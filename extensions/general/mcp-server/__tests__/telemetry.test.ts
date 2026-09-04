@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
+import type { EventPayload } from '@/lib/events/types'
 
 // ── Mocks (mirrors receipt-matcher.test.ts setup) ────────────
 
@@ -109,23 +110,16 @@ function mcpRequest(
   })
 }
 
-interface ToolCalledPayload {
-  tool: string
-  requiredScope: string | null
-  actorType: string
-  actorId: string | null
-  actorLabel: string | null
-  latencyMs: number
-  success: boolean
-  isError: boolean
-  errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'unknown_tool' | null
-  errorMessage: string | null
-  requestId: string | number | null
-  userId: string
-  companyId: string
-  client: string | null
-}
+/**
+ * The shared event contract, not a local copy.
+ *
+ * This used to be a hand-maintained duplicate interface, which silently
+ * omitted sessionId and half the errorKind union. A new field added to
+ * lib/events/types.ts and to the emitter then type-checked here against the
+ * stale local shape, so the tests passed while the payload type was wrong.
+ * Deriving it removes the drift entirely.
+ */
+type ToolCalledPayload = EventPayload<'mcp.tool_called'>
 
 interface ToolsListCalledPayload {
   toolCount: number
@@ -241,6 +235,86 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.latencyMs).toBe(0)
   })
 
+  /**
+   * Regression tests for the 2026-08-25 unknown-parameter rejection.
+   *
+   * That guard is correct and stays. What was wrong is what we RECORDED about
+   * it: one integration sent an unknown parameter to gnubok_get_kpi_report and
+   * was refused 604 times over seven days, and every one of those rows logged
+   * errorKind 'company_access_denied' with the message "Förfrågan innehåller
+   * ogiltiga uppgifter." The caller was told exactly which parameter was
+   * wrong; our own telemetry recorded a permissions problem that never existed.
+   */
+  it('logs an unknown parameter as invalid_arguments, not company_access_denied', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', {
+        name: 'gnubok_get_trial_balance',
+        arguments: { totally_not_a_parameter: 1 },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.errorCode).toBe('VALIDATION_ERROR')
+    expect(event.errorKind).toBe('invalid_arguments')
+    expect(event.errorKind).not.toBe('company_access_denied')
+  })
+
+  it('records the specific diagnostic in errorDetail when errorMessage is the generic default', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', {
+        name: 'gnubok_get_trial_balance',
+        arguments: { totally_not_a_parameter: 1 },
+      })
+    )
+
+    const event = await eventPromise
+    // Unchanged: the Swedish user-facing message, which for VALIDATION_ERROR
+    // is the registry default and says nothing about the cause.
+    expect(event.errorMessage).toBe('Förfrågan innehåller ogiltiga uppgifter.')
+    // New: what actually went wrong, enough to fix the caller from the log
+    // alone without reading the source.
+    expect(event.errorDetail).toContain('totally_not_a_parameter')
+    expect(event.errorDetail).toContain('gnubok_get_trial_balance')
+  })
+
+  it('carries both languages on a scope denial, without duplicating either', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', {
+        name: 'gnubok_create_invoice',
+        arguments: { customer_id: 'x', items: [] },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.errorKind).toBe('scope_denied')
+    // Asserted directly rather than behind an `if`: a conditional assertion
+    // would also pass on a wrong-but-present value, which is no assertion.
+    // And "some other string" is barely stronger, so pin the content that
+    // makes the field worth storing: the scope the caller actually lacks.
+    expect(event.errorDetail).toContain('invoices:write')
+    expect(event.errorDetail).not.toBe(event.errorMessage)
+  })
+
+  it('stores null when the call site supplies no diagnostic', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    // The unknown-tool exit passes errorMessage only. Nothing may be
+    // invented to fill errorDetail.
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_not_a_real_tool', arguments: {} })
+    )
+
+    const event = await eventPromise
+    expect(event.errorKind).toBe('unknown_tool')
+    expect(event.errorDetail).toBeNull()
+  })
+
   it('applies the canonical scope gate to an Accounted alias', async () => {
     const eventPromise = captureNextToolCalledEvent()
 
@@ -312,6 +386,59 @@ describe('mcp.tool_called telemetry', () => {
     expect((event.errorMessage as string).length).toBeLessThanOrEqual(500)
     // Execution path measures real latency, even if the tool exits quickly.
     expect(event.latencyMs).toBeGreaterThanOrEqual(0)
+  })
+
+  describe('errorCause: machine vocabulary for the unmapped residue (#2051)', () => {
+    /**
+     * 65.1% of real-agent errors in the 30 days before #2027 were
+     * UNKNOWN_ERROR, whose errorMessage is the constant "Något gick fel.
+     * Försök igen." and whose errorDetail is the English constant: nothing to
+     * cluster on. errorCause carries errorCauseTag(err): the SQLSTATE or coded
+     * error code, else the error's class name. Protocol vocabulary only,
+     * because a raw driver message can quote row values from a constraint
+     * violation and belongs in the server log, never in event_log.
+     */
+    it('records the error class name when execute() dies unmapped', async () => {
+      const eventPromise = captureNextToolCalledEvent()
+
+      // Valid call for the key's reports:read scope; the harness supabase is a
+      // bare vi.fn() mock, so execute() dies on it. Exactly the shape that
+      // used to log UNKNOWN_ERROR with the constant message and nothing else.
+      await handleMcpRequest(
+        mcpRequest('tools/call', { name: 'gnubok_get_trial_balance', arguments: {} })
+      )
+
+      const event = await eventPromise
+      expect(event.errorKind).toBe('execution')
+      expect(event.errorCause).toBe('TypeError')
+    })
+
+    it('stays null for a plain Error: the class name "Error" is noise, not vocabulary', async () => {
+      const eventPromise = captureNextToolCalledEvent()
+
+      // gnubok_load_skill throws `new Error("Skill not found: ...")`.
+      await handleMcpRequest(
+        mcpRequest('tools/call', { name: 'gnubok_load_skill', arguments: { slug: 'definitely-does-not-exist' } })
+      )
+
+      const event = await eventPromise
+      expect(event.errorKind).toBe('execution')
+      expect(event.errorCause).toBeNull()
+    })
+
+    it('stays null on success and on pre-execution denials', async () => {
+      const successPromise = captureNextToolCalledEvent()
+      await handleMcpRequest(mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }))
+      expect((await successPromise).errorCause).toBeNull()
+
+      const deniedPromise = captureNextToolCalledEvent()
+      await handleMcpRequest(
+        mcpRequest('tools/call', { name: 'gnubok_create_invoice', arguments: { customer_id: 'x', items: [] } })
+      )
+      const denied = await deniedPromise
+      expect(denied.errorKind).toBe('scope_denied')
+      expect(denied.errorCause).toBeNull()
+    })
   })
 
   it('does NOT block the JSON-RPC response on telemetry: even if a handler throws', async () => {

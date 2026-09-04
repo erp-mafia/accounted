@@ -1887,7 +1887,8 @@ export async function autoReconcileTransactionForLinkedVoucher(
  * Fetch unlinked GL lines for a settlement account. `accountNumber` defaults to
  * '1930' for back-compat; multi-account customers (Plusgiro 1920, kreditkort
  * 1940, EUR-konto 1932, etc.) pass the BAS code of the account they're
- * reconciling. The CashAccountSelector populates this from cash_accounts.
+ * reconciling. The reconciliation UI populates this from cash_accounts.
+
  */
 export async function fetchUnlinkedGLLines(
   supabase: SupabaseClient,

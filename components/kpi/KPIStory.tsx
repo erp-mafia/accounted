@@ -4,6 +4,13 @@ import { useTranslations } from 'next-intl'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { KPIReport, KPIPreferences } from '@/types'
+import {
+  allLabelsFit,
+  barLabel,
+  compactKr,
+  BAR_LABEL_FONT_PX,
+  LATEST_LABEL_FONT_PX,
+} from './month-values'
 
 /**
  * Nyckeltal as the founder-picked "Instrumentbrädan" layout: a grid of
@@ -16,10 +23,6 @@ import type { KPIReport, KPIPreferences } from '@/types'
 const SAGE = 'hsl(155 25% 40%)'
 
 type TFn = (key: string, values?: Record<string, string | number>) => string
-
-function compactKr(n: number): string {
-  return new Intl.NumberFormat('sv-SE', { notation: 'compact', maximumFractionDigits: 1 }).format(n)
-}
 
 /** Shared pane chrome: hairline border, compact metric padding. */
 function Pane({
@@ -60,7 +63,9 @@ function Pane({
 }
 
 /** Monthly net result as plain SVG bars: muted months, the latest in sage
- *  (terracotta when negative), a compact value label on the endpoint. */
+ *  (terracotta when negative). Every non-zero bar carries a compact value
+ *  label when they fit side by side, otherwise only the latest does; the
+ *  exact amounts always follow in a two-column list under the axis. */
 function ResultBarsPane({ report }: { report: KPIReport }) {
   const t = useTranslations('kpi')
   const months = report.months
@@ -76,15 +81,31 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
 
   const W = 320
   const H = 120
-  const maxAbs = Math.max(...months.map((m) => Math.abs(m.net)), 1)
-  // Baseline sits lower when no month is negative, so positive bars get the room.
   const hasNegative = months.some((m) => m.net < 0)
-  const baseline = hasNegative ? H * 0.62 : H - 4
+  // Fixed headroom above (and below, when negatives exist) keeps the endpoint
+  // label inside the viewBox even when a single month dominates the scale.
+  const topPad = 16
+  const bottomPad = hasNegative ? 16 : 4
+  const maxPos = Math.max(...months.map((m) => Math.max(0, m.net)), 0)
+  const maxNeg = Math.max(...months.map((m) => Math.max(0, -m.net)), 0)
+  // One px-per-krona scale for both signs, so bar heights stay comparable.
+  const pxPerKr = (H - topPad - bottomPad) / Math.max(maxPos + maxNeg, 1)
+  // All-zero months keep the baseline at the bottom instead of the top.
+  const baseline = maxPos + maxNeg === 0 ? H - bottomPad : topPad + maxPos * pxPerKr
   const slot = W / months.length
   const barW = Math.min(30, slot * 0.62)
+  const labels = months.map((m) => barLabel(m.net))
+  const labelAll = allLabelsFit(labels, slot, lastActive)
+  // Exact amounts as two columns of the year's months, read top to bottom.
+  const half = Math.ceil(months.length / 2)
+  const columns = [months.slice(0, half), months.slice(half)]
+  // A month with no result movement at all reads muted, whether it lies
+  // ahead of the last booking or before the first one (a mid-year start).
+  const inactive = (m: KPIReport['months'][number]) =>
+    m.income === 0 && m.expenses === 0 && m.net === 0
 
   return (
-    <Pane title={t('bars_title')} annotation={t('bars_unit')}>
+    <Pane title={t('bars_title')} annotation={t('bars_unit')} className="sm:row-span-2">
       <svg
         viewBox={`0 0 ${W} ${H + 8}`}
         className="mt-3 h-auto w-full"
@@ -95,7 +116,7 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
         })}
       >
         {months.map((m, i) => {
-          const scaled = (Math.abs(m.net) / maxAbs) * (hasNegative ? H * 0.55 : H - 26)
+          const scaled = Math.abs(m.net) * pxPerKr
           const h = m.net === 0 ? 2 : Math.max(3, scaled)
           const x = i * slot + (slot - barW) / 2
           const y = m.net >= 0 ? baseline - h : baseline
@@ -113,14 +134,17 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
               <rect x={x} y={y} width={barW} height={h} rx={3} fill={fill}>
                 <title>{`${m.label}: ${formatCurrency(m.net)}`}</title>
               </rect>
-              {isLast && (
+              {(isLast || (labelAll && labels[i] !== '')) && (
                 <text
                   x={x + barW / 2}
                   y={m.net >= 0 ? y - 5 : y + h + 11}
                   textAnchor="middle"
-                  style={{ font: '10.5px var(--font-body, ui-sans-serif)', fill: 'hsl(var(--muted-foreground))' }}
+                  style={{
+                    font: `${isLast ? LATEST_LABEL_FONT_PX : BAR_LABEL_FONT_PX}px var(--font-body, ui-sans-serif)`,
+                    fill: 'hsl(var(--muted-foreground))',
+                  }}
                 >
-                  {compactKr(m.net)}
+                  {labels[i] || compactKr(m.net)}
                 </text>
               )}
             </g>
@@ -130,6 +154,28 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
       <div className="mt-1 flex justify-between px-1 text-[10.5px] text-muted-foreground">
         {months.map((m) => (
           <span key={m.label}>{m.label}</span>
+        ))}
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-x-6 border-t border-border pt-3 text-xs">
+        {columns.map((column, c) => (
+          <dl key={c} className="space-y-1">
+            {column.map((m, j) => {
+              return (
+                <div key={`${m.label}-${c * half + j}`} className="flex items-baseline justify-between gap-3">
+                  <dt className="text-muted-foreground">{m.label}</dt>
+                  <dd
+                    className={cn(
+                      'tabular-nums',
+                      m.net < 0 && 'text-destructive',
+                      inactive(m) && 'text-muted-foreground/60',
+                    )}
+                  >
+                    {formatCurrency(m.net)}
+                  </dd>
+                </div>
+              )
+            })}
+          </dl>
         ))}
       </div>
     </Pane>

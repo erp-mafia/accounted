@@ -39,6 +39,7 @@ import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
 import { populateTemplatesFromSieVouchers } from '@/lib/bookkeeping/counterparty-templates'
+import { suggestPartiesForCompany } from '@/lib/parties/suggest'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { monthsBetween, parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
 import { findUntransferredResults } from '@/lib/reports/imbalance-diagnosis'
@@ -88,6 +89,8 @@ export function generateImportPreview(
     accountCount: parsed.stats.totalAccounts,
     voucherCount: parsed.stats.totalVouchers,
     transactionLineCount: parsed.stats.totalTransactionLines,
+    // Debit-side total of the IB voucher (shown as "IB, summa debet"), not a
+    // net opening balance: a balanced IB nets to zero.
     openingBalanceTotal: totalDebit,
     trialBalance: {
       totalDebit,
@@ -541,7 +544,7 @@ export async function ensureFiscalPeriod(
   // lib/bookkeeping/validate-period-duration.ts, the same arithmetic and the
   // same threshold validatePeriodDuration() applies on every other
   // period-creation path (fiscal-periods POST/PATCH, period-service's
-  // createNextPeriod/createPreviousPeriod, onboarding's computeFiscalPeriod),
+  // createNextPeriod, onboarding's computeFiscalPeriod),
   // so an 18-month förlängt räkenskapsår imports exactly as it does there and
   // a 19-month one does not. 18 is the ceiling for an extended or re-laid
   // year; ongoing years are 12. BFL sets no minimum, so there is no floor here.
@@ -2989,6 +2992,17 @@ export async function executeSIEImport(
         }
       } catch (templateError) {
         console.error('[sie-import] Failed to populate counterparty templates:', templateError)
+      }
+    }
+
+    // Fill the Kontakter register from the imported vouchers (non-blocking):
+    // suggested parties only, nothing is confirmed on the user's behalf.
+    if (result.success && parsed.vouchers.length > 0) {
+      try {
+        const summary = await suggestPartiesForCompany(supabase, companyId, userId)
+        console.info(`[sie-import] party suggestions: ${summary.created} new, ${summary.attached} attached, ${summary.skipped} skipped`)
+      } catch (partyError) {
+        console.error('[sie-import] Failed to suggest parties:', partyError)
       }
     }
 

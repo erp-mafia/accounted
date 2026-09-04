@@ -29,6 +29,45 @@ import { z } from 'zod'
  */
 type SupabaseClientLike = Pick<SupabaseClient, 'from'>
 
+// ── Event type catalog ──────────────────────────────────────────
+// Every event type the code emits, and the contract with the
+// processing_event_types reference table: processing_history.event_type has an
+// FK to it, and every append call site is best-effort try/catch, so a type
+// that is missing from the table fails the insert silently and the act leaves
+// no durable record at all. Ten types drifted out of the table exactly that
+// way before this list existed.
+//
+// Adding an entry here therefore REQUIRES a migration registering the same
+// string in public.processing_event_types, in the same change. The union
+// makes an unregistered literal a compile error;
+// tests/pg/processing-event-types.pg.test.ts makes an unregistered string a
+// test failure. Keep it sorted.
+
+export const PROCESSING_EVENT_TYPES = [
+  'AttachmentsTruncated',
+  'BankTransactionDuplicateDismissed',
+  'ChannelQuestionAnswered',
+  'ChannelQuestionAsked',
+  'ChannelQuestionExpired',
+  'DocumentDuplicateSkipped',
+  'DocumentExtractionAttempted',
+  'DocumentExtractionOverridden',
+  'DocumentExtractionRetried',
+  'DocumentIngested',
+  'InboundMailReceived',
+  'InboxUnderlagReconciled',
+  'InvoiceDuplicatePaymentDismissed',
+  'InvoiceJournalEntrySkipped',
+  'InvoicePaymentRowBackfilled',
+  'OAuthClientRevoked',
+  'PendingOperationApproved',
+  'PendingOperationRejected',
+  'RateLimitedDropped',
+  'TransactionDocumentReplaced',
+] as const
+
+export type ProcessingHistoryEventType = (typeof PROCESSING_EVENT_TYPES)[number]
+
 // ── PII validator ───────────────────────────────────────────────
 // Rejects payloads containing Swedish personal identity numbers.
 // Personnummer:       YYMMDD-NNNN or YYMMDDNNNN (6+4 digits)
@@ -88,7 +127,7 @@ export interface AppendEventInput {
   causationId?: string
   aggregateType: ProcessingHistoryAggregateType
   aggregateId: string
-  eventType: string
+  eventType: ProcessingHistoryEventType
   payload: Record<string, unknown>
   payloadSchemaVersion?: number
   actor: ProcessingHistoryActor
@@ -117,7 +156,7 @@ export async function appendProcessingHistory(
  * Same append, on a caller-supplied service-role client. For standalone
  * scripts (e.g. scripts/backfill-inbox-booked-underlag.ts) that cannot build
  * the Next-bound service client but must still write behandlingshistorik
- * through the one shared row shape and PII validation (BFNAR 2013:2 kap 8:
+ * through the one shared row shape and PII validation (BFNAR 2013:2 p. 9.16:
  * the change log has to reconcile across writers, so scripts never hand-roll
  * the insert).
  */

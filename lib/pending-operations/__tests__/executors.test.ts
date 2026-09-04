@@ -513,6 +513,76 @@ describe('commitPendingOperation: invoice send payment account guard', () => {
   )
 })
 
+describe('commitPendingOperation: seller VAT number guard', () => {
+  it('rejects mark_invoice_sent for a registered company without VAT number', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeInvoice({
+        id: 'invoice-1',
+        status: 'draft',
+        invoice_number: null,
+        credited_invoice_id: null,
+      }),
+      error: null,
+    })
+    enqueue({
+      data: { bankgiro: '123-4567', vat_registered: true, vat_number: null },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher rejected update
+
+    const op = makePendingOp({
+      operation_type: 'mark_invoice_sent',
+      params: { invoice_id: 'invoice-1' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(ensureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockRecordManualInvoiceDelivery).not.toHaveBeenCalled()
+  })
+
+  it('rejects send_invoice for a registered company without VAT number', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeInvoice({
+        id: 'invoice-1',
+        status: 'draft',
+        invoice_number: null,
+        customer: makeCustomer({ id: 'customer-1', email: 'customer@example.test' }),
+        items: [],
+      }),
+      error: null,
+    })
+    enqueue({
+      data: {
+        company_name: 'Test AB',
+        bankgiro: '123-4567',
+        vat_registered: true,
+        vat_number: null,
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher's rejected update
+
+    const op = makePendingOp({
+      operation_type: 'send_invoice',
+      params: { invoice_id: 'invoice-1' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(ensureInvoiceNumber).not.toHaveBeenCalled()
+    expect(supabase.from).not.toHaveBeenCalledWith('invoice_deliveries')
+  })
+})
+
 describe('commitPendingOperation: invoice send recipient limit', () => {
   it('rejects an oversized configured recipient set before reservation and allocation', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -1391,6 +1461,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
       data: { id: 'doc-1', file_name: 'kvitto.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
       error: null,
     })                                                                           // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                         // inbox stamp (best-effort)
     enqueue({ data: null, error: null })                                         // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1400,7 +1471,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
   })
 
   it('happy path: links doc to verifikation with no prior journal_entry_id', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, calls, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch
     enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
@@ -1408,6 +1479,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
       data: { id: 'doc-1', file_name: 'faktura.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
       error: null,
     })                                                                           // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                         // inbox stamp (best-effort)
     enqueue({ data: null, error: null })                                         // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1418,6 +1490,39 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
       document_id: 'doc-1',
       journal_entry_id: 'je-1',
     })
+    // The inbox item the document came from is stamped as handled, keyed on
+    // document_id and CAS-guarded on both link columns: otherwise
+    // list_inbox_items / list_unmatched_documents keep listing an attached
+    // document as unprocessed forever.
+    expect(findCall('invoice_inbox_items', 'update')).toEqual([{ created_journal_entry_id: 'je-1' }])
+    const inboxFilters = calls
+      .filter((c) => c.table === 'invoice_inbox_items' && (c.method === 'eq' || c.method === 'is'))
+      .map((c) => c.args)
+    expect(inboxFilters).toEqual([
+      ['document_id', 'doc-1'],
+      ['company_id', 'company-1'],
+      ['created_journal_entry_id', null],
+      ['created_supplier_invoice_id', null],
+    ])
+  })
+
+  it('inbox stamp is best-effort: a failed stamp never fails the committed link', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
+    enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
+    enqueue({
+      data: { id: 'doc-1', file_name: 'faktura.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
+      error: null,
+    })                                                                           // linkToJournalEntry: doc update
+    enqueue({ data: null, error: { code: '23505', message: 'duplicate key value' } }) // inbox stamp: samlingsverifikat already claimed
+    enqueue({ data: null, error: null })                                         // dispatcher commit update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ document_id: 'doc-1', journal_entry_id: 'je-1' })
   })
 
   it('auto-rejects 409 when linkToJournalEntry throws a period-lock error', async () => {
@@ -1462,6 +1567,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
       data: { id: 'doc-1', file_name: 'kvitto1.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
       error: null,
     })                                                                       // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                   // inbox stamp (best-effort)
     // row 2: doc-2 -> je-2
     enqueue({ data: { id: 'doc-2', journal_entry_id: null }, error: null })  // doc fetch
     enqueue({ data: { id: 'je-2' }, error: null })                          // linkToJournalEntry: JE ownership
@@ -1469,6 +1575,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
       data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
       error: null,
     })                                                                       // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                   // inbox stamp (best-effort)
     enqueue({ data: null, error: null })                                    // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1493,6 +1600,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
       data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
       error: null,
     })                                                                      // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                  // inbox stamp (best-effort)
     enqueue({ data: null, error: null })                                   // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1522,6 +1630,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
       data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
       error: null,
     })                                                                              // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                          // inbox stamp (best-effort)
     enqueue({ data: null, error: null })                                           // dispatcher commit update
 
     const result = await commitPendingOperation(

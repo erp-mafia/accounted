@@ -47,6 +47,7 @@
  * by lib/invoices/bulk-reconcile-supplier-vouchers.ts.
  */
 
+import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
@@ -173,12 +174,6 @@ function daysBetween(from: string, to: string): number | null {
   const b = Date.parse(to.slice(0, 10))
   if (!Number.isFinite(a) || !Number.isFinite(b)) return null
   return Math.round((b - a) / MS_PER_DAY)
-}
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
 }
 
 function emptyCounts(): RegistrationLinkCounts {

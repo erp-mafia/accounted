@@ -1,3 +1,4 @@
+import { chunk as chunkIds } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount, CashAccountSource, MappingResult } from '@/types'
 import { createLogger } from '@/lib/logger'
@@ -43,8 +44,11 @@ export interface UpsertFromPsd2Input {
   currency: string
   ledger_account: string
   iban?: string | null
+  /** Raw BBAN from the ASPSP (Swedish: clearing + account number). */
+  bban?: string | null
   name?: string | null
   balance?: number | null
+  available_balance?: number | null
   balance_updated_at?: string | null
   enabled?: boolean
   /**
@@ -993,12 +997,6 @@ export async function resolvePsd2LedgerAccount(
 /** Max transaction ids per `.in()` filter when rebinding: keeps the request URL short. */
 const REBIND_ID_CHUNK_SIZE = 100
 
-function chunkIds(ids: readonly string[], size: number): string[][] {
-  const out: string[][] = []
-  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size))
-  return out
-}
-
 /**
  * Rebind the MOVABLE transactions of one cash_accounts row onto another.
  *
@@ -1088,6 +1086,76 @@ async function rebindMovableTransactions(
   return moved
 }
 
+/** One account's refreshed balance snapshot, as the sync loop stores it. */
+export interface SyncedBalanceInput {
+  external_uid: string
+  balance?: number | null
+  available_balance?: number | null
+  balance_updated_at?: string | null
+}
+
+/**
+ * Mirror freshly-synced balances from bank_connections.accounts_data into
+ * cash_accounts. Before this, cash_accounts.balance was written only at
+ * connect/selection-save time and then drifted: the transactions-page source
+ * picker (which reads cash_accounts) showed a connect-time snapshot as if it
+ * were current.
+ *
+ * Balance-only by design: routing fields (ledger_account, enabled, name) are
+ * owned by the picker-save and callback paths via upsertFromPsd2. Rows are
+ * matched on (company_id, bank_connection_id, external_uid); accounts without
+ * a timestamped balance are skipped (never null out a stored balance because
+ * one refresh was skipped or failed). Mirror failures are logged, not thrown:
+ * a failed mirror must not fail the sync that produced the data.
+ */
+export async function updateBalancesFromSync(
+  supabase: SupabaseClient,
+  companyId: string,
+  bankConnectionId: string,
+  accounts: SyncedBalanceInput[],
+): Promise<void> {
+  for (const account of accounts) {
+    if (account.balance == null || !account.balance_updated_at) continue
+    // Manual sync and cron are not serialized per connection: an older run
+    // finishing later must not overwrite a newer mirror (the timestamp would
+    // visibly move backwards). Only rows with an older-or-missing timestamp
+    // accept the write. Two literal predicates instead of one .or(), and the
+    // payload inlined twice: the schema guard cannot resolve dynamically-built
+    // logical expressions or payload variables.
+    const { error: staleError } = await supabase
+      .from('cash_accounts')
+      .update({
+        balance: account.balance,
+        available_balance: account.available_balance ?? null,
+        balance_updated_at: account.balance_updated_at,
+      })
+      .eq('company_id', companyId)
+      .eq('bank_connection_id', bankConnectionId)
+      .eq('external_uid', account.external_uid)
+      .lt('balance_updated_at', account.balance_updated_at)
+    const { error: nullError } = await supabase
+      .from('cash_accounts')
+      .update({
+        balance: account.balance,
+        available_balance: account.available_balance ?? null,
+        balance_updated_at: account.balance_updated_at,
+      })
+      .eq('company_id', companyId)
+      .eq('bank_connection_id', bankConnectionId)
+      .eq('external_uid', account.external_uid)
+      .is('balance_updated_at', null)
+    const error = staleError ?? nullError
+    if (error) {
+      log.error('updateBalancesFromSync failed', {
+        companyId,
+        bankConnectionId,
+        externalUid: account.external_uid,
+        error: error.message,
+      })
+    }
+  }
+}
+
 /**
  * Upsert a PSD2-sourced cash account during connection callback / sync. Keyed on
  * (company_id, bank_connection_id, external_uid). When the row exists, balance
@@ -1106,10 +1174,14 @@ export async function upsertFromPsd2(
     bank_connection_id: input.bank_connection_id,
     external_uid: input.external_uid,
     iban: input.iban ?? null,
+    // Only overwrite when the bank sent one: a typed BBAN must survive a
+    // sync from an ASPSP that reports IBAN only.
+    ...(input.bban ? { bban: input.bban } : {}),
     name: input.name ?? null,
     currency: input.currency.toUpperCase(),
     ledger_account: input.ledger_account,
     balance: input.balance ?? null,
+    available_balance: input.available_balance ?? null,
     balance_updated_at: input.balance_updated_at ?? null,
     enabled: input.enabled ?? true,
     source: 'enable_banking' as CashAccountSource,
@@ -1454,6 +1526,28 @@ export async function setLedgerAccount(
     .eq('company_id', companyId)
     .eq('id', cashAccountId)
   if (error) throw new Error(`cash_accounts setLedgerAccount failed: ${error.message}`)
+}
+
+/**
+ * Set or clear the verifikationsserie override for a cash account. null means
+ * "follow the per-source-type default"; the engine reads this via
+ * resolveCashAccountVoucherSeries() when it books from the account.
+ */
+export async function setVoucherSeries(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+  voucherSeries: string | null,
+): Promise<CashAccount | null> {
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .update({ voucher_series: voucherSeries })
+    .eq('company_id', companyId)
+    .eq('id', cashAccountId)
+    .select('*')
+    .maybeSingle()
+  if (error) throw new Error(`cash_accounts setVoucherSeries failed: ${error.message}`)
+  return (data as CashAccount | null) ?? null
 }
 
 /**

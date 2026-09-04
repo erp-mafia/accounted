@@ -34,11 +34,17 @@ import { mergeParsedSIEFiles } from '@/lib/import/sie-merge'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
 import { loadMappings, generateImportPreview, executeSIEImport, findOverlappingPeriodImports } from '@/lib/import/sie-import'
-import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
+import { buildMappingTargets } from './lib/mapping-targets'
 import type { ProviderName } from '@/lib/providers/types'
 import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import {
+  requireFlowInitiator,
+  FLOW_INITIATOR_MISMATCH_MESSAGE,
+} from '@/lib/auth/oauth-flow-binding'
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
 import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { createLogger } from '@/lib/logger'
 
@@ -52,6 +58,15 @@ const moduleLog = createLogger('extensions/arcim-migration')
  */
 const STATE_REJECTED_MESSAGE =
   'Ingen giltig migrationssession hittades. Starta om anslutningen.'
+
+/**
+ * A valid state reached the callback but the browser carries no session. The
+ * state is already spent by then (consumeOAuthState is atomic and runs first),
+ * so unlike the bank/Stripe callbacks there is nothing to resume after a
+ * login: the user starts the connect again from the wizard.
+ */
+const SESSION_MISSING_MESSAGE =
+  'Ingen inloggad session hittades i det här fönstret. Logga in och starta om anslutningen.'
 
 /**
  * Map known OAuth error codes from providers (Fortnox, Visma) to actionable
@@ -125,12 +140,14 @@ function resolveArcimCallbackUrl(provider: ArcimProvider | ProviderName): string
 async function buildArcimOAuthUrl(
   consentId: string,
   provider: ArcimProvider,
+  initiatedByUserId: string,
   options?: { documentScopes?: boolean },
 ): Promise<string> {
-  // Server-side state row: consent id, provider (via the consent), expiry and a
-  // consumed marker all live in provider_otc. The `state` handed to the provider
-  // is that row's opaque random primary key, nothing more.
-  const otc = await generateOtc(consentId)
+  // Server-side state row: consent id, provider (via the consent), the user who
+  // started the flow, expiry and a consumed marker all live in provider_otc.
+  // The `state` handed to the provider is that row's opaque random primary
+  // key, nothing more.
+  const otc = await generateOtc(consentId, initiatedByUserId)
 
   const callbackUrl = resolveArcimCallbackUrl(provider)
 
@@ -145,6 +162,36 @@ async function buildArcimOAuthUrl(
 }
 
 /**
+ * Answer a failed provider call with its classified code, falling back to the
+ * caller's own code when the failure is not provider-shaped.
+ *
+ * PROVIDER_RESOURCE_FORBIDDEN carries its message here instead of from the
+ * shared registry: the useful half is the provider's own sentence naming the
+ * register it refused ("Saknar behörighet för leverantörsregister."), which
+ * only the error itself holds. Without the override the code would fall
+ * through entryFor() to INTERNAL_ERROR and answer 500.
+ */
+function providerFailureResponse(error: unknown, fallbackCode: string): NextResponse {
+  const classified = classifyProviderError(error)
+  const ctx = {
+    details: {
+      reason: error instanceof Error ? error.message : 'unknown',
+      classified: classified ?? 'unclassified',
+    },
+  }
+  if (classified === 'PROVIDER_RESOURCE_FORBIDDEN') {
+    const reason = fortnoxErrorMessage(error)
+    return errorResponseFromCode(classified, moduleLog, {
+      ...ctx,
+      status: 403,
+      messageSv: getProviderResourceForbiddenMessage(reason, 'sv'),
+      messageEn: getProviderResourceForbiddenMessage(reason, 'en'),
+    })
+  }
+  return errorResponseFromCode(classified ?? fallbackCode, moduleLog, ctx)
+}
+
+/**
  * Map a failed /migrate run to its structured error response. Shared by the
  * JSON path (returned as-is) and the NDJSON path (body re-sent as the
  * terminal `error` event, since the stream's 200 status is already
@@ -156,13 +203,7 @@ function migrateFailureResponse(error: unknown, consentId: string): NextResponse
       details: { consentId },
     })
   }
-  const classified = classifyProviderError(error)
-  return errorResponseFromCode(classified ?? 'PROVIDER_MIGRATE_FAILED', moduleLog, {
-    details: {
-      reason: error instanceof Error ? error.message : 'unknown',
-      classified: classified ?? 'unclassified',
-    },
-  })
+  return providerFailureResponse(error, 'PROVIDER_MIGRATE_FAILED')
 }
 
 /**
@@ -321,7 +362,7 @@ export const arcimMigrationExtension: Extension = {
                 await ctx.settings.set('provider', provider)
               }
               if (providerInfo.authType === 'oauth') {
-                const authUrl = await buildArcimOAuthUrl(stale.id, provider, {
+                const authUrl = await buildArcimOAuthUrl(stale.id, provider, user.id, {
                   documentScopes: documentScopes === true,
                 })
                 return NextResponse.json({
@@ -406,7 +447,7 @@ export const arcimMigrationExtension: Extension = {
           }
 
           if (providerInfo.authType === 'oauth') {
-            const authUrl = await buildArcimOAuthUrl(consent.id, provider)
+            const authUrl = await buildArcimOAuthUrl(consent.id, provider, user.id)
 
             return NextResponse.json({
               consentId: consent.id,
@@ -562,31 +603,48 @@ export const arcimMigrationExtension: Extension = {
           // describe as "nothing happens". Leaving the reason on screen keeps
           // every error diagnosable; the wizard also shows it when the message
           // does arrive.
+          //
+          // location.replace, not href: the callback URL carries a one-time
+          // state that is already spent, so a Back or a reload onto it can
+          // only fail. no-store keeps it out of the browser cache for the same
+          // reason.
           const html = `<!DOCTYPE html><html><body><script>
             if (window.opener) {
               window.opener.postMessage({ type: 'arcim-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(appUrl)});
             } else {
-              window.location.href = ${jsLiteral(fallbackUrl.toString())};
+              window.location.replace(${jsLiteral(fallbackUrl.toString())});
             }
           </script><p>Anslutningen misslyckades: ${escapedReason}</p><p>Du kan stänga detta fönster.</p></body></html>`
 
           return new Response(html, {
             status: 200,
-            // charset is required: without it browsers default to Latin-1 and
-            // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            headers: {
+              // charset is required: without it browsers default to Latin-1 and
+              // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'no-store',
+            },
           })
         }
 
         // Provider returned an OAuth error (user cancelled, missing API
         // subscription on the Fortnox side, invalid scope, etc.)
         if (oauthError) {
-          log.error('OAuth callback returned provider error', {
+          // access_denied is the user clicking "avbryt" in the provider's
+          // consent screen: an expected outcome of an optional flow, so it is
+          // logged at warn and stays out of the error panel. Every other
+          // provider error is still an error.
+          const oauthErrorDetails = {
             error: oauthError,
             errorDescription: oauthErrorDescription,
             hasCode: !!code,
             hasState: !!stateRaw,
-          })
+          }
+          if (oauthError === 'access_denied') {
+            log.warn('OAuth callback cancelled by the user at the provider', oauthErrorDetails)
+          } else {
+            log.error('OAuth callback returned provider error', oauthErrorDetails)
+          }
           let consentId: string | undefined
           if (stateRaw) {
             try {
@@ -632,7 +690,39 @@ export const arcimMigrationExtension: Extension = {
             return respondWithError(STATE_REJECTED_MESSAGE)
           }
 
-          const { consentId, provider } = resolvedState
+          const { consentId, provider, userId: initiatedByUserId } = resolvedState
+
+          // The state proves this callback belongs to a flow WE started; it
+          // says nothing about who is finishing it. Before the code is
+          // exchanged, the completing browser's own session must belong to the
+          // user recorded on the state row at connect time. Otherwise a victim
+          // lured into approving a consent someone else started has their
+          // Fortnox/Visma account bound to that someone's consent, and the
+          // next migration imports the victim's ledger into a stranger's
+          // company. Checked before callbackConsentId is set: a refused
+          // completion must not hand the consent id to whoever is refused.
+          if (!initiatedByUserId) {
+            // Row minted before provider_otc.user_id existed (or written
+            // outside generateOtc): nobody to bind to, so nobody may finish it.
+            // Such rows expire within 10 minutes of the deploy.
+            log.error('OAuth callback state carries no initiator; refusing', { consentId })
+            return respondWithError(STATE_REJECTED_MESSAGE)
+          }
+          const initiator = await requireFlowInitiator(request, initiatedByUserId, {
+            flow: 'arcim-migration.callback',
+          })
+          if (!initiator.ok) {
+            log.error('OAuth callback refused: completing session is not the initiator', {
+              consentId,
+              reason: initiator.reason,
+            })
+            return respondWithError(
+              initiator.reason === 'no_session'
+                ? SESSION_MISSING_MESSAGE
+                : FLOW_INITIATOR_MISMATCH_MESSAGE,
+            )
+          }
+
           callbackConsentId = consentId
 
           // Must match the redirect_uri the authorization request was built
@@ -644,23 +734,41 @@ export const arcimMigrationExtension: Extension = {
 
           // Return an HTML page that notifies the opener tab and closes itself
           const successUrl = `${appUrl}/import?migration=connected&consentId=${encodeURIComponent(consentId)}`
+          // location.replace + no-store: see respondWithError above. The state
+          // is spent the moment consumeOAuthState returns, and prod caught the
+          // consequence of leaving the URL in history: a second delivery 19
+          // seconds after a successful connect, answered with a red "ingen
+          // giltig migrationssession" about a connection that had just worked.
           const html = `<!DOCTYPE html><html><body><script>
             if (window.opener) {
               window.opener.postMessage({ type: 'arcim-oauth-success', consentId: ${jsLiteral(consentId)} }, ${jsLiteral(appUrl)});
               window.close();
             } else {
-              window.location.href = ${jsLiteral(successUrl)};
+              window.location.replace(${jsLiteral(successUrl)});
             }
           </script><p>Anslutningen lyckades. Du kan stänga denna flik.</p></body></html>`
 
           return new Response(html, {
             status: 200,
-            // charset is required: without it browsers default to Latin-1 and
-            // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            headers: {
+              // charset is required: without it browsers default to Latin-1 and
+              // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'no-store',
+            },
           })
         } catch (error) {
           log.error('OAuth callback exchange failed', error)
+          // Valid tokens for the WRONG company: exchangeAuthToken stored
+          // nothing. Show the user-facing sentence from the error registry
+          // (the same one /submit-token answers with for Bokio/WINT) instead
+          // of the English diagnostic on the error object.
+          if (error instanceof ProviderCompanyMismatchError) {
+            return respondWithError(
+              getErrorEntry('PROVIDER_COMPANY_MISMATCH')?.message_sv ?? error.message,
+              callbackConsentId,
+            )
+          }
           const reason = error instanceof Error ? error.message : 'Okänt fel vid tokenutbyte.'
           return respondWithError(reason, callbackConsentId)
         }
@@ -801,13 +909,7 @@ export const arcimMigrationExtension: Extension = {
           }
           // Classify HTTP failures into typed codes so the toast can suggest
           // reconnect / retry instead of a generic "preview failed".
-          const classified = classifyProviderError(error)
-          return errorResponseFromCode(classified ?? 'PROVIDER_PREVIEW_FAILED', moduleLog, {
-            details: {
-              reason: error instanceof Error ? error.message : 'unknown',
-              classified: classified ?? 'unclassified',
-            },
-          })
+          return providerFailureResponse(error, 'PROVIDER_PREVIEW_FAILED')
         }
       },
     },
@@ -921,12 +1023,13 @@ export const arcimMigrationExtension: Extension = {
             updated_at: '',
           }))
 
-          // Suggest mappings
-          const basAccounts = BAS_REFERENCE.map(b => ({
-            account_number: b.account_number,
-            account_name: b.account_name,
-          }))
-          const mappings = suggestMappings(allAccounts, basAccounts, existingRecords)
+          // Mapping targets are the company's OWN chart of accounts first,
+          // then BAS for anything it does not have yet. BAS alone cannot
+          // express an account the company added outside the standard, so
+          // such an account was impossible to map onto. See
+          // ./lib/mapping-targets.
+          const mappingTargets = await buildMappingTargets(supabase, companyId)
+          const mappings = suggestMappings(allAccounts, mappingTargets, existingRecords)
           const mappingStats = getMappingStats(mappings)
 
           log.info(`Account mapping: ${allAccounts.length} unique accounts across ${sieFiles.length} files, ${mappingStats.unmapped} unmapped`)
@@ -1009,17 +1112,11 @@ export const arcimMigrationExtension: Extension = {
             // Allowed years whose provider export failed: the wizard warns
             // the user before proceeding so an IB/UB gap cannot slip through.
             failedYears,
-            basAccounts: BAS_REFERENCE,
+            basAccounts: mappingTargets,
           })
         } catch (error) {
           log.error('arcim sie-data fetch failed', error as Error)
-          const classified = classifyProviderError(error)
-          return errorResponseFromCode(classified ?? 'PROVIDER_SIE_FETCH_FAILED', moduleLog, {
-            details: {
-              reason: error instanceof Error ? error.message : 'unknown',
-              classified: classified ?? 'unclassified',
-            },
-          })
+          return providerFailureResponse(error, 'PROVIDER_SIE_FETCH_FAILED')
         }
       },
     },
@@ -1128,13 +1225,7 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json(result)
         } catch (error) {
           log.error('arcim sie import failed', error as Error)
-          const classified = classifyProviderError(error)
-          return errorResponseFromCode(classified ?? 'SIE_IMPORT_UNEXPECTED', moduleLog, {
-            details: {
-              reason: error instanceof Error ? error.message : 'unknown',
-              classified: classified ?? 'unclassified',
-            },
-          })
+          return providerFailureResponse(error, 'SIE_IMPORT_UNEXPECTED')
         }
       },
     },

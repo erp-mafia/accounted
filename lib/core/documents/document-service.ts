@@ -362,6 +362,49 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
   return null
 }
 
+/**
+ * Declared types validateDocumentMagicBytes checks by content shape rather
+ * than by signature. They have no magic number, so the declared type is the
+ * only type there is once the shape check has passed.
+ */
+const SHAPE_CHECKED_TYPES = new Set([
+  'application/xhtml+xml',
+  'application/xml',
+  'text/xml',
+  'text/html',
+  'application/json',
+])
+
+/**
+ * The mime type to persist on the document row and stamp on the storage
+ * object: what the bytes are, never what the client declared. Call after
+ * validateDocumentMagicBytes has accepted the buffer for `declaredMimeType`.
+ *
+ * Binary formats take the sniffed type (an iOS capture declared image/heif
+ * but branded heic lands as image/heic). The shape-checked text formats keep
+ * their declared type, which the validator has already held against the
+ * content. With no declared type the sniffed type is stored when there is
+ * one, else null: a serving route treats null as unknown and serves it
+ * opaque, whereas an unverified client string could name an active type.
+ */
+export function resolveStoredMimeType(
+  buffer: ArrayBuffer,
+  declaredMimeType: string | undefined,
+): string | null {
+  if (declaredMimeType && SHAPE_CHECKED_TYPES.has(declaredMimeType)) return declaredMimeType
+  return detectFileMagic(new Uint8Array(buffer))
+}
+
+/**
+ * True when a stored type and a declared type name the same content. The
+ * stored type is the validated one (resolveStoredMimeType), so the only
+ * legitimate difference is the HEIC/HEIF family swap.
+ */
+function sameStoredMimeType(stored: string | null, declared: string): boolean {
+  if (stored === declared) return true
+  return stored !== null && HEIC_FAMILY.has(stored) && HEIC_FAMILY.has(declared)
+}
+
 let bucketVerified = false
 
 /** @internal Reset bucket verification flag: for testing only */
@@ -513,7 +556,7 @@ function validateReservedDocumentMetadata(
   fileName: string,
   mimeType: string
 ): void {
-  if (document.file_name !== fileName || document.mime_type !== mimeType) {
+  if (document.file_name !== fileName || !sameStoredMimeType(document.mime_type, mimeType)) {
     throw new Error('Upload ID was already completed with different file metadata')
   }
 }
@@ -607,6 +650,10 @@ export async function completePendingDocumentUpload(
     await storage.remove([sourcePath])
     throw error
   }
+  // Persist what the bytes are, not what the client said (see
+  // resolveStoredMimeType). The storage object itself keeps the metadata
+  // the PUT declared: nothing serving from this app trusts it.
+  const storedMimeType = resolveStoredMimeType(buffer, mimeType)
 
   if (options.dedupeByContent) {
     // Same lookup as uploadDocument: oldest current-version match wins, and
@@ -646,7 +693,7 @@ export async function completePendingDocumentUpload(
       storage_path: permanentPath,
       file_name: fileName,
       file_size_bytes: buffer.byteLength,
-      mime_type: mimeType,
+      mime_type: storedMimeType,
       sha256_hash: sha256Hash,
       version: 1,
       is_current_version: true,
@@ -754,6 +801,8 @@ export async function uploadDocument(
     const magicError = validateDocumentMagicBytes(file.buffer, file.type)
     if (magicError) throw new Error(magicError)
   }
+  // Stored and stamped type is the validated one, never the raw client type.
+  const storedMimeType = resolveStoredMimeType(file.buffer, file.type)
 
   // Compute SHA-256 hash
   const sha256Hash = await computeSHA256(file.buffer)
@@ -801,7 +850,7 @@ export async function uploadDocument(
   const { error: uploadError } = await supabase.storage
     .from('documents')
     .upload(storagePath, file.buffer, {
-      contentType: file.type || 'application/octet-stream',
+      contentType: storedMimeType ?? 'application/octet-stream',
       upsert: false,
     })
 
@@ -819,7 +868,7 @@ export async function uploadDocument(
       storage_path: storagePath,
       file_name: file.name,
       file_size_bytes: file.buffer.byteLength,
-      mime_type: file.type || null,
+      mime_type: storedMimeType,
       sha256_hash: sha256Hash,
       version: 1,
       is_current_version: true,
@@ -834,6 +883,17 @@ export async function uploadDocument(
 
   if (error) {
     if (reservedDocumentId && error.code === '23505') {
+      // The column list mirrors the DocumentAttachment interface one for one,
+      // so the row this returns is the stored row and nothing else.
+      // last_integrity_check_at stays in it even though it is now legacy
+      // (migration 20260901130000 moved the verification stamp to
+      // document_integrity_checks, and nothing writes this column any more):
+      // this branch re-reads a row a concurrent request inserted seconds ago,
+      // where the column is NULL by construction, and no caller interprets the
+      // value. Dropping it would leave the returned object short of a key the
+      // type declares; joining the new ledger for it would fetch a check that
+      // cannot exist yet. Whoever wants "when was this document last verified"
+      // reads document_integrity_checks, never this field.
       const { data: concurrent, error: concurrentError } = await supabase
         .from('document_attachments')
         .select('id, user_id, company_id, storage_path, file_name, file_size_bytes, mime_type, sha256_hash, version, original_id, superseded_by_id, is_current_version, uploaded_by, upload_source, digitization_date, journal_entry_id, journal_entry_line_id, prev_version_hash, last_integrity_check_at, created_at, updated_at')
@@ -905,6 +965,7 @@ export async function createNewVersion(
     const magicError = validateDocumentMagicBytes(file.buffer, file.type)
     if (magicError) throw new Error(magicError)
   }
+  const storedMimeType = resolveStoredMimeType(file.buffer, file.type)
 
   // Compute SHA-256 hash
   const sha256Hash = await computeSHA256(file.buffer)
@@ -934,7 +995,7 @@ export async function createNewVersion(
   const { error: uploadError } = await supabase.storage
     .from('documents')
     .upload(storagePath, file.buffer, {
-      contentType: file.type || 'application/octet-stream',
+      contentType: storedMimeType ?? 'application/octet-stream',
       upsert: false,
     })
 
@@ -949,7 +1010,7 @@ export async function createNewVersion(
     p_storage_path: storagePath,
     p_file_name: file.name,
     p_file_size_bytes: file.buffer.byteLength,
-    p_mime_type: file.type || null,
+    p_mime_type: storedMimeType,
     p_sha256_hash: sha256Hash,
   })
 

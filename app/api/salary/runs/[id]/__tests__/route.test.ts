@@ -209,28 +209,32 @@ describe('PATCH /api/salary/runs/[id]', () => {
     expect(findCall('salary_run_employees', 'update')).toBeUndefined()
   })
 
-  it('rejects a payment_date outside the run period month (kontantprincipen)', async () => {
+  it('accepts a payment_date in the month after the period (lön i efterskott, #2191)', async () => {
+    // The AGI redovisningsperiod follows payment_date, so a July run paid in
+    // August is legal: it is declared for August.
     const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
     authorize(supabase)
 
     enqueueMany([
-      { data: DRAFT_RUN }, // lookup: period 2026-07
+      { data: DRAFT_RUN }, // lookup: period 2026-07, paid 2026-07-25
+      { data: { ...DRAFT_RUN, payment_date: '2026-08-25' } }, // update
+      { data: null }, // roster calculation_breakdown clear
     ])
 
     const request = createMockRequest('/api/salary/runs/run-1', {
       method: 'PATCH',
-      body: { payment_date: '2026-08-01' },
+      body: { payment_date: '2026-08-25' },
     })
     const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status } = await parseJsonResponse(response)
 
-    expect(status).toBe(400)
-    expect(body.error).toContain('period')
-    // Refused before any write.
-    expect(findCall('salary_runs', 'update')).toBeUndefined()
+    expect(status).toBe(200)
+    expect(findCall('salary_runs', 'update')).toEqual([
+      expect.objectContaining({ payment_date: '2026-08-25' }),
+    ])
   })
 
-  it('grandfathers day adjustments when the current date is already outside the period', async () => {
+  it('still day-adjusts a run whose date already sits outside the period', async () => {
     const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
     authorize(supabase)
 

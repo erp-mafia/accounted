@@ -4,7 +4,7 @@ import React, { useState, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
-import { formatDate } from '@/lib/utils'
+import { formatAmount, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   createSourceLoader,
@@ -299,9 +299,3 @@ function ExpansionContent({
   )
 }
 
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-}

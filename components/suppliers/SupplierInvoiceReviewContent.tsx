@@ -5,7 +5,7 @@ import { CalendarClock } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import {
   resolveReverseChargeRate,
   isReverseChargeBasisAccount,
@@ -55,10 +55,6 @@ interface SupplierInvoiceReviewContentProps {
   subtotal: number
   totalVat: number
   total: number
-}
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 interface JournalPreviewLine {

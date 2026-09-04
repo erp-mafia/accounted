@@ -36,7 +36,8 @@ import {
   generateFileHash,
   generateExternalId,
 } from '@/lib/import/bank-file/parser'
-import { ingestTransactions, type RawTransaction } from '@/lib/transactions/ingest'
+import { ingestTransactions } from '@/lib/transactions/ingest'
+import type { RawTransaction } from '@/types'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'

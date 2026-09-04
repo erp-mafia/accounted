@@ -52,6 +52,7 @@ import '@/app/api/v1/companies/[companyId]/invoices/[id]/mark-sent/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/mark-paid/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/credit/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/send/route'
+import '@/app/api/v1/companies/[companyId]/invoices/[id]/quote-status/route'
 import '@/app/api/v1/companies/[companyId]/invoices/bulk-create/route'
 // Phase 2 PR-B-3: invoice PDF + customer bulk-create.
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/pdf/route'
@@ -71,6 +72,12 @@ import '@/app/api/v1/companies/[companyId]/transactions/ingest/route'
 import '@/app/api/v1/companies/[companyId]/transactions/batch-categorize/route'
 import '@/app/api/v1/companies/[companyId]/reconciliation/bank/run/route'
 import '@/app/api/v1/companies/[companyId]/reconciliation/bank/status/route'
+import '@/app/api/v1/companies/[companyId]/cash-accounts/route'
+
+// F2: PSD2 bank-connection health (last_synced_at, consent_expires) so
+// integrations can detect stale bank data instead of trusting it blindly.
+import '@/app/api/v1/companies/[companyId]/bank-connections/route'
+import '@/app/api/v1/companies/[companyId]/bank-connections/[connectionId]/sync/route'
 
 // Phase 4 PR-1: AP world: suppliers + supplier-invoices verticals.
 import '@/app/api/v1/companies/[companyId]/suppliers/route'

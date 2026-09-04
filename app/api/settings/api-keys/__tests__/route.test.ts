@@ -108,6 +108,24 @@ describe('POST /api/settings/api-keys', () => {
     expect(body.error.code).toBe('API_KEY_SCOPE_INVALID')
   })
 
+  it('returns 400 for the reserved OAuth marker name (would fake a Claude connection)', async () => {
+    const { insertSpy } = setupFrom({ count: 0 })
+    const res = await POST(
+      createMockRequest('/api/settings/api-keys', {
+        method: 'POST',
+        body: { name: ' MCP-klient (OAuth) ', scopes: ['reports:read'] },
+      }),
+      { params: Promise.resolve({}) },
+    )
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { field: string; reason: string } }
+    }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details).toMatchObject({ field: 'name', reason: 'reserved' })
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
   it('returns 409 API_KEY_SOD_CONFLICT for stage+approve without acknowledgement', async () => {
     setupFrom({ count: 0 })
     const res = await POST(

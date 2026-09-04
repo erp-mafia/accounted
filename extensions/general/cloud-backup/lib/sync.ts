@@ -18,8 +18,6 @@ import type {
   CloudLastSync,
 } from '../types'
 
-export { ROOT_FOLDER_NAME } from './folder-names'
-
 /**
  * Google Drive's storage keys, re-exported for the call sites that predate
  * multi-provider support. Provider-aware code reads `provider.keys` instead:
@@ -27,7 +25,6 @@ export { ROOT_FOLDER_NAME } from './folder-names'
  */
 export const CONNECTION_KEY = 'google_drive_connection'
 export const LAST_SYNC_KEY = 'google_drive_last_sync'
-export const SCHEDULE_KEY = 'google_drive_schedule'
 /**
  * Per-FILE ceiling, not per-backup: the backup splits into one archive per
  * räkenskapsår plus Grunddata.zip, and uploads are resumable/chunked. The

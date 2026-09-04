@@ -18,7 +18,8 @@ import {
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import {
@@ -118,15 +119,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       include_archived: url.searchParams.get('include_archived') ?? undefined,
     })
     if (!filtersResult.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: filtersResult.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
+      return v1ValidationError(ctx, filtersResult.error)
     }
     const filters = filtersResult.data
     const includeArchived = filters.include_archived === 'true'
@@ -322,27 +315,12 @@ registerEndpoint({
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'customers.create',
   async (request, ctx) => {
-    let rawBody: unknown
-    try {
-      rawBody = await request.json()
-    } catch {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'Body is not valid JSON.' },
-      })
-    }
+    const raw = await readV1JsonBody(request, ctx)
+    if (!raw.ok) return raw.response
 
-    const parsed = CreateCustomerSchema.safeParse(rawBody)
+    const parsed = CreateCustomerSchema.safeParse(raw.body)
     if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
+      return v1ValidationError(ctx, parsed.error)
     }
     const body = parsed.data
 
@@ -373,7 +351,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           address_line2: body.address_line2 ?? null,
           postal_code: body.postal_code ?? null,
           city: body.city ?? null,
-          country: body.country ?? 'Sweden',
+          country: body.country ?? 'SE',
           org_number: body.org_number ?? null,
           vat_number: body.vat_number ?? null,
           vat_number_validated: false,
@@ -424,7 +402,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         address_line2: body.address_line2 ?? null,
         postal_code: body.postal_code ?? null,
         city: body.city ?? null,
-        country: body.country ?? 'Sweden',
+        country: body.country ?? 'SE',
         org_number: body.org_number ?? null,
         vat_number: body.vat_number ?? null,
         vat_number_validated: vatValidated,

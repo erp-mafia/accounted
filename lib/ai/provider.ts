@@ -1,5 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
+import type { AiProviderKind } from './types'
+
 
 /**
  * Which backend AI traffic goes to.
@@ -20,7 +22,8 @@ import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
  *
  * See https://github.com/erp-mafia/accounted/issues/1406.
  */
-export type AiProvider = 'bedrock' | 'anthropic' | 'openai-compatible'
+export type AiProvider = AiProviderKind
+
 
 /**
  * Thrown by createAiClient() when the resolved backend has no Anthropic

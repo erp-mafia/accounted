@@ -2,10 +2,203 @@
 
 # Banking endpoints
 
-Bank transactions (ingest, categorize, match against invoices), bank reconciliation runs, and file imports (SIE, bank statements).
+Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, PSD2 connection health (sync freshness, consent expiry), bank reconciliation runs, and file imports (SIE, bank statements).
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
+
+### `GET /api/v1/companies/{companyId}/bank-connections`
+
+**List PSD2 bank connections with sync freshness and consent expiry.**
+`scope:companies:read · risk:low · idempotent`
+
+Returns every bank connection for the company with its status, last successful sync (last_synced_at), consent expiry (consent_expires) and any user-facing error message. Connections sync automatically once a day server-side; this endpoint tells you whether that is still happening.
+
+**Use when:** You need to verify bank data is current before building on it (liquidity, reconciliation, reports), or to detect a dead connection that needs BankID re-authorisation.
+**Do not use for:** Fetching transactions (use /transactions) or account balances (use /cash-accounts). Triggering a sync: not available on this surface; syncing is automatic.
+
+**Pitfalls:**
+- last_synced_at is null until the first sync completes (about a minute after connecting); it does NOT mean the connection is broken.
+- A connection can hold status=active with a stale last_synced_at (older than ~36 hours): treat the data as suspect, but do NOT assume re-authorisation fixes it. Common causes are a lapsed subscription (this endpoint then answers with a capability error) or every account deselected in settings.
+- status=expired means the PSD2 consent is dead: only the user can fix it, with BankID in a browser.
+- error_message is Swedish and user-facing: show it verbatim rather than translating.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    bank_connections: { connection_id: string, bank: string, status: "pending" | "pending_selection" | "active" | "expired" | "error", since: string, last_synced_at: string, consent_expires: string, error_message: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "bank_connections": [
+      {
+        "connection_id": "4f6c…",
+        "bank": "Swedbank",
+        "status": "active",
+        "since": "2026-08-01T00:00:00Z",
+        "last_synced_at": "2026-08-31T05:04:12Z",
+        "consent_expires": "2026-11-01T00:00:00Z",
+        "error_message": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/bank-connections/{connectionId}/sync`
+
+**Sync one bank connection now instead of waiting for the nightly run.**
+`scope:transactions:write · risk:low`
+
+Fetches new transactions and balances for one PSD2 bank connection right away. The window is chosen server-side: the last 7 days, widened to cover any gap since last_synced_at, capped at 90 days. Returns how many transactions were imported and the new last_synced_at. A connection synced within the last 15 minutes is refused with 429 BANK_SYNC_COOLDOWN and next_allowed_at: the data is already fresh. Not dry-runnable: the bank call itself is the side effect.
+
+**Use when:** GET /bank-connections shows a stale last_synced_at on an active connection and you need current bank data before building on it (liquidity, reconciliation, a report), or the user asks for the latest transactions now.
+**Do not use for:** Polling. Connections sync every night on their own; call this once when freshness matters, then read /transactions. Fixing a dead connection: status=expired needs BankID in a browser, not a sync.
+
+**Pitfalls:**
+- Idempotency-Key is optional here. If you send one, use a fresh key per attempt: a cooldown answer is never cached, but a completed sync is, and replaying it fetches nothing new.
+- 429 BANK_SYNC_COOLDOWN follows a recent successful sync OR a recent attempt that failed (the 15-minute lease is taken before the bank is called, on every instance). Compare last_synced_at from GET /bank-connections: if it is fresh, use the data you have; if it is still stale, the previous attempt failed, so retry once after next_allowed_at (Retry-After is set).
+- 409 BANK_SESSION_EXPIRED means the bank reported the consent dead during the sync; the connection is now status=expired. Hand the user the connect link; no API call revives it.
+- imported: 0 is normal on a quiet account. Banks report with up to 48 hours of delay, so today's transactions often arrive tomorrow.
+- Costs one Enable Banking call per enabled account: 403 CAPABILITY_BLOCKED when the company has no bank_sync entitlement.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `connectionId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    connection_id: string,
+    bank: string,
+    imported: number,
+    duplicates: number,
+    from_date: string,
+    to_date: string,
+    last_synced_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "connection_id": "4f6c…",
+    "bank": "Swedbank",
+    "imported": 3,
+    "duplicates": 12,
+    "from_date": "2026-08-26",
+    "to_date": "2026-09-02",
+    "last_synced_at": "2026-09-02T09:14:03Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/cash-accounts`
+
+**List bank/cash accounts with the bank-reported balance.**
+`scope:transactions:read · risk:low · idempotent`
+
+Returns the company's cash accounts (bank accounts, kassa) with their BAS ledger mapping and, for PSD2-connected accounts, the balance the bank itself reported at the last sync: balance (booked), available_balance, and balance_updated_at (when it was fetched). Pass ?enabled_only=true to return only accounts that sync.
+
+**Use when:** You need the current bank balance per account (e.g. a covering decision before a payment run), or cash_account_id values to filter transaction listings.
+**Do not use for:** The bookkept 19xx balance: use the trial-balance or balance-sheet reports. The two legitimately differ (pending bookings, timing).
+
+**Pitfalls:**
+- balance/available_balance are what the BANK reported, refreshed at most every 12h (PSD2 quota): check balance_updated_at before treating them as current.
+- balance is null for manual and SIE-imported accounts, and for PSD2 accounts that have not completed a sync since connecting.
+- available_balance is null when the bank reports no available balance type; that does not mean 0.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    cash_accounts: { cash_account_id: string, ledger_account: string, name: string, currency: string, iban: string, is_primary: boolean, enabled: boolean, source: "enable_banking" | "manual" | "sie_import", balance: number, available_balance: number, balance_updated_at: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "cash_accounts": [
+      {
+        "cash_account_id": "ca_…",
+        "ledger_account": "1930",
+        "name": "Företagskonto",
+        "currency": "SEK",
+        "iban": "SE4550000000058398257466",
+        "is_primary": true,
+        "enabled": true,
+        "source": "enable_banking",
+        "balance": 125430.5,
+        "available_balance": 123930.5,
+        "balance_updated_at": "2026-09-01T05:12:44.000Z"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
 
 ### `POST /api/v1/companies/{companyId}/imports/bank`
 
@@ -38,7 +231,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -93,7 +287,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -148,7 +343,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -266,7 +462,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -388,7 +585,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -483,7 +681,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -556,7 +755,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -627,7 +827,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -706,7 +907,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -764,7 +966,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -844,7 +1047,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -921,7 +1125,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1003,7 +1208,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1072,7 +1278,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1134,7 +1341,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1217,7 +1425,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1306,7 +1515,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1358,7 +1568,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1408,7 +1619,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1487,7 +1699,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1563,7 +1776,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1616,7 +1830,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1691,7 +1906,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```
@@ -1789,7 +2005,8 @@ Response `200`:
     api_version: string,
     next_cursor?: string,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
-    partial_expansions?: string[]
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
   }
 }
 ```

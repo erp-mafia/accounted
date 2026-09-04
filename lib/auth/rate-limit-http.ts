@@ -1,8 +1,21 @@
 import { Ratelimit } from '@upstash/ratelimit'
 import { Redis } from '@upstash/redis'
 import { NextResponse } from 'next/server'
+import { isSelfHosted } from '@/lib/env/public-flags'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('auth.rate-limit')
 
 let redis: Redis | null = null
+
+/**
+ * Whether the Upstash credentials the limiter needs are present. Exposed so
+ * health / version surfaces can report the limiter's state instead of every
+ * caller re-reading the env.
+ */
+export function isRateLimiterConfigured(): boolean {
+  return Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN)
+}
 
 function getRedis(): Redis | null {
   if (redis) return redis
@@ -33,6 +46,31 @@ function getLimiter(prefix: string, maxRequests: number, windowMs: number): Rate
   return limiter
 }
 
+// Once per process: the first rate-limited request on a hosted deployment
+// without Redis produces one error record. Repeating it per request would
+// drown the logs the alert is meant to surface in.
+let reportedNotConfigured = false
+
+/**
+ * Fail-open is deliberate for local dev and self-hosted installs (no Redis
+ * required to run the product). On the hosted product it is a
+ * misconfiguration: every limiter-protected surface (MCP OAuth registration,
+ * sandbox seeding, client log ingestion, webshop connects) is unthrottled.
+ * Say so loudly, exactly once, at error level with the alert flag so the
+ * observability sink pages on it. Never fail closed here: that would turn a
+ * missing env var into a 503 on every protected route.
+ */
+function reportNotConfiguredOnce(): void {
+  if (reportedNotConfigured) return
+  reportedNotConfigured = true
+  if (isSelfHosted()) return
+  if (process.env.NODE_ENV !== 'production') return
+  log.error(
+    'HTTP rate limiting is disabled: UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN are not set on a hosted deployment; checkRateLimit() is failing open',
+    { alert: true, operation: 'rate-limit.not-configured' },
+  )
+}
+
 export interface RateLimitOptions {
   prefix: string
   identifier: string
@@ -54,11 +92,16 @@ export interface RateLimitResult {
  * No-ops (allows the request) when Upstash env vars are not configured:
  * intentional so local dev and self-hosted deployments without Redis still work.
  * Production hosted deployments must set UPSTASH_REDIS_REST_URL/TOKEN for the
- * limit to be enforced; absence is logged once at startup by other call sites.
+ * limit to be enforced; a hosted process without them logs one error-level
+ * record (see reportNotConfiguredOnce) and `isRateLimiterConfigured()` reports
+ * the state for health surfaces.
  */
 export async function checkRateLimit(opts: RateLimitOptions): Promise<RateLimitResult> {
   const limiter = getLimiter(opts.prefix, opts.maxRequests, opts.windowMs)
-  if (!limiter) return { ok: true }
+  if (!limiter) {
+    reportNotConfiguredOnce()
+    return { ok: true }
+  }
 
   const { success, reset, limit, remaining } = await limiter.limit(opts.identifier)
   if (success) return { ok: true }

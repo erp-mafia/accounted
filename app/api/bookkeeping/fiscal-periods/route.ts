@@ -49,7 +49,16 @@ export const POST = withRouteContext(
     .eq('company_id', companyId)
     .order('period_start', { ascending: true })
 
-  const isFirstPeriod = !allPeriods || allPeriods.length === 0
+  // "First" räkenskapsår = no existing period starts earlier, NOT "no period
+  // exists at all". Mirrors the enforce_first_of_month_for_subsequent_periods
+  // trigger: a mid-month start is legal for the company's first year (BFL 3
+  // kap. 3 §, it begins the day bokföringsskyldigheten inträder) and only
+  // subsequent years must start on the 1st (BFL 3 kap. 1 §). A company that
+  // imported 2024+ from Fortnox and now backfills its first year from
+  // 2022-07-22 is creating exactly that first year; the old
+  // `allPeriods.length === 0` test refused it with the 1st-of-month error
+  // while the trigger would have accepted the row (issue #2237).
+  const isFirstPeriod = !(allPeriods ?? []).some((p) => p.period_start < body.period_start)
 
   // Validate period duration (max 18 months per BFL 3 kap.)
   const durationError = validatePeriodDuration(body.period_start, body.period_end, { isFirstPeriod })

@@ -6,8 +6,7 @@ import { roundOre } from '@/lib/money'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import type { Currency, Invoice } from '@/types'
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+import { UUID_RE } from '@/lib/invariants/uuid'
 
 /**
  * POST /api/invoices/[id]/refresh-exchange-rate

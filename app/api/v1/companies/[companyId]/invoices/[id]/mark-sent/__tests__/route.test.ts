@@ -255,6 +255,38 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     },
   )
 
+  it('rejects issuance when the registered company has no VAT number', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: DRAFT_INVOICE, error: null },
+        company_settings: {
+          data: {
+            accounting_method: 'accrual',
+            entity_type: 'enskild_firma',
+            bankgiro: '123-4567',
+            vat_registered: true,
+            vat_number: null,
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_SEND_VAT_NUMBER_MISSING')
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('rejects delivery notes with VALIDATION_ERROR (regardless of status)', async () => {
     // Critical: the delivery-note guard must run BEFORE the status check
     // so a sent delivery note still returns 400 (per the documented

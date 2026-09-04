@@ -32,11 +32,13 @@
 45 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/woocommerce/orders/cron
 15 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/shopify/orders/cron
 0 3 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/verify/cron
+30 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/reanchor/cron
 0 4 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/sandbox/cleanup/cron
 0 2 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/events/cleanup/cron
 0 * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/cloud-backup/auto-sync/cron
 30 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/idempotency/cleanup/cron
 30 2 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/pending-operations/expire/cron
+30 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/ombud/sync/cron
 0 4 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/skattekonto/sync/cron
 */15 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/agi/kvittenser/cron
 30 */2 * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/vat/kvittenser/cron
@@ -47,5 +49,10 @@
 45 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/invoice-inbox/underlag-reconcile/cron
 15 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/accruals/post-due/cron
 30 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/receipt-hunt/cron
+45 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/notifications/bookkeeping-digest/cron
+0 7 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/notifications/multi-user-grace/cron
 */10 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/peppol/inbound/cron
 5,20,35,50 * * * *  curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/peppol/outbound/status/cron
+
+# self-hosted-only jobs, not in vercel.json: see EXTRA_JOBS in scripts/generate-crontabs.ts
+17 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/connector/sync/cron

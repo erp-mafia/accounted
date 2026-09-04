@@ -1,5 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getAllTransactionsWithRaw, convertTransaction, getAccountBalance } from './api-client'
+import { getAllTransactionsWithRaw, convertTransaction, getAccountBalance, SessionExpiredError } from './api-client'
+import { historyWindowDays } from './history-window'
+import { bankSyncResponseSchema, connectorErrorSchema } from '@accounted/connect-contract'
+import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
 import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
@@ -44,6 +47,112 @@ export interface SyncResult {
   returnedMinBookingDate?: string
   /** Latest booking date the ASPSP returned. Undefined when no transactions came back. */
   returnedMaxBookingDate?: string
+  /** The date_from asked of the bank. */
+  requestedFromDate: string
+  /**
+   * The date_from the bank actually answered. Equal to requestedFromDate
+   * unless the bank refused the window and a narrower one was used; the sync
+   * is then complete only from this date on (#2202). Undefined through the
+   * hosted connector, which does not report it.
+   */
+  effectiveFromDate?: string
+  /** True when the bank refused the requested window and the history was cut. */
+  historyNarrowed: boolean
+}
+
+/** The subset of a converted bank transaction that the ingest mapping below reads. */
+interface BookedTransactionFields {
+  amount: number
+  currency: string
+  description: string
+  counterparty_name?: string
+  counterparty_account?: string
+  reference?: string
+  merchant_category_code?: string
+  bank_transaction_code?: string
+  proprietary_bank_transaction_code?: string
+}
+
+const CONNECTOR_SYNC_TIMEOUT_MS = 120_000
+
+/**
+ * Booked transactions through the hosted connector. The session id is the
+ * installation's own (it stays here); the service proves ownership from its
+ * ledger, does the provider work, and answers with the contract's response
+ * shape. A 410 means the consent is over and maps onto the same
+ * SessionExpiredError the direct path throws, so callers flip the connection
+ * to expired identically.
+ */
+async function fetchBookedViaConnector(
+  connector: { baseUrl: string; key: string },
+  args: {
+    supabase: SupabaseClient
+    companyId: string
+    connectionId: string
+    account: StoredAccount
+    fromDate: string
+    toDate: string
+    strategy?: TransactionsFetchStrategy
+  },
+): Promise<ReturnType<typeof bankSyncResponseSchema.parse>> {
+  // The PSD2 session id rests on the connection row (never on the account
+  // payload), and it stays on this installation: the service only receives
+  // it per call and proves ownership from its own ledger.
+  const { data: row, error } = await args.supabase
+    .from('bank_connections')
+    .select('session_id')
+    .eq('id', args.connectionId)
+    .maybeSingle()
+  if (error) throw new Error(`Connector bank sync could not read the connection: ${error.message}`)
+  const sessionId = (row as { session_id: string | null } | null)?.session_id
+  if (!sessionId) throw new Error('Connector bank sync requires a connection with a session id')
+  // The body is read INSIDE the timeout window: a service that sends headers
+  // and then stalls the body must not hold the sync open past the budget.
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), CONNECTOR_SYNC_TIMEOUT_MS)
+  let response: Response
+  let text: string
+  try {
+    response = await fetch(`${connector.baseUrl}/sync`, {
+      method: 'POST',
+      signal: controller.signal,
+      redirect: 'error',
+      headers: {
+        Authorization: `Bearer ${connector.key}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        [CONNECTOR_COMPANY_HEADER]: args.companyId,
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        account_uid: args.account.uid,
+        account_currency: args.account.currency,
+        date_from: args.fromDate,
+        date_to: args.toDate,
+        ...(args.strategy ? { strategy: args.strategy } : {}),
+      }),
+    })
+    text = await response.text()
+  } finally {
+    clearTimeout(timeout)
+  }
+  let json: unknown = null
+  try {
+    json = text ? JSON.parse(text) : null
+  } catch {
+    json = null
+  }
+  if (!response.ok) {
+    const envelope = connectorErrorSchema.safeParse(json)
+    const code = envelope.success ? envelope.data.code : `HTTP_${response.status}`
+    if (response.status === 410 || code === 'CONNECTOR_BANK_SESSION_EXPIRED') {
+      throw new SessionExpiredError(response.status, text)
+    }
+    throw new Error(`Connector bank sync failed (${response.status} ${code})`)
+  }
+  const parsed = bankSyncResponseSchema.safeParse(json)
+  if (!parsed.success) throw new Error('Connector bank sync answered with an unexpected shape')
+  return parsed.data
 }
 
 /**
@@ -77,67 +186,127 @@ export async function syncAccountTransactions(
     strategy: syncOptions?.strategy,
   })
 
-  const { transactions, rawPages } = await getAllTransactionsWithRaw(
-    account.uid,
-    fromDate,
-    toDate,
-    syncOptions?.strategy,
-  )
+  // Two ways to obtain booked transactions. Direct: this installation's own
+  // Enable Banking credentials, exactly as before. Connector: the hosted
+  // service does the paging, the booked-only filter and the normalization
+  // (POST /api/connect/bank/sync) and returns rows plus the raw pages. Both
+  // paths converge on bookedEntries + rawPages, and everything below
+  // (external ids, ingest, archive, balance) is shared, so a company moved to
+  // the connector produces byte-identical stored keys.
+  const connector = bankConnectorMode(companyId)
+  let rawPages: string[]
+  let bookedEntries: Array<{ tx: BookedTransactionFields; bookingDate: string }>
+  let totalFetched: number
+  let effectiveFromDate: string | undefined
+  let historyNarrowed = false
+  if (connector) {
+    const remote = await fetchBookedViaConnector(connector, {
+      supabase,
+      companyId,
+      connectionId,
+      account,
+      fromDate,
+      toDate,
+      strategy: syncOptions?.strategy,
+    })
+    rawPages = remote.raw_pages
+    totalFetched = remote.transactions.length + remote.skipped_pending
+    bookedEntries = remote.transactions.map((tx) => ({
+      tx: {
+        amount: tx.amount,
+        currency: tx.currency,
+        description: tx.description,
+        counterparty_name: tx.counterparty_name ?? undefined,
+        counterparty_account: tx.counterparty_account ?? undefined,
+        reference: tx.reference ?? undefined,
+        merchant_category_code: tx.merchant_category_code ?? undefined,
+        bank_transaction_code: tx.bank_transaction_code ?? undefined,
+        proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code ?? undefined,
+      },
+      bookingDate: tx.booking_date,
+    }))
+  } else {
+    const fetched = await getAllTransactionsWithRaw(
+      account.uid,
+      fromDate,
+      toDate,
+      syncOptions?.strategy,
+      { acceptedHistoryDays: account.accepted_history_days },
+    )
+    rawPages = fetched.rawPages
+    totalFetched = fetched.transactions.length
+    effectiveFromDate = fetched.effectiveDateFrom
+    historyNarrowed = fetched.narrowed === true
+    // Remember the widest window this bank has ANSWERED for the account, so a
+    // later rejection of a window no wider than it is read as the bank being
+    // unavailable rather than as a too-wide window (#2202). Never shrinks:
+    // an incremental 7-day sync must not forget that 90 days once worked.
+    // Stamped on the account object; the caller's accounts_data write-back
+    // persists it, exactly like dedup_scope and the balance fields.
+    const acceptedDays = historyWindowDays(fetched.effectiveDateFrom, toDate)
+    if (acceptedDays !== undefined && acceptedDays > (account.accepted_history_days ?? -1)) {
+      account.accepted_history_days = acceptedDays
+    }
+    if (historyNarrowed) {
+      console.warn('[enable-banking] Bank refused the requested history window; synced a narrower one', {
+        connectionId,
+        accountUid: account.uid,
+        requestedFromDate: fromDate,
+        effectiveFromDate,
+        toDate,
+      })
+    }
+    const bankTransactions = fetched.transactions.map(tx => convertTransaction(tx, account.currency))
+    // Only ingest BOOKED transactions: those the ASPSP returned with a real
+    // booking_date. Pending entries are intentionally skipped: a pending row is
+    // unstable across syncs (a later "synka nu" returns the same transaction
+    // either still pending or finally booked, often with a *different* effective
+    // date). Because BOTH the dedup external_id and the content-dedup key are
+    // date-derived, that drift mints a brand-new id and re-imports a transaction
+    // that already exists. Gating the import set on a stable booking_date
+    // removes the drift at the source, and leaves booked rows' ids byte-identical.
+    //
+    // booking_date is read from the RAW transaction, index-aligned with
+    // bankTransactions: convertTransaction's booking_date already falls back to
+    // value_date/today, so it cannot tell booked from pending.
+    bookedEntries = bankTransactions.flatMap((tx, i) => {
+      const bookingDate = fetched.transactions[i]?.booking_date
+      return typeof bookingDate === 'string' && bookingDate.trim() !== ''
+        ? [{ tx, bookingDate: bookingDate.trim() }]
+        : []
+    })
+  }
 
   // Log the actual date range returned so we can compare against the requested
   // window. Helps diagnose when an ASPSP truncates history below what we asked for.
   let minBookingDate: string | undefined
   let maxBookingDate: string | undefined
-  for (const tx of transactions) {
-    const d = tx.booking_date || tx.value_date
-    if (!d) continue
-    if (!minBookingDate || d < minBookingDate) minBookingDate = d
-    if (!maxBookingDate || d > maxBookingDate) maxBookingDate = d
+  for (const { bookingDate } of bookedEntries) {
+    if (!minBookingDate || bookingDate < minBookingDate) minBookingDate = bookingDate
+    if (!maxBookingDate || bookingDate > maxBookingDate) maxBookingDate = bookingDate
   }
 
-  console.log('[enable-banking] Fetched transactions from API', {
+  console.log('[enable-banking] Fetched transactions', {
     connectionId,
     accountUid: account.uid,
-    transactionCount: transactions.length,
+    via: connector ? 'connector' : 'direct',
+    transactionCount: totalFetched,
     rawPageCount: rawPages.length,
     requestedFromDate: fromDate,
+    effectiveFromDate,
     requestedToDate: toDate,
     returnedMinBookingDate: minBookingDate,
     returnedMaxBookingDate: maxBookingDate,
     strategy: syncOptions?.strategy,
   })
 
-  const bankTransactions = transactions.map(tx => convertTransaction(tx, account.currency))
-
-  // Only ingest BOOKED transactions: those the ASPSP returned with a real
-  // booking_date. Pending entries are intentionally skipped: a pending row is
-  // unstable across syncs (a later "synka nu" returns the same transaction
-  // either still pending or finally booked, often with a *different* effective
-  // date). Because BOTH the dedup external_id and the content-dedup key are
-  // date-derived, that drift mints a brand-new id and re-imports a transaction
-  // that already exists. Observed in production as the same amount+description
-  // landing twice with different dates: the bank's value_date in one sync, its
-  // booking_date in another. Gating the import set on a stable booking_date
-  // removes the drift at the source, and leaves booked rows' ids byte-identical
-  // (so the existing rows are NOT re-orphaned).
-  //
-  // booking_date is read from the RAW transaction (transactions[i]), index-
-  // aligned with bankTransactions: convertTransaction's booking_date already
-  // falls back to value_date/today, so it cannot tell booked from pending.
-  const bookedEntries = bankTransactions.flatMap((tx, i) => {
-    const bookingDate = transactions[i]?.booking_date
-    return typeof bookingDate === 'string' && bookingDate.trim() !== ''
-      ? [{ tx, bookingDate: bookingDate.trim() }]
-      : []
-  })
-
-  const skippedPending = bankTransactions.length - bookedEntries.length
+  const skippedPending = totalFetched - bookedEntries.length
   if (skippedPending > 0) {
     console.log('[enable-banking] Skipped pending transactions (no booking_date)', {
       connectionId,
       accountUid: account.uid,
       skippedPending,
-      total: bankTransactions.length,
+      total: totalFetched,
     })
   }
 
@@ -253,8 +422,17 @@ export async function syncAccountTransactions(
   } else {
     try {
       const balance = await getAccountBalance(account.uid)
-      account.balance = balance.amount
-      account.balance_updated_at = new Date().toISOString()
+      // null = the ASPSP returned no balances at all. Keep the previous
+      // stored value and timestamp; writing a fabricated 0 with a fresh
+      // timestamp would pin "the bank reports 0 kr" for the next 12h on
+      // every balance surface.
+      if (balance) {
+        account.balance = balance.amount
+        // Overwrite (not keep) on null: a stale available figure next to a
+        // fresh booked figure would misstate what can be spent.
+        account.available_balance = balance.available ?? undefined
+        account.balance_updated_at = new Date().toISOString()
+      }
     } catch {
       // Keep previous balance, don't update timestamp
     }
@@ -266,5 +444,8 @@ export async function syncAccountTransactions(
     errors: ingestResult.errors,
     returnedMinBookingDate: minBookingDate,
     returnedMaxBookingDate: maxBookingDate,
+    requestedFromDate: fromDate,
+    effectiveFromDate,
+    historyNarrowed,
   }
 }

@@ -165,6 +165,7 @@ function chipsInput(overrides: Partial<ForvalChipsInput> = {}): ForvalChipsInput
     receivedDate: '',
     deliveryDate: '',
     yourReference: '',
+    invoiceMarking: '',
     paymentLink: null,
     oreRounding: true,
     dims: null,
@@ -204,6 +205,22 @@ describe('deriveForvalChips', () => {
     })
   })
 
+  it('replaces the due chips with a valid-until chip for a quote', () => {
+    const chips = deriveForvalChips(
+      chipsInput({ documentType: 'quote', validUntil: '2026-09-16' }),
+    )
+    expect(chips[0]).toEqual({ kind: 'doc_type', documentType: 'quote' })
+    expect(chips).toContainEqual({ kind: 'valid_until', date: '2026-09-16' })
+    expect(chips.find((c) => c.kind === 'due_days')).toBeUndefined()
+    expect(chips.find((c) => c.kind === 'due_date')).toBeUndefined()
+  })
+
+  it('skips the valid-until chip while a quote has no expiry yet', () => {
+    const chips = deriveForvalChips(chipsInput({ documentType: 'quote', validUntil: '' }))
+    expect(chips.find((c) => c.kind === 'valid_until')).toBeUndefined()
+    expect(chips.find((c) => c.kind === 'due_days')).toBeUndefined()
+  })
+
   it('falls back to a plain due date when the invoice date is missing or after', () => {
     expect(deriveForvalChips(chipsInput({ invoiceDate: '' }))).toContainEqual({
       kind: 'due_date',
@@ -221,6 +238,7 @@ describe('deriveForvalChips', () => {
         currency: 'EUR',
         deliveryDate: '2026-08-20',
         yourReference: 'Anna',
+        invoiceMarking: 'KST 4711',
         paymentLink: 'manual',
         oreRounding: false,
         dims: 'KS01 · P001',
@@ -230,6 +248,7 @@ describe('deriveForvalChips', () => {
     expect(chips).toContainEqual({ kind: 'currency', currency: 'EUR' })
     expect(chips).toContainEqual({ kind: 'delivery', date: '2026-08-20' })
     expect(chips).toContainEqual({ kind: 'your_reference', reference: 'Anna' })
+    expect(chips).toContainEqual({ kind: 'invoice_marking', marking: 'KST 4711' })
     expect(chips).toContainEqual({ kind: 'payment_link', mode: 'manual' })
     expect(chips).toContainEqual({ kind: 'dims', dims: 'KS01 · P001' })
     // ore_off is SEK-only: an EUR invoice has no öresavrundning to disable.
@@ -249,6 +268,7 @@ describe('deriveForvalChips', () => {
         receivedDate: '2026-08-15',
         documentType: 'proforma',
         yourReference: 'x',
+        invoiceMarking: 'x',
         paymentLink: 'auto',
         oreRounding: false,
         dims: 'KS01',

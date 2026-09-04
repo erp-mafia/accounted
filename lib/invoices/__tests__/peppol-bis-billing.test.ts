@@ -71,6 +71,38 @@ function makeValidInput() {
 }
 
 describe('generatePeppolBisBillingInvoice', () => {
+  it('prints the same payee as the PDF: the resolved SEK payment account, not the raw legacy column', () => {
+    const input = makeValidInput()
+    // Legacy column says one bankgiro, the resolver's SEK entry another (the
+    // state a v1/MCP settings write used to leave behind). The XML must
+    // follow the resolver, like the PDF and the email do.
+    input.company = makeCompanySettings({
+      ...input.company,
+      bankgiro: '991-2346',
+      invoice_payment_accounts: {
+        SEK: {
+          bank_name: null,
+          clearing_number: null,
+          account_number: null,
+          bankgiro: '5050-1055',
+          plusgiro: null,
+          swish: null,
+          iban: null,
+          bic: null,
+          bank_code: null,
+          foreign_account_number: null,
+        },
+      },
+    })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:ID>50501055</cbc:ID>')
+    expect(result.xml).not.toContain('9912346')
+  })
+
   it('generates a Swedish Peppol BIS Billing 3 invoice with reconciled VAT groups', () => {
     const result = generatePeppolBisBillingInvoice(makeValidInput())
 
@@ -257,6 +289,71 @@ describe('generatePeppolBisBillingInvoice', () => {
     expect(result.issues.map(({ code }) => code)).toContain(
       'BUYER_PARTICIPANT_IDENTIFIER_UNSUPPORTED',
     )
+  })
+
+  it('prefers invoice_marking over your_reference for BT-10 BuyerReference', () => {
+    const input = makeValidInput()
+    input.invoice = makeInvoice({ ...input.invoice, invoice_marking: 'KST 4711' })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:BuyerReference>KST 4711</cbc:BuyerReference>')
+  })
+
+  it('accepts a marking-only invoice (no your_reference) as buyer reference', () => {
+    const input = makeValidInput()
+    input.invoice = makeInvoice({
+      ...input.invoice,
+      your_reference: null,
+      invoice_marking: 'PO-2026-17',
+    })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:BuyerReference>PO-2026-17</cbc:BuyerReference>')
+  })
+
+  it('renders a per-line discount as a BG-27 allowance with net LineExtensionAmount', () => {
+    const input = makeValidInput()
+    // 2 × 100 = 200 gross, 10% discount = 20, net 180, VAT 25% on net = 45.
+    input.items = [
+      makeItem({ discount_percent: 10, line_total: 180, vat_amount: 45 }),
+    ]
+    input.invoice = makeInvoice({
+      ...input.invoice,
+      subtotal: 180,
+      vat_amount: 45,
+      total: 225,
+      remaining_amount: 225,
+    })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:LineExtensionAmount currencyID="SEK">180.00</cbc:LineExtensionAmount>')
+    expect(result.xml).toContain('<cbc:ChargeIndicator>false</cbc:ChargeIndicator>')
+    expect(result.xml).toContain('<cbc:AllowanceChargeReasonCode>95</cbc:AllowanceChargeReasonCode>')
+    expect(result.xml).toContain('<cbc:MultiplierFactorNumeric>10</cbc:MultiplierFactorNumeric>')
+    expect(result.xml).toContain('<cbc:Amount currencyID="SEK">20.00</cbc:Amount>')
+    expect(result.xml).toContain('<cbc:BaseAmount currencyID="SEK">200.00</cbc:BaseAmount>')
+    // The undiscounted unit price stays in cac:Price (BT-146).
+    expect(result.xml).toContain('<cbc:PriceAmount currencyID="SEK">100</cbc:PriceAmount>')
+  })
+
+  it('rejects a discounted line whose stored total is not net of the discount', () => {
+    const input = makeValidInput()
+    input.items = [makeItem({ discount_percent: 10, line_total: 200, vat_amount: 50 })]
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues.map(({ code }) => code)).toContain('LINE_TOTAL_MISMATCH')
   })
 
   it('rejects credit notes and self-billed invoices in the generation layer', () => {

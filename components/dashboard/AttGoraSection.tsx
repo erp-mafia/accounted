@@ -200,7 +200,11 @@ export default function AttGoraSection({
   }
 
   const showInboxDocuments = hasAi && counts.inbox_document > 0
-  const bokforRows = counts.book_transaction > 0 || showInboxDocuments || matches.length > 0
+  const bokforRows =
+    counts.book_transaction > 0 ||
+    counts.book_skattekonto > 0 ||
+    showInboxDocuments ||
+    matches.length > 0
   const granskaRows =
     counts.supplier_invoice_approval > 0 ||
     counts.verifikat_missing_document > 0 ||
@@ -275,6 +279,14 @@ export default function AttGoraSection({
                         icon={ArrowLeftRight}
                         label={t('row_book_transactions')}
                         count={counts.book_transaction}
+                      />
+                    )}
+                    {counts.book_skattekonto > 0 && (
+                      <WorklistRow
+                        href="/transactions?source=skatteverket"
+                        icon={Landmark}
+                        label={t('row_book_skattekonto')}
+                        count={counts.book_skattekonto}
                       />
                     )}
                     {matches.length > 0 && (

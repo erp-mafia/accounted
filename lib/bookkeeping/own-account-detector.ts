@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Transaction } from '@/types'
 import { findPairableCashAccountByIban } from '@/lib/cash-accounts/service'
 import { createLogger } from '@/lib/logger'
+import { addDaysIso as addDays } from '@/lib/dates/iso'
 
 const log = createLogger('own-account-detector')
 
@@ -140,10 +141,4 @@ export async function detectOwnAccountTransfer(
     counterCurrency: counterAccount.currency,
     pairTransactionId: pair?.id ?? null,
   }
-}
-
-function addDays(iso: string, days: number): string {
-  const d = new Date(iso + 'T00:00:00Z')
-  d.setUTCDate(d.getUTCDate() + days)
-  return d.toISOString().slice(0, 10)
 }

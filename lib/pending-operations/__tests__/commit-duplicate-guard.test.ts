@@ -115,7 +115,7 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
     // The booking proceeds past the guard (not auto-rejected); the downstream
     // booking is allowed to fail against the bare mock. Before that, the bypass
     // must leave a durable BankTransactionDuplicateDismissed record so an
-    // auditor can reconstruct why the duplicate was allowed (BFNAR 2013:2 kap 8).
+    // auditor can reconstruct why the duplicate was allowed (BFNAR 2013:2 p. 9.16).
     const supabase = queuedSupabase([
       { data: { id: 'op-1' } },
       { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },

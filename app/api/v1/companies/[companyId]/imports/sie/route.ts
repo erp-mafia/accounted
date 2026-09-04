@@ -26,7 +26,7 @@ import { z } from 'zod'
 import { accepted } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import {
   startOperation,
   completeOperation,
@@ -165,17 +165,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // belt-and-suspenders.
       .strict()
       .safeParse(parsedOptions)
-    if (!optionsParse.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: optionsParse.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!optionsParse.success) return v1ValidationError(ctx, optionsParse.error)
     const options = optionsParse.data
 
     // Decode + parse + hash. These are all sync / fast: done before

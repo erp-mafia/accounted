@@ -33,6 +33,9 @@ function displayedCustomer(invoice: Invoice): string | null {
 }
 
 function displayedDueDate(invoice: Invoice): string | null {
+  // The list shows a quote's "Giltig till" in the date column (a quote stays
+  // a draft, so the draft rule below would blank it).
+  if (invoice.document_type === 'quote') return invoice.valid_until || null
   if (invoice.credited_invoice_id || invoice.status === 'draft') return null
   return invoice.due_date || null
 }

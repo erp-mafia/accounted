@@ -13,16 +13,12 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeft, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatDate } from '@/lib/utils'
+import { formatAmount, formatDate } from '@/lib/utils'
 import SupplierForm from '@/components/suppliers/SupplierForm'
 import Link from 'next/link'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import type { Supplier, SupplierType, CreateSupplierInput, SupplierInvoice } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
 
 // Supplier invoices carry their own currency; "kr" is only correct for SEK.
 function amountWithCurrency(amount: number, currency?: string | null): string {

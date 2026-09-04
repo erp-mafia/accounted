@@ -304,12 +304,142 @@ describe('tools/list payload size guard', () => {
     //     the staging envelope; the description is one sentence per fact).
     //     Same deliberate skip of the read-demotion rule as the entry above:
     //     the demotion needs prod usage data, not a guess inside this PR.
+    //   * 65K to 61.3K by demoting ten rarely-called READ tools to
+    //     search-only (2026-08-31). This is the demotion the two entries above
+    //     deferred for want of prod usage data, done as its own change and
+    //     ratcheting the ceiling back down as they asked.
+    //
+    //     Picked from 60 days of mcp.tool_called: default-catalog reads with
+    //     <= 25 calls, excluding anything in RECOMMENDED_WORKFLOW_LOADOUTS.
+    //     Deliberately NOT demoted despite low counts:
+    //       - gnubok_call_tool, which IS the search-only bridge;
+    //       - gnubok_receipt_matcher and gnubok_vat_review_widget, which are
+    //         WIDGET tools: the host renders them from the _meta.ui they
+    //         publish in tools/list, so search-only makes the widget
+    //         unrenderable. Their own tests catch this; both were demoted in a
+    //         first pass and put back.
+    //       - the connect_* onboarding tools (#1936 put them in the catalog on
+    //         purpose: a fresh agent has not learned to search yet);
+    //       - gnubok_lookup_company, the org-number-first onboarding entry;
+    //       - every arsredovisning / dispositioner / depreciation / accrual
+    //         PROPOSAL tool. A 60-day window ending in August cannot see
+    //         bokslut season at all: most Swedish companies close on 31 Dec and
+    //         do the work Jan-Jun, so summer counts understate them to near
+    //         zero. Demoting those would hide the year-end flow exactly when it
+    //         is needed. Usage data is necessary here, not sufficient.
+    //
+    //   * 61.3K to 61.5K by adding worked `examples` to five tools
+    //     (2026-09-01, #2066): categorize_transaction, create_voucher,
+    //     query_journal, approve_pending_operation, get_kpi_report. 199 tokens
+    //     for 10 examples, spending part of what the demotion above reclaimed
+    //     and leaving ~118 under the ceiling. The ceiling is NOT raised.
+    //     Examples were priced against 30 days of mcp.tool_called and aimed at
+    //     the combinations the descriptions already warn about and callers
+    //     still get wrong (account_override without vat_treatment;
+    //     representation without deltagare; confirmed on a high-risk approval;
+    //     `metric` sent to a tool whose only parameter is period_id).
+    //     Cheaper than it looks per example, so the next batch should still
+    //     demote a read first rather than assume there is room.
+    //
+    //   * 61.5K to 58.9K by trimming the ONE schema 58 catalogued tools share
+    //     (2026-09-01). Measured first, which is what made it findable:
+    //     outputSchema is 38% of the whole catalog (23 290 tokens), and
+    //     STAGED_OPERATION_SCHEMA alone accounted for 14 736 of it, the same
+    //     envelope transmitted 58 times. Descriptions, which the three rounds
+    //     above trimmed, are only 10%.
+    //
+    //     Three edits, no tool demoted and no field removed: period_status
+    //     stops declaring its sub-shape as JSON Schema and carries it in one
+    //     sentence instead (actor, approve and preview were already bare
+    //     objects, so this makes the envelope internally consistent), the next
+    //     hint drops args' redundant additionalProperties: true, and
+    //     operation_id's description loses six words. Every
+    //     change is in the LOOSER direction: the server emits
+    //     structuredContent for every tool, and the documented failure mode is
+    //     a declaration too TIGHT making a strict client reject a successful
+    //     call. A looser declaration cannot do that.
+    //
+    //     next keeps additionalProperties: false: staging.test.ts pins it as a
+    //     closed shape, and a guard whose reason is not in front of you is not
+    //     a guard to loosen for 420 tokens.
+    //
+    //     Ceiling set to 60 000, not to 59 250. That leaves ~1 070 tokens of
+    //     deliberate working margin, about two or three ordinary tool
+    //     additions. The log above shows the tight-ratchet cycle: ratchet to
+    //     ~300 margin, block the next feature, bump, feel bad, demote. server.ts
+    //     took 70 commits in the 14 days before this change and the margin was
+    //     116 tokens, which is how that cycle starts. The margin is here so the
+    //     guard catches sustained growth rather than the next commit.
+    //
+    //     If more is needed, the lever is known and priced: the envelope still
+    //     costs ~11 800 tokens across those 58 tools, and the structural fix is
+    //     to stop repeating it, not to trim it further.
+    //
+    //   * 59.0K to 59.1K: second examples batch (2026-09-01, #2066), 7
+    //     examples on 5 more tools for 80 tokens, spending under half the
+    //     margin the envelope trim created. Picked by evidence: search_tools
+    //     was sent a nonexistent `offset` in prod the same day, the upload
+    //     pair's examples ARE the two-step flow, and
+    //     list_uncategorized_transactions is the highest-traffic read.
+    //
+    //   * +1 property, ~25 tokens (2026-09-02, MCP feedback seq 299742):
+    //     exchange_rate_override on create_supplier_invoice_from_inbox. A
+    //     foreign supplier invoice whose Riksbanken lookup fails stages with
+    //     exchange_rate: null and can never be approved (SI_FX_RATE_MISSING);
+    //     the property is the only way to unblock it from an agent. One short
+    //     description, no example; the lookup itself now goes through the
+    //     shared resolver with the cache, so the case is also rarer.
+    //
     // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
     // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
     // can only invoke what tools/list showed them, which is the constraint that
     // forced gnubok_reconcile_match back into the default catalog on
     // 2026-08-26. Demote a read to search-only before proposing a bump.
-    expect(approxTokens).toBeLessThan(65_000)
+    //
+    // Only READ tools may be demoted: gnubok_call_tool refuses writes, so a
+    // search-only WRITE is uncallable on Claude.ai. That is why the three
+    // bumps above happened instead of demotions.
+    //
+    //   * 2026-09-02, offert (#2163): gnubok_set_quote_status (a WRITE, so it
+    //     must stay in the default catalog) plus document_type / valid_until /
+    //     quote_status on create, list and get. Measured 60 306 after merging
+    //     the sales-order tools from #2166, then 60 093 after shortening every
+    //     quote description and dropping set_quote_status's outputSchema to a
+    //     bare object. The remaining ~100 tokens came from demoting
+    //     gnubok_get_arsredovisning_filing_status to search-only: iXBRL
+    //     filing is off until the Bolagsverket avtal exists, so no client
+    //     polls it. Ceiling unchanged.
+    //   * 2026-09-03, jamkning (#2240) landing on top of proforma (#2254):
+    //     two one-line field notes on create/update_employee measured 60 010
+    //     after merging main. Demoted gnubok_list_arsredovisning_versions to
+    //     search-only: versions exist only once a report is rendered for
+    //     signing or filing, which is the same switched-off iXBRL path as its
+    //     sibling filing_status tool. Ceiling unchanged.
+    expect(approxTokens).toBeLessThan(60_000)
+  })
+
+  /**
+   * The trap that catches anyone reclaiming budget by demoting reads.
+   *
+   * A widget tool publishes _meta.ui in tools/list, and that is how the host
+   * knows to render it. Search-only hides it from tools/list, so the widget
+   * silently stops rendering while the tool still "works" when called. Two
+   * widget tools were demoted in the 2026-08-31 pass and put back; their own
+   * suites caught it, but only because those suites happen to exist. This
+   * makes the rule hold for every widget tool added later.
+   */
+  it('never lets a widget tool fall out of the default catalog', () => {
+    const hiddenWidgets = tools
+      .filter((t) => (t as { _meta?: { ui?: unknown } })._meta?.ui)
+      .filter((t) => !isDefaultCatalogTool(t))
+      .map((t) => t.name)
+
+    expect(
+      hiddenWidgets,
+      `Widget tools publish _meta.ui in tools/list and the host renders them from it. ` +
+        `catalogVisibility: 'search' hides them there, so the widget stops rendering: ` +
+        hiddenWidgets.join(', '),
+    ).toEqual([])
   })
 
   it('keeps the accounted_* namespace as the measured worst case', () => {

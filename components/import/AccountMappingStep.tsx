@@ -24,6 +24,7 @@ import {
 import {
   ArrowRight,
   Search,
+  Check,
   CheckCircle,
   AlertCircle,
   XCircle,
@@ -38,6 +39,7 @@ import {
   type AccountVatTreatment,
 } from '@/lib/vat/account-vat-treatment'
 import {
+  InfoTooltip,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -241,20 +243,26 @@ export default function AccountMappingStep({
 
           {/* Mapping table */}
           <div className="overflow-hidden rounded-lg border">
-            <Table className="table-fixed">
+            {/* Under table-fixed the header widths ARE the layout: cells never
+                grow them. The budget is ~990px so the table fits a laptop
+                content column at 100 % zoom (#2125: 1216px overflowed, with
+                144px spent on a four-digit source account); beyond that the
+                wrapper scrolls and the confirm column stays sticky (#1668).
+                13px text and px-3 cells match the page-level list density. */}
+            <Table className="table-fixed text-[13px] [&_td]:px-3 [&_th]:px-3">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-36">Källkonto</TableHead>
-                  <TableHead className="w-64 max-w-64">Källnamn</TableHead>
-                  <TableHead className="w-12"></TableHead>
-                  <TableHead className="w-64">Målkonto</TableHead>
-                  {/* table-fixed sizes columns from the header's width only:
-                      min-w collapsed this column to nothing on laptop widths
-                      and its selects overflowed into Konfidens (2026-08-20). */}
+                  <TableHead className="w-20">Källkonto</TableHead>
+                  <TableHead className="w-40">Källnamn</TableHead>
+                  <TableHead className="w-8 !px-0" aria-hidden="true"></TableHead>
+                  <TableHead className="w-56">Målkonto</TableHead>
                   <TableHead className="w-72">{t('vat_treatment_column')}</TableHead>
                   <TableHead className="w-24">Konfidens</TableHead>
-                  <TableHead className="sticky right-0 z-20 w-32 min-w-32 border-l border-border bg-background text-right">
-                    {t('vat_treatment_confirm')}
+                  <TableHead className="sticky right-0 z-20 w-28 min-w-28 border-l border-border bg-background text-right">
+                    <span className="inline-flex items-center gap-1">
+                      {t('vat_treatment_confirm')}
+                      <InfoTooltip content={t('vat_treatment_confirm_help')} side="left" />
+                    </span>
                   </TableHead>
                 </TableRow>
               </TableHeader>
@@ -265,11 +273,11 @@ export default function AccountMappingStep({
                     className={cn('group', !mapping.targetAccount && 'bg-destructive/5')}
                   >
                     <TableCell className="font-mono">{mapping.sourceAccount}</TableCell>
-                    <TableCell className="max-w-64 text-muted-foreground">
+                    <TableCell className="text-muted-foreground">
                       <TruncatedSourceName sourceName={mapping.sourceName} />
                     </TableCell>
-                    <TableCell>
-                      <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                    <TableCell className="!px-0">
+                      <ArrowRight className="mx-auto h-4 w-4 text-muted-foreground" />
                     </TableCell>
                     <TableCell>
                       <Select
@@ -310,7 +318,7 @@ export default function AccountMappingStep({
                     <TableCell>
                       {mapping.sourceAccount === mapping.targetAccount &&
                       ['3', '4', '5', '6'].includes(mapping.sourceAccount.charAt(0)) ? (
-                        <div className="flex min-w-72 gap-2">
+                        <div className="flex gap-2">
                           <Select
                             value={mapping.defaultVatTreatment ?? 'none'}
                             onValueChange={(value) => {
@@ -326,7 +334,12 @@ export default function AccountMappingStep({
                               onVatTreatmentChange(mapping.sourceAccount, treatment, rate)
                             }}
                           >
-                            <SelectTrigger className={mapping.requiresVatTreatmentReview ? 'border-warning/60' : ''}>
+                            <SelectTrigger
+                              className={cn(
+                                'min-w-0 flex-1',
+                                mapping.requiresVatTreatmentReview && 'border-warning/60',
+                              )}
+                            >
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -350,7 +363,7 @@ export default function AccountMappingStep({
                               value === 'none' ? null : Number(value),
                             )}
                           >
-                            <SelectTrigger className="w-24" aria-label={t('vat_rate_label')}>
+                            <SelectTrigger className="w-24 shrink-0" aria-label={t('vat_rate_label')}>
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -377,26 +390,34 @@ export default function AccountMappingStep({
                     </TableCell>
                     <TableCell
                       className={cn(
-                        'sticky right-0 z-10 w-32 min-w-32 border-l border-border transition-colors',
+                        'sticky right-0 z-10 w-28 min-w-28 border-l border-border text-right transition-colors',
                         mapping.targetAccount ? 'bg-background' : 'bg-destructive/5',
                         'group-hover:bg-muted/50 group-focus-within:bg-muted/50',
                       )}
                     >
                       {mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="min-h-11 w-full sm:min-h-8"
-                          aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount}`}
-                          onClick={() => onVatTreatmentChange(
-                            mapping.sourceAccount,
-                            mapping.defaultVatTreatment ?? null,
-                            mapping.defaultVatRate ?? null,
-                          )}
-                        >
-                          {t('vat_treatment_confirm')}
-                        </Button>
+                        /* Icon-only: the column header carries the label and
+                           the tooltip repeats it on hover; the accessible name
+                           also says which row. */
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="h-11 w-11 sm:h-8 sm:w-8"
+                              aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount}`}
+                              onClick={() => onVatTreatmentChange(
+                                mapping.sourceAccount,
+                                mapping.defaultVatTreatment ?? null,
+                                mapping.defaultVatRate ?? null,
+                              )}
+                            >
+                              <Check className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="left">{t('vat_treatment_confirm')}</TooltipContent>
+                        </Tooltip>
                       )}
                     </TableCell>
                   </TableRow>

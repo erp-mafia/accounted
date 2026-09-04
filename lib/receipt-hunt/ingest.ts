@@ -189,7 +189,7 @@ export async function ingestMailCandidate(
         if (dupErr) throw new Error(dupErr.message)
         if (dupItem) {
           // Behandlingshistorik, not just an app log: the dedupe decision is
-          // part of the auditable trail (BFNAR 2013:2 kap 8).
+          // part of the auditable trail (BFNAR 2013:2 p. 9.16).
           try {
             await appendProcessingHistory({
               companyId,

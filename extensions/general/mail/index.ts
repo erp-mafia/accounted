@@ -12,6 +12,7 @@ import {
 } from './lib/google-oauth'
 import { disconnect, listConnections, saveConnection } from './lib/connections'
 import { resolveCallbackOrigin } from './lib/callback-origin'
+import { requireFlowInitiator } from '@/lib/auth/oauth-flow-binding'
 
 // Registered as soon as the extension loads, so the receipt hunt can search
 // mail without core ever importing from @/extensions.
@@ -77,6 +78,23 @@ export const mailExtension: Extension = {
 
         const verified = verifyOAuthState(state)
         if (!verified) return NextResponse.redirect(`${settingsUrl}?mail=expired`)
+
+        // The signed state proves the flow was started by verified.userId for
+        // verified.companyId; it does not prove that the browser now finishing
+        // it is that user. The grant is written for the state's user and
+        // company with the service client, so without this check a victim
+        // lured into approving a Google consent someone else started would
+        // have THEIR mailbox attached to that someone's company. Checked
+        // before the code exchange so a refused flow burns nothing.
+        const initiator = await requireFlowInitiator(request, verified.userId, {
+          flow: 'mail.oauth-callback',
+        })
+        if (!initiator.ok) {
+          // No session: sign in and the callback re-runs with the same code
+          // and state (the state is stateless and still within its TTL).
+          if (initiator.reason === 'no_session') return initiator.response
+          return NextResponse.redirect(`${settingsUrl}?mail=mismatch`)
+        }
 
         try {
           const origin = resolveCallbackOrigin(url.origin)

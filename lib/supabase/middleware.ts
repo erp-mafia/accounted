@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import type { User } from '@supabase/supabase-js'
 import { NextResponse, type NextRequest } from 'next/server'
 import { createLogger } from '@/lib/logger'
 import {
@@ -11,9 +12,13 @@ import {
   type ProxyTimings,
 } from '@/lib/supabase/proxy-timing'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { claimsPinned } from '@/lib/auth/claims'
+import { isMultiUserEnforced } from '@/lib/entitlements/multi-user'
+import { MULTI_USER_GRACE_DAYS } from '@/lib/entitlements/multi-user-state'
 import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
+import { isEmailOnBrandAllowlist } from '@/lib/auth/brand-signup-gate'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
 import {
@@ -41,12 +46,27 @@ import {
 const log = createLogger('proxy')
 
 /**
- * Host-scoped marker that the signed-in user is on their home domain, so the
- * affinity check below costs zero queries on the hot path. Expiry re-runs the
- * check, which bounds staleness after team-membership changes.
+ * Marker that the signed-in user is on their home domain, so the affinity
+ * check below costs zero queries on the hot path. Expiry re-runs the check,
+ * which bounds staleness after team-membership changes.
+ *
+ * The value is scoped to BOTH the user and the host (`userId~host`): a
+ * host-only value let anyone who signed in within the TTL window inherit the
+ * previous user's "this is home" verdict in the same browser, skipping the
+ * brand-host bounce entirely (found via the amnas account-switch repro,
+ * 2026-08-31). A stale host-only cookie from before this change simply never
+ * matches, so the check re-runs and the format migrates itself. The `~`
+ * separator is unreserved under encodeURIComponent AND a legal raw cookie
+ * octet, so the value round-trips byte-identically whether or not the cookie
+ * layer percent-encodes.
  */
 const HOME_DOMAIN_OK_COOKIE = 'gnubok-home-ok'
 const HOME_DOMAIN_OK_MAX_AGE = 15 * 60
+
+/** The `userId~host` value a home-ok cookie must carry to skip the check. */
+function homeDomainOkValue(userId: string, host: string): string {
+  return `${userId}~${host}`
+}
 
 /**
  * Auth proxy entry point. Wraps the real work so every response carries a
@@ -244,12 +264,28 @@ async function updateSessionInner(
       pathname,
       hasAuthorizationHeader,
     )
-    if (!skipMfaGate && user && shouldEnforceMfa(user)) {
-      const { data: aal } = await timed(timing, 'mfaMs', () =>
-        supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
+    // `user` is the getUser() result above: server-authenticated, so its
+    // factor list is trustworthy. Only a session with something to step up
+    // TO is gated here; forcing enrolment stays the page branch's job, as
+    // before. The assurance level itself comes from the signature-verified
+    // claims and fails CLOSED (see resolveVerifiedAal), never from the
+    // cookie's session object.
+    if (
+      !skipMfaGate &&
+      user &&
+      shouldEnforceMfa(user) &&
+      userHasVerifiedFactor(user)
+    ) {
+      const aal = await timed(timing, 'mfaMs', () =>
+        resolveVerifiedAal(supabase),
       )
-      if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-        return NextResponse.json({ error: 'MFA-verifiering krävs.' }, { status: 403 })
+      if (aal !== 'aal2') {
+        const response = NextResponse.json(
+          { error: 'MFA-verifiering krävs.' },
+          { status: 403 },
+        )
+        copyResponseCookies(supabaseResponse, response)
+        return response
       }
     }
     return supabaseResponse
@@ -289,10 +325,15 @@ async function updateSessionInner(
   // requests off these paths (a) dropped the confirmation click before
   // verifyOtp could consume the token, so the change never completed, and
   // (b) hid the /auth/email-change status page in exactly the success case.
+  // Hook-built links carry type=email_change; stock GoTrue links verify on
+  // the GoTrue host and return through redirect_to with only the
+  // flow=email_change marker that /api/account/email stamps on it, so both
+  // shapes must pass.
   if (
     pathname.startsWith('/auth/email-change') ||
     (pathname.startsWith('/auth/callback') &&
-      request.nextUrl.searchParams.get('type') === 'email_change')
+      (request.nextUrl.searchParams.get('type') === 'email_change' ||
+        request.nextUrl.searchParams.get('flow') === 'email_change'))
   ) {
     return supabaseResponse
   }
@@ -334,14 +375,17 @@ async function updateSessionInner(
       const destination = carriesDestination
         ? safeReturnTo(request.nextUrl.searchParams.get('next'), '/')
         : '/'
-      return NextResponse.redirect(new URL(destination, request.url))
+      return redirectWithAuthCookies(
+        supabaseResponse,
+        new URL(destination, request.url),
+      )
     }
     return supabaseResponse
   }
 
   // Protected routes - require authentication
   if (!user) {
-    return bounceToAuth(request, '/login')
+    return bounceToAuth(request, supabaseResponse, '/login')
   }
 
   // ── Home-domain affinity (WL, founder call 2026-08-05) ──────────────────
@@ -355,14 +399,19 @@ async function updateSessionInner(
   // stays the answer for multi-domain company rosters. Exemption: byrå
   // staff who also have canonical-homed companies stay put on the canonical
   // host; the signpost handles per-company homing.
-  const homeOutcome = await resolveHomeDomainOutcome(supabase, user.id, request)
+  const homeOutcome = await resolveHomeDomainOutcome(
+    supabase,
+    user.id,
+    user.email ?? null,
+    request,
+  )
   if (homeOutcome.redirectTo) {
-    return NextResponse.redirect(homeOutcome.redirectTo)
+    return redirectWithAuthCookies(supabaseResponse, homeOutcome.redirectTo)
   }
   if (homeOutcome.cacheOk) {
     supabaseResponse.cookies.set(
       HOME_DOMAIN_OK_COOKIE,
-      normalizeHost(request.nextUrl.hostname),
+      homeDomainOkValue(user.id, normalizeHost(request.nextUrl.hostname)),
       {
         path: '/',
         httpOnly: true,
@@ -385,7 +434,8 @@ async function updateSessionInner(
       const mfaTarget = `/mfa/enroll${
         innerReturnTo ? `?returnTo=${encodeURIComponent(innerReturnTo)}` : ''
       }`
-      return NextResponse.redirect(
+      return redirectWithAuthCookies(
+        supabaseResponse,
         new URL(
           `/account/set-password?returnTo=${encodeURIComponent(mfaTarget)}`,
           request.url,
@@ -414,6 +464,7 @@ async function updateSessionInner(
     companyId: string | null
     locale: string | null
     degraded: boolean
+    allLocked: boolean
   } | null = null
   const resolveCompanyOnce = async () =>
     (resolvedCompany ??= await timed(timing, 'companyMs', () =>
@@ -422,38 +473,31 @@ async function updateSessionInner(
 
   // MFA enforcement (application-side only, not RLS)
   if (shouldEnforceMfa(user)) {
-    const { data: aal } = await timed(timing, 'mfaMs', () =>
-      supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
-    )
+    const aal = await timed(timing, 'mfaMs', () => resolveVerifiedAal(supabase))
 
-    // User has MFA enrolled but hasn't verified this session → redirect to verify
-    if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-      return bounceToAuth(request, '/mfa/verify')
-    }
+    // Nothing below applies at AAL2: reaching it requires having verified a
+    // challenge on a verified factor. Deliberately also skipped for a user
+    // who unenrols their last factor mid-session: the JWT keeps aal2 until
+    // the next token refresh, so the enrolment bounce lands on the refresh
+    // instead of the next click (unchanged from the listFactors-era gate,
+    // PR #1922).
+    if (aal !== 'aal2') {
+      // The factor list is read off the server-authenticated getUser()
+      // result above, never off the cookie session. A cookie edited to hide
+      // the factor used to sail past this bounce, and because the enrolment
+      // check below then found the factor server-side, straight onto the
+      // page at AAL1. Reading it here also drops the listFactors() round
+      // trip that check used to pay: auth-js implements listFactors() as
+      // that very getUser() call.
+      if (userHasVerifiedFactor(user)) {
+        return bounceToAuth(request, supabaseResponse, '/mfa/verify')
+      }
 
-    // MFA required but user has no factor enrolled yet → force enrollment
-    // Skip for users with no companies (still setting up).
-    //
-    // Only worth asking when the session is NOT at AAL2: reaching AAL2
-    // requires having verified a challenge on a verified factor, so the
-    // factor list cannot be empty there. auth-js implements listFactors()
-    // as a getUser() network round trip, and running it here on every
-    // page, RSC and prefetch request for every MFA-verified user was the
-    // second Supabase Auth call per request (measured via mw-mfa, PR #1922).
-    // The narrow case this defers is a user who unenrols their last factor
-    // mid-session: the JWT keeps aal2 until the next token refresh, so the
-    // enrolment bounce lands on the refresh instead of the next click.
-    if (aal?.currentLevel !== 'aal2') {
+      // MFA required but no factor enrolled yet: force enrolment. Skipped
+      // for users with no companies (still setting up).
       const { companyId: companyIdForMfa } = await resolveCompanyOnce()
       if (companyIdForMfa) {
-        const { data: factors } = await timed(timing, 'mfaMs', () =>
-          supabase.auth.mfa.listFactors(),
-        )
-        const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
-
-        if (!hasVerifiedFactor) {
-          return bounceToAuth(request, '/mfa/enroll')
-        }
+        return bounceToAuth(request, supabaseResponse, '/mfa/enroll')
       }
     }
   }
@@ -464,7 +508,7 @@ async function updateSessionInner(
 
   // Company context resolution
   const cookieCompanyId = request.cookies.get('gnubok-company-id')?.value
-  const { companyId, locale: dbLocale, degraded } = await resolveCompanyOnce()
+  const { companyId, locale: dbLocale, degraded, allLocked } = await resolveCompanyOnce()
 
   // If the cookie pointed at a company we can no longer resolve (e.g.
   // archived), clear it so the browser stops sending it. Never on degraded
@@ -495,7 +539,10 @@ async function updateSessionInner(
     pathname.startsWith('/select-company') ||
     pathname.startsWith('/settings/account') ||
     pathname.startsWith('/api/account/') ||
-    pathname.startsWith('/api/company')
+    pathname.startsWith('/api/company') ||
+    // Multi-user seat gate: the paused page IS the destination for a user
+    // whose every membership is frozen, so it must render in that state.
+    pathname.startsWith('/paused')
 
   // No companies: redirect to the picker if we have BankID enrichment for
   // this user, otherwise the manual wizard. Either way, allow the escape-hatch
@@ -541,7 +588,19 @@ async function updateSessionInner(
       if (isByraNoCompanyAllowed) {
         return supabaseResponse
       }
-      return NextResponse.redirect(new URL('/byra', request.url))
+      return redirectWithAuthCookies(supabaseResponse, new URL('/byra', request.url))
+    }
+
+    // Multi-user seat gate: memberships exist but every one is frozen for
+    // this (non-owner) user. This is NOT the no-company state: sending them
+    // to onboarding would walk a locked-out colleague into creating a
+    // pointless company. The paused page explains and names the companies.
+    // API requests pass through so routes answer JSON, not an HTML redirect.
+    if (allLocked) {
+      if (pathname.startsWith('/api/')) {
+        return supabaseResponse
+      }
+      return NextResponse.redirect(new URL('/paused', request.url))
     }
 
     // Enrichment lives in the user-keyed `bankid_enrichment` table (migration
@@ -554,7 +613,10 @@ async function updateSessionInner(
       .maybeSingle()
 
     const destination = enrichmentRow ? '/select-company' : '/onboarding'
-    return NextResponse.redirect(new URL(destination, request.url))
+    return redirectWithAuthCookies(
+      supabaseResponse,
+      new URL(destination, request.url),
+    )
   }
 
   // Set company cookie on the response so downstream requests have it
@@ -586,6 +648,68 @@ async function getSupabaseSessionId(
       : null
   } catch (error) {
     console.warn('[middleware] could not resolve Supabase session id', error)
+    return null
+  }
+}
+
+/**
+ * Whether the SERVER-authenticated user carries a verified MFA factor.
+ *
+ * Only ever call this with the getUser() result: GoTrue returns `factors` on
+ * /user (auth-js's listFactors() is that same call, filtered), so reading it
+ * off the round trip the proxy has already paid costs nothing extra. The
+ * server omits an empty list, so a missing array means "no factor", exactly
+ * the reading listFactors() would give.
+ *
+ * Never call it with a user deserialised from the session cookie: the
+ * sb-*-auth-token cookie is unsigned base64 JSON, so whoever holds the
+ * password can strip `factors` from it and make an enrolled account look
+ * like one with nothing to step up to.
+ */
+function userHasVerifiedFactor(user: Pick<User, 'factors'>): boolean {
+  return user.factors?.some((factor) => factor.status === 'verified') ?? false
+}
+
+/**
+ * Assurance level of the current session, read from the signature-verified
+ * JWT claims: getClaims() checks the token locally against the cached JWKS
+ * (server-side for HS256 projects) and the iss/aud pinning is the same one
+ * require-auth applies. Returns null on ANY failure so both MFA gates fail
+ * closed; each failure is logged because a spike means MFA users are being
+ * refused, which must be visible in production.
+ *
+ * Deliberately not `mfa.getAuthenticatorAssuranceLevel()`: called without a
+ * JWT it computes `nextLevel` from `session.user.factors`, and that session
+ * is the editable cookie described on userHasVerifiedFactor. Its
+ * `currentLevel` happens to be sound (the JWT the preceding getUser() was
+ * accepted with), but the two halves come as one answer, so neither gate
+ * consumes it any more (security audit 2026-09).
+ */
+async function resolveVerifiedAal(
+  supabase: ReturnType<typeof createServerClient>,
+): Promise<string | null> {
+  if (typeof supabase.auth.getClaims !== 'function') {
+    console.error('[middleware] getClaims unavailable; treating session as not MFA-assured')
+    return null
+  }
+
+  try {
+    const { data, error } = await supabase.auth.getClaims()
+    const claims = data?.claims
+    if (error || !claims) {
+      console.error('[middleware] getClaims failed; treating session as not MFA-assured', error)
+      return null
+    }
+    if (!claimsPinned(claims)) {
+      console.error('[middleware] getClaims iss/aud pinning failed; treating session as not MFA-assured', {
+        iss: claims.iss,
+        aud: claims.aud,
+      })
+      return null
+    }
+    return typeof claims.aal === 'string' ? claims.aal : null
+  } catch (error) {
+    console.error('[middleware] getClaims threw; treating session as not MFA-assured', error)
     return null
   }
 }
@@ -633,6 +757,28 @@ function copyResponseCookies(from: NextResponse, to: NextResponse): void {
   for (const cookie of from.cookies.getAll()) {
     to.cookies.set(cookie)
   }
+}
+
+/**
+ * Redirect that carries the auth cookies queued on `authResponse`.
+ *
+ * auth-js writes through the `setAll` callback while `getUser()` runs: a
+ * successful refresh puts the ROTATED tokens on the response, a dead session
+ * puts the cookie DELETIONS there. A bare `NextResponse.redirect()` throws
+ * both away, so the browser replays the old cookie on the very next request:
+ * a consumed refresh token on the happy path, and a dead one on the expiry
+ * path, where production showed the bounce and the following /login each
+ * spending their own GoTrue 400 about 100 ms apart. Every response that
+ * replaces `supabaseResponse` has to go through here (or through
+ * `copyResponseCookies`, for the non-redirect ones).
+ */
+function redirectWithAuthCookies(
+  authResponse: NextResponse,
+  url: URL | string,
+): NextResponse {
+  const response = NextResponse.redirect(url)
+  copyResponseCookies(authResponse, response)
+  return response
 }
 
 function sessionTimeoutResponse(
@@ -716,9 +862,14 @@ const AUTH_DESTINATION_PARAM = {
  * that was going to happen anyway, on exactly the same conditions. The auth
  * pages navigate to the destination only after the step-up succeeds, and the
  * next request re-runs this same gate regardless.
+ *
+ * The bounce also has to carry the cookies auth-js queued on the response
+ * while `getUser()` ran, hence `authResponse`: see
+ * `redirectWithAuthCookies`.
  */
 function bounceToAuth(
   request: NextRequest,
+  authResponse: NextResponse,
   target: keyof typeof AUTH_DESTINATION_PARAM,
 ) {
   // Absolute-path reference: replaces path AND clears query/fragment.
@@ -730,7 +881,7 @@ function bounceToAuth(
   if (destination !== '/') {
     url.search = `${AUTH_DESTINATION_PARAM[target]}=${encodeURIComponent(destination)}`
   }
-  return NextResponse.redirect(url)
+  return redirectWithAuthCookies(authResponse, url)
 }
 
 /**
@@ -761,19 +912,26 @@ function isAffinityExemptHost(host: string): boolean {
  *      byrå's own client users log in on the byrå domain).
  *   3. Everyone else stays put.
  *
- * `cacheOk` marks a positive "this is home" verdict, cached in a host-scoped
- * cookie by the caller. Query failures fail open with no caching, so a
- * transient error neither locks anyone out nor sticks for a TTL window.
+ * `cacheOk` marks a positive "this is home" verdict, cached by the caller in
+ * a cookie scoped to this user and host. Query failures fail open with no
+ * caching, so a transient error neither locks anyone out nor sticks for a
+ * TTL window.
  */
 async function resolveHomeDomainOutcome(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
+  userEmail: string | null,
   request: NextRequest,
 ): Promise<{ redirectTo: URL | null; cacheOk: boolean }> {
   const stay = { redirectTo: null, cacheOk: false }
   const host = normalizeHost(request.nextUrl.hostname)
   if (isAffinityExemptHost(host)) return stay
-  if (request.cookies.get(HOME_DOMAIN_OK_COOKIE)?.value === host) return stay
+  // The cached verdict must belong to THIS user: a host-only match let a
+  // second account signed in within the TTL window ride the first account's
+  // verdict and skip the brand-host bounce.
+  if (request.cookies.get(HOME_DOMAIN_OK_COOKIE)?.value === homeDomainOkValue(userId, host)) {
+    return stay
+  }
 
   // Rule 1: the user's own byrå brand domains (RLS: members read their brand).
   const { data: byraRows, error: byraError } = await supabase
@@ -857,6 +1015,17 @@ async function resolveHomeDomainOutcome(
   }
   if ((clientRows ?? []).length > 0) return { redirectTo: null, cacheOk: true }
 
+  // A signup-allowlisted email stays on the brand host even before any
+  // membership exists: the partner owner between allowlisted signup and team
+  // provisioning. Without this the layout-level exemption in
+  // resolveBrandDomainBounce (lib/auth/brand-signup-gate.ts) is unreachable,
+  // because this redirect runs first. Fail-closed lookup: an allowlist query
+  // error reads as "not allowlisted" and falls through to the platform
+  // redirect, which is the pre-existing behavior.
+  if (userEmail && (await isEmailOnBrandAllowlist(hostBrand.id, userEmail))) {
+    return { redirectTo: null, cacheOk: true }
+  }
+
   const platformUrl = new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se')
   if (normalizeHost(platformUrl.hostname) === host) return { redirectTo: null, cacheOk: true }
   // Preserve path + query for the same deep-link reason as the byrå hop.
@@ -926,19 +1095,32 @@ async function resolveCompanyForMiddleware(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest
-): Promise<{ companyId: string | null; locale: string | null; degraded: boolean }> {
-  const { data, error } = await supabase.rpc('resolve_active_company')
+): Promise<{ companyId: string | null; locale: string | null; degraded: boolean; allLocked: boolean }> {
+  // Multi-user seat gate: the gated RPC skips memberships frozen for this
+  // user (non-owner, multi_user lapsed past its 20-day grace) and reports
+  // has_locked_membership when NOTHING resolved because of that, which is
+  // what routes the user to /paused instead of onboarding. Self-hosted and
+  // dev call the ungated function: the gate never bites there.
+  const enforced = isMultiUserEnforced()
+  const { data, error } = enforced
+    ? await supabase.rpc('resolve_active_company_gated', {
+        p_grace_days: MULTI_USER_GRACE_DAYS,
+      })
+    : await supabase.rpc('resolve_active_company')
 
   if (error) {
     if (error.code === 'PGRST202') {
-      // Function not deployed here: use the query path.
+      // Function not deployed here (self-host not migrated yet, or a deploy
+      // racing the branch merge): use the ungated query path. The race
+      // window fails OPEN for the seat gate on purpose: never lock people
+      // out because a deploy is mid-flight.
       return resolveCompanyForMiddlewareViaQueries(supabase, userId, _request)
     }
     // Issue #1053: a FAILED call degrades (fail open), never reads as "no
     // companies". locale null is fine because the degraded flag already
     // suppresses the locale-cookie sync at the call site.
     console.error('[middleware] resolve_active_company rpc failed', error)
-    return { companyId: null, locale: null, degraded: true }
+    return { companyId: null, locale: null, degraded: true, allLocked: false }
   }
 
   const row = Array.isArray(data) ? data[0] : data
@@ -946,7 +1128,7 @@ async function resolveCompanyForMiddleware(
     // Zero rows = NULL auth.uid(); impossible for the cookie-auth middleware
     // client, so treat as degraded rather than redirecting to onboarding.
     console.error('[middleware] resolve_active_company returned no row for authenticated user')
-    return { companyId: null, locale: null, degraded: true }
+    return { companyId: null, locale: null, degraded: true, allLocked: false }
   }
 
   if (row.company_id && row.used_fallback) {
@@ -969,6 +1151,9 @@ async function resolveCompanyForMiddleware(
     companyId: row.company_id ?? null,
     locale: row.locale ?? null,
     degraded: false,
+    // Only the gated RPC carries the column; the ungated one leaves it
+    // undefined, which correctly reads as false.
+    allLocked: row.has_locked_membership === true,
   }
 }
 
@@ -981,7 +1166,7 @@ async function resolveCompanyForMiddlewareViaQueries(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest
-): Promise<{ companyId: string | null; locale: string | null; degraded: boolean }> {
+): Promise<{ companyId: string | null; locale: string | null; degraded: boolean; allLocked: boolean }> {
   // 1. user_preferences (authoritative) + first membership, fetched in
   // parallel: the fallback query result doubles as validation when the
   // preferred company happens to be the first membership, which is the
@@ -1016,12 +1201,12 @@ async function resolveCompanyForMiddlewareViaQueries(
       '[middleware] company resolution query failed',
       prefsRes.error ?? firstRes.error
     )
-    return { companyId: null, locale, degraded: true }
+    return { companyId: null, locale, degraded: true, allLocked: false }
   }
 
   if (prefs?.active_company_id) {
     if (prefs.active_company_id === firstCompany?.company_id) {
-      return { companyId: firstCompany.company_id, locale, degraded: false }
+      return { companyId: firstCompany.company_id, locale, degraded: false, allLocked: false }
     }
 
     const { data: membership, error: membershipError } = await supabase
@@ -1036,14 +1221,14 @@ async function resolveCompanyForMiddlewareViaQueries(
     // first membership (wrong company for consultants): degrade instead.
     if (membershipError) {
       console.error('[middleware] company preference validation failed', membershipError)
-      return { companyId: null, locale, degraded: true }
+      return { companyId: null, locale, degraded: true, allLocked: false }
     }
 
-    if (membership) return { companyId: membership.company_id, locale, degraded: false }
+    if (membership) return { companyId: membership.company_id, locale, degraded: false, allLocked: false }
   }
 
   // 2. Fallback: first non-archived membership (already fetched above)
-  if (!firstCompany) return { companyId: null, locale, degraded: false }
+  if (!firstCompany) return { companyId: null, locale, degraded: false, allLocked: false }
 
   // Write the fallback back to user_preferences so future RLS lookups
   // see the same active company without needing this fallback scan.
@@ -1061,5 +1246,5 @@ async function resolveCompanyForMiddlewareViaQueries(
     console.error('[middleware] active company write-back failed', writeBackError)
   }
 
-  return { companyId: firstCompany.company_id, locale, degraded: false }
+  return { companyId: firstCompany.company_id, locale, degraded: false, allLocked: false }
 }

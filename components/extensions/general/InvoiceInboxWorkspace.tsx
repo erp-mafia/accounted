@@ -47,8 +47,9 @@ import {
   Globe,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
-import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { cn, formatCurrency, formatDate, formatDateLong, formatDateTime } from '@/lib/utils'
+import { QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import { StartCard } from '@/components/dashboard/StartCard'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
@@ -62,9 +63,15 @@ import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
-import type { InboxChannelContext, InvoiceExtractionResult, InboxItemSource } from '@/types'
+import type { AccountingMethod, InboxChannelContext, InvoiceExtractionResult, InboxItemSource } from '@/types'
 import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
 import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
+import {
+  matchesInboxKindFilter,
+  resolveInboxKind,
+  INBOX_KIND_FILTERS,
+  type InboxKindFilter,
+} from '@/lib/documents/inbox-kind'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
@@ -84,8 +91,6 @@ import {
 } from '@/lib/documents/upload-size'
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
-
-type AccountingMethod = 'accrual' | 'cash'
 
 /**
  * A failure whose message is already the sentence to show the user, resolved
@@ -170,6 +175,10 @@ interface InboxItem {
   email_body_text: string | null
   document_id: string | null
   extracted_data: InvoiceExtractionResult | null
+  // Sender-declared kind from the +lev / +ver plus-address tag. A column, so
+  // it survives re-extraction; wins over extracted_data.documentKind for the
+  // row badge and the type filter. Absent on client-side placeholders.
+  kind_hint?: 'supplier_invoice' | 'receipt' | null
   matched_supplier_id: string | null
   matched_transaction_id: string | null
   created_supplier_invoice_id: string | null
@@ -211,6 +220,47 @@ interface InboxAddress {
   address: string
   local_part: string
   status: string
+}
+
+// One received mail per inbox, from the InboundMailReceived history event
+// the inbound webhook appends (#2181). Sender, subject and address are
+// deliberately absent from the event (processing_history is outside the
+// erasure path); the route resolves inbox_id to the company's own address
+// at read time, and the filed item ids are what the panel links to.
+interface InboundMailAttachment {
+  id: string
+  outcome: 'filed' | 'duplicate' | 'rejected' | 'failed'
+  inbox_item_id?: string
+  reason?: string
+  mime?: string
+}
+interface InboundMail {
+  event_id: string
+  email_id: string
+  occurred_at: string
+  inbox_id: string | null
+  custom_domain: boolean
+  tags: string[]
+  unknown_tag_count: number
+  inbox_local_part: string | null
+  inbox_status: string | null
+  kind_hint: string | null
+  tag_conflict: boolean
+  outcome: string
+  attachment_count: number
+  inbox_item_id: string | null
+  attachments: InboundMailAttachment[]
+}
+// Window for the received-mail panel; the route caps at 365.
+const INBOUND_MAIL_DAYS = 30
+
+// `acme-x7f2@inbox.example` + 'lev' → `acme-x7f2+lev@inbox.example`. The
+// webhook splits the local part at the first `+` and looks up what is before
+// it, so the tag never changes which company the mail reaches.
+function plusAddress(address: string, tag: string): string {
+  const at = address.indexOf('@')
+  if (at === -1) return address
+  return `${address.slice(0, at)}+${tag}${address.slice(at)}`
 }
 
 // How far the underlag behind the selected row got.
@@ -284,7 +334,10 @@ function hasAnyExtractedField(data: InvoiceExtractionResult | null): boolean {
     inv?.invoiceNumber || inv?.invoiceDate || inv?.dueDate || inv?.paymentReference ||
     t?.subtotal != null || t?.vatAmount != null || t?.total != null ||
     (data.lineItems?.length ?? 0) > 0 || (data.vatBreakdown?.length ?? 0) > 0 ||
-    (data.prominentAmounts?.length ?? 0) > 0
+    // Same meaningful-amount predicate as the Belopp row render filter: a
+    // zero-only prominentAmounts list must not count as "found something"
+    // and suppress the retry / upgrade affordances.
+    (data.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0)
   )
 }
 
@@ -310,8 +363,6 @@ const EXTRACTED_FIELD_ACCESSORS: ((d: InvoiceExtractionResult) => unknown)[] = [
   (d) => d.totals?.vatAmount,
   (d) => d.totals?.total,
 ]
-
-export const EXTRACTED_FIELD_COUNT = EXTRACTED_FIELD_ACCESSORS.length
 
 /** How many of them the extraction actually filled in. */
 function countExtractedFields(data: InvoiceExtractionResult | null): number {
@@ -403,6 +454,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [filter, setFilter] = useState<
     'todo' | 'linked' | 'booked' | 'error' | 'all' | 'missing' | 'portal'
   >('todo')
+  // Document-type filter (#2129): leverantörsfakturor vs underlag, on top of
+  // the status filter. Not persisted, same as the status filter.
+  const [kindFilter, setKindFilter] = useState<InboxKindFilter>('all')
   const [searchTerm, setSearchTerm] = useState('')
   // Bulk selection. Items linked to a supplier invoice are skipped at delete
   // time (server returns 409); we still allow them to be selected so the
@@ -610,6 +664,29 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [mailConnections, setMailConnections] = useState<InboxMailConnection[]>([])
   const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phoneMasked?: string; verifiedAt?: string | null } | null>(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
+  // Received-mail history (#2181): read when its panel is first opened, so
+  // the sources strip costs nothing for people who never look.
+  const [inboundMails, setInboundMails] = useState<InboundMail[] | null>(null)
+  const [inboundMailsFailed, setInboundMailsFailed] = useState(false)
+  // The route caps the list; when the window held more, say so rather than
+  // let "every mail" stand over a list that is missing the oldest ones.
+  const [inboundMailsTruncated, setInboundMailsTruncated] = useState(false)
+
+  const fetchInboundMails = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/invoice-inbox/inbound-history?days=${INBOUND_MAIL_DAYS}`,
+      )
+      if (!res.ok) throw new Error(`inbound-history ${res.status}`)
+      const { data } = await res.json()
+      setInboundMails(Array.isArray(data?.mails) ? data.mails : [])
+      setInboundMailsTruncated(data?.has_more === true)
+      setInboundMailsFailed(false)
+    } catch (err) {
+      console.error('[invoice-inbox] fetchInboundMails failed:', err)
+      setInboundMailsFailed(true)
+    }
+  }, [])
 
   useEffect(() => {
     void (async () => {
@@ -751,8 +828,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     )
   }, [portalPurchases, otherPurchases, filter, searchTerm])
 
-  const filteredItems = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase()
+  const statusFilteredItems = useMemo(() => {
     if (filter === 'missing' || filter === 'portal') return []
     return items.filter((item) => {
       // Status filter. "todo" is the active inbox: everything except booked.
@@ -762,6 +838,44 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       if (filter === 'booked' && status !== 'booked') return false
       if (filter === 'error' && status !== 'error') return false
       // 'all' → no status narrowing
+      return true
+    })
+  }, [items, filter])
+
+  // Per-kind counts for the type menu, over the status-filtered list so the
+  // numbers match what picking an entry would show.
+  const kindCounts = useMemo(() => {
+    const counts: Record<InboxKindFilter, number> = {
+      all: statusFilteredItems.length,
+      supplier_invoice: 0,
+      underlag: 0,
+    }
+    for (const item of statusFilteredItems) {
+      const kind = resolveInboxKind(item)
+      if (matchesInboxKindFilter(kind, 'supplier_invoice')) counts.supplier_invoice += 1
+      else if (matchesInboxKindFilter(kind, 'underlag')) counts.underlag += 1
+    }
+    return counts
+  }, [statusFilteredItems])
+
+  // Rows the type menu is hiding right now (#2181): a +lev mail filed as a
+  // leverantörsfaktura is invisible under Underlag, and the trigger's count
+  // alone does not say that anything is missing.
+  const hiddenByKindFilter = kindFilter === 'all' ? 0 : kindCounts.all - kindCounts[kindFilter]
+
+  // The type menu only earns its row once something is classified (or the
+  // user has already narrowed): an inbox of unclassified rows has nothing to
+  // split.
+  const showKindFilter =
+    filter !== 'missing' &&
+    filter !== 'portal' &&
+    (kindFilter !== 'all' || kindCounts.supplier_invoice > 0 || kindCounts.underlag > 0)
+
+  const filteredItems = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase()
+    return statusFilteredItems.filter((item) => {
+      // Type filter: sender hint first, then the AI classification.
+      if (!matchesInboxKindFilter(resolveInboxKind(item), kindFilter)) return false
 
       // Search filter: supplier name, email subject/from, placeholder filename
       if (term === '') return true
@@ -776,7 +890,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         .toLowerCase()
       return haystack.includes(term)
     })
-  }, [items, filter, searchTerm])
+  }, [statusFilteredItems, kindFilter, searchTerm])
 
   // ── Selection ──────────────────────────────────────────────
 
@@ -1127,16 +1241,23 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }
   }, [fetchItems, selectedId, toast])
 
-  const toggleSelected = useCallback((id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }, [])
+  // Ranges walk the rendered inbox rows in order. Optimistic upload
+  // placeholders render no checkbox, so they stay out of the range: their
+  // temp-* ids are not server rows and must never reach a bulk action.
+  const range = useRangeSelect({
+    visibleIds: filteredItems.filter((item) => !item.isPlaceholder).map((item) => item.id),
+    selectedIds,
+    setSelectedIds,
+  })
+  const toggleSelected = useCallback(
+    (id: string, extend?: boolean) => range.toggle(id, extend),
+    [range],
+  )
 
-  const clearSelection = useCallback(() => setSelectedIds(new Set()), [])
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set())
+    range.resetAnchor()
+  }, [range])
 
   // The selected rows, and how many of them can actually be bulk-booked
   // (matched to a transaction and not yet booked). Drives the "Bokför valda"
@@ -1464,6 +1585,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <div className="min-w-0 flex-1">
                 <span className="tabular-nums">{inboxAddress.address}</span>
+                {/* Plus-addressing (#2129): the sender sorts the mail by
+                    writing +lev or +ver before the @. Both variants spelled
+                    out, since a tag is easier to copy than to construct. */}
+                <p className="mt-1 text-muted-foreground break-all">
+                  {t('address_plus_hint', {
+                    lev: plusAddress(inboxAddress.address, 'lev'),
+                    ver: plusAddress(inboxAddress.address, 'ver'),
+                  })}
+                </p>
               </div>
               <InboxAddressBar
                 address={inboxAddress.address}
@@ -1471,6 +1601,61 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 isRotating={isRotating}
               />
             </div>
+          )}
+
+          {/* Every mail that reached the address (#2181), whatever became of
+              it: filed, duplicate, rejected, failed. This is where "I mailed
+              it and it is not there" gets an answer instead of a shrug. */}
+          {inboxAddress && (
+            <details
+              className="group border-b border-border"
+              onToggle={(e) => {
+                if (e.currentTarget.open && inboundMails === null && !inboundMailsFailed) {
+                  void fetchInboundMails()
+                }
+              }}
+            >
+              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
+                <Inbox className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="flex-1 truncate">{t('inbound_mail_title')}</span>
+                {inboundMails !== null && (
+                  <span className="tabular-nums text-muted-foreground shrink-0">{inboundMails.length}</span>
+                )}
+                <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
+              </summary>
+              <div className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-1.5">
+                <p>
+                  {inboundMailsTruncated && inboundMails
+                    ? t('inbound_mail_truncated', { count: inboundMails.length, days: INBOUND_MAIL_DAYS })
+                    : t('inbound_mail_hint', { days: INBOUND_MAIL_DAYS })}
+                </p>
+                {inboundMailsFailed ? (
+                  <AttnLine
+                    action={{ label: t('retry'), onClick: () => { void fetchInboundMails() } }}
+                  >
+                    {t('inbound_mail_load_failed')}
+                  </AttnLine>
+                ) : inboundMails === null ? (
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {t('inbound_mail_loading')}
+                  </span>
+                ) : inboundMails.length === 0 ? (
+                  <p>{t('inbound_mail_empty', { days: INBOUND_MAIL_DAYS })}</p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {inboundMails.map((mail) => (
+                      <InboundMailRow
+                        key={mail.event_id}
+                        mail={mail}
+                        domain={inboxAddress.address.split('@')[1] ?? ''}
+                        onOpenItem={handleSelect}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </details>
           )}
 
           {mailConnections.map((c) => (
@@ -1601,6 +1786,48 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+              {/* Document type (#2129): the Fortnox-style split between
+                  leverantörsfakturor and bokföringsunderlag, as a second
+                  menu in the same shape as the status one. */}
+              {showKindFilter && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-between h-8 px-2.5 text-xs font-normal"
+                    >
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span className="truncate">{t(`kind_filter_${kindFilter}`)}</span>
+                        <span className="tabular-nums text-muted-foreground">
+                          {kindCounts[kindFilter]}
+                        </span>
+                      </span>
+                      <ChevronDown className="h-3.5 w-3.5 opacity-60 shrink-0" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-[--radix-dropdown-menu-trigger-width]">
+                    {INBOX_KIND_FILTERS.map((key) => (
+                      <DropdownMenuItem
+                        key={key}
+                        onSelect={() => setKindFilter(key)}
+                        className="justify-between text-xs"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Check
+                            className={cn(
+                              'h-3.5 w-3.5',
+                              kindFilter === key ? 'opacity-100' : 'opacity-0',
+                            )}
+                          />
+                          {t(`kind_filter_${key}`)}
+                        </span>
+                        <span className="tabular-nums text-muted-foreground">{kindCounts[key]}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           )}
           {selectedIds.size > 0 && (
@@ -1725,13 +1952,19 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   beside it reads 50. */}
               {searchTerm.trim() !== ''
                 ? `Inga träffar på ”${searchTerm.trim()}”.`
-                : filter === 'todo'
-                  ? 'Inget att åtgärda; allt är bearbetat.'
-                  : filter === 'portal'
-                    ? 'Inga köp väntar på en faktura från en portal.'
-                    : filter === 'missing'
-                      ? 'Varje köp har sitt underlag.'
-                      : 'Inga poster matchar filtret.'}
+                : kindFilter !== 'all' && filter !== 'missing' && filter !== 'portal'
+                  // Same trap as the search term: "allt är bearbetat" would be
+                  // false while the status trigger above still counts rows the
+                  // type menu is hiding. Purchase lists ignore the type menu,
+                  // so a leftover kind filter must not speak for them.
+                  ? t('empty_no_kind_hits')
+                  : filter === 'todo'
+                    ? 'Inget att åtgärda; allt är bearbetat.'
+                    : filter === 'portal'
+                      ? 'Inga köp väntar på en faktura från en portal.'
+                      : filter === 'missing'
+                        ? 'Varje köp har sitt underlag.'
+                        : 'Inga poster matchar filtret.'}
             </div>
           ) : (
             <ul>
@@ -1754,11 +1987,27 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                       selected={item.id === selectedId}
                       onClick={() => handleSelect(item.id)}
                       isChecked={selectedIds.has(item.id)}
-                      onToggleChecked={() => toggleSelected(item.id)}
+                      onToggleChecked={(extend) => toggleSelected(item.id, extend)}
                       anyChecked={selectedIds.size > 0}
                     />
                   ))}
             </ul>
+          )}
+          {/* The type menu hides rows without saying so (#2181): a +lev mail
+              is a leverantörsfaktura and does not show under Underlag. Say
+              how many, with the one click that brings them back. The empty
+              state above already says it when nothing is left. */}
+          {filter !== 'missing' && filter !== 'portal' && filteredItems.length > 0 && hiddenByKindFilter > 0 && (
+            <div className="px-4 py-2 border-t text-[11px] text-muted-foreground">
+              {t('hidden_by_kind_filter', { count: hiddenByKindFilter })}{' '}
+              <button
+                type="button"
+                className={cn(QUIET_LINK_CLASS, 'underline')}
+                onClick={() => setKindFilter('all')}
+              >
+                {t('kind_filter_all')}
+              </button>
+            </div>
           )}
         </aside>
 
@@ -2033,6 +2282,78 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 // mounted. No toast on any path, so nothing here can be evicted by (or evict)
 // another toast under TOAST_LIMIT = 1.
 
+function InboundMailRow({
+  mail,
+  domain,
+  onOpenItem,
+}: {
+  mail: InboundMail
+  /** The shared inbound domain, from the company's own address. */
+  domain: string
+  onOpenItem: (id: string) => void
+}) {
+  const t = useTranslations('inbox_workspace')
+  // The address is reconstructed from the inbox row, never read from the
+  // event: one line per tag the mail used, or the bare address.
+  const tags = mail.tags ?? []
+  const address = mail.custom_domain
+    ? t('inbound_mail_custom_domain')
+    : mail.inbox_local_part
+      ? (tags.length > 0 ? tags : [null])
+          .map((tag) => `${mail.inbox_local_part}${tag ? `+${tag}` : ''}@${domain}`)
+          .join(', ')
+      : t('inbound_mail_former_address')
+  const counts = { filed: 0, duplicate: 0, rejected: 0, failed: 0 }
+  for (const a of mail.attachments ?? []) {
+    if (a.outcome in counts) counts[a.outcome] += 1
+  }
+  const parts: string[] = []
+  if (mail.outcome === 'rate_limited') parts.push(t('inbound_outcome_rate_limited'))
+  else if (mail.outcome === 'no_attachments') parts.push(t('inbound_outcome_empty'))
+  else if (mail.outcome === 'email_body') parts.push(t('inbound_outcome_body'))
+  else if (mail.outcome === 'email_body_duplicate') parts.push(t('inbound_outcome_body_duplicate'))
+  else if (mail.outcome === 'fan_out_capped') parts.push(t('inbound_outcome_fan_out_capped'))
+  else {
+    if (counts.filed > 0) parts.push(t('inbound_outcome_filed', { count: counts.filed }))
+    if (counts.duplicate > 0) parts.push(t('inbound_outcome_duplicate', { count: counts.duplicate }))
+    if (counts.rejected > 0) parts.push(t('inbound_outcome_rejected', { count: counts.rejected }))
+    if (counts.failed > 0) parts.push(t('inbound_outcome_failed', { count: counts.failed }))
+  }
+  const hasFailure =
+    mail.outcome === 'rate_limited' || mail.outcome === 'fan_out_capped' || counts.rejected > 0 || counts.failed > 0
+  // Every row the mail produced, in attachment order, each a click away.
+  const openable: string[] = []
+  if (mail.inbox_item_id) openable.push(mail.inbox_item_id)
+  for (const a of mail.attachments ?? []) {
+    if (a.inbox_item_id && !openable.includes(a.inbox_item_id)) openable.push(a.inbox_item_id)
+  }
+  return (
+    <li className="space-y-0.5">
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className="tabular-nums shrink-0">{formatDateTime(mail.occurred_at)}</span>
+        <span className="truncate text-foreground">{address}</span>
+        {(mail.unknown_tag_count ?? 0) > 0 && (
+          <span>{t('inbound_unknown_tags', { count: mail.unknown_tag_count })}</span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className={cn(hasFailure && 'text-destructive')}>{parts.join(', ')}</span>
+        {openable.map((id, i) => (
+          <button
+            key={id}
+            type="button"
+            className={cn(QUIET_LINK_CLASS, 'underline')}
+            onClick={() => onOpenItem(id)}
+          >
+            {openable.length === 1 ? t('inbound_open') : t('inbound_open_nth', { n: i + 1 })}
+          </button>
+        ))}
+      </div>
+      {mail.tag_conflict && <AttnLine>{t('inbound_tag_conflict')}</AttnLine>}
+    </li>
+  )
+}
+
 function InboxAddressBar({
   address,
   onRotate,
@@ -2121,16 +2442,20 @@ function InboxRow({
   selected: boolean
   onClick: () => void
   isChecked: boolean
-  onToggleChecked: () => void
+  onToggleChecked: (extend?: boolean) => void
   /** True when bulk-select mode is active anywhere in the list: keeps the
       checkbox visible (otherwise it's hover-only on desktop). */
   anyChecked: boolean
 }) {
   const t = useTranslations('inbox_workspace')
+  // Radix' onCheckedChange carries no mouse event: the preceding click records
+  // whether shift was held, for range selection.
+  const shiftHeld = useRef(false)
   const amount = pickAmount(item)
   const supplierName = pickSupplierName(item)
   const invoiceDate = pickInvoiceDate(item)
   const isPlaceholder = !!item.isPlaceholder
+  const kind = resolveInboxKind(item)
   const status = deriveInboxStatus(item)
   const isErrored = status === 'error'
   const isBooked = status === 'booked'
@@ -2164,17 +2489,24 @@ function InboxRow({
       {!isPlaceholder && (
         <div
           className={cn(
-            'flex items-center pl-2.5 pr-1.5 transition-opacity',
-            // Always visible on touch (no hover), or when any selection is active.
-            anyChecked ? 'opacity-100' : 'md:opacity-0 md:group-hover:opacity-100 opacity-100'
+            'flex select-none items-center pl-2.5 pr-1.5 transition-opacity',
+            // Solid on touch (pointer-coarse) or when any selection is active;
+            // otherwise muted-but-visible at rest. focus-within because this
+            // wraps the checkbox rather than being it.
+            anyChecked
+              ? 'opacity-100'
+              : cn(CHECKBOX_REVEAL_CLASS, 'focus-within:opacity-100')
           )}
           onClick={(e) => e.stopPropagation()}
         >
           <Checkbox
             checked={isChecked}
-            onCheckedChange={onToggleChecked}
+            onClick={(e) => {
+              shiftHeld.current = e.shiftKey
+            }}
+            onCheckedChange={() => onToggleChecked(shiftHeld.current)}
             aria-label="Markera post"
-            className="h-3.5 w-3.5"
+            className="h-3.5 w-3.5 border-foreground"
           />
         </div>
       )}
@@ -2225,28 +2557,34 @@ function InboxRow({
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           {isPlaceholder ? (
             <span className="italic">Tolkar dokument med AI…</span>
-          ) : isExtracting ? (
+          ) : (
             <span className="flex items-center gap-1.5 min-w-0">
-              <Badge variant="outline" className="font-normal">
-                <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
-                {t('processing_chip')}
-              </Badge>
-              {receivedMeta}
-            </span>
-          ) : item.extraction_skipped || hasUnansweredQuestion ? (
-            <span className="flex items-center gap-1.5 min-w-0">
-              {item.extraction_skipped && (
-                <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
-              )}
-              {hasUnansweredQuestion && (
-                <Badge variant="outline" className="font-normal text-attn border-attn/40">
-                  {t('wa_question_badge')}
+              {/* Document kind (#2129): sender's +lev / +ver hint first, then
+                  the AI classification. Nothing when neither is known. */}
+              {kind && (
+                <Badge variant="outline" className="font-normal shrink-0">
+                  {t(`doc_kind_${kind}`)}
                 </Badge>
               )}
+              {isExtracting ? (
+                <Badge variant="outline" className="font-normal">
+                  <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+                  {t('processing_chip')}
+                </Badge>
+              ) : (
+                <>
+                  {item.extraction_skipped && (
+                    <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
+                  )}
+                  {hasUnansweredQuestion && (
+                    <Badge variant="outline" className="font-normal text-attn border-attn/40">
+                      {t('wa_question_badge')}
+                    </Badge>
+                  )}
+                </>
+              )}
               {receivedMeta}
             </span>
-          ) : (
-            receivedMeta
           )}
           {!isPlaceholder && amount != null && (
             <span className="tabular-nums shrink-0">
@@ -2748,6 +3086,7 @@ function FieldsRail({
   const hasAi = useCapability(CAPABILITY.ai)
   const { appName } = useBranding()
   const data = item.extracted_data
+  const resolvedKind = resolveInboxKind(item)
   const [proposal, setProposal] = useState<SuggestedBooking | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   // A proposal belongs to one item; carrying it to the next would offer the
@@ -2909,15 +3248,18 @@ function FieldsRail({
       {/* AI classification: what kind of document this is and how it was
           paid. Read-only context above the editable fields; absent for
           extractions from before the fields existed. */}
-      {(data?.documentKind ||
+      {(resolvedKind ||
         data?.payment?.method ||
         data?.pages ||
-        (data?.totals?.total == null && (data?.prominentAmounts?.length ?? 0) > 0)) && (
+        (data?.totals?.total == null &&
+          (data?.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0))) && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
-          {data?.documentKind && (
+          {/* Same resolution as the list row (sender's +lev / +ver hint first,
+              then the AI), so the pane never contradicts the badge. */}
+          {resolvedKind && (
             <div className="flex gap-2">
               <span className="text-muted-foreground w-14 shrink-0">{t('doc_kind_label')}</span>
-              <span>{t(`doc_kind_${data.documentKind}`)}</span>
+              <span>{t(`doc_kind_${resolvedKind}`)}</span>
             </div>
           )}
           {data?.payment?.method && (
@@ -2930,14 +3272,21 @@ function FieldsRail({
               </span>
             </div>
           )}
-          {/* Amounts read off a non-invoice document (bankintyg, avtal):
-              without this row the empty "Totalt" field reads as if extraction
-              missed them. */}
-          {data?.totals?.total == null && (data?.prominentAmounts?.length ?? 0) > 0 && (
+          {/* Amounts read off a multi-amount non-invoice document (an AGI
+              besked listing lön/skatt/avgifter): no single figure is "the"
+              total, so they show here as context while TOTALT stays empty for
+              the user to settle. Single-amount documents don't render this:
+              their amount is promoted into the editable TOTALT field
+              (promoteSingleProminentAmount), which also hides this row via
+              the totals.total == null condition. Zero amounts are noise
+              ("Totalt månadspris: 0 kr"), same filter as matching applies. */}
+          {data?.totals?.total == null &&
+            (data?.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0) && (
             <div className="flex gap-2">
               <span className="text-muted-foreground w-14 shrink-0">{t('prominent_amounts_label')}</span>
               <span className="tabular-nums">
                 {(data?.prominentAmounts ?? [])
+                  .filter((a) => Number.isFinite(a.amount) && a.amount !== 0)
                   .map((a) =>
                     a.label
                       ? `${a.label}: ${formatCurrency(a.amount, data?.invoice?.currency ?? 'SEK')}`

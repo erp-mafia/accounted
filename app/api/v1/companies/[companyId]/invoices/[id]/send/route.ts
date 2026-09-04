@@ -45,9 +45,10 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
@@ -78,6 +79,7 @@ import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -270,17 +272,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     const bodyResult = InvoiceSendBody.safeParse(rawBody)
-    if (!bodyResult.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: bodyResult.error.issues.map((issue) => ({
-            field: issue.path.join('.'),
-            message: issue.message,
-          })),
-        },
-      })
-    }
+    if (!bodyResult.success) return v1ValidationError(ctx, bodyResult.error)
 
     // Reject delivery notes: they have a different (D-series) lifecycle.
     if (typed.document_type === 'delivery_note') {
@@ -350,10 +342,25 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const settings = company as CompanySettings & { accounting_method?: string }
     const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
+    // Freeze the chosen bank account's payee at issue (no-op without a choice).
+    const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed, { persist: !ctx.dryRun })
+    if (!payeeSnapshot.ok) {
+      return v1ErrorResponseFromCode(payeeSnapshot.code, ctx.log, {
+        requestId: ctx.requestId,
+        details: payeeSnapshot.details,
+      })
+    }
+    typed.payment_details = payeeSnapshot.payee
     if (!hasRequiredInvoicePaymentAccount(settings, typed)) {
       return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
         requestId: ctx.requestId,
         details: { currency: typed.currency },
+      })
+    }
+
+    if (!hasRequiredSellerVatNumber(settings, typed)) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_VAT_NUMBER_MISSING', ctx.log, {
+        requestId: ctx.requestId,
       })
     }
 
@@ -429,6 +436,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       try {
         const preflight = await prepareInvoicePdfRender(settings, typed.currency, {
           paymentAccountRequired,
+          payee: typed.payment_details ?? null,
         })
         await renderToBuffer(
           InvoicePDF({
@@ -564,7 +572,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(
         settings,
         renderableInvoice.currency,
-        { paymentAccountRequired },
+        { paymentAccountRequired, payee: typed.payment_details ?? null },
       )
       const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
       const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)

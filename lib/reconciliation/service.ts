@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { daysBetweenIso, toIsoDate } from '@/lib/dates/iso'
 import { getReconciliationStatus as getBankReconciliationStatus } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import {
@@ -53,16 +54,10 @@ interface CashAccountRow {
   is_primary: boolean | null
   source: string | null
   bank_connection_id: string | null
+  balance: number | null
+  available_balance: number | null
+  balance_updated_at: string | null
   updated_at: string | null
-}
-
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
-
-function daysBetween(a: string, b: string): number {
-  const ms = new Date(a + 'T00:00:00Z').getTime() - new Date(b + 'T00:00:00Z').getTime()
-  return Math.round(ms / 86_400_000)
 }
 
 function defaultWindow(today: string): { from: string; to: string } {
@@ -155,7 +150,25 @@ async function bankStatus(
     Boolean(account.is_primary),
   )
   const syncedAt = await latestBankSyncAt(supabase, companyId, account.id)
-  const stale = !syncedAt || daysBetween(today, syncedAt.slice(0, 10)) > STALE_AFTER_DAYS
+  const stale = !syncedAt || daysBetweenIso(syncedAt.slice(0, 10), today) > STALE_AFTER_DAYS
+  // The bank-reported (booked) balance, mirrored from the last PSD2 balance
+  // refresh. Point-in-time and dated by balance_updated_at, NOT by any
+  // through-date a caller asks for. It therefore lives ONLY in the bank block
+  // below, never in external_balance: sign-off persists external_balance into
+  // account_reconciliations and bokslutsbilagor computes closing - external
+  // from that row, so a today-balance stored on a balansdag sign-off would
+  // print a phantom differens in the year-end appendix (skeptic finding,
+  // PR #2118). difference/unexplained stay transaction-based for the same
+  // reason. A balance without its timestamp is unusable (age unknown), so
+  // both fields are exposed only as a pair.
+  const reportedBalance =
+    account.balance == null || account.balance_updated_at == null
+      ? null
+      : Number(account.balance)
+  const reportedAvailable =
+    reportedBalance == null || account.available_balance == null
+      ? null
+      : Number(account.available_balance)
   return {
     account_key: bankAccountKey(account.id),
     kind: 'bank',
@@ -178,7 +191,14 @@ async function bankStatus(
       ignored: raw.ignored_transaction_count,
     },
     skattekonto: null,
-    bank: raw as unknown as Record<string, unknown>,
+    bank: {
+      ...(raw as unknown as Record<string, unknown>),
+      // What the bank itself reports for the account (F7): booked +
+      // available + when it was fetched. Distinct from the movement fields.
+      bank_reported_balance: reportedBalance,
+      bank_reported_available_balance: reportedAvailable,
+      bank_balance_updated_at: reportedBalance == null ? null : account.balance_updated_at,
+    },
   }
 }
 
@@ -212,7 +232,7 @@ export async function listReconciliationAccounts(
   companyId: string,
   options: ListAccountsOptions = {},
 ): Promise<ReconciliationAccount[]> {
-  const today = options.today ?? isoDate(new Date())
+  const today = options.today ?? toIsoDate(new Date())
   const withStatus = options.withStatus ?? true
   const window = {
     from: options.windowFrom ?? defaultWindow(today).from,
@@ -221,7 +241,7 @@ export async function listReconciliationAccounts(
 
   const { data, error } = await supabase
     .from('cash_accounts')
-    .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, updated_at')
+    .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, updated_at')
     .eq('company_id', companyId)
     .eq('enabled', true)
     .order('is_primary', { ascending: false })
@@ -292,7 +312,7 @@ export async function listReconciliationAccounts(
       } catch {
         syncedAt = null
       }
-      const stale = !syncedAt || daysBetween(today, syncedAt.slice(0, 10)) > STALE_AFTER_DAYS
+      const stale = !syncedAt || daysBetweenIso(syncedAt.slice(0, 10), today) > STALE_AFTER_DAYS
       return {
         account_key: bankAccountKey(a.id),
         kind: 'bank',
@@ -378,7 +398,7 @@ export async function getAccountStatus(
 ): Promise<ReconciliationStatus | null> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return null
-  const today = options.today ?? isoDate(new Date())
+  const today = options.today ?? toIsoDate(new Date())
 
   let status: ReconciliationStatus | null = null
   if (parsed.kind === 'skattekonto') {
@@ -392,7 +412,7 @@ export async function getAccountStatus(
   if (parsed.kind === 'bank') {
     const { data, error } = await supabase
       .from('cash_accounts')
-      .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, updated_at')
+      .select('id, name, ledger_account, currency, iban, enabled, is_primary, source, bank_connection_id, balance, available_balance, balance_updated_at, updated_at')
       .eq('company_id', companyId)
       .eq('id', parsed.cashAccountId)
       .maybeSingle()

@@ -9,6 +9,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import { currentAppVersion } from '@/lib/reports/app-version'
+import { recordAppRelease } from '@/lib/reports/app-releases'
 import { slugifyCompanyName } from '@/lib/reports/xlsx-export'
 import {
   buildBehandlingshistorikExport,
@@ -71,6 +72,9 @@ export const GET = withRouteContext('report.behandlingshistorik', async (request
 
   try {
     const serviceClient = createServiceClient()
+    // Date the running build in app_releases (p. 9.16: program versions). Fire
+    // and forget: the helper never throws and is a no-op once recorded.
+    void recordAppRelease(serviceClient)
     const report = await generateBehandlingshistorik(
       supabase,
       companyId,
@@ -83,6 +87,7 @@ export const GET = withRouteContext('report.behandlingshistorik', async (request
       {
         resolveUserLabels: (ids) => resolveUserLabelsFromProfiles(serviceClient, ids),
         appVersion: currentAppVersion(),
+        globalClient: serviceClient,
       },
     )
     if (!report) {

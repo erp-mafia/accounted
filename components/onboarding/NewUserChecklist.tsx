@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Check } from 'lucide-react'
 import posthog from 'posthog-js'
 import { Badge } from '@/components/ui/badge'
@@ -13,7 +13,15 @@ import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
 import { useFormat } from '@/lib/hooks/use-format'
 import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
-import { checklistNumbers, type VatDeadlineLine } from '@/lib/onboarding/checklist'
+import {
+  checklistNumbers,
+  claudeConnectorLink,
+  completionPatchBody,
+  SIDE_DOORS,
+  sideDoorServerUrl,
+  type SideDoor,
+  type VatDeadlineLine,
+} from '@/lib/onboarding/checklist'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -27,7 +35,11 @@ interface NewUserChecklistProps {
   hasBankConnected?: boolean
   hasSkatteverketConnected?: boolean
   hasInboxItems?: boolean
-  hasAgentBuilt?: boolean
+  /** The user holds a live OAuth-minted MCP key, i.e. a Claude (or other
+   *  MCP client) connection completed its first sign-in. This is the only
+   *  signal that means "connected to Claude"; the in-app AI-profile flag
+   *  used to tick this step and never corresponded to it (issue #2133). */
+  hasMcpKey?: boolean
   /** Personalized VAT-deadline line for the Skatteverket step (null = say nothing). */
   vatLine?: VatDeadlineLine
   /** Latest SIE reconciliation-sweep outcome: surfaces "X matchade, Y att
@@ -74,11 +86,12 @@ export default function NewUserChecklist({
   hasBankConnected = false,
   hasSkatteverketConnected = false,
   hasInboxItems = false,
-  hasAgentBuilt = false,
+  hasMcpKey = false,
   vatLine = null,
   sieSweep = null,
 }: NewUserChecklistProps) {
   const t = useTranslations('initial_setup')
+  const locale = useLocale()
   const { appName } = useBranding()
   const router = useRouter()
   const showError = useErrorToast()
@@ -92,9 +105,15 @@ export default function NewUserChecklist({
   // step (companies whose completedAt arrives from the server never see it).
   const [retiring, setRetiring] = useState<'verdict' | 'closing' | 'done' | null>(null)
   const retireStartedRef = useRef(false)
-  // The ChatGPT side door on the Claude step: collapsed by default so the
-  // one-click Claude path stays the visual primary.
-  const [chatGptOpen, setChatGptOpen] = useState(false)
+  // A completion PATCH the server rejected (4xx: no write role, no settings
+  // row) must not be retried in a loop: `saving` is a dependency of the
+  // completion effect, so without this latch every rejection re-armed the
+  // effect and re-raised the error toast forever. The next visit tries once
+  // more from server truth.
+  const completeRejectedRef = useRef(false)
+  // The ChatGPT and Grok side doors on the Claude step: collapsed by default
+  // so the one-click Claude path stays the visual primary; at most one open.
+  const [sideDoor, setSideDoor] = useState<SideDoor | null>(null)
   const [serverUrlCopied, setServerUrlCopied] = useState(false)
 
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
@@ -134,7 +153,7 @@ export default function NewUserChecklist({
   // Companies built without the skatteverket/inbox extensions skip those steps.
   const step3Done = !hasSkatteverket || hasSkatteverketConnected
   const step4Done = !hasInbox || hasInboxItems
-  const step5Done = hasAgentBuilt
+  const step5Done = hasMcpKey
 
   useEffect(() => {
     // The block retires itself once every step is done; Dölj remains the
@@ -143,14 +162,18 @@ export default function NewUserChecklist({
     if (
       !state.completedAt &&
       step1Done && step2Done && step3Done && step4Done && step5Done &&
-      saving === null
+      saving === null &&
+      !completeRejectedRef.current
     ) {
       if (!retireStartedRef.current) {
         retireStartedRef.current = true
         setRetiring('verdict')
       }
-      void persist({ completed: true }, 'complete').then((updated) => {
+      // completionPatchBody supplies a path when none was recorded: the route
+      // refuses completed:true without one, and this cohort looped on a 400.
+      void persist(completionPatchBody(state.path), 'complete').then((updated) => {
         if (updated) captureSetup('onboarding_setup_completed', { path: updated.path })
+        else completeRejectedRef.current = true
       })
     }
   // persist intentionally stays out: its identity follows the toast hook and
@@ -175,8 +198,9 @@ export default function NewUserChecklist({
   if (state.dismissedAt) return null
   // After the beat, stay retired even while the completion PATCH is still in
   // flight or retrying: falling through to the full checklist here would
-  // flash it after the verdict already played. A failed PATCH keeps retrying
-  // invisibly; the next visit renders from server truth either way.
+  // flash it after the verdict already played. A rejected PATCH is not
+  // retried this session (completeRejectedRef); the next visit renders from
+  // server truth either way.
   if (retiring === 'done') return null
   if (state.completedAt && !retiring) return null
 
@@ -231,20 +255,26 @@ export default function NewUserChecklist({
   // page origin so self-hosted and white-label domains link to themselves.
   const goClaude = () => {
     captureSetup('onboarding_setup_step_started', { step: 'claude' })
-    const serverUrl = `${window.location.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted`
-    const link = `https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=${encodeURIComponent(appName)}&connectorUrl=${encodeURIComponent(serverUrl)}`
-    window.open(link, '_blank', 'noopener')
+    window.open(
+      claudeConnectorLink({ origin: window.location.origin, appName }),
+      '_blank',
+      'noopener',
+    )
   }
-  // ChatGPT has no add-connector deep link (the user pastes the server URL
-  // into Developer mode manually), so the side door copies the URL instead.
-  const toggleChatGpt = () => {
-    setChatGptOpen((open) => {
-      if (!open) captureSetup('onboarding_setup_step_started', { step: 'chatgpt' })
-      return !open
+  /**
+   * Open one side door (closing any other) or close it when it is already
+   * open. Neither ChatGPT nor Grok has an add-connector deep link (the user
+   * pastes the server URL into the client manually), so the side doors copy
+   * the URL instead. Telemetry fires once per open, never on close.
+   */
+  const toggleSideDoor = (door: SideDoor) => {
+    setSideDoor((open) => {
+      if (open !== door) captureSetup('onboarding_setup_step_started', { step: door })
+      return open === door ? null : door
     })
   }
-  const copyServerUrl = async () => {
-    const serverUrl = `${window.location.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted`
+  const copyServerUrl = async (door: SideDoor) => {
+    const serverUrl = sideDoorServerUrl({ origin: window.location.origin, door })
     try {
       await navigator.clipboard.writeText(serverUrl)
       setServerUrlCopied(true)
@@ -428,20 +458,41 @@ export default function NewUserChecklist({
           )}
           footnote={
             <div className="mt-2">
-              <button
-                type="button"
-                onClick={toggleChatGpt}
-                aria-expanded={chatGptOpen}
-                className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
-              >
-                {t('step_claude_chatgpt_link')}
-              </button>
-              {chatGptOpen && (
+              {/* What the click leads to on Claude's side. Tools list before
+                  any sign-in (lazy auth, by design), so without this line a
+                  "connected" status with an unanswered first question reads
+                  as a broken connection (issue #2133). The guide carries the
+                  full sequence; one language per URL, see ApiKeysPanel. */}
+              <p className="mb-2 max-w-prose text-xs leading-5 text-muted-foreground">
+                {t('step_claude_expectation')}{' '}
+                <a
+                  href={locale === 'sv' ? '/docs/api/anslut-claude' : '/docs/api/connect-claude'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                >
+                  {t('step_claude_guide_link')}
+                </a>
+              </p>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {SIDE_DOORS.map((door) => (
+                  <button
+                    key={door}
+                    type="button"
+                    onClick={() => toggleSideDoor(door)}
+                    aria-expanded={sideDoor === door}
+                    className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                  >
+                    {t(`step_claude_${door}_link`)}
+                  </button>
+                ))}
+              </div>
+              {sideDoor && (
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
                   <p className="max-w-prose text-xs leading-5 text-muted-foreground">
-                    {t('step_claude_chatgpt_steps', { appName })}
+                    {t(`step_claude_${sideDoor}_steps`, { appName })}
                   </p>
-                  <Button size="sm" variant="outline" onClick={() => void copyServerUrl()}>
+                  <Button size="sm" variant="outline" onClick={() => void copyServerUrl(sideDoor)}>
                     {serverUrlCopied
                       ? t('step_claude_chatgpt_copied')
                       : t('step_claude_chatgpt_copy')}
@@ -494,7 +545,7 @@ function Step({
   doneNote?: React.ReactNode
   /** Block content below the pitch while the step is open. Unlike `children`
    *  (which lives inside a <p>), this may hold nested block elements, e.g.
-   *  the Claude step's ChatGPT side door. */
+   *  the Claude step's ChatGPT and Grok side doors. */
   footnote?: React.ReactNode
   last?: boolean
   children: React.ReactNode

@@ -11,6 +11,7 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 
 export const GET = withRouteContext(
   'settings.get',
@@ -182,14 +183,31 @@ export const PUT = withRouteContext(
       body.employer_seasonal = false
     }
 
-    // Validate: VAT-registered must have VAT number (ML 11 kap. 8§) and moms period (SFL 26 kap.)
+    // Validate: VAT-registered must have VAT number (ML 17 kap. 24 §, the
+    // invoice needs it) and moms period (SFL 26 kap.).
+    // Each cross-field check runs only when the request touches a field in its
+    // group: a partial save of unrelated settings (e.g. the invoice bank-details
+    // dialog) must not be rejected for a pre-existing inconsistency it cannot
+    // fix from that surface. Explicit null counts as touched, it clears a value,
+    // so it must not fall back to the stored one during validation.
+    // PS/EU-trade edits are in the completeness group: enabling the EU sales
+    // list on an incomplete VAT registration must keep failing like it did
+    // when the check ran on every save.
     const effectiveVatRegistered = body.vat_registered ?? oldSettings?.vat_registered
-    const effectiveMomsPeriod = body.moms_period ?? oldSettings?.moms_period
-    if (effectiveVatRegistered === true) {
-      const effectiveVatNumber = body.vat_number ?? oldSettings?.vat_number
+    const effectiveMomsPeriod =
+      body.moms_period !== undefined ? body.moms_period : oldSettings?.moms_period
+    const touchesVatCompleteness =
+      body.vat_registered !== undefined ||
+      body.vat_number !== undefined ||
+      body.moms_period !== undefined ||
+      body.vat_has_eu_trade !== undefined ||
+      body.periodisk_sammanstallning_enabled !== undefined
+    if (touchesVatCompleteness && effectiveVatRegistered === true) {
+      const effectiveVatNumber =
+        body.vat_number !== undefined ? body.vat_number : oldSettings?.vat_number
       if (!effectiveVatNumber) {
         return NextResponse.json(
-          { error: 'Momsregistreringsnummer krävs när företaget är momsregistrerat (ML 11 kap. 8§)' },
+          { error: 'Momsregistreringsnummer krävs när företaget är momsregistrerat (ML 17 kap. 24 §)' },
           { status: 400 }
         )
       }
@@ -201,25 +219,52 @@ export const PUT = withRouteContext(
       }
     }
 
+    const touchesVat40m =
+      body.vat_registered !== undefined ||
+      body.vat_taxable_base_over_40m !== undefined ||
+      body.moms_period !== undefined
     const effectiveVatTaxableBaseOver40m =
       body.vat_taxable_base_over_40m ?? oldSettings?.vat_taxable_base_over_40m ?? false
-    if (effectiveVatRegistered && effectiveVatTaxableBaseOver40m && effectiveMomsPeriod !== 'monthly') {
+    if (
+      touchesVat40m &&
+      effectiveVatRegistered &&
+      effectiveVatTaxableBaseOver40m &&
+      effectiveMomsPeriod !== 'monthly'
+    ) {
       return NextResponse.json(
         { error: 'Företag med beskattningsunderlag över 40 miljoner kronor måste redovisa moms varje månad.' },
         { status: 400 },
       )
     }
 
+    const touchesPs =
+      body.periodisk_sammanstallning_enabled !== undefined ||
+      body.vat_registered !== undefined ||
+      body.vat_has_eu_trade !== undefined
     const effectivePsEnabled =
       body.periodisk_sammanstallning_enabled ??
       oldSettings?.periodisk_sammanstallning_enabled ??
       false
     const effectiveEuTrade = body.vat_has_eu_trade ?? oldSettings?.vat_has_eu_trade ?? false
-    if (effectivePsEnabled && (!effectiveVatRegistered || !effectiveEuTrade)) {
+    if (touchesPs && effectivePsEnabled && (!effectiveVatRegistered || !effectiveEuTrade)) {
       return NextResponse.json(
         { error: 'Periodisk sammanställning kräver momsregistrering och EU-handel.' },
         { status: 400 },
       )
+    }
+
+    // Payment instructions live on cash_accounts since migration
+    // 20260904010000; the bank columns below are a mirror of the default
+    // payee account per currency. Write the change through to the account
+    // FIRST: if that fails nothing has been written and the caller gets an
+    // error, instead of a settings row that the next mirror would undo.
+    if (changesInvoicePaymentInstructions) {
+      try {
+        await propagateLegacyPayeeWrite(supabase, companyId, body)
+      } catch (err) {
+        log.error('failed to write payment instructions through to cash accounts', err as Error)
+        return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+      }
     }
 
     const { data, error } = await supabase
@@ -235,6 +280,7 @@ export const PUT = withRouteContext(
       }
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
+
 
     // Regenerate when the save touches tax-relevant fields: the statutory
     // dates are derived from them, and re-running also repairs rows created

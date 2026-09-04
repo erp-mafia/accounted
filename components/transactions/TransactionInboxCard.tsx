@@ -1,13 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useDocumentExtraction } from '@/lib/hooks/use-document-extraction'
 import ExtractionStatus from '@/components/ui/extraction-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { TD_CLASS, RowFoldout } from '@/components/ui/dry-table'
+import { TD_CLASS, CHECKBOX_REVEAL_CLASS, RowFoldout } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import {
@@ -23,6 +23,7 @@ import {
   Pencil,
   Split,
   Trash2,
+  Unlink,
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -39,6 +40,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 const HAS_AI_EXTRACTION = ENABLED_EXTENSION_IDS.has('document-extraction')
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { canDetachDocument } from './detach-underlag'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
 import type { CashAccount } from '@/types'
 
@@ -73,6 +75,9 @@ interface TransactionInboxCardProps {
   /** Open the attach-underlag dialog: pin an inbox document or a fresh upload
    *  to the transaction (the tx→doc mirror of the Documents view's matcher). */
   onOpenAttachDocument?: (transaction: TransactionWithInvoice) => void
+  /** Detach the pinned underlag (DELETE attach-document). Unbooked rows only:
+   *  once the doc has propagated onto a verifikation the route answers 409. */
+  onDetachDocument?: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
   /** Mark the transaction as ignored so it leaves the inbox without a journal entry. */
@@ -85,7 +90,7 @@ interface TransactionInboxCardProps {
   /** The company's enabled cash accounts (the page's ?enabled_only=true fetch):
    *  gates the move action, which is pointless with a single account. */
   cashAccounts?: CashAccount[]
-  onToggleSelect: (id: string) => void
+  onToggleSelect: (id: string, extend?: boolean) => void
   /** End date of the company's completed SIE-import coverage. Rows on or
    *  before it are pre-migration history: they most likely correspond to an
    *  already-imported verifikat, so the row carries a quiet marker steering
@@ -112,6 +117,7 @@ export default function TransactionInboxCard({
   onOpenSplitMatch,
   onOpenMatchVoucher,
   onOpenAttachDocument,
+  onDetachDocument,
   onOpenCategoryDialog,
   onDelete,
   onIgnore,
@@ -122,7 +128,12 @@ export default function TransactionInboxCard({
   preMigrationCutoff = null,
 }: TransactionInboxCardProps) {
   const t = useTranslations('tx_inbox_card')
+  const tDetach = useTranslations('tx_detach')
   const tMethod = useTranslations('tx_method')
+  // Radix' onCheckedChange carries no mouse event, so the shift state is
+  // captured from the click that precedes it (Radix composes our onClick
+  // before its own handler) and read back when the toggle fires.
+  const shiftHeld = useRef(false)
   // Attaching underlag is a write: hide the affordance from viewers so they
   // don't dead-end on a 403 (mirrors the gate in TransactionHistoryList).
   const { canWrite } = useCanWrite()
@@ -142,8 +153,19 @@ export default function TransactionInboxCard({
       if (!detail || detail.transaction_id !== transaction.id || !detail.document_id) return
       setOptimisticDocumentId(detail.document_id)
     }
+    // Detach (page handler) drops the override too, or the indicator would
+    // keep showing a doc the row no longer carries.
+    function onUnlinked(e: Event) {
+      const detail = (e as CustomEvent<{ transaction_id?: string }>).detail
+      if (!detail || detail.transaction_id !== transaction.id) return
+      setOptimisticDocumentId(null)
+    }
     window.addEventListener('Accounted:transaction-document-linked', onLinked)
-    return () => window.removeEventListener('Accounted:transaction-document-linked', onLinked)
+    window.addEventListener('Accounted:transaction-document-unlinked', onUnlinked)
+    return () => {
+      window.removeEventListener('Accounted:transaction-document-linked', onLinked)
+      window.removeEventListener('Accounted:transaction-document-unlinked', onUnlinked)
+    }
   }, [transaction.id])
   const attachedDocumentId =
     optimisticDocumentId ?? (transaction as { document_id?: string | null }).document_id ?? null
@@ -214,6 +236,15 @@ export default function TransactionInboxCard({
   // "Matcha mot underlag": pin an inbox doc / fresh upload to the tx. The
   // tx→doc mirror of the Documents view's "Matcha mot transaktion".
   const showAttachDocumentItem = isUnbooked && canWrite && !!onOpenAttachDocument
+  // Same gate as attach, plus an actual pin to remove.
+  const showDetachDocumentItem =
+    showAttachDocumentItem &&
+    canDetachDocument({
+      isBooked: !isUnbooked,
+      canWrite,
+      documentId: attachedDocumentId,
+      hasHandler: !!onDetachDocument,
+    })
   const showSplitItem = showInvoiceMatchButton && !!onOpenSplitMatch
   const showEditItem = isTitleEditable && !!onEditTitle
   // Moving between cash accounts only makes sense with somewhere to move TO,
@@ -284,23 +315,24 @@ export default function TransactionInboxCard({
             : undefined
         }
       >
-        {/* Hover-revealed selection checkbox (concept .cb) */}
+        {/* Always-visible selection checkbox (concept .cb) */}
         {/* Zero-width cell: the checkbox hangs in the left page margin so
             the date column can sit flush with the page edge. */}
         <td
-          className={cn(TD_CLASS, 'relative w-0 !p-0')}
+          className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}
           onClick={(e) => e.stopPropagation()}
         >
           {selectable && (
             <Checkbox
               checked={isSelected}
-              onCheckedChange={() => onToggleSelect(transaction.id)}
+              onClick={(e) => {
+                shiftHeld.current = e.shiftKey
+              }}
+              onCheckedChange={() => onToggleSelect(transaction.id, shiftHeld.current)}
               aria-label="Välj transaktion"
               className={cn(
-                'absolute -left-5 top-1/2 -translate-y-1/2 transition-opacity duration-150 md:-left-6',
-                isSelected
-                  ? 'opacity-100'
-                  : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
+                isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
               )}
             />
           )}
@@ -416,6 +448,17 @@ export default function TransactionInboxCard({
                     >
                       <Paperclip className="h-4 w-4" />
                       {t('attach_document_btn')}
+                    </DropdownMenuItem>
+                  )}
+                  {showDetachDocumentItem && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onDetachDocument!(transaction)
+                      }}
+                    >
+                      <Unlink className="h-4 w-4" />
+                      {tDetach('menu_item')}
                     </DropdownMenuItem>
                   )}
                   {showSplitItem && (

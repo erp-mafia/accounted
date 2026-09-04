@@ -60,7 +60,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "name": "Bolagsuppgifter",
           "sector": "general",
           "category": "import",
-          "icon": "Building2",
+          "icon": "Briefcase",
           "dataPattern": "manual",
           "description": "Hämta företagsinformation automatiskt vid registrering",
           "longDescription": "Fyll i företagsuppgifter automatiskt genom att ange organisationsnummer. Hämtar adress, momsregistrering, F-skattestatus och bankuppgifter från offentliga register via TIC.",
@@ -68,7 +68,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "quickAction": {
                 "label": "Företagsprofil",
                 "description": "Visa offentliga uppgifter",
-                "icon": "Building2",
+                "icon": "Briefcase",
                 "href": "/e/general/tic",
                 "order": 10
           }

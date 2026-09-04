@@ -3,7 +3,6 @@ import type { OAuthConfig, TokenResponse } from '../types';
 import {
   fetchWithTimeout,
   OAUTH_TIMEOUT_MS,
-  OAUTH_REVOKE_TIMEOUT_MS,
 } from '@/lib/http/fetch-with-timeout';
 
 const BASE_SCOPES = [
@@ -186,27 +185,4 @@ export async function refreshFortnoxToken(
   }
 
   return response.json() as Promise<TokenResponse>;
-}
-
-export async function revokeFortnoxToken(
-  config: OAuthConfig,
-  refreshToken: string,
-): Promise<boolean> {
-  const response = await fetchWithTimeout(
-    FORTNOX_TOKEN_URL,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: basicAuthHeader(config),
-      },
-      body: new URLSearchParams({
-        token: refreshToken,
-        token_type_hint: 'refresh_token',
-      }).toString(),
-    },
-    { timeoutMs: OAUTH_REVOKE_TIMEOUT_MS, description: 'Fortnox token revoke' },
-  );
-
-  return response.ok;
 }

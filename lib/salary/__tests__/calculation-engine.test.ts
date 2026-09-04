@@ -193,6 +193,38 @@ describe('calculateSalary', () => {
     expect(result.taxWithheld).toBe(6000) // 15% of 40000
   })
 
+  it('does not apply jämkning when valid_to is null (#2058: an incomplete beslut is inert)', () => {
+    // Every write path now rejects this shape; rows stored before that fix
+    // still exist and must keep falling back to the table (or the 30 % here).
+    const result = calculateSalary(
+      makeBasicInput({
+        jamkningPercentage: 15,
+        jamkningValidFrom: '2026-01-01',
+        jamkningValidTo: null,
+        paymentDate: '2026-04-25',
+      }),
+      config2026,
+      emptyTaxRates
+    )
+
+    expect(result.taxWithheld).toBe(12000)
+  })
+
+  it('does not apply jämkning when valid_from is null', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        jamkningPercentage: 15,
+        jamkningValidFrom: null,
+        jamkningValidTo: '2026-12-31',
+        paymentDate: '2026-04-25',
+      }),
+      config2026,
+      emptyTaxRates
+    )
+
+    expect(result.taxWithheld).toBe(12000)
+  })
+
   it('does not apply jämkning when outside date range', () => {
     const result = calculateSalary(
       makeBasicInput({

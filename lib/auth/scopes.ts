@@ -75,6 +75,7 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/invoices/:id/mark-paid': 'invoices:write',
   'POST /api/v1/companies/:companyId/invoices/:id/credit': 'invoices:write',
   'POST /api/v1/companies/:companyId/invoices/:id/send': 'invoices:write',
+  'POST /api/v1/companies/:companyId/invoices/:id/quote-status': 'invoices:write',
   'POST /api/v1/companies/:companyId/invoices/bulk-create': 'invoices:write',
   // Phase 2 PR-B-3: invoice PDF + customer bulk-create.
   'GET /api/v1/companies/:companyId/invoices/:id/pdf': 'invoices:read',
@@ -145,6 +146,16 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Writes: bulk
   'POST /api/v1/companies/:companyId/transactions/ingest': 'transactions:write',
   'POST /api/v1/companies/:companyId/transactions/batch-categorize': 'transactions:write',
+  // Cash accounts: the bank/kassa register incl. the bank-reported balance
+  // (booked + available + balance_updated_at) from the PSD2 sync.
+  'GET /api/v1/companies/:companyId/cash-accounts': 'transactions:read',
+  // Bank connections: PSD2 connection health (status, last_synced_at,
+  // consent_expires). companies:read, mirroring the MCP gnubok_connect_bank
+  // mapping: connection metadata, no transaction data.
+  'GET /api/v1/companies/:companyId/bank-connections': 'companies:read',
+  // Triggering a sync writes transactions: transactions:write, like the
+  // MCP gnubok_sync_bank twin.
+  'POST /api/v1/companies/:companyId/bank-connections/:connectionId/sync': 'transactions:write',
   // Reconciliation (legacy bank-only routes; kept as aliases of the
   // account-keyed routes below, with their original scopes)
   'POST /api/v1/companies/:companyId/reconciliation/bank/run': 'transactions:write',

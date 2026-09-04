@@ -94,10 +94,6 @@ export class DimensionValidationError extends Error {
   }
 }
 
-export function isDimensionValidationError(err: unknown): err is DimensionValidationError {
-  return err instanceof DimensionValidationError
-}
-
 // ============================================================================
 // Mandatory dimension enforcement (dimensions PR10)
 // ============================================================================
@@ -131,10 +127,4 @@ export class MandatoryDimensionMissingError extends Error {
     super(violations.map(formatMandatoryDimensionViolation).join(' '))
     this.name = 'MandatoryDimensionMissingError'
   }
-}
-
-export function isMandatoryDimensionMissingError(
-  err: unknown,
-): err is MandatoryDimensionMissingError {
-  return err instanceof MandatoryDimensionMissingError
 }

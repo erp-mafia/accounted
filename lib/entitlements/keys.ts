@@ -35,6 +35,15 @@ export const CAPABILITY = {
   /** Shopify store sync: orders/refunds imported as a transaction feed. */
   shopify_sync: 'shopify_sync',
   /**
+   * Multiple people working in one company. Without it only the OWNER can
+   * enter the company: every other membership goes dormant (never deleted)
+   * after a 20-day post-lapse grace window, and new invites are blocked.
+   * See lib/entitlements/multi-user.ts for the derived entitled/grace/frozen
+   * state; company_capability_config does NOT apply to this key (it gates
+   * member access, not a feature surface).
+   */
+  multi_user: 'multi_user',
+  /**
    * Invoice email from the company's own verified sending domain (Resend
    * domain per company). Opt-in: granted manually per company, NOT part of
    * PAID_CAPABILITIES, so it is never trial-seeded or written by the Stripe
@@ -42,6 +51,8 @@ export const CAPABILITY = {
    * mail keeps leaving from the platform sender.
    */
   custom_sender_domain: 'custom_sender_domain',
+  /** Peppol e-invoicing (send/receive via a Peppol Access Point). Free on hosted (Arcim's own AP); on self-host brokered through the connector: Arcim's Qvalia AP with a per-key one-address + volume quota. */
+  peppol: 'peppol',
 } as const
 
 export type CapabilityKey = (typeof CAPABILITY)[keyof typeof CAPABILITY]
@@ -69,7 +80,39 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.stripe_payments,
   CAPABILITY.woocommerce_sync,
   CAPABILITY.shopify_sync,
+  // Founder decision (2026-09-01): multiple users per company is paid.
+  // Trial-seeded and Stripe-synced like the rest; enforcement is the
+  // owner-only dormancy rule in lib/entitlements/multi-user.ts.
+  CAPABILITY.multi_user,
 ] as const
+
+/**
+ * Capabilities that a SELF-HOSTED instance cannot provide on its own because
+ * they run on services Accounted operates (the PSD2/AISP bank connection,
+ * the Skatteverket API client, the TIC lookup contract, the migration
+ * gateway). On hosted these follow the normal paywall (bank_sync and
+ * skatteverket are in PAID_CAPABILITIES; org_lookup and migration are free).
+ * On a self-host every other capability is always on, and exactly these fall
+ * through to the grant lookup: the hourly connector sync writes
+ * `source = 'connector'` grants for them from the instance's connector key
+ * (lib/connect/instance, arriving with the connector-keys stack PR #1748).
+ * A self-host serving an upstream from its OWN credentials holds that
+ * capability outright (see own-credentials.ts): only keyless-and-credential-
+ * less connector capabilities are withheld. Deliberately NOT part of
+ * PAID_CAPABILITIES and NOT seeded by the trial trigger: hosted companies
+ * never receive connector grants.
+ */
+export const CONNECTOR_CAPABILITIES: readonly CapabilityKey[] = [
+  CAPABILITY.bank_sync,
+  CAPABILITY.skatteverket,
+  CAPABILITY.org_lookup,
+  CAPABILITY.migration,
+  CAPABILITY.peppol,
+] as const
+
+export function isConnectorCapability(key: CapabilityKey): boolean {
+  return (CONNECTOR_CAPABILITIES as readonly string[]).includes(key)
+}
 
 /**
  * Paid MCP tools → required capability. The MCP/agent path is a paid chokepoint
@@ -82,9 +125,9 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
  * The document upload tools invoke AI (Bedrock document OCR via
  * extractInvoiceFields), so they are gated on CAPABILITY.ai: the same paywall
  * the HTTP inbox upload/attach/retry paths enforce. Without these entries a
- * free-tier API key could trigger paid AI extraction. bank_sync gates only
- * gnubok_connect_bank (the onboarding connect link); the sync itself is
- * cron/HTTP only.
+ * free-tier API key could trigger paid AI extraction. bank_sync gates
+ * gnubok_connect_bank (the onboarding connect link) and gnubok_sync_bank
+ * (the agent-triggered PSD2 sync, a paid Enable Banking call per account).
  */
 export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
   gnubok_send_invoice: CAPABILITY.email_send,
@@ -92,6 +135,8 @@ export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, Capability
   gnubok_agi_submit: CAPABILITY.skatteverket,
   // Onboarding connect-link tools (issue #1814): gated like the links' targets.
   gnubok_connect_bank: CAPABILITY.bank_sync,
+  // Agent-triggered PSD2 sync: a paid Enable Banking call per account.
+  gnubok_sync_bank: CAPABILITY.bank_sync,
   gnubok_connect_skatteverket: CAPABILITY.skatteverket,
   // AI document OCR (Bedrock): the inbox's paid extraction, reachable via MCP.
   gnubok_create_document_upload: CAPABILITY.ai,

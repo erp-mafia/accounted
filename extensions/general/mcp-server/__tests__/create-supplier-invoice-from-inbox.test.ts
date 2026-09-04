@@ -14,6 +14,12 @@ vi.mock('@/lib/currency/riksbanken', () => ({
   convertToSEK: vi.fn(),
 }))
 
+const mockResolveRate = vi.fn()
+vi.mock('@/lib/currency/supplier-invoice-rate', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/currency/supplier-invoice-rate')>()
+  return { ...actual, resolveSupplierInvoiceExchangeRate: (...args: unknown[]) => mockResolveRate(...args) }
+})
+
 describe('gnubok_create_supplier_invoice_from_inbox: registration', () => {
   it('is registered with idempotent + non-read-only annotations', () => {
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')
@@ -777,5 +783,132 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     await expect(
       tool.execute({ inbox_item_id: 'inbox-5' }, 'company-1', 'user-1', supabase),
     ).rejects.toThrow(/no extracted_data/)
+  })
+})
+
+/**
+ * FX resolution at staging time (feedback seq 299742): the tool used to call
+ * fetchExchangeRate WITHOUT the supabase client, so neither the shared
+ * exchange_rates cache nor the last-cached-observation fallback was reachable
+ * and a Riksbanken 429 surfaced as exchange_rate: null / lookup_failed for a
+ * date that resolved fine a minute later. The staged op was then unapprovable
+ * (SI_FX_RATE_MISSING at commit) with no way to supply the rate.
+ */
+describe('gnubok_create_supplier_invoice_from_inbox: exchange rate resolution', () => {
+  const usdExtracted = {
+    ...baseExtracted,
+    invoice: { ...baseExtracted.invoice, currency: 'USD', invoiceDate: '2026-04-24' },
+  }
+  const usdInbox = {
+    id: 'inbox-usd',
+    status: 'received',
+    extracted_data: usdExtracted,
+    matched_supplier_id: 'supplier-1',
+    created_supplier_invoice_id: null,
+    document_id: 'doc-usd',
+  }
+  const tool = () => tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockResolveRate.mockReset()
+  })
+
+  it('resolves through the shared resolver WITH the supabase client (cache + last-cached fallback reachable)', async () => {
+    mockResolveRate.mockResolvedValue({
+      ok: true,
+      rate: { currency: 'USD', rate: 9.51731, exchangeRate: 9.51731, exchangeRateDate: '2026-04-24', source: 'fetched' },
+    })
+    const supabase = makeMock({ inbox: usdInbox })
+    const result = (await tool().execute(
+      { inbox_item_id: 'inbox-usd', dry_run: true },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as { preview: Record<string, unknown> }
+
+    expect(mockResolveRate).toHaveBeenCalledWith(supabase, {
+      currency: 'USD',
+      invoiceDate: '2026-04-24',
+      suppliedRate: null,
+    })
+    expect(result.preview.exchange_rate).toBe(9.51731)
+    expect(result.preview.exchange_rate_source).toBe('riksbanken')
+    expect(result.preview.exchange_rate_hint).toBeUndefined()
+  })
+
+  it('exchange_rate_override is passed as the supplied rate and echoed as source "supplied"', async () => {
+    mockResolveRate.mockResolvedValue({
+      ok: true,
+      rate: { currency: 'USD', rate: 9.6, exchangeRate: 9.6, exchangeRateDate: null, source: 'supplied' },
+    })
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({ inbox: usdInbox, inserts })
+    const result = (await tool().execute(
+      { inbox_item_id: 'inbox-usd', exchange_rate_override: 9.6 },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as { preview: Record<string, unknown> }
+
+    expect(mockResolveRate).toHaveBeenCalledWith(supabase, {
+      currency: 'USD',
+      invoiceDate: '2026-04-24',
+      suppliedRate: 9.6,
+    })
+    expect(result.preview.exchange_rate).toBe(9.6)
+    expect(result.preview.exchange_rate_source).toBe('supplied')
+    // The staged params carry the rate the reviewer saw, so the executor's
+    // resolver trusts it verbatim instead of re-fetching.
+    const staged = inserts[0]?.params as Record<string, unknown> | undefined
+    expect(staged?.exchange_rate).toBe(9.6)
+  })
+
+  it('lookup failure stays visible as lookup_failed and tells the agent what unblocks approval', async () => {
+    mockResolveRate.mockResolvedValue({ ok: false, currency: 'USD', invoiceDate: '2026-04-24' })
+    const supabase = makeMock({ inbox: usdInbox })
+    const result = (await tool().execute(
+      { inbox_item_id: 'inbox-usd', dry_run: true },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as { preview: Record<string, unknown> }
+
+    expect(result.preview.exchange_rate).toBeNull()
+    expect(result.preview.exchange_rate_source).toBe('lookup_failed')
+    expect(result.preview.exchange_rate_hint).toMatch(/exchange_rate_override \(SEK per 1 USD\)/)
+  })
+
+  it('rejects a non-positive or non-numeric exchange_rate_override before touching the resolver', async () => {
+    const supabase = makeMock({ inbox: usdInbox })
+    await expect(
+      tool().execute({ inbox_item_id: 'inbox-usd', exchange_rate_override: '9,6' }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/exchange_rate_override must be a positive number \(SEK per 1 USD\); got "9,6"/)
+    await expect(
+      tool().execute({ inbox_item_id: 'inbox-usd', exchange_rate_override: 0 }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/must be a positive number/)
+    expect(mockResolveRate).not.toHaveBeenCalled()
+  })
+
+  it('an implausible override is refused with a pointer at the invoice, never silently replaced', async () => {
+    mockResolveRate.mockResolvedValue({ ok: false, currency: 'USD', invoiceDate: '2026-04-24' })
+    const supabase = makeMock({ inbox: usdInbox })
+    await expect(
+      tool().execute({ inbox_item_id: 'inbox-usd', exchange_rate_override: 250000 }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/exchange_rate_override 250000 was refused as implausible/)
+  })
+
+  it('a SEK invoice does not consult the resolver and reports not_applicable', async () => {
+    const supabase = makeMock({
+      inbox: { ...usdInbox, id: 'inbox-sek', extracted_data: baseExtracted },
+    })
+    const result = (await tool().execute(
+      { inbox_item_id: 'inbox-sek', dry_run: true },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as { preview: Record<string, unknown> }
+    expect(mockResolveRate).not.toHaveBeenCalled()
+    expect(result.preview.exchange_rate_source).toBe('not_applicable')
   })
 })

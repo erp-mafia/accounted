@@ -13,9 +13,6 @@ import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
-// Re-export types for backward compatibility
-export type { RawTransaction, IngestResult } from '@/types'
-
 /**
  * Sentinel for a (date, öre) bucket whose incoming rows carry more than one
  * currency: the booked-hand-entered mirror's per-bucket currency gate cannot be

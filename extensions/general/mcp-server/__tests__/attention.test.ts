@@ -74,6 +74,15 @@ describe('Accounted://attention', () => {
     expect(result.categories).toEqual([])
   })
 
+  it('only lists overdue fakturor: proformas, delivery notes and quotes are never receivables', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+
+    await attentionResource.read(ctx(supabase))
+
+    expect(findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
+  })
+
   it('classifies recently-unbooked transactions as warning', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const today = new Date().toISOString().slice(0, 10)

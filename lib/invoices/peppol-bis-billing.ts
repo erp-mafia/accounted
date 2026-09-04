@@ -1,9 +1,12 @@
+import { escapeXml } from '@/lib/xml/escape'
 import {
   generateOcrReference,
   validateBankgiroNumber,
   validatePlusgiroNumber,
 } from '@/lib/bankgiro/luhn'
 import { isSaneDateString, normalizeOrgNumber } from '@/lib/invariants'
+import { resolveInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { computeLineAmounts, hasLineDiscount } from '@/lib/invoices/line-amounts'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { equalOre, roundOre } from '@/lib/money'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
@@ -108,15 +111,6 @@ function formatDecimal(value: number): string {
   const whole = Math.floor(absolute / precision)
   const fraction = String(absolute % precision).padStart(6, '0').replace(/0+$/, '')
   return fraction ? `${sign}${whole}.${fraction}` : `${sign}${whole}`
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
 }
 
 function hasText(value: string | null | undefined): value is string {
@@ -270,11 +264,13 @@ function prepareInvoice(input: PeppolInvoiceInput):
       'Invoice, due, and delivery dates must be valid dates.',
     ))
   }
-  if (!hasText(invoice.your_reference)) {
+  // BT-10 BuyerReference: fakturamärkning wins when set (SFTI convention:
+  // the buyer's routing/marking string), else Er referens.
+  if (!hasText(invoice.invoice_marking) && !hasText(invoice.your_reference)) {
     issues.push(validationIssue(
       'BUYER_REFERENCE_REQUIRED', 'invoice.your_reference',
-      'Er referens krävs för Peppol när inköpsordernummer saknas.',
-      'Buyer reference is required for Peppol when no purchase order reference is available.',
+      'Märkning eller Er referens krävs för Peppol när inköpsordernummer saknas.',
+      'A marking or buyer reference is required for Peppol when no purchase order reference is available.',
     ))
   }
   if ((invoice.deduction_total ?? 0) !== 0) {
@@ -331,16 +327,19 @@ function prepareInvoice(input: PeppolInvoiceInput):
     phone: customer.phone,
   }, false, issues)
 
+  // Same payee the PDF and the email print: the resolver, not the raw legacy
+  // columns. Peppol is SEK-only (validated above), so resolve for SEK.
+  const payee = resolveInvoicePaymentAccount(company, 'SEK', invoice.payment_details ?? null)
   let payment: PreparedInvoice['payment'] | null = null
-  if (hasText(company.bankgiro) && validateBankgiroNumber(company.bankgiro)) {
+  if (hasText(payee?.bankgiro) && validateBankgiroNumber(payee.bankgiro)) {
     payment = {
-      accountId: company.bankgiro.replace(/\D/g, ''),
+      accountId: payee.bankgiro.replace(/\D/g, ''),
       branchId: 'SE:BANKGIRO',
       paymentId: generateOcrReference(invoice.invoice_number ?? ''),
     }
-  } else if (hasText(company.plusgiro) && validatePlusgiroNumber(company.plusgiro)) {
+  } else if (hasText(payee?.plusgiro) && validatePlusgiroNumber(payee.plusgiro)) {
     payment = {
-      accountId: company.plusgiro.replace(/\D/g, ''),
+      accountId: payee.plusgiro.replace(/\D/g, ''),
       branchId: 'SE:PLUSGIRO',
       paymentId: generateOcrReference(invoice.invoice_number ?? ''),
     }
@@ -396,11 +395,22 @@ function prepareInvoice(input: PeppolInvoiceInput):
         `The VAT rate on invoice line ${index + 1} must be 6, 12, or 25 percent.`,
       ))
     }
-    if (!equalMoney(item.line_total, roundMoney(item.quantity * item.unit_price))) {
+    // Net of any line discount: line_total must equal (qty × price) − rabatt,
+    // the same exact öre arithmetic the write path stores
+    // (lib/invoices/line-amounts.ts) and the BG-27 allowance below renders.
+    const expectedAmounts = computeLineAmounts(item.quantity, item.unit_price, item.discount_percent)
+    if (!equalMoney(item.line_total, roundMoney(expectedAmounts.net))) {
       issues.push(validationIssue(
         'LINE_TOTAL_MISMATCH', `${lineField}.line_total`,
-        `Beloppet på fakturarad ${index + 1} stämmer inte med antal gånger pris.`,
-        `The amount on invoice line ${index + 1} does not equal quantity times price.`,
+        `Beloppet på fakturarad ${index + 1} stämmer inte med antal gånger pris minus rabatt.`,
+        `The amount on invoice line ${index + 1} does not equal quantity times price less discount.`,
+      ))
+    }
+    if (item.discount_percent !== undefined && (item.discount_percent < 0 || item.discount_percent > 100)) {
+      issues.push(validationIssue(
+        'LINE_DISCOUNT_INVALID', `${lineField}.discount_percent`,
+        `Rabatten på fakturarad ${index + 1} måste vara mellan 0 och 100 procent.`,
+        `The discount on invoice line ${index + 1} must be between 0 and 100 percent.`,
       ))
     }
     if (!equalMoney(item.vat_amount, roundMoney(item.line_total * item.vat_rate / 100))) {
@@ -552,11 +562,29 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     '      </cac:TaxCategory>',
     '    </cac:TaxSubtotal>',
   ])
-  const invoiceLines = prepared.productItems.flatMap((item, index) => [
+  const invoiceLines = prepared.productItems.flatMap((item, index) => {
+    // Line discount as a BG-27 allowance: LineExtensionAmount stays the net
+    // line_total and the allowance documents base − amount = net exactly
+    // (the amounts come from the same öre arithmetic as the stored total).
+    const amounts = computeLineAmounts(item.quantity, item.unit_price, item.discount_percent)
+    const allowance = hasLineDiscount(item.discount_percent)
+      ? [
+          '    <cac:AllowanceCharge>',
+          '      <cbc:ChargeIndicator>false</cbc:ChargeIndicator>',
+          '      <cbc:AllowanceChargeReasonCode>95</cbc:AllowanceChargeReasonCode>',
+          '      <cbc:AllowanceChargeReason>Rabatt</cbc:AllowanceChargeReason>',
+          `      <cbc:MultiplierFactorNumeric>${formatDecimal(item.discount_percent as number)}</cbc:MultiplierFactorNumeric>`,
+          `      <cbc:Amount currencyID="SEK">${formatMoney(amounts.discount)}</cbc:Amount>`,
+          `      <cbc:BaseAmount currencyID="SEK">${formatMoney(amounts.gross)}</cbc:BaseAmount>`,
+          '    </cac:AllowanceCharge>',
+        ]
+      : []
+    return [
     '  <cac:InvoiceLine>',
     `    <cbc:ID>${index + 1}</cbc:ID>`,
     `    <cbc:InvoicedQuantity unitCode="${UNIT_CODES[item.unit]}">${formatDecimal(item.quantity)}</cbc:InvoicedQuantity>`,
     `    <cbc:LineExtensionAmount currencyID="SEK">${formatMoney(item.line_total)}</cbc:LineExtensionAmount>`,
+    ...allowance,
     '    <cac:Item>',
     `      <cbc:Name>${escapeXml(item.description.trim())}</cbc:Name>`,
     '      <cac:ClassifiedTaxCategory>',
@@ -569,7 +597,8 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     `      <cbc:PriceAmount currencyID="SEK">${formatDecimal(item.unit_price)}</cbc:PriceAmount>`,
     '    </cac:Price>',
     '  </cac:InvoiceLine>',
-  ])
+    ]
+  })
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -584,7 +613,7 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     '  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>',
     invoice.notes ? `  <cbc:Note>${escapeXml(invoice.notes)}</cbc:Note>` : null,
     '  <cbc:DocumentCurrencyCode>SEK</cbc:DocumentCurrencyCode>',
-    `  <cbc:BuyerReference>${escapeXml(invoice.your_reference?.trim() ?? '')}</cbc:BuyerReference>`,
+    `  <cbc:BuyerReference>${escapeXml((invoice.invoice_marking?.trim() || invoice.your_reference?.trim()) ?? '')}</cbc:BuyerReference>`,
     renderParty('AccountingSupplierParty', prepared.supplier, company.f_skatt),
     renderParty('AccountingCustomerParty', prepared.buyer, false),
     invoice.delivery_date

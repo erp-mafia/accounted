@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
@@ -17,7 +17,8 @@ import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogTitle, DialogVeil } from '@/components/ui/dialog'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
@@ -29,6 +30,13 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
+import { matchesInvoiceSearch } from '@/lib/invoices/invoice-search'
+import {
+  fetchInvoiceRegisterCoverage,
+  NO_INVOICE_REGISTER_COVERAGE,
+  type InvoiceRegisterCoverage,
+} from '@/lib/invoices/invoice-register-coverage'
 import {
   sortInvoiceList,
   type InvoiceListSort,
@@ -44,6 +52,8 @@ import {
   Repeat,
   FileInput,
   FileDown,
+  FileText,
+  FileClock,
 } from 'lucide-react'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -86,7 +96,7 @@ const CREATE_MODES = ['faktura', 'aterkommande', 'sjalvfaktura'] as const
 
 // Main views (concept seg) and the low-frequency views behind "Fler …".
 const SEG_TABS = ['all', 'unpaid', 'overdue', 'draft'] as const
-const MORE_TABS = ['paid', 'proforma', 'delivery_note', 'credit', 'cancelled'] as const
+const MORE_TABS = ['paid', 'proforma', 'quote', 'delivery_note', 'credit', 'cancelled'] as const
 const ALL_TABS = [...SEG_TABS, ...MORE_TABS]
 type ListTab = (typeof SEG_TABS)[number] | (typeof MORE_TABS)[number]
 
@@ -113,6 +123,7 @@ function matchesListTab(invoice: Invoice, tab: ListTab): boolean {
     (tab === 'paid' && invoice.status === 'paid') ||
     (tab === 'credit' && isCreditNote) ||
     (tab === 'proforma' && docType === 'proforma' && invoice.status !== 'cancelled') ||
+    (tab === 'quote' && docType === 'quote' && invoice.status !== 'cancelled') ||
     (tab === 'delivery_note' &&
       docType === 'delivery_note' &&
       invoice.status !== 'cancelled') ||
@@ -127,6 +138,7 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   draft: 'tab_draft',
   paid: 'tab_paid',
   proforma: 'tab_proforma',
+  quote: 'tab_quote',
   delivery_note: 'tab_delivery_note',
   credit: 'tab_credit',
   cancelled: 'tab_cancelled',
@@ -204,6 +216,9 @@ export default function InvoicesPage() {
   const accountingMethod: string = companySettings?.accounting_method ?? 'accrual'
   const deferInvoiceBooking: boolean = companySettings?.defer_invoice_booking ?? false
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Radix' onCheckedChange carries no mouse event: the preceding click records
+  // whether shift was held, for range selection.
+  const shiftHeld = useRef(false)
   const [showBulkBookConfirm, setShowBulkBookConfirm] = useState(false)
   const [isBulkBooking, setIsBulkBooking] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -238,6 +253,12 @@ export default function InvoicesPage() {
   const copyFromId = searchParams.get('copy')
   const showNewInvoice = searchParams.has('new') || copyFromId !== null
   const openSelfBilled = searchParams.has('self')
+  // ?quote=1 preselects the offert document type ("Ny offert" split entry);
+  // ?proforma=1 the proforma type ("Ny proformafaktura" split entry, #2217:
+  // proforma existed but only behind the collapsed Förval panel inside the
+  // editor, so a user coming from Fortnox concluded it did not exist).
+  const openQuote = searchParams.has('quote')
+  const openProforma = searchParams.has('proforma')
   const showRotRutPayout = searchParams.has('rot-rut')
   // Open/close handlers rewrite only their own keys: a hardcoded '/invoices'
   // would destroy the ?status= view write-back (and any other params) every
@@ -253,6 +274,8 @@ export default function InvoicesPage() {
       invoicesUrl((p) => {
         p.delete('new')
         p.delete('self')
+        p.delete('quote')
+        p.delete('proforma')
         p.delete('copy')
       }),
       { scroll: false },
@@ -264,6 +287,22 @@ export default function InvoicesPage() {
       invoicesUrl((p) => {
         p.set('new', '1')
         p.set('self', '1')
+      }),
+      { scroll: false },
+    )
+  const openNewQuote = () =>
+    router.push(
+      invoicesUrl((p) => {
+        p.set('new', '1')
+        p.set('quote', '1')
+      }),
+      { scroll: false },
+    )
+  const openNewProforma = () =>
+    router.push(
+      invoicesUrl((p) => {
+        p.set('new', '1')
+        p.set('proforma', '1')
       }),
       { scroll: false },
     )
@@ -281,6 +320,30 @@ export default function InvoicesPage() {
   // ones. ?rot-rut=1 keeps working regardless, so nothing is unreachable.
   const showRotRutAction =
     rotRutEnabled || invoices.some((invoice) => (invoice.deduction_total ?? 0) > 0)
+
+  // Invoice-register coverage (see lib/invoices/invoice-register-coverage.ts):
+  // a migrated or backfilled company has invoices that live only as verifikat,
+  // so this list looks complete for periods it doesn't cover. One quiet attn
+  // line discloses the boundary; without it the user's next step is "those
+  // invoices were never sent" (the 2026-09-01 report: nearly double-invoiced).
+  const [registerCoverage, setRegisterCoverage] = useState<InvoiceRegisterCoverage>(
+    NO_INVOICE_REGISTER_COVERAGE,
+  )
+  useEffect(() => {
+    if (!company) {
+      setRegisterCoverage(NO_INVOICE_REGISTER_COVERAGE)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const coverage = await fetchInvoiceRegisterCoverage(supabase, company.id)
+      if (!cancelled) setRegisterCoverage(coverage)
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [company?.id])
 
   async function fetchInvoices() {
     if (!company) return
@@ -327,14 +390,7 @@ export default function InvoicesPage() {
   const scopedInvoices = useMemo(
     () =>
       invoices.filter((invoice) => {
-        const matchesSearch =
-          (invoice.invoice_number ?? '').toLocaleLowerCase('sv-SE').includes(normalizedSearch) ||
-          (invoice.external_invoice_number ?? '')
-            .toLocaleLowerCase('sv-SE')
-            .includes(normalizedSearch) ||
-          (invoice.customer as { name: string })?.name
-            ?.toLocaleLowerCase('sv-SE')
-            .includes(normalizedSearch)
+        const matchesSearch = matchesInvoiceSearch(invoice, normalizedSearch)
 
         const matchesFy =
           !fyPeriod ||
@@ -419,13 +475,16 @@ export default function InvoicesPage() {
   const allSelectableSelected =
     selectableInvoices.length > 0 && selectableInvoices.every((inv) => selectedIds.has(inv.id))
 
-  function toggleSelect(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  // Ranges walk the selectable rows that are actually rendered: the list is
+  // sorted and cut at visibleCount, so rows below the fold are not in range.
+  const range = useRangeSelect({
+    visibleIds: visibleInvoices.filter(isBulkSelectable).map((inv) => inv.id),
+    selectedIds,
+    setSelectedIds,
+  })
+
+  function toggleSelect(id: string, extend?: boolean) {
+    range.toggle(id, extend)
   }
 
   const selectedInvoices = invoices.filter((inv) => selectedIds.has(inv.id))
@@ -497,6 +556,24 @@ export default function InvoicesPage() {
       onSelect: () => openNewInvoice(),
     },
     {
+      key: 'offert',
+      label: t('create_quote'),
+      icon: FileText,
+      description: t('create_quote_desc'),
+      disabled: !canWrite,
+      disabledTitle: t('viewer_disabled_tooltip'),
+      onSelect: () => openNewQuote(),
+    },
+    {
+      key: 'proforma',
+      label: t('create_proforma'),
+      icon: FileClock,
+      description: t('create_proforma_desc'),
+      disabled: !canWrite,
+      disabledTitle: t('viewer_disabled_tooltip'),
+      onSelect: () => openNewProforma(),
+    },
+    {
       key: 'aterkommande',
       label: t('create_recurring'),
       icon: Repeat,
@@ -528,6 +605,20 @@ export default function InvoicesPage() {
     if (invoice.status === 'credited') {
       return { label: t('status_credited'), exception: true, variant: 'secondary' }
     }
+    // Offert: the decision (or derived expiry) is the status. Open and
+    // accepted are the normal states; declined and expired deviate.
+    const quoteStatus =
+      (invoice as Invoice & { document_type?: string }).document_type === 'quote'
+        ? effectiveQuoteStatus(invoice)
+        : null
+    if (quoteStatus === 'expired') {
+      return { label: t('quote_status_expired'), exception: true, variant: 'warning' }
+    }
+    if (quoteStatus === 'declined') {
+      return { label: t('quote_status_declined'), exception: true, variant: 'secondary' }
+    }
+    if (quoteStatus === 'accepted') return { label: t('quote_status_accepted') }
+    if (quoteStatus === 'open') return { label: t('quote_status_open') }
     if (invoice.status === 'draft') {
       const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
       const isUnsent =
@@ -624,6 +715,15 @@ export default function InvoicesPage() {
         </div>
       </div>
 
+      {/* Coverage boundary (convention 6: one page-domain attn line). Shown
+          only when posted AR verifikat predate the register's first invoice:
+          the list is then silently incomplete for that period. */}
+      {registerCoverage.has_pre_register_invoices && registerCoverage.covers_from && (
+        <p className="attn text-[12.5px]">
+          {t('coverage_notice', { date: formatDate(registerCoverage.covers_from) })}
+        </p>
+      )}
+
       {/* Bulkbar: appears once anything is selected (supplier-invoices shape). */}
       {selectedIds.size > 0 && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2 text-[12.5px] animate-fade-in">
@@ -642,7 +742,10 @@ export default function InvoicesPage() {
             <button
               type="button"
               className={QUIET_LINK_CLASS}
-              onClick={() => setSelectedIds(new Set(selectableInvoices.map((inv) => inv.id)))}
+              onClick={() => {
+                setSelectedIds(new Set(selectableInvoices.map((inv) => inv.id)))
+                range.resetAnchor()
+              }}
             >
               {t('bulk_select_all', { count: selectableInvoices.length })}
             </button>
@@ -650,7 +753,10 @@ export default function InvoicesPage() {
           <button
             type="button"
             className={QUIET_LINK_CLASS}
-            onClick={() => setSelectedIds(new Set())}
+            onClick={() => {
+              setSelectedIds(new Set())
+              range.resetAnchor()
+            }}
           >
             {t('bulk_clear')}
           </button>
@@ -759,11 +865,13 @@ export default function InvoicesPage() {
                   activeTab === 'all'
                     ? docType === 'proforma'
                       ? t('badge_proforma')
-                      : docType === 'delivery_note'
-                        ? t('badge_delivery_note')
-                        : invoice.is_self_billed
-                          ? t('badge_self_billed')
-                          : null
+                      : docType === 'quote'
+                        ? t('badge_quote')
+                        : docType === 'delivery_note'
+                          ? t('badge_delivery_note')
+                          : invoice.is_self_billed
+                            ? t('badge_self_billed')
+                            : null
                     : null
                 return (
                   <tr
@@ -780,19 +888,22 @@ export default function InvoicesPage() {
                     {/* Hover-revealed selection checkbox (supplier-invoices shape). */}
                     {showSelection && (
                       <td
-                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px]')}
+                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px] select-none')}
                         onClick={(e) => e.stopPropagation()}
                       >
                         {isBulkSelectable(invoice) && (
                           <Checkbox
                             checked={selectedIds.has(invoice.id)}
-                            onCheckedChange={() => toggleSelect(invoice.id)}
+                            onClick={(e) => {
+                              shiftHeld.current = e.shiftKey
+                            }}
+                            onCheckedChange={() => toggleSelect(invoice.id, shiftHeld.current)}
                             aria-label={t('bulk_select_row')}
                             className={cn(
-                              'transition-opacity duration-150',
+                              'border-foreground duration-150',
                               selectedIds.has(invoice.id) || selectedIds.size > 0
                                 ? 'opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+                                : CHECKBOX_REVEAL_CLASS,
                             )}
                           />
                         )}
@@ -816,9 +927,13 @@ export default function InvoicesPage() {
                       </span>
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
-                      {invoice.due_date && !isCreditNote && invoice.status !== 'draft'
-                        ? formatDate(invoice.due_date)
-                        : ''}
+                      {docType === 'quote'
+                        ? invoice.valid_until
+                          ? formatDate(invoice.valid_until)
+                          : ''
+                        : invoice.due_date && !isCreditNote && invoice.status !== 'draft'
+                          ? formatDate(invoice.due_date)
+                          : ''}
                     </td>
                     <td
                       className={cn(
@@ -869,6 +984,7 @@ export default function InvoicesPage() {
           open
           copyFromId={copyFromId}
           selfBilled={openSelfBilled}
+          documentType={openQuote ? 'quote' : openProforma ? 'proforma' : undefined}
           onOpenChange={(open) => {
             if (!open) closeNewInvoice()
           }}

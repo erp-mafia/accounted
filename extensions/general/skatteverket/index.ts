@@ -1,3 +1,4 @@
+import { sleep } from '@/lib/utils'
 import crypto from 'crypto'
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -12,6 +13,12 @@ import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
+import { skatteverketConnectorMode, startConnectorAuthorization } from './lib/connector-mode'
+import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
+import {
+  requireFlowInitiator,
+  FLOW_INITIATOR_MISMATCH_MESSAGE,
+} from '@/lib/auth/oauth-flow-binding'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
 import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
 import { writeSkatteverketAudit } from './lib/audit'
@@ -25,10 +32,17 @@ import {
 import { submitVatDeclarationChain } from './lib/vat-submit'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { getSystemAuthMode, isSystemAuthConfigured, getOmbudOrgNumber, getSystemCertInfo } from './lib/system-auth/config'
-import { getConnection, markConnectionRevoked } from './lib/connection-store'
+import {
+  getConnection,
+  isOrgNumberContested,
+  markConnectionRevoked,
+  recordProbeResult,
+} from './lib/connection-store'
 import { currentSkvEnvironment, resolveReadAuth } from './lib/resolve-auth'
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
+import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
+import { createUtseOmbudDeepLink, OMBUD_ROLE_KEYS, OmbudApiError } from './lib/ombud-client'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import type {
   SkvSubmitResult,
@@ -57,7 +71,6 @@ import {
   bokforSkattekontoTransactionsBatch,
   SkattekontoBookingError,
 } from './lib/skattekonto-booking'
-import { handleSkattekontoDriftDetected } from './lib/skattekonto-drift-email'
 import {
   findMatchCandidates,
   findMatchSuggestionsBulk,
@@ -152,10 +165,18 @@ const SkattekontoBokforBatchSchema = z.object({
  *   4. Set SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL, _SCOPES, _CLIENT_ID,
  *      _AUTH_MECHANISM per the docs; SKATTEVERKET_OMBUD_ORG_NUMBER =
  *      Accounted's org number (shown to users in the grant instructions).
- *   5. Validate grant-probe.ts classification against real sandbox 403
- *      bodies (shadow mode in the test environment first).
+ *   5. First live call against Ombudshantering v2 in the test service
+ *      (scope `obr` was added to application id arcimtechnologyab_gnubok_1
+ *      on 2026-09-01): confirm the list envelope, read the rollbeteckning
+ *      codes from GET /roller and pin them in SKATTEVERKET_OMBUD_ROLL_LASOMBUD
+ *      / SKATTEVERKET_OMBUD_ROLL_MOMS (lib/ombud-client.ts). Grant
+ *      verification then runs on the register; the read-service probes in
+ *      grant-probe.ts stay as the fallback and still need their 403 bodies
+ *      validated (shadow mode in the test environment first).
  *   6. Godkännandetest per API, then SKATTEVERKET_SYSTEM_AUTH_MODE=on in
- *      prod. User tokens remain the fallback indefinitely.
+ *      prod. User tokens remain the fallback indefinitely. The daily ombud
+ *      sync cron (/api/extensions/skatteverket/ombud/sync/cron) runs from
+ *      shadow mode on: it only records grant state.
  *
  * The /status endpoint reports which environment is active so the UI can
  * surface a Testmiljö / Produktion badge.
@@ -173,6 +194,26 @@ const AGI_WRITE_ROLES = new Set(['owner', 'admin', 'member'])
  */
 async function requireSkvCapability(ctx: ExtensionContext): Promise<NextResponse | null> {
   return requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.skatteverket)
+}
+
+/**
+ * The ombud path binds Skatteverket system-credential access to an org
+ * number, and org numbers are public and tenant-editable. While more than
+ * one live company claims the same one, no company may verify a grant or
+ * mint a deep link on it: a tenant that typed a victim's number must never
+ * inherit the victim's grant. Returns the 409 to send, or null when clear.
+ */
+async function contestedOrgNumberResponse(orgNumber: string): Promise<NextResponse | null> {
+  if (!(await isOrgNumberContested(orgNumber))) return null
+  return NextResponse.json(
+    {
+      error:
+        'Organisationsnumret används av fler än ett företag i Accounted. ' +
+        'Kontakta support för att aktivera ombudsanslutningen.',
+      code: 'ORG_NUMBER_CONTESTED',
+    },
+    { status: 409 }
+  )
 }
 
 /**
@@ -283,7 +324,7 @@ export const skatteverketExtension: Extension = {
         if (blocked) return blocked
 
         const state = crypto.randomUUID()
-        const redirectUri = `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
+        let redirectUri = `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
 
         // Optional: where to send the user after the BankID round-trip.
         // Allowlisted to internal in-app paths to avoid open-redirect abuse.
@@ -299,6 +340,44 @@ export const skatteverketExtension: Extension = {
         // tokens unless PKCE is present, so we always send it.
         const pkce = generatePkcePair()
 
+        // Connector mode (self-host with a connector key and no own SKV
+        // client): the broker builds the authorize URL against Arcim's
+        // registered SKV client and OUR hosted redirect_uri; the hosted
+        // callback bounces the browser back to THIS instance's /callback with
+        // the code. The broker's redirect_uri replaces the local one (the
+        // token exchange must repeat the redirect_uri SKV saw), and the
+        // broker's signed connector_state is persisted for that exchange.
+        const connector = skatteverketConnectorMode()
+        let authorizeUrl: string
+        let connectorState: string | null = null
+        if (connector) {
+          try {
+            const started = await startConnectorAuthorization(connector, {
+              companyRef: ctx.companyId,
+              returnUrl: redirectUri,
+              state,
+              codeChallenge: pkce.challenge,
+            })
+            redirectUri = started.redirectUri
+            connectorState = started.connectorState
+            authorizeUrl = started.authorizeUrl
+          } catch (err) {
+            log.error('connector authorize-url failed', err as Error, { companyId: ctx.companyId })
+            return NextResponse.json(
+              {
+                error:
+                  'Kunde inte starta Skatteverket-anslutningen via connectorn. ' +
+                  'Kontrollera GNUBOK_CONNECTOR_KEY och anslutningsläget på /api/connector/status.',
+              },
+              { status: 502 },
+            )
+          }
+        } else {
+          authorizeUrl = buildAuthorizeUrl(redirectUri, state, {
+            codeChallenge: pkce.challenge,
+          })
+        }
+
         // Store state for CSRF validation in callback. The user id is stored
         // alongside it because the callback runs on the OAuth host (see
         // getSkvOauthBaseUrl), where the browser carries no session cookies
@@ -307,12 +386,10 @@ export const skatteverketExtension: Extension = {
         await ctx.settings.set('oauth_user_id', ctx.userId)
         await ctx.settings.set('oauth_redirect_uri', redirectUri)
         await ctx.settings.set('oauth_code_verifier', pkce.verifier)
+        if (connectorState) await ctx.settings.set('oauth_connector_state', connectorState)
+        else await ctx.settings.clear('oauth_connector_state')
         if (returnTo) await ctx.settings.set('oauth_return_to', returnTo)
         else await ctx.settings.clear('oauth_return_to')
-
-        const authorizeUrl = buildAuthorizeUrl(redirectUri, state, {
-          codeChallenge: pkce.challenge,
-        })
 
         return NextResponse.redirect(authorizeUrl)
       },
@@ -333,6 +410,27 @@ export const skatteverketExtension: Extension = {
         const code = url.searchParams.get('code')
         const state = url.searchParams.get('state')
         const error = url.searchParams.get('error')
+
+        // Connector branch: a self-hosted instance started this SKV consent
+        // through the /api/connect/skv broker, which registered OUR redirect
+        // uri and a signed connector state. We never exchange the code here
+        // (the instance does, through the broker's /oauth/token): just bounce
+        // the browser back to the instance with the code + its original
+        // state, so no per-instance redirect uri is registered at SKV.
+        if (isConnectorState(state)) {
+          const verified = verifyConnectorState(state as string)
+          if (!verified.ok || verified.payload.svc !== 'skv') {
+            return NextResponse.redirect(`${appUrl}/?connector_error=${encodeURIComponent(verified.ok ? 'wrong_service' : verified.reason)}`)
+          }
+          const ret = new URL(verified.payload.ret)
+          if (error) ret.searchParams.set('error', error)
+          const errorDescription = url.searchParams.get('error_description')
+          if (errorDescription) ret.searchParams.set('error_description', errorDescription)
+          if (code) ret.searchParams.set('code', code)
+          if (verified.payload.st) ret.searchParams.set('state', verified.payload.st)
+          ret.searchParams.set('connector_state', state as string)
+          return NextResponse.redirect(ret.toString())
+        }
 
         // Injection-safety invariants: appUrl comes from NEXT_PUBLIC_APP_URL
         // (deployment configuration, never user input), and jsLiteral
@@ -465,8 +563,43 @@ export const skatteverketExtension: Extension = {
         // Flows that started before oauth_user_id shipped ran on the same
         // domain as the app and still carry session cookies; fall back to
         // those so in-flight connects survive the deploy boundary.
-        let userId = await readSetting('oauth_user_id')
-        if (!userId) {
+        const storedUserId = await readSetting('oauth_user_id')
+        let userId = storedUserId
+        if (storedUserId) {
+          // The state row names the user who started the flow; the tokens
+          // below are stored for that user with the service client. Bind the
+          // completion to that user's own session so a victim lured into
+          // approving a Skatteverket consent someone else started cannot have
+          // their BankID-authorised access stored under that someone.
+          //
+          // Hosted, this callback is served on the pinned OAuth host
+          // (getSkvOauthBaseUrl, app.gnubok.se) where the app's session
+          // cookies never arrive: a missing session proves nothing there and
+          // the single-use state + membership check stay the guard. Where the
+          // OAuth host IS the app host (self-hosted, or the pin removed) the
+          // initiator's cookies do arrive, so no session means the initiator
+          // is not the one finishing the flow. A session for a DIFFERENT user
+          // is refused on every host.
+          const initiator = await requireFlowInitiator(request, storedUserId, {
+            flow: 'skatteverket.callback',
+          })
+          if (!initiator.ok) {
+            const sessionExpected =
+              new URL(getSkvOauthBaseUrl()).origin === new URL(appUrl).origin
+            if (initiator.reason === 'mismatch') {
+              return respondWithError(
+                FLOW_INITIATOR_MISMATCH_MESSAGE,
+                `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(FLOW_INITIATOR_MISMATCH_MESSAGE)}`,
+              )
+            }
+            if (sessionExpected) {
+              // The state row is untouched until the exchange, so signing in
+              // and re-running this callback (the helper's /login?next=...)
+              // completes the flow for its initiator.
+              return initiator.response
+            }
+          }
+        } else {
           const cookieClient = await createClient()
           const { data: { user } } = await cookieClient.auth.getUser()
           userId = user?.id ?? null
@@ -505,6 +638,15 @@ export const skatteverketExtension: Extension = {
         // PKCE rollout: once those drain, this can be made required.
         const codeVerifier = (await readSetting('oauth_code_verifier')) || undefined
 
+        // Connector mode: the broker's signed state, stored by /authorize
+        // (authoritative) with the hosted callback's bounced query param as
+        // fallback for a row written before the store landed. Required by the
+        // broker's token exchange; undefined on the direct path.
+        const connectorState =
+          (await readSetting('oauth_connector_state')) ||
+          url.searchParams.get('connector_state') ||
+          undefined
+
         // Optional in-app destination set by /authorize?return_to=...
         const returnTo = await readSetting('oauth_return_to')
         const successPath = returnTo
@@ -516,7 +658,7 @@ export const skatteverketExtension: Extension = {
             : `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(msg)}`
 
         try {
-          const tokens = await exchangeCodeForTokens(code, redirectUri, codeVerifier)
+          const tokens = await exchangeCodeForTokens(code, redirectUri, codeVerifier, connectorState)
           await storeTokens(db, userId, tokens, companyId)
 
           // Clean up CSRF state + the one-shot user id/return_to/PKCE verifier.
@@ -525,7 +667,7 @@ export const skatteverketExtension: Extension = {
             .delete()
             .eq('company_id', companyId)
             .eq('extension_id', 'skatteverket')
-            .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier'])
+            .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier', 'oauth_connector_state'])
 
           // Refresh Skatteverket-derived data AFTER the response is sent.
           // Right-after-consent is still the one reliable window for a
@@ -565,7 +707,7 @@ export const skatteverketExtension: Extension = {
               .delete()
               .eq('company_id', companyId)
               .eq('extension_id', 'skatteverket')
-              .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier'])
+              .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier', 'oauth_connector_state'])
           } catch (cleanupErr) {
             log.error('oauth state cleanup after failed exchange failed', cleanupErr, { companyId })
           }
@@ -599,7 +741,15 @@ export const skatteverketExtension: Extension = {
         }
 
         const expired = tokens.expires_at < Date.now()
-        const canRefresh = tokens.refresh_token !== null && tokens.refresh_count < 10
+        // Honest refreshability: SKV's per-flow refresh token dies 65 minutes
+        // after issue, five minutes past access-token expiry. A stored
+        // refresh token past that window is not "can refresh"; reporting it
+        // as such kept the reconnect banner silent for days.
+        const canRefresh = isSkvSessionRefreshable({
+          expiresAt: tokens.expires_at,
+          hasRefreshToken: tokens.refresh_token !== null,
+          refreshCount: tokens.refresh_count,
+        })
 
         // Persisted health, written by the crons when they hit a terminal
         // auth state. Lets the settings panel prompt for re-consent
@@ -725,6 +875,9 @@ export const skatteverketExtension: Extension = {
           settings.entity_type as 'enskild_firma' | 'aktiebolag'
         )
 
+        const contestedForVerify = await contestedOrgNumberResponse(orgNumber)
+        if (contestedForVerify) return contestedForVerify
+
         try {
           const result = await probeCompanyGrants(ctx.companyId, orgNumber, ctx.userId)
           await writeSkatteverketAudit(ctx, {
@@ -742,6 +895,93 @@ export const skatteverketExtension: Extension = {
             },
           })
         } catch (err) {
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    // ── System connection: deep link to appoint Accounted as ombud ──
+    // Ombudshantering v2 mints a link into Skatteverket's e-service with
+    // Accounted pre-filled as ombud and both roles pre-selected; the company
+    // only signs with BankID there. Runs on the system identity (the link's
+    // ombud is whoever holds the token), so it needs the same configuration
+    // as verify.
+    {
+      method: 'POST',
+      path: '/system-connection/deeplink',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const blocked = await requireSkvCapability(ctx)
+        if (blocked) return blocked
+        const roleBlocked = await requireAgiWriteRole(ctx)
+        if (roleBlocked) return roleBlocked
+
+        if (getSystemAuthMode() === 'off' || !isSystemAuthConfigured()) {
+          return NextResponse.json(
+            { error: 'Systemanslutningen är inte aktiverad i denna miljö.' },
+            { status: 503 }
+          )
+        }
+
+        const { data: settings } = await ctx.supabase
+          .from('company_settings')
+          .select('org_number, entity_type')
+          .eq('company_id', ctx.companyId)
+          .single()
+        if (!settings?.org_number) {
+          return NextResponse.json(
+            { error: 'Organisationsnummer saknas. Ange det under Inställningar först.' },
+            { status: 400 }
+          )
+        }
+        const orgNumber = formatRedovisare(
+          settings.org_number as string,
+          settings.entity_type as 'enskild_firma' | 'aktiebolag'
+        )
+
+        const contestedForLink = await contestedOrgNumberResponse(orgNumber)
+        if (contestedForLink) return contestedForLink
+
+        try {
+          const link = await createUtseOmbudDeepLink(orgNumber, OMBUD_ROLE_KEYS)
+          // Minting the link is the tenant's opt-in: record a pending row
+          // (no grant state yet) so the nightly ombud sync, which only ever
+          // touches existing rows, picks the signed grant up on its own.
+          const optIn = await recordProbeResult({
+            companyId: ctx.companyId,
+            environment: currentSkvEnvironment(),
+            orgNumber,
+            createdBy: ctx.userId,
+            error: null,
+          })
+          if (!optIn) {
+            // Handing out the link without the row would let the company
+            // sign at Skatteverket and never be picked up by the sync.
+            log.error('deep link minted but opt-in row could not be stored', { companyId: ctx.companyId })
+            return NextResponse.json(
+              { error: 'Anslutningen kunde inte sparas. Försök igen.' },
+              { status: 500 }
+            )
+          }
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'system-connection/deeplink',
+            agRegistreradId: orgNumber,
+            outcome: 'ok',
+          })
+          return NextResponse.json({
+            data: {
+              djuplank: link.djuplank,
+              roller: link.roller,
+              expires_on: link.expiresOn,
+            },
+          })
+        } catch (err) {
+          if (err instanceof OmbudApiError) {
+            log.warn('ombud deep link failed', { companyId: ctx.companyId, code: err.code, message: err.message })
+            return NextResponse.json({ error: err.message, code: err.code }, { status: 502 })
+          }
           return handleSkvError(err)
         }
       },
@@ -2486,16 +2726,14 @@ export const skatteverketExtension: Extension = {
     },
   ],
 
-  // skattekonto.connection.expired is still emitted (needs_reconsent flagging,
-  // UI banner, agent briefing) but has no email consumer: with SKV's 65-minute
-  // personal sessions a per-episode expiry mail is one mail per connect, which
-  // trains users to ignore it. See DECISIONS.md 2026-08-25.
-  eventHandlers: [
-    {
-      eventType: 'skattekonto.drift_detected',
-      handler: handleSkattekontoDriftDetected,
-    },
-  ],
+  // No email consumers. skattekonto.connection.expired is still emitted
+  // (needs_reconsent flagging, UI banner, agent briefing) but a per-episode
+  // expiry mail is one mail per connect with SKV's 65-minute sessions, which
+  // trains users to ignore it (DECISIONS.md 2026-08-25). The skattekonto
+  // drift mail was removed 2026-09-02: the reconciliation page and the Hem
+  // notice (lib/notices/categories.ts detectSkvUnexplained) are the surface,
+  // and the mail alerted on raw saldo-vs-1630 gaps that unbooked rows explain.
+  eventHandlers: [],
 
   // Registry-resolved commit services for the MCP submit tools. The core
   // pending-operations dispatcher (lib/pending-operations/commit.ts) cannot
@@ -2689,8 +2927,6 @@ function handleSkvError(err: unknown): NextResponse {
 function skatteverketEnabled(): boolean {
   return process.env.SKATTEVERKET_ENABLED === 'true'
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 const EXTENSION_DISABLED_RESULT: Extract<SkvSubmitResult, { ok: false }> = {
   ok: false,

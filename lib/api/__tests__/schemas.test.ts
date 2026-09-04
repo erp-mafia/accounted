@@ -704,8 +704,13 @@ describe('CreateCustomerSchema', () => {
     expect(result.success).toBe(false)
   })
 
-  it('rejects zero payment terms', () => {
+  it('accepts zero payment terms (betalning direkt, issue #2070)', () => {
     const result = CreateCustomerSchema.safeParse(validCustomer({ default_payment_terms: 0 }))
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects payment terms above 365 days', () => {
+    const result = CreateCustomerSchema.safeParse(validCustomer({ default_payment_terms: 366 }))
     expect(result.success).toBe(false)
   })
 

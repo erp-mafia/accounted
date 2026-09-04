@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency, Customer, InvoiceDocumentType } from '@/types'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
+import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import {
@@ -46,9 +47,15 @@ export interface InvoiceWriteItemInput {
   quantity: number
   unit: string
   unit_price: number
+  /** Percentage discount on the line (0-100). Omitted/null = 0; line_total
+   *  and vat_amount are computed NET of it (lib/invoices/line-amounts.ts). */
+  discount_percent?: number | null
   vat_rate?: number
   article_id?: string | null
   revenue_account?: string | null
+  /** Kundorder line this invoice line was created from; round-tripped on
+   *  edit so the order's derived invoiced quantity never loses a link. */
+  sales_order_item_id?: string | null
   deduction_type?: 'rot' | 'rut' | null
   labor_hours?: number | null
   work_type?: string | null
@@ -67,9 +74,13 @@ export interface InvoiceWriteInput {
   invoice_date: string
   due_date: string
   delivery_date?: string | null
+  /** Quotes only: expiry date. Mirrored into due_date (NOT NULL) for quotes. */
+  valid_until?: string | null
   currency: Currency
   your_reference?: string
   our_reference?: string
+  /** Fakturamärkning: buyer-required marking, separate from your_reference. */
+  invoice_marking?: string
   notes?: string
   /** Optional https payment link (schema-validated). Omitted/empty → null. */
   payment_link_url?: string
@@ -95,6 +106,7 @@ export type InvoiceWriteFields = {
   invoice_date: string
   due_date: string
   delivery_date: string | null
+  valid_until: string | null
   currency: Currency
   exchange_rate: number | null
   exchange_rate_date: string | null
@@ -111,6 +123,7 @@ export type InvoiceWriteFields = {
   reverse_charge_text: string | null
   your_reference: string | null | undefined
   our_reference: string | null | undefined
+  invoice_marking: string | null
   notes: string | null | undefined
   payment_link_url: string | null
   payment_link_auto: boolean
@@ -129,11 +142,13 @@ export type InvoiceWriteItemRow = {
   quantity: number
   unit: string
   unit_price: number
+  discount_percent: number
   line_total: number
   vat_rate: number
   vat_amount: number
   article_id: string | null
   revenue_account: string | null
+  sales_order_item_id: string | null
   deduction_type: 'rot' | 'rut' | null
   deduction_amount: number
   labor_hours: number | null
@@ -171,7 +186,7 @@ export async function buildInvoiceWriteData(params: {
   const { supabase, companyId, customer, documentType, input, existingPersonnummer } = params
   const items = input.items
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
   // Gate on the PERMITTED set, not the picker default. Under huvudregeln
   // (ML 6 kap. 34 §) a service to a foreign business is taxed where the buyer
   // is established, so 0% is the default; but the ML 6 kap. exceptions taxed
@@ -181,7 +196,7 @@ export async function buildInvoiceWriteData(params: {
   // Refusing every non-zero rate made a Stockholm hotel night or a conference
   // ticket impossible to invoice. The default is still 0% (vatRules.rate is
   // the fallback below), so a Swedish rate only lands here when set explicitly.
-  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   // VAT registration gate (defense in depth: the invoice form already hides
@@ -224,8 +239,12 @@ export async function buildInvoiceWriteData(params: {
   }
 
   // Free-text rows carry no amounts and are excluded from totals + VAT.
+  // Line totals are net of any per-line discount (rabatt i procent).
   const subtotal = items.reduce(
-    (sum, item) => (item.line_type === 'text' ? sum : sum + item.quantity * item.unit_price),
+    (sum, item) =>
+      item.line_type === 'text'
+        ? sum
+        : sum + computeLineNet(item.quantity, item.unit_price, item.discount_percent),
     0,
   )
 
@@ -260,7 +279,7 @@ export async function buildInvoiceWriteData(params: {
           details: { account: item.revenue_account, vatRate: itemRate },
         }
       }
-      const lineTotal = item.quantity * item.unit_price
+      const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
       vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
     }
   }
@@ -330,6 +349,7 @@ export async function buildInvoiceWriteData(params: {
     const validateInput = items.map((item) => ({
       unit_price: item.unit_price,
       quantity: item.quantity,
+      discount_percent: item.discount_percent ?? 0,
       deduction_type: item.deduction_type ?? null,
       // The deduction base is arbetskostnaden inkl. moms (HUSFL 6-9 §§), so
       // the validator and total need the same per-line rate the item rows
@@ -488,11 +508,22 @@ export async function buildInvoiceWriteData(params: {
     totalSek = Math.round(total * 100) / 100
   }
 
+  // A quote has no due date, only an expiry. due_date is NOT NULL on the
+  // table and every date-ordered reader sorts on it, so it mirrors
+  // valid_until; valid_until stays the authoritative column.
+  const validUntil = documentType === 'quote' ? (input.valid_until ?? input.due_date) : null
+
   const invoiceFields: InvoiceWriteFields = {
     customer_id: input.customer_id,
     invoice_date: input.invoice_date,
-    due_date: input.due_date,
+    due_date: validUntil ?? input.due_date,
     delivery_date: input.delivery_date ?? null,
+    valid_until: validUntil,
+    // quote_status is deliberately NOT a builder output: this object is
+    // spread into both inserts and draft updates, and a recorded accept or
+    // decline must never be overwritten by an edit. New quotes start open via
+    // the invoices_quote_defaults trigger (20260902221000); decisions are
+    // written only by the quote-status routes and the converter.
     currency: input.currency,
     exchange_rate: exchangeRate,
     exchange_rate_date: exchangeRateDate,
@@ -505,7 +536,7 @@ export async function buildInvoiceWriteData(params: {
     // remaining_amount = total - deduction for real invoices so open-invoice
     // queries treat them as fully unpaid for the CUSTOMER's share: the
     // Skatteverket portion is on 1513 and clears when the agency pays out.
-    // Proformas / delivery notes have no payment obligation → keep 0.
+    // Proformas / delivery notes / quotes have no payment obligation → keep 0.
     remaining_amount: documentType === 'invoice' ? total - deductionTotal : 0,
     vat_treatment: notVatRegistered ? 'exempt' : headerRules.treatment,
     vat_rate: documentType === 'delivery_note' ? 0 : (isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate)),
@@ -513,6 +544,9 @@ export async function buildInvoiceWriteData(params: {
     reverse_charge_text: notVatRegistered ? null : (headerRules.reverseChargeText || null),
     your_reference: input.your_reference,
     our_reference: input.our_reference,
+    // Always a concrete value so a draft edit that cleared the field NULLs
+    // the column (supabase-js drops undefined keys).
+    invoice_marking: input.invoice_marking?.trim() || null,
     notes: input.notes,
     // Always a concrete value (never undefined) so a draft edit that cleared
     // the field actually NULLs the column: supabase-js drops undefined keys.
@@ -542,11 +576,13 @@ export async function buildInvoiceWriteData(params: {
         quantity: 0,
         unit: '',
         unit_price: 0,
+        discount_percent: 0,
         line_total: 0,
         vat_rate: 0,
         vat_amount: 0,
         article_id: null,
         revenue_account: null,
+        sales_order_item_id: null,
         deduction_type: null,
         deduction_amount: 0,
         labor_hours: null,
@@ -561,7 +597,8 @@ export async function buildInvoiceWriteData(params: {
       }
     }
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
-    const lineTotal = item.quantity * item.unit_price
+    const discountPercent = item.discount_percent ?? 0
+    const lineTotal = computeLineNet(item.quantity, item.unit_price, discountPercent)
     const itemVat = documentType === 'delivery_note' ? 0 : Math.round(lineTotal * itemRate / 100 * 100) / 100
     // ROT/RUT deduction is recomputed server-side so a tampered client can't
     // expand the 1513 receivable beyond the rules. Non-invoice document types
@@ -571,6 +608,7 @@ export async function buildInvoiceWriteData(params: {
       ? computeDeduction({
           unit_price: item.unit_price,
           quantity: item.quantity,
+          discount_percent: discountPercent,
           deduction_type: deductionType,
           vat_rate: itemRate,
         })
@@ -582,6 +620,7 @@ export async function buildInvoiceWriteData(params: {
       quantity: item.quantity,
       unit: item.unit,
       unit_price: item.unit_price,
+      discount_percent: discountPercent,
       line_total: lineTotal,
       vat_rate: itemRate,
       vat_amount: itemVat,
@@ -590,6 +629,10 @@ export async function buildInvoiceWriteData(params: {
       // VAT-treatment-derived account in generatePerRateLines().
       article_id: item.article_id ?? null,
       revenue_account: item.revenue_account ?? null,
+      // Only a faktura consumes kundorder quantity: a quote or proforma line
+      // linked to an order item would mark the order invoiced without any
+      // invoice existing (sales_order_invoiced_quantities counts by status).
+      sales_order_item_id: documentType === 'invoice' ? (item.sales_order_item_id ?? null) : null,
       deduction_type: deductionType,
       deduction_amount: deductionAmount,
       labor_hours: documentType === 'invoice' ? (item.labor_hours ?? null) : null,

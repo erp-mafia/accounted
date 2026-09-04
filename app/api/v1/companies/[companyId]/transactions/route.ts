@@ -15,7 +15,7 @@ import {
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
 
 const TransactionSummary = z.object({
   id: z.string().uuid(),
@@ -115,17 +115,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       search: url.searchParams.get('search') ?? undefined,
       cash_account_id: url.searchParams.get('cash_account_id') ?? undefined,
     })
-    if (!filtersResult.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: filtersResult.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!filtersResult.success) return v1ValidationError(ctx, filtersResult.error)
     const f = filtersResult.data
 
     // Sort by (created_at DESC, id ASC). created_at is the stable cursor

@@ -1,3 +1,4 @@
+import { normalizeNameKey as nameKey } from '@/lib/import/shared/column-utils'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events'
@@ -18,11 +19,6 @@ interface ExistingArticle {
   id: string
   name: string
   article_number: string | null
-}
-
-function nameKey(value: string | null): string | null {
-  if (!value) return null
-  return value.trim().toLowerCase() || null
 }
 
 /**

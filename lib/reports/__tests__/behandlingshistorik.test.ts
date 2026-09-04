@@ -6,6 +6,8 @@ import {
   AUDITED_TABLES,
   AUDIT_ROW_FILTER,
   GLOBAL_ACTIONS,
+  appReleaseEvent,
+  appReleaseEvents,
   auditRowToEvent,
   buildBehandlingshistorikExport,
   collapseBursts,
@@ -553,6 +555,7 @@ describe('generateBehandlingshistorik', () => {
       ],
       journal_entry_rattelse_log: [{ data: [] }, { data: [] }],
       company_migration_resets: [{ data: [] }, { data: [] }],
+      app_releases: [{ data: [] }],
       sie_imports: [
         {
           data: [
@@ -611,6 +614,7 @@ describe('generateBehandlingshistorik', () => {
       ],
       journal_entry_rattelse_log: [{ data: [] }],
       company_migration_resets: [{ data: [] }, { data: [] }],
+      app_releases: [{ data: [] }],
       sie_imports: [{ data: [] }],
       bank_file_imports: [{ data: [] }],
     }
@@ -677,5 +681,171 @@ describe('buildBehandlingshistorikExport', () => {
     expect(out.contentType).toContain('spreadsheetml')
     expect(out.filename.endsWith('.xlsx')).toBe(true)
     expect(out.buffer.length).toBeGreaterThan(100)
+  })
+})
+
+// ============================================================
+// Behandlingsregler and program versions (BFNAR 2013:2 p. 9.16, 2nd paragraph)
+// ============================================================
+
+describe('auditRowToEvent: behandlingsregler', () => {
+  it('mapping_rules: a rule change names the rule and diffs the accounts', () => {
+    const ins = auditRowToEvent(
+      auditRow({ table_name: 'mapping_rules', action: 'INSERT', new_state: { rule_name: 'Spotify', debit_account: '6540', credit_account: '1930', is_active: true } }),
+    )!
+    expect(ins).toMatchObject({ category: 'installningar', code: 'mapping_rule.created', object: 'Spotify' })
+
+    const upd = auditRowToEvent(
+      auditRow({
+        table_name: 'mapping_rules',
+        action: 'UPDATE',
+        old_state: { rule_name: 'Spotify', debit_account: '6540', updated_at: 'x' },
+        new_state: { rule_name: 'Spotify', debit_account: '6212', updated_at: 'y' },
+      }),
+    )!
+    expect(upd.code).toBe('mapping_rule.updated')
+    expect(upd.details).toEqual(['Debetkonto: 6540 → 6212'])
+  })
+
+  it('cash_accounts: a verifikationsserie change names the account and diffs the series', () => {
+    const upd = auditRowToEvent(
+      auditRow({
+        table_name: 'cash_accounts',
+        action: 'UPDATE',
+        old_state: { name: 'Företagskort', ledger_account: '1931', voucher_series: null, balance: 100, updated_at: 'x' },
+        new_state: { name: 'Företagskort', ledger_account: '1931', voucher_series: 'M', balance: 250, updated_at: 'y' },
+      }),
+    )!
+    expect(upd).toMatchObject({ category: 'installningar', code: 'cash_account.updated', object: 'Företagskort 1931' })
+    expect(upd.details).toEqual(['Verifikationsserie: (tomt) → M'])
+
+    // Bank-sync churn (balance, name) is not a behandlingsregel: no event.
+    const churn = auditRowToEvent(
+      auditRow({
+        table_name: 'cash_accounts',
+        action: 'UPDATE',
+        old_state: { name: 'Företagskort', ledger_account: '1931', voucher_series: 'M', balance: 100 },
+        new_state: { name: 'Företagskort', ledger_account: '1931', voucher_series: 'M', balance: 250 },
+      }),
+    )
+    expect(churn).toBeNull()
+  })
+
+  it('categorization_templates: the learning columns never reach the report', () => {
+    // The DB trigger filters these already (20260901103000 + 20260901200000);
+    // the read model must not resurrect them if a row slips through, or every
+    // booking would appear as a system change. counterparty_aliases counts as
+    // learning: prod's first 30 minutes of trigger rows were 15/16 alias
+    // noise, and those pre-fix rows are still in audit_log and must render as
+    // no-ops.
+    const learning = auditRowToEvent(
+      auditRow({
+        table_name: 'categorization_templates',
+        action: 'UPDATE',
+        old_state: { counterparty_name: 'Spotify AB', debit_account: '6540', occurrence_count: 4, confidence: 0.7, counterparty_aliases: ['SPOTIFY'] },
+        new_state: { counterparty_name: 'Spotify AB', debit_account: '6540', occurrence_count: 5, confidence: 0.9, counterparty_aliases: ['SPOTIFY', 'SPOTIFY STOCKHOLM 4711'] },
+      }),
+    )
+    expect(learning).toBeNull()
+
+    const rule = auditRowToEvent(
+      auditRow({
+        table_name: 'categorization_templates',
+        action: 'UPDATE',
+        old_state: { counterparty_name: 'Spotify AB', debit_account: '6540' },
+        new_state: { counterparty_name: 'Spotify AB', debit_account: '6212' },
+      }),
+    )!
+    expect(rule).toMatchObject({ code: 'categorization_template.updated', object: 'Spotify AB' })
+    expect(rule.details).toEqual(['Debetkonto: 6540 → 6212'])
+  })
+
+  it('salary_payroll_config: statutory constants are BFN\'s own automatkontering example', () => {
+    const upd = auditRowToEvent(
+      auditRow({
+        table_name: 'salary_payroll_config',
+        company_id: null,
+        user_id: null,
+        actor_type: 'system',
+        action: 'UPDATE',
+        old_state: { config_year: 2026, employer_fee_rate: 0.3142, created_at: 'x' },
+        new_state: { config_year: 2026, employer_fee_rate: 0.3097, created_at: 'x' },
+      }),
+    )!
+    expect(upd).toMatchObject({ category: 'installningar', code: 'payroll_config.updated', object: 'Löneår 2026' })
+    expect(upd.details).toEqual(['employer_fee_rate: 0.3142 → 0.3097'])
+    expect(upd.actor.type).toBe('system')
+  })
+
+  it('import logs only add what the rows themselves can no longer show: a deletion', () => {
+    expect(auditRowToEvent(auditRow({ table_name: 'sie_imports', action: 'INSERT', new_state: { filename: 'bok.se' } }))).toBeNull()
+    const del = auditRowToEvent(auditRow({ table_name: 'sie_imports', action: 'DELETE', old_state: { filename: 'bok.se' } }))!
+    expect(del).toMatchObject({ category: 'import', code: 'sie_import.deleted', object: 'bok.se' })
+
+    expect(auditRowToEvent(auditRow({ table_name: 'bank_file_imports', action: 'UPDATE', new_state: { filename: 'kontoutdrag.csv' } }))).toBeNull()
+    const bankDel = auditRowToEvent(auditRow({ table_name: 'bank_file_imports', action: 'DELETE', old_state: { filename: 'kontoutdrag.csv' } }))!
+    expect(bankDel.code).toBe('bank_file_import.deleted')
+  })
+})
+
+describe('appReleaseEvent', () => {
+  it('dates a program version as a system event with no human actor', () => {
+    const ev = appReleaseEvent({ version: 'b643e6ce6d44', first_seen_at: '2026-03-10T10:00:00.000Z', source: 'runtime' })
+    expect(ev).toMatchObject({
+      category: 'ovrigt',
+      code: 'system.release',
+      object: 'b643e6ce6d44',
+      event: 'Ny programversion i drift',
+    })
+    expect(ev.actor).toEqual({ type: 'system', user_id: null, actor_label: null })
+  })
+
+  it('names a non-runtime source rather than claiming the system saw it', () => {
+    const ev = appReleaseEvent({ version: 'aaaaaaaaaaaa', first_seen_at: '2026-03-10T10:00:00.000Z', source: 'backfill' })
+    expect(ev.details).toEqual(['Källa: backfill'])
+  })
+})
+
+describe('appReleaseEvents: per-day roll-up', () => {
+  const day = (h: number, v: string) => ({ version: v, first_seen_at: `2026-03-10T0${h}:00:00.000Z`, source: 'runtime' })
+
+  it('keeps a single deploy as a single named version', () => {
+    const out = appReleaseEvents([day(8, 'aaaaaaaaaaaa')])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ code: 'system.release', object: 'aaaaaaaaaaaa' })
+  })
+
+  it('collapses a day of deploys into one dated event that still names every build id', () => {
+    // Truncating the list would defeat the entry: an auditor has to be able to
+    // reconstruct which versions ran that day.
+    const versions = ['a1', 'b2', 'c3', 'd4', 'e5', 'f6', 'g7']
+    const out = appReleaseEvents(versions.map((v, i) => day(i + 1, v)))
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ code: 'system.release.bulk', object: '7 versioner', count: 7 })
+    expect(out[0].details).toEqual(['a1, b2, c3, d4, e5, f6, g7'])
+  })
+
+  it('never lets the deploy rate swamp the report: a year of merges stays one event per day', () => {
+    // main takes ~570 merges a month; per-version events would be ~7 000 a year
+    // and would trip the PDF's 4 000-event guard on their own.
+    const rows = []
+    for (let d = 0; d < 365; d++) {
+      const date = new Date(Date.UTC(2026, 0, 1 + d, 9))
+      for (let n = 0; n < 19; n++) rows.push({ version: `v${d}-${n}`, first_seen_at: date.toISOString(), source: 'runtime' })
+    }
+    expect(rows).toHaveLength(6935)
+    expect(appReleaseEvents(rows)).toHaveLength(365)
+  })
+
+  it('groups on the Swedish calendar day, not UTC', () => {
+    // Both timestamps are 2026-07-10 in UTC, but Stockholm is UTC+2 in July:
+    // 21:00Z is the 10th at 23:00 and 23:00Z is already the 11th at 01:00.
+    // Grouping on the raw ISO date would merge them into one event.
+    const out = appReleaseEvents([
+      { version: 'beforemidnight', first_seen_at: '2026-07-10T21:00:00.000Z', source: 'runtime' },
+      { version: 'aftermidnight', first_seen_at: '2026-07-10T23:00:00.000Z', source: 'runtime' },
+    ])
+    expect(out).toHaveLength(2)
+    expect(out.map((e) => e.object)).toEqual(['beforemidnight', 'aftermidnight'])
   })
 })

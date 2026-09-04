@@ -1,3 +1,4 @@
+import { UUID_RE } from '@/lib/invariants/uuid'
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { ensureInitialized } from '@/lib/init'
@@ -71,7 +72,7 @@ export async function POST(request: Request) {
   // the DB (the column is typed uuid and would error opaquely).
   const isUuid =
     state !== null &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(state)
+    UUID_RE.test(state)
   if (!isUuid || !consumerKey || !consumerSecret) {
     return NextResponse.json({ error: 'Missing parameters' }, { status: 400 })
   }
@@ -132,7 +133,12 @@ export async function POST(request: Request) {
       status: 'active',
       connected_at: new Date().toISOString(),
       error_message: null,
-      oauth_state: null, // Clear to prevent replay
+      // oauth_state is deliberately KEPT here. This POST is server-to-server
+      // (the store calls it, no browser session), so the initiator check has
+      // to happen on the browser leg (../return), which locates the row by
+      // this same state and consumes it there. Replay is still blocked: both
+      // the lookup above and this update are scoped to status 'pending', so
+      // an active row can never be activated again.
       // Feed-only product: connecting the store means fetching its orders, so
       // the nightly feed starts on by default; the panel toggle is the opt-out.
       transaction_sync_enabled: true,

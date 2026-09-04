@@ -3,6 +3,8 @@ import {
   InvoicePaymentAccountMissingError,
   assertInvoicePaymentAccountForRender,
   companyWithInvoicePaymentAccount,
+  describeMissingInvoicePaymentAccount,
+  isInvoicePaymentAccountCurrency,
   hasRequiredInvoicePaymentAccount,
   hasUsableInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
@@ -193,6 +195,7 @@ describe('invoice payment accounts', () => {
     expect(invoiceRequiresPaymentAccount(makeInvoice({ credited_invoice_id: 'invoice-original' }))).toBe(false)
     expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'delivery_note' }))).toBe(false)
     expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'proforma' }))).toBe(false)
+    expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'quote' }))).toBe(false)
   })
 
   it('accepts non-payable documents without an account', () => {
@@ -209,6 +212,86 @@ describe('invoice payment accounts', () => {
       emptySettings,
       makeInvoice({ document_type: 'proforma' }),
     )).toBe(true)
+    expect(hasRequiredInvoicePaymentAccount(
+      emptySettings,
+      makeInvoice({ document_type: 'quote' }),
+    )).toBe(true)
     expect(hasRequiredInvoicePaymentAccount(emptySettings, makeInvoice())).toBe(false)
+  })
+})
+
+describe('describeMissingInvoicePaymentAccount (#2126)', () => {
+  it('SEK: names the domestic options and never talks about currency accounts', () => {
+    const { sv, en } = describeMissingInvoicePaymentAccount('SEK')
+    expect(sv).toContain('bankgiro')
+    expect(sv).toContain('plusgiro')
+    expect(sv).toContain('Swish')
+    expect(sv).toContain('Inställningar → Fakturering')
+    expect(sv).not.toMatch(/valuta/i)
+    expect(sv).not.toMatch(/IBAN/)
+    expect(en).toContain('bankgiro')
+    expect(en).toContain('Settings → Invoicing')
+    expect(en).not.toMatch(/currency/i)
+  })
+
+  it('EUR: asks for an IBAN account in that currency', () => {
+    const { sv, en } = describeMissingInvoicePaymentAccount('EUR')
+    expect(sv).toContain('EUR')
+    expect(sv).toContain('IBAN')
+    expect(sv).not.toContain('routing number')
+    expect(sv).toContain('Inställningar → Fakturering')
+    expect(en).toContain('EUR')
+    expect(en).toContain('IBAN')
+  })
+
+  it('USD/GBP: also offers the non-IBAN routing path', () => {
+    expect(describeMissingInvoicePaymentAccount('USD').sv).toContain('routing number')
+    expect(describeMissingInvoicePaymentAccount('GBP').sv).toContain('sort code')
+    expect(describeMissingInvoicePaymentAccount('GBP').en).toContain('sort code')
+  })
+
+  it('isInvoicePaymentAccountCurrency guards the details field', () => {
+    expect(isInvoicePaymentAccountCurrency('SEK')).toBe(true)
+    expect(isInvoicePaymentAccountCurrency('NOK')).toBe(true)
+    expect(isInvoicePaymentAccountCurrency('JPY')).toBe(false)
+    expect(isInvoicePaymentAccountCurrency(undefined)).toBe(false)
+    expect(isInvoicePaymentAccountCurrency(42)).toBe(false)
+  })
+})
+
+describe('per-invoice payee override (invoices.payment_details)', () => {
+  const frozen = {
+    bank_name: 'Sparbanken',
+    clearing_number: null,
+    account_number: null,
+    bankgiro: '5050-1055',
+    plusgiro: null,
+    swish: null,
+    iban: null,
+    bic: null,
+    bank_code: null,
+    foreign_account_number: null,
+  }
+
+  it('the invoice\'s frozen payee wins over the company account for the currency', () => {
+    const settings = company({
+      invoice_payment_accounts: {
+        SEK: { ...frozen, bank_name: 'Huvudbanken', bankgiro: '991-2346' },
+      },
+    })
+    expect(resolveInvoicePaymentAccount(settings, 'SEK', frozen)?.bankgiro).toBe('5050-1055')
+    expect(resolveInvoicePaymentAccount(settings, 'SEK', null)?.bankgiro).toBe('991-2346')
+    const rendered = companyWithInvoicePaymentAccount(settings, 'SEK', frozen)
+    expect(rendered.bank_name).toBe('Sparbanken')
+    expect(rendered.iban).toBeNull()
+  })
+
+  it('the send gate reads the frozen payee from the invoice row', () => {
+    const settings = company({ bankgiro: null, iban: null, plusgiro: null, swish: null, clearing_number: null, account_number: null })
+    const invoice = makeInvoice({ currency: 'SEK', document_type: 'invoice', credited_invoice_id: null })
+    expect(hasRequiredInvoicePaymentAccount(settings, invoice)).toBe(false)
+    expect(hasRequiredInvoicePaymentAccount(settings, { ...invoice, payment_details: frozen })).toBe(true)
+    // A frozen bankgiro-only payee is not enough for a EUR invoice.
+    expect(hasRequiredInvoicePaymentAccount(settings, { ...invoice, currency: 'EUR', payment_details: frozen })).toBe(false)
   })
 })

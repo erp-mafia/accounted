@@ -36,6 +36,18 @@ describe('Peppol transport registry', () => {
     }
   })
 
+  it('defaults to the connector transport when that is the only registered adapter and no provider is selected', () => {
+    cleanups.push(registerPeppolTransport(makeTransport('connector')))
+    expect(getPeppolTransportAvailability()).toEqual({ available: true, provider: 'connector' })
+    // An explicit selection still wins, and still refuses an absent adapter.
+    process.env.PEPPOL_TRANSPORT_PROVIDER = 'qvalia'
+    expect(getPeppolTransportAvailability()).toEqual({
+      available: false,
+      provider: null,
+      reason: 'provider_adapter_unavailable',
+    })
+  })
+
   it('stays truthfully unavailable until a provider is selected', () => {
     expect(getPeppolTransportAvailability()).toEqual({
       available: false,

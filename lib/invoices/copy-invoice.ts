@@ -22,6 +22,7 @@ export interface InvoiceCopyItem {
   quantity: number
   unit: string
   unit_price: number
+  discount_percent: number
   vat_rate: number
   article_id: null
   revenue_account: string | null
@@ -46,6 +47,8 @@ export interface InvoiceCopyInitial {
   notes: string
   ore_rounding: boolean | null
   default_dimensions: Record<string, string>
+  /** The bank account the source asked to be paid to; reusable commercial content. */
+  payment_cash_account_id: string | null
   items: InvoiceCopyItem[]
 }
 
@@ -77,6 +80,7 @@ export function buildInvoiceCopyInitial(source: InvoiceCopySource): InvoiceCopyI
     notes: source.notes ?? '',
     ore_rounding: source.ore_rounding,
     default_dimensions: source.default_dimensions ?? {},
+    payment_cash_account_id: source.payment_cash_account_id ?? null,
     items: [...source.items]
       .sort((a, b) => a.sort_order - b.sort_order)
       .map((item) => ({
@@ -85,6 +89,8 @@ export function buildInvoiceCopyInitial(source: InvoiceCopySource): InvoiceCopyI
         quantity: item.quantity,
         unit: item.unit,
         unit_price: item.unit_price,
+        // Agreed price reduction is reusable commercial content, like the price.
+        discount_percent: item.discount_percent ?? 0,
         vat_rate: item.vat_rate ?? 25,
         // A copied line keeps the frozen description and price, but is not
         // linked to a possibly changed or archived article preset.

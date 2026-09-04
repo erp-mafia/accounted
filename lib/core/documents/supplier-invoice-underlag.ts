@@ -78,9 +78,21 @@ export async function anchorSupplierInvoiceDocument(
         payment_journal_entry_id: string | null
       },
     )
-    if (!entryId) return null
+    if (!entryId) {
+      // The invoice HAS a floating retained document but no verifikat that can
+      // take it. In the payment routes (which call this right after posting)
+      // that is an anomaly worth a log line: prod case 2026-08-28 (Anders,
+      // faktura 118776) stayed "Underlag saknas" through exactly this kind of
+      // silent bail, and nothing recorded which branch gave up.
+      log.warn('supplier invoice document is floating but no verifikat can anchor it', {
+        companyId,
+        supplierInvoiceId,
+        documentId: doc.id,
+      })
+      return null
+    }
 
-    const { error } = await supabase
+    const { data: updatedRows, error } = await supabase
       .from('document_attachments')
       .update({ journal_entry_id: entryId })
       .eq('id', doc.id)
@@ -89,6 +101,7 @@ export async function anchorSupplierInvoiceDocument(
       // read above. Never steal a document that already serves a verifikat.
       .is('journal_entry_id', null)
       .eq('is_current_version', true)
+      .select('id')
 
     if (error) {
       log.warn('failed to anchor supplier invoice document to verifikat', {
@@ -97,6 +110,19 @@ export async function anchorSupplierInvoiceDocument(
         documentId: doc.id,
         journalEntryId: entryId,
         reason: error.message,
+      })
+      return null
+    }
+    // The guarded update can match zero rows (a concurrent writer got there
+    // first, or RLS filtered the row). That is NOT a successful anchor: report
+    // null so callers and the reconcile cron treat the document as still
+    // floating instead of trusting a write that never happened.
+    if (!updatedRows || updatedRows.length === 0) {
+      log.warn('anchor update matched no rows; document left floating', {
+        companyId,
+        supplierInvoiceId,
+        documentId: doc.id,
+        journalEntryId: entryId,
       })
       return null
     }
@@ -150,11 +176,30 @@ async function pickAnchorEntry(
   }
   if (candidates.length === 0) return null
 
-  const { data: entries } = await supabase
+  const { data: entries, error } = await supabase
     .from('journal_entries')
-    .select('id, status, fiscal_period:fiscal_periods(is_closed, locked_at)')
+    // fiscal_periods also points back at journal_entries (closing_entry_id,
+    // opening_balance_entry_id), so PostgREST refuses the bare embed as
+    // ambiguous; name the FK explicitly.
+    .select(
+      'id, status, fiscal_period:fiscal_periods!journal_entries_fiscal_period_id_fkey(is_closed, locked_at)',
+    )
     .eq('company_id', companyId)
     .in('id', candidates)
+
+  if (error) {
+    // Fail closed: never anchor on a lock state we could not read. But say so.
+    // The bare embed above returned PGRST201 on every call from 2026-07-27
+    // onwards and the result was dropped on the floor, so the caller's "no
+    // verifikat can anchor it" warning was the only signal, and it named the
+    // wrong cause.
+    log.error('failed to resolve period lock state for supplier invoice anchoring', {
+      companyId,
+      supplierInvoiceId,
+      reason: error.message,
+    })
+    return null
+  }
 
   type EntryRow = {
     id: string
@@ -193,6 +238,69 @@ async function pickAnchorEntry(
  *
  * Returns the number of documents re-anchored.
  */
+export interface FloatingDocumentSweepResult {
+  /** Invoices whose floating retained document was examined. */
+  candidates: number
+  /** Documents actually anchored to a verifikat this run. */
+  anchored: number
+}
+
+/**
+ * Prod-wide self-heal for retained supplier-invoice documents that stayed
+ * floating although the invoice has a posted verifikat: the inline anchoring
+ * in the payment routes is best-effort by design (never throws, the booking is
+ * already committed), so a transient failure there strands the document until
+ * something retries. Historically that "something" was a hand-written repair
+ * migration (20260727180000, 20260824150000); this makes the retry a standing
+ * daily cron instead. Prod case 2026-08-28 (Anders, faktura 118776): payment
+ * verifikat posted, invoice document eligible on every static condition, yet
+ * the inline anchor did nothing and no log recorded why, so the verifikat
+ * showed "Underlag saknas" until the user re-uploaded the PDF by hand.
+ *
+ * Anchoring an already-shown-but-floating document is strictly an improvement
+ * (it puts the file behind the WORM deletion guard and satisfies BFL 5 kap
+ * 7 §), and anchorSupplierInvoiceDocument never moves an anchored document,
+ * so re-running this sweep is idempotent. Locked/closed periods are skipped by
+ * pickAnchorEntry, matching the repair migrations.
+ *
+ * Meant to run under the service-role client from a cron: RLS would otherwise
+ * scope the candidate scan to one user's companies.
+ */
+export async function sweepFloatingSupplierInvoiceDocuments(
+  supabase: SupabaseClient,
+  opts: { limit?: number } = {},
+): Promise<FloatingDocumentSweepResult> {
+  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 1000)
+
+  // FK named explicitly: with an ambiguous relationship PostgREST rejects the
+  // embed and the sweep would silently see zero candidates (the #2022 lesson).
+  const { data, error } = await supabase
+    .from('supplier_invoices')
+    .select(
+      'id, company_id, document:document_attachments!supplier_invoices_document_id_fkey!inner(id, journal_entry_id, is_current_version)',
+    )
+    .not('document_id', 'is', null)
+    .or('payment_journal_entry_id.not.is.null,registration_journal_entry_id.not.is.null')
+    .is('document.journal_entry_id', null)
+    .eq('document.is_current_version', true)
+    .limit(limit)
+
+  if (error) {
+    log.warn('floating-document sweep query failed', { reason: error.message })
+    return { candidates: 0, anchored: 0 }
+  }
+
+  const rows = (data ?? []) as unknown as Array<{ id: string; company_id: string }>
+  let anchored = 0
+  for (const row of rows) {
+    if (await anchorSupplierInvoiceDocument(supabase, row.company_id, row.id)) anchored++
+  }
+  if (rows.length > 0) {
+    log.info('floating-document sweep complete', { candidates: rows.length, anchored })
+  }
+  return { candidates: rows.length, anchored }
+}
+
 export async function reanchorOrphanedSupplierInvoiceDocuments(
   supabase: SupabaseClient,
   companyId: string,

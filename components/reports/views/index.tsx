@@ -21,7 +21,8 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
 import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { cn, formatDate } from '@/lib/utils'
+import { cn, formatAmount, formatDate } from '@/lib/utils'
+import { formatDateISO } from '@/lib/calendar/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
 import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
@@ -87,10 +88,6 @@ import type {
   VatDeclaration,
   VatPeriodType,
 } from '@/types'
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
 
 // Shared shells for the report bodies, so all views read as the same
 // instrument: Skeleton while loading, EmptyState when the period has no data,
@@ -1281,7 +1278,6 @@ function VatBookingCard({
   )
 }
 
-
 /** The Stegen header (concept Moms C): the filing pipeline as a clickable
  *  horizontal stepper with honest per-step status subs. Statutory surface,
  *  Swedish in both locales like the rest of the declaration. */
@@ -2434,11 +2430,6 @@ interface SupplierLedgerData {
 
 // Local calendar date (YYYY-MM-DD) for the reskontra "per datum" default:
 // toISOString() is UTC and rolls the date over an hour early in Sweden.
-function localIsoDate(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-}
-
 // Shared "Per datum" control + export menu header for the two reskontra views
 // (#1020/#1021): pick an arbitrary as-of date and export PDF/Excel for it.
 function ReskontraToolbar({
@@ -2482,7 +2473,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<SupplierLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [asOfDate, setAsOfDate] = useState(localIsoDate)
+  const [asOfDate, setAsOfDate] = useState(() => formatDateISO(new Date()))
 
   const fetchData = async () => {
     setLoading(true)
@@ -3116,6 +3107,10 @@ interface ARLedgerData {
     total_overdue: number
     unpaid_count: number
     unconverted_fx_count: number
+    register_coverage?: {
+      covers_from: string | null
+      has_pre_register_invoices: boolean
+    }
   }
   reconciliation: {
     ar_ledger_total: number
@@ -3123,6 +3118,7 @@ interface ARLedgerData {
     difference: number
     is_reconciled: boolean
     unconverted_fx_count: number
+    pre_register_ar_in_period?: boolean
   } | null
 }
 
@@ -3227,7 +3223,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set())
-  const [asOfDate, setAsOfDate] = useState(localIsoDate)
+  const [asOfDate, setAsOfDate] = useState(() => formatDateISO(new Date()))
 
   const fetchData = async () => {
     setLoading(true)
@@ -3304,6 +3300,11 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
             {ledger.unconverted_fx_count > 0 && (
               <p className="mt-1 text-xs text-muted-foreground">
                 {ledger.unconverted_fx_count} faktura i utländsk valuta utan växelkurs är inte med i totalen.
+              </p>
+            )}
+            {ledger.register_coverage?.has_pre_register_invoices && ledger.register_coverage.covers_from && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Fakturor före {formatDate(ledger.register_coverage.covers_from)} kan ligga som bokförda verifikat och ingår inte i reskontran.
               </p>
             )}
           </CardContent>
@@ -3430,6 +3431,17 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
                     {reconciliation.unconverted_fx_count} kundfaktura i utländsk valuta saknar växelkurs: differensen kan bero på saknade kursuppgifter snarare än felbokning.
                   </p>
                 )}
+                {/* Only when pre-register AR debits exist IN the reconciled
+                    period: prior-period migration history contributes nothing
+                    to this period's balance, and offering it as an explanation
+                    there would cushion a genuine felbokning. */}
+                {!reconciliation.is_reconciled &&
+                  reconciliation.pre_register_ar_in_period &&
+                  ledger.register_coverage?.covers_from && (
+                    <p className="text-xs text-muted-foreground">
+                      Perioden innehåller verifikat med kundfordringar före {formatDate(ledger.register_coverage.covers_from)} som inte ligger i fakturaregistret (t.ex. efter en migrering): differensen kan bero på det. Kontrollera huvudboken på <AccountNumber number="1510" /> och <AccountNumber number="1513" /> innan du letar felbokning.
+                    </p>
+                  )}
               </div>
             </div>
           </CardContent>

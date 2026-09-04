@@ -37,9 +37,9 @@ import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 /**
  * Confidence floor for surfacing an unmatched item as a probable underlag.
- * Deliberately above core-receipt-matcher's MIN_MATCH_CONFIDENCE (0.4): that
- * floor governs a picker where a human reads a ranked list and judges, whereas
- * a candidate named here is read by an agent that will reason from it. A wrong
+ * Deliberately stricter than the receipt picker, which ranks candidates without
+ * a hard floor: there a human reads a ranked list and judges, whereas a
+ * candidate named here is read by an agent that will reason from it. A wrong
  * receipt on the wrong transaction is a mis-booking, so this surface trades
  * recall for precision and leaves the rest to the picker.
  */
@@ -111,7 +111,13 @@ function extractionSignals(extracted: InvoiceExtractionResult | null | undefined
   return {
     supplier: extracted?.supplier?.name?.trim() || null,
     date: extracted?.invoice?.invoiceDate ?? null,
-    total: extracted?.totals?.total ?? null,
+    // A total promoted from the document's single prominent amount
+    // (totalSource 'prominent') exists for the editable TOTALT field, not as
+    // invoice-grade evidence: score it through the fallback path below (the
+    // prominentAmounts list still carries it), which keeps the discount, the
+    // date guard, and the hunt's amountSource exclusion intact. A user-edited
+    // total has the stamp cleared and counts at full weight.
+    total: extracted?.totalSource === 'prominent' ? null : (extracted?.totals?.total ?? null),
     vat: extracted?.totals?.vatAmount ?? null,
     currency: (extracted?.invoice?.currency || 'SEK').toUpperCase(),
     // Non-invoice documents (bankintyg, avtal) carry no total but often show

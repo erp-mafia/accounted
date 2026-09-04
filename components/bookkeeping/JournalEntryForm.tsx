@@ -45,7 +45,7 @@ import {
 } from '@/lib/documents/link-documents'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import { formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { formatVoucher, resolveDefaultSeriesForSource, VOUCHER_SERIES_PRESETS } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -113,6 +113,13 @@ interface Props {
    */
   extraBody?: Record<string, unknown>
   duplicateMatchTransaction?: DuplicateMatchTransaction
+  /** Embedded variant only: show the series picker anyway. The series is
+   *  seeded from the server (source type + cash account override) so the
+   *  dialog and the booking route can never disagree. */
+  seriesPicker?: boolean
+  /** Bank account the entry is booked from; its voucher_series override
+   *  (Inställningar → Bokföring) seeds the picker. */
+  cashAccountId?: string | null
   /** Fired after the duplicate guard's match action links the transaction to
    *  the existing voucher (no new entry was created). */
   onDuplicateMatched?: (journalEntryId: string) => void
@@ -140,6 +147,8 @@ export default function JournalEntryForm({
   onUpdated,
   extraBody,
   duplicateMatchTransaction,
+  seriesPicker,
+  cashAccountId,
   onDuplicateMatched,
 }: Props) {
   const { canWrite } = useCanWrite()
@@ -181,6 +190,14 @@ export default function JournalEntryForm({
     initialLines ?? [{ ...BLANK_LINE }, { ...BLANK_LINE }]
   )
   const [voucherSeries, setVoucherSeries] = useState(initialVoucherSeries ?? 'A')
+  // Embedded forms show the picker only on request (bank transaction dialog).
+  const showSeries = !embedded || !!seriesPicker
+  // Whether voucherSeries is authoritative. The standalone form seeds it from
+  // company settings; the embedded picker asks the server once (source type +
+  // cash account override) and marks it resolved, or when the user picks. Until
+  // then the submit omits voucher_series so the route resolves it itself: an
+  // unresolved 'A' must never override the bank account's own series.
+  const [seriesResolved, setSeriesResolved] = useState(!embedded)
   // The source_type the entry will be committed with. Seeded from the prop
   // (undefined -> 'manual' for the standalone form). Applying a booking template
   // whose category maps to a dedicated source type (e.g. VAT -> vat_settlement)
@@ -193,6 +210,11 @@ export default function JournalEntryForm({
   // effect below.
   const seriesMapRef = useRef<Record<string, string> | null>(null)
   const defaultSeriesRef = useRef<string>('A')
+  // Series letters this company has configured beyond the fixed presets. The
+  // dropdown is a closed list, so anything already in use (a legacy letter, an
+  // override in the per-source-type map) has to stay selectable: otherwise the
+  // Select would render blank on a value it does not offer.
+  const [configuredSeries, setConfiguredSeries] = useState<string[]>([])
   // Mirror of effectiveSourceType for the settings-fetch callback: if a template
   // routed the source type before /api/settings resolved, the late callback must
   // re-apply the series for the ROUTED type, not the mount-time base (otherwise
@@ -274,6 +296,18 @@ export default function JournalEntryForm({
     setVoucherSeries(perSource !== 'A' ? perSource : defaultSeriesRef.current || 'A')
   }, [])
 
+  // The series picker: the fixed Swedish presets first, then any letter this
+  // company already uses (settings map, global default, or the series a draft
+  // was saved with) so no existing value falls out of the list.
+  const seriesOptions = useMemo(() => {
+    const options = VOUCHER_SERIES_PRESETS.map((p) => ({ letter: p.letter, label: p.label }))
+    const seen = new Set(options.map((o) => o.letter))
+    const extras = [...configuredSeries, voucherSeries]
+      .filter((letter) => /^[A-Z]$/.test(letter) && !seen.has(letter) && seen.add(letter))
+      .sort()
+    return [...options, ...extras.map((letter) => ({ letter, label: '' }))]
+  }, [configuredSeries, voucherSeries])
+
   useEffect(() => {
     loadBasCatalog().then(setCatalog).catch(() => {/* search degrades to the active chart */})
   }, [])
@@ -289,6 +323,16 @@ export default function JournalEntryForm({
     seriesMapRef.current =
       (companySettings.default_voucher_series_per_source_type as Record<string, string> | null) ?? null
     defaultSeriesRef.current = companySettings.default_voucher_series || 'A'
+    setConfiguredSeries(
+      Array.from(
+        new Set(
+          [
+            ...Object.values(seriesMapRef.current || {}),
+            defaultSeriesRef.current,
+          ].filter((v): v is string => typeof v === 'string' && /^[A-Z]$/.test(v)),
+        ),
+      ),
+    )
     if (!embedded && !editEntryId) {
       applySeriesForSourceType(effectiveSourceTypeRef.current)
     }
@@ -332,7 +376,7 @@ export default function JournalEntryForm({
   // Read-only hint; the actual number is reserved atomically at commit time,
   // so this may shift by one if another entry lands first.
   useEffect(() => {
-    if (embedded || !entryDate || !voucherSeries) {
+    if (!showSeries || !entryDate || !voucherSeries) {
       setNextVoucherNumber(null)
       return
     }
@@ -340,13 +384,29 @@ export default function JournalEntryForm({
     // Keyed on the entry date rather than the resolved period so the preview
     // fires as soon as the series is known: the route resolves the period
     // from the date itself, which is exactly how selectedPeriod is derived.
-    const qs = new URLSearchParams({ date: entryDate, series: voucherSeries })
+    // Before the embedded picker is resolved, ask by source type + cash
+    // account instead of by series: the route answers with the series the
+    // booking would actually get, and that seeds the picker.
+    const qs = new URLSearchParams({ date: entryDate })
+    if (seriesResolved) {
+      qs.set('series', voucherSeries)
+    } else {
+      if (sourceType) qs.set('source_type', sourceType)
+      if (cashAccountId) qs.set('cash_account_id', cashAccountId)
+    }
     fetch(`/api/bookkeeping/voucher-sequences/next?${qs}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
         if (cancelled) return
         const next = body?.data?.next
         setNextVoucherNumber(typeof next === 'number' ? next : null)
+        if (!seriesResolved && body) {
+          const resolved = body?.data?.series
+          if (typeof resolved === 'string' && /^[A-Z]$/.test(resolved)) {
+            setVoucherSeries(resolved)
+          }
+          setSeriesResolved(true)
+        }
       })
       .catch(() => {
         if (!cancelled) setNextVoucherNumber(null)
@@ -354,7 +414,7 @@ export default function JournalEntryForm({
     return () => {
       cancelled = true
     }
-  }, [embedded, entryDate, voucherSeries])
+  }, [showSeries, seriesResolved, entryDate, voucherSeries, sourceType, cashAccountId])
 
   // Fetch exchange rate from Riksbanken when currency changes
   const fetchRate = useCallback(async (currency: Currency) => {
@@ -621,6 +681,28 @@ export default function JournalEntryForm({
     if (fill <= 0) return
     updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', fill.toFixed(2))
   }
+
+  // Tabbing (or clicking) into an untouched amount proposes the outstanding
+  // difference, so the closing row of a moms-split voucher fills itself. The
+  // proposal is pre-selected: typing replaces it, which keeps a multi-row split
+  // exactly as fast as before. Guards: the row must already have an account (so
+  // you can tab through the trailing blank row), both amounts must still be
+  // empty (never overwrite a typed figure), and the difference must belong on
+  // this side.
+  const handleAmountFocus =
+    (index: number, side: 'debit' | 'credit') =>
+    (e: React.FocusEvent<HTMLInputElement>) => {
+      const target = e.currentTarget
+      const line = lines[index]
+      if (!line || !line.account_number) return
+      if (line.debit_amount || line.credit_amount) return
+      const diff = computeBalancingDiff(index)
+      const fill = side === 'debit' ? diff : -diff
+      if (fill <= 0) return
+      updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', fill.toFixed(2))
+      // Select after the controlled re-render has written the value.
+      requestAnimationFrame(() => target.select())
+    }
 
   // Move focus to a row's input. Deferred a frame so it runs after any
   // re-render (e.g. the auto-appended trailing row). offsetParent is null for
@@ -993,7 +1075,9 @@ export default function JournalEntryForm({
         description,
         source_type: effectiveSourceType,
         source_id: sourceId,
-        voucher_series: voucherSeries || 'A',
+        // Omitted while an embedded picker is still unresolved: see
+        // seriesResolved. Endpoints that do not declare the key strip it.
+        ...(seriesResolved ? { voucher_series: voucherSeries || 'A' } : {}),
         notes: notes || undefined,
         lines: entryLines,
         // Set only when retrying past the booking-time duplicate guard (see
@@ -1007,7 +1091,7 @@ export default function JournalEntryForm({
       }),
     })
     return (await throwOnStructuredError(res)) as { data?: { id?: string; voucher_series?: string; voucher_number?: number }; journal_entry_id?: string }
-  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, notes, extraBody])
+  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, seriesResolved, notes, extraBody])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
     useSubmitWithAccountActivation(postJournalEntry)
@@ -1361,25 +1445,33 @@ export default function JournalEntryForm({
               className="mt-1 h-8"
             />
           </div>
-          {!embedded && (
-            <div className="w-16">
+          {showSeries && (
+            // Closed list, not free text: the letters carry fixed meanings
+            // (A = redovisning, B = kundfakturor, ...) and a typo here silently
+            // starts a new series with its own number sequence.
+            <div className="w-full sm:w-72">
               <Label className="text-xs text-muted-foreground">{t('series')}</Label>
-              <Input
+              <Select
                 value={voucherSeries}
-                onChange={(e) => {
-                  const v = e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(-1)
+                onValueChange={(v) => {
                   setVoucherSeries(v)
+                  setSeriesResolved(true)
                 }}
-                onFocus={(e) => {
-                  const target = e.target
-                  setTimeout(() => target.select(), 0)
-                }}
-                onBlur={() => {
-                  if (!voucherSeries) setVoucherSeries('A')
-                }}
-                className="mt-1 h-8 text-center font-mono"
-                maxLength={1}
-              />
+              >
+                <SelectTrigger className="mt-1 h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {seriesOptions.map((option) => (
+                    <SelectItem key={option.letter} value={option.letter}>
+                      <span className="font-mono">{option.letter}</span>
+                      {option.label && (
+                        <span className="ml-2 text-muted-foreground">{option.label}</span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
         </div>
@@ -1594,6 +1686,7 @@ export default function JournalEntryForm({
                   value={line.debit_amount}
                   onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
                   onKeyDown={handleAmountKeyDown(index, 'debit')}
+                  onFocus={handleAmountFocus(index, 'debit')}
                   onDoubleClick={() => handleFillBalance(index, 'debit')}
                   title={t('fill_balance_tooltip')}
                   placeholder="0,00"
@@ -1611,6 +1704,7 @@ export default function JournalEntryForm({
                   value={line.credit_amount}
                   onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
                   onKeyDown={handleAmountKeyDown(index, 'credit')}
+                  onFocus={handleAmountFocus(index, 'credit')}
                   onDoubleClick={() => handleFillBalance(index, 'credit')}
                   title={t('fill_balance_tooltip')}
                   placeholder="0,00"
@@ -1748,6 +1842,7 @@ export default function JournalEntryForm({
                     value={line.debit_amount}
                     onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
                     onKeyDown={handleAmountKeyDown(index, 'debit')}
+                    onFocus={handleAmountFocus(index, 'debit')}
                     onDoubleClick={() => handleFillBalance(index, 'debit')}
                     title={t('fill_balance_tooltip')}
                     placeholder="0,00"
@@ -1764,6 +1859,7 @@ export default function JournalEntryForm({
                     value={line.credit_amount}
                     onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
                     onKeyDown={handleAmountKeyDown(index, 'credit')}
+                    onFocus={handleAmountFocus(index, 'credit')}
                     onDoubleClick={() => handleFillBalance(index, 'credit')}
                     title={t('fill_balance_tooltip')}
                     placeholder="0,00"

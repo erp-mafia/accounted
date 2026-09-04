@@ -113,6 +113,7 @@ describe('registerCompanyForPeppolReceiving', () => {
       participant: { scheme: '0007', identifier: '5595386219' },
       businessCard: expect.objectContaining({ companyName: 'Arcim Technology AB', orgNumber: '5595386219' }),
       documentTypes: PEPPOL_RECEIVING_DOCUMENT_TYPES,
+      tenantReference: 'company-1',
     })
     const inserted = calls.find((c) => c.method === 'insert')
     expect(inserted?.args[0]).toMatchObject({ status: 'pending', participant_identifier: '5595386219', company_id: 'company-1' })

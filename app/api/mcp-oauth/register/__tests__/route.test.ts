@@ -51,6 +51,54 @@ describe('POST /api/mcp-oauth/register', () => {
     expect(response.status).toBe(201)
   })
 
+  it('accepts registration with the grok.com connector callback', async () => {
+    const response = await POST(createRequest({
+      client_name: 'Grok',
+      redirect_uris: ['https://grok.com/connectors-oauth-exchange-code/'],
+      token_endpoint_auth_method: 'none',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual(['https://grok.com/connectors-oauth-exchange-code/'])
+    expect(body.token_endpoint_auth_method).toBe('none')
+  })
+
+  it('accepts the three redirect_uris Cursor registers in one request', async () => {
+    // Cursor sends the legacy deeplink, the Cloud Agents web fallback and the
+    // RFC 8252 loopback together; one unknown URI used to fail the whole set.
+    const uris = [
+      'cursor://anysphere.cursor-mcp/oauth/callback',
+      'https://www.cursor.com/agents/mcp/oauth/callback',
+      'http://localhost:8787/callback',
+    ]
+    const response = await POST(createRequest({
+      client_name: 'Cursor',
+      redirect_uris: uris,
+      token_endpoint_auth_method: 'none',
+    }))
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.redirect_uris).toEqual(uris)
+  })
+
+  it('rejects other cursor.com paths and other cursor:// authorities', async () => {
+    for (const uri of [
+      'https://www.cursor.com/agents/mcp/oauth/callback2',
+      'https://cursor.com/agents/mcp/oauth/callback',
+      'cursor://evil.extension/oauth/callback',
+    ]) {
+      const response = await POST(createRequest({ redirect_uris: [uri] }))
+      expect(response.status, uri).toBe(400)
+    }
+  })
+
+  it('rejects other grok.com paths', async () => {
+    const response = await POST(createRequest({
+      redirect_uris: ['https://grok.com/oauth/callback'],
+    }))
+    expect(response.status).toBe(400)
+  })
+
   it('rejects registration with disallowed redirect_uris', async () => {
     const response = await POST(createRequest({
       redirect_uris: ['https://evil.com/callback'],

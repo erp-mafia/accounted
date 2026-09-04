@@ -56,6 +56,18 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   return { ...actual, hasCapability: mocks.hasCapability }
 })
 
+// Multi-user seat gate: entitled here, so the strict company_members-only
+// table mock above stays valid for non-owner roles (the gate would otherwise
+// read companies + capability_grants). Gate behavior is covered in
+// company-routing.test.ts and lib/entitlements/__tests__/multi-user.test.ts.
+vi.mock('@/lib/entitlements/multi-user', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/entitlements/multi-user')>()
+  return {
+    ...actual,
+    getMultiUserState: vi.fn().mockResolvedValue({ state: 'entitled', graceEndsAt: null }),
+  }
+})
+
 import { handleMcpRequest } from '../server'
 
 function toolCall(args: Record<string, unknown>): Request {

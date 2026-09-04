@@ -63,6 +63,21 @@ const INTENTIONAL_DIVERGENCES: Record<string, Divergence> = {
     'taxes paid by the firm are an eget uttag, so the template now debits 2013 Övriga egna ' +
     'uttag; migration 20260810120000 retargets the seeded rows the same way.',
   },
+  'inkop-eu-varor-omvand-moms-25': {
+    seededName: 'Inköp EU-varor, omvänd moms 25%',
+    reason:
+      'Seeded version booked the cost on 4010 Varuinköp, which no momsdeklaration ruta reads: ' +
+    'the fiktiv moms filled ruta 30/48 while ruta 20 (inköpsvärdet) stayed 0, which Skatteverket ' +
+    'rejects (felkod FK004, ML 13 kap kräver både underlag och moms). Now books on 4515 Inköp ' +
+    'varor från annat EU-land 25%, the ACCOUNT_RUTA basis account for ruta 20. User report ' +
+    '(Anders, 2026-08-25).',
+  },
+  'inkop-eu-tjanster-omvand-moms-25': {
+    seededName: 'Inköp EU-tjänster, omvänd moms 25%',
+    reason:
+      'Same ruta gap as inkop-eu-varor-omvand-moms-25: cost sat on 6540 IT-tjänster, so ruta 21 ' +
+    'stayed 0. Now books on 4535 Inköp tjänster från annat EU-land 25% (ruta 21).',
+  },
   'representation-avdragsgill-25-moms': {
     seededName: 'Representation (avdragsgill, 25% moms)',
     reason:

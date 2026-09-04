@@ -23,6 +23,7 @@
  */
 
 import { isIsoDateShaped } from '@/lib/invariants'
+import { UUID_RE } from '@/lib/invariants/uuid'
 import { roundOre } from '@/lib/money'
 
 /**
@@ -31,7 +32,6 @@ import { roundOre } from '@/lib/money'
  */
 export const SKATTEKONTO_ACCOUNT = '1630'
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const STORAGE_KEY = 'accounted.skv-manual-prefill'
 
 export interface SkvManualPrefill {

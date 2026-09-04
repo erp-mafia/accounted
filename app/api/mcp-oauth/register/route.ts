@@ -15,10 +15,14 @@ import { truncateIp } from '@/lib/api/v1/with-api-v1'
  *
  * Security model:
  *  - Anonymous by design (RFC 7591 §3 allows it); the endpoint does NOT
- *    write to oauth_client_registrations: only owner/admin users can
+ *    write to oauth_client_registrations: members with a writer role
  *    insert via /api/settings/oauth-clients. This endpoint just echoes
  *    a client_id back to callers whose redirect_uris are already on the
  *    allowlist.
+ *  - With no user session there is nobody to bind a DB registration to, so
+ *    any active registration passes here. That is harmless: a code is only
+ *    ever minted at /authorize, which accepts a registered URI solely for
+ *    the registering user and their colleagues (lib/auth/oauth-allowlist.ts).
  *  - Per-/24 sliding-window rate-limit prevents the endpoint being used
  *    as a high-rate oracle for enumerating registered URIs.
  *  - Error responses are uniform across "built-in", "DB-registered", and

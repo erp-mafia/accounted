@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
+// Pure data module (no server imports): the same classifier the settings UI
+// and the v1 REST wrapper use, so "what counts as a write" has one owner.
+import { scopeKind } from '@/lib/auth/scope-catalog'
+import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import type { CompanyRole } from '@/types'
 
 const UUID_PATTERN =
@@ -30,13 +34,13 @@ export function isOptionalCompanyTool(toolName: string): boolean {
   return OPTIONAL_COMPANY_TOOLS.has(toolName)
 }
 
-export const COMPANY_ID_INPUT_PROPERTY = {
+const COMPANY_ID_INPUT_PROPERTY = {
   type: 'string',
   format: 'uuid',
   description: 'Target company ID. Omit for default.',
 } as const
 
-export interface McpCompanyContext {
+interface McpCompanyContext {
   companyId: string
   role: CompanyRole
   isDefault: boolean
@@ -74,16 +78,22 @@ export function isCompanyDependentTool(toolName: string): boolean {
   return !COMPANY_INDEPENDENT_TOOLS.has(toolName)
 }
 
+/**
+ * Does a tool that requires `scope` change tenant state?
+ *
+ * Every scope that is not `:read` counts: `:write`, `:approve`, `:manage` and
+ * `:signoff` today (sign-off attests on the company's behalf, a write for the
+ * role guard even though the scope is deliberately not `:write`), and any
+ * suffix added later. Deriving from `scopeKind` instead of an allowlist of
+ * suffixes means a new elevated scope is write-gated for viewers by default
+ * rather than silently open until someone remembers this function.
+ *
+ * `undefined` (a tool absent from TOOL_SCOPE_MAP) is not a tenant write: the
+ * unscoped tools are discovery, skills and the feedback channel, and
+ * strict-schemas.test.ts pins that every write-annotated tool has a scope.
+ */
 export function isTenantWriteScope(scope: ApiKeyScope | undefined): boolean {
-  return (
-    scope?.endsWith(':write') === true ||
-    scope?.endsWith(':approve') === true ||
-    scope?.endsWith(':manage') === true ||
-    // Sign-off attests on the company's behalf: a write for the role guard
-    // even though the scope is deliberately not `:write` (linking rows must
-    // not imply the right to attest).
-    scope?.endsWith(':signoff') === true
-  )
+  return scope !== undefined && scopeKind(scope) === 'write'
 }
 
 export function projectToolInputSchema(tool: ToolSchemaSource): Record<string, unknown> {
@@ -144,6 +154,20 @@ export async function resolveMcpCompanyContext(args: {
     throw codedError('FORBIDDEN', 'Company membership has an unsupported role')
   }
 
+  // Multi-user seat gate: the MCP surface is a chokepoint like the HTTP
+  // routes, so a non-owner membership in a frozen company (multi_user lapsed
+  // past its 20-day grace) is refused here, before any tool touches tenant
+  // data. Owners always pass; self-hosted/dev return 'entitled' outright.
+  if (membership.role !== 'owner') {
+    const access = await getMultiUserState(args.supabase, companyId)
+    if (isMembershipDormant(membership.role, access.state)) {
+      throw codedError(
+        'FORBIDDEN',
+        'This company is paused for your account: multiple users require a paid plan. Ask the company owner to upgrade.'
+      )
+    }
+  }
+
   return {
     companyId,
     role: membership.role,
@@ -151,12 +175,27 @@ export async function resolveMcpCompanyContext(args: {
   }
 }
 
+/**
+ * Read-only role gate for the MCP tools/call path.
+ *
+ * Called by the dispatcher (server.ts, tools/call) right after
+ * `resolveMcpCompanyContext` for every company-scoped call, including calls
+ * routed through the gnubok_call_tool bridge, and before execute(). The MCP
+ * surface runs as the service role, so RLS never sees the viewer: this is
+ * the only place the role is enforced for API-key callers. Read tools pass
+ * unchanged; a viewer's key with write scopes is still refused, because the
+ * key's scopes bound what the key MAY do and the role bounds what the user
+ * may do, and the effective permission is the intersection.
+ */
 export function assertMcpCompanyWriteAccess(
   context: McpCompanyContext,
   scope: ApiKeyScope | undefined
 ): void {
   if (context.role === 'viewer' && isTenantWriteScope(scope)) {
-    throw codedError('FORBIDDEN', 'Write permission required for this company')
+    throw codedError(
+      'FORBIDDEN',
+      `This company membership is read-only (viewer): tools that require the "${scope}" scope change company data and are refused. Use read tools only, or ask a company owner or admin to change the role.`
+    )
   }
 }
 

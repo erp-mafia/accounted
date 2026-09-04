@@ -46,6 +46,9 @@ export const ResponseMetaSchema = z.object({
   next_cursor: z.string().nullable().optional(),
   audit: ResponseAuditSchema.optional(),
   partial_expansions: z.array(z.string()).optional(),
+  // Endpoint-specific register-coverage disclosure (e.g. invoices.list:
+  // { covers_from, has_pre_register_invoices }). Documented per endpoint.
+  coverage: z.record(z.string(), z.unknown()).optional(),
 })
 
 /**
@@ -205,9 +208,6 @@ export function listEndpoints(): EndpointDefinition[] {
   return Array.from(ENDPOINTS.values())
 }
 
-export function getEndpoint(method: HttpMethod, path: string): EndpointDefinition | undefined {
-  return ENDPOINTS.get(`${method} ${path}`)
-}
 
 /**
  * Resolve the registered endpoint for a CONCRETE request path (e.g.
@@ -510,10 +510,3 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
   }
 }
 
-/**
- * Test-only escape hatch. Clears the registry: used in unit tests so a test
- * that registers a fake endpoint doesn't leak into the next test.
- */
-export function _resetRegistryForTests(): void {
-  ENDPOINTS.clear()
-}

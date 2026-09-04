@@ -4,6 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { getEmailService } from '@/lib/email/service'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import {
@@ -41,6 +42,7 @@ import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -190,11 +192,21 @@ export const POST = withRouteContext(
 
     const invoiceCurrency = (invoice as Invoice).currency
     const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
+    // Freeze the chosen bank account's payee at issue (no-op without a choice).
+    const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice as Invoice)
+    if (!payeeSnapshot.ok) {
+      return errorResponseFromCode(payeeSnapshot.code, opLog, { requestId, details: payeeSnapshot.details })
+    }
+    ;(invoice as Invoice).payment_details = payeeSnapshot.payee
     if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
       return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', opLog, {
         requestId,
         details: { currency: invoiceCurrency },
       })
+    }
+
+    if (!hasRequiredSellerVatNumber(company as CompanySettings, invoice as Invoice)) {
+      return errorResponseFromCode('INVOICE_SEND_VAT_NUMBER_MISSING', opLog, { requestId })
     }
 
     const hasAdditionalRecipients =
@@ -290,7 +302,7 @@ export const POST = withRouteContext(
         const preflight = await prepareInvoicePdfRender(
           company as CompanySettings,
           (invoice as Invoice).currency,
-          { paymentAccountRequired },
+          { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
         )
         await renderToBuffer(
           InvoicePDF({
@@ -355,7 +367,7 @@ export const POST = withRouteContext(
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
       renderableInvoice.currency,
-      { paymentAccountRequired },
+      { paymentAccountRequired, payee: (invoice as Invoice).payment_details ?? null },
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)

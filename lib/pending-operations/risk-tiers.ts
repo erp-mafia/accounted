@@ -51,6 +51,15 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // and the executor's isTransactionBooked() refusal keep it off booked rows,
   // so the op cannot hide a booking even if tampered with (issue #1661).
   ignore_transaction: 'low',
+  // Kundorder (sales orders) never book: an order is the non-ledger document
+  // between agreement and invoice. Creating one, moving it through its
+  // header state machine (confirm / cancel / reopen) and registering
+  // delivered quantities write only sales_orders / sales_order_items, no
+  // verifikat and no external side-effect, and all three are re-editable
+  // (cancel is refused while invoices exist, reopen undoes it).
+  create_sales_order: 'low',
+  transition_sales_order: 'low',
+  register_sales_order_delivery: 'low',
 
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',
@@ -70,6 +79,10 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // create_invoice: the target has no verifikat yet (isEditableInvoiceDraft
   // is re-checked at commit), so the edit is fully reversible by editing again.
   update_invoice: 'medium',
+  // Creates an unnumbered DRAFT kundfaktura from a confirmed order through
+  // the same builder as create_invoice (nothing is booked or sent at commit;
+  // the draft can be deleted). Same tier as create_invoice.
+  create_invoice_from_sales_order: 'medium',
   // Recurring invoice schedules: the commit only creates/edits the monthly
   // template (nothing is booked or sent at commit time), and the schedule is
   // pausable/deletable before the next cron run. Not 'low' because an

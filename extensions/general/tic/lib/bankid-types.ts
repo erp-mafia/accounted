@@ -134,26 +134,3 @@ export interface EnrichmentData {
   spar?: SparData
   companyRoles?: CompanyRole[]
 }
-
-// ---------------------------------------------------------------------------
-// Complete endpoint request/response (Accounted internal)
-// ---------------------------------------------------------------------------
-
-export interface BankIdCompleteRequest {
-  sessionId: string
-  mode: 'login' | 'signup'
-  email?: string
-}
-
-export interface BankIdCompleteResponse {
-  tokenHash: string
-  type: string
-  isNewUser: boolean
-  enrichmentData?: EnrichmentData
-}
-
-export interface BankIdCompleteErrorResponse {
-  error: 'no_account' | 'already_linked' | 'account_exists' | 'session_invalid' | 'session_expired'
-  givenName?: string
-  surname?: string
-}

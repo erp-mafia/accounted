@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse, after } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
-import { createSession, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
+import { createSession, extractBban, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import { eventBus } from '@/lib/events/bus'
 import {
@@ -12,10 +12,18 @@ import {
   defaultLedgerForCurrency,
   normalizeIban,
 } from '@/lib/cash-accounts/service'
-import { fanOutSessionRenewal } from '@/extensions/general/enable-banking/lib/session-sharing'
+import {
+  fanOutSessionRenewal,
+  fetchCrossCompanyAccountContext,
+} from '@/extensions/general/enable-banking/lib/session-sharing'
 import { supersedeSiblingConnections } from '@/extensions/general/enable-banking/lib/supersede'
 import { getBankConnectionErrorMessage } from '@/lib/errors/get-error-message'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
+import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
+import {
+  requireFlowInitiator,
+  FLOW_INITIATOR_MISMATCH_MESSAGE,
+} from '@/lib/auth/oauth-flow-binding'
 
 // This route emits bank_connection.consent_granted / .cash_account_mirror_failed
 // (ASVS V16 / GDPR Art.30 audit events). ensureInitialized() must run at module
@@ -79,8 +87,34 @@ export async function GET(request: Request) {
   const state = searchParams.get('state') // Cryptographic oauth_state token
   const error = searchParams.get('error')
   const errorDescription = searchParams.get('error_description')
+  // Present in connector mode only: the hosted callback echoes the signed
+  // connector state back to this instance so createSession can bind the proxy's
+  // /sessions exchange to the pending ledger row. Null on the direct path.
+  const connectorState = searchParams.get('connector_state')
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+
+  // Connector branch: a self-hosted instance started this authorization through
+  // the /api/connect/bank proxy, which replaced the upstream state with a
+  // signed connector state carrying the instance's own return URL. We never
+  // create a session here (the instance does, through the proxy): we just
+  // bounce the browser back to the instance with the code + its original
+  // state, so no per-instance redirect URI has to be registered with EB.
+  if (isConnectorState(state)) {
+    const verified = verifyConnectorState(state as string)
+    if (!verified.ok || verified.payload.svc !== 'bank') {
+      return NextResponse.redirect(`${baseUrl}/?connector_error=${encodeURIComponent(verified.ok ? 'wrong_service' : verified.reason)}`)
+    }
+    const ret = new URL(verified.payload.ret)
+    if (error) ret.searchParams.set('error', error)
+    if (errorDescription) ret.searchParams.set('error_description', errorDescription)
+    if (code) ret.searchParams.set('code', code)
+    if (verified.payload.st) ret.searchParams.set('state', verified.payload.st)
+    // Echo the signed connector state so the instance can present it back to
+    // the proxy's POST /sessions (which finds the pending ledger row by it).
+    ret.searchParams.set('connector_state', state as string)
+    return NextResponse.redirect(ret.toString())
+  }
 
   if (error) {
     // Swedish user-facing message carrying the underlying provider error; the
@@ -239,6 +273,31 @@ export async function GET(request: Request) {
     )
   }
 
+  // The state token proves this callback belongs to a flow we started; it
+  // says nothing about WHO is completing it. Bind the completion to the
+  // initiator's own cookie session before any finalize work: otherwise a
+  // victim lured into approving a consent someone else started would have
+  // their bank accounts attached to that someone's company. The connector
+  // branch above is exempt on purpose (server-to-server, HMAC-verified).
+  const initiator = await requireFlowInitiator(request, pendingConnection.user_id, {
+    flow: 'enable-banking.callback',
+  })
+  if (!initiator.ok) {
+    if (initiator.reason === 'no_session') {
+      // Session expired mid-flow: sign in and the callback re-runs with the
+      // same code + state. Nothing on the row changes.
+      return initiator.response
+    }
+    // A different user completed it. Refuse without exchanging the code and
+    // without touching the row: it keeps waiting for its initiator and the
+    // stale-pending cleanup reaps it if nobody comes back.
+    const params = new URLSearchParams({
+      bank_error: FLOW_INITIATOR_MISMATCH_MESSAGE,
+      ...(pendingConnection.bank_name ? { bank_name: pendingConnection.bank_name } : {}),
+    })
+    return NextResponse.redirect(`${baseUrl}/settings/banking?${params.toString()}`)
+  }
+
   // Kick the finalize work off eagerly, decoupled from the response stream:
   // if the user closes the tab mid-stream, the stream is cancelled but this
   // promise keeps running, so the session persistence, cash-account mirror
@@ -246,7 +305,7 @@ export async function GET(request: Request) {
   // failures resolve to the cleanup redirect target.
   const finalizePromise = (async (): Promise<string> => {
     try {
-      return await finalizeConnection(supabase, pendingConnection, code)
+      return await finalizeConnection(supabase, pendingConnection, code, connectorState)
     } catch (finalizeError) {
       const reason =
         finalizeError instanceof Error ? finalizeError.message : String(finalizeError)
@@ -347,6 +406,7 @@ async function finalizeConnection(
   supabase: ServiceClient,
   pendingConnection: PendingConnection,
   code: string,
+  connectorState: string | null,
 ): Promise<string> {
   const userId = pendingConnection.user_id
 
@@ -356,7 +416,7 @@ async function finalizeConnection(
     codeLength: code.length,
   })
 
-  const sessionData = await createSession(code)
+  const sessionData = await createSession(code, connectorState ?? undefined)
   const { session_id, accounts, access } = sessionData
   const consentExpiresAt = access.valid_until
 
@@ -410,6 +470,7 @@ async function finalizeConnection(
     return {
       uid: account.uid,
       iban: account.account_id?.iban,
+      bban: extractBban(account),
       name: account.name || account.product,
       currency: account.currency,
       // Carry the user's earlier choice for an account we have seen before;
@@ -490,6 +551,107 @@ async function finalizeConnection(
         newUid: survivor.uid,
       })
     }
+  }
+
+  // Cross-company guard: at one-session banks (SEB) the PSU's single consent
+  // can cover accounts another of the user's companies already books. The
+  // deliberate reuse path (findReusableSessions) never offers a claimed IBAN,
+  // but this callback used to trust the session wholesale: a connect performed
+  // under company B stored company A's accounts pre-enabled and mirrored them
+  // into B's cash_accounts, one "Spara val" away from booking A's transactions
+  // in B's ledger. Accounts claimed elsewhere are stored disabled + flagged
+  // (the picker names the claiming company) and skipped by the mirror below.
+  // Accounts this row itself carried before keep their own state: the active
+  // company's standing choice outranks a sibling's claim, so a renewal can
+  // never switch a working feed off.
+  const crossCompany = await fetchCrossCompanyAccountContext(
+    supabase,
+    userId,
+    pendingConnection.company_id,
+    pendingConnection.id,
+  )
+  // Every account the guard itself disabled, whatever the branch. These are
+  // excluded from the cash_accounts mirror below: mirroring enabled:false for
+  // a new-to-row account can PROMOTE an existing manual holder (the seeded
+  // primary 1930 included) and flip it to disabled with a foreign identity,
+  // and a claimed account's row would double-claim the IBAN besides. The
+  // selection save allocates + mirrors any of them the user turns on.
+  const guardDisabledUids = new Set<string>()
+  let claimedCount = 0
+  for (const account of accountsMetadata) {
+    const normalizedIban = normalizeIban(account.iban)
+    // Row-local memory only. The active company's standing state on OTHER
+    // rows (a bank-list renewal arrives on a fresh row while the old row is
+    // waiting to be superseded) is already folded into crossCompany:
+    // activeCompanyIbans outrank claims and deselections there, so such
+    // accounts fall through to the enabled default below.
+    const seenOnThisRow =
+      priorEnabledByUid.has(account.uid) ||
+      (normalizedIban ? priorEnabledByIban.has(normalizedIban) : false) ||
+      pairedPriorUidByNewUid.has(account.uid)
+    if (seenOnThisRow) {
+      // The carried enabled/disabled state stands. The claim label is
+      // metadata on top of it: accountsMetadata is rebuilt without the prior
+      // flags, so without this an in-place renewal would drop the label and
+      // the picker would list the sibling's accounts as plain unchecked own
+      // accounts again. Re-stamp it only on an account that stays disabled
+      // here (an enabled one is the active company's standing state, which
+      // outranks any claim), and only from a fresh lookup, never from the
+      // stale prior flag.
+      if (account.enabled === false && crossCompany !== null) {
+        const claim = normalizedIban ? crossCompany.claims.get(normalizedIban) : undefined
+        if (claim) {
+          account.claimed_by_company_id = claim.companyId
+          if (claim.companyName) account.claimed_by_company_name = claim.companyName
+          // Keep it out of the cash_accounts mirror too: the first connect
+          // never mirrored it (see guardDisabledUids below), and mirroring
+          // it now would plant the sibling's IBAN in this company's routing
+          // table and burn a 19xx slot for an account that stays off.
+          guardDisabledUids.add(account.uid)
+          claimedCount += 1
+        }
+      }
+      continue
+    }
+
+    if (crossCompany === null) {
+      // Fail closed: without the claim set a free account cannot be told from
+      // one another company books, and pre-checking a claimed account is the
+      // one outcome this guard must never produce. The user just re-ticks.
+      account.enabled = false
+      guardDisabledUids.add(account.uid)
+      continue
+    }
+    const claim = normalizedIban ? crossCompany.claims.get(normalizedIban) : undefined
+    if (claim) {
+      account.enabled = false
+      account.claimed_by_company_id = claim.companyId
+      if (claim.companyName) account.claimed_by_company_name = claim.companyName
+      guardDisabledUids.add(account.uid)
+      claimedCount += 1
+      continue
+    }
+    if (normalizedIban && crossCompany.deselectedIbans.has(normalizedIban)) {
+      // The user already said "Synkas ej" to this account on another
+      // connection row: a fresh row must not resurrect it pre-checked. The
+      // flag makes the picker say so; an unexplained unchecked box reads as
+      // a glitch and a silent one hides a sync gap.
+      account.enabled = false
+      account.deselected_elsewhere = true
+      guardDisabledUids.add(account.uid)
+    }
+  }
+  if (crossCompany === null) {
+    log.error('cross-company claim lookup failed: storing new accounts deselected', {
+      connectionId: pendingConnection.id,
+    })
+  } else if (claimedCount > 0) {
+    log.warn('session covers accounts claimed by sibling companies', {
+      connectionId: pendingConnection.id,
+      companyId: pendingConnection.company_id,
+      claimedCount,
+      accountCount: accountsMetadata.length,
+    })
   }
 
   // Stay in 'pending_selection' until the user confirms which accounts to sync.
@@ -629,6 +791,14 @@ async function finalizeConnection(
   let accountsDataDirty = carriedScopeDirty
 
   for (const account of accountsMetadata) {
+    // Nothing the guard disabled is mirrored here: a claimed account's row
+    // would be another company's data in this routing table (and an enabled
+    // one would double-claim the IBAN), and mirroring enabled:false for any
+    // new-to-row account can promote an existing manual holder — the seeded
+    // primary 1930 included — flipping it to disabled under a foreign
+    // identity. No 19xx slot is burned either. The selection save allocates
+    // and mirrors whichever of them the user deliberately turns on.
+    if (guardDisabledUids.has(account.uid)) continue
     let targetLedger = mirroredByUid.get(account.uid)?.ledger_account
     let reuseCashAccountId: string | null = null
     if (!targetLedger) {
@@ -681,6 +851,7 @@ async function finalizeConnection(
         currency: account.currency,
         ledger_account: targetLedger,
         iban: account.iban ?? null,
+        bban: account.bban ?? null,
         name: account.name ?? null,
         enabled: account.enabled ?? true,
         reuse_cash_account_id: reuseCashAccountId,

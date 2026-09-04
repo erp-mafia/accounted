@@ -36,6 +36,7 @@ import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { formatAmount } from '@/lib/utils'
 
 interface SkatteverketStatus {
   connected: boolean
@@ -105,10 +106,6 @@ interface SkatteverketPanelProps {
 interface Notice {
   kind: 'error' | 'success' | 'info'
   text: string
-}
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 const ORG_NUMBER_MISSING_NOTICE: Notice = {

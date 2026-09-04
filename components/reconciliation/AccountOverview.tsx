@@ -21,7 +21,7 @@ import type {
   ReconciliationStatus,
 } from '@/lib/reconciliation/schemas'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
-import { SignoffDialog, type SignoffSubmitInput } from './SignoffDialog'
+import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } from './SignoffDialog'
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
 import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
@@ -256,14 +256,47 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     }
   }
 
+  // A policy refusal carries a code and a Swedish reason written for the
+  // signer; show that reason as-is. The generic mapper does not recognise it
+  // and used to replace it with a "request contains invalid data" string.
+  function signoffRefusal(json: Record<string, unknown>, statusCode: number): string {
+    return typeof json.code === 'string' && typeof json.error === 'string' && json.error.trim()
+      ? json.error
+      : getUserErrorMessage(json, { statusCode })
+  }
+
+  // The same call with dry_run: the server judges the exact sign-off (its own
+  // window, from the fiscal period start to the date) and the dialog shows
+  // that verdict instead of the page tile's number, which is scoped to the
+  // period or range picked above and can differ.
+  async function previewSignoff(input: SignoffSubmitInput): Promise<SignoffPreviewResult> {
+    const res = await fetch(`${base}/signoff`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...input, dry_run: true }),
+    })
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    if (res.ok) {
+      const preview = (json.data as { would_sign?: { unexplained_difference?: number | null } } | undefined)?.would_sign
+      return { kind: 'ok', unexplained: preview?.unexplained_difference ?? null }
+    }
+    const code = typeof json.code === 'string' ? json.code : null
+    if (code === 'NOT_RECONCILED') {
+      const details = json.details as { unexplained_difference?: number | null } | undefined
+      return { kind: 'needs_force', unexplained: details?.unexplained_difference ?? null }
+    }
+    if (code === 'OUTSIDE_UNKNOWN') return { kind: 'needs_force', unexplained: null }
+    return { kind: 'blocked', message: signoffRefusal(json, res.status) }
+  }
+
   async function submitSignoff(input: SignoffSubmitInput) {
     const res = await fetch(`${base}/signoff`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     })
-    const json = await res.json().catch(() => ({}))
-    if (!res.ok) return getUserErrorMessage(json, { statusCode: res.status })
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    if (!res.ok) return signoffRefusal(json, res.status)
     setSignoffOpen(false)
     toast({ title: t('toast_signed_off', { date: formatDate(input.through_date) }) })
     await refresh()
@@ -470,6 +503,36 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     },
   ]
 
+  // What the bank itself reports (F7): booked + available balance from the
+  // last PSD2 balance refresh, with its fetch date. Point-in-time, so it
+  // lives outside the movement-based tiles.
+  const bankReportedRaw =
+    !isSkv && !isManual
+      ? (status.bank as {
+          bank_reported_balance?: number | null
+          bank_reported_available_balance?: number | null
+          bank_balance_updated_at?: string | null
+        } | null)
+      : null
+  // Both the amount and its fetch timestamp must exist: a balance of unknown
+  // age labeled with today's date is exactly the misleading staleness the
+  // timestamp exists to prevent, so without it the line is omitted entirely.
+  const bankReportedLine =
+    bankReportedRaw &&
+    typeof bankReportedRaw.bank_reported_balance === 'number' &&
+    bankReportedRaw.bank_balance_updated_at
+      ? typeof bankReportedRaw.bank_reported_available_balance === 'number'
+        ? t('bank_reported_line_available', {
+            amount: formatCurrency(bankReportedRaw.bank_reported_balance, currency),
+            available: formatCurrency(bankReportedRaw.bank_reported_available_balance, currency),
+            date: formatDate(bankReportedRaw.bank_balance_updated_at),
+          })
+        : t('bank_reported_line', {
+            amount: formatCurrency(bankReportedRaw.bank_reported_balance, currency),
+            date: formatDate(bankReportedRaw.bank_balance_updated_at),
+          })
+      : null
+
   const unexplained = status.unexplained_difference
   const attn = status.stale
     ? t('stale_line', { source: sourceLabel })
@@ -534,6 +597,12 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
           </div>
         ))}
       </div>
+
+      {bankReportedLine && (
+        <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+          {bankReportedLine}
+        </p>
+      )}
 
       {attn ? (
         <AttnLine>{attn}</AttnLine>
@@ -769,6 +838,7 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         currency={currency}
         askExternalBalance={isManual && !specification}
         ledgerBalance={status.ledger_balance}
+        onPreview={previewSignoff}
         onSubmit={submitSignoff}
       />
     </div>

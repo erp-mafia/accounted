@@ -19,7 +19,7 @@ import type { SkatteverketReadServices } from '@/lib/skatteverket/declaration-st
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 
 ensureInitialized()
 
@@ -108,17 +108,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       period: url.searchParams.get('period') ?? undefined,
       state: url.searchParams.get('state') ?? undefined,
     })
-    if (!parsed.success) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          issues: parsed.error.issues.map((i) => ({
-            field: i.path.join('.'),
-            message: i.message,
-          })),
-        },
-      })
-    }
+    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
 
     // The skatteverket extension is opt-in (extensions.config.json) and the
     // registry is the runtime source of truth: absent registration means the

@@ -7,30 +7,17 @@
 
 import type { HydrationReport } from '@/lib/providers/provider-data-fetcher'
 
-// Re-export canonical DTOs used by entity-mapper and migration-orchestrator
+// Re-export the canonical DTOs used by arcim-client (entity-mapper imports
+// its DTOs straight from '@/lib/providers/dto')
 export type {
-  AmountType,
-  PostalAddress,
-  Contact,
-  PartyIdentification,
-  PartyLegalEntity,
-  PartyDto,
   PaginatedResponse,
-  TaxSubtotalDto,
-  TaxTotalDto,
-  LegalMonetaryTotalDto,
-  PaymentStatusDto,
   CompanyInformationDto,
   CustomerDto,
   SupplierDto,
-  InvoiceStatusCode,
-  SalesInvoiceLineDto,
   SalesInvoiceDto,
-  SupplierInvoiceLineDto,
   SupplierInvoiceDto,
 } from '@/lib/providers/dto'
 
-export type { CustomerType as ArcimCustomerType } from '@/lib/providers/dto'
 
 // ── Supported providers ─────────────────────────────────────────────
 
@@ -116,6 +103,13 @@ export interface InvoiceStepResult {
   skipReasons?: SkipReasons
   fxUnresolved?: number
   vatUnresolved?: number
+  /**
+   * Credit notes imported without a credited_invoice_id. No provider DTO
+   * carries a reference to the invoice being credited, so the link cannot be
+   * resolved at import time; the amounts are reversed and the record is
+   * complete, but the pairing is missing and the user is told so.
+   */
+  creditNotesUnlinked?: number
   hydration?: HydrationReport
   errorSample?: string
 }

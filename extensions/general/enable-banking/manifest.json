@@ -5,7 +5,7 @@
   "entryPoint": "@/extensions/general/enable-banking",
   "workspace": "@/components/extensions/general/EnableBankingWorkspace",
   "requiredEnvVars": ["ENABLE_BANKING_APP_ID", "ENABLE_BANKING_PRIVATE_KEY"],
-  "optionalEnvVars": ["ENABLE_BANKING_SANDBOX"],
+  "optionalEnvVars": ["ENABLE_BANKING_API_URL", "ENABLE_BANKING_PSU_TYPE"],
   "npmDependencies": [],
   "definition": {
     "name": "Bankintegration (PSD2)",

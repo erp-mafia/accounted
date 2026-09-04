@@ -66,3 +66,12 @@ export function normalizeEmail(value: string | null): string | null {
   if (!value) return null
   return value.trim().toLowerCase() || null
 }
+
+/**
+ * Lowercased dedup key for matching a row by name (articles, and any other
+ * importer that dedupes on a free-text name). Same rule as normalizeEmail.
+ */
+export function normalizeNameKey(value: string | null): string | null {
+  if (!value) return null
+  return value.trim().toLowerCase() || null
+}

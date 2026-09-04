@@ -110,7 +110,19 @@ describe('GET /api/documents/[id]/inline', () => {
     expect(disposition).toContain('filename="kvitto f_rvaring.pdf"')
     expect(res.headers.get('Content-Type')).toBe('application/pdf')
     expect(res.headers.get('Cache-Control')).toBe('private, no-store')
-    // The mail-body CSP is HTML-only: it must not restrict PDF rendering.
+    // PDF is natively inline-safe: the sandboxing CSP would break Chrome's
+    // built-in viewer, so it must be absent here.
+    expect(res.headers.get('Content-Security-Policy')).toBeNull()
+  })
+
+  it('serves raster images without the sandboxing CSP', async () => {
+    enqueue({ data: makeDoc({ file_name: 'kvitto.png', mime_type: 'image/png' }), error: null })
+    downloadMock.mockResolvedValue({ data: new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])]), error: null })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('image/png')
     expect(res.headers.get('Content-Security-Policy')).toBeNull()
   })
 
@@ -136,5 +148,73 @@ describe('GET /api/documents/[id]/inline', () => {
       "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:",
     )
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
+  })
+
+  // Allow-list, not deny-list: every type outside PDF/raster images is
+  // uploader-controlled active content on this origin and must be sandboxed,
+  // while still rendering inline (Peppol XML archives, iXBRL, JSON previews).
+  it.each([
+    ['application/xml', 'peppol-faktura.xml', '<?xml version="1.0"?><Invoice/>'],
+    ['text/xml', 'peppol-faktura.xml', '<?xml version="1.0"?><Invoice/>'],
+    [
+      'application/xhtml+xml',
+      'arsredovisning.xhtml',
+      '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></html>',
+    ],
+    [
+      'image/svg+xml',
+      'logga.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(document.cookie)</script></svg>',
+    ],
+    ['application/json', 'psd2-svar.json', '{"transactions":[]}'],
+  ])('serves %s inline but under the sandboxing CSP', async (mimeType, fileName, body) => {
+    enqueue({ data: makeDoc({ file_name: fileName, mime_type: mimeType }), error: null })
+    downloadMock.mockResolvedValue({ data: new Blob([body]), error: null })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe(mimeType)
+    expect(res.headers.get('Content-Disposition')).toContain('inline')
+    expect(res.headers.get('Content-Security-Policy')).toBe(
+      "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:",
+    )
+    expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
+  })
+
+  it('sandboxes a legacy row whose type is spoofed with casing or parameters', async () => {
+    enqueue({
+      data: makeDoc({ file_name: 'faktura.html', mime_type: 'TEXT/HTML; charset=utf-8' }),
+      error: null,
+    })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Security-Policy')).toBe(
+      "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:",
+    )
+  })
+
+  it('sandboxes an unknown type the extension fallback cannot resolve', async () => {
+    enqueue({ data: makeDoc({ file_name: 'underlag.bin', mime_type: null }), error: null })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('application/octet-stream')
+    expect(res.headers.get('Content-Security-Policy')).toBe(
+      "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:",
+    )
+  })
+
+  it('keeps the extension fallback for legacy PDF rows without adding the CSP', async () => {
+    enqueue({ data: makeDoc({ file_name: 'kvitto.pdf', mime_type: null }), error: null })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('application/pdf')
+    expect(res.headers.get('Content-Security-Policy')).toBeNull()
   })
 })

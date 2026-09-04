@@ -30,6 +30,7 @@ import {
 } from '@/lib/transactions/bank-sync-store'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export type { BankConn }
@@ -245,14 +246,25 @@ export default function BankSyncNowButton() {
   // Bank sync (and reconnect) is a paid external PSD2 call. Without the
   // capability we keep the button VISIBLE as the conversion surface but inert,
   // and surface an Uppgradera link. CSV/SIE import stays free (separate UI).
-  const gateTitle = !hasBankSync ? 'Bankkoppling kräver ett abonnemang' : undefined
+  // Self-host: the remedy is a connector key (or own EB credentials), never
+  // the hosted Stripe billing page; same branch as UpgradeNote.
+  const selfHosted = isSelfHosted()
+  const gateTitle = !hasBankSync
+    ? selfHosted
+      ? t('bank_sync_requires_connector_key')
+      : t('bank_sync_requires_subscription')
+    : undefined
   const upsellNote = !hasBankSync ? (
-    <span className="text-xs text-muted-foreground">
-      Kräver abonnemang.{' '}
-      <a href="/settings/billing" className="underline underline-offset-2">
-        Uppgradera
-      </a>
-    </span>
+    selfHosted ? (
+      <span className="text-xs text-muted-foreground">{t('bank_sync_upsell_connector_key')}</span>
+    ) : (
+      <span className="text-xs text-muted-foreground">
+        {t('bank_sync_upsell_subscription')}{' '}
+        <a href="/settings/billing" className="underline underline-offset-2">
+          {t('bank_sync_upsell_upgrade')}
+        </a>
+      </span>
+    )
   ) : null
 
   if (connections.length === 1) {

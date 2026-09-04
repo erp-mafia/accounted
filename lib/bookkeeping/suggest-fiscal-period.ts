@@ -10,6 +10,7 @@
  */
 
 import type { FiscalPeriod } from '@/types'
+import { addDaysIso as addDays } from '@/lib/dates/iso'
 
 /** Minimal shape needed for the date math: `FiscalPeriod` satisfies it. */
 type PeriodRange = Pick<FiscalPeriod, 'period_start' | 'period_end'>
@@ -21,13 +22,6 @@ export interface SuggestedPeriod {
   name: string
   period_start: string
   period_end: string
-}
-
-/** Add `days` to a YYYY-MM-DD date string, returning a YYYY-MM-DD string. */
-function addDays(date: string, days: number): string {
-  const d = new Date(date + 'T00:00:00Z')
-  d.setUTCDate(d.getUTCDate() + days)
-  return d.toISOString().split('T')[0]
 }
 
 /**

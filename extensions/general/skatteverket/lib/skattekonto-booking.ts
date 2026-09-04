@@ -7,6 +7,7 @@ import { getPrimary as getPrimaryCashAccount } from '@/lib/cash-accounts/service
 import type {
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
+  EntityType,
   JournalEntry,
 } from '@/types'
 import type {
@@ -43,7 +44,7 @@ import type {
 const PRIMARY_SEK_SENTINEL = '__PRIMARY_SEK__'
 const PRIMARY_SEK_FALLBACK = '1930'
 
-export type EntityType = 'enskild_firma' | 'aktiebolag'
+export type { EntityType } from '@/types'
 
 interface SkattekontoRuleRow {
   id: string

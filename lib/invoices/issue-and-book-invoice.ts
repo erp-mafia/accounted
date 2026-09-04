@@ -9,11 +9,13 @@ import type { CustomIssuanceLine } from '@/lib/invoices/issuance-custom-lines'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import type { Logger } from '@/lib/logger'
 import type {
@@ -92,7 +94,7 @@ export async function archiveIssuedInvoicePdf(args: {
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       settings,
       renderableInvoice.currency,
-      { paymentAccountRequired },
+      { paymentAccountRequired, payee: renderableInvoice.payment_details ?? null },
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
     const pdfBuffer = await renderToBuffer(
@@ -159,12 +161,25 @@ export async function issueAndBookInvoice(
   const customLines = opts.customLines ?? null
   const id = invoice.id
 
+  // An invoice that chose a bank account freezes that account's payee now,
+  // from the account as it is at issue; a chosen account that can no longer
+  // be used blocks issue instead of silently printing the company default.
+  const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice as Invoice)
+  if (!payeeSnapshot.ok) {
+    return { ok: false, errorCode: payeeSnapshot.code, details: payeeSnapshot.details }
+  }
+  ;(invoice as Invoice).payment_details = payeeSnapshot.payee
+
   if (!hasRequiredInvoicePaymentAccount(settings, invoice as Invoice)) {
     return {
       ok: false,
       errorCode: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING',
       details: { currency: (invoice as Invoice).currency },
     }
+  }
+
+  if (!hasRequiredSellerVatNumber(settings, invoice as Invoice)) {
+    return { ok: false, errorCode: 'INVOICE_SEND_VAT_NUMBER_MISSING' }
   }
 
   // Assign the number only after all payment-instruction guards pass.

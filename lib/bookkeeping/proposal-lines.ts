@@ -36,6 +36,12 @@ import { getVatRate } from '@/lib/bookkeeping/vat-entries'
 import { getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
 import { buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
+import {
+  legacyTemplateDirection as legacyDirection,
+  patternDirection,
+} from '@/lib/bookkeeping/counterparty-templates'
+
+
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { TransactionCategory, VatTreatment, EntityType, LinePatternEntry } from '@/types'
 
@@ -115,35 +121,6 @@ export interface ProposalLinesInput {
   settlementAccount?: string
 }
 
-type LearnedDirection = 'expense' | 'income' | 'unknown'
-
-/**
- * Settlement-account predicate, mirroring the private isSettlementAccount in
- * counterparty-templates.ts (bank/cash 19xx, receivables 1510, payables 2440,
- * credit card 2890). Keep the two in sync.
- */
-function isSettlementAccount(account: string): boolean {
-  return account.startsWith('19') || account === '1510' || account === '2440' || account === '2890'
-}
-
-/** Mirrors legacyTemplateDirection in counterparty-templates.ts. */
-function legacyDirection(debitAccount: string, creditAccount: string): LearnedDirection {
-  const debitSettles = isSettlementAccount(debitAccount)
-  const creditSettles = isSettlementAccount(creditAccount)
-  if (creditSettles && !debitSettles) return 'expense'
-  if (debitSettles && !creditSettles) return 'income'
-  return 'unknown'
-}
-
-/** Mirrors patternDirection in counterparty-templates.ts. */
-function patternDirection(pattern: LinePatternEntry[]): LearnedDirection {
-  const business = pattern.filter((e) => e.type === 'business')
-  if (business.length === 0) return 'unknown'
-  const debitCount = business.filter((b) => b.side === 'debit').length
-  if (debitCount === business.length) return 'expense'
-  if (debitCount === 0) return 'income'
-  return 'unknown'
-}
 
 /**
  * Resolve a static template's accounts for the company's entity type: the
