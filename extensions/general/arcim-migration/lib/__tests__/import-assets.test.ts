@@ -527,3 +527,50 @@ describe('resolveAssetType refuses to guess', () => {
     expect(resolveAssetType({ Type: '1300 - Programvara' }, new Map(), types)?.Id).toBe(2)
   })
 })
+
+/**
+ * From review of #2266: the separator's spacing varies between payloads, and
+ * which form a given Fortnox account carries is not something to depend on.
+ */
+describe('resolveAssetType ignores how the label is spaced', () => {
+  const TYPES: FortnoxAssetType[] = [
+    {
+      Id: 7,
+      Number: '1300',
+      Description: 'Utveckling',
+      AccountAsset: 1010,
+      AccountDepreciation: 1019,
+      AccountValueLoss: 7811,
+    },
+  ]
+
+  it.each([
+    '1300 - Utveckling',
+    '1300- Utveckling',
+    '1300 -Utveckling',
+    '1300-Utveckling',
+    '  1300  -  Utveckling  ',
+  ])('resolves %s', (label) => {
+    expect(resolveAssetType({ Type: label }, new Map(), TYPES)?.Id).toBe(7)
+  })
+
+  // The account triple has to survive the resolution, not just the match.
+  it('keeps the type accounts once resolved from an oddly spaced label', () => {
+    const mapped = mapFortnoxAsset(
+      {
+        Number: '6',
+        Description: 'Utvecklingsprojekt',
+        AcquisitionDate: '2026-05-28',
+        AcquisitionStart: '2026-05-01',
+        AcquisitionValue: 3_500_000,
+        DepreciationFinal: '2031-04-30',
+        Type: '1300-Utveckling',
+      },
+      resolveAssetType({ Type: '1300-Utveckling' }, new Map(), TYPES),
+    )
+    if (!('input' in mapped)) throw new Error('expected mapped input')
+    expect(mapped.input.bas_asset_account).toBe('1010')
+    expect(mapped.input.bas_accumulated_account).toBe('1019')
+    expect(mapped.input.bas_expense_account).toBe('7811')
+  })
+})

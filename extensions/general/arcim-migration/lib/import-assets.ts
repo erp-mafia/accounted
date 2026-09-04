@@ -179,7 +179,12 @@ export function resolveAssetType(
   const label = asset.Type?.trim()
   if (!label) return undefined
 
-  const normalize = (value: string) => value.trim().toLowerCase()
+  // All whitespace, not just the ends: "1300- Utveckling" and
+  // "1300 - Utveckling" name the same type, and which one a payload carries is
+  // not something to depend on. Two genuinely different types could collide
+  // under this, but the uniqueness check below turns that into no match rather
+  // than a wrong one.
+  const normalize = (value: string) => value.replace(/\s+/g, '').toLowerCase()
   const target = normalize(label)
 
   // Tried in order of how much the match proves. The combined form identifies
@@ -411,13 +416,6 @@ export async function importProviderAssets(
     }
 
     const assetType = resolveAssetType(asset, typeById, types)
-    if (!assetType) {
-      // Not fatal: the asset still imports on its category default. Counted
-      // because those accounts came from a guess about the category rather
-      // than from the source, so a register that does not tie to the ledger
-      // has a stated reason instead of looking like a deliberate choice.
-      skipReasons.typeUnresolved = (skipReasons.typeUnresolved ?? 0) + 1
-    }
     const mapped = mapFortnoxAsset(asset, assetType)
     if ('reason' in mapped) {
       skipReasons.unsupported = (skipReasons.unsupported ?? 0) + 1
@@ -441,6 +439,15 @@ export async function importProviderAssets(
     try {
       await createAsset(supabase, companyId, userId, mapped.input)
       imported++
+      if (!assetType) {
+        // Counted here rather than at resolution: an asset that turns out to
+        // be a duplicate or fails to import never reached the register, and
+        // saying its accounts came from a default would describe a row that
+        // does not exist. Not a skip either, the asset is in: the accounts
+        // came from a guess about the category rather than from the source,
+        // so a register that does not tie to the ledger has a stated reason.
+        skipReasons.typeUnresolved = (skipReasons.typeUnresolved ?? 0) + 1
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       log.error('failed to import an asset', error as Error, {
