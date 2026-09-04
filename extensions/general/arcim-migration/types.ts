@@ -63,6 +63,13 @@ export interface SkipReasons {
  */
 export interface AssetSkipReasons extends SkipReasons {
   unsupported?: number
+  /**
+   * Assets imported on their category default accounts because the source
+   * type could not be resolved, or resolved ambiguously. Not a skip: the
+   * asset is in the register, but on accounts the source did not confirm, so
+   * the register may not tie to the ledger until someone looks.
+   */
+  typeUnresolved?: number
 }
 
 /**

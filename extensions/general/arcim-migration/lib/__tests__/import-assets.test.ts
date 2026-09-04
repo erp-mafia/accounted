@@ -492,3 +492,38 @@ describe('resolveAssetType', () => {
     expect(mapped.input.useful_life_months).toBe(60)
   })
 })
+
+/**
+ * Review of #2266 raised both of these: the label fallback picking silently
+ * among several candidates, and an unresolvable type still landing the asset
+ * on a category default with nothing said about it.
+ */
+describe('resolveAssetType refuses to guess', () => {
+  const base = { AccountAsset: 1010, AccountDepreciation: 1019, AccountValueLoss: 7811 }
+
+  it('returns nothing when two types share the number the label names', () => {
+    const types: FortnoxAssetType[] = [
+      { Id: 1, Number: '1300', Description: 'Utveckling', ...base },
+      { Id: 2, Number: '1300', Description: 'Programvara', ...base },
+    ]
+    expect(resolveAssetType({ Type: '1300' }, new Map(), types)).toBeUndefined()
+  })
+
+  it('returns nothing when two types share the description the label names', () => {
+    const types: FortnoxAssetType[] = [
+      { Id: 1, Number: '1220', Description: 'Inventarier', ...base },
+      { Id: 2, Number: '1230', Description: 'Inventarier', ...base },
+    ]
+    expect(resolveAssetType({ Type: 'Inventarier' }, new Map(), types)).toBeUndefined()
+  })
+
+  // The combined form identifies a type, so it still resolves even when the
+  // number alone would have been ambiguous.
+  it('still resolves on the combined form when only the number is shared', () => {
+    const types: FortnoxAssetType[] = [
+      { Id: 1, Number: '1300', Description: 'Utveckling', ...base },
+      { Id: 2, Number: '1300', Description: 'Programvara', ...base },
+    ]
+    expect(resolveAssetType({ Type: '1300 - Programvara' }, new Map(), types)?.Id).toBe(2)
+  })
+})

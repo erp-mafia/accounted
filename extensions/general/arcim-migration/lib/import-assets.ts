@@ -181,16 +181,36 @@ export function resolveAssetType(
 
   const normalize = (value: string) => value.trim().toLowerCase()
   const target = normalize(label)
-  return types.find((type) => {
-    const number = type.Number?.trim() ?? ''
-    const description = type.Description?.trim() ?? ''
-    return (
-      (number !== '' && description !== '' &&
-        normalize(`${number} - ${description}`) === target) ||
-      (number !== '' && normalize(number) === target) ||
-      (description !== '' && normalize(description) === target)
-    )
-  })
+
+  // Tried in order of how much the match proves. The combined form identifies
+  // a type; a number or a description on its own only narrows it, and two
+  // types can share either. Take a looser form only when it lands on exactly
+  // one type: picking the first of several would put the asset on another
+  // type's accounts, which is the failure this function exists to prevent,
+  // just harder to notice.
+  const candidates = [
+    (type: FortnoxAssetType) => {
+      const number = type.Number?.trim() ?? ''
+      const description = type.Description?.trim() ?? ''
+      return number !== '' && description !== '' &&
+        normalize(`${number} - ${description}`) === target
+    },
+    (type: FortnoxAssetType) => {
+      const number = type.Number?.trim() ?? ''
+      return number !== '' && normalize(number) === target
+    },
+    (type: FortnoxAssetType) => {
+      const description = type.Description?.trim() ?? ''
+      return description !== '' && normalize(description) === target
+    },
+  ]
+
+  for (const matches of candidates) {
+    const found = types.filter(matches)
+    if (found.length === 1) return found[0]
+    if (found.length > 1) return undefined
+  }
+  return undefined
 }
 
 /**
@@ -390,7 +410,15 @@ export async function importProviderAssets(
       continue
     }
 
-    const mapped = mapFortnoxAsset(asset, resolveAssetType(asset, typeById, types))
+    const assetType = resolveAssetType(asset, typeById, types)
+    if (!assetType) {
+      // Not fatal: the asset still imports on its category default. Counted
+      // because those accounts came from a guess about the category rather
+      // than from the source, so a register that does not tie to the ledger
+      // has a stated reason instead of looking like a deliberate choice.
+      skipReasons.typeUnresolved = (skipReasons.typeUnresolved ?? 0) + 1
+    }
+    const mapped = mapFortnoxAsset(asset, assetType)
     if ('reason' in mapped) {
       skipReasons.unsupported = (skipReasons.unsupported ?? 0) + 1
       skipped++
