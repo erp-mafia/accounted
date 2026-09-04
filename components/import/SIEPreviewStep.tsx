@@ -149,9 +149,12 @@ export default function SIEPreviewStep({
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <span className="text-sm">IB Summa</span>
+              <span className="text-sm">IB, summa debet</span>
             </div>
             <p className="text-2xl font-display tabular-nums">{formatCurrency(preview.openingBalanceTotal)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Summan av alla debetsaldon i ingående balans, inte ett enskilt kontosaldo.
+            </p>
           </CardContent>
         </Card>
       </div>
