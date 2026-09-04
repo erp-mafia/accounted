@@ -98,6 +98,7 @@ export function ScbPickerDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
+          {result?.aiRead && !query.trim() && !loading ? <p className="text-sm text-muted-foreground">{t('picker_ai_read', { name: result.aiRead.name })}</p> : null}
           {foreign && candidates.length === 0 && !loading ? <p className="text-sm text-muted-foreground">{t('picker_foreign_hint')}</p> : null}
           {alternates.length > 0 && !loading ? (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">

@@ -16,6 +16,12 @@ vi.mock('@/lib/parties/scb/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/parties/scb/client')>()),
   createScbClient: () => ({ lookupByOrgNumber, searchByName }),
 }))
+const readCounterpartName = vi.fn()
+const ai = { available: false }
+vi.mock('@/lib/parties/ai-name', () => ({
+  readCounterpartName: (texts: string[]) => readCounterpartName(texts),
+  aiNameAvailable: () => ai.available,
+}))
 const configured = { value: true }
 vi.mock('@/lib/parties/scb/config', () => ({
   isScbConfigured: () => configured.value,
@@ -40,6 +46,7 @@ beforeEach(() => {
   reset()
   eventBus.clear()
   configured.value = true
+  ai.available = false
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user } })
 })
 
@@ -153,7 +160,7 @@ describe('GET /api/parties/[id]/enrich/candidates', () => {
     searchByName.mockResolvedValue(result)
     const a = await parseJsonResponse<{ data: typeof result }>(await candidates())
     expect(a.status).toBe(200)
-    expect(a.body.data).toEqual({ ...result, queries: ['Adobe Systems Software'], foreign: null })
+    expect(a.body.data).toEqual({ ...result, queries: ['Adobe Systems Software'], foreign: null, aiRead: null })
     expect(searchByName).toHaveBeenLastCalledWith('Adobe Systems Software')
     enqueue({ data: { id: PARTY, display_name: 'Adobe Systems Software', legal_name: null } })
     await candidates('Adobe Nordic')
@@ -165,7 +172,7 @@ describe('GET /api/parties/[id]/enrich/candidates', () => {
     const hit = { query: 'TIC identity', mode: 'starts_with', total: 1, truncated: false, candidates: [{ orgNumber: '5567890123', name: 'TIC Identity AB', active: true }] }
     enqueue({ data: { id: PARTY, display_name: 'TIC identity', legal_name: null } })
     enqueue({
-      data: [{ value: ['TIC identity     BG 0000005786439 Bg-bet. via internet · Faktura 20250746, The Intelligence Company AB (publ). TIC Identity-abonnemang.'] }],
+      data: [{ field: 'voucher_text', value: ['TIC identity     BG 0000005786439 Bg-bet. via internet · Faktura 20250746, The Intelligence Company AB (publ). TIC Identity-abonnemang.'] }],
     })
     searchByName.mockResolvedValueOnce(miss).mockResolvedValueOnce(hit)
     const { status, body } = await parseJsonResponse<{ data: { query: string; queries: string[]; candidates: unknown[] } }>(await candidates())
@@ -175,9 +182,50 @@ describe('GET /api/parties/[id]/enrich/candidates', () => {
     expect(body.data.candidates).toHaveLength(1)
   })
 
+  it('lets the model read a bank memo once, keeps the reading as a fact, and searches on it', async () => {
+    ai.available = true
+    readCounterpartName.mockResolvedValue({ name: 'Booking.com', country: 'NL', vatNumber: null, confidence: 'high', model: 'm' })
+    enqueue({ data: { id: PARTY, display_name: 'Hotel at Booking.com', legal_name: null } })
+    enqueue({ data: [{ field: 'voucher_text', value: ['Hotel at Booking.com K3667 Kortköp/uttag · Hotell, svenskt boende, 12% moms'] }] })
+    enqueue({ data: { recorded: 1 } }) // record_party_facts
+    const { status, body } = await parseJsonResponse<{ data: { queries: string[]; foreign: unknown; aiRead: unknown; candidates: unknown[] } }>(await candidates())
+    expect(status).toBe(200)
+    expect(readCounterpartName).toHaveBeenCalledWith(['Hotel at Booking.com', 'Hotel at Booking.com K3667 Kortköp/uttag · Hotell, svenskt boende, 12% moms'])
+    // A Dutch reading: no SCB call, the picker explains, the reading is shown.
+    expect(searchByName).not.toHaveBeenCalled()
+    expect(body.data.foreign).toEqual({ name: 'Booking.com', country: 'NL' })
+    expect(body.data.aiRead).toEqual({ name: 'Booking.com', country: 'NL' })
+    const rpc = mockSupabase.rpc.mock.calls.find((c) => c[0] === 'record_party_facts')
+    expect(rpc?.[1]).toMatchObject({ p_source: 'model', p_party_id: PARTY, p_facts: [{ field: 'ai_name' }] })
+
+    // Cached: no second model call, and a Swedish reading is searched for.
+    readCounterpartName.mockClear()
+    enqueue({ data: { id: PARTY, display_name: 'UBER *TRIP HELP.UBER.COM', legal_name: null } })
+    enqueue({ data: [{ field: 'ai_name', value: { name: 'Uber Sweden AB', country: 'SE', vatNumber: null, confidence: 'high', model: 'm' } }] })
+    searchByName.mockResolvedValue({ query: 'Uber Sweden', mode: 'starts_with', total: 1, truncated: false, candidates: [{ orgNumber: '5567890123', name: 'Uber Sweden AB', active: true }] })
+    const second = await parseJsonResponse<{ data: { queries: string[]; aiRead: unknown } }>(await candidates())
+    expect(readCounterpartName).not.toHaveBeenCalled()
+    expect(searchByName).toHaveBeenLastCalledWith('Uber Sweden')
+    expect(second.body.data.aiRead).toEqual({ name: 'Uber Sweden AB', country: 'SE' })
+  })
+
+  it('does not call the model when the rules already anchored a name, or when no model is configured', async () => {
+    ai.available = true
+    enqueue({ data: { id: PARTY, display_name: 'Visma Spcs AB', legal_name: null } })
+    enqueue({ data: [] })
+    searchByName.mockResolvedValue({ query: 'Visma Spcs', mode: 'starts_with', total: 1, truncated: false, candidates: [] })
+    await candidates()
+    expect(readCounterpartName).not.toHaveBeenCalled()
+    ai.available = false
+    enqueue({ data: { id: PARTY, display_name: 'Hotel at Booking.com', legal_name: null } })
+    enqueue({ data: [] })
+    await candidates()
+    expect(readCounterpartName).not.toHaveBeenCalled()
+  })
+
   it('never asks SCB about a foreign company, and says which one it read', async () => {
     enqueue({ data: { id: PARTY, display_name: 'Framer B.V.', legal_name: null } })
-    enqueue({ data: [{ value: ['Utlägg Framer · Framer B.V. (NL), webbdesignverktyg.'] }] })
+    enqueue({ data: [{ field: 'voucher_text', value: ['Utlägg Framer · Framer B.V. (NL), webbdesignverktyg.'] }] })
     const { status, body } = await parseJsonResponse<{ data: { queries: string[]; candidates: unknown[]; foreign: unknown } }>(await candidates())
     expect(status).toBe(200)
     expect(searchByName).not.toHaveBeenCalled()
