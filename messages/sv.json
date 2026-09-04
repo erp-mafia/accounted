@@ -6458,7 +6458,7 @@
     "summary_unpaid": "{count} obetalda",
     "summary_to_collect": "{amount} att få in",
     "summary_overdue": "{count} förfallna",
-    "search_placeholder": "Sök fakturor",
+    "search_placeholder": "Sök fakturanummer, kund eller belopp",
     "tab_all": "Alla",
     "tab_unpaid": "Obetalda",
     "tab_paid": "Betalda",
@@ -6527,7 +6527,8 @@
     "bulk_book_failed_title": "Kunde inte bokföra",
     "status_overdue_days": "Förfallen {days} dgr",
     "status_paid_date": "Betald {date}",
-    "status_picker_aria": "Filtrera på status"
+    "status_picker_aria": "Filtrera på status",
+    "coverage_notice": "Fakturor före {date} kan ligga som bokförda verifikat och visas inte i den här listan."
   },
   "notices": {
     "bank_broken_one": "Bankkopplingen till {bank} har slutat fungera och hämtar inte längre transaktioner.",

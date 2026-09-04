@@ -120,6 +120,10 @@ import {
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import { fetchEntryLines, fetchLinesByEntryIds, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
+import {
+  fetchInvoiceRegisterCoverage,
+  NO_INVOICE_REGISTER_COVERAGE,
+} from '@/lib/invoices/invoice-register-coverage'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findResource, parseResourceQuery } from './resources'
@@ -6550,7 +6554,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_invoices',
     keywords: ['faktura', 'kundfaktura', 'fakturor', 'obetalda', 'förfallna', 'påminnelse', 'offert', 'offerter'],
     title: 'List Customer Invoices',
-    description: 'List invoices and quotes (offerter) for the active company, newest first. Optional status, document_type and quote_status filters.',
+    description: 'List invoices and quotes (offerter) for the active company, newest first. Optional status, document_type and quote_status filters. Heed invoice_register_coverage/coverage_note: after a migration or backfill, older invoices may exist only as journal entries and NOT appear here.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6638,12 +6642,35 @@ export const tools: McpTool[] = [
         : offset + invoices.length < count
       const total = count ?? offset + invoices.length + (hasMore ? 1 : 0)
 
+      // Register-coverage disclosure: the register only holds invoices
+      // created in Accounted. Migrated/backfilled invoice history lives as
+      // journal entries, so without this field an agent reads a silently
+      // incomplete list as complete. First page only: continuation pages of
+      // the same listing don't need the disclosure re-queried. Non-fatal:
+      // lookup failure degrades to "no note", never a failed list.
+      let coverage = NO_INVOICE_REGISTER_COVERAGE
+      if (offset === 0) {
+        try {
+          coverage = await fetchInvoiceRegisterCoverage(supabase, companyId)
+        } catch {
+          // keep NO_INVOICE_REGISTER_COVERAGE
+        }
+      }
+
       return {
         invoices,
         count: invoices.length,
         total_count: total,
         has_more: hasMore,
         ...(hasMore ? { next_offset: offset + invoices.length } : {}),
+        // Omitted (not nulled) on continuation pages: a null covers_from on
+        // page 2 would read as "no coverage limit" when it just wasn't queried.
+        ...(offset === 0 ? { invoice_register_coverage: coverage } : {}),
+        ...(coverage.has_pre_register_invoices && coverage.covers_from
+          ? {
+              coverage_note: `Äldsta fakturan i fakturaregistret är daterad ${coverage.covers_from}. Det finns bokförda verifikat med kundfordringar (1510/1513) före det datumet: äldre kundfakturor kan ligga som verifikat utanför registret (t.ex. efter en migrering) och syns inte i detta svar. Sök i journalen (gnubok_query_journal) för perioden före ${coverage.covers_from}.`,
+            }
+          : {}),
       }
     },
   },
