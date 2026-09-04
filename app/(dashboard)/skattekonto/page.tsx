@@ -1106,7 +1106,9 @@ function MatchDialog({
   const open = !!row
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
+      {/* See SkattekontoMatchDialog for why 3xl and why the table below is
+          fixed layout. */}
+      <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>Matcha mot befintligt verifikat</DialogTitle>
           {/* data-ph-mask: transaction text and amount are user data */}
@@ -1142,14 +1144,14 @@ function MatchDialog({
 
         {!loading && candidates && candidates.length > 0 && (
           <div className="max-h-[420px] overflow-y-auto rounded-lg border">
-            <Table>
+            <Table className="table-fixed min-w-[470px] sm:min-w-[580px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Datum</TableHead>
-                  <TableHead>Verifikat</TableHead>
+                  <TableHead className="w-[116px]">Datum</TableHead>
+                  <TableHead className="w-[128px]">Verifikat</TableHead>
                   <TableHead>Beskrivning</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead></TableHead>
+                  <TableHead className="hidden w-[112px] sm:table-cell">Status</TableHead>
+                  <TableHead className="sticky right-0 w-[124px] bg-background sm:static sm:bg-transparent"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1159,10 +1161,10 @@ function MatchDialog({
                     <TableCell className="tabular-nums">
                       {formatVoucher(c)}
                     </TableCell>
-                    <TableCell className="max-w-[260px] truncate">
-                      {c.description}
-                    </TableCell>
                     <TableCell>
+                      <div className="truncate">{c.description}</div>
+                    </TableCell>
+                    <TableCell className="hidden sm:table-cell">
                       {c.status === 'posted' ? (
                         <Badge variant="secondary">Bokförd</Badge>
                       ) : c.status === 'draft' ? (
@@ -1171,7 +1173,7 @@ function MatchDialog({
                         <Badge variant="destructive">Makulerad</Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="sticky right-0 bg-background text-right sm:static sm:bg-transparent">
                       <Button
                         size="sm"
                         onClick={() => onConfirm(c.journal_entry_id)}

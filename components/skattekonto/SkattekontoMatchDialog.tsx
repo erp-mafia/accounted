@@ -144,7 +144,10 @@ export function SkattekontoMatchDialog({
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
+      {/* 3xl, not 2xl: the five fixed columns below claim 480px, and at 2xl
+          that left the description under 150px, too narrow to tell two
+          candidates apart. */}
+      <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           {/* data-ph-mask: transaction text and amount are user data */}
@@ -177,16 +180,29 @@ export function SkattekontoMatchDialog({
           </div>
         )}
 
+        {/* table-fixed, not auto layout: with auto layout the column widths
+            come from the content, and the candidate rows sat right at the
+            dialog's width. Firefox keeps the date on one line where Chrome
+            wraps it, and ignores max-width on a td, so the table overflowed
+            there and pushed the Koppla button out of reach. Fixed layout makes
+            the widths the same in every engine.
+            Below sm the dialog is only as wide as the viewport, which cannot
+            hold all five columns: Status drops out (it reads "Bokförd" on
+            nearly every candidate anyway, design convention 5) and the action
+            cell pins to the right edge, so Koppla stays on screen however
+            narrow the window gets. sm:static restores a plain cell on pointer
+            devices, where a pinned opaque background would not pick up the
+            row hover tint. */}
         {!loading && candidates && candidates.length > 0 && (
           <div className="max-h-[420px] overflow-y-auto rounded-lg border">
-            <Table>
+            <Table className="table-fixed min-w-[470px] sm:min-w-[580px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('th_date')}</TableHead>
-                  <TableHead>{t('th_voucher')}</TableHead>
+                  <TableHead className="w-[116px]">{t('th_date')}</TableHead>
+                  <TableHead className="w-[128px]">{t('th_voucher')}</TableHead>
                   <TableHead>{t('th_description')}</TableHead>
-                  <TableHead>{t('th_status')}</TableHead>
-                  <TableHead></TableHead>
+                  <TableHead className="hidden w-[112px] sm:table-cell">{t('th_status')}</TableHead>
+                  <TableHead className="sticky right-0 w-[124px] bg-background sm:static sm:bg-transparent"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -196,10 +212,12 @@ export function SkattekontoMatchDialog({
                     <TableCell className="tabular-nums">
                       {formatVoucher(c)}
                     </TableCell>
-                    <TableCell className="max-w-[260px] truncate">
-                      {c.description}
-                    </TableCell>
+                    {/* No width cap: the column is sized by the fixed layout
+                        above, so the block just fills it and clips. */}
                     <TableCell>
+                      <div className="truncate">{c.description}</div>
+                    </TableCell>
+                    <TableCell className="hidden sm:table-cell">
                       {c.status === 'posted' ? (
                         <Badge variant="secondary">{t('status_posted')}</Badge>
                       ) : c.status === 'draft' ? (
@@ -208,7 +226,7 @@ export function SkattekontoMatchDialog({
                         <Badge variant="destructive">{t('status_reversed')}</Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="sticky right-0 bg-background text-right sm:static sm:bg-transparent">
                       <Button
                         size="sm"
                         onClick={() => confirmMatch(c.journal_entry_id)}
