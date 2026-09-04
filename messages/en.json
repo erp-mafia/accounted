@@ -5586,6 +5586,7 @@
     "ext_arcim_year_select_lede": "The three most recent fiscal years are selected by default. Tick older years to fetch them too: it takes longer, and attached documents come along.",
     "ext_arcim_year_select_older": "takes longer",
     "ext_arcim_year_select_none": "Select at least one fiscal year.",
+    "ext_arcim_year_select_too_many": "At most {max} fiscal years can be fetched at once. Older years can be fetched in a second run.",
     "ext_arcim_omitted_years_kicker": "Fiscal years not fetched",
     "ext_arcim_omitted_years_result": "{count, plural, one {Not selected in this run. Run a new migration with it ticked to fetch that year too (attached documents come along), or upload it as a SIE file under Import.} other {Not selected in this run. Run a new migration with them ticked to fetch those years too (attached documents come along), or upload them as one SIE file per year under Import, oldest first.}}",
     "ext_arcim_omitted_years_sie_link": "Go to the SIE import",

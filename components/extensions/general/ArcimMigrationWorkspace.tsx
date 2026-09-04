@@ -309,6 +309,9 @@ interface PreviewData {
   // selection marked: rendered as the year picker so the user chooses
   // before the import runs and no year is left out silently (#2211, #2238).
   sourceYears?: SourceFiscalYear[]
+  // The most years one run may select: /sie-data refuses more. Read from
+  // the server so the picker never drifts from the route.
+  maxSelectedYears?: number
   assetStats: {
     total: number
     importable: number
@@ -930,6 +933,8 @@ function PreviewStep({
   const sourceYears = preview?.sieAvailable ? preview.sourceYears ?? [] : []
   const showYearPicker = sourceYears.length > 0 && !isLoading
   const noYearSelected = showYearPicker && selectedYears.length === 0
+  const maxSelectable = preview?.maxSelectedYears ?? null
+  const tooManySelected = showYearPicker && maxSelectable != null && selectedYears.length > maxSelectable
   const toggleYear = (year: number) => {
     onSelectedYearsChange(
       selectedYears.includes(year)
@@ -1020,6 +1025,9 @@ function PreviewStep({
             })}
           </div>
           {noYearSelected && <AttnLine>{t('ext_arcim_year_select_none')}</AttnLine>}
+          {tooManySelected && maxSelectable != null && (
+            <AttnLine>{t('ext_arcim_year_select_too_many', { max: maxSelectable })}</AttnLine>
+          )}
         </section>
       )}
 
@@ -1064,7 +1072,7 @@ function PreviewStep({
         <Button
           className="min-h-11"
           onClick={onContinue}
-          disabled={isLoading || noYearSelected || (!!preview && !preview.sieAvailable && !preview.hasSieData)}
+          disabled={isLoading || noYearSelected || tooManySelected || (!!preview && !preview.sieAvailable && !preview.hasSieData)}
         >
           Fortsätt
           <ArrowRight className="ml-2 h-4 w-4" />

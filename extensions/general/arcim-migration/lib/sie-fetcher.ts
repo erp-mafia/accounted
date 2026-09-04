@@ -44,6 +44,32 @@ export function getAllowedFiscalYears(now: Date = new Date()): Set<number> {
   return new Set([currentYear - 2, currentYear - 1, currentYear])
 }
 
+/**
+ * The most fiscal years one import run may select. The bound is the single
+ * /sie-data invocation that fetches and parses one SIE export per selected
+ * year: hosted function limit 300 s; one export call is 15 s per attempt
+ * (FETCH_TIMEOUT_MS in lib/providers/fortnox/client.ts), 3 attempts with
+ * 1 s and 2 s backoff between them (lib/providers/retry.ts defaults, capped
+ * at 30 s), so a year that times out on every attempt costs 15 + 1 + 15 +
+ * 2 + 15 = 48 s. Six such years are 288 s, which leaves the remaining 12 s
+ * for the /financialyears listing, parsing and the response. Older years
+ * beyond the cap go in a second run. Enforced server-side in /sie-data and
+ * mirrored by the preview step's picker (which reads it from /preview).
+ */
+export const MAX_SELECTED_FISCAL_YEARS = 6
+
+/**
+ * Thrown by fetchProviderSieFiles when an explicit selection names a year
+ * the source does not have: raised right after the year listing, before any
+ * SIE export is fetched, so an unknown year never costs a provider export.
+ */
+export class FiscalYearSelectionError extends Error {
+  constructor(public readonly unknownYears: number[]) {
+    super(`Fiscal years not found at the provider: ${unknownYears.join(', ')}`)
+    this.name = 'FiscalYearSelectionError'
+  }
+}
+
 export interface ProviderSieFile {
   fiscalYear: number
   rawContent: string
@@ -143,6 +169,13 @@ export async function fetchProviderSieFiles(
   const byYear = (a: FiscalYearRef, b: FiscalYearRef) =>
     a.year - b.year || (a.fromDate ?? '').localeCompare(b.fromDate ?? '')
   const allYears = (await fetcher.listYears(accessToken)).sort(byYear)
+  if (opts?.years) {
+    // Reject an unknown year here, before the first export: the listing is
+    // the only provider call made so far.
+    const known = new Set(allYears.map((fy) => fy.year))
+    const unknownYears = opts.years.filter((y) => !known.has(y))
+    if (unknownYears.length > 0) throw new FiscalYearSelectionError(unknownYears)
+  }
   const allowedYears = allYears.filter((fy) => selectedFiscalYears.has(fy.year))
 
   const availableYears = allowedYears.map((fy) => fy.year)

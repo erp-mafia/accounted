@@ -17,7 +17,14 @@ import {
   ProviderCompanyMismatchError,
   ConsentNotFoundError,
 } from './lib/provider-client'
-import { providerSupportsSie, fetchProviderSieFiles, getAllowedFiscalYears, type SourceFiscalYear } from './lib/sie-fetcher'
+import {
+  providerSupportsSie,
+  fetchProviderSieFiles,
+  getAllowedFiscalYears,
+  FiscalYearSelectionError,
+  MAX_SELECTED_FISCAL_YEARS,
+  type SourceFiscalYear,
+} from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
 import {
@@ -904,6 +911,9 @@ export const arcimMigrationExtension: Extension = {
             sieAvailable,
             sieStats,
             sourceYears,
+            // The picker enforces the same cap as /sie-data, read from here
+            // rather than duplicated in the client.
+            maxSelectedYears: MAX_SELECTED_FISCAL_YEARS,
             assetStats,
             hasSieData: (sieImportCount ?? 0) > 0,
           })
@@ -960,6 +970,16 @@ export const arcimMigrationExtension: Extension = {
             })
           }
           requestedYears = [...new Set(parsed)].sort((a, b) => a - b)
+          // The resource bound: each selected year is one provider export
+          // fetched and parsed in this invocation (derivation on the
+          // constant). Rejected before any provider call.
+          if (requestedYears.length > MAX_SELECTED_FISCAL_YEARS) {
+            return errorResponseFromCode('VALIDATION_ERROR', moduleLog, {
+              messageSv: `Högst ${MAX_SELECTED_FISCAL_YEARS} räkenskapsår kan hämtas per körning. Välj färre år; äldre år kan hämtas i en ny körning.`,
+              messageEn: `At most ${MAX_SELECTED_FISCAL_YEARS} fiscal years can be fetched per run. Select fewer years; older years can be fetched in a second run.`,
+              details: { field: 'years', reason: 'too_many', max: MAX_SELECTED_FISCAL_YEARS, requested: requestedYears.length },
+            })
+          }
         }
 
         try {
@@ -973,13 +993,29 @@ export const arcimMigrationExtension: Extension = {
             })
           }
 
-          // Fetch SIE type 4 for each selected fiscal year
-          const { files: sieFiles, failedYears, omittedYears } = await fetchProviderSieFiles(
-            provider,
-            resolved.accessToken,
-            resolved.providerCompanyId,
-            requestedYears ? { years: requestedYears } : undefined,
-          )
+          // Fetch SIE type 4 for each selected fiscal year. A selected year
+          // the source does not have is refused by the fetcher right after
+          // the year listing, before any export is fetched.
+          let fetched: Awaited<ReturnType<typeof fetchProviderSieFiles>>
+          try {
+            fetched = await fetchProviderSieFiles(
+              provider,
+              resolved.accessToken,
+              resolved.providerCompanyId,
+              requestedYears ? { years: requestedYears } : undefined,
+            )
+          } catch (err) {
+            if (err instanceof FiscalYearSelectionError) {
+              const years = err.unknownYears.join(', ')
+              return errorResponseFromCode('VALIDATION_ERROR', moduleLog, {
+                messageSv: `Räkenskapsår ${years} finns inte hos leverantören.`,
+                messageEn: `Fiscal years ${years} do not exist at the provider.`,
+                details: { field: 'years', reason: 'unknown_year', unknownYears: err.unknownYears },
+              })
+            }
+            throw err
+          }
+          const { files: sieFiles, failedYears, omittedYears } = fetched
 
           if (sieFiles.length === 0) {
             // Name the selection: the explicit years when the picker sent

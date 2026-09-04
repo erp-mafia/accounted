@@ -41,6 +41,12 @@ vi.mock('../lib/sie-fetcher', () => ({
   providerSupportsSie: vi.fn().mockReturnValue(true),
   fetchProviderSieFiles: vi.fn(),
   getAllowedFiscalYears: vi.fn(),
+  FiscalYearSelectionError: class FiscalYearSelectionError extends Error {
+    constructor(public readonly unknownYears: number[]) {
+      super(`unknown ${unknownYears.join(', ')}`)
+    }
+  },
+  MAX_SELECTED_FISCAL_YEARS: 6,
 }))
 
 // The Fortnox asset preview would otherwise go to the network.
@@ -59,7 +65,12 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import { arcimMigrationExtension } from '../index'
 import { getConsent, resolveConsent, fetchCompanyInfoDirect } from '../lib/provider-client'
-import { fetchProviderSieFiles, getAllowedFiscalYears } from '../lib/sie-fetcher'
+import {
+  fetchProviderSieFiles,
+  getAllowedFiscalYears,
+  FiscalYearSelectionError,
+  MAX_SELECTED_FISCAL_YEARS,
+} from '../lib/sie-fetcher'
 
 type RouteHandler = (request: Request, ctx?: ExtensionContext) => Promise<Response>
 
@@ -157,6 +168,13 @@ describe('GET /preview: every source year, with the default selection marked (#2
     expect((fetchProviderSieFiles as Mock).mock.calls[0][3]).toBeUndefined()
   })
 
+  it('hands the picker the same cap /sie-data enforces', async () => {
+    const res = await handler('/preview')(request('/preview'), buildCtx())
+    const { body } = await parseJsonResponse<{ maxSelectedYears: number }>(res)
+
+    expect(body.maxSelectedYears).toBe(MAX_SELECTED_FISCAL_YEARS)
+  })
+
   it('still lists the source years when nothing inside the default selection came back', async () => {
     ;(fetchProviderSieFiles as Mock).mockResolvedValue({
       files: [],
@@ -241,6 +259,54 @@ describe('GET /sie-data: the ticked years are fetched, the rest are named (#2211
     expect((fetchProviderSieFiles as Mock).mock.calls[0][3]).toEqual({ years: [CY - 4, CY] })
     expect(body.fileStatuses.map((f) => f.fiscalYear)).toEqual([CY - 4, CY])
     expect(body.omittedYears).toEqual([])
+  })
+
+  it('accepts a selection at the cap and rejects one over it before any provider call', async () => {
+    const atCap = Array.from({ length: MAX_SELECTED_FISCAL_YEARS }, (_, i) => CY - i)
+    const overCap = [...atCap, CY - MAX_SELECTED_FISCAL_YEARS]
+
+    const ok = await handler('/sie-data')(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+        searchParams: { consentId: 'consent-1', years: atCap.join(',') },
+      }),
+      buildCtx(),
+    )
+    expect(ok.status).toBe(200)
+    expect((fetchProviderSieFiles as Mock).mock.calls[0][3]).toEqual({
+      years: [...atCap].sort((a, b) => a - b),
+    })
+
+    vi.clearAllMocks()
+    const rejected = await handler('/sie-data')(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+        searchParams: { consentId: 'consent-1', years: overCap.join(',') },
+      }),
+      buildCtx(),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(rejected)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.message).toContain(String(MAX_SELECTED_FISCAL_YEARS))
+    // Refused before the consent is even resolved: no provider work at all.
+    expect(fetchProviderSieFiles).not.toHaveBeenCalled()
+    expect(resolveConsent).not.toHaveBeenCalled()
+  })
+
+  it('rejects a ticked year the source does not have, as the fetcher reports it before any export', async () => {
+    ;(fetchProviderSieFiles as Mock).mockRejectedValue(new FiscalYearSelectionError([CY - 7]))
+
+    const res = await handler('/sie-data')(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
+        searchParams: { consentId: 'consent-1', years: `${CY},${CY - 7}` },
+      }),
+      buildCtx(),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.message).toContain(String(CY - 7))
   })
 
   it('names the selection in PROVIDER_SIE_NO_YEARS when none of the ticked years exist at the source', async () => {

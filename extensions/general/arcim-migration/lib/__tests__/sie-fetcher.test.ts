@@ -3,6 +3,8 @@ import {
   providerSupportsSie,
   fetchProviderSieFiles,
   getAllowedFiscalYears,
+  FiscalYearSelectionError,
+  MAX_SELECTED_FISCAL_YEARS,
 } from '../sie-fetcher'
 
 // The allowed window is rolling (current year and the two before it): derive
@@ -65,6 +67,14 @@ describe('getAllowedFiscalYears (the default selection)', () => {
     expect(years.has(CY)).toBe(true)
     expect(years.has(CY - 2)).toBe(true)
     expect(years.has(CY - 3)).toBe(false)
+  })
+})
+
+describe('MAX_SELECTED_FISCAL_YEARS', () => {
+  it('is six: 6 years x 48 s worst case (3 x 15 s timeout + 1 s + 2 s backoff) = 288 s inside the 300 s function', () => {
+    expect(MAX_SELECTED_FISCAL_YEARS).toBe(6)
+    expect(MAX_SELECTED_FISCAL_YEARS * (3 * 15 + 1 + 2)).toBeLessThan(300)
+    expect((MAX_SELECTED_FISCAL_YEARS + 1) * (3 * 15 + 1 + 2)).toBeGreaterThan(300)
   })
 })
 
@@ -239,6 +249,26 @@ describe('fetchProviderSieFiles', () => {
       expect(fetchSpy.mock.calls.map((c: unknown[]) => String(c[0]))).not.toContainEqual(
         expect.stringContaining('financialyear=4'),
       )
+    })
+
+    it('refuses a selected year the source does not have, before any SIE export', async () => {
+      routeFetch(fetchSpy, [
+        yearRoutes,
+        {
+          match: '/sie/4?financialyear=',
+          respond: () => new Response('#FLAGGA 0\n#KONTO 1930 "Företagskonto"\n', { status: 200 }),
+        },
+      ])
+
+      const attempt = fetchProviderSieFiles('fortnox', 'token', undefined, { years: [CY - 1, CY - 9] })
+
+      await expect(attempt).rejects.toBeInstanceOf(FiscalYearSelectionError)
+      await expect(attempt).rejects.toMatchObject({ unknownYears: [CY - 9] })
+      // Only the year listing was called: the unknown year cost no export,
+      // and neither did the known one.
+      const urls = fetchSpy.mock.calls.map((c: unknown[]) => String(c[0]))
+      expect(urls.filter((u: string) => u.includes('/financialyears'))).toHaveLength(1)
+      expect(urls.filter((u: string) => u.includes('/sie/4'))).toHaveLength(0)
     })
 
     it('fetches exactly the years the picker selected, oldest first (#2238)', async () => {
