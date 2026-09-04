@@ -200,5 +200,9 @@ describe('POST /sync (enable-banking): retry from error status', () => {
       '[enable-banking] Sync: connector hop failed',
       expect.objectContaining({ code: 'CONNECTOR_BAD_SHAPE', issues: ['transactions.0.amount: Invalid input'] })
     )
+    // The raw connector body can carry bank data: never in the log line.
+    const logged = (ctx.log.warn as Mock).mock.calls.find((c) => c[0] === '[enable-banking] Sync: connector hop failed')?.[1]
+    expect(logged).not.toHaveProperty('body')
+    expect(logged).toHaveProperty('bodyLength', 2)
   })
 })

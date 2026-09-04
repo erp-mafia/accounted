@@ -963,11 +963,13 @@ export const enableBankingExtension: Extension = {
           // mismatch): same treatment, the PSD2 session is not the problem
           // and the row keeps whatever status it has.
           if (error instanceof ConnectorSyncError) {
+            // Never the body: a connector response can carry transaction and
+            // personal data, and this log line sits next to user/connection ids.
             log.warn('[enable-banking] Sync: connector hop failed', {
               code: error.code,
               status: error.status,
               issues: error.issues,
-              body: error.body,
+              bodyLength: error.body.length,
               user_id: user.id,
               connection_id,
               bankName: connection.bank_name,

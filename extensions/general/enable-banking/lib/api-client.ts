@@ -359,7 +359,10 @@ export class AspspUnavailableError extends Error {
  * 2026-09-04 a contract mismatch parked four canary companies in 'error' with
  * "förnya anslutningen" and cost them BankID round trips that fixed nothing.
  * `issues` carries the failing field paths so the service side can be fixed
- * from the server log instead of guessed at.
+ * from the server log instead of guessed at. `body` (head of the response) is
+ * kept for a debugger with the object in hand and is deliberately absent from
+ * the message and from every log line: a connector response can carry
+ * transaction and personal data.
  */
 export class ConnectorSyncError extends Error {
   constructor(
@@ -370,7 +373,7 @@ export class ConnectorSyncError extends Error {
   ) {
     super(
       code === 'CONNECTOR_BAD_SHAPE'
-        ? `Connector bank sync answered with an unexpected shape: ${(issues ?? []).join('; ') || body}`
+        ? `Connector bank sync answered with an unexpected shape: ${(issues ?? []).join('; ') || 'no issues reported'}`
         : `Connector bank sync failed (${status ?? 'no response'} ${code})`
     )
     this.name = 'ConnectorSyncError'
