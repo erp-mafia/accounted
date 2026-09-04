@@ -34,6 +34,16 @@ vi.mock('@/lib/currency/riksbanken', () => ({
   fetchExchangeRate: (...args: unknown[]) => mockFetchExchangeRate(...args),
 }))
 
+// Mocked so the open-begäran pool consumes no slot in the queued Supabase
+// mock: every existing test enqueues results in the pre-fetch order.
+const mockLoadOpenRotRutPayoutRequests = vi.fn()
+vi.mock('@/lib/invoices/rot-rut-payout-candidates', () => ({
+  loadOpenRotRutPayoutRequests: (...args: unknown[]) => mockLoadOpenRotRutPayoutRequests(...args),
+}))
+// Default: no open begäran. vi.clearAllMocks keeps implementations, so this
+// survives beforeEach; tests that need a pool override it.
+mockLoadOpenRotRutPayoutRequests.mockResolvedValue([])
+
 // ---------------------------------------------------------------------------
 // Queue-based Supabase mock
 // ---------------------------------------------------------------------------
@@ -1755,6 +1765,51 @@ describe('ingestTransactions', () => {
       expect.objectContaining({ id: 'tx-income' }),
       0.50
     )
+  })
+
+  // -----------------------------------------------------------------------
+  // 4a. Skatteverkets ROT/RUT payout: an income row equal to an open begäran
+  //     gets potential_rot_rut_payout_request_id (a suggestion, never a hard
+  //     link) and skips auto-categorisation, exactly like an invoice hint.
+  // -----------------------------------------------------------------------
+  it('suggests the open ROT/RUT payout request for a matching Skatteverket income row', async () => {
+    const { supabase, enqueue, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: 3000, description: 'Skatteverket utbetalning' })
+    const inserted = makeTransaction({
+      id: 'tx-skv',
+      amount: 3000,
+      currency: 'SEK',
+      description: 'Skatteverket utbetalning',
+      external_id: raw.external_id,
+    })
+    mockLoadOpenRotRutPayoutRequests.mockResolvedValueOnce([
+      {
+        id: 'rr-1',
+        name: 'ROT 2026-07',
+        deduction_type: 'rot',
+        status: 'submitted',
+        requested_total: 3000,
+        decided_total: null,
+        settlement_journal_entry_id: null,
+      },
+    ])
+    mockGetBestInvoiceMatch.mockResolvedValue(null)
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked bank-synced map
+    enqueue({ data: [], error: null }) // supplier invoices pool
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+    enqueue({ data: null, error: null }) // suggestion update
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.imported).toBe(1)
+    expect(result.auto_matched_invoices).toBe(1)
+    const txUpdates = (updates['transactions'] ?? []) as Record<string, unknown>[]
+    expect(txUpdates).toEqual([{ potential_rot_rut_payout_request_id: 'rr-1' }])
+    // The hint short-circuits the mapping engine: no auto-booked voucher.
+    expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
   })
 
   // -----------------------------------------------------------------------

@@ -181,6 +181,9 @@ export default function TransactionInboxCard({
   const hasInvoiceMatch = !!transaction.potential_invoice && !transaction.invoice_id
   const hasSupplierInvoiceMatch =
     !!transaction.potential_supplier_invoice && !transaction.supplier_invoice_id
+  // Skatteverkets ROT/RUT-utbetalning for an open begäran: same 1-click
+  // shortcut as an invoice match, confirmed in its own dialog.
+  const hasRotRutPayoutMatch = !!transaction.potential_rot_rut_payout && !transaction.journal_entry_id
   const isUncategorized = transaction.is_business === null && !transaction.journal_entry_id
   const selectable = isUncategorized && canWrite
   // Unbooked rows are still actionable (match, split, edit, categorize): that
@@ -202,7 +205,9 @@ export default function TransactionInboxCard({
       ? t('match_supplier_invoice_btn', {
           number: transaction.potential_supplier_invoice!.supplier_invoice_number ?? '',
         })
-      : null
+      : hasRotRutPayoutMatch
+        ? t('match_rot_rut_payout_btn', { name: transaction.potential_rot_rut_payout!.name })
+        : null
 
   // Primary action: invoice/supplier-invoice match keeps the 1-click
   // shortcut; otherwise the user opens the template picker. Rendered as the
@@ -216,7 +221,7 @@ export default function TransactionInboxCard({
   // Manual invoice-match affordance. Hidden once an auto-detected match is
   // already shown as the primary button: having both makes the row noisy.
   const showInvoiceMatchButton =
-    isUnbooked && !hasInvoiceMatch && !hasSupplierInvoiceMatch
+    isUnbooked && !hasInvoiceMatch && !hasSupplierInvoiceMatch && !hasRotRutPayoutMatch
 
   const invoiceMatchLabel = isIncome
     ? 'Matcha mot kundfaktura'

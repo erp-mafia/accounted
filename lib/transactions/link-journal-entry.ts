@@ -140,7 +140,7 @@ export async function linkTransactionToJournalEntry(
   const { data: transactionRow, error: fetchTxError } = await supabase
     .from('transactions')
     .select(
-      'id, date, amount, currency, exchange_rate, journal_entry_id, invoice_id, is_business, potential_invoice_id, potential_supplier_invoice_id, transaction_voucher_links(journal_entry_id, role)'
+      'id, date, amount, currency, exchange_rate, journal_entry_id, invoice_id, is_business, potential_invoice_id, potential_supplier_invoice_id, potential_rot_rut_payout_request_id, transaction_voucher_links(journal_entry_id, role)'
     )
     .eq('id', transactionId)
     .eq('company_id', companyId)
@@ -287,6 +287,7 @@ export async function linkTransactionToJournalEntry(
     invoice_id: transaction.invoice_id,
     potential_invoice_id: transaction.potential_invoice_id,
     potential_supplier_invoice_id: transaction.potential_supplier_invoice_id,
+    potential_rot_rut_payout_request_id: transaction.potential_rot_rut_payout_request_id ?? null,
     is_business: transaction.is_business,
   }
 
@@ -302,6 +303,7 @@ export async function linkTransactionToJournalEntry(
       invoice_id: invoiceId ?? null,
       potential_invoice_id: null,
       potential_supplier_invoice_id: null,
+      potential_rot_rut_payout_request_id: null,
       is_business: true,
     })
     .eq('id', transactionId)
@@ -463,6 +465,7 @@ export async function linkTransactionToJournalEntry(
             ...transaction,
             journal_entry_id: journalEntryId,
             invoice_id: invoiceId,
+            potential_rot_rut_payout_request_id: null,
             potential_invoice_id: null,
             potential_supplier_invoice_id: null,
             is_business: true,
