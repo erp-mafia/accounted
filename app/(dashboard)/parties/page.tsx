@@ -21,7 +21,7 @@ import { ObservedTable } from '@/components/parties/ObservedTable'
 import { PartyDossier } from '@/components/parties/PartyDossier'
 import { ScbPickerDialog } from '@/components/parties/ScbPickerDialog'
 import type { ScbCandidate } from '@/lib/parties/scb/client'
-import { SuggestionQueue } from '@/components/parties/SuggestionQueue'
+import { SuggestionQueue, isForeign } from '@/components/parties/SuggestionQueue'
 import { hasHardKey } from '@/components/parties/format'
 import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -331,7 +331,10 @@ function SuggestionsPage() {
   const rows = register?.rows ?? []
   const searching = debounced.length > 0
   const selectedItems = rows.filter((r) => selected.has(r.id)).map((r) => ({ partyId: r.id, roles: rolesFor(r) }))
-  const missingOrg = rows.filter((r) => selected.has(r.id) && !r.orgNumber && r.kind !== 'person').length
+  // Rows SCB could complete but cannot yet (no org number), and rows it can
+  // never hold (the text places them abroad): two different sentences.
+  const foreignCount = rows.filter((r) => selected.has(r.id) && isForeign(r)).length
+  const missingOrg = rows.filter((r) => selected.has(r.id) && !r.orgNumber && r.kind !== 'person' && !isForeign(r)).length
 
   let attn: React.ReactNode = null
   if (counts && counts.suggested === 0 && counts.observed > 0 && canWrite && view === 'observed') {
@@ -453,8 +456,14 @@ function SuggestionsPage() {
         onOpenChange={setConfirmOpen}
         title={t('promote_dialog_title', { count: selectedItems.length })}
         description={
-          missingOrg > 0
-            ? `${t('promote_dialog_body', { detail: roleSummary(t, selectedItems) })} ${t('promote_dialog_missing_org', { missing: missingOrg, count: selectedItems.length })}`
+          missingOrg > 0 || foreignCount > 0
+            ? [
+                t('promote_dialog_body', { detail: roleSummary(t, selectedItems) }),
+                missingOrg > 0 ? t('promote_dialog_missing_org', { missing: missingOrg, count: selectedItems.length }) : null,
+                foreignCount > 0 ? t('promote_dialog_foreign', { foreign: foreignCount, count: selectedItems.length }) : null,
+              ]
+                .filter(Boolean)
+                .join(' ')
             : t('promote_dialog_body', { detail: roleSummary(t, selectedItems) })
         }
         confirmLabel={t('promote_n', { count: selectedItems.length })}

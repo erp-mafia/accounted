@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -12,6 +12,7 @@ import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/c
 import type { Dossier, PartyRole, RegisterPeriod } from '@/lib/parties/register'
 import { formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
 import { AccountNub } from './AccountNub'
+import { regionName } from './SuggestionQueue'
 import { formatPaymentIdentity, rhythmLabel, roleLabel } from './format'
 import type { MergeCandidate } from './MergeDialog'
 
@@ -118,6 +119,7 @@ export function PartyDossier({
   reloadKey: number
 }) {
   const t = useTranslations('parties')
+  const locale = useLocale()
   // { partyId, reloadKey } stamps the loaded dossier, so "loading" and
   // "failed" are derived instead of set from inside the effect.
   const [loaded, setLoaded] = useState<{ partyId: string; reloadKey: number; dossier: Dossier | null } | null>(null)
@@ -169,6 +171,8 @@ export function PartyDossier({
   }
   const dominant = dossier?.facts.find((f) => f.field === 'dominant_account')?.value as { account?: string; count?: number } | undefined
   const registryVat = dossier?.facts.find((f) => f.field === 'vat_number' && f.source === 'registry_scb')?.value
+  const countryRaw = dossier?.facts.find((f) => f.field === 'country')?.value
+  const countryCode = typeof countryRaw === 'string' && /^[A-Za-z]{2}$/.test(countryRaw) ? countryRaw.toUpperCase() : null
   // One primary action: the role the ledger suggests and the party does not
   // have yet. The other role and everything else live behind the menu.
   const missingRoles: PartyRole[] = p ? (['supplier', 'customer'] as PartyRole[]).filter((r) => (r === 'supplier' ? !p.roles.supplierId : !p.roles.customerId)) : []
@@ -301,6 +305,7 @@ export function PartyDossier({
                       value={p.vatNumber ?? (registryVat ? String(registryVat) : <span className="text-muted-foreground">{t('fact_missing')}</span>)}
                       note={p.vatNumber ? docsFor('vat_number') || undefined : registryVat ? docsFor('vat_number') : undefined}
                     />
+                    {countryCode ? <Row label={t('fact_country')} value={regionName(countryCode, locale)} note={docsFor('country') || undefined} /> : null}
                     {dossier.identities.map((i) => (
                       <Row
                         key={i.id}
