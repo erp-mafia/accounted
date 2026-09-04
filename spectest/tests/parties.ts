@@ -126,11 +126,12 @@ export const pickInScb = env.test(
     const row = b.getByRole("row", { name: /Visma Spcs AB/ });
     await row.getByRole("button", { name: "Hitta i företagsregistret" }).click();
 
-    // The search is planned from the name in the text, not the whole
-    // verifikat: two Visma companies come back and nothing is auto-picked.
+    // The search is planned from the name in the text ("Visma Spcs", the
+    // legal form stripped), not the whole verifikat. One company matches
+    // that prefix, and even a single match is shown, never auto-picked.
     const dialog = b.getByRole("dialog");
-    await expect(dialog).toContainText("SCB hittar 2 företag som liknar Visma Spcs");
-    await expect(dialog.getByRole("option", { name: /Visma Software AB/ })).toBeVisible();
+    await expect(dialog).toContainText("SCB hittar 1 företag som liknar Visma Spcs");
+    await expect(dialog.getByRole("button", { name: "Välj ett företag" })).toBeDisabled();
     await dialog.getByRole("option", { name: /Visma Spcs AB/ }).click();
     await dialog.getByRole("button", { name: "Välj Visma Spcs AB" }).click();
 
