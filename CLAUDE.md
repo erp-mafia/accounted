@@ -36,6 +36,16 @@ General prohibitions:
 - **Swedish domain questions are never answered from training data.** Load the matching `swedish-*` skill (vat, accounting-compliance, invoice-compliance, payroll, year-end-closing, sie-import-export, sru-filing, financial-reporting, asset-accounting, project-accounting, tax-planning, e-invoicing).
 - Scaffolding has skills; use them instead of improvising: `/erp-api-route` (API routes), `/supabase-migration` (migrations), `/create-extension` (extensions), `/frontend-design` (new UI), `vercel:deploy` (deployment).
 
+## Fix From First Principles
+
+A reported problem usually arrives with a proposed solution: the reporter's workaround, the issue author's fix shape, the obvious patch at the line that broke. Treat it as evidence about the pain, not as the spec. Before implementing, answer three questions and put the answers in the PR body:
+
+1. **Why did the problem occur?** Name the mechanism, not the symptom. A wrong number in one place usually means the definition lives in several places; a bypassed check usually means the invariant lives only in application code; a confusing label usually means a field nobody reads. Fix at the level that stops the class of bug, not the instance that was reported.
+2. **What could be removed or simplified instead?** A counter that cannot be wrong because it is gone, a policy dropped instead of a check added, one write path instead of a third copy of a formula, a constraint instead of a trigger. The solution with fewer states and less code wins unless something concrete needs the extra state.
+3. **Is this the best solution, or just the proposed one?** Write down the alternative you considered and why you did not take it. When the better answer removes or changes something users see (a column, a field, a limit), state both options with a recommendation: that choice is the founder's, and the PR should make it easy to take either way.
+
+When the chosen path differs from the one proposed in the issue, record it in `DECISIONS.md` (see Decision Log).
+
 ## Definition of Done
 
 A change is done when all of these hold; iterate until they do:
@@ -49,6 +59,7 @@ A change is done when all of these hold; iterate until they do:
 7. Commit is conventional (`feat:`/`fix:`/`refactor:`/`test:`/`docs:`), atomic, branched from `main`.
 8. If the change touches migrations, local and prod are reconciled: every version in prod's `schema_migrations` has a matching file in `supabase/migrations/`, and vice versa. Check before opening the PR (e.g. `list_migrations` / `select version from supabase_migrations.schema_migrations`); a remote-only version means an uncommitted orphan that will fail the merge.
 9. **The last mile is verified in-session, not assumed.** Whatever was built is confirmed switched on before the session ends: merged PR's migration applied to prod, scheduled loop/routine observed firing, script actually executed, feature reachable. If switch-on must wait, the session's final output states exactly what is NOT live yet and who flips it. History shows the expensive failure mode is built-but-never-initiated, not built-wrong.
+10. The PR body answers the three questions in [Fix From First Principles](#fix-from-first-principles): why the problem occurred, what removal or simplification was considered, and why the chosen solution is the best one rather than the proposed one.
 
 ## Commands
 
