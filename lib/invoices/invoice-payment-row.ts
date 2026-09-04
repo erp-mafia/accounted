@@ -45,12 +45,31 @@ export type RecordInvoicePaymentRowResult =
   | { ok: true; id: string }
   | { ok: false; error: string }
 
+/**
+ * The amount an invoice_payments row carries: what was APPLIED to the
+ * receivable (paid_amount after the payment minus paid_amount before it),
+ * never the cash received. One definition for every writer: the manual, MCP
+ * and Stripe paths adopted it in #2236 and the bank-match paths (dashboard,
+ * v1, pending-operation commit) in #2250. When a whole-krona bank line
+ * settles an öre-carrying remaining, planInvoicePayment advances paid_amount
+ * by the remaining only and 3740 carries the öre, so a row holding the cash
+ * received would exceed the receivable by that öre and every reader that
+ * subtracts rows from `total` (kontantmetod cut-off, reskontra, the storno
+ * sync) would land öre off.
+ */
+export function appliedPaymentAmount(
+  invoice: { paid_amount?: number | null },
+  newPaidAmount: number,
+): number {
+  return roundOre(newPaidAmount - (invoice.paid_amount ?? 0))
+}
+
 export async function recordInvoicePaymentRow(
   supabase: SupabaseClient,
   params: RecordInvoicePaymentRowParams,
 ): Promise<RecordInvoicePaymentRowResult> {
   const { userId, companyId, invoice, paymentDate, newPaidAmount, journalEntryId } = params
-  const amount = roundOre(newPaidAmount - (invoice.paid_amount ?? 0))
+  const amount = appliedPaymentAmount(invoice, newPaidAmount)
 
   const { data, error } = await supabase
     .from('invoice_payments')

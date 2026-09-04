@@ -98,7 +98,11 @@ import {
   type LinkSupplierInvoiceToVoucherResult,
 } from '@/lib/invoices/supplier-voucher-matching'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
-import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
+import {
+  appliedPaymentAmount,
+  recordInvoicePaymentRow,
+  removeInvoicePaymentRow,
+} from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import {
   clearSettledBatchAllocationSuggestions,
@@ -3504,12 +3508,16 @@ async function commitMatchTransactionInvoice(
   // No cash-method note here anymore: pure kontantmetoden partials are now
   // rejected above, and for an invoice booked at send the clearing entry
   // handles a partial correctly, so the note would be misleading.
+  // amount is the amount APPLIED to the invoice (new paid_amount minus the
+  // prior one, the #2236 definition shared with mark_invoice_paid above), not
+  // the cash received: a whole-krona overshoot absorbed on 3740 is part of
+  // the voucher, not of the receivable (#2250).
   await supabase.from('invoice_payments').insert({
     user_id: userId,
     company_id: companyId,
     invoice_id: invoiceId,
     payment_date: transaction.date,
-    amount: paidAmount,
+    amount: appliedPaymentAmount(invoice, newPaidAmount),
     currency: invoice.currency,
     exchange_rate: fx.required ? fx.rate : invoice.exchange_rate,
     journal_entry_id: journalEntryId,

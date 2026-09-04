@@ -15,6 +15,7 @@ import { validateBody } from '@/lib/api/validate'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { appliedPaymentAmount } from '@/lib/invoices/invoice-payment-row'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
@@ -700,9 +701,13 @@ export const POST = withRouteContext(
 
     const paymentNotes = manualRateNote
 
-    // Payment row stores amount in INVOICE currency (the column unit). For
-    // same-currency that's tx.amount; for cross-currency it's the spot-rate
-    // conversion above. exchange_rate records the rate ACTUALLY USED for
+    // Payment row stores the amount APPLIED to the invoice (new paid_amount
+    // minus the prior one), in INVOICE currency (the column unit): the
+    // definition the manual, MCP and Stripe paths adopted in #2236. Never the
+    // cash received: when a whole-krona bank line settles an öre-carrying
+    // remaining, 3740 carries the öre and paid_amount advances by the
+    // remaining only, so a row holding the cash would exceed the receivable
+    // by the absorbed öre (#2250). exchange_rate records the rate ACTUALLY USED for
     // this payment: Riksbanken (or manual override) on tx.date: per
     // ML 8 kap 21-23§. Falling back to invoice.exchange_rate would record
     // the invoice-date rate, which is what the round-7/8 bot reviews
@@ -714,7 +719,7 @@ export const POST = withRouteContext(
         company_id: companyId,
         invoice_id,
         payment_date: transaction.date,
-        amount: paidAmountInInvoiceCurrency,
+        amount: appliedPaymentAmount(invoice, newPaidAmount),
         currency: invoice.currency,
         exchange_rate: fx.required ? fx.rate : invoice.exchange_rate,
         journal_entry_id: journalEntryId,

@@ -176,6 +176,18 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
       (call) => call.table === 'invoices' && call.method === 'update',
     )
     expect(invoiceUpdate?.args[0]).toMatchObject({ paid_at: '2024-06-15T12:00:00Z' })
+    // No residual: the applied amount IS the cash received (#2250).
+    const paymentInsert = calls.find(
+      (call) => call.table === 'invoice_payments' && call.method === 'insert',
+    )
+    expect(paymentInsert?.args[0]).toMatchObject({
+      invoice_id: INVOICE_ID,
+      transaction_id: TX_ID,
+      payment_date: '2024-06-15',
+      amount: 12500,
+      currency: 'SEK',
+      journal_entry_id: 'je-1',
+    })
     expect(matchedHandler).toHaveBeenCalledWith(
       expect.objectContaining({
         invoice: expect.objectContaining({
@@ -190,6 +202,79 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
         }),
       }),
     )
+  })
+
+  it('3740 residual: the invoice_payments row carries the applied amount, not the cash received (#2250)', async () => {
+    // Remaining 999.60 settled by a whole-krona 1 000.00 bank line: 3740
+    // absorbs the 0.40 and paid_amount advances by the remaining only, so the
+    // AR sub-ledger row must be 999.60 as well (parity with the dashboard
+    // route and the pending-operation commit path).
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          transactions: { data: { ...TRANSACTION, amount: 1000 }, error: null },
+          invoices: [
+            {
+              data: { ...SENT_INVOICE, total: 999.6, remaining_amount: 999.6, paid_amount: 0 },
+              error: null,
+            },
+            { data: [{ id: INVOICE_ID }], error: null },
+          ],
+          company_settings: {
+            data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+            error: null,
+          },
+        },
+        calls,
+      ),
+    )
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.invoice_status).toBe('paid')
+    expect(body.data.paid_amount).toBe(999.6)
+    expect(body.data.remaining_amount).toBe(0)
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      USER_ID,
+      expect.objectContaining({
+        lines: expect.arrayContaining([
+          expect.objectContaining({ account_number: '1930', debit_amount: 1000 }),
+          expect.objectContaining({ account_number: '1510', credit_amount: 999.6 }),
+          expect.objectContaining({ account_number: '3740', credit_amount: 0.4 }),
+        ]),
+      }),
+    )
+    const invoiceUpdate = calls.find(
+      (call) => call.table === 'invoices' && call.method === 'update',
+    )
+    expect(invoiceUpdate?.args[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 999.6,
+      remaining_amount: 0,
+    })
+    const paymentInsert = calls.find(
+      (call) => call.table === 'invoice_payments' && call.method === 'insert',
+    )
+    expect(paymentInsert?.args[0]).toMatchObject({
+      invoice_id: INVOICE_ID,
+      transaction_id: TX_ID,
+      payment_date: '2024-06-15',
+      amount: 999.6,
+      currency: 'SEK',
+      journal_entry_id: 'je-1',
+    })
   })
 
   it('returns 401 when no bearer token is supplied', async () => {

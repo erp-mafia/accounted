@@ -494,6 +494,16 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.paid_at).toBe('2024-06-15T12:00:00Z')
     const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
     expect(invoiceUpdate).toMatchObject({ paid_at: '2024-06-15T12:00:00Z' })
+    // No residual: the applied amount IS the cash received, and the row keeps
+    // the bank transaction, date and currency it always carried (#2250).
+    expect(findCalls('invoice_payments', 'insert').at(-1)?.[0]).toMatchObject({
+      invoice_id: VALID_UUID,
+      transaction_id: 'tx-1',
+      payment_date: '2024-06-15',
+      amount: 12500,
+      currency: 'SEK',
+      journal_entry_id: 'je-1',
+    })
     expect(vi.mocked(eventBus.emit)).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'invoice.match_confirmed',
@@ -531,6 +541,78 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
         ]),
       }),
     )
+  })
+
+  it('3740 residual: the invoice_payments row carries the applied amount, not the cash received (#2250)', async () => {
+    // Remaining 999.60 settled by a whole-krona 1 000.00 bank line: 3740
+    // absorbs the 0.40 and paid_amount advances by the remaining only. The AR
+    // sub-ledger row must be 999.60 too, or every reader that subtracts rows
+    // from total (kontantmetod cut-off, reskontra, the storno sync) lands
+    // 0.40 off with a negative outstanding on a paid invoice.
+    const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, date: '2024-06-15' })
+    const invoice = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      total: 999.6,
+      remaining_amount: 999.6,
+      paid_amount: 0,
+      subtotal: 799.68,
+      vat_amount: 199.92,
+      invoice_number: 'F-2024002',
+      customer: makeCustomer(),
+    })
+
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: invoice, error: null }) // fetch invoice
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
+    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: null, error: null }) // update transaction
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      invoice_status: string
+      paid_amount: number
+      remaining_amount: number
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.invoice_status).toBe('paid')
+    expect(body.paid_amount).toBe(999.6)
+    expect(body.remaining_amount).toBe(0)
+    // The voucher carries the cash: Dr 1930 1 000 / Cr 1510 999.60 / Cr 3740 0.40.
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        lines: expect.arrayContaining([
+          expect.objectContaining({ account_number: '1930', debit_amount: 1000 }),
+          expect.objectContaining({ account_number: '1510', credit_amount: 999.6 }),
+          expect.objectContaining({ account_number: '3740', credit_amount: 0.4 }),
+        ]),
+      }),
+    )
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 999.6,
+      remaining_amount: 0,
+    })
+    // The AR sub-ledger row carries the receivable it cleared, not the cash.
+    expect(findCalls('invoice_payments', 'insert').at(-1)?.[0]).toMatchObject({
+      invoice_id: VALID_UUID,
+      transaction_id: 'tx-1',
+      payment_date: '2024-06-15',
+      amount: 999.6,
+      currency: 'SEK',
+      journal_entry_id: 'je-1',
+    })
   })
 
   it('stornos conflicting journal entry before matching', async () => {

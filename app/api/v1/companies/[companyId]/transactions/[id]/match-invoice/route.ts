@@ -41,6 +41,7 @@ import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { appliedPaymentAmount } from '@/lib/invoices/invoice-payment-row'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
@@ -709,9 +710,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const paymentNotes = [cashMethodNote, manualRateNote].filter(Boolean).join(' · ') || null
 
-    // amount and currency must agree: the row stores the payment in INVOICE
-    // currency (the column's unit), never a SEK magnitude wearing the invoice's
-    // foreign currency code. exchange_rate is the rate ACTUALLY USED for this
+    // amount and currency must agree: the row stores the amount APPLIED to
+    // the invoice (new paid_amount minus the prior one, the #2236 definition
+    // shared with the manual, MCP and Stripe paths) in INVOICE currency (the
+    // column's unit), never a SEK magnitude wearing the invoice's foreign
+    // currency code and never the cash received: a whole-krona overshoot
+    // absorbed on 3740 is part of the voucher, not of the receivable (#2250).
+    // exchange_rate is the rate ACTUALLY USED for this
     // payment (Riksbanken or the caller's override on the payment date, per
     // ML 8 kap 21-23§), falling back to the invoice's booking rate only when no
     // conversion was needed.
@@ -722,7 +727,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         company_id: ctx.companyId!,
         invoice_id,
         payment_date: transaction.date,
-        amount: paidAmount,
+        amount: appliedPaymentAmount(invoice, newPaidAmount),
         currency: invoice.currency,
         exchange_rate: fx.required ? fx.rate : invoice.exchange_rate,
         journal_entry_id: journalEntryId,

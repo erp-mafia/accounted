@@ -7,7 +7,28 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ error: logError, warn: vi.fn(), info: vi.fn(), debug: vi.fn() }),
 }))
 
-import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
+import {
+  appliedPaymentAmount,
+  recordInvoicePaymentRow,
+  removeInvoicePaymentRow,
+} from '@/lib/invoices/invoice-payment-row'
+
+describe('appliedPaymentAmount', () => {
+  it('is the advance of paid_amount, not the cash received (3740 residual)', () => {
+    // Remaining 999.60 settled by a 1 000.00 bank line: planInvoicePayment
+    // advances paid_amount to 999.60 and 3740 carries the 0.40 (#2250).
+    expect(appliedPaymentAmount({ paid_amount: 0 }, 999.6)).toBe(999.6)
+  })
+
+  it('subtracts the prior paid_amount on a final partial, rounded to the öre', () => {
+    expect(appliedPaymentAmount({ paid_amount: 1000 }, 1999.6)).toBe(999.6)
+  })
+
+  it('treats a missing or null prior paid_amount as zero', () => {
+    expect(appliedPaymentAmount({ paid_amount: null }, 12500)).toBe(12500)
+    expect(appliedPaymentAmount({}, 12500)).toBe(12500)
+  })
+})
 
 describe('recordInvoicePaymentRow', () => {
   beforeEach(() => vi.clearAllMocks())

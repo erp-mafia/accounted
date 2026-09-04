@@ -196,6 +196,15 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
     const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
     expect(invoiceUpdate).toMatchObject({ paid_at: '2026-05-12T12:00:00Z' })
+    // No residual: the applied amount IS the cash received (#2250).
+    expect(findCalls('invoice_payments', 'insert').at(-1)?.[0]).toMatchObject({
+      invoice_id: 'inv-1',
+      transaction_id: 'tx-1',
+      payment_date: '2026-05-12',
+      amount: 12500,
+      currency: 'SEK',
+      journal_entry_id: 'je-1',
+    })
     expect(matchedHandler).toHaveBeenCalledWith(
       expect.objectContaining({
         invoice: expect.objectContaining({
@@ -432,6 +441,79 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       status: 'paid',
       paid_amount: 12499.63,
       remaining_amount: 0,
+    })
+  })
+
+  it('3740 residual: the invoice_payments row carries the applied amount, not the cash received (#2250)', async () => {
+    // Remaining 999.60 settled by a whole-krona 1 000.00 bank line: 3740
+    // absorbs the 0.40 and paid_amount advances by the remaining only, so the
+    // AR sub-ledger row must be 999.60 as well (parity with the dashboard and
+    // v1 routes; the #2236 definition every reader relies on).
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: 1000,
+        currency: 'SEK',
+        date: '2026-05-12',
+        invoice_id: null,
+        journal_entry_id: null,
+        cash_account_id: null,
+      },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026002',
+        status: 'sent',
+        total: 999.6,
+        remaining_amount: 999.6,
+        paid_amount: 0,
+        currency: 'SEK',
+        exchange_rate: null,
+        journal_entry_id: null,
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: null, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // transactions update (link)
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        lines: expect.arrayContaining([
+          expect.objectContaining({ account_number: '1930', debit_amount: 1000 }),
+          expect.objectContaining({ account_number: '1510', credit_amount: 999.6 }),
+          expect.objectContaining({ account_number: '3740', credit_amount: 0.4 }),
+        ]),
+      }),
+    )
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 999.6,
+      remaining_amount: 0,
+    })
+    expect(findCalls('invoice_payments', 'insert').at(-1)?.[0]).toMatchObject({
+      invoice_id: 'inv-1',
+      transaction_id: 'tx-1',
+      payment_date: '2026-05-12',
+      amount: 999.6,
+      currency: 'SEK',
+      journal_entry_id: 'je-1',
     })
   })
 
