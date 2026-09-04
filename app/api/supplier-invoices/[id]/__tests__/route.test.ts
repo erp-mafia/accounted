@@ -260,7 +260,7 @@ describe('GET /api/supplier-invoices/[id]', () => {
     })
     enqueue({ data: { id: 'si-orig', supplier_invoice_number: '528285626420', arrival_number: 4 }, error: null })
 
-    const { status, body } = await parseJsonResponse(await getRequest('cn-1'))
+    const { status, body } = await parseJsonResponse<{ data: { credited_original: unknown } }>(await getRequest('cn-1'))
     expect(status).toBe(200)
     expect(body.data.credited_original).toEqual({
       id: 'si-orig',
@@ -275,7 +275,7 @@ describe('GET /api/supplier-invoices/[id]', () => {
   it('leaves credited_original null on an ordinary invoice without a second query', async () => {
     enqueue({ data: { id: 'si-1', is_credit_note: false, credited_invoice_id: null, items: [], payments: [] }, error: null })
 
-    const { status, body } = await parseJsonResponse(await getRequest('si-1'))
+    const { status, body } = await parseJsonResponse<{ data: { credited_original: unknown } }>(await getRequest('si-1'))
     expect(status).toBe(200)
     expect(body.data.credited_original).toBeNull()
     expect(mockSupabase.from).toHaveBeenCalledTimes(1)
