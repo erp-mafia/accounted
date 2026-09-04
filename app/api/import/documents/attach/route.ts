@@ -4,6 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
 import { planPermitsAttach } from '@/lib/documents/underlag-import'
+import { uploadedFileBaseName } from '@/lib/documents/upload-file-name'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
@@ -65,6 +66,14 @@ export const POST = withRouteContext(
       return errorResponseFromCode('DOC_UPLOAD_NO_FILE', log, { requestId })
     }
 
+    // The multipart `filename` is not `File.name`. For a folder selection
+    // Chrome writes the relative path (`2026/06/Leverantörsfakturor/A166_x.pdf`)
+    // while the preview the user approved was built from `File.name`
+    // (`A166_x.pdf`). Every use below, the resolver check and the archived
+    // name alike, must see the name the user reviewed, so it is normalized
+    // once, here, at the boundary.
+    const fileName = uploadedFileBaseName(file.name)
+
     const fields = AttachFieldsSchema.safeParse({
       journal_entry_id: formData.get('journal_entry_id'),
       fiscal_period_id: formData.get('fiscal_period_id'),
@@ -98,7 +107,13 @@ export const POST = withRouteContext(
       })
     }
 
-    const opLog = log.child({ filename: file.name, journalEntryId })
+    const opLog = log.child({
+      filename: fileName,
+      journalEntryId,
+      // Kept only when the browser sent something else, so a refusal can be
+      // read against exactly what arrived on the wire.
+      ...(file.name !== fileName ? { uploadedAs: file.name } : {}),
+    })
 
     // Tenant check first and explicitly: RLS covers the cookie session, but the
     // link is irreversible, so the route never takes the client's word for which
@@ -156,7 +171,7 @@ export const POST = withRouteContext(
     const permitted = await planPermitsAttach(
       supabase,
       companyId!,
-      file.name,
+      fileName,
       journalEntryId,
       fiscalPeriodId,
       override,
@@ -173,7 +188,7 @@ export const POST = withRouteContext(
         supabase,
         user.id,
         companyId!,
-        { name: file.name, buffer, type: file.type },
+        { name: fileName, buffer, type: file.type },
         {
           upload_source: 'file_upload',
           journal_entry_id: journalEntryId,
