@@ -1,4 +1,11 @@
 import type { Transaction, TransactionCategory, Invoice, Customer, SupplierInvoice, VatTreatment } from '@/types'
+import type { RotRutPayoutRequestCandidate } from '@/lib/invoices/rot-rut-payout-matching'
+
+/** Open ROT/RUT begäran hung onto an income row as a match suggestion, with
+ *  the invoices it covers (so the user sees which fakturor the payout settles). */
+export interface PotentialRotRutPayout extends RotRutPayoutRequestCandidate {
+  invoices: Array<{ invoice_number: string | null; requested_amount: number | string }>
+}
 
 /** Revalidated journal-entry match suggestion hung onto a row (mirrors
  *  potential_invoice): present only when the suggested entry is still posted. */
@@ -14,6 +21,7 @@ export interface PotentialVoucher {
 export interface TransactionWithInvoice extends Transaction {
   potential_invoice?: Invoice & { customer?: Customer }
   potential_supplier_invoice?: SupplierInvoice
+  potential_rot_rut_payout?: PotentialRotRutPayout
   potential_voucher?: PotentialVoucher
 }
 

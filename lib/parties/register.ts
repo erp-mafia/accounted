@@ -56,6 +56,12 @@ export interface RegisterRow {
   /** What confirming this suggestion creates, read from which side of the ledger it sits on. */
   defaultRoles: PartyRole[]
   createdAt: string
+  /**
+   * ISO 3166-1 alpha-2 read out of the voucher text or a register. Anything
+   * but SE means SCB cannot hold the party, so the queue says so instead of
+   * offering a search that cannot succeed.
+   */
+  country: string | null
 }
 
 export interface ObservedRow {
@@ -234,7 +240,7 @@ export async function getRegister(
   const period = options.period ?? '12m'
   const q = normalizeQuery(options.q)
 
-  const [parties, customers, suppliers, observed, customerCounts, supplierCounts] = await Promise.all([
+  const [parties, customers, suppliers, observed, customerCounts, supplierCounts, countryFacts] = await Promise.all([
     // Archived (dismissed) parties stay out of the list but keep their keys
     // claimed, so a dismissed suggestion does not resurface as observed.
     fetchAllRows<PartyRecord>(({ from, to }) =>
@@ -259,7 +265,23 @@ export async function getRegister(
     fetchAllRows<{ supplier_id: string }>(({ from, to }) =>
       supabase.from('supplier_invoices').select('supplier_id').eq('company_id', companyId).not('supplier_id', 'is', null).range(from, to),
     ),
+    fetchAllRows<{ party_id: string; value: unknown; recorded_at: string }>(({ from, to }) =>
+      supabase
+        .from('party_facts')
+        .select('party_id, value, recorded_at')
+        .eq('company_id', companyId)
+        .eq('field', 'country')
+        .is('superseded_at', null)
+        .order('recorded_at', { ascending: false })
+        .range(from, to),
+    ),
   ])
+
+  const countryByParty = new Map<string, string>()
+  for (const f of countryFacts) {
+    const code = typeof f.value === 'string' ? f.value.trim().toUpperCase() : ''
+    if (/^[A-Z]{2}$/.test(code) && !countryByParty.has(f.party_id)) countryByParty.set(f.party_id, code)
+  }
 
   const customerByParty = new Map<string, string>()
   for (const c of customers) if (c.party_id && !customerByParty.has(c.party_id)) customerByParty.set(c.party_id, c.id)
@@ -300,6 +322,7 @@ export async function getRegister(
       similar: similarById.get(p.id) ?? [],
       defaultRoles: p.kind === 'person' ? ['customer'] : defaultRoles(stats),
       createdAt: p.created_at,
+      country: countryByParty.get(p.id) ?? null,
     })
   }
 
@@ -511,6 +534,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       similar: similar.map((s) => ({ id: s.id, displayName: s.displayName })),
       defaultRoles: p.kind === 'person' ? ['customer'] : defaultRoles(stats),
       createdAt: p.created_at,
+      country: (facts.data as Array<{ field: string; value: unknown }> | null)?.find((f) => f.field === 'country' && typeof f.value === 'string')?.value as string | null ?? null,
     },
     facts: ((facts.data ?? []) as Array<Record<string, unknown>>).map((f) => ({
       id: f.id as string,

@@ -145,20 +145,23 @@ function MfaVerifyContent() {
         return
       }
 
-      if (returnTo.startsWith('/api/')) {
-        // Route-handler destinations (e.g. the MCP OAuth consent page)
-        // return raw HTML the client router cannot render: hard-navigate.
-        window.location.assign(returnTo)
-        return
-      }
-
       // Hosted byrå staff hit MFA before any dashboard, so the cockpit
       // landing (WL-14) resolves here too: only when no explicit step-up
       // destination was requested. Everyone else keeps returnTo/'/' exactly
       // as before (the helper degrades to '/' on any failure). The session
       // is AAL2 at this point, so the /api MFA gate passes.
-      router.push(returnTo === '/' ? await resolvePostLoginDestination() : returnTo)
-      router.refresh()
+      //
+      // Always a hard navigation, for two reasons that point the same way.
+      // Route-handler destinations (e.g. the MCP OAuth consent page) return
+      // raw HTML the client router cannot render. And verifying raises the
+      // session to aal2, which lib/supabase/middleware.ts only re-evaluates
+      // on a fresh document request: `router.push` followed by
+      // `router.refresh` raced, the refresh won, and the user stayed on the
+      // code screen; re-entering the same code is then rejected as reuse and
+      // bumps the lockout counter (#2056, the shape #1984 fixed on enroll).
+      // returnTo went through safeReturnTo and the helper only ever returns
+      // '/clients' or '/', so the navigation stays same-origin.
+      window.location.assign(returnTo === '/' ? await resolvePostLoginDestination() : returnTo)
     } catch {
       toast({
         title: t('verify_failed_title'),

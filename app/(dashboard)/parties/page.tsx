@@ -21,7 +21,8 @@ import { ObservedTable } from '@/components/parties/ObservedTable'
 import { PartyDossier } from '@/components/parties/PartyDossier'
 import { ScbPickerDialog } from '@/components/parties/ScbPickerDialog'
 import type { ScbCandidate } from '@/lib/parties/scb/client'
-import { SuggestionQueue } from '@/components/parties/SuggestionQueue'
+import { SuggestionQueue, isForeign } from '@/components/parties/SuggestionQueue'
+import { RegistryReviewDialog } from '@/components/parties/RegistryReviewDialog'
 import { hasHardKey } from '@/components/parties/format'
 import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -78,6 +79,7 @@ function SuggestionsPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [fetchingRegistry, setFetchingRegistry] = useState(false)
   const [picker, setPicker] = useState<{ partyId: string; name: string } | null>(null)
+  const [review, setReview] = useState<RegisterRow[] | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [dossierId, setDossierId] = useState<string | null>(null)
   const [dossierReload, setDossierReload] = useState(0)
@@ -331,7 +333,13 @@ function SuggestionsPage() {
   const rows = register?.rows ?? []
   const searching = debounced.length > 0
   const selectedItems = rows.filter((r) => selected.has(r.id)).map((r) => ({ partyId: r.id, roles: rolesFor(r) }))
-  const missingOrg = rows.filter((r) => selected.has(r.id) && !r.orgNumber && r.kind !== 'person').length
+  // Rows SCB could complete but cannot yet (no org number), and rows it can
+  // never hold (the text places them abroad): two different sentences.
+  const foreignCount = rows.filter((r) => selected.has(r.id) && isForeign(r)).length
+  // Rows the review list can settle: suggestions SCB could hold that have
+  // no org number yet. Foreign rows and people are never asked for.
+  const reviewable = view === 'suggested' ? rows.filter((r) => !r.orgNumber && r.kind !== 'person' && !isForeign(r)) : []
+  const missingOrg = rows.filter((r) => selected.has(r.id) && !r.orgNumber && r.kind !== 'person' && !isForeign(r)).length
 
   let attn: React.ReactNode = null
   if (counts && counts.suggested === 0 && counts.observed > 0 && canWrite && view === 'observed') {
@@ -405,18 +413,6 @@ function SuggestionsPage() {
             <p>{t('help')}</p>
           </HelpPopover>
         }
-        action={
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void refreshSuggestions()}
-            disabled={!canWrite || refreshing}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            {!canWrite ? <Lock className="mr-2 h-4 w-4" aria-hidden="true" /> : null}
-            {refreshing ? t('refreshing') : t('refresh')}
-          </Button>
-        }
       />
 
       {attn}
@@ -432,6 +428,23 @@ function SuggestionsPage() {
         />
         <ToolbarSearch value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('search_placeholder')} aria-label={t('search_placeholder')} />
         <div className="ml-auto flex items-center gap-2">
+          {scbEnabled && canWrite && reviewable.length > 0 ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => setReview(reviewable)} disabled={busy}>
+              {t('review_open', { count: reviewable.length })}
+            </Button>
+          ) : null}
+          {/* The queue builds itself; this is for the rare manual re-run. */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => void refreshSuggestions()}
+            disabled={!canWrite || refreshing}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+          >
+            {!canWrite ? <Lock className="mr-2 h-4 w-4" aria-hidden="true" /> : null}
+            {refreshing ? t('refreshing') : t('refresh')}
+          </Button>
           <ContextPicker
             items={periodItems}
             value={period}
@@ -453,8 +466,14 @@ function SuggestionsPage() {
         onOpenChange={setConfirmOpen}
         title={t('promote_dialog_title', { count: selectedItems.length })}
         description={
-          missingOrg > 0
-            ? `${t('promote_dialog_body', { detail: roleSummary(t, selectedItems) })} ${t('promote_dialog_missing_org', { missing: missingOrg, count: selectedItems.length })}`
+          missingOrg > 0 || foreignCount > 0
+            ? [
+                t('promote_dialog_body', { detail: roleSummary(t, selectedItems) }),
+                missingOrg > 0 ? t('promote_dialog_missing_org', { missing: missingOrg, count: selectedItems.length }) : null,
+                foreignCount > 0 ? t('promote_dialog_foreign', { foreign: foreignCount, count: selectedItems.length }) : null,
+              ]
+                .filter(Boolean)
+                .join(' ')
             : t('promote_dialog_body', { detail: roleSummary(t, selectedItems) })
         }
         confirmLabel={t('promote_n', { count: selectedItems.length })}
@@ -481,6 +500,27 @@ function SuggestionsPage() {
         onPickRegistry={scbEnabled ? (id, name) => setPicker({ partyId: id, name }) : undefined}
         fetching={fetchingRegistry}
       />
+
+      {review ? (
+        <RegistryReviewDialog
+          open
+          rows={review}
+          onOpenChange={(open) => {
+            if (!open) {
+              setReview(null)
+              reload()
+            }
+          }}
+          onChoose={(row) => setPicker({ partyId: row.id, name: row.displayName })}
+          onApproved={(saved, failed) => {
+            toast({
+              title: t('review_done_title', { saved }),
+              description: failed > 0 ? `${t('review_done_description')} ${t('review_done_failed', { failed })}` : t('review_done_description'),
+            })
+            reload()
+          }}
+        />
+      ) : null}
 
       {picker ? (
         <ScbPickerDialog

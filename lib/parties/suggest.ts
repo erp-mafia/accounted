@@ -17,6 +17,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { roundOre } from '@/lib/money'
 import { coreKey, displayNameFromVoucherText } from './ledger-key'
 import { extractNameCandidates, extractVatNumbers } from './name-extract'
 import { getObservedParties, type ObservedParty } from './observed'
@@ -42,6 +43,7 @@ export interface LedgerKeyEvidence {
 export interface ExistingParty {
   id: string
   display_name: string
+  legal_name?: string | null
   org_number: string | null
   alias_keys: string[]
   status: 'suggested' | 'confirmed'
@@ -64,7 +66,7 @@ export interface SuggestionIdentity {
 
 export interface SuggestionReason {
   /** How the key attaches, or why it becomes a new party. */
-  attach: 'party_id' | 'org_number' | 'alias_key' | 'new'
+  attach: 'party_id' | 'org_number' | 'alias_key' | 'legal_name' | 'new'
   occurrences: number
   expense_sek: number
   revenue_sek: number
@@ -91,6 +93,12 @@ export interface SuggestionItem {
   vat_number?: string
   party_id?: string
   alias_keys: string[]
+  /**
+   * The display name is the legal person named in the voucher text (a
+   * legal-form anchor), not a cleaned bank memo. apply_party_suggestions
+   * may rename an untouched suggestion to it on a later run.
+   */
+  name_anchored?: boolean
   reason: SuggestionReason
   facts: SuggestionFact[]
   identities: SuggestionIdentity[]
@@ -113,6 +121,8 @@ interface PickedName {
   country?: string
   /** The text points abroad: foreign legal form, country word or VAT prefix. */
   foreign?: boolean
+  /** The name is a legal person read out of the text, legal form included. */
+  anchored?: boolean
 }
 
 /** The voucher texts under a key, most common first, at most three. */
@@ -138,7 +148,14 @@ function pickName(observed: ObservedParty, evidence: LedgerKeyEvidence | undefin
     candidates.find((c) => c.source === 'legal_form' && !c.foreign) ??
     candidates.find((c) => c.source === 'legal_form') ??
     candidates.find((c) => c.source === 'country')
-  if (anchored) return { display: anchored.name, ...(anchored.country ? { country: anchored.country } : {}), foreign: anchored.foreign }
+  if (anchored) {
+    return {
+      display: anchored.name,
+      ...(anchored.country ? { country: anchored.country } : {}),
+      foreign: anchored.foreign,
+      anchored: anchored.source === 'legal_form',
+    }
+  }
   const head = candidates.find((c) => c.source === 'head')
   return {
     display: displayNameFromVoucherText(observed.name || observed.key),
@@ -172,8 +189,16 @@ export function buildSuggestions(input: {
   const byOrg = new Map<string, ExistingParty>()
   const byAlias = new Map<string, ExistingParty>()
   const byCore = new Map<string, ExistingParty[]>()
+  // Exact legal names, legal form included: registered company names are
+  // unique in Sweden, so "Visma Spcs AB" read out of a voucher text is the
+  // party already called that. Never a fuzzy match; never without the form.
+  const byLegalName = new Map<string, ExistingParty>()
   for (const p of input.existing) {
     if (p.org_number && !byOrg.has(p.org_number)) byOrg.set(p.org_number, p)
+    for (const n of [p.display_name, p.legal_name]) {
+      const k = (n ?? '').trim().toLowerCase()
+      if (k && !byLegalName.has(k)) byLegalName.set(k, p)
+    }
     for (const a of p.alias_keys) if (!byAlias.has(a)) byAlias.set(a, p)
     const c = coreKey(p.display_name)
     if (c) byCore.set(c, [...(byCore.get(c) ?? []), p])
@@ -193,10 +218,20 @@ export function buildSuggestions(input: {
     const ev = evidenceByKey.get(o.key)
     const orgs = ev?.orgs ?? []
     const org = orgs.length === 1 ? orgs[0]!.org : undefined
-    const existing = (org && byOrg.get(org)) || byAlias.get(o.key) || undefined
     const name = pickName(o, ev)
+    let existing = (org && byOrg.get(org)) || byAlias.get(o.key) || undefined
+    let attach: SuggestionReason['attach'] = existing ? (org && byOrg.get(org) === existing ? 'org_number' : 'alias_key') : 'new'
+    if (!existing && name.anchored) {
+      const byName = byLegalName.get(name.display.trim().toLowerCase())
+      // A different org number on either side means a different company
+      // with a confusable name; the exact-name rule never overrides a key.
+      if (byName && (!org || !byName.org_number || byName.org_number === org)) {
+        existing = byName
+        attach = 'legal_name'
+      }
+    }
     const reason: SuggestionReason = {
-      attach: existing ? (org && byOrg.get(org) === existing ? 'org_number' : 'alias_key') : 'new',
+      attach,
       occurrences: o.occurrences,
       expense_sek: o.expense_sek,
       revenue_sek: o.revenue_sek,
@@ -260,6 +295,7 @@ export function buildSuggestions(input: {
       key: o.key,
       display_name: name.display,
       ...(name.legal ? { legal_name: name.legal } : {}),
+      ...(name.anchored ? { name_anchored: true } : {}),
       kind: 'company',
       origin: org ? 'document' : 'ledger',
       ...(org ? { org_number: org } : {}),
@@ -271,7 +307,47 @@ export function buildSuggestions(input: {
       identities,
     })
   }
-  return { items, skipped }
+  return { items: groupByLegalName(items), skipped }
+}
+
+/**
+ * Two keys that name the same legal person, legal form included, become one
+ * suggestion with both keys as aliases, so "TIC identity · ... The
+ * Intelligence Company AB (publ)" and "Utbetalning leverantörsfaktura, The
+ * Intelligence Company AB (publ)" do not turn into two suppliers. Only for
+ * new items whose name is anchored on a legal form; hard keys and existing
+ * parties are already settled by then.
+ */
+function groupByLegalName(items: SuggestionItem[]): SuggestionItem[] {
+  const heads = new Map<string, SuggestionItem>()
+  const out: SuggestionItem[] = []
+  for (const item of items) {
+    const groupable = item.name_anchored && !item.party_id && !item.org_number
+    const k = groupable ? item.display_name.trim().toLowerCase() : null
+    const head = k ? heads.get(k) : undefined
+    if (!head) {
+      if (k) heads.set(k, item)
+      out.push(item)
+      continue
+    }
+    head.alias_keys = [...new Set([...head.alias_keys, ...item.alias_keys])]
+    head.reason.occurrences += item.reason.occurrences
+    head.reason.expense_sek = roundOre(head.reason.expense_sek + item.reason.expense_sek)
+    head.reason.revenue_sek = roundOre(head.reason.revenue_sek + item.reason.revenue_sek)
+    head.reason.docs += item.reason.docs
+    head.reason.self_docs += item.reason.self_docs
+    if (item.reason.first_seen < head.reason.first_seen) head.reason.first_seen = item.reason.first_seen
+    if (item.reason.last_seen > head.reason.last_seen) head.reason.last_seen = item.reason.last_seen
+    if (!head.vat_number && item.vat_number) head.vat_number = item.vat_number
+    head.identities.push(...item.identities)
+    const headTexts = head.facts.find((f) => f.field === 'voucher_text')
+    const itemTexts = item.facts.find((f) => f.field === 'voucher_text')
+    if (headTexts && itemTexts && Array.isArray(headTexts.value) && Array.isArray(itemTexts.value)) {
+      headTexts.value = [...new Set([...(headTexts.value as string[]), ...(itemTexts.value as string[])])].slice(0, 3)
+    }
+    for (const f of item.facts) if (f.field !== 'voucher_text' && !head.facts.some((h) => h.field === f.field)) head.facts.push(f)
+  }
+  return out
 }
 
 export interface SuggestSummary {
@@ -307,7 +383,7 @@ export async function suggestPartiesForCompany(
   const existing = await fetchAllRows<ExistingParty>(({ from, to }) =>
     supabase
       .from('parties')
-      .select('id, display_name, org_number, alias_keys, status')
+      .select('id, display_name, legal_name, org_number, alias_keys, status')
       .eq('company_id', companyId)
       .is('merged_into', null)
       .is('archived_at', null)

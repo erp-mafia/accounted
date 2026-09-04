@@ -19,7 +19,7 @@ import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer
 import { getCompanyEntityType } from '@/lib/company/context'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
-import { touchesJamkning, validateJamkning } from '@/lib/salary/jamkning-rules'
+import { jamkningIssueFromDbError, touchesJamkning, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
 
 export type EmployeeCommandResult<T> =
   | { ok: true; data: T }
@@ -288,6 +288,19 @@ export async function updateEmployee(
     .single()
 
   if (error) {
+    // The CHECK constraint refused the row (#2256): either the merged-state
+    // check above passed against a snapshot another request has since
+    // changed, or this is a legacy incomplete row (stored before #2240) whose
+    // next edit must complete or clear the beslut. Same VALIDATION_ERROR and
+    // sentence as that check, derived from the merged row.
+    const jamkningIssue = jamkningIssueFromDbError(error, merged as JamkningFields)
+    if (jamkningIssue) {
+      return {
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        details: { field: jamkningIssue.field, message: jamkningIssue.message },
+      }
+    }
     return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message } }
   }
 

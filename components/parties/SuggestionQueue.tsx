@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Check, ChevronDown } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,6 +17,19 @@ import { isDuplicateCandidate, reasonText, rolesLabel } from './format'
  * here and what it becomes; only rows with a hard key arrive pre-ticked;
  * bulk confirm opens one dialog that says what happens.
  */
+/** A party the voucher text places abroad: SCB cannot hold it, so no search is offered. */
+export function isForeign(row: { country: string | null }): boolean {
+  return !!row.country && row.country !== 'SE'
+}
+
+export function regionName(code: string, locale: string): string {
+  try {
+    return new Intl.DisplayNames([locale], { type: 'region' }).of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
 export function SuggestionQueue({
   rows,
   selected,
@@ -48,6 +61,7 @@ export function SuggestionQueue({
   onFind?: (row: RegisterRow) => void
 }) {
   const t = useTranslations('parties')
+  const locale = useLocale()
   const count = selected.size
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id))
 
@@ -113,7 +127,12 @@ export function SuggestionQueue({
                   </td>
                   <td className={`${TD_CLASS} min-w-[16rem] max-w-[28rem] text-muted-foreground`}>
                     {reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}
-                    {onFind && !row.orgNumber && row.kind !== 'person' ? (
+                    {isForeign(row) ? (
+                      <>
+                        {' · '}
+                        <span className="text-foreground">{t('row_foreign', { country: regionName(row.country as string, locale) })}</span>
+                      </>
+                    ) : onFind && !row.orgNumber && row.kind !== 'person' ? (
                       <>
                         {' · '}
                         <button

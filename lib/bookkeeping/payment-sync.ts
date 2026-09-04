@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { invoiceCustomerOutstanding } from '@/lib/invoices/customer-share'
 import type { JournalEntry } from '@/types'
 
 const log = createLogger('payment-sync')
@@ -180,13 +181,18 @@ export async function syncInvoiceStatusFromPaymentEntry(
       // invoices after a storno, which made them permanently un-settleable
       // once mark-paid started comparing the net customer settlement against
       // remaining (a net payment can never reach a gross remaining, and the
-      // cash-partial block rejects the "partial"). Mirrors rot-rut-file's
-      // derivation, which distrusted this very writer.
+      // cash-partial block rejects the "partial"). The share comes from the
+      // one shared definition (lib/invoices/customer-share.ts); the
+      // Math.max(0, ...) mirrors the guard's GREATEST(0, ...) because this
+      // value is persisted into the column.
       const deductionTotal =
         (customerInvoice as { deduction_total?: number | null }).deduction_total ?? 0
       const newRemaining = Math.max(
         0,
-        roundOre(customerInvoice.total - deductionTotal - safePaidAmount),
+        invoiceCustomerOutstanding(
+          { total: customerInvoice.total, deduction_total: deductionTotal },
+          safePaidAmount,
+        ),
       )
       const revertStatus = newPaidAmount > 0
         ? 'partially_paid'

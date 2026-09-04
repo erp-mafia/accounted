@@ -8,6 +8,7 @@
  * extensions/general/mcp-server/__tests__/payroll-staged-tools.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { JAMKNING_ROW_INCOMPLETE } from '@/lib/salary/jamkning-rules'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 import type { PendingOperation } from '@/types'
@@ -944,5 +945,53 @@ describe('commitPendingOperation: update_employee', () => {
 
     expect(result.status).not.toBe('committed')
     expect(result.error).toMatch(/Månadslön/)
+  })
+
+  it('answers the CHECK constraint (concurrent-update race, #2256) as a validation failure, not INTERNAL_ERROR', async () => {
+    const { encryptPersonnummer } = await import('@/lib/salary/personnummer')
+    const encrypted = encryptPersonnummer('190001010000')
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'emp-1',
+        first_name: 'Anna',
+        last_name: 'Andersson',
+        personnummer: encrypted,
+        salary_type: 'monthly',
+        monthly_salary: 35000,
+        tax_table_number: 33,
+        is_sidoinkomst: false,
+        f_skatt_status: 'a_skatt',
+        vaxa_stod_eligible: false,
+        jamkning_percentage: null,
+        jamkning_valid_from: null,
+        jamkning_valid_to: null,
+        is_active: true,
+      },
+    }) // fetch existing: the snapshot the merged check passes against
+    enqueue({
+      data: null,
+      error: {
+        code: '23514',
+        message: 'new row for relation "employees" violates check constraint "employees_jamkning_dates_check"',
+        details: 'Failing row contains (...).',
+        hint: null,
+      },
+    }) // update: the constraint checked the row another request changed in between
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'update_employee',
+      params: {
+        employee_id: 'emp-1',
+        patch: { jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: '2026-12-31' },
+      },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(result.error).toBe(JAMKNING_ROW_INCOMPLETE)
   })
 })
