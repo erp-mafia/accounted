@@ -1,5 +1,6 @@
 /**
- * pg-real tests for the fiscal-year reset RPCs (migration 20260825150000).
+ * pg-real tests for the fiscal-year reset RPCs (migration 20260825150000,
+ * next-year dependency narrowed in 20260904163000).
  *
  * Pins: the actor gate (service-role p_user_id, owner/admin only), every
  * eligibility guard (locked, closed, company lock date, year-end state,
@@ -29,6 +30,7 @@ type RpcResult = {
   eligible?: boolean
   blockers?: Array<{ code: string; count?: number; date?: string }>
   counts?: { vouchers: number; documents_to_detach: number }
+  next_period?: { id: string; name: string; has_opening_balances: boolean } | null
   deleted?: number
   detached_documents?: number
   period_name?: string
@@ -212,7 +214,7 @@ describe('reset_fiscal_year: eligibility guards', () => {
     )
   })
 
-  it('refuses when a later year depends on this year (IB generated)', async () => {
+  it('refuses when a later year is finalised on top of this one (closed)', async () => {
     const { companyId, userId, fiscalPeriodId } = await seedCompany()
     const nextId = await insertFiscalPeriod({
       userId,
@@ -220,11 +222,10 @@ describe('reset_fiscal_year: eligibility guards', () => {
       name: '2027',
       periodStart: '2027-01-01',
       periodEnd: '2027-12-31',
+      isClosed: true,
     })
     await getPool().query(
-      `UPDATE public.fiscal_periods
-          SET previous_period_id = $1, opening_balances_set = true
-        WHERE id = $2`,
+      `UPDATE public.fiscal_periods SET previous_period_id = $1 WHERE id = $2`,
       [fiscalPeriodId, nextId],
     )
 
@@ -233,6 +234,86 @@ describe('reset_fiscal_year: eligibility guards', () => {
     expect(result.blockers).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'next_year_dependency' })]),
     )
+  })
+
+  it('refuses when a later year has its own closing entry', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    const nextId = await insertFiscalPeriod({
+      userId,
+      companyId,
+      name: '2027',
+      periodStart: '2027-01-01',
+      periodEnd: '2027-12-31',
+    })
+    const nextClosingId = await insertPostedEntry({
+      companyId,
+      userId,
+      fiscalPeriodId: nextId,
+      sourceType: 'year_end',
+      entryDate: '2027-12-31',
+    })
+    await getPool().query(
+      `UPDATE public.fiscal_periods
+          SET previous_period_id = $1, closing_entry_id = $2
+        WHERE id = $3`,
+      [fiscalPeriodId, nextClosingId, nextId],
+    )
+
+    const result = await callReset(companyId, fiscalPeriodId, '2026', userId)
+    expect(result).toMatchObject({ ok: false, code: 'FISCAL_YEAR_RESET_INELIGIBLE' })
+    expect(result.blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'next_year_dependency' })]),
+    )
+  })
+
+  it('does not treat the later year\'s own opening balances as a dependency', async () => {
+    // The backfill shape: the first imported year carries its own IB (from
+    // the SIE file's #IB, or resynced from the backfilled year's #UB). Its
+    // IB is a verifikat of its own and survives the reset untouched; the
+    // preview discloses it instead of refusing.
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    await insertPostedEntry({ companyId, userId, fiscalPeriodId, sourceType: 'import' })
+    const nextId = await insertFiscalPeriod({
+      userId,
+      companyId,
+      name: '2027',
+      periodStart: '2027-01-01',
+      periodEnd: '2027-12-31',
+    })
+    const nextIbId = await insertPostedEntry({
+      companyId,
+      userId,
+      fiscalPeriodId: nextId,
+      sourceType: 'opening_balance',
+      entryDate: '2027-01-01',
+    })
+    await getPool().query(
+      `UPDATE public.fiscal_periods
+          SET previous_period_id = $1,
+              opening_balance_entry_id = $2,
+              opening_balances_set = true
+        WHERE id = $3`,
+      [fiscalPeriodId, nextIbId, nextId],
+    )
+
+    const eligibility = await callEligibility(companyId, fiscalPeriodId, userId)
+    expect(eligibility).toMatchObject({
+      ok: true,
+      eligible: true,
+      blockers: [],
+      next_period: { id: nextId, name: '2027', has_opening_balances: true },
+    })
+
+    const result = await callReset(companyId, fiscalPeriodId, '2026', userId)
+    expect(result.ok).toBe(true)
+    expect(result.deleted).toBe(1)
+
+    expect(await entryCount(companyId, nextId)).toBe(1)
+    const { rows } = await getPool().query<{ opening_balance_entry_id: string; opening_balances_set: boolean }>(
+      `SELECT opening_balance_entry_id, opening_balances_set FROM public.fiscal_periods WHERE id = $1`,
+      [nextId],
+    )
+    expect(rows[0]).toEqual({ opening_balance_entry_id: nextIbId, opening_balances_set: true })
   })
 
   it('allows a later year that carries no dependency yet', async () => {
@@ -249,6 +330,13 @@ describe('reset_fiscal_year: eligibility guards', () => {
       `UPDATE public.fiscal_periods SET previous_period_id = $1 WHERE id = $2`,
       [fiscalPeriodId, nextId],
     )
+
+    const eligibility = await callEligibility(companyId, fiscalPeriodId, userId)
+    expect(eligibility).toMatchObject({
+      ok: true,
+      eligible: true,
+      next_period: { id: nextId, name: '2027', has_opening_balances: false },
+    })
 
     const result = await callReset(companyId, fiscalPeriodId, '2026', userId)
     expect(result.ok).toBe(true)

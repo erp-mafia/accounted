@@ -35,6 +35,7 @@ const SNAPSHOT = {
     period_end: '2026-12-31',
   },
   counts: { vouchers: 7, documents_to_detach: 2 },
+  next_period: { id: 'period-2', name: '2027', has_opening_balances: true },
 }
 
 describe('getFiscalYearResetEligibility', () => {
@@ -52,6 +53,7 @@ describe('getFiscalYearResetEligibility', () => {
         blockers: [],
         period: SNAPSHOT.period,
         counts: SNAPSHOT.counts,
+        next_period: SNAPSHOT.next_period,
       },
     })
     expect(supabase.rpc).toHaveBeenCalledWith('get_fiscal_year_reset_eligibility', {

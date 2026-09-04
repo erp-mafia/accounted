@@ -145,6 +145,14 @@ export interface FiscalYearResetEligibility {
     vouchers: number
     documents_to_detach: number
   }
+  // The following räkenskapsår, when one exists. Its own opening balances
+  // are never touched by the reset and are disclosed, not treated as a
+  // dependency (migration 20260904163000).
+  next_period: {
+    id: string
+    name: string
+    has_opening_balances: boolean
+  } | null
 }
 
 export interface FiscalYearResetRpcResult {
@@ -154,6 +162,7 @@ export interface FiscalYearResetRpcResult {
   blockers?: FiscalYearResetBlocker[]
   period?: FiscalYearResetEligibility['period']
   counts?: FiscalYearResetEligibility['counts']
+  next_period?: FiscalYearResetEligibility['next_period']
   deleted?: number
   detached_documents?: number
   period_name?: string
