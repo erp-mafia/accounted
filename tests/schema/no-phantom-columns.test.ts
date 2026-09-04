@@ -167,7 +167,13 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // (parties phase 1, #2162/#2168/#2169) at 395: 397.
 // 2026-09-04: +2 recurring lines (#2044, see the 2026-08-30 recurring payroll
 // lines note above); merged with main (#2141/#2164/#2170/#2192) at 397: 399.
-const UNRESOLVED_CEILING = 399
+// 2026-09-04: +2 for the migrated-invoice row completion
+// (extensions/general/arcim-migration/lib/complete-invoice-lines.ts): the
+// invoice_items rows come from the migration's own mapSalesInvoiceLine, the
+// same row array the orchestrator already inserts (counted above), written
+// once as a batch and again per invoice when the batch is rejected. The header
+// VAT update in the same module is an object literal and is checked. 399: 401.
+const UNRESOLVED_CEILING = 401
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

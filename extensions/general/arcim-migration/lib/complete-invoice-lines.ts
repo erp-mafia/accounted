@@ -188,10 +188,20 @@ async function alreadyFilled(supabase: SupabaseClient, ids: string[]): Promise<S
   return new Set(((data ?? []) as { invoice_id: string }[]).map((r) => r.invoice_id))
 }
 
+/** The header VAT split the detail form established, ready to write. */
+interface HeaderFill {
+  subtotal: number
+  subtotalSek: number | null
+  vatAmount: number
+  vatAmountSek: number | null
+  vatRate: number | null
+  vatTreatment: string
+}
+
 interface PlannedWrite {
   row: CandidateRow
   items: Record<string, unknown>[]
-  header: Record<string, unknown> | null
+  header: HeaderFill | null
 }
 
 export async function completeMigratedInvoiceLines(
@@ -282,7 +292,7 @@ export async function completeMigratedInvoiceLines(
       continue
     }
 
-    let header: Record<string, unknown> | null = null
+    let header: HeaderFill | null = null
     if (mapped.vatUnresolved) {
       result.vatUnresolved++
     } else if (headerHoldsNoVatEvidence(row)) {
@@ -290,11 +300,11 @@ export async function completeMigratedInvoiceLines(
       const vatAmount = mapped.invoice.vat_amount as number
       header = {
         subtotal,
-        subtotal_sek: toRowSek(subtotal, row),
-        vat_amount: vatAmount,
-        vat_amount_sek: toRowSek(vatAmount, row),
-        vat_rate: mapped.invoice.vat_rate,
-        vat_treatment: mapped.invoice.vat_treatment,
+        subtotalSek: toRowSek(subtotal, row),
+        vatAmount,
+        vatAmountSek: toRowSek(vatAmount, row),
+        vatRate: mapped.invoice.vat_rate as number | null,
+        vatTreatment: mapped.invoice.vat_treatment as string,
       }
     }
 
@@ -327,9 +337,17 @@ export async function completeMigratedInvoiceLines(
       }
       result.completed++
       if (!plan.header) continue
+      // Written as a literal so the schema guard checks these columns.
       const { error } = await supabase
         .from('invoices')
-        .update(plan.header)
+        .update({
+          subtotal: plan.header.subtotal,
+          subtotal_sek: plan.header.subtotalSek,
+          vat_amount: plan.header.vatAmount,
+          vat_amount_sek: plan.header.vatAmountSek,
+          vat_rate: plan.header.vatRate,
+          vat_treatment: plan.header.vatTreatment,
+        })
         .eq('id', plan.row.id)
         .eq('company_id', companyId)
       if (error) {
