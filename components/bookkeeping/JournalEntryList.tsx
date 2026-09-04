@@ -1585,7 +1585,9 @@ export default function JournalEntryList({
                       <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground', struckCell)}>
                         {formatDate(entry.entry_date)}
                       </td>
-                      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                      {/* overflow-hidden: see #2003, the shrink-0 status
+                          chips cannot truncate and would paint over Belopp. */}
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
                         <span className="flex min-w-0 items-center gap-2">
                           <span className={cn('truncate', struckCell)}>{entry.description}</span>
                           {entry.out_of_period && (

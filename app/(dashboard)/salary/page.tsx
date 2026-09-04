@@ -213,7 +213,9 @@ export default function SalaryPage() {
                             {periodOf(run)}
                           </Link>
                         </td>
-                        <td className={cn(TD_CLASS, 'max-w-0 w-full whitespace-nowrap')}>
+                        {/* overflow-hidden: see #2003, nothing in this cell
+                            truncates so it must clip. */}
+                        <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden whitespace-nowrap')}>
                           <span className="inline-flex items-center gap-2">
                             {run.status === 'booked' ? (
                               <span className="text-muted-foreground">{t('status_booked')}</span>
