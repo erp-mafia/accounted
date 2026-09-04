@@ -613,6 +613,14 @@ export default function SupplierInvoicesPage() {
           }
         />
       ) : (
+        /* Column budget (#2262): the content column is at most 960px (max-w-5xl
+           minus px-8) and 948px on a 1280-wide laptop, at every desktop size,
+           so viewport breakpoints cannot buy room. Every nowrap column adds its
+           widest header or cell to the table's minimum width; past the budget
+           the wrapper scrolls sideways, Leverantör collapses to its header
+           width and Status is cut at the edge. That is why the list carries
+           one date (förfaller: the payer's date and the default order) and a
+           short Kvar header; fakturadatum lives in the detail view. */
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
@@ -632,15 +640,6 @@ export default function SupplierInvoicesPage() {
                   column="number"
                   sort={sort}
                   onSort={updateSort}
-                />
-                <SortableHeader
-                  label={t('th_invoice_date')}
-                  sortLabel={t('sort_by', { column: t('th_invoice_date') })}
-                  column="invoice_date"
-                  sort={sort}
-                  onSort={updateSort}
-                  className="hidden text-right md:table-cell"
-                  align="right"
                 />
                 <SortableHeader
                   label={t('th_due_date')}
@@ -762,9 +761,6 @@ export default function SupplierInvoicesPage() {
                       >
                         {inv.supplier_invoice_number}
                       </Link>
-                    </td>
-                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground md:table-cell')}>
-                      {formatDate(inv.invoice_date)}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
                       {formatDate(inv.due_date)}
