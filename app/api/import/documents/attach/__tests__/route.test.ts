@@ -198,6 +198,59 @@ describe('POST /api/import/documents/attach', () => {
     expect(uploadDocumentMock).not.toHaveBeenCalled()
   })
 
+  it('resolves the basename when the browser sends a folder-relative multipart filename', async () => {
+    // Chrome fills the multipart `filename` with webkitRelativePath for files
+    // picked through a folder selection, so the server sees the Fortnox export
+    // tree (<year>/<month>/<type>/<file>) while the preview, built from
+    // File.name, saw only the basename. The check must run on the name the
+    // user reviewed, and the archived document must carry that name, not the
+    // path. Long exporter suffixes after the ref are part of the same shape.
+    const res = await POST(
+      makeRequest({
+        fileName:
+          '2026/06/Leverantörsfakturor/A31_90493_62864442_Hetzner_2026-05-13_089000921156.pdf',
+      }),
+      emptyParams,
+    )
+
+    expect(res.status).toBe(200)
+    const [, , , file] = uploadDocumentMock.mock.calls[0]
+    expect(file).toMatchObject({
+      name: 'A31_90493_62864442_Hetzner_2026-05-13_089000921156.pdf',
+    })
+  })
+
+  it('still refuses a folder-relative filename whose basename points elsewhere', async () => {
+    // Normalizing the path must not loosen the guard: the basename is checked
+    // exactly as a bare filename would be.
+    vouchers = [{ ...VOUCHER, id: OTHER_ID }]
+
+    const res = await POST(
+      makeRequest({ fileName: '2026/06/Leverantörsfakturor/A31_kvitto.pdf' }),
+      emptyParams,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('UNDERLAG_REF_MISMATCH')
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+  })
+
+  it('attaches several underlag to the same verifikat, one request each', async () => {
+    // Fortnox exports one file per attachment, so a verifikat with six
+    // receipts is six files sharing a prefix. Each lands on the same target
+    // under the same entry-scoped idempotency key; the content hash keeps
+    // them apart as separate documents.
+    for (const fileName of ['A31_90470_1_faktura.pdf', 'A31_90470_2_kvitto.pdf']) {
+      expect((await POST(makeRequest({ fileName }), emptyParams)).status).toBe(200)
+    }
+
+    expect(uploadDocumentMock).toHaveBeenCalledTimes(2)
+    for (const call of uploadDocumentMock.mock.calls) {
+      expect(call[4]).toMatchObject({ journal_entry_id: TARGET_ID, idempotency_key: TARGET_ID })
+    }
+  })
+
   it('returns 400 when the declared fiscal year is missing or not a uuid', async () => {
     expect((await POST(makeRequest({ declaredPeriodId: null }), emptyParams)).status).toBe(400)
     expect((await POST(makeRequest({ declaredPeriodId: '2024' }), emptyParams)).status).toBe(400)
