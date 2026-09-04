@@ -748,7 +748,9 @@ export default function ChartOfAccountsManager() {
                               <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
                                 <AccountNumber number={account.account_number} name={account.account_name} />
                               </td>
-                              <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                              {/* overflow-hidden: see #2003, the shrink-0
+                                  markers cannot truncate. */}
+                              <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
                                 <span className="flex min-w-0 items-center gap-1.5">
                                   <span className="truncate">{account.account_name}</span>
                                   {account.is_system_account && (

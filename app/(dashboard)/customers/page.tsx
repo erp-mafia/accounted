@@ -352,7 +352,9 @@ function CustomersPageInner() {
                       className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
                       onClick={() => router.push(`/customers/${customer.id}`)}
                     >
-                      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                      {/* overflow-hidden: see #2003, the shrink-0 verified
+                          badge cannot truncate. */}
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
                         <span className="flex min-w-0 items-center gap-2">
                           <Link
                             href={`/customers/${customer.id}`}
