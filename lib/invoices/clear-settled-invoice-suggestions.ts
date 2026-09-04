@@ -3,7 +3,13 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoices/clear-settled-invoice-suggestions')
 
-export type SettledInvoiceKind = 'invoice' | 'supplier_invoice'
+export type SettledInvoiceKind = 'invoice' | 'supplier_invoice' | 'rot_rut_payout_request'
+
+const HINT_COLUMN_BY_KIND: Record<SettledInvoiceKind, string> = {
+  invoice: 'potential_invoice_id',
+  supplier_invoice: 'potential_supplier_invoice_id',
+  rot_rut_payout_request: 'potential_rot_rut_payout_request_id',
+}
 
 /**
  * Retire the match SUGGESTIONS that point at an invoice which has just been
@@ -36,7 +42,7 @@ export async function clearSettledInvoiceSuggestions(
   invoiceId: string,
   options?: { exceptTransactionId?: string | null },
 ): Promise<void> {
-  const column = kind === 'invoice' ? 'potential_invoice_id' : 'potential_supplier_invoice_id'
+  const column = HINT_COLUMN_BY_KIND[kind]
   let query = supabase
     .from('transactions')
     .update({ [column]: null })

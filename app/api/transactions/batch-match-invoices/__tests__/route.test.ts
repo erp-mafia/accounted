@@ -14,6 +14,13 @@ vi.mock('@/lib/invoices/invoice-matching', () => ({
   getBestInvoiceMatch: (...args: unknown[]) => mockGetBestInvoiceMatch(...args),
 }))
 
+// Mocked so the open-begäran pool consumes no slot in the queued Supabase mock.
+const mockLoadOpenRotRutPayoutRequests = vi.fn()
+vi.mock('@/lib/invoices/rot-rut-payout-candidates', () => ({
+  loadOpenRotRutPayoutRequests: (...args: unknown[]) => mockLoadOpenRotRutPayoutRequests(...args),
+}))
+mockLoadOpenRotRutPayoutRequests.mockResolvedValue([])
+
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),

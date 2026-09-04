@@ -155,6 +155,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             is_net_deduction: li.is_net_deduction,
             account_number: li.account_number,
             sort_order: li.sort_order,
+            // Provenance must survive the copy: without these back-links a
+            // recalculation of the correction run treats the copied derived
+            // rows as manual and step 8d/8d3 derives them a second time.
+            source_benefit_id: li.source_benefit_id ?? null,
+            source_recurring_line_id: li.source_recurring_line_id ?? null,
           })
         }
       }
