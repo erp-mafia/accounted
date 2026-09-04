@@ -8,13 +8,28 @@ vi.mock('@/lib/deadlines/status-engine', () => ({
 
 import { buildAssistantSnapshot } from '../snapshot'
 
-function supabaseWith(settings: Record<string, unknown> | null): SupabaseClient {
-  const chain = {
-    select: () => chain,
-    eq: () => chain,
-    maybeSingle: async () => ({ data: settings, error: null }),
-  }
-  return { from: () => chain } as unknown as SupabaseClient
+/**
+ * company_settings answers maybeSingle(); employees answers the awaited head
+ * count (the builder chain is thenable, like the real PostgREST builder).
+ */
+function supabaseWith(
+  settings: Record<string, unknown> | null,
+  activeEmployees: number | null = null,
+): SupabaseClient {
+  return {
+    from: (table: string) => {
+      const chain = {
+        select: () => chain,
+        eq: () => chain,
+        maybeSingle: async () => ({ data: table === 'company_settings' ? settings : null, error: null }),
+        then: (onFulfilled: (v: unknown) => unknown) =>
+          Promise.resolve({ count: table === 'employees' ? activeEmployees : null, error: null }).then(
+            onFulfilled,
+          ),
+      }
+      return chain
+    },
+  } as unknown as SupabaseClient
 }
 
 beforeEach(() => {
@@ -45,7 +60,60 @@ describe('buildAssistantSnapshot', () => {
     )
     expect(snap).toContain('ej momsregistrerad')
     expect(snap).toContain('bokföringsmetod: kontantmetod')
-    expect(snap).toContain('betalar inte löner')
+  })
+
+  describe('the salary fact', () => {
+    // pays_salaries is NOT NULL DEFAULT false and only the Skatt settings form
+    // writes it, so false is what every company that never opened that form
+    // reads. Claiming "betalar inte löner" from it told a payroll-running
+    // aktiebolag in every answer that it had no salaries.
+    it('claims nothing when the flag is merely at its column default', async () => {
+      const snap = await buildAssistantSnapshot(
+        supabaseWith({ vat_registered: true, pays_salaries: false, employer_registered: null }, 0),
+        'c1',
+      )
+      expect(snap).not.toContain('betalar inte löner')
+      expect(snap).not.toContain('betalar löner')
+      expect(snap).toContain('Status: momsregistrerad.')
+    })
+
+    it('derives it from active employees when the flag was never set', async () => {
+      const snap = await buildAssistantSnapshot(
+        supabaseWith({ vat_registered: true, pays_salaries: false, employer_registered: null }, 1),
+        'c1',
+      )
+      expect(snap).toContain('betalar löner (1 anställd)')
+    })
+
+    it('pluralises the headcount', async () => {
+      const snap = await buildAssistantSnapshot(
+        supabaseWith({ vat_registered: true, pays_salaries: false }, 3),
+        'c1',
+      )
+      expect(snap).toContain('betalar löner (3 anställda)')
+    })
+
+    it('accepts an attested employer registration as the positive fact', async () => {
+      const snap = await buildAssistantSnapshot(
+        supabaseWith({ vat_registered: true, pays_salaries: false, employer_registered: true }, 0),
+        'c1',
+      )
+      expect(snap).toContain('betalar löner')
+    })
+
+    it('states the negative only from an attested employer_registered = false', async () => {
+      const snap = await buildAssistantSnapshot(
+        supabaseWith({ vat_registered: true, pays_salaries: false, employer_registered: false }, 0),
+        'c1',
+      )
+      expect(snap).toContain('betalar inte löner')
+    })
+  })
+
+  it('tells the model where the profile values are edited', async () => {
+    const snap = await buildAssistantSnapshot(supabaseWith({ vat_registered: true }), 'c1')
+    expect(snap).toContain('Inställningar > Skatt')
+    expect(snap).toContain('Inställningar > Bokföring')
   })
 
   it('lists deadlines that need attention (overdue first, capped)', async () => {
