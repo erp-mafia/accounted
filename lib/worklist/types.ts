@@ -59,7 +59,8 @@ export const WORKLIST_CATEGORIES = [
   'suggested_match',
   /**
    * Supplier invoices awaiting approval ("attestera").
-   * Pending:  supplier_invoices.status = 'registered'.
+   * Pending:  supplier_invoices.status = 'registered' and not a credit note
+   *           (a credit note is a reversal, never a payable).
    * Done:     status moves to approved/paid/credited/….
    */
   'supplier_invoice_approval',

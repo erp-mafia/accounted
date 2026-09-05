@@ -167,13 +167,21 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // (parties phase 1, #2162/#2168/#2169) at 395: 397.
 // 2026-09-04: +2 recurring lines (#2044, see the 2026-08-30 recurring payroll
 // lines note above); merged with main (#2141/#2164/#2170/#2192) at 397: 399.
+// 2026-09-04: +3 supplier credit notes (#2289): the dashboard credit route,
+// commitCreditSupplierInvoice (MCP) and the v1 credit route insert the
+// credit-note row from one builder, buildSupplierCreditNoteRow() in
+// lib/supplier-invoices/credit-note.ts, so the resting status is decided in
+// one place (and held by CHECK supplier_invoices_credit_note_not_payable);
+// its columns are the object literal in that file, pinned by
+// credit-note.test.ts. Merged with main (#2288) at 399: 402.
 // 2026-09-04: +2 for the migrated-invoice row completion
 // (extensions/general/arcim-migration/lib/complete-invoice-lines.ts): the
 // invoice_items rows come from the migration's own mapSalesInvoiceLine, the
 // same row array the orchestrator already inserts (counted above), written
 // once as a batch and again per invoice when the batch is rejected. The header
-// VAT update in the same module is an object literal and is checked. 399: 401.
-const UNRESOLVED_CEILING = 401
+// VAT update in the same module is an object literal and is checked. Merged
+// with main (#2289) at 402: 404.
+const UNRESOLVED_CEILING = 404
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

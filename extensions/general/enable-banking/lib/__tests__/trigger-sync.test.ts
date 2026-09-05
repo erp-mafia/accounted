@@ -16,7 +16,7 @@ vi.mock('@/lib/events/bus', () => ({
   eventBus: { emit: (...args: unknown[]) => mocks.emit(...args) },
 }))
 
-import { SessionExpiredError, REAUTH_REQUIRED_MESSAGE } from '../api-client'
+import { SessionExpiredError, REAUTH_REQUIRED_MESSAGE, ConnectorSyncError } from '../api-client'
 import { SYNC_COOLDOWN_MS, triggerConnectionSync } from '../trigger-sync'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -248,6 +248,18 @@ describe('triggerConnectionSync', () => {
   it('refuses when every account is deselected', async () => {
     state.connection = connection({ accounts_data: [{ uid: 'acc-1', enabled: false }] })
     expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_NO_ACCOUNTS' })
+  })
+
+  it('answers retryable and leaves the row alone when the connector hop fails', async () => {
+    state.connection = connection({ status: 'error', error_message: 'old' })
+    mocks.syncAccountTransactions.mockRejectedValue(new ConnectorSyncError(null, 'CONNECTOR_TIMEOUT', 'aborted'))
+    const result = await run()
+    expect(result).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status: 'error' })
+    expect(state.updates.some((u) => 'status' in u || 'error_message' in u)).toBe(false)
+    expect(log.warn).toHaveBeenCalledWith(
+      'agent-triggered bank sync: connector hop failed',
+      expect.objectContaining({ code: 'CONNECTOR_TIMEOUT' }),
+    )
   })
 
   it('flips the connection to expired when the bank reports the session dead', async () => {
