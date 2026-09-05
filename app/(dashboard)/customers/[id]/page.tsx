@@ -71,10 +71,10 @@ export default function CustomerDetailPage({
   // Which contact fields carry what the register said: one note for the
   // section, not a tag under every row.
   const registryFields = [
-    fromRegistry(customer.email, party.registry?.contact.email) ? tParties('fact_email') : null,
-    fromRegistry(customer.phone, party.registry?.contact.phone) ? tParties('fact_phone') : null,
-    !!registryAddress && fromRegistry(customer.address_line1, registryAddress.address_line1) && fromRegistry(customer.city, registryAddress.city) ? tParties('facts_address_short') : null,
-    fromRegistry(customer.vat_number, party.registry?.vat_number) ? tParties('fact_vat') : null,
+    fromRegistry(customer?.email, party.registry?.contact.email) ? tParties('fact_email') : null,
+    fromRegistry(customer?.phone, party.registry?.contact.phone) ? tParties('fact_phone') : null,
+    !!registryAddress && fromRegistry(customer?.address_line1, registryAddress.address_line1) && fromRegistry(customer?.city, registryAddress.city) ? tParties('facts_address_short') : null,
+    fromRegistry(customer?.vat_number, party.registry?.vat_number) ? tParties('fact_vat') : null,
   ].filter((x): x is string => !!x)
   const registryNote = registryFields.length ? (
     <p className="pt-2 text-xs text-muted-foreground">{tParties('facts_contact_from_registry', { fields: listSv(registryFields, tParties('facts_list_and')) })}</p>
