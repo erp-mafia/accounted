@@ -109,6 +109,7 @@ describe('POST /api/parties/[id]/enrich', () => {
       ],
       fetchedAt: '2026-09-03T10:00:00Z',
     })
+    enqueue({ data: [] }) // previous registry contact facts
     enqueue({ data: { inserted: 2, superseded: 0, refreshed: 0 } })
     enqueue({ data: null, count: 0 }) // no user-entered legal name
     enqueue({ data: null }) // parties.update
@@ -131,10 +132,42 @@ describe('POST /api/parties/[id]/enrich', () => {
   })
 })
 
+describe('POST /api/parties/[id]/enrich, contact details land on the rows', () => {
+  it('fills empty supplier contact fields from the register, never a typed one, and reports what it filled', async () => {
+    enqueue({ data: { id: PARTY, display_name: 'Webhallen Sverige AB', org_number: '5565588224', legal_name: 'WEBHALLEN SVERIGE AB' } })
+    lookupByOrgNumber.mockResolvedValue({
+      found: true,
+      peOrgNr: '165565588224',
+      row: {},
+      facts: [
+        { field: 'legal_name', value: 'WEBHALLEN SVERIGE AB' },
+        { field: 'email', value: 'info@webhallen.com' },
+        { field: 'phone', value: '086736000' },
+        { field: 'postal_address', value: { co: null, street: 'TELEGRAFGATAN 4', postal_code: '169 72', city: 'SOLNA' } },
+      ],
+      fetchedAt: '2026-09-05T10:00:00Z',
+    })
+    enqueue({ data: [] }) // previous registry contact facts: none
+    enqueue({ data: { inserted: 4, superseded: 0, refreshed: 0 } })
+    enqueue({ data: null, count: 0 }) // no user-entered legal name
+    // suppliers pointing at the party: one with a typed e-mail, empty otherwise
+    enqueue({ data: [{ id: 's-1', email: 'faktura@webhallen.com', phone: null, address_line1: null, address_line2: null, postal_code: null, city: null }] })
+    enqueue({ data: null }) // suppliers.update
+    enqueue({ data: [] }) // customers: none
+    const { status, body } = await parseJsonResponse<{ data: { filled: Record<string, string[]>; renamedTo: string | null } }>(await call())
+    expect(status).toBe(200)
+    expect(body.data.renamedTo).toBeNull()
+    expect(body.data.filled).toEqual({ suppliers: ['phone', 'address_line1', 'address_line2', 'postal_code', 'city'] })
+    const update = mockSupabase.from.mock.calls.map((c, i) => ({ table: c[0], i })).filter((c) => c.table === 'suppliers')
+    expect(update.length).toBeGreaterThanOrEqual(2)
+  })
+})
+
 describe('POST /api/parties/[id]/enrich, the registry name becomes the displayed name', () => {
   it('renames a memo-named party and its supplier row to the registry name in title case, and reports it', async () => {
     enqueue({ data: { id: PARTY, display_name: 'Webhallen Oktober', org_number: '5565588224', legal_name: null } })
     lookupByOrgNumber.mockResolvedValue({ found: true, peOrgNr: '165565588224', row: {}, facts: [{ field: 'legal_name', value: 'WEBHALLEN SVERIGE AB' }], fetchedAt: '2026-09-05T10:00:00Z' })
+    enqueue({ data: [] }) // previous registry contact facts
     enqueue({ data: { inserted: 1, superseded: 0, refreshed: 0 } })
     enqueue({ data: null, count: 0 }) // no user-entered legal name
     enqueue({ data: null }) // parties.update
@@ -152,6 +185,7 @@ describe('POST /api/parties/[id]/enrich, the registry name becomes the displayed
   it('keeps a display name that already is the registry name, spelling aside', async () => {
     enqueue({ data: { id: PARTY, display_name: 'Visma Spcs AB', org_number: '5562529155', legal_name: null } })
     lookupByOrgNumber.mockResolvedValue({ found: true, peOrgNr: '165562529155', row: {}, facts: [{ field: 'legal_name', value: 'VISMA SPCS AB' }], fetchedAt: '2026-09-05T10:00:00Z' })
+    enqueue({ data: [] }) // previous registry contact facts
     enqueue({ data: { inserted: 1, superseded: 0, refreshed: 0 } })
     enqueue({ data: null, count: 0 })
     enqueue({ data: null }) // parties.update (legal_name only)
@@ -165,6 +199,7 @@ describe('POST /api/parties/[id]/enrich, legal name survivorship', () => {
   it('replaces a document-sourced legal name with the registry name, but never one a person entered', async () => {
     enqueue({ data: { id: PARTY, display_name: 'Beijer Bygg', org_number: '5560125790', legal_name: 'Beijer Bygg' } })
     lookupByOrgNumber.mockResolvedValue({ found: true, peOrgNr: '165560125790', row: {}, facts: [{ field: 'legal_name', value: 'AKTIEBOLAGET VOLVO' }], fetchedAt: '2026-09-03T10:00:00Z' })
+    enqueue({ data: [] }) // previous registry contact facts
     enqueue({ data: { inserted: 1, superseded: 0, refreshed: 0 } })
     enqueue({ data: null, count: 1 }) // a user-entered legal name exists
     const { status } = await parseJsonResponse(await call())
@@ -307,8 +342,10 @@ describe('POST /api/parties/[id]/enrich with a picked org number', () => {
     enqueue({ data: { id: PARTY, org_number: null, legal_name: null, vat_number: null } })
     enqueue({ data: null }) // no holder
     enqueue({ data: null }) // parties.update org_number
+    enqueue({ data: [] }) // previous registry contact facts
     enqueue({ data: { inserted: 1, superseded: 0, refreshed: 0 } }) // record_party_facts (user)
     lookupByOrgNumber.mockResolvedValue({ found: true, peOrgNr: '165564082161', row: {}, facts: [{ field: 'legal_name', value: 'Adobe Systems Nordic Aktiebolag' }], fetchedAt: '2026-09-03T10:00:00Z' })
+    enqueue({ data: [] }) // previous registry contact facts
     enqueue({ data: { inserted: 1, superseded: 0, refreshed: 0 } }) // record_party_facts (registry)
     enqueue({ data: null, count: 0 }) // no user legal name
     enqueue({ data: null }) // parties.update legal_name

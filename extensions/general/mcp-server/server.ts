@@ -101,6 +101,7 @@ import {
 } from '@/lib/reports/vat-filing-gate'
 import { findRcBasisGaps } from '@/lib/reports/rc-basis-gaps'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { expandParty } from '@/lib/parties/party-api'
 import { listForCompany as listCashAccountsForCompany } from '@/lib/cash-accounts/service'
 import {
   looksLikeSwedishPersonalNumber,
@@ -5948,7 +5949,7 @@ export const tools: McpTool[] = [
         rows = await fetchAllRows<ListedCustomer>(({ from, to }) => {
           const query = supabase
             .from('customers')
-            .select('id, name, customer_type, email, org_number, vat_number, personal_number, default_payment_terms, city, country, archived_at')
+            .select('id, name, customer_type, email, org_number, vat_number, personal_number, default_payment_terms, city, country, party_id, archived_at')
             .eq('company_id', companyId)
           return (includeArchived ? query : query.is('archived_at', null))
             .order('id', { ascending: true })
@@ -8481,7 +8482,7 @@ export const tools: McpTool[] = [
         suppliers = await fetchAllRows<{ id: string; name: string }>(({ from, to }) => {
           const query = supabase
             .from('suppliers')
-            .select('id, name, supplier_type, email, phone, org_number, vat_number, default_expense_account, default_payment_terms, default_currency, city, country, archived_at')
+            .select('id, name, supplier_type, email, phone, org_number, vat_number, default_expense_account, default_payment_terms, default_currency, city, country, party_id, archived_at')
             .eq('company_id', companyId)
           return (includeArchived ? query : query.is('archived_at', null))
             .order('id', { ascending: true })
@@ -8493,6 +8494,61 @@ export const tools: McpTool[] = [
       suppliers.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
       return { suppliers, count: suppliers.length }
+    },
+  },
+
+  {
+    name: 'gnubok_get_party',
+    keywords: ['motpart', 'part', 'leverantör', 'kund', 'företagsregistret', 'scb', 'org.nr', 'organisationsnummer', 'bolagsform', 'f-skatt'],
+    title: 'Get Party (Motpart) Behind a Supplier or Customer',
+    description:
+      'The party (motpart) behind a supplier or customer: legal name, org and VAT number, country, the SCB company-register summary (status, legal form, industry, seat, size, F-tax/VAT/employer registrations, contact details, fetched date) and what the ledger has seen for it (occurrences, amounts, first/last seen, dominant account). Pass exactly one of party_id, supplier_id or customer_id (party_id comes back on gnubok_list_suppliers and gnubok_list_customers rows). Read-only; registry facts are fetched in the web app (Leverantörer → Företagsuppgifter) or via the v1 REST API.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        party_id: { type: 'string', format: 'uuid', description: 'The party id.' },
+        supplier_id: { type: 'string', format: 'uuid', description: 'A supplier id; its party is returned.' },
+        customer_id: { type: 'string', format: 'uuid', description: 'A customer id; its party is returned. Private individuals have none.' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        party: { type: ['object', 'null'] },
+        found: { type: 'boolean' },
+      },
+      required: ['party', 'found'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    async execute(args, companyId, userId, supabase) {
+      const given = (['party_id', 'supplier_id', 'customer_id'] as const).filter((k) => typeof args[k] === 'string' && (args[k] as string).trim())
+      if (given.length !== 1) {
+        throw new Error('Pass exactly one of party_id, supplier_id or customer_id.')
+      }
+      let partyId: string | null = null
+      if (given[0] === 'party_id') partyId = String(args.party_id)
+      else {
+        const table = given[0] === 'supplier_id' ? 'suppliers' : 'customers'
+        const { data: row, error } = await supabase
+          .from(table)
+          .select('id, party_id')
+          .eq('company_id', companyId)
+          .eq('id', String(args[given[0]]))
+          .maybeSingle()
+        if (error) throw dbError(error)
+        if (!row) return { party: null, found: false }
+        partyId = (row as { party_id: string | null }).party_id
+      }
+      if (!partyId) return { party: null, found: false }
+      let party
+      try {
+        party = await expandParty(supabase, companyId, partyId)
+      } catch (error) {
+        throw dbError(error)
+      }
+      return { party, found: party !== null }
     },
   },
 

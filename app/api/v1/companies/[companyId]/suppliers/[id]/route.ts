@@ -16,6 +16,7 @@ import { z } from 'zod'
 import { noContent, ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { parseExpand } from '@/lib/api/v1/expand'
+import { PartyForApiSchema, expandParty } from '@/lib/parties/party-api'
 import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
@@ -51,12 +52,16 @@ const SupplierDetail = z.object({
   default_payment_terms: z.number(),
   default_currency: z.string(),
   notes: z.string().nullable(),
+  /** The party (motpart) behind the supplier: one per counterpart, shared with the customer side and the ledger. */
+  party_id: z.string().uuid().nullable(),
+  /** Present with ?expand=party: identity, the SCB register summary and what the ledger has seen. */
+  party: PartyForApiSchema.nullable().optional(),
   archived_at: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
 })
 
-const ALLOWED_EXPAND = ['supplier_invoices'] as const
+const ALLOWED_EXPAND = ['supplier_invoices', 'party'] as const
 // `disputed` is included so a held supplier invoice still blocks archive:
 // the seller record may still be needed if the dispute resolves into a
 // kreditfaktura or partial payment.
@@ -69,7 +74,7 @@ const OPEN_SUPPLIER_INVOICE_STATUSES = [
 ]
 
 const SUPPLIER_DETAIL_COLUMNS =
-  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, iban, bic, default_expense_account, default_payment_terms, default_currency, notes, archived_at, created_at, updated_at'
+  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, iban, bic, default_expense_account, default_payment_terms, default_currency, notes, party_id, archived_at, created_at, updated_at'
 
 const OPEN_SUPPLIER_INVOICE_COLUMNS =
   'id, supplier_invoice_number, arrival_number, invoice_date, due_date, status, currency, total, remaining_amount'
@@ -80,7 +85,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/suppliers/:id',
   summary: 'Retrieve a single supplier by id.',
   description:
-    'Returns the full supplier record. Pass ?expand=supplier_invoices to embed any open supplier invoices (registered / approved / partially_paid / overdue / disputed) for the supplier in the same response.',
+    'Returns the full supplier record. Pass ?expand=supplier_invoices to embed any open supplier invoices (registered / approved / partially_paid / overdue / disputed) for the supplier in the same response. Pass ?expand=party to embed the party (motpart) behind the supplier: legal name, org and VAT number, country, the SCB company-register summary (status, legal form, industry, seat, size, registrations, contact details, fetched date) and what the ledger has seen for it.',
   useWhen:
     'You need the full supplier record: address, payment terms, banking details, default expense account: before booking a supplier invoice or syncing to an external AP system.',
   doNotUseFor:
@@ -195,8 +200,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       }
     }
 
+    const party = expand.has('party') ? await expandParty(ctx.supabase, ctx.companyId!, (supplier as { party_id?: string | null }).party_id ?? null) : undefined
+
     return ok(
-      { ...supplier, ...(supplier_invoices !== undefined ? { supplier_invoices } : {}) },
+      { ...supplier, ...(supplier_invoices !== undefined ? { supplier_invoices } : {}), ...(party !== undefined ? { party } : {}) },
       {
         requestId: ctx.requestId,
         partialExpansions: partialExpansions.length > 0 ? partialExpansions : undefined,

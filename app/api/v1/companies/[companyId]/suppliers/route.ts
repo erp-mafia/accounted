@@ -44,6 +44,8 @@ const SupplierSummary = z.object({
   vat_number: z.string().nullable(),
   default_payment_terms: z.number(),
   default_currency: z.string(),
+  /** The party (motpart) behind the row; fetch it with GET .../{id}?expand=party or the MCP tool get_party. */
+  party_id: z.string().uuid().nullable().optional(),
   archived_at: z.string().nullable(),
   created_at: z.string(),
 })
@@ -53,7 +55,7 @@ const SuppliersListResponse = listEnvelope(SupplierSummary)
 // Explicit projection: never SELECT *. Schema migrations adding columns
 // must update this list before the field becomes visible on the public API.
 const SUPPLIER_SUMMARY_COLUMNS =
-  'id, name, supplier_type, email, org_number, vat_number, default_payment_terms, default_currency, archived_at, created_at'
+  'id, name, supplier_type, email, org_number, vat_number, default_payment_terms, default_currency, party_id, archived_at, created_at'
 
 registerEndpoint({
   operation: 'suppliers.list',
