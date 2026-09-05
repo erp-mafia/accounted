@@ -23,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import {
   Inbox,
@@ -3083,7 +3084,13 @@ export type PayerChoice = 'company' | 'unpaid' | ExpensePayer
 
 const PAYER_ORDER: PayerChoice[] = ['company', 'owner', 'employee', 'unpaid']
 
-export function PayerChoiceList({
+/**
+ * The "Vem betalade?" control: a compact select so the rail keeps its
+ * primary button above the fold, with the chosen answer's one-line
+ * consequence under it. Each option in the list carries the same help so
+ * the choice is made with the consequence visible, not after.
+ */
+export function PayerChoiceSelect({
   value,
   onChange,
   accountingMethod,
@@ -3098,38 +3105,24 @@ export function PayerChoiceList({
   return (
     <div className="space-y-1.5">
       <p className="text-[13px] font-medium">{t('payer_question')}</p>
-      <div role="radiogroup" aria-label={t('payer_question')} className="rounded-lg border border-border">
-        {PAYER_ORDER.map((choice) => {
-          const selected = choice === value
-          return (
-            <button
-              key={choice}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => onChange(choice)}
-              className={cn(
-                'flex w-full items-start gap-3 border-b border-border px-3 py-2.5 text-left transition-colors duration-150 last:border-b-0 hover:bg-secondary/30 first:rounded-t-lg last:rounded-b-lg',
-                selected && 'bg-secondary/40',
-              )}
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border bg-background',
-                  selected ? 'border-primary' : 'border-input',
-                )}
-              >
-                {selected && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
-              </span>
-              <span className="min-w-0">
-                <span className="block text-[13px]">{t(`payer_${choice}`)}</span>
-                <span className="block text-xs text-muted-foreground">{t(helpKey(choice))}</span>
-              </span>
-            </button>
-          )
-        })}
-      </div>
+      <Select value={value} onValueChange={(next) => onChange(next as PayerChoice)}>
+        <SelectTrigger aria-label={t('payer_question')} className="h-9 text-[13px]">
+          {/* Explicit children: the items render label + help, and the
+              trigger must show the label alone. */}
+          <SelectValue>{t(`payer_${value}`)}</SelectValue>
+        </SelectTrigger>
+        {/* Match the trigger width so the two-line options wrap inside the rail
+            instead of spilling over the document viewer. */}
+        <SelectContent align="start" className="w-[var(--radix-select-trigger-width)]">
+          {PAYER_ORDER.map((choice) => (
+            <SelectItem key={choice} value={choice} className="py-2">
+              <span className="block text-[13px]">{t(`payer_${choice}`)}</span>
+              <span className="block text-xs text-muted-foreground">{t(helpKey(choice))}</span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">{t(helpKey(value))}</p>
     </div>
   )
 }
@@ -3689,7 +3682,7 @@ function FieldsRail({
                 answer keeps BFL 5 kap 6-7 § intact (the underlag is booked
                 as a verifikat, never forced into a supplier invoice), and the
                 verifikat editor stays reachable below as the escape hatch. */}
-            <PayerChoiceList value={payer} onChange={setPayer} accountingMethod={accountingMethod} />
+            <PayerChoiceSelect value={payer} onChange={setPayer} accountingMethod={accountingMethod} />
             {payer === 'company' ? (
               <Button variant="default" size="sm" className="w-full" onClick={onMatchTransaction}>
                 Matcha mot transaktion
