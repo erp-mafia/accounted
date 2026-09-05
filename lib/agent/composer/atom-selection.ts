@@ -480,8 +480,12 @@ export function buildKnownFacts(inputs: ComposerInputs): string[] {
     if (s.vat_registered != null) {
       out.push(`Momsregistrerad: ${s.vat_registered ? 'ja' : 'nej'}`)
     }
-    if (s.pays_salaries != null) {
-      out.push(`Betalar ut lön: ${s.pays_salaries ? 'ja' : 'nej'}`)
+    // Only a true is a fact: the column is NOT NULL DEFAULT false, so false is
+    // what every company that never opened the Skatt settings reads
+    // (employee-facts.ts). An attested negative surfaces through
+    // employeeKnownFact below; the default must not be read as "nej".
+    if (s.pays_salaries === true) {
+      out.push('Betalar ut lön: ja')
     }
     if (s.employer_registered != null) {
       out.push(`Arbetsgivarregistrerad: ${s.employer_registered ? 'ja' : 'nej'}`)
