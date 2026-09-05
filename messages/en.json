@@ -3304,7 +3304,6 @@
   "inbox_workspace": {
     "payer_question": "Who paid?",
     "payer_company": "The company",
-    "payer_help_company": "Card or bank account. Matched against the transaction when it appears.",
     "payer_owner": "Me, privately",
     "payer_help_owner": "The company owes you the amount. Paid out from the company account later.",
     "payer_employee": "An employee",

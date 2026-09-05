@@ -3304,7 +3304,6 @@
   "inbox_workspace": {
     "payer_question": "Vem betalade?",
     "payer_company": "Företaget",
-    "payer_help_company": "Kort eller bankkonto. Matchas mot transaktionen när den syns.",
     "payer_owner": "Jag, privat",
     "payer_help_owner": "Bolaget blir skyldigt dig beloppet. Betalas ut från företagskontot senare.",
     "payer_employee": "En anställd",

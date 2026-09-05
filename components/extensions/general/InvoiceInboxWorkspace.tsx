@@ -3100,8 +3100,16 @@ export function PayerChoiceSelect({
   accountingMethod: AccountingMethod
 }) {
   const t = useTranslations('inbox_workspace')
-  const helpKey = (choice: PayerChoice): string =>
-    choice === 'unpaid' && accountingMethod === 'cash' ? 'payer_help_unpaid_cash' : `payer_help_${choice}`
+  // Företaget carries no help line: the button under it ("Matcha mot
+  // transaktion") already says what happens. The other answers name the
+  // liability the company takes on, which is the consequence worth reading.
+  const helpKey = (choice: PayerChoice): string | null =>
+    choice === 'company'
+      ? null
+      : choice === 'unpaid' && accountingMethod === 'cash'
+        ? 'payer_help_unpaid_cash'
+        : `payer_help_${choice}`
+  const selectedHelp = helpKey(value)
   return (
     <div className="space-y-1.5">
       <p className="text-[13px] font-medium">{t('payer_question')}</p>
@@ -3117,12 +3125,14 @@ export function PayerChoiceSelect({
           {PAYER_ORDER.map((choice) => (
             <SelectItem key={choice} value={choice} className="py-2">
               <span className="block text-[13px]">{t(`payer_${choice}`)}</span>
-              <span className="block text-xs text-muted-foreground">{t(helpKey(choice))}</span>
+              {helpKey(choice) && (
+                <span className="block text-xs text-muted-foreground">{t(helpKey(choice)!)}</span>
+              )}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
-      <p className="text-xs text-muted-foreground">{t(helpKey(value))}</p>
+      {selectedHelp && <p className="text-xs text-muted-foreground">{t(selectedHelp)}</p>}
     </div>
   )
 }
