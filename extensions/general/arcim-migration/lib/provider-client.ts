@@ -32,6 +32,7 @@ import { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
 import type { CompanyInformationDto } from '@/lib/providers/dto'
 import { createLogger } from '@/lib/logger'
 import type { ConsentRecord, OtcResponse } from '../types'
+import { decryptHandoffValue, encryptHandoffValue } from './handoff-crypto'
 
 const log = createLogger('extensions/arcim-migration/provider-client')
 
@@ -327,7 +328,7 @@ export async function consumeOAuthState(
   }
 }
 
-/** Keep provider credentials server-side during the two-minute domain handoff. */
+/** Encrypt provider credentials and error text during the two-minute handoff. */
 export async function mintHandoff(
   consentId: string,
   userId: string,
@@ -343,8 +344,12 @@ export async function mintHandoff(
       consent_id: consentId,
       user_id: userId,
       origin,
-      provider_code: result.providerCode ?? null,
-      provider_error: result.providerError ?? null,
+      provider_code: result.providerCode === undefined ? null : encryptHandoffValue(
+        result.providerCode, JSON.stringify([code, consentId, userId, origin, 'provider_code']),
+      ),
+      provider_error: result.providerError === undefined ? null : encryptHandoffValue(
+        result.providerError, JSON.stringify([code, consentId, userId, origin, 'provider_error']),
+      ),
       expires_at: expiresAt,
     })
   if (error) throw new Error(`Failed to mint OAuth handoff: ${error.message}`)
@@ -380,13 +385,24 @@ export async function consumeHandoff(code: string, origin: string): Promise<{
     .maybeSingle()
   if (!consent?.provider) return null
 
-  return {
-    consentId: consumed.consent_id as string,
-    provider: consent.provider as ProviderName,
-    userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
-    origin: consumed.origin as string,
-    providerCode: consumed.provider_code as string | null,
-    providerError: consumed.provider_error as string | null,
+  try {
+    const decrypt = (column: 'provider_code' | 'provider_error') => consumed[column] === null
+      ? null
+      : decryptHandoffValue(consumed[column], JSON.stringify([
+        code, consumed.consent_id, consumed.user_id, consumed.origin, column,
+      ]))
+    return {
+      consentId: consumed.consent_id as string,
+      provider: consent.provider as ProviderName,
+      userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
+      origin: consumed.origin as string,
+      providerCode: decrypt('provider_code'),
+      providerError: decrypt('provider_error'),
+    }
+  } catch {
+    // The row has already been deleted. Tampered or unreadable credentials
+    // have the same rejection as an unknown/expired handoff, without leaks.
+    return null
   }
 }
 

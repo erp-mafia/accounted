@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { encryptHandoffValue } from '../lib/handoff-crypto'
 
 /**
  * Unit-level guard on the two tenant boundaries in provider-client:
@@ -215,6 +216,12 @@ describe('generateOtc', () => {
 describe('OAuth handoff storage', () => {
   const origin = 'https://solbo.accounted.se'
 
+  beforeEach(() => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-only-handoff-encryption-key')
+  })
+
+  afterEach(() => vi.unstubAllEnvs())
+
   it.each([{ providerCode: 'auth-code' }, { providerError: 'access denied' }])(
     'mints a fresh two-minute handoff holding %j', async (result) => {
       const { calls } = useResults([{}, {}])
@@ -225,18 +232,27 @@ describe('OAuth handoff storage', () => {
       expect(first.code).not.toBe(second.code)
       expect(Date.parse(first.expiresAt)).toBeGreaterThanOrEqual(before + 120_000)
       expect(Date.parse(first.expiresAt)).toBeLessThanOrEqual(Date.now() + 120_000)
-      expect(findOp(calls[0], 'insert')?.[1][0]).toEqual({
+      const inserted = findOp(calls[0], 'insert')?.[1][0] as Record<string, unknown>
+      expect(inserted).toEqual({
         code: first.code, consent_id: 'consent-1', user_id: 'user-1', origin,
         expires_at: first.expiresAt,
-        provider_code: result.providerCode ?? null,
-        provider_error: result.providerError ?? null,
+        provider_code: result.providerCode ? expect.stringMatching(/^v1:/) : null,
+        provider_error: result.providerError ? expect.stringMatching(/^v1:/) : null,
+      })
+      expect(JSON.stringify(inserted)).not.toContain(result.providerCode ?? result.providerError)
+      useResults([{ data: inserted }, { data: { provider: 'fortnox' } }])
+      await expect(consumeHandoff(first.code, origin)).resolves.toMatchObject({
+        providerCode: result.providerCode ?? null, providerError: result.providerError ?? null,
       })
     },
   )
 
   it('deletes atomically, binding origin, expiry, unused status and handoff purpose', async () => {
     const { calls } = useResults([
-      { data: { consent_id: 'consent-1', user_id: 'user-1', origin, provider_code: 'stored-code', provider_error: null } },
+      { data: {
+        consent_id: 'consent-1', user_id: 'user-1', origin, provider_error: null,
+        provider_code: encryptHandoffValue('stored-code', JSON.stringify(['handoff-token', 'consent-1', 'user-1', origin, 'provider_code'])),
+      } },
       { data: { provider: 'visma' } },
     ])
     await expect(consumeHandoff('handoff-token', origin)).resolves.toEqual({
@@ -270,6 +286,15 @@ describe('OAuth handoff storage', () => {
     useResults([{ error: { message: 'unavailable' } }])
     await expect(mintHandoff('consent-1', 'user-1', origin, { providerCode: 'code' }))
       .rejects.toThrow('Failed to mint OAuth handoff')
+  })
+
+  it('rejects unencrypted or corrupted handoff credentials after deleting the row', async () => {
+    const { calls } = useResults([
+      { data: { consent_id: 'consent-1', user_id: 'user-1', origin, provider_code: 'plaintext-code', provider_error: null } },
+      { data: { provider: 'fortnox' } },
+    ])
+    await expect(consumeHandoff('token', origin)).resolves.toBeNull()
+    expect(calls[0].ops[0][0]).toBe('delete')
   })
 })
 
