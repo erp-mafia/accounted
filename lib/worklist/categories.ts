@@ -12,6 +12,7 @@ import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matc
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
@@ -565,13 +566,6 @@ export async function countReconciliationDue(
 }
 
 /**
- * Upper bound on registered-claim rows scanned per company. Claims are
- * marked paid in batches, so a backlog beyond this is pathological; the
- * list clamps rather than paginating on every home render.
- */
-export const EXPENSE_PAYOUT_SCAN_CAP = 500
-
-/**
  * People owed for registered, unpaid utlägg, newest debt last. The canonical
  * "att betala ut" predicate: expense_claims.status = 'registered'. Grouped
  * here (not in SQL) because the owner has no employee row: two owner claims
@@ -581,25 +575,34 @@ export async function listExpensePayoutsDue(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<ExpensePayoutDue[]> {
-  const { data, error } = await supabase
-    .from('expense_claims')
-    .select('employee_id, claimant_name, liability_account, amount_sek, expense_date')
-    .eq('company_id', companyId)
-    .eq('status', 'registered')
-    .order('expense_date', { ascending: true })
-    .limit(EXPENSE_PAYOUT_SCAN_CAP)
-  if (error) {
-    logAndZero('expense_payout', companyId, error)
-    return []
-  }
-  const byPerson = new Map<string, ExpensePayoutDue>()
-  for (const row of (data ?? []) as Array<{
+  type ClaimRow = {
+    id?: string
     employee_id: string | null
     claimant_name: string
     liability_account: string
     amount_sek: number | string
     expense_date: string
-  }>) {
+  }
+  let rows: ClaimRow[]
+  try {
+    // Every registered claim, paginated past the PostgREST row cap: a person
+    // omitted or a total understated here is money the company owes someone.
+    rows = await fetchAllRows<ClaimRow>(({ from, to }) =>
+      supabase
+        .from('expense_claims')
+        .select('id, employee_id, claimant_name, liability_account, amount_sek, expense_date')
+        .eq('company_id', companyId)
+        .eq('status', 'registered')
+        .order('expense_date', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (err) {
+    logAndZero('expense_payout', companyId, err as { message?: string })
+    return []
+  }
+  const byPerson = new Map<string, ExpensePayoutDue>()
+  for (const row of rows) {
     const key = row.employee_id ?? `owner:${row.claimant_name}`
     const amount = Number(row.amount_sek) || 0
     const existing = byPerson.get(key)
