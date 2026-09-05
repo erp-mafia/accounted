@@ -63,6 +63,8 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import {
   consumeOAuthState,
+  mintHandoff,
+  consumeHandoff,
   generateOtc,
   getConsent,
   ConsentNotFoundError,
@@ -97,7 +99,9 @@ describe('consumeOAuthState', () => {
     expect(findOp(otcCall, 'is', 'used_at')?.[1]).toEqual(['used_at', null])
     // Expiry is enforced in the same statement, not in JavaScript afterwards.
     expect(findOp(otcCall, 'gt', 'expires_at')).toBeDefined()
-    expect(findOp(otcCall, 'select', 'consent_id, user_id')).toBeDefined()
+    expect(findOp(otcCall, 'select', 'consent_id, user_id, origin')).toBeDefined()
+    expect(findOp(otcCall, 'is', 'provider_code')?.[1]).toEqual(['provider_code', null])
+    expect(findOp(otcCall, 'is', 'provider_error')?.[1]).toEqual(['provider_error', null])
   })
 
   it('returns the consent and the provider read from the server-side rows', async () => {
@@ -107,6 +111,7 @@ describe('consumeOAuthState', () => {
       consentId: 'consent-1',
       provider: 'visma',
       userId: 'user-1',
+      origin: null,
     })
   })
 
@@ -142,6 +147,7 @@ describe('consumeOAuthState', () => {
       consentId: 'consent-1',
       provider: 'fortnox',
       userId: 'user-1',
+      origin: null,
     })
 
     // Replay: used_at is now set, so `is('used_at', null)` matches nothing.
@@ -158,6 +164,7 @@ describe('consumeOAuthState', () => {
       consentId: 'consent-1',
       provider: 'fortnox',
       userId: null,
+      origin: null,
     })
   })
 
@@ -186,7 +193,7 @@ describe('generateOtc', () => {
     const { calls } = useResults([{ data: null }])
     const before = Date.now()
 
-    const { expiresAt } = await generateOtc('consent-1', 'user-1')
+    const { expiresAt } = await generateOtc('consent-1', 'user-1', 'https://solbo.accounted.se')
 
     const after = Date.now()
     expect(calls[0].table).toBe('provider_otc')
@@ -195,12 +202,74 @@ describe('generateOtc', () => {
     // The initiator travels with the row: the callback binds the completing
     // session to it, so it must be written here and nowhere else.
     expect(inserted.user_id).toBe('user-1')
+    expect(inserted).toHaveProperty('origin', 'https://solbo.accounted.se')
 
     const tenMinutes = 10 * 60 * 1000
     const expiry = new Date(expiresAt).getTime()
     expect(expiry).toBeGreaterThanOrEqual(before + tenMinutes)
     expect(expiry).toBeLessThanOrEqual(after + tenMinutes)
     expect(new Date(inserted.expires_at).getTime()).toBe(expiry)
+  })
+})
+
+describe('OAuth handoff storage', () => {
+  const origin = 'https://solbo.accounted.se'
+
+  it.each([{ providerCode: 'auth-code' }, { providerError: 'access denied' }])(
+    'mints a fresh two-minute handoff holding %j', async (result) => {
+      const { calls } = useResults([{}, {}])
+      const before = Date.now()
+      const first = await mintHandoff('consent-1', 'user-1', origin, result)
+      const second = await mintHandoff('consent-1', 'user-1', origin, result)
+      expect(first.code).toMatch(/^[A-Za-z0-9_-]{43}$/)
+      expect(first.code).not.toBe(second.code)
+      expect(Date.parse(first.expiresAt)).toBeGreaterThanOrEqual(before + 120_000)
+      expect(Date.parse(first.expiresAt)).toBeLessThanOrEqual(Date.now() + 120_000)
+      expect(findOp(calls[0], 'insert')?.[1][0]).toEqual({
+        code: first.code, consent_id: 'consent-1', user_id: 'user-1', origin,
+        expires_at: first.expiresAt,
+        provider_code: result.providerCode ?? null,
+        provider_error: result.providerError ?? null,
+      })
+    },
+  )
+
+  it('deletes atomically, binding origin, expiry, unused status and handoff purpose', async () => {
+    const { calls } = useResults([
+      { data: { consent_id: 'consent-1', user_id: 'user-1', origin, provider_code: 'stored-code', provider_error: null } },
+      { data: { provider: 'visma' } },
+    ])
+    await expect(consumeHandoff('handoff-token', origin)).resolves.toEqual({
+      consentId: 'consent-1', userId: 'user-1', origin, provider: 'visma',
+      providerCode: 'stored-code', providerError: null,
+    })
+    expect(calls[0].ops[0][0]).toBe('delete')
+    expect(findOp(calls[0], 'eq', 'code')?.[1]).toEqual(['code', 'handoff-token'])
+    expect(findOp(calls[0], 'eq', 'origin')?.[1]).toEqual(['origin', origin])
+    expect(findOp(calls[0], 'is', 'used_at')?.[1]).toEqual(['used_at', null])
+    expect(findOp(calls[0], 'gt', 'expires_at')).toBeDefined()
+    expect(findOp(calls[0], 'or')?.[1]).toEqual(['provider_code.not.is.null,provider_error.not.is.null'])
+    expect(calls[1].table).toBe('provider_consents')
+    expect(findOp(calls[1], 'eq', 'id')?.[1]).toEqual(['id', 'consent-1'])
+  })
+
+  it('rejects unmatched or already consumed handoffs without reading a consent', async () => {
+    const { calls } = useResults([{ data: null }])
+    await expect(consumeHandoff('spent-token', origin)).resolves.toBeNull()
+    expect(calls).toHaveLength(1)
+  })
+
+  it('fails closed when the delete errors or the consent no longer exists', async () => {
+    useResults([{ error: { message: 'unavailable' } }])
+    await expect(consumeHandoff('token', origin)).resolves.toBeNull()
+    useResults([{ data: { consent_id: 'deleted-consent' } }, { data: null }])
+    await expect(consumeHandoff('token', origin)).resolves.toBeNull()
+  })
+
+  it('fails the flow if the handoff cannot be stored', async () => {
+    useResults([{ error: { message: 'unavailable' } }])
+    await expect(mintHandoff('consent-1', 'user-1', origin, { providerCode: 'code' }))
+      .rejects.toThrow('Failed to mint OAuth handoff')
   })
 })
 

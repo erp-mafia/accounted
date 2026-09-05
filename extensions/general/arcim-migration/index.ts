@@ -6,6 +6,8 @@ import {
   listConsents,
   generateOtc,
   consumeOAuthState,
+  mintHandoff,
+  consumeHandoff,
   getAuthUrl,
   exchangeAuthToken,
   submitProviderToken,
@@ -54,6 +56,7 @@ import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
 import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { createLogger } from '@/lib/logger'
+import { resolveBrandByHost } from '@/lib/branding/resolve'
 
 const moduleLog = createLogger('extensions/arcim-migration')
 
@@ -137,6 +140,32 @@ function resolveArcimCallbackUrl(provider: ArcimProvider | ProviderName): string
   return `${appUrl}/api/extensions/ext/arcim-migration/callback`
 }
 
+function requestOrigin(request: Request): string {
+  const url = new URL(request.url)
+  const host = request.headers.get('host') ?? url.host
+  try {
+    const candidate = new URL(`${url.protocol}//${host}`)
+    if (candidate.host !== host.toLowerCase() || candidate.pathname !== '/' || candidate.search || candidate.hash) {
+      return url.origin
+    }
+    return candidate.origin
+  } catch {
+    return url.origin
+  }
+}
+
+async function resolveOAuthOrigin(request: Request): Promise<string> {
+  const origin = requestOrigin(request)
+  const appOrigin = new URL(process.env.NEXT_PUBLIC_APP_URL || request.url).origin
+  if (origin === appOrigin) return appOrigin
+  const url = new URL(origin)
+  // Brand domains are HTTPS origins. A hostname lookup must not authorize an
+  // arbitrary port or a downgrade to HTTP on the same host.
+  if (url.protocol !== 'https:' || url.port) return appOrigin
+  const brand = await resolveBrandByHost(url.host)
+  return brand && new URL(`https://${brand.domain}`).origin === origin ? origin : appOrigin
+}
+
 /**
  * Build a provider OAuth authorization URL bound to an EXISTING consent id.
  * Used by both first-time connect and reconnect (token revival): the callback
@@ -148,13 +177,14 @@ async function buildArcimOAuthUrl(
   consentId: string,
   provider: ArcimProvider,
   initiatedByUserId: string,
+  origin: string,
   options?: { documentScopes?: boolean },
 ): Promise<string> {
   // Server-side state row: consent id, provider (via the consent), the user who
   // started the flow, expiry and a consumed marker all live in provider_otc.
   // The `state` handed to the provider is that row's opaque random primary
   // key, nothing more.
-  const otc = await generateOtc(consentId, initiatedByUserId)
+  const otc = await generateOtc(consentId, initiatedByUserId, origin)
 
   const callbackUrl = resolveArcimCallbackUrl(provider)
 
@@ -369,7 +399,7 @@ export const arcimMigrationExtension: Extension = {
                 await ctx.settings.set('provider', provider)
               }
               if (providerInfo.authType === 'oauth') {
-                const authUrl = await buildArcimOAuthUrl(stale.id, provider, user.id, {
+                const authUrl = await buildArcimOAuthUrl(stale.id, provider, user.id, await resolveOAuthOrigin(request), {
                   documentScopes: documentScopes === true,
                 })
                 return NextResponse.json({
@@ -454,7 +484,7 @@ export const arcimMigrationExtension: Extension = {
           }
 
           if (providerInfo.authType === 'oauth') {
-            const authUrl = await buildArcimOAuthUrl(consent.id, provider, user.id)
+            const authUrl = await buildArcimOAuthUrl(consent.id, provider, user.id, await resolveOAuthOrigin(request))
 
             return NextResponse.json({
               consentId: consent.id,
@@ -581,11 +611,13 @@ export const arcimMigrationExtension: Extension = {
       handler: async (request: Request, ctx?: ExtensionContext) => {
         const log = ctx?.log ?? console
         const url = new URL(request.url)
-        const code = url.searchParams.get('code')
+        let code = url.searchParams.get('code')
+        const handoff = url.searchParams.get('handoff')
         const stateRaw = url.searchParams.get('state')
         const oauthError = url.searchParams.get('error')
         const oauthErrorDescription = url.searchParams.get('error_description')
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || ''
+        const currentOrigin = requestOrigin(request)
+        let responseOrigin = new URL(process.env.NEXT_PUBLIC_APP_URL || request.url).origin
 
         // JSON-encode for safe embedding inside <script>. Escapes quotes/unicode
         // and `</` so the value can't break out of the script tag.
@@ -593,7 +625,7 @@ export const arcimMigrationExtension: Extension = {
           JSON.stringify(value ?? '').replace(/</g, '\\u003c')
 
         const respondWithError = (reason: string, consentId?: string) => {
-          const fallbackUrl = new URL(`${appUrl}/import`)
+          const fallbackUrl = new URL(`${responseOrigin}/import`)
           fallbackUrl.searchParams.set('migration', 'error')
           fallbackUrl.searchParams.set('reason', reason)
           if (consentId) fallbackUrl.searchParams.set('consentId', consentId)
@@ -617,7 +649,7 @@ export const arcimMigrationExtension: Extension = {
           // reason.
           const html = `<!DOCTYPE html><html><body><script>
             if (window.opener) {
-              window.opener.postMessage({ type: 'arcim-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(appUrl)});
+              window.opener.postMessage({ type: 'arcim-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(responseOrigin)});
             } else {
               window.location.replace(${jsLiteral(fallbackUrl.toString())});
             }
@@ -630,13 +662,14 @@ export const arcimMigrationExtension: Extension = {
               // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
               'Content-Type': 'text/html; charset=utf-8',
               'Cache-Control': 'no-store',
+              'Referrer-Policy': 'no-referrer',
             },
           })
         }
 
         // Provider returned an OAuth error (user cancelled, missing API
         // subscription on the Fortnox side, invalid scope, etc.)
-        if (oauthError) {
+        if (!handoff && oauthError) {
           // access_denied is the user clicking "avbryt" in the provider's
           // consent screen: an expected outcome of an optional flow, so it is
           // logged at warn and stays out of the error panel. Every other
@@ -652,21 +685,9 @@ export const arcimMigrationExtension: Extension = {
           } else {
             log.error('OAuth callback returned provider error', oauthErrorDetails)
           }
-          let consentId: string | undefined
-          if (stateRaw) {
-            try {
-              consentId = (await consumeOAuthState(stateRaw))?.consentId
-            } catch (error) {
-              log.error('OAuth callback could not resolve failed consent', error)
-            }
-          }
-          return respondWithError(
-            translateOAuthError(oauthError, oauthErrorDescription),
-            consentId,
-          )
         }
 
-        if (!code || !stateRaw) {
+        if (!handoff && ((!code && !oauthError) || !stateRaw)) {
           log.error('OAuth callback missing code or state', {
             hasCode: !!code,
             hasState: !!stateRaw,
@@ -683,7 +704,10 @@ export const arcimMigrationExtension: Extension = {
           // read from the query string except the opaque state token itself, so
           // an attacker who knows a victim's consent id still cannot steer their
           // own provider tokens onto it.
-          const resolvedState = await consumeOAuthState(stateRaw)
+          const resolvedHandoff = handoff ? await consumeHandoff(handoff, currentOrigin) : null
+          const resolvedState = handoff
+            ? resolvedHandoff
+            : await consumeOAuthState(stateRaw!)
 
           if (!resolvedState) {
             // Unknown/forged state, expired state, replayed state and deleted
@@ -692,12 +716,17 @@ export const arcimMigrationExtension: Extension = {
             // disclose whether a given consent exists.
             log.error('OAuth callback state rejected', {
               hasCode: !!code,
-              stateLength: stateRaw.length,
+              stateLength: (handoff ?? stateRaw ?? '').length,
             })
             return respondWithError(STATE_REJECTED_MESSAGE)
           }
 
           const { consentId, provider, userId: initiatedByUserId } = resolvedState
+          responseOrigin = resolvedState.origin ?? responseOrigin
+          const providerError = resolvedHandoff
+            ? resolvedHandoff.providerError
+            : oauthError ? translateOAuthError(oauthError, oauthErrorDescription) : null
+          if (resolvedHandoff) code = resolvedHandoff.providerCode
 
           // The state proves this callback belongs to a flow WE started; it
           // says nothing about who is finishing it. Before the code is
@@ -715,6 +744,23 @@ export const arcimMigrationExtension: Extension = {
             log.error('OAuth callback state carries no initiator; refusing', { consentId })
             return respondWithError(STATE_REJECTED_MESSAGE)
           }
+
+          // Hop 1 has no brand-domain session. Only the server-written origin
+          // chooses the destination; provider credentials never enter its URL.
+          if (!handoff && resolvedState.origin && responseOrigin !== currentOrigin) {
+            const next = await mintHandoff(consentId, initiatedByUserId, responseOrigin,
+              providerError !== null ? { providerError } : { providerCode: code! })
+            const target = new URL('/api/extensions/ext/arcim-migration/callback', responseOrigin)
+            target.searchParams.set('handoff', next.code)
+            return new Response(null, {
+              status: 302,
+              headers: {
+                Location: target.toString(),
+                'Cache-Control': 'no-store',
+                'Referrer-Policy': 'no-referrer',
+              },
+            })
+          }
           const initiator = await requireFlowInitiator(request, initiatedByUserId, {
             flow: 'arcim-migration.callback',
           })
@@ -731,6 +777,8 @@ export const arcimMigrationExtension: Extension = {
           }
 
           callbackConsentId = consentId
+          if (providerError !== null) return respondWithError(providerError, consentId)
+          if (!code) return respondWithError(STATE_REJECTED_MESSAGE)
 
           // Must match the redirect_uri the authorization request was built
           // with, so both come from resolveArcimCallbackUrl.
@@ -740,7 +788,7 @@ export const arcimMigrationExtension: Extension = {
           await exchangeAuthToken(consentId, provider, code, redirectUri)
 
           // Return an HTML page that notifies the opener tab and closes itself
-          const successUrl = `${appUrl}/import?migration=connected&consentId=${encodeURIComponent(consentId)}`
+          const successUrl = `${responseOrigin}/import?migration=connected&consentId=${encodeURIComponent(consentId)}`
           // location.replace + no-store: see respondWithError above. The state
           // is spent the moment consumeOAuthState returns, and prod caught the
           // consequence of leaving the URL in history: a second delivery 19
@@ -748,7 +796,7 @@ export const arcimMigrationExtension: Extension = {
           // giltig migrationssession" about a connection that had just worked.
           const html = `<!DOCTYPE html><html><body><script>
             if (window.opener) {
-              window.opener.postMessage({ type: 'arcim-oauth-success', consentId: ${jsLiteral(consentId)} }, ${jsLiteral(appUrl)});
+              window.opener.postMessage({ type: 'arcim-oauth-success', consentId: ${jsLiteral(consentId)} }, ${jsLiteral(responseOrigin)});
               window.close();
             } else {
               window.location.replace(${jsLiteral(successUrl)});
@@ -762,6 +810,7 @@ export const arcimMigrationExtension: Extension = {
               // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
               'Content-Type': 'text/html; charset=utf-8',
               'Cache-Control': 'no-store',
+              'Referrer-Policy': 'no-referrer',
             },
           })
         } catch (error) {

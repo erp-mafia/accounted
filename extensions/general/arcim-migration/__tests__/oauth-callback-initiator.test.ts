@@ -235,7 +235,7 @@ describe('POST /connect: the state row records who started the flow', () => {
     )
 
     expect(res.status).toBe(200)
-    expect(generateOtc).toHaveBeenCalledWith('consent-new', 'user-1')
+    expect(generateOtc).toHaveBeenCalledWith('consent-new', 'user-1', APP_URL)
   })
 
   it('binds a reconnect of an existing consent to the caller too', async () => {
@@ -250,6 +250,6 @@ describe('POST /connect: the state row records who started the flow', () => {
     )
 
     expect(res.status).toBe(200)
-    expect(generateOtc).toHaveBeenCalledWith('consent-1', 'user-1')
+    expect(generateOtc).toHaveBeenCalledWith('consent-1', 'user-1', APP_URL)
   })
 })

@@ -243,6 +243,7 @@ export async function deleteConsent(consentId: string): Promise<void> {
 export async function generateOtc(
   consentId: string,
   initiatedByUserId: string,
+  origin: string | null = null,
   expiresInMinutes: number = 10,
 ): Promise<OtcResponse> {
   const supabase = createServiceClient()
@@ -256,6 +257,7 @@ export async function generateOtc(
       code,
       consent_id: consentId,
       user_id: initiatedByUserId,
+      origin,
       expires_at: expiresAt,
     })
 
@@ -288,7 +290,7 @@ export async function generateOtc(
  */
 export async function consumeOAuthState(
   state: string,
-): Promise<{ consentId: string; provider: ProviderName; userId: string | null } | null> {
+): Promise<{ consentId: string; provider: ProviderName; userId: string | null; origin: string | null } | null> {
   const supabase = createServiceClient()
   const now = new Date().toISOString()
 
@@ -297,8 +299,10 @@ export async function consumeOAuthState(
     .update({ used_at: now })
     .eq('code', state)
     .is('used_at', null)
+    .is('provider_code', null)
+    .is('provider_error', null)
     .gt('expires_at', now)
-    .select('consent_id, user_id')
+    .select('consent_id, user_id, origin')
     .maybeSingle()
 
   if (error || !consumed?.consent_id) {
@@ -319,6 +323,70 @@ export async function consumeOAuthState(
     consentId: consumed.consent_id as string,
     provider: consent.provider as ProviderName,
     userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
+    origin: typeof consumed.origin === 'string' ? consumed.origin : null,
+  }
+}
+
+/** Keep provider credentials server-side during the two-minute domain handoff. */
+export async function mintHandoff(
+  consentId: string,
+  userId: string,
+  origin: string,
+  result: { providerCode: string; providerError?: never } | { providerCode?: never; providerError: string },
+): Promise<OtcResponse> {
+  const code = randomBytes(32).toString('base64url')
+  const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString()
+  const { error } = await createServiceClient()
+    .from('provider_otc')
+    .insert({
+      code,
+      consent_id: consentId,
+      user_id: userId,
+      origin,
+      provider_code: result.providerCode ?? null,
+      provider_error: result.providerError ?? null,
+      expires_at: expiresAt,
+    })
+  if (error) throw new Error(`Failed to mint OAuth handoff: ${error.message}`)
+  return { code, consentId, expiresAt }
+}
+
+/** Atomic DELETE RETURNING: only this origin can claim an unexpired handoff. */
+export async function consumeHandoff(code: string, origin: string): Promise<{
+  consentId: string
+  provider: ProviderName
+  userId: string | null
+  origin: string
+  providerCode: string | null
+  providerError: string | null
+} | null> {
+  const supabase = createServiceClient()
+  const { data: consumed, error } = await supabase
+    .from('provider_otc')
+    .delete()
+    .eq('code', code)
+    .eq('origin', origin)
+    .is('used_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .or('provider_code.not.is.null,provider_error.not.is.null')
+    .select('consent_id, user_id, origin, provider_code, provider_error')
+    .maybeSingle()
+  if (error || !consumed?.consent_id) return null
+
+  const { data: consent } = await supabase
+    .from('provider_consents')
+    .select('provider')
+    .eq('id', consumed.consent_id)
+    .maybeSingle()
+  if (!consent?.provider) return null
+
+  return {
+    consentId: consumed.consent_id as string,
+    provider: consent.provider as ProviderName,
+    userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
+    origin: consumed.origin as string,
+    providerCode: consumed.provider_code as string | null,
+    providerError: consumed.provider_error as string | null,
   }
 }
 
