@@ -99,3 +99,73 @@ describe('mapFortnoxToSupplierInvoice: VAT', () => {
     expect(detail.taxTotal?.taxAmount.value).toBe(250);
   });
 });
+
+describe('mapFortnoxToSalesInvoice: VATIncluded rows', () => {
+  // Profilio (2026-09-05): a 956 kr invoice priced with VAT inside. Its rows
+  // were stored as if net, summing to 956 with 25 % on top, beside a header
+  // that read 764.80 + 191.20 correctly.
+  const inclusive = {
+    DocumentNumber: 241,
+    InvoiceDate: '2025-06-02',
+    Currency: 'SEK',
+    Total: 956,
+    Balance: 0,
+    FullyPaid: true,
+    Net: 764.8,
+    TotalVAT: 191.2,
+    VATIncluded: true,
+  };
+
+  it('converts VAT-inclusive row amounts to net, unit price included', () => {
+    const dto = mapFortnoxToSalesInvoice({
+      ...inclusive,
+      InvoiceRows: [
+        { RowId: 1, Description: 'Mugg', DeliveredQuantity: 3, Price: 200, Total: 600, VAT: 25 },
+        { RowId: 2, Description: 'Frakt', DeliveredQuantity: 1, Price: 356, Total: 356, VAT: 25 },
+      ],
+    });
+
+    expect(dto.lines.map((l) => l.lineExtensionAmount.value)).toEqual([480, 284.8]);
+    expect(dto.lines.map((l) => l.unitPrice?.value)).toEqual([160, 284.8]);
+    expect(dto.lines.map((l) => l.taxAmount?.value)).toEqual([120, 71.2]);
+    const rowsNet = dto.lines.reduce((s, l) => s + l.lineExtensionAmount.value, 0);
+    expect(rowsNet).toBeCloseTo(764.8, 2);
+    // The header is unaffected: it always came from Net / TotalVAT.
+    expect(dto.legalMonetaryTotal.lineExtensionAmount?.value).toBe(764.8);
+  });
+
+  it('prefers the net the row states itself when the payload carries it', () => {
+    const dto = mapFortnoxToSalesInvoice({
+      ...inclusive,
+      InvoiceRows: [
+        { RowId: 1, Price: 956, PriceExcludingVAT: 764.8, Total: 956, TotalExcludingVAT: 764.8, VAT: 25 },
+      ],
+    });
+
+    expect(dto.lines[0]?.lineExtensionAmount.value).toBe(764.8);
+    expect(dto.lines[0]?.unitPrice?.value).toBe(764.8);
+  });
+
+  it('leaves rows alone when the invoice is priced excluding VAT', () => {
+    const dto = mapFortnoxToSalesInvoice({
+      ...inclusive,
+      VATIncluded: false,
+      InvoiceRows: [{ RowId: 1, Price: 764.8, Total: 764.8, VAT: 25 }],
+    });
+
+    expect(dto.lines[0]?.lineExtensionAmount.value).toBe(764.8);
+    expect(dto.lines[0]?.unitPrice?.value).toBe(764.8);
+  });
+
+  it('cannot split a VAT-inclusive row without a rate and keeps the amount', () => {
+    // Text rows and rows without VAT carry no rate; nothing to divide by. The
+    // consumer's rows-versus-header check is what reports such an invoice.
+    const dto = mapFortnoxToSalesInvoice({
+      ...inclusive,
+      InvoiceRows: [{ RowId: 1, Description: 'Referens', Total: 0 }, { RowId: 2, Total: 956 }],
+    });
+
+    expect(dto.lines.map((l) => l.lineExtensionAmount.value)).toEqual([0, 956]);
+    expect(dto.lines[1]?.taxAmount).toBeUndefined();
+  });
+});
