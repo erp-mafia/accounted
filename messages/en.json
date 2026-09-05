@@ -5884,7 +5884,9 @@
     "title": "The active company was switched in another tab",
     "body": "This tab shows {company}, but another tab switched the active company. Actions here would land in the wrong company's books. Choose how to continue.",
     "switch_back": "Switch back to {company}",
-    "reload_as_new": "Reload with the new company"
+    "reload_as_new": "Reload with the new company",
+    "body_named": "This tab shows {company}, but another tab switched to {newCompany}. Actions here would land in the wrong company's books. Choose how to continue.",
+    "reload_as_named": "Reload as {newCompany}"
   },
   "signpost": {
     "title": "This company is managed on another domain",

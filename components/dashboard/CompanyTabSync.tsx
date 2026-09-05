@@ -12,6 +12,7 @@ import {
   guardStore,
   isTabMismatch,
   requestHasNextActionHeader,
+  resolveObservedCompanyName,
   shouldBlockMutation,
 } from '@/lib/company/tab-guard'
 
@@ -119,10 +120,16 @@ function uninstallFetchGuard(): void {
 }
 
 export default function CompanyTabSync() {
-  const { company } = useCompany()
+  const { company, companies, foreignCompanies } = useCompany()
   const t = useTranslations('company_tab_guard')
   const currentCompanyId = company?.id ?? null
   const [mismatch, setMismatch] = useState(false)
+  // The company the other tab switched to, so the dialog can name it: the
+  // choice between "switch back" and "reload as the new one" is only obvious
+  // when both sides are named. Read from the guard store at the moment the
+  // dialog is raised (both the observe path and the blocked-write path set
+  // observedCompanyId first).
+  const [observedCompanyId, setObservedCompanyId] = useState<string | null>(null)
   const [resolving, setResolving] = useState(false)
 
   useEffect(() => {
@@ -134,7 +141,10 @@ export default function CompanyTabSync() {
       // A self-initiated switch is hard-navigating this tab away: blocked
       // stray writes still get their 409, but the "switched in another tab"
       // dialog would just flash over the tab's own page load.
-      if (!guardStore.selfSwitchTargetId) setMismatch(true)
+      if (!guardStore.selfSwitchTargetId) {
+        setObservedCompanyId(guardStore.observedCompanyId)
+        setMismatch(true)
+      }
     }
     installFetchGuard()
 
@@ -143,6 +153,7 @@ export default function CompanyTabSync() {
       guardStore.observedCompanyId = observedId
       if (observedId === guardStore.selfSwitchTargetId) return
       if (isTabMismatch(currentCompanyId, observedId)) {
+        setObservedCompanyId(observedId)
         setMismatch(true)
       }
     }
@@ -212,6 +223,12 @@ export default function CompanyTabSync() {
 
   if (!mismatch || !currentCompanyId) return null
 
+  const newCompanyName = resolveObservedCompanyName(
+    observedCompanyId,
+    companies,
+    foreignCompanies ?? [],
+  )
+
   const handleSwitchBack = async () => {
     setResolving(true)
     // Re-activate THIS tab's company and reload the page we are on (same
@@ -249,7 +266,9 @@ export default function CompanyTabSync() {
           {t('title')}
         </h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          {t('body', { company: company?.name ?? '' })}
+          {newCompanyName
+            ? t('body_named', { company: company?.name ?? '', newCompany: newCompanyName })
+            : t('body', { company: company?.name ?? '' })}
         </p>
         <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-end">
           <Button
@@ -257,7 +276,9 @@ export default function CompanyTabSync() {
             disabled={resolving}
             onClick={handleReloadAsNew}
           >
-            {t('reload_as_new')}
+            {newCompanyName
+              ? t('reload_as_named', { newCompany: newCompanyName })
+              : t('reload_as_new')}
           </Button>
           <Button disabled={resolving} onClick={() => void handleSwitchBack()}>
             {t('switch_back', { company: company?.name ?? '' })}

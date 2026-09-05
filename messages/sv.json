@@ -5884,7 +5884,9 @@
     "title": "Aktivt företag har bytts i en annan flik",
     "body": "Den här fliken visar {company}, men en annan flik har bytt aktivt företag. Åtgärder här skulle hamna i fel bolags bokföring. Välj hur du vill fortsätta.",
     "switch_back": "Byt tillbaka till {company}",
-    "reload_as_new": "Ladda om med det nya företaget"
+    "reload_as_new": "Ladda om med det nya företaget",
+    "body_named": "Den här fliken visar {company}, men en annan flik har bytt till {newCompany}. Åtgärder här skulle hamna i fel bolags bokföring. Välj hur du vill fortsätta.",
+    "reload_as_named": "Ladda om som {newCompany}"
   },
   "signpost": {
     "title": "Företaget hanteras på en annan domän",
