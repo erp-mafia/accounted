@@ -665,6 +665,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // the mailboxes we search, WhatsApp for photographed receipts, and the
   // forwarding address that works with nothing connected at all.
   const [mailConnections, setMailConnections] = useState<InboxMailConnection[]>([])
+  const [mailConnectEnabled, setMailConnectEnabled] = useState(false)
   const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phoneMasked?: string; verifiedAt?: string | null } | null>(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
   // Received-mail history (#2181): read when its panel is first opened, so
@@ -696,8 +697,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       try {
         const res = await fetch('/api/extensions/ext/mail/connections')
         if (!res.ok) return
-        const json = (await res.json()) as { data?: { connections?: InboxMailConnection[] } }
+        const json = (await res.json()) as {
+          data?: { connections?: InboxMailConnection[]; connectEnabled?: boolean }
+        }
         setMailConnections(json.data?.connections ?? [])
+        // While Google's scope review keeps new consents withheld, the start
+        // card must not send people to a settings page with no connect button.
+        setMailConnectEnabled(json.data?.connectEnabled === true)
       } catch {
         // The extension may not be enabled at all; stay quiet.
       }
@@ -1927,11 +1933,16 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     dense
                     title={tStart('inbox_title')}
                     body={tStart('inbox_body')}
-                    primary={{ label: tStart('inbox_primary'), href: '/settings/mail' }}
-                    secondary={{
-                      label: tStart('inbox_secondary'),
-                      onClick: () => fileInputRef.current?.click(),
-                    }}
+                    primary={
+                      mailConnectEnabled
+                        ? { label: tStart('inbox_primary'), href: '/settings/mail' }
+                        : { label: tStart('inbox_secondary'), onClick: () => fileInputRef.current?.click() }
+                    }
+                    secondary={
+                      mailConnectEnabled
+                        ? { label: tStart('inbox_secondary'), onClick: () => fileInputRef.current?.click() }
+                        : undefined
+                    }
                     onDismiss={handleDismissOnboarding}
                     dismissLabel={tStart('inbox_dismiss')}
                   />
@@ -2106,11 +2117,16 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   floatIcons
                   title={tStart('inbox_title')}
                   body={tStart('inbox_body')}
-                  primary={{ label: tStart('inbox_primary'), href: '/settings/mail' }}
-                  secondary={{
-                    label: tStart('inbox_secondary'),
-                    onClick: () => fileInputRef.current?.click(),
-                  }}
+                  primary={
+                    mailConnectEnabled
+                      ? { label: tStart('inbox_primary'), href: '/settings/mail' }
+                      : { label: tStart('inbox_secondary'), onClick: () => fileInputRef.current?.click() }
+                  }
+                  secondary={
+                    mailConnectEnabled
+                      ? { label: tStart('inbox_secondary'), onClick: () => fileInputRef.current?.click() }
+                      : undefined
+                  }
                   onDismiss={handleDismissOnboarding}
                   dismissLabel={tStart('inbox_dismiss')}
                 />
