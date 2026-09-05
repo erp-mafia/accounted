@@ -26,6 +26,7 @@ import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import { getCountryName } from '@/lib/vat/country-codes'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   individual: 'type_individual',
@@ -280,6 +281,10 @@ export default function CustomerDetailPage({
           )}
         </DefRow>
       </DetailSection>
+
+      {(customer as { party_id?: string | null }).party_id && customer.customer_type !== 'individual' ? (
+        <PartyFactsSection partyId={(customer as { party_id?: string | null }).party_id as string} canWrite={canWrite} onChanged={() => void fetchCustomer()} />
+      ) : null}
 
       <DetailSection kicker={t('section_business')}>
         <DefRow label={t('def_customer_number')}>

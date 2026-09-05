@@ -34,6 +34,8 @@ vi.mock('../lib/provider-client', () => ({
   listConsents: vi.fn(),
   generateOtc: vi.fn(),
   consumeOAuthState: vi.fn(),
+  mintHandoff: vi.fn(),
+  consumeHandoff: vi.fn(),
   getAuthUrl: vi.fn(),
   exchangeAuthToken: vi.fn(),
   submitProviderToken: vi.fn(),
@@ -53,6 +55,8 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
 }))
 
+vi.mock('@/lib/branding/resolve', () => ({ resolveBrandByHost: vi.fn().mockResolvedValue(null) }))
+
 // The callback also binds the completing browser session to the user recorded
 // on the state row. That check has its own tests
 // (oauth-callback-initiator.test.ts); here it always passes so these tests
@@ -64,8 +68,11 @@ vi.mock('@/lib/auth/oauth-flow-binding', () => ({
 
 import { arcimMigrationExtension } from '../index'
 import { requireFlowInitiator } from '@/lib/auth/oauth-flow-binding'
+import { resolveBrandByHost } from '@/lib/branding/resolve'
 import {
   consumeOAuthState,
+  mintHandoff,
+  consumeHandoff,
   exchangeAuthToken,
   getConsent,
   createConsent,
@@ -107,6 +114,198 @@ function callbackRequest(params: Record<string, string>) {
 function forgedLegacyState(consentId: string, provider: string) {
   return Buffer.from(JSON.stringify({ consentId, provider })).toString('base64url')
 }
+
+describe('white-label OAuth callback handoff', () => {
+  const BRAND_ORIGIN = 'https://solbo.accounted.se'
+  const path = '/api/extensions/ext/arcim-migration/callback'
+  const state = { consentId: 'consent-1', provider: 'fortnox', userId: 'user-1', origin: BRAND_ORIGIN } as const
+  const request = (origin: string, params: Record<string, string>) =>
+    createMockRequest(`${origin}${path}`, { searchParams: params })
+  const storedHandoff = { ...state, providerCode: 'stored-code', providerError: null }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', APP_URL)
+    vi.stubEnv('FORTNOX_REDIRECT_URI', '')
+    vi.stubEnv('VISMA_REDIRECT_URI', '')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(consumeOAuthState).mockResolvedValue(state)
+    vi.mocked(mintHandoff).mockResolvedValue({ code: 'fresh-handoff', consentId: 'consent-1', expiresAt: '' })
+    vi.mocked(consumeHandoff).mockResolvedValue(storedHandoff)
+    vi.mocked(requireFlowInitiator).mockResolvedValue({ ok: true, userId: 'user-1' })
+    vi.mocked(resolveBrandByHost).mockResolvedValue(null)
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('completes same-origin connects directly and targets that origin', async () => {
+    vi.mocked(consumeOAuthState).mockResolvedValue({ ...state, origin: APP_URL })
+    const response = await callbackHandler(request(APP_URL, { state: 'state', code: 'code' }))
+    const html = await response.text()
+    expect(response.status).toBe(200)
+    expect(mintHandoff).not.toHaveBeenCalled()
+    expect(exchangeAuthToken).toHaveBeenCalledWith('consent-1', 'fortnox', 'code', `${APP_URL}${path}`)
+    expect(html).toContain(`}, "${APP_URL}")`)
+    expect(html).toContain(`${APP_URL}/import?migration=connected`)
+  })
+
+  it('hands off without requiring an app-domain session or exposing the provider code', async () => {
+    vi.mocked(requireFlowInitiator).mockResolvedValue({ ok: false, reason: 'no_session', response: new Response(null, { status: 401 }) })
+    const response = await callbackHandler(request(APP_URL, {
+      state: 'one-time-state', code: 'secret-provider-code', origin: 'https://attacker.test',
+    }))
+    expect(response.status).toBe(302)
+    expect(response.headers.get('location')).toBe(`${BRAND_ORIGIN}${path}?handoff=fresh-handoff`)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(consumeOAuthState).toHaveBeenCalledOnce()
+    expect(mintHandoff).toHaveBeenCalledWith('consent-1', 'user-1', BRAND_ORIGIN, { providerCode: 'secret-provider-code' })
+    expect(requireFlowInitiator).not.toHaveBeenCalled()
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+    expect(await response.text()).not.toContain('secret-provider-code')
+  })
+
+  it.each(['fortnox', 'visma'] as const)('finishes %s on the brand with stored credentials and the unchanged redirect URI', async (provider) => {
+    const redirectUri = `${APP_URL}${path}?configured=1`
+    vi.stubEnv(provider === 'fortnox' ? 'FORTNOX_REDIRECT_URI' : 'VISMA_REDIRECT_URI', redirectUri)
+    vi.mocked(consumeHandoff).mockResolvedValue({ ...storedHandoff, provider })
+    const req = request(BRAND_ORIGIN, {
+      handoff: 'fresh-handoff', code: 'injected-code', error: 'injected-error',
+      state: 'injected-state', provider: 'bokio', consentId: 'other-consent',
+    })
+    const response = await callbackHandler(req)
+    const html = await response.text()
+    expect(consumeHandoff).toHaveBeenCalledWith('fresh-handoff', BRAND_ORIGIN)
+    expect(consumeOAuthState).not.toHaveBeenCalled()
+    expect(mintHandoff).not.toHaveBeenCalled()
+    expect(requireFlowInitiator).toHaveBeenCalledWith(req, 'user-1', { flow: 'arcim-migration.callback' })
+    expect(exchangeAuthToken).toHaveBeenCalledWith('consent-1', provider, 'stored-code', redirectUri)
+    expect(html).toContain(`}, "${BRAND_ORIGIN}")`)
+    expect(html).toContain(`${BRAND_ORIGIN}/import?migration=connected`)
+    expect(html).toContain('window.close()')
+    expect(html).not.toContain('injected')
+  })
+
+  it('hands provider denial off and shows it on the brand without exchanging tokens', async () => {
+    const first = await callbackHandler(request(APP_URL, { state: 'state', error: 'access_denied' }))
+    expect(first.status).toBe(302)
+    const result = vi.mocked(mintHandoff).mock.calls[0][3]
+    expect(result.providerError).toContain('Du avbröt anslutningen')
+    expect(requireFlowInitiator).not.toHaveBeenCalled()
+    vi.mocked(consumeHandoff).mockResolvedValue({ ...storedHandoff, providerCode: null, providerError: result.providerError! })
+    const second = await callbackHandler(request(BRAND_ORIGIN, { handoff: 'fresh-handoff' }))
+    const html = await second.text()
+    expect(requireFlowInitiator).toHaveBeenCalledOnce()
+    expect(html).toContain('Du avbröt anslutningen')
+    expect(html).toContain(`}, "${BRAND_ORIGIN}")`)
+    expect(html).toContain(`${BRAND_ORIGIN}/import?migration=error`)
+    expect(html).not.toContain('window.close')
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+  })
+
+  it('safely embeds provider error text in both HTML and script contexts', async () => {
+    vi.mocked(consumeHandoff).mockResolvedValue({
+      ...storedHandoff, providerCode: null, providerError: '</script><img src=x onerror=alert(1)>',
+    })
+    const html = await (await callbackHandler(request(BRAND_ORIGIN, { handoff: 'fresh-handoff' }))).text()
+    expect(html).not.toContain('<img')
+    expect(html).toContain('\\u003c/script>')
+    expect(html).toContain('&lt;/script&gt;')
+  })
+
+  it('rejects a replayed first hop before minting a second handoff', async () => {
+    vi.mocked(consumeOAuthState).mockResolvedValueOnce(state).mockResolvedValueOnce(null)
+    expect((await callbackHandler(request(APP_URL, { state: 'state', code: 'code' }))).status).toBe(302)
+    const replay = await callbackHandler(request(APP_URL, { state: 'state', code: 'code' }))
+    expect(await replay.text()).toContain(GENERIC_REJECTION)
+    expect(mintHandoff).toHaveBeenCalledOnce()
+  })
+
+  it('rejects replayed handoffs after exactly one exchange', async () => {
+    vi.mocked(consumeHandoff).mockResolvedValueOnce(storedHandoff).mockResolvedValueOnce(null)
+    await callbackHandler(request(BRAND_ORIGIN, { handoff: 'fresh-handoff' }))
+    const replay = await callbackHandler(request(BRAND_ORIGIN, { handoff: 'fresh-handoff' }))
+    expect(await replay.text()).toContain(GENERIC_REJECTION)
+    expect(exchangeAuthToken).toHaveBeenCalledOnce()
+  })
+
+  it.each(['expired', 'unknown', 'wrong-origin'])('rejects %s handoffs without exchanging', async (token) => {
+    vi.mocked(consumeHandoff).mockResolvedValue(null)
+    const response = await callbackHandler(request(BRAND_ORIGIN, { handoff: token }))
+    expect(await response.text()).toContain(GENERIC_REJECTION)
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+    expect(requireFlowInitiator).not.toHaveBeenCalled()
+  })
+
+  it.each(['no_session', 'mismatch'] as const)('refuses hop 2 with %s, including provider-error handoffs', async (reason) => {
+    vi.mocked(requireFlowInitiator).mockResolvedValue({ ok: false, reason, response: new Response(null, { status: 403 }), sessionUserId: 'other-user' })
+    for (const providerError of [null, 'provider rejected']) {
+      vi.mocked(consumeHandoff).mockResolvedValue({ ...storedHandoff, providerError })
+      const html = await (await callbackHandler(request(BRAND_ORIGIN, { handoff: 'token' }))).text()
+      expect(html).toContain('arcim-oauth-error')
+      expect(html).not.toContain('consent-1')
+      expect(html).not.toContain('provider rejected')
+    }
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+  })
+
+  it('refuses a legacy row with no initiator before minting a handoff', async () => {
+    vi.mocked(consumeOAuthState).mockResolvedValue({ ...state, userId: null })
+    const response = await callbackHandler(request(APP_URL, { state: 'state', code: 'code' }))
+    expect(await response.text()).toContain(GENERIC_REJECTION)
+    expect(mintHandoff).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [APP_URL, false, APP_URL],
+    [BRAND_ORIGIN, true, BRAND_ORIGIN],
+    ['https://unknown.accounted.se', false, APP_URL],
+    ['http://solbo.accounted.se', true, APP_URL],
+    ['https://solbo.accounted.se:444', true, APP_URL],
+  ])('connect from %s stores only an allowed origin', async (origin, knownBrand, expected) => {
+    vi.mocked(resolveBrandByHost).mockResolvedValue(knownBrand ? { domain: 'solbo.accounted.se' } as Awaited<ReturnType<typeof resolveBrandByHost>> : null)
+    vi.mocked(listConsents).mockResolvedValue([])
+    vi.mocked(createConsent).mockResolvedValue({ id: 'consent-new' } as Awaited<ReturnType<typeof createConsent>>)
+    vi.mocked(generateOtc).mockResolvedValue({ code: 'state', consentId: 'consent-new', expiresAt: '' })
+    vi.mocked(getAuthUrl).mockResolvedValue({ url: 'https://provider.test/login' })
+    const { supabase } = createMockSupabase()
+    ;(supabase as unknown as { auth: unknown }).auth = {
+      getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
+    }
+    const connect = findRoute('POST', '/connect').handler as RouteHandler
+    const response = await connect(createMockRequest(`${origin}/api/extensions/ext/arcim-migration/connect`, {
+      method: 'POST', body: { provider: 'fortnox', origin: 'https://attacker.test' },
+    }), { supabase, companyId: 'company-1' } as unknown as ExtensionContext)
+    expect(response.status).toBe(200)
+    expect(generateOtc).toHaveBeenCalledWith('consent-new', 'user-1', expected)
+  })
+
+  it.each([
+    ['solbo.accounted.se', BRAND_ORIGIN],
+    ['unknown.accounted.se', APP_URL],
+    ['invalid host', APP_URL],
+  ])('reconnect records the validated request Host %s', async (host, expected) => {
+    vi.mocked(resolveBrandByHost).mockImplementation(async (value) =>
+      value === 'solbo.accounted.se' ? { domain: value } as Awaited<ReturnType<typeof resolveBrandByHost>> : null)
+    vi.mocked(listConsents).mockResolvedValue([{ id: 'consent-1', provider: 'fortnox', status: 1 }] as Awaited<ReturnType<typeof listConsents>>)
+    vi.mocked(generateOtc).mockResolvedValue({ code: 'state', consentId: 'consent-1', expiresAt: '' })
+    vi.mocked(getAuthUrl).mockResolvedValue({ url: 'https://provider.test/login' })
+    const ctx = {
+      companyId: 'company-1',
+      supabase: { auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) } },
+    } as unknown as ExtensionContext
+    const connect = findRoute('POST', '/connect').handler as RouteHandler
+    const response = await connect(createMockRequest(`${APP_URL}/api/extensions/ext/arcim-migration/connect`, {
+      method: 'POST', headers: { host }, body: { provider: 'fortnox', reconnect: true },
+    }), ctx)
+    expect(response.status).toBe(200)
+    expect(generateOtc).toHaveBeenCalledWith('consent-1', 'user-1', expected)
+  })
+})
 
 describe('GET /callback: OAuth state binding', () => {
   beforeEach(() => {

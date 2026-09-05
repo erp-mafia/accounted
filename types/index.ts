@@ -1818,6 +1818,8 @@ export type JournalEntrySourceType =
   | 'vat_settlement'
   | 'stripe_payout'
   | 'webshop_order'
+  | 'expense_claim'
+  | 'expense_payout'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'

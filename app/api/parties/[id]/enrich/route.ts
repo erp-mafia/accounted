@@ -6,6 +6,7 @@ import { createScbClient } from '@/lib/parties/scb/client'
 import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
 import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import { ScbApiError } from '@/lib/parties/scb/transport'
+import { displayNameFromRegistry, sameName } from '@/lib/parties/registry-name'
 
 /**
  * POST /api/parties/[id]/enrich: fetch the party's registry facts from SCB
@@ -42,14 +43,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data: party, error } = await supabase
       .from('parties')
-      .select('id, org_number, legal_name, vat_number')
+      .select('id, display_name, org_number, legal_name, vat_number')
       .eq('company_id', companyId)
       .eq('id', id)
       .is('merged_into', null)
       .maybeSingle()
     if (error) throw new Error(`parties lookup failed: ${error.message}`)
     if (!party) return errorResponseFromCode('NOT_FOUND', log, { requestId })
-    const p = party as { id: string; org_number: string | null; legal_name: string | null; vat_number: string | null }
+    const p = party as { id: string; display_name: string; org_number: string | null; legal_name: string | null; vat_number: string | null }
 
     if (chosen && chosen !== p.org_number) {
       if (!isLegalPersonOrgNumber(chosen)) return errorResponseFromCode('SCB_NOT_A_LEGAL_PERSON', log, { requestId })
@@ -107,7 +108,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // registry's legal name replaces one read from documents or none at all,
     // but never one a person entered (a legal_name fact with source 'user').
     const legal = lookup.facts.find((f) => f.field === 'legal_name')?.value
-    if (typeof legal === 'string' && legal && legal !== p.legal_name) {
+    let renamedTo: string | null = null
+    if (typeof legal === 'string' && legal) {
       const { count } = await supabase
         .from('party_facts')
         .select('id', { count: 'exact', head: true })
@@ -117,7 +119,23 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         .eq('source', 'user')
         .is('superseded_at', null)
       if (!count) {
-        await supabase.from('parties').update({ legal_name: legal }).eq('company_id', companyId).eq('id', id)
+        // The register's name also becomes the name people see, on the party
+        // and on the supplier and customer rows that still carry the party's
+        // old name: "Webhallen Oktober" was a memo, "Webhallen Sverige AB" is
+        // the company. A name a person set on the row (different from the
+        // party's) is theirs and stays.
+        const display = displayNameFromRegistry(legal)
+        const update: Record<string, string> = {}
+        if (legal !== p.legal_name) update.legal_name = legal
+        if (!sameName(p.display_name, display)) {
+          update.display_name = display
+          renamedTo = display
+        }
+        if (Object.keys(update).length) await supabase.from('parties').update(update).eq('company_id', companyId).eq('id', id)
+        if (renamedTo) {
+          await supabase.from('suppliers').update({ name: renamedTo }).eq('company_id', companyId).eq('party_id', id).eq('name', p.display_name)
+          await supabase.from('customers').update({ name: renamedTo }).eq('company_id', companyId).eq('party_id', id).eq('name', p.display_name)
+        }
       }
     }
 
@@ -132,7 +150,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const r = (summary ?? {}) as Partial<Record<'inserted' | 'superseded' | 'refreshed', number>>
     return NextResponse.json({
-      data: { found: true, orgNumber: p.org_number, inserted: r.inserted ?? 0, superseded: r.superseded ?? 0, refreshed: r.refreshed ?? 0, facts: lookup.facts },
+      data: { found: true, orgNumber: p.org_number, inserted: r.inserted ?? 0, superseded: r.superseded ?? 0, refreshed: r.refreshed ?? 0, facts: lookup.facts, renamedTo },
     })
   },
   { requireWrite: true },

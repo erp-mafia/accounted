@@ -157,6 +157,21 @@ describe('buildSuggestions', () => {
     expect(memo.name_anchored).toBeUndefined()
   })
 
+  it('attaches a new key to the party confirmed under the pre-2026-09-04 key for the same vouchers', () => {
+    const text = 'Webhallen Oktober · Dataskärmar till kontoret'
+    const confirmed: ExistingParty = {
+      id: 'p-web',
+      display_name: 'Webhallen Oktober · Dataskärmar till kontoret',
+      org_number: null,
+      alias_keys: ['webhallen oktober dataskärmar till kontoret'],
+      status: 'confirmed',
+    }
+    const item = buildSuggestions({ observed: [observed({ key: 'webhallen', name: text })], evidence: [], existing: [confirmed] }).items[0]!
+    expect(item.party_id).toBe('p-web')
+    expect(item.reason.attach).toBe('alias_key')
+    expect(item.alias_keys).toEqual(['webhallen'])
+  })
+
   it('withholds the hard key and identities when a key mixes two org numbers', () => {
     const r = buildSuggestions({
       observed: [observed({ key: 'vattenfall' })],

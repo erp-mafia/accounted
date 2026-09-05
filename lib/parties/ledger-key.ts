@@ -98,3 +98,28 @@ export function displayNameFromVoucherText(raw: string): string {
     .trim()
   return cleaned.length >= 2 ? cleaned : raw.trim()
 }
+
+const LEGACY_AP_PREFIX = /^(levfakt|levfkt|leverantörsfaktura från|leverantörsfaktura|levbet|faktura|kvitto|utgift)\s+/
+const LEGACY_LEADING_SUPPLIER_NUMBER = /^\d{1,5}\s+/
+const LEGACY_TRAILING_SHORT_DIGITS = /(\s+\d{1,3})+$/
+
+/**
+ * The ledger key as it was computed before 2026-09-04 (migration
+ * 20260904002000): the whole description normalised, with only the AP
+ * prefix and short numbers stripped. Parties confirmed under that key keep
+ * it as an alias, and the vouchers that produced it now map to the new key,
+ * so a rebuild would otherwise offer the same company again as a fresh
+ * suggestion. buildSuggestions asks this for every voucher text and attaches
+ * the new key to the party that already owns the old one.
+ */
+export function legacyLedgerKey(raw: string | null | undefined): string {
+  const k = normalizeCounterpartyName(raw ?? '')
+  if (!k) return ''
+  const stripped = k
+    .replace(LEGACY_AP_PREFIX, '')
+    .replace(LEGACY_LEADING_SUPPLIER_NUMBER, '')
+    .replace(LEGACY_TRAILING_SHORT_DIGITS, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return stripped === '' ? k : stripped
+}
