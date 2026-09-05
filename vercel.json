@@ -103,6 +103,10 @@
       "schedule": "20 * * * *"
     },
     {
+      "path": "/api/extensions/arcim-migration/cleanup/cron",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
     },
