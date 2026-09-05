@@ -1219,6 +1219,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   event_log: '30-day TTL event bus log',
   extension_data: 'extension runtime state (includes this backup\'s own state)',
   idempotency_keys: 'infrastructure',
+  sandbox_seed_attempts: 'infrastructure: disposable demo seed coordination, no accounting records',
   inbox_rate_counters: 'infrastructure',
   mail_connections:
     'mailbox OAuth grants (live refresh tokens), not portable. The receipts they find are archived as documents.',
