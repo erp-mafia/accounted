@@ -53,6 +53,14 @@ $$;
 ALTER TABLE auth.users
   ADD COLUMN IF NOT EXISTS is_anonymous boolean NOT NULL DEFAULT false;
 
+-- GoTrue's 2021 alter_users migration replaced confirmed_at with
+-- email_confirmed_at (+ phone_confirmed_at) on every real stack; the image's
+-- init script still carries the pre-2021 shape. list_users_awaiting_lifecycle_email
+-- (20260905140000) reads email_confirmed_at in a LANGUAGE sql body, which is
+-- validated at definition time, so the column must exist before migrations run.
+ALTER TABLE auth.users
+  ADD COLUMN IF NOT EXISTS email_confirmed_at timestamptz;
+
 -- auth.identities is created by GoTrue at startup, not by the Postgres
 -- image, and GoTrue does not run in CI. Triggers on auth.users that touch
 -- identities (20260903110000 unlink_old_address_identities) need the table

@@ -52,8 +52,12 @@ GRANT ALL ON TABLE public.user_lifecycle_emails TO service_role;
 -- Filters, in order of intent:
 --   * confirmed address inside the lookback window (email + Google + BankID
 --     signups all end up with email_confirmed_at set)
---   * live account: not soft-deleted in auth, not an anonymous sandbox user,
---     profile not deleted or anonymized
+--   * live account: profile not deleted or anonymized. Anonymous sandbox users
+--     need no separate filter, they have no email (u.email IS NULL), and the
+--     app never soft-deletes in auth (auth.admin.deleteUser hard-deletes), so
+--     the profile tombstones are the deletion signal. Referencing only
+--     GoTrue columns every supported stack has keeps this LANGUAGE sql body
+--     valid at definition time on older self-hosted auth schemas too.
 --   * no claim row yet for this key
 --   * not an invitee: someone with a pending or accepted company/team
 --     invitation on the address joined an existing workspace and was
@@ -89,8 +93,6 @@ AS $$
   WHERE u.email_confirmed_at IS NOT NULL
     AND u.email_confirmed_at >= p_confirmed_since
     AND u.email IS NOT NULL
-    AND u.deleted_at IS NULL
-    AND COALESCE(u.is_anonymous, false) = false
     AND p.deleted_at IS NULL
     AND p.anonymized_at IS NULL
     AND NOT EXISTS (

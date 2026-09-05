@@ -142,20 +142,22 @@ describe('user_lifecycle_emails + list_users_awaiting_lifecycle_email (pg)', () 
     expect(await awaiting()).not.toContain(invitee)
   })
 
-  it('skips anonymized profiles, anonymous users and soft-deleted auth rows', async () => {
+  it('skips anonymized or deleted profiles and users without an address (anonymous sandbox users)', async () => {
     const anonymized = await confirmedUser()
     await getPool().query(`UPDATE public.profiles SET anonymized_at = now() WHERE id = $1`, [anonymized])
 
-    const anonymous = await confirmedUser()
-    await getPool().query(`UPDATE auth.users SET is_anonymous = true WHERE id = $1`, [anonymous])
+    const deleted = await confirmedUser()
+    await getPool().query(`UPDATE public.profiles SET deleted_at = now() WHERE id = $1`, [deleted])
 
-    const softDeleted = await confirmedUser()
-    await getPool().query(`UPDATE auth.users SET deleted_at = now() WHERE id = $1`, [softDeleted])
+    // GoTrue anonymous sign-ins create users with a NULL email; that absence is
+    // the filter, not is_anonymous (which older self-hosted stacks lack).
+    const anonymous = await confirmedUser()
+    await getPool().query(`UPDATE auth.users SET email = NULL WHERE id = $1`, [anonymous])
 
     const rows = await awaiting()
     expect(rows).not.toContain(anonymized)
+    expect(rows).not.toContain(deleted)
     expect(rows).not.toContain(anonymous)
-    expect(rows).not.toContain(softDeleted)
   })
 
   it('orders oldest confirmation first and caps the batch', async () => {
