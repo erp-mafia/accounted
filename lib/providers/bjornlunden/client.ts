@@ -19,6 +19,39 @@ export class BjornLundenApiError extends Error {
   }
 }
 
+/**
+ * True when BL answered 403 because the company behind the User-Key has not
+ * activated our integration: the service provider holds no scopes for that
+ * company. Live-verified 2026-09-05 against a real customer key:
+ *
+ *   {"body":{"status":"FORBIDDEN","message":"Calls to details:READ is out of
+ *    allowed scope for service provider Arcim "}, "statusCodeValue":403}
+ *
+ * The key itself is right (an unknown key answers 500, see
+ * isBjornLundenUnknownKeyError), so this must never be reported as "check
+ * what you pasted": the fix is on the BL side (activate the integration).
+ */
+export function isBjornLundenScopeError(error: unknown): boolean {
+  return (
+    error instanceof BjornLundenApiError &&
+    error.statusCode === 403 &&
+    /out of allowed scope/i.test(error.body ?? '')
+  )
+}
+
+/**
+ * True when BL could not bind a company to the User-Key at all. Sandbox- and
+ * live-verified: the gateway answers 500 with a body naming the null current
+ * user ("...ServiceInfo.getCurrentUser()\" is null"), not 401/403/404.
+ */
+export function isBjornLundenUnknownKeyError(error: unknown): boolean {
+  return (
+    error instanceof BjornLundenApiError &&
+    error.statusCode === 500 &&
+    /getCurrentUser\(\)/.test(error.body ?? '')
+  )
+}
+
 function isRetryableError(error: unknown): boolean {
   if (isTimeoutError(error)) return true;
   if (error instanceof BjornLundenApiError) {

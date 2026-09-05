@@ -2492,6 +2492,27 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_en:
       'Bokio could not find the company. Check the company ID and that the integration token was created for the same company.',
   },
+  BL_INTEGRATION_NOT_ACTIVATED: {
+    // 422, same reasoning as PROVIDER_TOKEN_INVALID. The User-Key opened a
+    // real company, but that company has granted our service provider no
+    // scopes (BL: "out of allowed scope for service provider"). Nothing the
+    // user re-pastes can fix this: the integration must be activated on the
+    // BL side, and until BL has released it for the company it cannot be.
+    httpStatus: 422,
+    message_sv:
+      'Företagsnyckeln stämmer, men företaget har inte aktiverat Accounted som integration i Björn Lundén. Aktivera integrationen under Integrationer i Lundify eller BL Administration och försök igen. Saknas Accounted i listan är integrationen inte släppt för ditt företag ännu: importera via SIE-fil så länge.',
+    message_en:
+      'The company key is valid, but the company has not activated Accounted as an integration in Björn Lundén. Activate the integration under Integrations in Lundify or BL Administration and try again. If Accounted is missing from the list, the integration has not been released for your company yet: import via a SIE file for now.',
+  },
+  BL_COMPANY_KEY_NOT_FOUND: {
+    // 422: BL could not bind any company to the pasted User-Key (typo,
+    // truncated GUID, key from a different BL environment).
+    httpStatus: 422,
+    message_sv:
+      'Björn Lundén hittade inget företag för den här företagsnyckeln. Kontrollera att hela nyckeln (GUID) är kopierad från Integrationer → kugghjulet i Lundify och försök igen.',
+    message_en:
+      'Björn Lundén found no company for this company key. Check that the whole key (GUID) was copied from Integrations → the gear icon in Lundify and try again.',
+  },
   PROVIDER_COMPANY_MISMATCH: {
     // 422, same reasoning as PROVIDER_TOKEN_INVALID: the credentials are valid,
     // but they open a DIFFERENT legal entity than the one being imported into.

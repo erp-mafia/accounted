@@ -39,6 +39,18 @@ describe('structured-errors registry', () => {
     }
   })
 
+  it('has 422 entries for the Björn Lundén connect verdicts (valid key, missing activation; unknown key)', () => {
+    for (const code of ['BL_INTEGRATION_NOT_ACTIVATED', 'BL_COMPANY_KEY_NOT_FOUND']) {
+      const entry = getErrorEntry(code)
+      expect(entry, `missing entry for ${code}`).toBeDefined()
+      // 422, never 401: the caller's own session is fine and a 401 can trip
+      // client-side auth interceptors into logging the user out.
+      expect(entry?.httpStatus).toBe(422)
+      expect(entry?.message_sv).toBeTruthy()
+      expect(entry?.message_en).toBeTruthy()
+    }
+  })
+
   it('has an entry for every code the link-transaction service can emit', () => {
     for (const code of [
       'LINK_TX_JE_NOT_FOUND',

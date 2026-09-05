@@ -35,7 +35,11 @@ vi.mock('../lib/provider-client', () => {
   class ProviderTokenInvalidError extends Error {
     constructor(
       message: string,
-      readonly kind: 'credentials' | 'company-not-found' = 'credentials',
+      readonly kind:
+        | 'credentials'
+        | 'company-not-found'
+        | 'integration-not-activated'
+        | 'company-key-not-found' = 'credentials',
     ) {
       super(message)
     }
@@ -285,5 +289,51 @@ describe('POST /submit-token Bokio error mapping', () => {
     expect(body.error.code).toBe('PROVIDER_TOKEN_SUBMIT_FAILED')
     expect(body.error.message).toContain('kontrollera integrationsuppgifterna')
     expect(body.error.message_en).toContain('verify the integration details')
+  })
+})
+
+describe('POST /submit-token Björn Lundén error mapping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('reports a valid key whose company never activated the integration as an activation problem, not bad credentials', async () => {
+    ;(submitProviderToken as Mock).mockRejectedValue(
+      new ProviderTokenInvalidError(
+        'Björn Lundén: the company behind this User-Key has not activated the integration',
+        'integration-not-activated',
+      ),
+    )
+
+    const response = await submitTokenHandler(submitTokenRequest(), buildContext())
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en?: string }
+    }>(response)
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('BL_INTEGRATION_NOT_ACTIVATED')
+    expect(body.error.message).toContain('Aktivera integrationen')
+    expect(body.error.message).not.toContain('avvisade autentiseringen')
+    expect(body.error.message_en).toContain('Activate the integration')
+  })
+
+  it('reports an unknown User-Key as a key problem with the place to copy it from', async () => {
+    ;(submitProviderToken as Mock).mockRejectedValue(
+      new ProviderTokenInvalidError(
+        'Björn Lundén found no company for the key (HTTP 500)',
+        'company-key-not-found',
+      ),
+    )
+
+    const response = await submitTokenHandler(submitTokenRequest(), buildContext())
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en?: string }
+    }>(response)
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('BL_COMPANY_KEY_NOT_FOUND')
+    expect(body.error.message).toContain('hittade inget företag')
+    expect(body.error.message_en).toContain('found no company')
   })
 })
