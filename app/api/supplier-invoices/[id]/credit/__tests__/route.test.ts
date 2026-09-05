@@ -145,6 +145,16 @@ describe('POST /api/supplier-invoices/[id]/credit', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
+    // The credit note rests at 'credited' from birth: it is a reversal with
+    // nothing to attest or pay, so it must never enter the attest queue.
+    const insertedRow = findCall('supplier_invoices', 'insert')?.[0]
+    expect(insertedRow).toMatchObject({
+      status: 'credited',
+      is_credit_note: true,
+      credited_invoice_id: 'invoice-1',
+      remaining_amount: 0,
+      supplier_invoice_number: 'KREDIT-LF-001',
+    })
     const insertArgs = findCall('supplier_invoice_items', 'insert')
     const insertedItems = insertArgs?.[0] as Array<{ vat_rate: number }>
     expect(insertedItems[0]?.vat_rate).toBe(0.25)

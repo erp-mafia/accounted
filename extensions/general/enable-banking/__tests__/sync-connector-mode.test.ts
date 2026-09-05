@@ -12,7 +12,7 @@ vi.mock('../lib/api-client', async () => {
 })
 
 import { syncAccountTransactions } from '../lib/sync'
-import { SessionExpiredError } from '../lib/api-client'
+import { SessionExpiredError, ConnectorSyncError } from '../lib/api-client'
 import { buildStableExternalIds } from '@/lib/transactions/external-id'
 import type { StoredAccount } from '../types'
 
@@ -84,11 +84,57 @@ describe('syncAccountTransactions in connector mode', () => {
     await expect(syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())).rejects.toBeInstanceOf(SessionExpiredError)
   })
 
-  it('surfaces other connector failures as errors and refuses an unexpected response shape', async () => {
+  it('surfaces other connector failures as ConnectorSyncError, never as a dead session', async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'busy', code: 'CONNECTOR_RATE_LIMITED' }), { status: 429 }))
-    await expect(syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())).rejects.toThrow(/CONNECTOR_RATE_LIMITED/)
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ transactions: 'nope' }), { status: 200 }))
-    await expect(syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())).rejects.toThrow(/unexpected shape/)
+    const failed = syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())
+    await expect(failed).rejects.toThrow(/CONNECTOR_RATE_LIMITED/)
+    await expect(failed).rejects.toBeInstanceOf(ConnectorSyncError)
+    await expect(failed).rejects.toMatchObject({ status: 429, code: 'CONNECTOR_RATE_LIMITED' })
+    await expect(failed).rejects.not.toBeInstanceOf(SessionExpiredError)
+  })
+
+  it('refuses an unexpected response shape and names the failing fields', async () => {
+    // 2026-09-04: the service answered 200 with a body the contract rejects
+    // and four canary companies were parked in error with renewal advice.
+    // The field paths are what lets the service side be fixed.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      transactions: [{ booking_date: '2026-09-03', amount: '12.50', currency: 'SEK', description: 'x' }],
+      raw_pages: [],
+      skipped_pending: 0,
+      returned_min_booking_date: null,
+      returned_max_booking_date: null,
+      effective_date_from: null,
+      pages: 1,
+    }), { status: 200 }))
+    const failed = syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())
+    await expect(failed).rejects.toThrow(/unexpected shape/)
+    await expect(failed).rejects.toBeInstanceOf(ConnectorSyncError)
+    const err = await failed.catch((e: unknown) => e) as ConnectorSyncError
+    expect(err.code).toBe('CONNECTOR_BAD_SHAPE')
+    expect(err.issues?.some((i) => i.startsWith('transactions.0.amount'))).toBe(true)
+    expect(err.issues?.some((i) => i.startsWith('transactions.0.counterparty_name'))).toBe(true)
+    expect(warn).toHaveBeenCalledWith(
+      '[enable-banking] Connector sync response failed the wire contract',
+      expect.objectContaining({ connectionId: 'conn-1', accountUid: 'acc-1', issues: err.issues }),
+    )
+    warn.mockRestore()
+  })
+
+  it('wraps the timeout abort as ConnectorSyncError CONNECTOR_TIMEOUT', async () => {
+    const abort = new Error('This operation was aborted')
+    abort.name = 'AbortError'
+    fetchMock.mockRejectedValueOnce(abort)
+    const failed = syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())
+    await expect(failed).rejects.toBeInstanceOf(ConnectorSyncError)
+    await expect(failed).rejects.toMatchObject({ status: null, code: 'CONNECTOR_TIMEOUT' })
+  })
+
+  it('wraps a transport failure as ConnectorSyncError', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'))
+    const failed = syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())
+    await expect(failed).rejects.toBeInstanceOf(ConnectorSyncError)
+    await expect(failed).rejects.toMatchObject({ status: null, code: 'CONNECTOR_TRANSPORT' })
   })
 })
 

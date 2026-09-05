@@ -41,6 +41,19 @@ describe('countUnbookedTransactions', () => {
   })
 })
 
+describe('countSupplierInvoicesAwaitingApproval', () => {
+  it('counts registered invoices but never credit notes', async () => {
+    // A credit note is a reversal with nothing to attest; the detail page
+    // offers no attest button for it, so counting one here made an item
+    // nobody could clear (support case 2026-09-04).
+    enqueue({ count: 1 })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(1)
+    const eqCalls = findCalls('supplier_invoices', 'eq')
+    expect(eqCalls).toContainEqual(['status', 'registered'])
+    expect(eqCalls).toContainEqual(['is_credit_note', false])
+  })
+})
+
 describe('countUnbookedSkattekontoRows', () => {
   it('counts only settled, unbooked, non-ignored skattekonto rows', async () => {
     enqueue({ count: 3 })
