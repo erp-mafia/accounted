@@ -1580,6 +1580,106 @@ describe('precheckFiscalPeriod', () => {
     expect(verdict).toEqual({ verdict: 'match', periodId: 'existing-period-id' })
   })
 
+  // A containing period that is closed or locked used to answer 'match', so
+  // the import ran into the DB trigger ("Cannot write to locked/closed fiscal
+  // period") with no way forward. Each state names its own remedy.
+  const closedPeriod = {
+    id: 'fy-2024-2025',
+    name: 'Räkenskapsår 2024/2025',
+    period_start: '2024-06-03',
+    period_end: '2025-08-31',
+  }
+
+  it('refuses a klarmarkerad containing period and points at Öppna igen', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      {
+        data: {
+          ...closedPeriod,
+          is_closed: true,
+          locked_at: '2026-09-04T10:55:54Z',
+          closed_externally: true,
+          closing_entry_id: null,
+        },
+        error: null,
+      },
+    ])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2024-06-03',
+      '2025-08-31',
+    )
+
+    expect(verdict.verdict).toBe('conflict')
+    if (verdict.verdict !== 'conflict') return
+    expect(verdict.existingPeriod).toEqual({
+      id: 'fy-2024-2025',
+      name: 'Räkenskapsår 2024/2025',
+      periodStart: '2024-06-03',
+      periodEnd: '2025-08-31',
+    })
+    expect(verdict.message).toMatch(/avslutat i ett tidigare program/)
+    expect(verdict.message).toMatch(/Öppna igen/)
+    expect(verdict.message).toMatch(/Inställningar > Bokföring > Räkenskapsår/)
+  })
+
+  it('refuses a period closed by a year-end run without offering Öppna igen', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      {
+        data: {
+          ...closedPeriod,
+          is_closed: true,
+          locked_at: '2026-09-04T12:14:16Z',
+          closed_externally: false,
+          closing_entry_id: 'closing-entry',
+        },
+        error: null,
+      },
+    ])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2024-06-03',
+      '2025-08-31',
+    )
+
+    expect(verdict.verdict).toBe('conflict')
+    if (verdict.verdict !== 'conflict') return
+    expect(verdict.message).toMatch(/stängt med ett årsbokslut/)
+    expect(verdict.message).not.toMatch(/Öppna igen/)
+  })
+
+  it('refuses a locked (not closed) containing period and points at Lås upp', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      {
+        data: {
+          ...closedPeriod,
+          is_closed: false,
+          locked_at: '2026-09-04T10:55:54Z',
+          closed_externally: false,
+          closing_entry_id: null,
+        },
+        error: null,
+      },
+    ])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2024-06-03',
+      '2025-08-31',
+    )
+
+    expect(verdict.verdict).toBe('conflict')
+    if (verdict.verdict !== 'conflict') return
+    expect(verdict.message).toMatch(/är låst\. Lås upp det/)
+  })
+
   it('reports create with nothing to replace when no period overlaps', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
