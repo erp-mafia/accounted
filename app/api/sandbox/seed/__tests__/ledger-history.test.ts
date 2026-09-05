@@ -195,7 +195,7 @@ describe('sandbox ledger history', () => {
     expect(otherTagged).toEqual([])
   })
 
-  it('keeps every entry inside the fiscal year and on the posted, allowed shape', () => {
+  it('keeps dates inside the fiscal year and leaves posting metadata to the engine', () => {
     const history = buildSandboxLedgerHistory(input)
 
     for (const entry of history.entries) {
@@ -203,8 +203,9 @@ describe('sandbox ledger history', () => {
       expect(entry.entry_date <= '2026-12-31').toBe(true)
       expect(entry.entry_date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
       expect(ALLOWED_SOURCE_TYPES).toContain(entry.source_type)
-      expect(entry.status).toBe('posted')
-      expect(entry.committed_at).toBe(entry.entry_date)
+      expect(entry).not.toHaveProperty('status')
+      expect(entry).not.toHaveProperty('committed_at')
+      expect(entry).not.toHaveProperty('commit_method')
       expect(entry.voucher_series).toBe('A')
       expect(entry.fiscal_period_id).toBe('fp-1')
       expect(entry.user_id).toBe('user-1')

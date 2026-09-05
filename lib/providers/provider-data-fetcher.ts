@@ -746,7 +746,31 @@ export async function fetchSalesInvoicesHydrated(
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
 ): Promise<HydratedInvoices<SalesInvoiceDto>> {
   const invoices = await fetchSalesInvoicesDirect(provider, accessToken, providerCompanyId);
+  return hydrateSalesInvoices(provider, accessToken, providerCompanyId, invoices, budgetMs);
+}
 
+/**
+ * Hydrate a caller-chosen set of already-listed sales invoices.
+ *
+ * The migration's own pass (above) spends its budget on the WHOLE register,
+ * open invoices first, and reports what it did not reach. A follow-up that
+ * wants to finish the job must not repeat that: re-hydrating the register
+ * from the top would spend every run on the same open invoices and never get
+ * to the ones still missing their rows. This entry point takes the subset the
+ * caller already knows to be incomplete on its own side, so each run makes
+ * progress on exactly those. Invoices that need nothing (a list payload that
+ * carried its rows) pass through unrequested, as in the full pass.
+ *
+ * Returns the invoices in the order given; see `hydrateInvoices` for the
+ * report and `unhydratedIds` semantics.
+ */
+export async function hydrateSalesInvoices(
+  provider: ProviderName,
+  accessToken: string,
+  providerCompanyId: string | undefined,
+  invoices: SalesInvoiceDto[],
+  budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
+): Promise<HydratedInvoices<SalesInvoiceDto>> {
   const { items, report, unhydratedIds } = await hydrateInvoices<SalesInvoiceDto>(
     invoices,
     salesInvoiceNeedsDetail,
