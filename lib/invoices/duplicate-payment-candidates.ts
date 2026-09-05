@@ -138,9 +138,14 @@ export async function findDuplicatePaymentCandidatesForInvoice(
 ): Promise<DuplicatePaymentCandidate[]> {
   const { companyId, invoice, paymentAmount, paymentDate } = params
   const customerName = invoice.customer_name
-  if (!customerName) return []
-
   const paymentCurrency = normalizeCurrencyCode(invoice.currency)
+
+  // The name sweeps need a payer to look for; the aggregate sweep does not
+  // (a Bankgirot row names nobody), so a nameless invoice skips straight to it.
+  if (!customerName) {
+    if (paymentCurrency !== 'SEK') return []
+    return runAggregateSweep(supabase, { companyId, invoice, paymentAmount, paymentDate })
+  }
   const reference: ComparableAmount = {
     amount: paymentAmount,
     currency: paymentCurrency,
@@ -228,23 +233,7 @@ export async function findDuplicatePaymentCandidatesForInvoice(
   // remaining amounts stored in invoice currency.
   if (data.length === 0) {
     if (paymentCurrency !== 'SEK') return []
-    try {
-      return await findAggregateCandidates(supabase, {
-        companyId,
-        invoiceNumber: invoice.invoice_number,
-        paymentAmount,
-        paymentDate,
-      })
-    } catch (err) {
-      // Advisory guard: a failed sweep must never block "Markera som betald".
-      // Logged so the blind spot is visible rather than passing silently.
-      log.warn('duplicate-payment guard: aggregate sweep failed', {
-        companyId,
-        invoiceNumber: invoice.invoice_number,
-        error: err instanceof Error ? err.message : String(err),
-      })
-      return []
-    }
+    return runAggregateSweep(supabase, { companyId, invoice, paymentAmount, paymentDate })
   }
 
   const invoiceOcr = normalizeOcrReference(invoice.invoice_number)
@@ -273,6 +262,35 @@ export async function findDuplicatePaymentCandidatesForInvoice(
 
   candidates.sort((a, b) => MATCH_REASON_RANK[a.match_reason] - MATCH_REASON_RANK[b.match_reason])
   return candidates
+}
+
+async function runAggregateSweep(
+  supabase: SupabaseClient,
+  params: {
+    companyId: string
+    invoice: Pick<CustomerInvoice, 'invoice_number'>
+    paymentAmount: number
+    paymentDate: string
+  },
+): Promise<DuplicatePaymentCandidate[]> {
+  const { companyId, invoice, paymentAmount, paymentDate } = params
+  try {
+    return await findAggregateCandidates(supabase, {
+      companyId,
+      invoiceNumber: invoice.invoice_number,
+      paymentAmount,
+      paymentDate,
+    })
+  } catch (err) {
+    // Advisory guard: a failed sweep must never block "Markera som betald".
+    // Logged so the blind spot is visible rather than passing silently.
+    log.warn('duplicate-payment guard: aggregate sweep failed', {
+      companyId,
+      invoiceNumber: invoice.invoice_number,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return []
+  }
 }
 
 type OpenInvoiceRow = {

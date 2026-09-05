@@ -234,8 +234,25 @@ describe('findDuplicatePaymentCandidatesForInvoice', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 
-  it('returns nothing when the invoice has no customer name', async () => {
-    const { supabase, queries } = createRecordingSupabase([])
+  it('runs the aggregate sweep for a nameless SEK invoice: a Bankgirot row names nobody anyway', async () => {
+    const { supabase, queries } = createRecordingSupabase([
+      [{ id: 'tx-bg', date: '2026-07-31', amount: 88250, description: 'BGGIRERING 03447786', merchant_name: null, reference: null }],
+      [{ id: 'inv-064', invoice_number: '064', remaining_amount: 25750, total: 25750, due_date: '2026-07-31' }],
+    ])
+    const candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
+      companyId: 'company-1',
+      invoice: { ...sekInvoice, invoice_number: '063', customer_name: null, total: 62500, total_sek: 62500 },
+      paymentAmount: 62500,
+      paymentDate: '2026-07-31',
+    })
+    // No name sweeps at all: straight to the two aggregate queries.
+    expect(queries).toHaveLength(2)
+    expect(queries[0].gt).toContainEqual(['amount', 62500])
+    expect(candidates.map((c) => c.match_reason)).toEqual(['aggregate_exact'])
+  })
+
+  it('skips the name sweeps when the invoice has no customer name; only the aggregate row sweep runs', async () => {
+    const { supabase, queries } = createRecordingSupabase([[]])
     const candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
       companyId: 'company-1',
       invoice: { ...sekInvoice, customer_name: null },
@@ -243,7 +260,9 @@ describe('findDuplicatePaymentCandidatesForInvoice', () => {
       paymentDate: '2026-05-10',
     })
     expect(candidates).toEqual([])
-    expect(queries).toHaveLength(0)
+    // No ILIKE probe without a name; the aggregate row sweep found nothing and stopped.
+    expect(queries).toHaveLength(1)
+    expect(queries[0].ilike).toBeUndefined()
   })
 })
 

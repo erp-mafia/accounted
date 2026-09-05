@@ -791,6 +791,25 @@ describe('detectExplainingVoucherSet', () => {
     expect(set?.total).toBe(11500)
   })
 
+  it('fails open (null) when a link lookup resolves with an error instead of throwing', async () => {
+    const entries = [leg({ je_id: 'je-1', date: '2026-07-31', debit: 1000 })]
+    enqueue({ data: entries.map((r) => r.journal_entry), error: null })
+    enqueue({
+      data: entries.map((r, i) => ({ id: `line-${i}`, journal_entry_id: r.journal_entry.id, account_number: '1930', debit_amount: 1000, credit_amount: 0 })),
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    // transactions lookup fails: PostgREST resolves, it does not throw.
+    enqueue({ data: null, error: { message: 'permission denied' } })
+    enqueue({ data: [], error: null })
+    const set = await detectExplainingVoucherSet(supabase as never, {
+      ...baseArgs,
+      transactionAmount: 1000,
+    })
+    expect(set).toBeNull()
+  })
+
   it('fails open (null) when the ledger scan throws', async () => {
     enqueue({ data: null, error: { message: 'boom' } })
     const set = await detectExplainingVoucherSet(supabase as never, {
@@ -812,6 +831,15 @@ describe('detectExplainingVoucherSetForTransaction', () => {
     const set = await detectExplainingVoucherSetForTransaction(supabase as never, 'company-1', 'tx-1')
     expect(set).toBeNull()
     expect(supabase.from.mock.calls.length - callsBefore).toBe(1)
+  })
+
+  it('fails open when the cash-account lookup errors instead of widening the scan', async () => {
+    const callsBefore = supabase.from.mock.calls.length
+    enqueue({ data: { id: 'tx-1', date: '2026-07-31', amount: 100, currency: 'SEK', cash_account_id: 'ca-1', journal_entry_id: null }, error: null })
+    enqueue({ data: null, error: { message: 'boom' } })
+    const set = await detectExplainingVoucherSetForTransaction(supabase as never, 'company-1', 'tx-1')
+    expect(set).toBeNull()
+    expect(supabase.from.mock.calls.length - callsBefore).toBe(2)
   })
 
   it('resolves the settlement account from the cash account before scanning', async () => {

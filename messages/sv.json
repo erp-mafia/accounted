@@ -4480,7 +4480,7 @@
     "match_reason_name_amount_fuzzy": "Sannolik träff",
     "match_reason_amount_only": "Möjlig träff",
     "match_reason_aggregate_exact": "Samlad inbetalning",
-    "aggregate_covers": "Beloppet täcker exakt även faktura {numbers}. Fördela inbetalningen under Transaktioner så bokförs den en gång.",
+    "aggregate_covers": "Beloppet täcker exakt även {count, plural, =1 {faktura {numbers}} other {fakturorna {numbers}}}. Fördela inbetalningen under Transaktioner så bokförs den en gång.",
     "allocate_transaction": "Fördela under Transaktioner",
     "duplicate_title": "Möjlig dubblettbetalning",
     "duplicate_one": "En inkommande banktransaktion ser ut att vara denna betalning. Länka den istället för att skapa en ny verifikation, eller bokför ändå om du är säker.",

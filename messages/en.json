@@ -4480,7 +4480,7 @@
     "match_reason_name_amount_fuzzy": "Likely match",
     "match_reason_amount_only": "Possible match",
     "match_reason_aggregate_exact": "Aggregated payment",
-    "aggregate_covers": "The amount also covers invoice {numbers} exactly. Split the payment under Transactions so it is booked once.",
+    "aggregate_covers": "The amount also covers {count, plural, =1 {invoice {numbers}} other {invoices {numbers}}} exactly. Split the payment under Transactions so it is booked once.",
     "allocate_transaction": "Split under Transactions",
     "duplicate_title": "Possible duplicate payment",
     "duplicate_one": "An incoming bank transaction looks like it could be this payment. Link it instead of creating a new verifikat, or post anyway if you're sure.",

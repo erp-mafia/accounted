@@ -398,6 +398,7 @@ export default function PaymentBookingDialog({
                       {isAggregate && (
                         <p className="text-xs text-muted-foreground">
                           {t('aggregate_covers', {
+                            count: c.aggregate_invoice_numbers!.length,
                             numbers: c.aggregate_invoice_numbers!.join(', '),
                           })}
                         </p>

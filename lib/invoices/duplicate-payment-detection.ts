@@ -464,7 +464,7 @@ export async function detectExplainingVoucherSet(
   // Drop vouchers a bank transaction already explains, through any of the
   // three anchors. All four lookups are company-scoped (defense in depth).
   const entryIds = Array.from(byEntry.keys())
-  const [{ data: paymentLinks }, { data: supplierPaymentLinks }, { data: txLinks }, { data: junctionLinks }] =
+  const [paymentLinksRes, supplierPaymentLinksRes, txLinksRes, junctionLinksRes] =
     await Promise.all([
       supabase
         .from('invoice_payments')
@@ -487,6 +487,17 @@ export async function detectExplainingVoucherSet(
         .eq('company_id', companyId)
         .in('journal_entry_id', entryIds),
     ])
+  // A PostgREST failure resolves with { data: null, error } rather than
+  // throwing. Reading that as "no links" would offer a voucher a bank row
+  // already settles, so a failed lookup fails open (null) like a thrown one:
+  // the guard stays advisory and the booking RPC keeps the last word.
+  if (paymentLinksRes.error || supplierPaymentLinksRes.error || txLinksRes.error || junctionLinksRes.error) {
+    return null
+  }
+  const paymentLinks = paymentLinksRes.data
+  const supplierPaymentLinks = supplierPaymentLinksRes.data
+  const txLinks = txLinksRes.data
+  const junctionLinks = junctionLinksRes.data
 
   const linkedIds = new Set<string>()
   for (const row of [...((paymentLinks ?? []) as PaymentLinkRow[]), ...((supplierPaymentLinks ?? []) as PaymentLinkRow[])]) {
@@ -553,12 +564,13 @@ export async function detectExplainingVoucherSetForTransaction(
 ): Promise<ExplainingVoucherSet | null> {
   let row: TransactionForExplaining | null
   if (typeof transaction === 'string') {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('transactions')
       .select('id, date, amount, currency, amount_sek, exchange_rate, cash_account_id, journal_entry_id')
       .eq('id', transaction)
       .eq('company_id', companyId)
       .maybeSingle()
+    if (error) return null
     row = (data as TransactionForExplaining | null) ?? null
   } else {
     row = transaction
@@ -567,12 +579,15 @@ export async function detectExplainingVoucherSetForTransaction(
 
   let bankAccountNumber: string | null = null
   if (row.cash_account_id) {
-    const { data: cashAccount } = await supabase
+    const { data: cashAccount, error } = await supabase
       .from('cash_accounts')
       .select('ledger_account')
       .eq('id', row.cash_account_id)
       .eq('company_id', companyId)
       .maybeSingle()
+    // Without the account the scan would widen to every 19xx account: an
+    // unverified answer, so a failed lookup is a pass, not a wider guess.
+    if (error) return null
     bankAccountNumber = (cashAccount?.ledger_account as string | null) ?? null
   }
 
