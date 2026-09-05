@@ -3,16 +3,14 @@
  *
  * A run in status 'booked' that produced no verifikat would be a lie: in the
  * real product `bookPaidSalaryRun` posts 2-4 entries through the bookkeeping
- * engine before it advances the status. The sandbox seed cannot call that path
- * (it goes through the engine, which emits events, and the seed deliberately
- * inserts journal rows directly), so this module mirrors the account structure
+ * engine before it advances the status. This module mirrors the account structure
  * of `createSalaryRunEntries` in lib/salary/salary-entries.ts instead.
  *
  * Accounts come from SALARY_ACCOUNTS (lib/salary/account-mapping.ts), not from
  * literals here, so a future BAS remap moves the seed with the engine.
  *
  * Pure builders, in the same style as ./customers.ts and ./pending-operations.ts:
- * the caller assigns voucher numbers and journal_entry_id foreign keys.
+ * the caller posts through the engine and links the returned journal entry IDs.
  */
 
 import { SALARY_ACCOUNTS } from '@/lib/salary/account-mapping'
@@ -79,8 +77,6 @@ export interface SeedJournalEntry {
   description: string
   source_type: 'salary_payment'
   source_id: string
-  status: 'posted'
-  committed_at: string
   voucher_series: string
 }
 
@@ -143,8 +139,6 @@ export function buildSandboxSalaryVouchers(input: SalaryVoucherInput): SalaryVou
     entry_date: paymentDate,
     source_type: 'salary_payment' as const,
     source_id: salaryRunId,
-    status: 'posted' as const,
-    committed_at: paymentDate,
     voucher_series: 'A',
   }
 

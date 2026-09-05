@@ -82,13 +82,14 @@ describe('buildSandboxSalaryVouchers', () => {
     }
   })
 
-  it('stamps every entry as a posted salary_payment on the run', () => {
+  it('links salary_payment to the run and leaves posting metadata to the engine', () => {
     for (const { entry } of buildSandboxSalaryVouchers({ ...BASE, ...TOTALS })) {
       expect(entry.source_type).toBe('salary_payment')
       expect(entry.source_id).toBe('run-1')
-      expect(entry.status).toBe('posted')
+      expect(entry).not.toHaveProperty('status')
       expect(entry.entry_date).toBe('2026-07-25')
-      expect(entry.committed_at).toBe('2026-07-25')
+      expect(entry).not.toHaveProperty('committed_at')
+      expect(entry).not.toHaveProperty('commit_method')
       expect(entry.voucher_series).toMatch(/^[A-Z]$/)
       expect(entry.description).toContain('2026-07')
     }

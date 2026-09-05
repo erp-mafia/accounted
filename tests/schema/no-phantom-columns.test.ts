@@ -174,7 +174,14 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // one place (and held by CHECK supplier_invoices_credit_note_not_payable);
 // its columns are the object literal in that file, pinned by
 // credit-note.test.ts. Merged with main (#2288) at 399: 402.
-const UNRESOLVED_CEILING = 402
+// 2026-09-04: +2 for the migrated-invoice row completion
+// (extensions/general/arcim-migration/lib/complete-invoice-lines.ts): the
+// invoice_items rows come from the migration's own mapSalesInvoiceLine, the
+// same row array the orchestrator already inserts (counted above), written
+// once as a batch and again per invoice when the batch is rejected. The header
+// VAT update in the same module is an object literal and is checked. Merged
+// with main (#2289) at 402: 404.
+const UNRESOLVED_CEILING = 404
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

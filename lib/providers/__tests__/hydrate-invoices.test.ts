@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchSalesInvoicesHydrated } from '../provider-data-fetcher';
+import { fetchSalesInvoicesDirect, fetchSalesInvoicesHydrated, hydrateSalesInvoices } from '../provider-data-fetcher';
 
 /**
  * Hydration is what makes the VAT fix work in production: the list payload
@@ -204,5 +204,65 @@ describe('fetchSalesInvoicesHydrated: detail id comes from the configured idFiel
     expect(detail).not.toContain('99001');
     // And the hydrated payload's VAT actually landed.
     expect(invoices[0]?.taxTotal?.taxAmount.value).toBe(250);
+  });
+});
+
+describe('hydrateSalesInvoices: a caller-chosen subset of an already-listed register', () => {
+  let requested: string[];
+
+  beforeEach(() => {
+    requested = [];
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', '');
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+  it('requests the detail form only for the invoices it was given', async () => {
+    // A follow-up pass knows which invoices are still incomplete on its own
+    // side. Re-hydrating the whole register would spend every run on the
+    // same open invoices first and never reach the rest.
+    const third = { ...PAID, DocumentNumber: 6, InvoiceDate: '2025-11-03' };
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.includes('/invoices/5')) return json(detailFor(5, 500));
+      if (url.includes('/invoices/6')) return json(detailFor(6, 500));
+      return json(listResponse([OPEN, PAID, third]));
+    }));
+
+    const listed = await fetchSalesInvoicesDirect('fortnox', 'token');
+    const subset = listed.filter((dto) => dto.id !== '4');
+
+    const { invoices, hydration, unhydratedIds } = await hydrateSalesInvoices('fortnox', 'token', undefined, subset);
+
+    expect(hydration).toMatchObject({ needed: 2, hydrated: 2, failed: 0, skippedForBudget: 0 });
+    expect(unhydratedIds.size).toBe(0);
+    // Same order as given, so the caller can pair results back by index.
+    expect(invoices.map((dto) => dto.id)).toEqual(['5', '6']);
+    expect(invoices.every((dto) => dto.lines.length === 1)).toBe(true);
+    const details = requested.filter((u) => /\/invoices\/\d/.test(u));
+    expect(details).toHaveLength(2);
+    expect(details.some((u) => u.includes('/invoices/4'))).toBe(false);
+  });
+
+  it('reports the subset it could not reach, in the caller\'s ids', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      requested.push(url);
+      return json(listResponse([OPEN, PAID]));
+    }));
+
+    const listed = await fetchSalesInvoicesDirect('fortnox', 'token');
+
+    const { invoices, hydration, unhydratedIds } = await hydrateSalesInvoices('fortnox', 'token', undefined, listed, 0);
+
+    expect(hydration).toMatchObject({ needed: 2, hydrated: 0, skippedForBudget: 2 });
+    expect([...unhydratedIds].sort()).toEqual(['4', '5']);
+    expect(invoices).toHaveLength(2);
   });
 });
