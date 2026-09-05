@@ -314,7 +314,8 @@ export const promoteToSuppliers = env.test(
     await expect(b.getByRole("heading", { name: "Visma Spcs AB" })).toBeVisible();
     await expect(b.getByText("Företagsuppgifter")).toBeVisible();
     await expect(b.getByText("556252-9155")).toBeVisible();
-    await expect(b.getByText("SE556252915501")).toBeVisible();
+    // The VAT number shows both under Kontaktuppgifter and Företagsuppgifter.
+    await expect(b.getByText("SE556252915501").first()).toBeVisible();
     await expect(b.getByText("Utgivning av annan programvara")).toBeVisible();
     await expect(b.getByText(/^Från SCB · hämtat/)).toBeVisible();
     await expect(b.getByRole("button", { name: "Uppdatera från SCB", exact: true })).toBeVisible();
