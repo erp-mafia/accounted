@@ -149,3 +149,9 @@ export function contactFill(row: ContactRow, now: RegistrySummary['contact'], be
 export function fromRegistry(rowValue: string | null | undefined, registryValue: string | null | undefined): boolean {
   return !!norm(rowValue) && norm(rowValue) === norm(registryValue)
 }
+
+/** "E-post, telefon och adress": a list the way Swedish (or English) joins it. */
+export function listSv(items: string[], and: string): string {
+  if (items.length <= 1) return items.join('')
+  return `${items.slice(0, -1).join(', ')} ${and} ${items[items.length - 1]}`
+}

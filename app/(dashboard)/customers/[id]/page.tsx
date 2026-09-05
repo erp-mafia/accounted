@@ -28,7 +28,7 @@ import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
-import { fromRegistry, addressRowsFromRegistry } from '@/lib/parties/registry-summary'
+import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   individual: 'type_individual',
@@ -68,7 +68,17 @@ export default function CustomerDetailPage({
   const partyId = customer && customer.customer_type !== 'individual' ? ((customer as { party_id?: string | null }).party_id ?? null) : null
   const party = usePartyDossier(partyId)
   const registryAddress = party.registry?.contact.address ? addressRowsFromRegistry(party.registry.contact.address) : null
-  const scbNote = (isFromRegistry: boolean) => (isFromRegistry ? <span className="block text-xs text-muted-foreground">{tParties('facts_from_registry')}</span> : null)
+  // Which contact fields carry what the register said: one note for the
+  // section, not a tag under every row.
+  const registryFields = [
+    fromRegistry(customer.email, party.registry?.contact.email) ? tParties('fact_email') : null,
+    fromRegistry(customer.phone, party.registry?.contact.phone) ? tParties('fact_phone') : null,
+    !!registryAddress && fromRegistry(customer.address_line1, registryAddress.address_line1) && fromRegistry(customer.city, registryAddress.city) ? tParties('facts_address_short') : null,
+    fromRegistry(customer.vat_number, party.registry?.vat_number) ? tParties('fact_vat') : null,
+  ].filter((x): x is string => !!x)
+  const registryNote = registryFields.length ? (
+    <p className="pt-2 text-xs text-muted-foreground">{tParties('facts_contact_from_registry', { fields: listSv(registryFields, tParties('facts_list_and')) })}</p>
+  ) : null
   const [isLoading, setIsLoading] = useState(true)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
@@ -271,11 +281,9 @@ export default function CustomerDetailPage({
           ) : (
             <DefEmpty />
           )}
-          {scbNote(fromRegistry(customer.email, party.registry?.contact.email))}
         </DefRow>
         <DefRow label={t('def_phone')}>
           {customer.phone || <DefEmpty />}
-          {scbNote(fromRegistry(customer.phone, party.registry?.contact.phone))}
         </DefRow>
         <DefRow label={t('def_address')}>
           {customer.address_line1 || customer.city ? (
@@ -285,17 +293,13 @@ export default function CustomerDetailPage({
               {(customer.postal_code || customer.city) && (
                 <p>{[customer.postal_code, customer.city].filter(Boolean).join(' ')}</p>
               )}
-              {scbNote(
-                !!registryAddress &&
-                  fromRegistry(customer.address_line1, registryAddress.address_line1) &&
-                  fromRegistry(customer.city, registryAddress.city),
-              )}
               {customer.country && <p>{getCountryName(customer.country, errorLocale)}</p>}
             </div>
           ) : (
             <DefEmpty />
           )}
         </DefRow>
+        {registryNote}
       </DetailSection>
 
       {partyId && party.dossier ? (
