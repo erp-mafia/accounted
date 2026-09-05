@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { getPool, withUserContext } from './setup'
 import { seedCompany, insertAuthUser, insertCompanyMember } from './fixtures'
 
-// pg-real coverage for 20260901210000_expense_claims: RLS (member SELECT,
+// pg-real coverage for 20260904170000_expense_claims: RLS (member SELECT,
 // owner/admin/member writes, viewers read-only, strangers see nothing) and
 // the CHECK constraints (vat_sek < amount_sek, paid requires a payout batch,
 // cash/liability account whitelists on payout batches).
