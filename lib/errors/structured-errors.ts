@@ -3644,6 +3644,13 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
     message_en:
       'Transaction is already booked. Reverse the existing journal entry before re-allocating.',
   },
+  BATCH_TX_POSSIBLE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen ser redan ut att vara bokförd: en eller flera verifikationer utan bankkoppling summerar exakt till beloppet. Koppla transaktionen till dem i stället, eller bokför ändå om de inte hör ihop.',
+    message_en:
+      'The transaction already looks booked: one or more posted vouchers with no bank link add up exactly to its amount. Link the transaction to them instead, or pass force=true with expected_journal_entry_ids to book anyway.',
+  },
   BATCH_TX_ZERO_AMOUNT: {
     httpStatus: 400,
     message_sv: 'Transaktioner med beloppet 0 kan inte bokföras.',

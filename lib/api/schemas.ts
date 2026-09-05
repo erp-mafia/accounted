@@ -2096,8 +2096,27 @@ export const MatchBatchSchema = z
       // (PR #603 compliance review, OWASP V4.2). Domain-appropriate ceiling:
       // a real samlingsverifikat rarely covers more than a few dozen invoices.
       .max(100, 'At most 100 allocations per batch'),
+    // Bypass the already-explained guard (BATCH_TX_POSSIBLE_DUPLICATE): the
+    // bank row is fully covered by one or more posted, unlinked vouchers on
+    // its settlement account (an invoice marked paid by hand, a salary
+    // voucher per employee). Set only after the user has seen those vouchers
+    // and decided the row is a separate event.
+    force: z.boolean().optional(),
+    // Required whenever force=true: the journal_entry_ids of the set the
+    // user reviewed. The route re-detects the set and refuses force unless
+    // the ids match, so an automation cannot sweep through force=true
+    // without ever consulting the vouchers (same binding as
+    // MatchInvoiceSchema.expected_journal_entry_id).
+    expected_journal_entry_ids: z.array(uuid).max(10).optional(),
   })
   .superRefine((data, ctx) => {
+    if (data.force && !(data.expected_journal_entry_ids?.length)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['expected_journal_entry_ids'],
+        message: 'expected_journal_entry_ids is required when force=true',
+      })
+    }
     // Reject mixed customer + supplier in a single batch: semantically a
     // single bank transfer settles invoices on one side. The RPC also guards
     // this with BATCH_MIXED_KINDS_UNSUPPORTED, but rejecting at the schema
