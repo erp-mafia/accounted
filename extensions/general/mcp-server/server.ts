@@ -8502,7 +8502,7 @@ export const tools: McpTool[] = [
     keywords: ['motpart', 'part', 'leverantör', 'kund', 'företagsregistret', 'scb', 'org.nr', 'organisationsnummer', 'bolagsform', 'f-skatt'],
     title: 'Get Party (Motpart) Behind a Supplier or Customer',
     description:
-      'The party (motpart) behind a supplier or customer: legal name, org and VAT number, country, the SCB company-register summary (status, legal form, industry, seat, size, F-tax/VAT/employer registrations, contact details, fetched date) and what the ledger has seen for it (occurrences, amounts, first/last seen, dominant account). Pass exactly one of party_id, supplier_id or customer_id (party_id comes back on gnubok_list_suppliers and gnubok_list_customers rows). Read-only; registry facts are fetched in the web app (Leverantörer → Företagsuppgifter) or via the v1 REST API.',
+      'The party (motpart) behind a supplier or customer: legal name, org/VAT number, country, the SCB register summary (status, legal form, industry, seat, size, registrations, contact) and what the ledger has seen. Pass exactly one of party_id, supplier_id, customer_id. Read-only.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

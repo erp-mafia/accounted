@@ -606,7 +606,7 @@ Returns active suppliers in created-first order. Pass ?include_archived=true to 
 Response `200`:
 ```ts
 {
-  data: { id: string, name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email: string, org_number: string, vat_number: string, default_payment_terms: number, default_currency: string, archived_at: string, created_at: string }[],
+  data: { id: string, name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email: string, org_number: string, vat_number: string, default_payment_terms: number, default_currency: string, party_id?: string, archived_at: string, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -778,7 +778,7 @@ Example response `200`:
 **Retrieve a single supplier by id.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Returns the full supplier record. Pass ?expand=supplier_invoices to embed any open supplier invoices (registered / approved / partially_paid / overdue / disputed) for the supplier in the same response.
+Returns the full supplier record. Pass ?expand=supplier_invoices to embed any open supplier invoices (registered / approved / partially_paid / overdue / disputed) for the supplier in the same response. Pass ?expand=party to embed the party (motpart) behind the supplier: legal name, org and VAT number, country, the SCB company-register summary (status, legal form, industry, seat, size, registrations, contact details, fetched date) and what the ledger has seen for it.
 
 **Use when:** You need the full supplier record: address, payment terms, banking details, default expense account: before booking a supplier invoice or syncing to an external AP system.
 **Do not use for:** Listing suppliers (use the list endpoint). Looking up customer or employee records (different resources).
@@ -817,6 +817,8 @@ Response `200`:
     default_payment_terms: number,
     default_currency: string,
     notes: string,
+    party_id: string,
+    party?: { id: string, display_name: string, legal_name: string, org_number: string, vat_number: string, country: string, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string, customer_id: string }, registry: { legal_name: string, legal_form: string, status: { label: string, active: boolean }, warning: string, registrations: { f_tax: boolean, vat: boolean, employer: boolean }, industry: { code: string, label: string }, seat: string, registered_at: string, active_since: string, active_until: string, employees_band: string, turnover: { band: string, year: string }, workplaces: number, contact: { email: string, phone: string, address: { co: string, street: string, postal_code: string, city: string } }, vat_number: string, fetched_at: string }, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string, last_seen: string, dominant_account: string }, identities: { scheme: string, value: string, status: string, seen_count: number }[] },
     archived_at: string,
     created_at: string,
     updated_at: string
@@ -939,6 +941,8 @@ Response `200`:
     default_payment_terms: number,
     default_currency: string,
     notes: string,
+    party_id: string,
+    party?: { id: string, display_name: string, legal_name: string, org_number: string, vat_number: string, country: string, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string, customer_id: string }, registry: { legal_name: string, legal_form: string, status: { label: string, active: boolean }, warning: string, registrations: { f_tax: boolean, vat: boolean, employer: boolean }, industry: { code: string, label: string }, seat: string, registered_at: string, active_since: string, active_until: string, employees_band: string, turnover: { band: string, year: string }, workplaces: number, contact: { email: string, phone: string, address: { co: string, street: string, postal_code: string, city: string } }, vat_number: string, fetched_at: string }, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string, last_seen: string, dominant_account: string }, identities: { scheme: string, value: string, status: string, seen_count: number }[] },
     archived_at: string,
     created_at: string,
     updated_at: string
