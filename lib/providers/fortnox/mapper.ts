@@ -10,6 +10,29 @@ import type {
 } from '../dto';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
 import { sourceVoucherFromParts } from '../source-voucher';
+import { roundOre } from '@/lib/money';
+
+/**
+ * A row amount net of VAT.
+ *
+ * Fortnox prices an invoice either excluding or including VAT, and says which
+ * with the invoice-level `VATIncluded` flag: when it is true the row `Price`
+ * and `Total` are the amounts the customer saw, VAT inside, and the net is
+ * the amount divided by (1 + rate). Newer payloads also carry the net on the
+ * row (`TotalExcludingVAT`, `PriceExcludingVAT`), which callers prefer when
+ * present; this is the fallback for the ones that do not. Without a stated
+ * rate the amount cannot be split and is returned as it is, and the
+ * consumer's rows-versus-header check reports the disagreement.
+ *
+ * Found on Profilio (2026-09-05): 345 VAT-inclusive invoices whose rows were
+ * stored as if net, so the rows summed to the gross and carried 25 % VAT on
+ * top of it, beside a header that was right.
+ */
+function netOfVat(amount: number, vatIncluded: boolean, ratePercent: number | undefined): number {
+  if (!vatIncluded || ratePercent === undefined) return amount;
+  const rate = ratePercent > 1 ? ratePercent / 100 : ratePercent;
+  return roundOre(amount / (1 + rate));
+}
 
 /**
  * Fortnox splits its invoice payloads in two. `GET /3/invoices` answers with
@@ -118,12 +141,21 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
   const paid = isFullyPaid(raw);
   const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
 
+  // Whether the row amounts include VAT. Absent on the list form, where there
+  // are no rows anyway; false is the default when the detail form omits it.
+  const vatIncluded = raw['VATIncluded'] === true;
+
   const rows = (raw['InvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
-    // Fortnox `Total` on a row is the line amount excluding VAT; `VAT` is the
-    // rate in percent (25), not an amount.
-    const lineNet = readNumber(row, ['Total']) ?? 0;
+    // `VAT` on a row is the rate in percent (25), not an amount. `Total` and
+    // `Price` are net only when the invoice is priced excluding VAT; see
+    // netOfVat for the VATIncluded case.
     const taxPercent = readNumber(row, ['VAT']);
+    const lineNet = readNumber(row, ['TotalExcludingVAT'])
+      ?? netOfVat(readNumber(row, ['Total']) ?? 0, vatIncluded, taxPercent);
+    const rawPrice = readNumber(row, ['Price']);
+    const unitPrice = readNumber(row, ['PriceExcludingVAT'])
+      ?? (rawPrice !== undefined ? netOfVat(rawPrice, vatIncluded, taxPercent) : undefined);
     const lineVat = lineVatFromPercent(lineNet, taxPercent);
 
     return {
@@ -131,7 +163,7 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
       description: row['Description'] as string | undefined,
       quantity: row['DeliveredQuantity'] as number | undefined,
       unitCode: row['Unit'] as string | undefined,
-      unitPrice: row['Price'] != null ? amount(row['Price'] as number, currency) : undefined,
+      unitPrice: unitPrice !== undefined ? amount(unitPrice, currency) : undefined,
       lineExtensionAmount: amount(lineNet, currency),
       taxPercent,
       // Fortnox states the rate per row but not the money. Deriving it here is

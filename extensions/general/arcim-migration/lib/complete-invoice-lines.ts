@@ -76,6 +76,12 @@ export interface CompleteInvoiceLinesResult {
   totalMismatch: number
   /** Matched and hydrated, but the detail form itself carries no rows. */
   noLinesAtProvider: number
+  /**
+   * Matched and hydrated, but the mapped rows do not add up to the header the
+   * same payload established (net or VAT off by more than ROWS_TOLERANCE_KR);
+   * left untouched rather than stored as rows that contradict their invoice.
+   */
+  rowsMismatch: number
   /** Matched but not hydrated this run (budget, auth, or a failed fetch); the next run retries them. */
   notHydrated: number
   /** Rows written but the header left alone because the detail form established no VAT. */
@@ -105,6 +111,17 @@ interface CandidateRow {
 
 /** Invoices per statement. Small enough that a chunk's rows stay one request. */
 const WRITE_CHUNK_SIZE = 100
+
+/**
+ * How far the rows may disagree with the header before the invoice is left
+ * alone. Öresavrundning puts up to 0.50 kr between a Fortnox `Total` and the
+ * unrounded net plus VAT, and per-row VAT rounding adds öre per row; a real
+ * disagreement (rows priced with VAT inside, a header-level freight or
+ * discount the rows do not carry) is kronor, not öre. A row set that fails
+ * this is a mapper or payload problem to be understood, not stored: rows that
+ * contradict their own header are worse than no rows.
+ */
+const ROWS_TOLERANCE_KR = 1
 
 /**
  * "number::YYYY-MM-DD", the same key the registration-voucher relink joins
@@ -218,6 +235,7 @@ export async function completeMigratedInvoiceLines(
     headersUpdated: 0,
     totalMismatch: 0,
     noLinesAtProvider: 0,
+    rowsMismatch: 0,
     notHydrated: 0,
     vatUnresolved: 0,
     failed: 0,
@@ -290,6 +308,21 @@ export async function completeMigratedInvoiceLines(
         companyId, invoiceId: row.id, invoiceNumber: row.invoice_number, stored: row.total, provider: mappedTotal,
       })
       continue
+    }
+
+    if (!mapped.vatUnresolved) {
+      const rowsNet = mapped.items.reduce((sum, item) => sum + Number(item.line_total ?? 0), 0)
+      const rowsVat = mapped.items.reduce((sum, item) => sum + Number(item.vat_amount ?? 0), 0)
+      const headerNet = mapped.invoice.subtotal as number
+      const headerVat = mapped.invoice.vat_amount as number
+      if (Math.abs(rowsNet - headerNet) > ROWS_TOLERANCE_KR || Math.abs(rowsVat - headerVat) > ROWS_TOLERANCE_KR) {
+        result.rowsMismatch++
+        log.warn('mapped rows do not add up to the header; invoice left untouched', {
+          companyId, invoiceId: row.id, invoiceNumber: row.invoice_number,
+          headerNet, rowsNet: roundOre(rowsNet), headerVat, rowsVat: roundOre(rowsVat), rows: mapped.items.length,
+        })
+        continue
+      }
     }
 
     let header: HeaderFill | null = null
@@ -371,6 +404,7 @@ export async function completeMigratedInvoiceLines(
     headersUpdated: result.headersUpdated,
     notHydrated: result.notHydrated,
     totalMismatch: result.totalMismatch,
+    rowsMismatch: result.rowsMismatch,
     failed: result.failed,
     remaining: result.remaining,
     hydration: result.hydration,
