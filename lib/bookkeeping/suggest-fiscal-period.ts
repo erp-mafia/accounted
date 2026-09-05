@@ -28,12 +28,18 @@ export interface SuggestedPeriod {
  * A fiscal-year name: `Räkenskapsår 2025`, or `Räkenskapsår 2024/2025` when it
  * straddles two calendar years. Swedish by default to match the app's existing
  * fiscal-year naming (Swedish-first); the field stays editable in the dialog.
+ * Exported so the create dialog can keep the name in step with the dates the
+ * user actually types: a suggested "Räkenskapsår 2027" must not survive the
+ * user re-dating the year to 2022-07-01..2023-12-31. Callers pass full
+ * YYYY-MM-DD strings.
  */
-function periodName(start: string, end: string): string {
-  const startYear = Number(start.slice(0, 4))
-  const endYear = Number(end.slice(0, 4))
+export function fiscalYearName(start: string, end: string): string {
+  const startYear = start.slice(0, 4)
+  const endYear = end.slice(0, 4)
   return startYear === endYear ? `Räkenskapsår ${startYear}` : `Räkenskapsår ${startYear}/${endYear}`
 }
+
+const periodName = fiscalYearName
 
 /**
  * Suggest a fiscal period for the create dialog, given the date the user is

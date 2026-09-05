@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeSuggestedPeriod,
+  fiscalYearName,
   suggestSeedDate,
   resolveCurrentPeriodId,
 } from '../suggest-fiscal-period'
@@ -9,6 +10,22 @@ type Range = { period_start: string; period_end: string }
 
 const FY2024: Range = { period_start: '2024-01-01', period_end: '2024-12-31' }
 const FY2026: Range = { period_start: '2026-01-01', period_end: '2026-12-31' }
+
+describe('fiscalYearName', () => {
+  it('names a calendar year by its year', () => {
+    expect(fiscalYearName('2025-01-01', '2025-12-31')).toBe('Räkenskapsår 2025')
+  })
+
+  it('names a straddling year by both years', () => {
+    expect(fiscalYearName('2024-07-01', '2025-06-30')).toBe('Räkenskapsår 2024/2025')
+  })
+
+  it('names a backfilled first year that spans two calendar years by both years', () => {
+    // The customer case: the create dialog seeded "Räkenskapsår 2027" and the
+    // user re-dated the form to the company's first, extended year.
+    expect(fiscalYearName('2022-07-28', '2023-12-31')).toBe('Räkenskapsår 2022/2023')
+  })
+})
 
 describe('computeSuggestedPeriod', () => {
   it('suggests a calendar year around the entry date when there are no periods', () => {

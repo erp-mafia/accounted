@@ -8,6 +8,8 @@ import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
 import { ScbApiError } from '@/lib/parties/scb/transport'
 import { needsModelReading, planRegistryQueries, type RegistryCandidatesResult } from '@/lib/parties/registry-search'
 import { readCounterpartName, aiNameAvailable, type AiNameReading } from '@/lib/parties/ai-name'
+import { hasCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 
 /**
  * GET /api/parties/[id]/enrich/candidates?q=: SCB companies whose name
@@ -61,8 +63,10 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
       // A bank memo the rules could not anchor: the model reads it once,
       // the reading is kept as a fact with source 'model', and the search
-      // runs on the reading. A rebuilt queue does not repeat the call.
-      if (needsModelReading(plan) && aiNameAvailable()) {
+      // runs on the reading. A rebuilt queue does not repeat the call. Same
+      // gate as every other model call on the company's data: the AI
+      // capability, which the company holds by plan and can switch off.
+      if (needsModelReading(plan) && aiNameAvailable() && (await hasCapability(supabase, companyId, CAPABILITY.ai))) {
         const cached = rows.find((f) => f.field === 'ai_name')?.value as Partial<AiNameReading> | undefined
         let reading: AiNameReading | null =
           cached && typeof cached === 'object' && 'name' in cached

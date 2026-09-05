@@ -130,6 +130,18 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * same patch-shape rationale as webshop-orders ingest: one literal per key
  * combination is not viable. The field set is pinned by validatePatch and
  * covered by payroll-executors.test.ts; both selects around it are literals.
+ *
+ * 2026-08-30 recurring payroll lines (#2042): +2 for the same two shapes the
+ * employee_benefits code already carries: the step-8d3 derived-rows insert
+ * (rows built in a .map with literal keys, opaque to the scanner) and the
+ * PATCH route's merged-updates payload (explicit literal keys, but assembled
+ * conditionally into a variable). Both carry scoped assertions instead:
+ * employee-recurring-lines.pg.test.ts inserts the derived-row shape against
+ * the real table, and the PATCH route test pins the exact writable column
+ * set ("writes exactly the patchable columns and nothing else"). Making
+ * either literal would cost a real property: the PATCH would have to write
+ * every column on every request, turning a partial update into
+ * last-write-wins.
  */
 // 2026-08-20: +1 for lib/connect/instance/sync.ts, whose capability_grants
 // upsert is a per-company x per-scope row array built at runtime (one chunked
@@ -153,7 +165,23 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // lines as a row array built from one literal mapper (toInsertRow). Every
 // header/line update in the module is an object literal. Merged with main
 // (parties phase 1, #2162/#2168/#2169) at 395: 397.
-const UNRESOLVED_CEILING = 397
+// 2026-09-04: +2 recurring lines (#2044, see the 2026-08-30 recurring payroll
+// lines note above); merged with main (#2141/#2164/#2170/#2192) at 397: 399.
+// 2026-09-04: +3 supplier credit notes (#2289): the dashboard credit route,
+// commitCreditSupplierInvoice (MCP) and the v1 credit route insert the
+// credit-note row from one builder, buildSupplierCreditNoteRow() in
+// lib/supplier-invoices/credit-note.ts, so the resting status is decided in
+// one place (and held by CHECK supplier_invoices_credit_note_not_payable);
+// its columns are the object literal in that file, pinned by
+// credit-note.test.ts. Merged with main (#2288) at 399: 402.
+// 2026-09-04: +2 for the migrated-invoice row completion
+// (extensions/general/arcim-migration/lib/complete-invoice-lines.ts): the
+// invoice_items rows come from the migration's own mapSalesInvoiceLine, the
+// same row array the orchestrator already inserts (counted above), written
+// once as a batch and again per invoice when the batch is rejected. The header
+// VAT update in the same module is an object literal and is checked. Merged
+// with main (#2289) at 402: 404.
+const UNRESOLVED_CEILING = 404
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

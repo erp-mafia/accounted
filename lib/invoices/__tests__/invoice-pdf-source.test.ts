@@ -232,6 +232,18 @@ describe('invoiceRerenderUrl', () => {
       '/api/invoices/a%2Fb/pdf?disposition=inline',
     )
   })
+
+  // The preview probes the route before pointing the tab at it, so a refusal
+  // (no payment account for the currency) is shown in the app instead of as
+  // raw JSON in the new tab.
+  it('adds the probe flag next to the inline disposition', () => {
+    expect(invoiceRerenderUrl(INVOICE_ID, { inline: true, probe: true })).toBe(
+      `/api/invoices/${INVOICE_ID}/pdf?disposition=inline&probe=1`,
+    )
+    expect(invoiceRerenderUrl(INVOICE_ID, { probe: true })).toBe(
+      `/api/invoices/${INVOICE_ID}/pdf?probe=1`,
+    )
+  })
 })
 
 // #1693: the betalningsbekräftelse is always a re-render and always says so,

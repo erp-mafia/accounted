@@ -5,8 +5,16 @@ import { roundOre } from '@/lib/money'
 const log = createLogger('invoice-payment-row')
 
 /**
- * The AR sub-ledger row for a payment that no bank transaction drives:
- * "Markera som betald" (dashboard, v1, MCP) and the Stripe payment sync.
+ * The single writer of invoice_payments rows (the customer AR sub-ledger).
+ *
+ * Every settlement path records its payment here: "Markera som betald"
+ * (dashboard, v1, MCP), the Stripe payment sync, the bank match (dashboard,
+ * v1, pending-operation commit) and the link-to-existing-voucher flow.
+ * `npm run check:guards` (direct-invoice-payment-insert) refuses a
+ * `.from('invoice_payments').insert(` anywhere else under app/, lib/ or
+ * extensions/, so the row's field semantics cannot drift per code path
+ * again: five hand-built inserts each computed their own `amount`, and the
+ * bank-match ones stored the cash received (#2250).
  *
  * Without the row the payment has no DATE anywhere. The kontantmetod bokslut
  * cut-off (lib/core/bookkeeping/kontantmetod-cutoff.ts) reads invoice_payments
@@ -14,16 +22,13 @@ const log = createLogger('invoice-payment-row')
  * end, double-counting revenue and VAT (#2019); the Betalningar view and the
  * voucher -> invoice reference map read the same table.
  *
- * Shape mirrors the bank-match path (app/api/transactions/[id]/match-invoice):
- * amount in INVOICE currency, transaction_id null. The
+ * `amount` is the amount APPLIED to the invoice (new paid_amount minus the
+ * prior one), in INVOICE currency, never the cash received: a SEK
+ * öresavrundning overshoot absorbed on 3740 is part of the voucher but not
+ * of the receivable, and every reader subtracts rows from `total`. The
  * (transaction_id, invoice_id) unique index treats nulls as distinct, so
  * several manual partials on one invoice coexist; (journal_entry_id,
  * invoice_id) still refuses the same voucher twice.
- *
- * `amount` is the amount APPLIED to the invoice (new paid_amount minus the
- * prior one), not the cash received: a SEK öresavrundning overshoot absorbed
- * on 3740 is part of the voucher but not of the receivable, and every reader
- * subtracts rows from `total`.
  */
 export interface RecordInvoicePaymentRowParams {
   userId: string
@@ -39,18 +44,52 @@ export interface RecordInvoicePaymentRowParams {
   /** paid_amount after this payment, in invoice currency. */
   newPaidAmount: number
   journalEntryId: string | null
+  /** The bank transaction that drove the payment. Default null: manual, MCP and Stripe rows have none. */
+  transactionId?: string | null
+  /**
+   * The rate ACTUALLY USED for this payment when it is not the invoice's
+   * booking rate: Riksbanken or a manual override on the payment date for a
+   * cross-currency bank match (ML 8 kap 21-23 §), or null when the caller
+   * deliberately records none. Omitted: invoice.exchange_rate.
+   */
+  exchangeRate?: number | null
+  /** Free text on the row (rate provenance, link note). Default null. */
+  notes?: string | null
 }
 
 export type RecordInvoicePaymentRowResult =
   | { ok: true; id: string }
-  | { ok: false; error: string }
+  /** `code` is the Postgres SQLSTATE when the driver reported one ('23505' = unique violation). */
+  | { ok: false; error: string; code?: string }
+
+/**
+ * new paid_amount minus the prior one, to the öre. Internal on purpose: the
+ * only way to write a row is recordInvoicePaymentRow, so nothing else needs
+ * the formula.
+ */
+function appliedPaymentAmount(
+  invoice: { paid_amount?: number | null },
+  newPaidAmount: number,
+): number {
+  return roundOre(newPaidAmount - (invoice.paid_amount ?? 0))
+}
 
 export async function recordInvoicePaymentRow(
   supabase: SupabaseClient,
   params: RecordInvoicePaymentRowParams,
 ): Promise<RecordInvoicePaymentRowResult> {
-  const { userId, companyId, invoice, paymentDate, newPaidAmount, journalEntryId } = params
-  const amount = roundOre(newPaidAmount - (invoice.paid_amount ?? 0))
+  const {
+    userId,
+    companyId,
+    invoice,
+    paymentDate,
+    newPaidAmount,
+    journalEntryId,
+    transactionId,
+    exchangeRate,
+    notes,
+  } = params
+  const amount = appliedPaymentAmount(invoice, newPaidAmount)
 
   const { data, error } = await supabase
     .from('invoice_payments')
@@ -61,16 +100,20 @@ export async function recordInvoicePaymentRow(
       payment_date: paymentDate,
       amount,
       currency: invoice.currency ?? 'SEK',
-      exchange_rate: invoice.exchange_rate ?? null,
+      exchange_rate: exchangeRate !== undefined ? exchangeRate : (invoice.exchange_rate ?? null),
       journal_entry_id: journalEntryId,
-      transaction_id: null,
-      notes: null,
+      transaction_id: transactionId ?? null,
+      notes: notes ?? null,
     })
     .select('id')
     .single()
 
   if (error || !data) {
-    return { ok: false, error: error?.message ?? 'no_row_returned' }
+    return {
+      ok: false,
+      error: error?.message ?? 'no_row_returned',
+      ...(error?.code ? { code: error.code } : {}),
+    }
   }
   return { ok: true, id: (data as { id: string }).id }
 }

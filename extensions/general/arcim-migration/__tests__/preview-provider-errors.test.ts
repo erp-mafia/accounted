@@ -45,6 +45,8 @@ vi.mock('../lib/sie-fetcher', () => ({
   providerSupportsSie: vi.fn().mockReturnValue(false),
   fetchProviderSieFiles: vi.fn(),
   getAllowedFiscalYears: vi.fn().mockReturnValue([]),
+  FiscalYearSelectionError: class FiscalYearSelectionError extends Error {},
+  MAX_SELECTED_FISCAL_YEARS: 6,
 }))
 
 vi.mock('@/lib/supabase/server', () => ({

@@ -32,6 +32,7 @@ import {
 } from '@/lib/salary/payment/bank-account'
 import type { EmployeeMasked } from '@/types'
 import { EmployeeBenefitsPanel } from '@/components/salary/EmployeeBenefitsPanel'
+import { EmployeeRecurringLinesPanel } from '@/components/salary/EmployeeRecurringLinesPanel'
 import { OpeningBalancesPanel } from '@/components/salary/OpeningBalancesPanel'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 import { jamkningPatch } from '@/lib/salary/jamkning-patch'
@@ -491,6 +492,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
           benefits and opening balances write to their own endpoints, so the
           "Spara ändringar" in the edit dialog never touches them. */}
       <EmployeeBenefitsPanel employeeId={id} canWrite={canWrite} />
+      <EmployeeRecurringLinesPanel employeeId={id} canWrite={canWrite} />
       <OpeningBalancesPanel employeeId={id} canWrite={canWrite} />
 
       <DestructiveConfirmDialog {...dialogProps} />

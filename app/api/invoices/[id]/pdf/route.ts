@@ -37,6 +37,11 @@ function resolveVariant(request: Request): 'invoice' | 'paid' {
   return requested === 'paid' ? 'paid' : 'invoice'
 }
 
+/** `?probe=1` asks only whether the render would be refused; see the handler. */
+function isProbe(request: Request): boolean {
+  return new URL(request.url).searchParams.get('probe') === '1'
+}
+
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.pdf',
   async (request, { supabase, companyId, log, requestId }, { params }) => {
@@ -91,6 +96,15 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       requestId,
       details: { currency: (invoice as Invoice).currency },
     }))
+  }
+
+  // `?probe=1`: every refusal above has been checked, so answer without
+  // rendering. The in-app preview asks this first, from a fetch whose JSON
+  // refusal it can show as a message, and only then points the new tab at the
+  // real inline URL. Navigating the tab straight here showed the refusal
+  // envelope as raw JSON in that tab.
+  if (isProbe(request)) {
+    return new NextResponse(null, { status: 204, headers: PRIVATE_NO_STORE_HEADERS })
   }
 
   // Sort items by sort_order

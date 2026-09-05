@@ -1,5 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getAllTransactionsWithRaw, convertTransaction, getAccountBalance, SessionExpiredError } from './api-client'
+import {
+  getAllTransactionsWithRaw,
+  convertTransaction,
+  getAccountBalance,
+  SessionExpiredError,
+  ConnectorSyncError,
+} from './api-client'
 import { historyWindowDays } from './history-window'
 import { bankSyncResponseSchema, connectorErrorSchema } from '@accounted/connect-contract'
 import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
@@ -113,26 +119,37 @@ async function fetchBookedViaConnector(
   let response: Response
   let text: string
   try {
-    response = await fetch(`${connector.baseUrl}/sync`, {
-      method: 'POST',
-      signal: controller.signal,
-      redirect: 'error',
-      headers: {
-        Authorization: `Bearer ${connector.key}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        [CONNECTOR_COMPANY_HEADER]: args.companyId,
-      },
-      body: JSON.stringify({
-        session_id: sessionId,
-        account_uid: args.account.uid,
-        account_currency: args.account.currency,
-        date_from: args.fromDate,
-        date_to: args.toDate,
-        ...(args.strategy ? { strategy: args.strategy } : {}),
-      }),
-    })
-    text = await response.text()
+    try {
+      response = await fetch(`${connector.baseUrl}/sync`, {
+        method: 'POST',
+        signal: controller.signal,
+        redirect: 'error',
+        headers: {
+          Authorization: `Bearer ${connector.key}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          [CONNECTOR_COMPANY_HEADER]: args.companyId,
+        },
+        body: JSON.stringify({
+          session_id: sessionId,
+          account_uid: args.account.uid,
+          account_currency: args.account.currency,
+          date_from: args.fromDate,
+          date_to: args.toDate,
+          ...(args.strategy ? { strategy: args.strategy } : {}),
+        }),
+      })
+      text = await response.text()
+    } catch (err) {
+      // Transport failure or the abort above: the connector hop failed, the
+      // PSD2 session is untouched. Never a status flip (ConnectorSyncError).
+      const aborted = err instanceof Error && err.name === 'AbortError'
+      throw new ConnectorSyncError(
+        null,
+        aborted ? 'CONNECTOR_TIMEOUT' : 'CONNECTOR_TRANSPORT',
+        err instanceof Error ? err.message : String(err),
+      )
+    }
   } finally {
     clearTimeout(timeout)
   }
@@ -148,10 +165,21 @@ async function fetchBookedViaConnector(
     if (response.status === 410 || code === 'CONNECTOR_BANK_SESSION_EXPIRED') {
       throw new SessionExpiredError(response.status, text)
     }
-    throw new Error(`Connector bank sync failed (${response.status} ${code})`)
+    throw new ConnectorSyncError(response.status, code, text.slice(0, 500))
   }
   const parsed = bankSyncResponseSchema.safeParse(json)
-  if (!parsed.success) throw new Error('Connector bank sync answered with an unexpected shape')
+  if (!parsed.success) {
+    // The field paths are the only thing that lets the service side be fixed:
+    // a bare "unexpected shape" left the 2026-09-04 canary failure undiagnosable.
+    const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+    console.warn('[enable-banking] Connector sync response failed the wire contract', {
+      connectionId: args.connectionId,
+      accountUid: args.account.uid,
+      status: response.status,
+      issues,
+    })
+    throw new ConnectorSyncError(response.status, 'CONNECTOR_BAD_SHAPE', text.slice(0, 500), issues)
+  }
   return parsed.data
 }
 

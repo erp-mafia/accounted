@@ -59,7 +59,8 @@ export const WORKLIST_CATEGORIES = [
   'suggested_match',
   /**
    * Supplier invoices awaiting approval ("attestera").
-   * Pending:  supplier_invoices.status = 'registered'.
+   * Pending:  supplier_invoices.status = 'registered' and not a credit note
+   *           (a credit note is a reversal, never a payable).
    * Done:     status moves to approved/paid/credited/….
    */
   'supplier_invoice_approval',
@@ -124,8 +125,12 @@ export interface SuggestedMatch {
   transaction_description: string
   transaction_amount: number
   transaction_currency: string
-  /** Which match endpoint confirms it: match-invoice vs match-supplier-invoice. */
-  kind: 'invoice' | 'supplier_invoice'
+  /**
+   * Which match endpoint confirms it: match-invoice, match-supplier-invoice,
+   * or match-rot-rut-payout (Skatteverkets utbetalning for an open begäran;
+   * candidate_number is then the request name).
+   */
+  kind: 'invoice' | 'supplier_invoice' | 'rot_rut_payout'
   candidate_id: string
   candidate_number: string | null
   counterparty_name: string | null

@@ -17,7 +17,8 @@ vi.mock('@/lib/parties/scb/client', async (importOriginal) => ({
   createScbClient: () => ({ lookupByOrgNumber, searchByName }),
 }))
 const readCounterpartName = vi.fn()
-const ai = { available: false }
+const ai = { available: false, capability: true }
+vi.mock('@/lib/entitlements/has-capability', () => ({ hasCapability: () => Promise.resolve(ai.capability) }))
 vi.mock('@/lib/parties/ai-name', () => ({
   readCounterpartName: (texts: string[]) => readCounterpartName(texts),
   aiNameAvailable: () => ai.available,
@@ -47,6 +48,7 @@ beforeEach(() => {
   eventBus.clear()
   configured.value = true
   ai.available = false
+  ai.capability = true
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user } })
 })
 
@@ -96,7 +98,7 @@ describe('POST /api/parties/[id]/enrich', () => {
   })
 
   it('records the facts with provenance and fills an empty legal name', async () => {
-    enqueue({ data: { id: PARTY, org_number: '5560125790', legal_name: null } })
+    enqueue({ data: { id: PARTY, display_name: 'Beijer Byggmaterial AB', org_number: '5560125790', legal_name: null } })
     lookupByOrgNumber.mockResolvedValue({
       found: true,
       peOrgNr: '165560125790',
@@ -129,9 +131,39 @@ describe('POST /api/parties/[id]/enrich', () => {
   })
 })
 
+describe('POST /api/parties/[id]/enrich, the registry name becomes the displayed name', () => {
+  it('renames a memo-named party and its supplier row to the registry name in title case, and reports it', async () => {
+    enqueue({ data: { id: PARTY, display_name: 'Webhallen Oktober', org_number: '5565588224', legal_name: null } })
+    lookupByOrgNumber.mockResolvedValue({ found: true, peOrgNr: '165565588224', row: {}, facts: [{ field: 'legal_name', value: 'WEBHALLEN SVERIGE AB' }], fetchedAt: '2026-09-05T10:00:00Z' })
+    enqueue({ data: { inserted: 1, superseded: 0, refreshed: 0 } })
+    enqueue({ data: null, count: 0 }) // no user-entered legal name
+    enqueue({ data: null }) // parties.update
+    enqueue({ data: null }) // suppliers.update
+    enqueue({ data: null }) // customers.update
+    const { status, body } = await parseJsonResponse<{ data: { renamedTo: string | null } }>(await call())
+    expect(status).toBe(200)
+    expect(body.data.renamedTo).toBe('Webhallen Sverige AB')
+    const updates = mockSupabase.from.mock.calls.map((c) => c[0])
+    expect(updates.filter((t) => t === 'parties')).toHaveLength(2)
+    expect(updates).toContain('suppliers')
+    expect(updates).toContain('customers')
+  })
+
+  it('keeps a display name that already is the registry name, spelling aside', async () => {
+    enqueue({ data: { id: PARTY, display_name: 'Visma Spcs AB', org_number: '5562529155', legal_name: null } })
+    lookupByOrgNumber.mockResolvedValue({ found: true, peOrgNr: '165562529155', row: {}, facts: [{ field: 'legal_name', value: 'VISMA SPCS AB' }], fetchedAt: '2026-09-05T10:00:00Z' })
+    enqueue({ data: { inserted: 1, superseded: 0, refreshed: 0 } })
+    enqueue({ data: null, count: 0 })
+    enqueue({ data: null }) // parties.update (legal_name only)
+    const { body } = await parseJsonResponse<{ data: { renamedTo: string | null } }>(await call())
+    expect(body.data.renamedTo).toBeNull()
+    expect(mockSupabase.from.mock.calls.map((c) => c[0])).not.toContain('suppliers')
+  })
+})
+
 describe('POST /api/parties/[id]/enrich, legal name survivorship', () => {
   it('replaces a document-sourced legal name with the registry name, but never one a person entered', async () => {
-    enqueue({ data: { id: PARTY, org_number: '5560125790', legal_name: 'Beijer Bygg' } })
+    enqueue({ data: { id: PARTY, display_name: 'Beijer Bygg', org_number: '5560125790', legal_name: 'Beijer Bygg' } })
     lookupByOrgNumber.mockResolvedValue({ found: true, peOrgNr: '165560125790', row: {}, facts: [{ field: 'legal_name', value: 'AKTIEBOLAGET VOLVO' }], fetchedAt: '2026-09-03T10:00:00Z' })
     enqueue({ data: { inserted: 1, superseded: 0, refreshed: 0 } })
     enqueue({ data: null, count: 1 }) // a user-entered legal name exists
@@ -209,13 +241,19 @@ describe('GET /api/parties/[id]/enrich/candidates', () => {
     expect(second.body.data.aiRead).toEqual({ name: 'Uber Sweden AB', country: 'SE' })
   })
 
-  it('does not call the model when the rules already anchored a name, or when no model is configured', async () => {
+  it('does not call the model when the rules already anchored a name, when the company lacks the AI capability, or when no model is configured', async () => {
     ai.available = true
     enqueue({ data: { id: PARTY, display_name: 'Visma Spcs AB', legal_name: null } })
     enqueue({ data: [] })
     searchByName.mockResolvedValue({ query: 'Visma Spcs', mode: 'starts_with', total: 1, truncated: false, candidates: [] })
     await candidates()
     expect(readCounterpartName).not.toHaveBeenCalled()
+    ai.capability = false
+    enqueue({ data: { id: PARTY, display_name: 'Hotel at Booking.com', legal_name: null } })
+    enqueue({ data: [] })
+    await candidates()
+    expect(readCounterpartName).not.toHaveBeenCalled()
+    ai.capability = true
     ai.available = false
     enqueue({ data: { id: PARTY, display_name: 'Hotel at Booking.com', legal_name: null } })
     enqueue({ data: [] })

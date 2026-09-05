@@ -3,6 +3,7 @@ import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
+import { buildSupplierCreditNoteRow } from '@/lib/supplier-invoices/credit-note'
 import { cancelSchedulesForSource } from '@/lib/bookkeeping/accruals/service'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -40,32 +41,14 @@ export const POST = withRouteContext(
 
     const { data: creditNote, error: creditError } = await supabase
       .from('supplier_invoices')
-      .insert({
-        user_id: user.id,
-        company_id: companyId,
-        supplier_id: original.supplier_id,
-        arrival_number: arrivalNum,
-        supplier_invoice_number: `KREDIT-${original.supplier_invoice_number}`,
-        invoice_date: new Date().toISOString().split('T')[0],
-        due_date: new Date().toISOString().split('T')[0],
-        status: 'registered',
-        currency: original.currency,
-        exchange_rate: original.exchange_rate,
-        vat_treatment: original.vat_treatment,
-        reverse_charge: original.reverse_charge,
-        subtotal: original.subtotal,
-        subtotal_sek: original.subtotal_sek,
-        vat_amount: original.vat_amount,
-        vat_amount_sek: original.vat_amount_sek,
-        total: original.total,
-        total_sek: original.total_sek,
-        remaining_amount: 0,
-        is_credit_note: true,
-        credited_invoice_id: id,
-        // Copy the original's dimension bag so the reversal nets against the
-        // same dimension cells in reports (dimensions PR7).
-        default_dimensions: original.default_dimensions ?? {},
-      })
+      .insert(
+        buildSupplierCreditNoteRow(original, {
+          userId: user.id,
+          companyId,
+          arrivalNumber: arrivalNum,
+          date: new Date().toISOString().split('T')[0],
+        }),
+      )
       .select()
       .single()
 

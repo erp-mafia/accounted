@@ -119,9 +119,10 @@ reaches far enough back anyway.
      offer TWO paths and recommend by need. The FULL migration: call
      \`gnubok_connect_migration\` with the provider; it renders a connect
      card (same feel as bank/Skatteverket) whose button opens the wizard
-     that logs into the old system and fetches every fiscal year PLUS
-     invoices, customers, suppliers and documents: recommend it when they
-     have open fakturor or want underlag along. The QUICK path is a SIE
+     that logs into the old system and fetches the three latest fiscal
+     years by default (older years can be ticked in the wizard; they take
+     longer) PLUS invoices, customers, suppliers and documents: recommend
+     it when they have open fakturor or want underlag along. The QUICK path is a SIE
      export dropped here (Fortnox: Register → Exportera → SIE 4): ledger
      only, fastest. Either way the result lands in the same books.
    - **Visma eEkonomi / Bokio**: no API export exists; ask for the SIE

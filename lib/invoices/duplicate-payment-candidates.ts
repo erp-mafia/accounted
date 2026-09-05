@@ -13,6 +13,8 @@ import {
   type ComparableAmount,
 } from './duplicate-guard-currency'
 import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
+import { findExactCoveringSet } from '@/lib/reconciliation/covering-set'
+import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoices/duplicate-payment-candidates')
@@ -21,6 +23,13 @@ export type DuplicatePaymentMatchReason =
   | 'ocr_exact'
   | 'name_amount_fuzzy'
   | 'amount_only'
+  /**
+   * The bank row is larger than this payment and the difference is exactly
+   * (to the öre) the remaining amount of one to three OTHER open invoices:
+   * a Bankgirot daily aggregate that settled this invoice together with
+   * them. No counterparty text is consulted; such rows carry none.
+   */
+  | 'aggregate_exact'
 
 export interface DuplicatePaymentCandidate {
   id: string
@@ -31,19 +40,32 @@ export interface DuplicatePaymentCandidate {
   reference: string | null
   match_reason: DuplicatePaymentMatchReason
   match_confidence: number
+  /** For aggregate_exact: the other open invoices the row also covers. */
+  aggregate_invoice_numbers?: string[]
 }
 
 const MATCH_REASON_RANK: Record<DuplicatePaymentMatchReason, number> = {
   ocr_exact: 0,
-  name_amount_fuzzy: 1,
-  amount_only: 2,
+  aggregate_exact: 1,
+  name_amount_fuzzy: 2,
+  amount_only: 3,
 }
 
 const MATCH_REASON_CONFIDENCE: Record<DuplicatePaymentMatchReason, number> = {
   ocr_exact: 0.99,
+  aggregate_exact: 0.9,
   name_amount_fuzzy: 0.7,
   amount_only: 0.5,
 }
+
+/** ± days around the payment date an aggregate row is looked for: a Bankgirot
+ *  aggregate lands on the payment day, so the wide name-sweep window would only
+ *  add coincidental sums. */
+const AGGREGATE_DATE_WINDOW_DAYS = 7
+/** Other open invoices an aggregate row may cover besides this one. */
+const AGGREGATE_MAX_OTHER_INVOICES = 3
+const AGGREGATE_MAX_ROWS = 40
+const AGGREGATE_MAX_OPEN_INVOICES = 200
 
 interface CustomerInvoice {
   invoice_number: string | null
@@ -116,9 +138,14 @@ export async function findDuplicatePaymentCandidatesForInvoice(
 ): Promise<DuplicatePaymentCandidate[]> {
   const { companyId, invoice, paymentAmount, paymentDate } = params
   const customerName = invoice.customer_name
-  if (!customerName) return []
-
   const paymentCurrency = normalizeCurrencyCode(invoice.currency)
+
+  // The name sweeps need a payer to look for; the aggregate sweep does not
+  // (a Bankgirot row names nobody), so a nameless invoice skips straight to it.
+  if (!customerName) {
+    if (paymentCurrency !== 'SEK') return []
+    return runAggregateSweep(supabase, { companyId, invoice, paymentAmount, paymentDate })
+  }
   const reference: ComparableAmount = {
     amount: paymentAmount,
     currency: paymentCurrency,
@@ -200,7 +227,14 @@ export async function findDuplicatePaymentCandidatesForInvoice(
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
     .slice(0, 5)
 
-  if (data.length === 0) return []
+  // Nothing of this invoice's own size: look for the row that paid it TOGETHER
+  // with other invoices. One warning is enough, so the sweep only runs when
+  // the name sweeps came back empty. Kronor only: the sum is taken over
+  // remaining amounts stored in invoice currency.
+  if (data.length === 0) {
+    if (paymentCurrency !== 'SEK') return []
+    return runAggregateSweep(supabase, { companyId, invoice, paymentAmount, paymentDate })
+  }
 
   const invoiceOcr = normalizeOcrReference(invoice.invoice_number)
   const searchTerms = customerName
@@ -227,6 +261,146 @@ export async function findDuplicatePaymentCandidatesForInvoice(
   })
 
   candidates.sort((a, b) => MATCH_REASON_RANK[a.match_reason] - MATCH_REASON_RANK[b.match_reason])
+  return candidates
+}
+
+async function runAggregateSweep(
+  supabase: SupabaseClient,
+  params: {
+    companyId: string
+    invoice: Pick<CustomerInvoice, 'invoice_number'>
+    paymentAmount: number
+    paymentDate: string
+  },
+): Promise<DuplicatePaymentCandidate[]> {
+  const { companyId, invoice, paymentAmount, paymentDate } = params
+  try {
+    return await findAggregateCandidates(supabase, {
+      companyId,
+      invoiceNumber: invoice.invoice_number,
+      paymentAmount,
+      paymentDate,
+    })
+  } catch (err) {
+    // Advisory guard: a failed sweep must never block "Markera som betald".
+    // Logged so the blind spot is visible rather than passing silently.
+    log.warn('duplicate-payment guard: aggregate sweep failed', {
+      companyId,
+      invoiceNumber: invoice.invoice_number,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return []
+  }
+}
+
+type OpenInvoiceRow = {
+  id: string
+  invoice_number: string | null
+  remaining_amount: number | string | null
+  total: number | string | null
+  due_date: string | null
+}
+
+type AggregateRow = Pick<Row, 'id' | 'date' | 'amount' | 'description' | 'merchant_name' | 'reference'>
+
+/**
+ * Unlinked inbound kronor rows around the payment date that are LARGER than
+ * the payment, where the excess is exactly the remaining amount of one to
+ * three other open invoices. That is what a Bankgirot daily aggregate looks
+ * like from the invoice side: "BGGIRERING", no payer, one sum for two
+ * customers' invoices. Same exact-sum search the bank-side guard uses
+ * (lib/reconciliation/covering-set.ts), so the two doors agree on what
+ * "already paid" means. The remedy is the split under Transaktioner, which
+ * books ONE samlingsverifikation and links the row; marking the invoices
+ * paid one by one is what books the money twice.
+ */
+async function findAggregateCandidates(
+  supabase: SupabaseClient,
+  params: {
+    companyId: string
+    invoiceNumber: string | null
+    paymentAmount: number
+    paymentDate: string
+  },
+): Promise<DuplicatePaymentCandidate[]> {
+  const { companyId, invoiceNumber, paymentAmount, paymentDate } = params
+  const payment = roundOre(paymentAmount)
+  if (!(payment > 0)) return []
+  const dateMs = new Date(paymentDate).getTime()
+  if (Number.isNaN(dateMs)) return []
+  const dayMs = 24 * 3600 * 1000
+  const dateLow = new Date(dateMs - AGGREGATE_DATE_WINDOW_DAYS * dayMs).toISOString().split('T')[0]
+  const dateHigh = new Date(dateMs + AGGREGATE_DATE_WINDOW_DAYS * dayMs).toISOString().split('T')[0]
+
+  const { data: rowsData } = await supabase
+    .from('transactions')
+    .select('id, date, amount, description, merchant_name, reference')
+    .eq('company_id', companyId)
+    .eq('is_business', true)
+    .is('invoice_id', null)
+    .is('supplier_invoice_id', null)
+    .is('journal_entry_id', null)
+    .or('currency.is.null,currency.eq.SEK')
+    .gt('amount', payment)
+    .gte('date', dateLow)
+    .lte('date', dateHigh)
+    .order('date', { ascending: false })
+    .limit(AGGREGATE_MAX_ROWS)
+  // Defensive shape check: a client that answers a list query with a single
+  // object (older test doubles do) must read as "no rows", not throw.
+  const rows = (Array.isArray(rowsData) ? rowsData : []) as AggregateRow[]
+  if (rows.length === 0) return []
+
+  let othersQuery = supabase
+    .from('invoices')
+    .select('id, invoice_number, remaining_amount, total, due_date')
+    .eq('company_id', companyId)
+    .eq('document_type', 'invoice')
+    .is('credited_invoice_id', null)
+    .in('status', ['sent', 'overdue', 'partially_paid'])
+    .gt('remaining_amount', 0)
+    .or('currency.is.null,currency.eq.SEK')
+  if (invoiceNumber) othersQuery = othersQuery.neq('invoice_number', invoiceNumber)
+  const { data: othersData } = await othersQuery
+    .order('due_date', { ascending: true })
+    .limit(AGGREGATE_MAX_OPEN_INVOICES)
+  const others = ((Array.isArray(othersData) ? othersData : []) as OpenInvoiceRow[]).filter(
+    (inv) => inv.invoice_number && Number(inv.remaining_amount ?? inv.total ?? 0) > 0,
+  )
+  if (others.length === 0) return []
+
+  const candidates: DuplicatePaymentCandidate[] = []
+  for (const row of rows) {
+    const residual = roundOre(Number(row.amount) - payment)
+    if (!(residual > 0)) continue
+    const rowMs = new Date(row.date).getTime()
+    const set = findExactCoveringSet(
+      residual,
+      others.map((inv) => ({
+        id: inv.id,
+        amount: Number(inv.remaining_amount ?? inv.total ?? 0),
+        dateDistanceDays:
+          inv.due_date && !Number.isNaN(rowMs)
+            ? Math.round(Math.abs(new Date(inv.due_date).getTime() - rowMs) / dayMs)
+            : AGGREGATE_DATE_WINDOW_DAYS,
+        invoiceNumber: inv.invoice_number as string,
+      })),
+      { maxSize: AGGREGATE_MAX_OTHER_INVOICES },
+    )
+    if (!set) continue
+    candidates.push({
+      id: row.id,
+      date: row.date,
+      amount: Number(row.amount),
+      description: row.description,
+      merchant_name: row.merchant_name,
+      reference: row.reference,
+      match_reason: 'aggregate_exact',
+      match_confidence: MATCH_REASON_CONFIDENCE.aggregate_exact,
+      aggregate_invoice_numbers: set.map((s) => s.invoiceNumber),
+    })
+    if (candidates.length >= 5) break
+  }
   return candidates
 }
 

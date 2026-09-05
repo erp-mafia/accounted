@@ -2096,8 +2096,27 @@ export const MatchBatchSchema = z
       // (PR #603 compliance review, OWASP V4.2). Domain-appropriate ceiling:
       // a real samlingsverifikat rarely covers more than a few dozen invoices.
       .max(100, 'At most 100 allocations per batch'),
+    // Bypass the already-explained guard (BATCH_TX_POSSIBLE_DUPLICATE): the
+    // bank row is fully covered by one or more posted, unlinked vouchers on
+    // its settlement account (an invoice marked paid by hand, a salary
+    // voucher per employee). Set only after the user has seen those vouchers
+    // and decided the row is a separate event.
+    force: z.boolean().optional(),
+    // Required whenever force=true: the journal_entry_ids of the set the
+    // user reviewed. The route re-detects the set and refuses force unless
+    // the ids match, so an automation cannot sweep through force=true
+    // without ever consulting the vouchers (same binding as
+    // MatchInvoiceSchema.expected_journal_entry_id).
+    expected_journal_entry_ids: z.array(uuid).max(10).optional(),
   })
   .superRefine((data, ctx) => {
+    if (data.force && !(data.expected_journal_entry_ids?.length)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['expected_journal_entry_ids'],
+        message: 'expected_journal_entry_ids is required when force=true',
+      })
+    }
     // Reject mixed customer + supplier in a single batch: semantically a
     // single bank transfer settles invoices on one side. The RPC also guards
     // this with BATCH_MIXED_KINDS_UNSUPPORTED, but rejecting at the schema
@@ -2127,6 +2146,15 @@ export const CreateTransactionFromDocumentSchema = z.object({
   amount: z.number().refine((n) => n !== 0, 'Amount must be non-zero'),
   transaction_date: isoDate,
   description: z.string().min(1).max(500),
+})
+
+/**
+ * POST /api/transactions/[id]/match-rot-rut-payout: settle a ROT/RUT begäran
+ * with the bank row that carried Skatteverkets utbetalning. Amount, date and
+ * bank account all come from the transaction, so the body is just the target.
+ */
+export const MatchRotRutPayoutSchema = z.object({
+  request_id: uuid,
 })
 
 export const MatchSupplierInvoiceSchema = z.object({
@@ -3313,6 +3341,83 @@ export const UpdateEmployeeBenefitSchema = z.object({
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: BENEFIT_PERIOD_ORDER_MESSAGE,
+      path: ['valid_to'],
+    })
+  }
+})
+
+export const RecurringLineItemTypeSchema = z.enum([
+  'gross_deduction_pension',
+  'gross_deduction_other',
+  'net_deduction_union',
+  'net_deduction_benefit_payment',
+  'net_deduction_other',
+])
+
+/** Same inclusive-bound semantics as BENEFIT_PERIOD_ORDER_MESSAGE, for
+ * employee_recurring_lines (migration 20260902140000). */
+export const RECURRING_LINE_PERIOD_ORDER_MESSAGE =
+  '"Gäller till" måste vara samma dag som eller efter "Gäller från". Lämna fältet tomt för en löpande rad.'
+
+const recurringLineAmountIssue = (
+  data: { item_type?: string; amount?: number },
+  ctx: z.RefinementCtx,
+) => {
+  // Mirrors the employee_recurring_lines_amount_sign CHECK: every supported
+  // type is a deduction and must be negative. Kept in the schema so the
+  // violation is a field-level 400 instead of a Postgres 23514.
+  if (data.amount === undefined || data.item_type === undefined) return
+  const bad = data.amount >= 0
+  if (bad) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Avdragsrader måste ha negativt belopp och tilläggsrader positivt belopp.',
+      path: ['amount'],
+    })
+  }
+}
+
+export const CreateEmployeeRecurringLineSchema = z.object({
+  item_type: RecurringLineItemTypeSchema,
+  description: z.string().min(1).max(200),
+  amount: z.number(),
+  account_number: accountNumberSchema.optional(),
+  valid_from: isoDate,
+  valid_to: isoDate.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  is_active: z.boolean().optional(),
+}).superRefine((data, ctx) => {
+  recurringLineAmountIssue(data, ctx)
+  if (data.valid_to !== undefined && data.valid_to < data.valid_from) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: RECURRING_LINE_PERIOD_ORDER_MESSAGE,
+      path: ['valid_to'],
+    })
+  }
+})
+
+/** item_type is not patchable (like benefit_type): the sign rule and derived
+ * flags key off it, so changing kind means delete + recreate. The route
+ * re-checks the amount sign and merged date pair against the stored row. */
+export const UpdateEmployeeRecurringLineSchema = z.object({
+  description: z.string().min(1).max(200).optional(),
+  amount: z.number().optional(),
+  account_number: accountNumberSchema.nullable().optional(),
+  valid_from: isoDate.optional(),
+  valid_to: isoDate.nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  is_active: z.boolean().optional(),
+}).superRefine((data, ctx) => {
+  if (
+    data.valid_from !== undefined &&
+    data.valid_to !== undefined &&
+    data.valid_to !== null &&
+    data.valid_to < data.valid_from
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: RECURRING_LINE_PERIOD_ORDER_MESSAGE,
       path: ['valid_to'],
     })
   }

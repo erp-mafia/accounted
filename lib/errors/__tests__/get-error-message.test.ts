@@ -605,6 +605,19 @@ describe('getErrorMessage: INVOICE_SEND_PAYMENT_ACCOUNT_MISSING (#2126)', () => 
     const unknown = getErrorMessage(envelope('JPY'), { statusCode: 400 })
     expect(unknown).toBe(getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')!.message_sv)
   })
+
+  // The preview surfaces (settings dialog, invoice page) hand the whole
+  // parsed body to the mapper with the invoice context. The context fallback
+  // must not shadow the specific text, and the stringified-object shape the
+  // old `new Error(body.error)` produced must be recognisably the bug.
+  it('preview surfaces: whole body + invoice context still yields the specific text', () => {
+    const msg = getErrorMessage(envelope('SEK'), { statusCode: 400, context: 'invoice', locale: 'sv' })
+    expect(msg).toContain('bankgiro')
+    expect(msg).not.toBe('Kunde inte hantera fakturan. Försök igen.')
+
+    const mangled = getErrorMessage(new Error(String(envelope('SEK').error)), { context: 'invoice' })
+    expect(mangled).toBe('Kunde inte hantera fakturan. Försök igen.')
+  })
 })
 
 

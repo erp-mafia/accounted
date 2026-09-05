@@ -165,6 +165,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     enqueue({ data: [], error: null })
     // Duplicate-payment guard: description ILIKE, no candidates
     enqueue({ data: [], error: null })
+    // Duplicate-payment guard: aggregate sweep (larger unbooked kronor rows), none
+    enqueue({ data: [], error: null })
     // Fetch company settings (now before update due to journal-first ordering)
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     // Update invoice status (CAS guard: returns matched row)
@@ -235,6 +237,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     // Duplicate-payment guard: two ILIKE probes, no candidates
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
+    // Duplicate-payment guard: aggregate sweep (larger unbooked kronor rows), none
+    enqueue({ data: [], error: null })
     // Company settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     // Deliberately NO status-update enqueued: the route must fail closed BEFORE
@@ -265,6 +269,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     // Duplicate-payment guard: merchant_name ILIKE, no candidates
     enqueue({ data: [], error: null })
     // Duplicate-payment guard: description ILIKE, no candidates
+    enqueue({ data: [], error: null })
+    // Duplicate-payment guard: aggregate sweep (larger unbooked kronor rows), none
     enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
     // Update invoice status (CAS guard: returns matched row)
@@ -875,6 +881,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     enqueue({ data: [], error: null })
     // Duplicate-payment guard: description ILIKE, no candidates
     enqueue({ data: [], error: null })
+    // Duplicate-payment guard: aggregate sweep (larger unbooked kronor rows), none
+    enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     // Update invoice status (CAS guard: returns matched row)
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
@@ -1153,6 +1161,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // duplicate guard: merchant_name
     enqueue({ data: [], error: null }) // duplicate guard: description
+    enqueue({ data: [], error: null }) // duplicate guard: aggregate sweep
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS update matched

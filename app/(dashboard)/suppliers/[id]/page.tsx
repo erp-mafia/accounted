@@ -19,6 +19,7 @@ import Link from 'next/link'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import type { Supplier, SupplierType, CreateSupplierInput, SupplierInvoice } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 
 // Supplier invoices carry their own currency; "kr" is only correct for SEK.
 function amountWithCurrency(amount: number, currency?: string | null): string {
@@ -262,6 +263,10 @@ export default function SupplierDetailPage() {
           </p>
         </div>
       </div>
+
+      {(supplier as { party_id?: string | null }).party_id ? (
+        <PartyFactsSection partyId={(supplier as { party_id?: string | null }).party_id as string} canWrite={canWrite} onChanged={() => void fetchSupplier()} />
+      ) : null}
 
       <DetailSection kicker={t('contact_section_title')}>
         <DefRow label={t('def_email')}>{supplier.email || <DefEmpty />}</DefRow>

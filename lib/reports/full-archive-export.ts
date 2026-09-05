@@ -1089,6 +1089,7 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Salary (räkenskapsinformation with 7-year retention)
   { name: 'employees', file: 'employees.json', orderBy: 'created_at' },
   { name: 'employee_benefits', file: 'employee_benefits.json', orderBy: 'created_at' },
+  { name: 'employee_recurring_lines', file: 'employee_recurring_lines.json', orderBy: 'created_at' },
   { name: 'salary_runs', file: 'salary_runs.json', orderBy: 'created_at' },
   { name: 'salary_run_employees', file: 'salary_run_employees.json', orderBy: 'created_at' },
   { name: 'salary_line_items', file: 'salary_line_items.json', orderBy: 'created_at' },
@@ -1218,6 +1219,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   event_log: '30-day TTL event bus log',
   extension_data: 'extension runtime state (includes this backup\'s own state)',
   idempotency_keys: 'infrastructure',
+  sandbox_seed_attempts: 'infrastructure: disposable demo seed coordination, no accounting records',
   inbox_rate_counters: 'infrastructure',
   mail_connections:
     'mailbox OAuth grants (live refresh tokens), not portable. The receipts they find are archived as documents.',

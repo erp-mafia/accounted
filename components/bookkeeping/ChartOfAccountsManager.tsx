@@ -553,11 +553,13 @@ export default function ChartOfAccountsManager() {
   }
 
   // Concept band row (Klass N: label), clickable to fold the class away.
+  // It carries no per-class counter: the old "{active}/{total} aktiva" was
+  // derived from the filtered list and read as full coverage under the
+  // Verifikat filter (#2263). Shown/total lives once, in the page footer.
   const bandRow = (
     cls: number,
     open: boolean,
     onToggle: () => void,
-    countLabel: string,
     colSpan: number,
   ) => (
     <tr key={`band-${cls}`}>
@@ -570,7 +572,6 @@ export default function ChartOfAccountsManager() {
         >
           <ChevronRight className={cn('h-3 w-3 shrink-0 transition-transform duration-200', open && 'rotate-90')} />
           {t('class_heading', { cls, label: classLabel(cls) })}
-          <span className="font-normal normal-case tabular-nums">{countLabel}</span>
         </button>
       </td>
     </tr>
@@ -717,16 +718,9 @@ export default function ChartOfAccountsManager() {
                   .map(([cls, classAccounts]) => {
                     const classNum = Number(cls)
                     const open = !collapsedMyClasses.has(classNum) || !!searchQuery
-                    const activeCount = classAccounts.filter((a) => a.is_active).length
                     return (
                       <Fragment key={cls}>
-                        {bandRow(
-                          classNum,
-                          open,
-                          () => toggleMyClass(classNum),
-                          t('active_count_label', { active: activeCount, total: classAccounts.length }),
-                          8,
-                        )}
+                        {bandRow(classNum, open, () => toggleMyClass(classNum), 8)}
                         {open &&
                           classAccounts.map((account) => (
                             <tr
@@ -867,19 +861,9 @@ export default function ChartOfAccountsManager() {
                     .map(([cls, classAccounts]) => {
                       const classNum = Number(cls)
                       const open = expandedCatalogClasses.has(classNum) || !!searchQuery
-                      // Row existence alone is not activation: a deactivated
-                      // account is in the chart but not usable, so it must not
-                      // count as active here either.
-                      const activatedCount = classAccounts.filter((a) => a.is_activated && a.is_active).length
                       return (
                         <Fragment key={cls}>
-                          {bandRow(
-                            classNum,
-                            open,
-                            () => toggleCatalogClass(classNum),
-                            t('active_count_label', { active: activatedCount, total: classAccounts.length }),
-                            5,
-                          )}
+                          {bandRow(classNum, open, () => toggleCatalogClass(classNum), 5)}
                           {open &&
                             classAccounts.map((account) => (
                               <tr
