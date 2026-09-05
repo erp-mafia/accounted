@@ -16,6 +16,7 @@ import { z } from 'zod'
 import { noContent, ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { parseExpand } from '@/lib/api/v1/expand'
+import { PartyForApiSchema, expandParty } from '@/lib/parties/party-api'
 import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
@@ -71,18 +72,22 @@ const CustomerDetail = z.object({
   personal_number: z.string().nullable(),
   default_payment_terms: z.number(),
   notes: z.string().nullable(),
+  /** The party (motpart) behind the customer: one per counterpart, shared with the supplier side and the ledger. Null for private individuals. */
+  party_id: z.string().uuid().nullable(),
+  /** Present with ?expand=party: identity, the SCB register summary and what the ledger has seen. */
+  party: PartyForApiSchema.nullable().optional(),
   archived_at: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
 })
 
-const ALLOWED_EXPAND = ['invoices'] as const
+const ALLOWED_EXPAND = ['invoices', 'party'] as const
 const OPEN_INVOICE_STATUSES = ['sent', 'partially_paid', 'overdue']
 
 // Explicit projection. Excludes user_id, company_id (internal scoping),
 // and vat_number_validated_at (internal timestamp not in the public schema).
 const CUSTOMER_DETAIL_COLUMNS =
-  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, personal_number, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, personal_number, default_payment_terms, notes, party_id, archived_at, created_at, updated_at'
 
 const OPEN_INVOICE_COLUMNS =
   'id, invoice_number, invoice_date, due_date, status, currency, total, remaining_amount'
@@ -93,7 +98,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/customers/:id',
   summary: 'Retrieve a single customer by id.',
   description:
-    'Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response.',
+    'Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response. Pass ?expand=party to embed the party (motpart) behind the customer: legal name, org and VAT number, country, the SCB company-register summary and what the ledger has seen for it. Private individuals have no party.',
   useWhen:
     'You need the full customer record: address, payment terms, VAT validation status, contact details: before invoicing or syncing to another system.',
   doNotUseFor:
@@ -226,10 +231,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       }
     }
 
+    const party = expand.has('party') ? await expandParty(ctx.supabase, ctx.companyId!, (customer as { party_id?: string | null }).party_id ?? null) : undefined
+
     return ok(
       // The selected row carries personal_number ciphertext; mask before it
       // leaves the server.
-      { ...maskCustomerRow(customer as { personal_number?: string | null }), ...(invoices !== undefined ? { invoices } : {}) },
+      { ...(party !== undefined ? { party } : {}), ...maskCustomerRow(customer as { personal_number?: string | null }), ...(invoices !== undefined ? { invoices } : {}) },
       {
         requestId: ctx.requestId,
         partialExpansions: partialExpansions.length > 0 ? partialExpansions : undefined,

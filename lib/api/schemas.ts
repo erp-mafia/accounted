@@ -292,6 +292,8 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'vat_settlement',
   'stripe_payout',
   'webshop_order',
+  'expense_claim',
+  'expense_payout',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
@@ -3788,6 +3790,66 @@ export const ByraBrandUpdateSchema = z.object({
 // ============================================================
 // Körjournal (mileage trips)
 // ============================================================
+
+// ============ Expense claims (utlägg) ============
+
+const expenseCurrency = z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'])
+
+export const CreateExpenseClaimSchema = z
+  .object({
+    description: z.string().trim().min(1).max(300),
+    expense_date: saneIsoDate,
+    /** Gross incl VAT, in `currency`. */
+    amount: z.number().positive(),
+    /** Deductible VAT part of `amount`, in `currency`. */
+    vat_amount: z.number().nonnegative().default(0),
+    currency: expenseCurrency.default('SEK'),
+    exchange_rate: z.number().positive().optional(),
+    expense_account: accountNumberSchema.refine((a) => /^[4-8]/.test(a), {
+      message: 'Kostnadskontot måste vara ett resultatkonto (klass 4-8)',
+    }),
+    employee_id: uuid.optional().nullable(),
+    claimant_name: z.string().trim().max(200).optional(),
+    document_id: uuid.optional().nullable(),
+    inbox_item_id: uuid.optional().nullable(),
+    /** Advanced booking: full verifikat lines in claim currency. Deep
+     *  validation (balance, liability line) happens in the service. */
+    lines: z
+      .array(
+        z.object({
+          account_number: accountNumberSchema,
+          debit_amount: z.number().nonnegative().default(0),
+          credit_amount: z.number().nonnegative().default(0),
+          line_description: z.string().trim().max(300).optional().nullable(),
+        }),
+      )
+      .min(2)
+      .max(20)
+      .optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (!data.lines && data.vat_amount >= data.amount) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Momsen måste vara mindre än totalbeloppet.',
+        path: ['vat_amount'],
+      })
+    }
+    if (!data.employee_id && !data.claimant_name?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Ange vem utlägget avser: välj anställd eller skriv ett namn.',
+        path: ['claimant_name'],
+      })
+    }
+  })
+
+export const CreateExpensePayoutSchema = z.object({
+  claim_ids: z.array(uuid).min(1).max(200),
+  payout_date: saneIsoDate,
+  cash_account: z.string().regex(/^19\d{2}$/, 'Ange ett likvidkonto i 19xx-serien'),
+  notes: z.string().trim().max(1000).optional(),
+})
 
 const mileageVehicleType = z.enum(['own_car', 'company_car_fossil', 'company_car_electric'])
 

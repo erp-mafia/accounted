@@ -96,7 +96,7 @@ Request body:
   fiscal_period_id: string,
   entry_date: string,
   description: string,
-  source_type?: "manual" | "bank_transaction" | "invoice_created" | "invoice_paid" | "invoice_cash_payment" | "credit_note" | "salary_payment" | "opening_balance" | "year_end" | "storno" | "correction" | "import" | "system" | "inbox_item" | "supplier_invoice_registered" | "supplier_invoice_paid" | "supplier_invoice_cash_payment" | "supplier_invoice_privately_paid" | "supplier_credit_note" | "currency_revaluation" | "reminder_fee" | "accrual" | "result_appropriation" | "rot_rut_payout" | "vat_settlement" | "stripe_payout" | "webshop_order",
+  source_type?: "manual" | "bank_transaction" | "invoice_created" | "invoice_paid" | "invoice_cash_payment" | "credit_note" | "salary_payment" | "opening_balance" | "year_end" | "storno" | "correction" | "import" | "system" | "inbox_item" | "supplier_invoice_registered" | "supplier_invoice_paid" | "supplier_invoice_cash_payment" | "supplier_invoice_privately_paid" | "supplier_credit_note" | "currency_revaluation" | "reminder_fee" | "accrual" | "result_appropriation" | "rot_rut_payout" | "vat_settlement" | "stripe_payout" | "webshop_order" | "expense_claim" | "expense_payout",
   source_id?: string,
   voucher_series?: string,
   notes?: string,
@@ -504,7 +504,7 @@ Bulk-create endpoint mirroring /invoices/bulk-create and /suppliers/bulk-create.
 Request body:
 ```ts
 {
-  journal_entries: { fiscal_period_id: string, entry_date: string, description: string, source_type?: "manual" | "bank_transaction" | "invoice_created" | "invoice_paid" | "invoice_cash_payment" | "credit_note" | "salary_payment" | "opening_balance" | "year_end" | "storno" | "correction" | "import" | "system" | "inbox_item" | "supplier_invoice_registered" | "supplier_invoice_paid" | "supplier_invoice_cash_payment" | "supplier_invoice_privately_paid" | "supplier_credit_note" | "currency_revaluation" | "reminder_fee" | "accrual" | "result_appropriation" | "rot_rut_payout" | "vat_settlement" | "stripe_payout" | "webshop_order", source_id?: string, voucher_series?: string, notes?: string, lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[] }[],
+  journal_entries: { fiscal_period_id: string, entry_date: string, description: string, source_type?: "manual" | "bank_transaction" | "invoice_created" | "invoice_paid" | "invoice_cash_payment" | "credit_note" | "salary_payment" | "opening_balance" | "year_end" | "storno" | "correction" | "import" | "system" | "inbox_item" | "supplier_invoice_registered" | "supplier_invoice_paid" | "supplier_invoice_cash_payment" | "supplier_invoice_privately_paid" | "supplier_credit_note" | "currency_revaluation" | "reminder_fee" | "accrual" | "result_appropriation" | "rot_rut_payout" | "vat_settlement" | "stripe_payout" | "webshop_order" | "expense_claim" | "expense_payout", source_id?: string, voucher_series?: string, notes?: string, lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[] }[],
   all_or_nothing?: boolean
 }
 ```

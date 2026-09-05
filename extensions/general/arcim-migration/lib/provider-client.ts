@@ -32,6 +32,7 @@ import { fetchCompanyInfoDirect } from '@/lib/providers/provider-data-fetcher'
 import type { CompanyInformationDto } from '@/lib/providers/dto'
 import { createLogger } from '@/lib/logger'
 import type { ConsentRecord, OtcResponse } from '../types'
+import { decryptHandoffValue, encryptHandoffValue } from './handoff-crypto'
 
 const log = createLogger('extensions/arcim-migration/provider-client')
 
@@ -243,6 +244,7 @@ export async function deleteConsent(consentId: string): Promise<void> {
 export async function generateOtc(
   consentId: string,
   initiatedByUserId: string,
+  origin: string | null = null,
   expiresInMinutes: number = 10,
 ): Promise<OtcResponse> {
   const supabase = createServiceClient()
@@ -256,6 +258,7 @@ export async function generateOtc(
       code,
       consent_id: consentId,
       user_id: initiatedByUserId,
+      origin,
       expires_at: expiresAt,
     })
 
@@ -288,7 +291,7 @@ export async function generateOtc(
  */
 export async function consumeOAuthState(
   state: string,
-): Promise<{ consentId: string; provider: ProviderName; userId: string | null } | null> {
+): Promise<{ consentId: string; provider: ProviderName; userId: string | null; origin: string | null } | null> {
   const supabase = createServiceClient()
   const now = new Date().toISOString()
 
@@ -297,8 +300,10 @@ export async function consumeOAuthState(
     .update({ used_at: now })
     .eq('code', state)
     .is('used_at', null)
+    .is('provider_code', null)
+    .is('provider_error', null)
     .gt('expires_at', now)
-    .select('consent_id, user_id')
+    .select('consent_id, user_id, origin')
     .maybeSingle()
 
   if (error || !consumed?.consent_id) {
@@ -319,6 +324,85 @@ export async function consumeOAuthState(
     consentId: consumed.consent_id as string,
     provider: consent.provider as ProviderName,
     userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
+    origin: typeof consumed.origin === 'string' ? consumed.origin : null,
+  }
+}
+
+/** Encrypt provider credentials and error text during the two-minute handoff. */
+export async function mintHandoff(
+  consentId: string,
+  userId: string,
+  origin: string,
+  result: { providerCode: string; providerError?: never } | { providerCode?: never; providerError: string },
+): Promise<OtcResponse> {
+  const code = randomBytes(32).toString('base64url')
+  const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString()
+  const { error } = await createServiceClient()
+    .from('provider_otc')
+    .insert({
+      code,
+      consent_id: consentId,
+      user_id: userId,
+      origin,
+      provider_code: result.providerCode === undefined ? null : encryptHandoffValue(
+        result.providerCode, JSON.stringify([code, consentId, userId, origin, 'provider_code']),
+      ),
+      provider_error: result.providerError === undefined ? null : encryptHandoffValue(
+        result.providerError, JSON.stringify([code, consentId, userId, origin, 'provider_error']),
+      ),
+      expires_at: expiresAt,
+    })
+  if (error) throw new Error(`Failed to mint OAuth handoff: ${error.message}`)
+  return { code, consentId, expiresAt }
+}
+
+/** Atomic DELETE RETURNING: only this origin can claim an unexpired handoff. */
+export async function consumeHandoff(code: string, origin: string): Promise<{
+  consentId: string
+  provider: ProviderName
+  userId: string | null
+  origin: string
+  providerCode: string | null
+  providerError: string | null
+} | null> {
+  const supabase = createServiceClient()
+  const { data: consumed, error } = await supabase
+    .from('provider_otc')
+    .delete()
+    .eq('code', code)
+    .eq('origin', origin)
+    .is('used_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .or('provider_code.not.is.null,provider_error.not.is.null')
+    .select('consent_id, user_id, origin, provider_code, provider_error')
+    .maybeSingle()
+  if (error || !consumed?.consent_id) return null
+
+  const { data: consent } = await supabase
+    .from('provider_consents')
+    .select('provider')
+    .eq('id', consumed.consent_id)
+    .maybeSingle()
+  if (!consent?.provider) return null
+
+  try {
+    const decrypt = (column: 'provider_code' | 'provider_error') => consumed[column] === null
+      ? null
+      : decryptHandoffValue(consumed[column], JSON.stringify([
+        code, consumed.consent_id, consumed.user_id, consumed.origin, column,
+      ]))
+    return {
+      consentId: consumed.consent_id as string,
+      provider: consent.provider as ProviderName,
+      userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
+      origin: consumed.origin as string,
+      providerCode: decrypt('provider_code'),
+      providerError: decrypt('provider_error'),
+    }
+  } catch {
+    // The row has already been deleted. Tampered or unreadable credentials
+    // have the same rejection as an unknown/expired handoff, without leaks.
+    return null
   }
 }
 

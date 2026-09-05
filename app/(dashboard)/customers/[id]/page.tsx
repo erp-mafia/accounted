@@ -27,6 +27,8 @@ import { getCountryName } from '@/lib/vat/country-codes'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
+import { usePartyDossier } from '@/components/parties/use-party-dossier'
+import { fromRegistry, addressRowsFromRegistry } from '@/lib/parties/registry-summary'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   individual: 'type_individual',
@@ -60,8 +62,13 @@ export default function CustomerDetailPage({
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('customer_detail')
+  const tParties = useTranslations('parties')
   const errorLocale = useLocale() as ErrorLocale
   const [customer, setCustomer] = useState<CustomerWithRelations | null>(null)
+  const partyId = customer && customer.customer_type !== 'individual' ? ((customer as { party_id?: string | null }).party_id ?? null) : null
+  const party = usePartyDossier(partyId)
+  const registryAddress = party.registry?.contact.address ? addressRowsFromRegistry(party.registry.contact.address) : null
+  const scbNote = (isFromRegistry: boolean) => (isFromRegistry ? <span className="block text-xs text-muted-foreground">{tParties('facts_from_registry')}</span> : null)
   const [isLoading, setIsLoading] = useState(true)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
@@ -264,8 +271,12 @@ export default function CustomerDetailPage({
           ) : (
             <DefEmpty />
           )}
+          {scbNote(fromRegistry(customer.email, party.registry?.contact.email))}
         </DefRow>
-        <DefRow label={t('def_phone')}>{customer.phone || <DefEmpty />}</DefRow>
+        <DefRow label={t('def_phone')}>
+          {customer.phone || <DefEmpty />}
+          {scbNote(fromRegistry(customer.phone, party.registry?.contact.phone))}
+        </DefRow>
         <DefRow label={t('def_address')}>
           {customer.address_line1 || customer.city ? (
             <div>
@@ -273,6 +284,11 @@ export default function CustomerDetailPage({
               {customer.address_line2 && <p>{customer.address_line2}</p>}
               {(customer.postal_code || customer.city) && (
                 <p>{[customer.postal_code, customer.city].filter(Boolean).join(' ')}</p>
+              )}
+              {scbNote(
+                !!registryAddress &&
+                  fromRegistry(customer.address_line1, registryAddress.address_line1) &&
+                  fromRegistry(customer.city, registryAddress.city),
               )}
               {customer.country && <p>{getCountryName(customer.country, errorLocale)}</p>}
             </div>
@@ -282,8 +298,19 @@ export default function CustomerDetailPage({
         </DefRow>
       </DetailSection>
 
-      {(customer as { party_id?: string | null }).party_id && customer.customer_type !== 'individual' ? (
-        <PartyFactsSection partyId={(customer as { party_id?: string | null }).party_id as string} canWrite={canWrite} onChanged={() => void fetchCustomer()} />
+      {partyId && party.dossier ? (
+        <PartyFactsSection
+          partyId={partyId}
+          rowName={customer.name}
+          canWrite={canWrite}
+          dossier={party.dossier}
+          registry={party.registry}
+          scbEnabled={party.scbEnabled}
+          onChanged={async () => {
+            await party.reload()
+            await fetchCustomer()
+          }}
+        />
       ) : null}
 
       <DetailSection kicker={t('section_business')}>
