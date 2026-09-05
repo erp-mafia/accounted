@@ -62,7 +62,12 @@ interface Props {
 const OWNER_FALLBACK_NAME = 'Ägare'
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
+  // Local calendar date: toISOString() is UTC and would date a receipt booked
+  // after midnight CEST to the previous day (wrong period, wrong FX rate).
+  const now = new Date()
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const dd = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${mm}-${dd}`
 }
 
 function parseAmount(raw: string): number {
