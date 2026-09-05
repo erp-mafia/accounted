@@ -2908,6 +2908,7 @@
     "invoices_help": "Förfallodatum för fakturor"
   },
   "tx_inbox_card": {
+    "match_expense_payout_btn": "Bokför återbetalning av utlägg till {name}",
     "skv_counterpart_label": "Möjlig 1930↔1630-överföring.",
     "skv_counterpart_body": "Det finns en skattekonto-händelse den {date} som matchar: bokför detta verifikat först, koppla sedan skattekonto-raden mot samma verifikat istället för att bokföra två gånger.",
     "match_invoice_btn": "Matcha Faktura {number}",
@@ -5998,6 +5999,9 @@
     "load_failed": "Kunde inte hämta varumärket. Prova att ladda om sidan."
   },
   "transactions": {
+    "expense_payout_matched_title": "Återbetalning av utlägg bokförd",
+    "expense_payout_matched_description": "Överföringen till {name} bokfördes och utläggen markerades som utbetalda.",
+    "expense_payout_match_failed_title": "Kunde inte bokföra återbetalningen",
     "counterparty_suggestion_gone_title": "Motparten är inte längre tillgänglig",
     "counterparty_suggestion_gone_description": "Förslaget hann uppdateras. Stäng rutan, öppna den igen och välj motparten på nytt.",
     "page_title": "Transaktioner",
@@ -6674,6 +6678,7 @@
     "dismiss": "Dölj"
   },
   "dashboard": {
+    "suggested_kind_expense_payout": "Återbetalning utlägg",
     "band_betala": "Betala",
     "row_expense_payout": "Betala ut utlägg till {name}",
     "row_expense_payout_detail_one": "1 kvitto · {date}",
@@ -8768,5 +8773,14 @@
     "attn_create": "Skapa förslag",
     "auto_created_title": "{count} förslag skapade från bokföringen",
     "auto_created_description": "Motparter som dina verifikat namnger men som inte finns i registret. Lägg upp dem, eller dölj de som inte hör hemma här."
-}
+},
+  "tx_expense_payout_match": {
+    "title": "Bokför återbetalning av utlägg",
+    "description": "Överföringen bokförs mot personens skuldkonto, utläggen markeras som utbetalda och transaktionen kopplas till verifikatet.",
+    "claims_one": "1 kvitto · {date}",
+    "claims_other": "{count} kvitton · äldsta {date}",
+    "outcome": "Skulden till personen blir 0 kr och raden försvinner från Att göra.",
+    "cancel": "Avbryt",
+    "confirm": "Bokför återbetalningen"
+  }
 }

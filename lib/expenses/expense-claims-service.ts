@@ -500,6 +500,12 @@ export interface CreatePayoutBatchInput {
   payout_date: string
   cash_account: string
   notes?: string
+  /**
+   * The unbooked bank transaction that IS this transfer. The RPC then requires
+   * an SEK outflow of exactly the claims' total and links it to the verifikat
+   * in the same transaction, so the row can never be booked a second time.
+   */
+  transaction_id?: string
 }
 
 export type CreatePayoutBatchFailureCode =
@@ -513,6 +519,10 @@ export type CreatePayoutBatchFailureCode =
   | 'ACCOUNT_NOT_IN_CHART'
   | 'INVALID_CASH_ACCOUNT'
   | 'FORBIDDEN'
+  | 'TX_NOT_FOUND'
+  | 'TX_ALREADY_BOOKED'
+  | 'TX_CURRENCY'
+  | 'TX_AMOUNT_MISMATCH'
   | 'BATCH_INSERT_FAILED'
 
 export type CreatePayoutBatchResult =
@@ -537,6 +547,10 @@ const PAYOUT_RPC_CODES: ReadonlySet<string> = new Set<CreatePayoutBatchFailureCo
   'ACCOUNT_NOT_IN_CHART',
   'INVALID_CASH_ACCOUNT',
   'FORBIDDEN',
+  'TX_NOT_FOUND',
+  'TX_ALREADY_BOOKED',
+  'TX_CURRENCY',
+  'TX_AMOUNT_MISMATCH',
 ])
 
 interface PayoutRpcRow {
@@ -581,6 +595,7 @@ export async function createPayoutBatch(
     // cookieless service client where auth.uid() is NULL); an authenticated
     // caller is pinned to its own auth.uid() by the RPC.
     p_user_id: userId,
+    p_transaction_id: input.transaction_id ?? null,
   })
   if (error) {
     // Period-lock and lock-date triggers surface here as Postgres errors;

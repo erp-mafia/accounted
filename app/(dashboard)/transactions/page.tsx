@@ -50,6 +50,11 @@ import type {
   PotentialRotRutPayout,
 } from '@/components/transactions/transaction-types'
 import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
+import {
+  groupExpenseClaimsByPerson,
+  matchTransactionsToExpensePayouts,
+} from '@/lib/expenses/expense-payout-candidates'
+import type { ExpensePayoutDue } from '@/lib/worklist/types'
 import { SuggestionReviewList } from '@/components/transactions/SuggestionReviewList'
 import {
   isSourceFilter,
@@ -101,6 +106,7 @@ const TransactionForm = dynamic(() => import('@/components/transactions/Transact
 const BatchCategorySelector = dynamic(() => import('@/components/transactions/BatchCategorySelector'), { loading: DialogLoadingSkeleton })
 const InvoiceMatchDialog = dynamic(() => import('@/components/transactions/InvoiceMatchDialog'), { loading: DialogLoadingSkeleton })
 const RotRutPayoutMatchDialog = dynamic(() => import('@/components/transactions/RotRutPayoutMatchDialog'), { loading: DialogLoadingSkeleton })
+const ExpensePayoutMatchDialog = dynamic(() => import('@/components/transactions/ExpensePayoutMatchDialog'), { loading: DialogLoadingSkeleton })
 const MatchVoucherDialog = dynamic(
   () => import('@/components/transactions/MatchVoucherDialog').then((module) => module.MatchVoucherDialog),
   { loading: DialogLoadingSkeleton },
@@ -191,6 +197,34 @@ function buildSupplierInvoiceMap(
     acc[inv.id] = inv
     return acc
   }, {})
+}
+
+// Pair unbooked outflows with the person whose registered utlägg they repay
+// in full (lib/expenses/expense-payout-candidates). Read-time: the open claims
+// are the candidate pool, so this is one small query and nothing for the
+// companies without any. Non-fatal like fetchPotentialMatches.
+async function fetchExpensePayoutMatches(
+  supabase: SupabaseClient,
+  companyId: string | null,
+  rows: { id: string; amount: number; currency: string | null; is_business: boolean | null; journal_entry_id: string | null }[],
+): Promise<Map<string, ExpensePayoutDue>> {
+  const out = new Map<string, ExpensePayoutDue>()
+  if (!companyId || rows.length === 0) return out
+  const { data, error } = await supabase
+    .from('expense_claims')
+    .select('id, employee_id, claimant_name, liability_account, amount_sek, expense_date')
+    .eq('company_id', companyId)
+    .eq('status', 'registered')
+    .order('expense_date', { ascending: true })
+  if (error) {
+    console.error('[fetchExpensePayoutMatches] expense_claims query failed', error)
+    return out
+  }
+  const people = groupExpenseClaimsByPerson(
+    (data ?? []) as Parameters<typeof groupExpenseClaimsByPerson>[0],
+  )
+  for (const [txId, m] of matchTransactionsToExpensePayouts(rows, people)) out.set(txId, m.person)
+  return out
 }
 
 // Fetch the potential invoice/supplier-invoice matches referenced by a page
@@ -401,6 +435,9 @@ export default function TransactionsPage() {
   // ROT/RUT payout confirm (Skatteverkets utbetalning for an open begäran):
   // its own dialog, same selectedTransaction / isConfirmingMatch plumbing.
   const [rotRutMatchDialogOpen, setRotRutMatchDialogOpen] = useState(false)
+  // Utlägg repayment confirm (a transfer covering one person's registered
+  // claims): own dialog, same selectedTransaction / isConfirmingMatch plumbing.
+  const [expensePayoutDialogOpen, setExpensePayoutDialogOpen] = useState(false)
 
   // Booking dialog (journal entry form)
   const [bookingDialogOpen, setBookingDialogOpen] = useState(false)
@@ -674,8 +711,8 @@ export default function TransactionsPage() {
       // animation still finishes instead of being cut to a jump.
       .filter((t) => (t.is_business === null && !t.is_ignored) || exitingIds.has(t.id))
       .sort((a, b) => {
-        const aHasMatch = a.potential_invoice || a.potential_supplier_invoice || a.potential_rot_rut_payout ? 1 : 0
-        const bHasMatch = b.potential_invoice || b.potential_supplier_invoice || b.potential_rot_rut_payout ? 1 : 0
+        const aHasMatch = a.potential_invoice || a.potential_supplier_invoice || a.potential_rot_rut_payout || a.potential_expense_payout ? 1 : 0
+        const bHasMatch = b.potential_invoice || b.potential_supplier_invoice || b.potential_rot_rut_payout || b.potential_expense_payout ? 1 : 0
         if (aHasMatch !== bHasMatch) return bHasMatch - aHasMatch
         return b.date.localeCompare(a.date)
       }),
@@ -1122,7 +1159,10 @@ export default function TransactionsPage() {
       const windowIds = new Set(rows.map((r) => r.id))
       const olderPending = (pendingRows ?? []).filter((r) => !windowIds.has(r.id))
       const allRows = [...rows, ...olderPending].sort((a, b) => b.date.localeCompare(a.date))
-      const { invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap } = await fetchPotentialMatches(supabase, allRows)
+      const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap }, expensePayoutMap] = await Promise.all([
+        fetchPotentialMatches(supabase, allRows),
+        fetchExpensePayoutMatches(supabase, companyId, allRows),
+      ])
 
       // Re-check after the second await: a scope change during the match
       // enrichment must also discard this response.
@@ -1130,6 +1170,7 @@ export default function TransactionsPage() {
 
       const transactionsWithInvoices: TransactionWithInvoice[] = allRows.map((t) => ({
         ...t,
+        potential_expense_payout: expensePayoutMap.get(t.id),
         potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
         potential_supplier_invoice: t.potential_supplier_invoice_id
           ? supplierInvoiceMap[t.potential_supplier_invoice_id]
@@ -1210,7 +1251,10 @@ export default function TransactionsPage() {
     setPagedThroughDate(txData.length >= PAGE_SIZE ? txData[txData.length - 1].date : null)
     setHasMore(txData.length >= PAGE_SIZE)
 
-    const { invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap } = await fetchPotentialMatches(supabase, txData)
+    const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap }, expensePayoutMap] = await Promise.all([
+      fetchPotentialMatches(supabase, txData),
+      fetchExpensePayoutMatches(supabase, companyId, txData),
+    ])
 
     // Same staleness rule after the enrichment await: the offsets above were
     // written under this generation, but a newer fetch has already reset them.
@@ -1221,6 +1265,7 @@ export default function TransactionsPage() {
 
     const newTransactions: TransactionWithInvoice[] = txData.map((t) => ({
       ...t,
+      potential_expense_payout: expensePayoutMap.get(t.id),
       potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
       potential_supplier_invoice: t.potential_supplier_invoice_id
         ? supplierInvoiceMap[t.potential_supplier_invoice_id]
@@ -2227,6 +2272,68 @@ export default function TransactionsPage() {
       }, 350)
     } catch {
       toast({ title: t('match_failed_title'), description: t('match_failed_transaction'), variant: 'destructive' })
+      setIsConfirmingMatch(false)
+    }
+  }
+
+  async function handleConfirmExpensePayoutMatch() {
+    if (!selectedTransaction?.potential_expense_payout) return
+    const person = selectedTransaction.potential_expense_payout
+    setIsConfirmingMatch(true)
+    try {
+      const response = await fetch(
+        `/api/transactions/${selectedTransaction.id}/match-expense-payout`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ claim_ids: person.claim_ids }),
+        },
+      )
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: t('expense_payout_match_failed_title'),
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        setIsConfirmingMatch(false)
+        return
+      }
+
+      toast({
+        title: t('expense_payout_matched_title'),
+        description: t('expense_payout_matched_description', { name: person.claimant_name }),
+      })
+      setExpensePayoutDialogOpen(false)
+
+      setExitingIds((prev) => new Set(prev).add(selectedTransaction.id))
+      setTimeout(() => {
+        setTransactions((prev) =>
+          prev.map((tx) => {
+            if (tx.id === selectedTransaction.id) {
+              return {
+                ...tx,
+                potential_expense_payout: undefined,
+                is_business: true,
+                category: 'expense_other' as TransactionCategory,
+                journal_entry_id: result.journal_entry_id,
+              }
+            }
+            // The person is paid: any other row that suggested them is stale.
+            if (tx.potential_expense_payout?.key === person.key) {
+              return { ...tx, potential_expense_payout: undefined }
+            }
+            return tx
+          }),
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(selectedTransaction.id)
+          return next
+        })
+        setSelectedTransaction(null)
+      }, 350)
+    } finally {
       setIsConfirmingMatch(false)
     }
   }
@@ -3573,6 +3680,14 @@ export default function TransactionsPage() {
       setRotRutMatchDialogOpen(true)
       return
     }
+    if (
+      !transaction.potential_invoice &&
+      !transaction.potential_supplier_invoice &&
+      transaction.potential_expense_payout
+    ) {
+      setExpensePayoutDialogOpen(true)
+      return
+    }
     setMatchDialogOpen(true)
   }
 
@@ -4247,6 +4362,16 @@ export default function TransactionsPage() {
           transaction={selectedTransaction}
           isConfirming={isConfirmingMatch}
           onConfirm={handleConfirmRotRutPayoutMatch}
+        />
+      )}
+
+      {expensePayoutDialogOpen && (
+        <ExpensePayoutMatchDialog
+          open
+          onOpenChange={setExpensePayoutDialogOpen}
+          transaction={selectedTransaction}
+          isConfirming={isConfirmingMatch}
+          onConfirm={handleConfirmExpensePayoutMatch}
         />
       )}
 

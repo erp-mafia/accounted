@@ -2159,6 +2159,11 @@ export const MatchRotRutPayoutSchema = z.object({
   request_id: uuid,
 })
 
+/** Bank outflow → the registered utlägg it repays (one person). */
+export const MatchExpensePayoutSchema = z.object({
+  claim_ids: z.array(uuid).min(1).max(200),
+})
+
 export const MatchSupplierInvoiceSchema = z.object({
   supplier_invoice_id: uuid,
   // Same purpose as MatchInvoiceSchema.lines: user-edited rows override
