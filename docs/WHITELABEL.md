@@ -39,6 +39,7 @@ All branding can be set via env vars. Public ones use `NEXT_PUBLIC_BRANDING_*` (
 | `BRANDING_SUPPORT_EMAIL` | `supportEmail` | `support@gnubok.se` |
 | `BRANDING_PRIVACY_EMAIL` | `privacyEmail` | `privacy@gnubok.se` |
 | `BRANDING_SECURITY_EMAIL` | `securityEmail` | `security@arcim.io` |
+| `BRANDING_WELCOME_SENDER_NAME` | `welcomeSenderName`: name the welcome email (sent by the `/api/lifecycle-emails/welcome/cron` job to every new confirmed account) is sent as and signed with; the From header reads `<name> via <appName>`. Set to an empty string to send and sign as the app. | `Jakob` |
 | `NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM` | `authEmailFrom`: From address Supabase Auth sends verification / reset emails from. Used to pre-populate the `from:` query on the "open in Gmail" button after signup. Set to whatever you configured in your Supabase Auth SMTP. | `noreply@gnubok.se` |
 | `NEXT_PUBLIC_APP_URL` | `appUrl` | `https://app.gnubok.se` |
 | `NEXT_PUBLIC_WHITELABEL_DOMAINS` | Exact comma-separated hostnames served by the same hosted deployment. No wildcards. Invite and auth redirects use a listed host and otherwise fall back to `NEXT_PUBLIC_APP_URL`. | `` |
@@ -215,6 +216,7 @@ After deploying:
 - [ ] Visit `/login` and `/register`: your logo renders.
 - [ ] View source of `/manifest.webmanifest`: `name`, `short_name`, `theme_color` reflect your overrides.
 - [ ] Trigger an invite email: From line says `<your-brand> <noreply@...>`, body uses your name.
+- [ ] Sign up a test account and wait two minutes: the welcome email arrives from `<BRANDING_WELCOME_SENDER_NAME> via <your-brand>`, replies go to your support address, and the button opens your `NEXT_PUBLIC_APP_URL`.
 - [ ] Visit `/dpa` and `/privacy`: legal entity and contact email are yours.
 - [ ] Open OAuth flow (`/api/mcp-oauth/authorize?...`) from a test MCP client: consent page references your brand.
 - [ ] Submit support form (Settings → Support): internal subject prefix is `[<your-brand> support]`.
