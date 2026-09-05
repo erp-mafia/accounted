@@ -297,12 +297,18 @@ function treatmentForRate(rate: number, currencyCode?: string): VatTreatment {
  * Accounted models them as `line_type = 'text'`, which the invoice page
  * renders without amounts and the booking engine leaves out.
  */
-function isTextLine(line: { quantity?: number; unitPrice?: { value: number }; lineExtensionAmount: { value: number } }): boolean {
-  return !line.quantity && !line.unitPrice?.value && line.lineExtensionAmount.value === 0
+interface LineShape {
+  quantity?: number
+  unitPrice?: { value: number }
+  lineExtensionAmount?: { value: number }
+}
+
+function isTextLine(line: LineShape): boolean {
+  return !line.quantity && !line.unitPrice?.value && line.lineExtensionAmount?.value === 0
 }
 
 function resolveInvoiceVat(
-  dto: { currencyCode: string; lines: readonly { taxPercent?: number; taxAmount?: { value: number } }[]; taxTotal?: { taxAmount: { value: number } }; legalMonetaryTotal: { lineExtensionAmount?: { value: number }; payableAmount: { value: number } } },
+  dto: { currencyCode: string; lines: readonly (LineShape & { taxPercent?: number; taxAmount?: { value: number } })[]; taxTotal?: { taxAmount: { value: number } }; legalMonetaryTotal: { lineExtensionAmount?: { value: number }; payableAmount: { value: number } } },
 ): InvoiceVatResolution {
   const total = round2(dto.legalMonetaryTotal.payableAmount.value)
   const statedNet = dto.legalMonetaryTotal.lineExtensionAmount?.value
