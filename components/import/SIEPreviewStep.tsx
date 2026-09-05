@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -45,8 +46,14 @@ export default function SIEPreviewStep({
   onBack,
   onOpenManualOpeningBalances,
 }: SIEPreviewStepProps) {
+  const t = useTranslations('import')
   const errors = issues.filter((i) => i.severity === 'error')
   const warnings = issues.filter((i) => i.severity === 'warning')
+
+  // Both blocks are optional: a preview built by an older parse response
+  // lacks them, and the card then falls back to the BAS-reference counts.
+  const chart = preview.chart
+  const fiscalYear = preview.fiscalYear
 
   // Opening-balance imbalance. The importer plugs any diff > 0.01 to 2099, but a
   // diff under ~1 SEK is genuine öresavrundning. Anything larger is a real
@@ -89,7 +96,7 @@ export default function SIEPreviewStep({
       </Card>
 
       {/* Fiscal year */}
-      <Card>
+      <Card className={fiscalYear?.verdict === 'conflict' ? 'border-destructive/50' : undefined}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Calendar className="h-5 w-5" />
@@ -111,7 +118,22 @@ export default function SIEPreviewStep({
                 {preview.fiscalYearEnd ?? 'Okänt'}
               </p>
             </div>
+            {fiscalYear && fiscalYear.verdict !== 'conflict' && (
+              <span className="ml-auto text-sm text-muted-foreground">
+                {fiscalYear.verdict === 'match'
+                  ? t('fiscal_year_match')
+                  : fiscalYear.replacesEmptyPeriodId
+                    ? t('fiscal_year_create_replaces')
+                    : t('fiscal_year_create')}
+              </span>
+            )}
           </div>
+          {fiscalYear?.verdict === 'conflict' && (
+            <div className="mt-4 flex items-start gap-2 text-sm text-destructive">
+              <XCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              <span>{fiscalYear.message}</span>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -264,35 +286,67 @@ export default function SIEPreviewStep({
             ) : (
               <CheckCircle className="h-5 w-5 text-success" />
             )}
-            Kontomappning
+            {t('chart_card_title')}
           </CardTitle>
           <CardDescription>
-            Hur väl kunde kontona i filen matchas mot din kontoplan
+            {chart
+              ? t('chart_summary', { toCreate: chart.toCreate, existing: chart.existing })
+              : 'Hur väl kunde kontona i filen matchas mot din kontoplan'}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <div>
-              <p className="text-sm text-muted-foreground">Totalt</p>
-              <p className="font-medium">{preview.mappingStatus.total}</p>
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Mappade</p>
-              <p className="font-medium text-success">{preview.mappingStatus.mapped}</p>
-            </div>
+            {chart ? (
+              <>
+                <div>
+                  <p className="text-sm text-muted-foreground">{t('chart_to_create')}</p>
+                  <p className="font-medium tabular-nums">{chart.toCreate}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">{t('chart_existing')}</p>
+                  <p className="font-medium tabular-nums">{chart.existing}</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <p className="text-sm text-muted-foreground">Totalt</p>
+                  <p className="font-medium">{preview.mappingStatus.total}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Mappade</p>
+                  <p className="font-medium text-success">{preview.mappingStatus.mapped}</p>
+                </div>
+              </>
+            )}
             <div>
               <p className="text-sm text-muted-foreground">Ej mappade</p>
-              <p className={`font-medium ${preview.mappingStatus.unmapped > 0 ? 'text-destructive' : ''}`}>
+              <p className={`font-medium tabular-nums ${preview.mappingStatus.unmapped > 0 ? 'text-destructive' : ''}`}>
                 {preview.mappingStatus.unmapped}
               </p>
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Osäkra</p>
-              <p className={`font-medium ${preview.mappingStatus.lowConfidence > 0 ? 'text-warning' : ''}`}>
+              <p className={`font-medium tabular-nums ${preview.mappingStatus.lowConfidence > 0 ? 'text-warning' : ''}`}>
                 {preview.mappingStatus.lowConfidence}
               </p>
             </div>
           </div>
+          {chart && chart.sample.length > 0 && (
+            <div className="mt-4 space-y-1 text-sm">
+              {chart.sample.map((acc) => (
+                <div key={acc.number} className="flex gap-2 text-muted-foreground">
+                  <span className="font-mono">{acc.number}</span>
+                  <span>{acc.name}</span>
+                </div>
+              ))}
+              {chart.toCreate > chart.sample.length && (
+                <div className="text-muted-foreground">
+                  {t('chart_sample_more', { count: chart.toCreate - chart.sample.length })}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

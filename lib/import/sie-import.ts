@@ -15,6 +15,7 @@ import type {
   AccountMapping,
   ImportResult,
   ImportPreview,
+  FiscalYearPrecheck,
   SIEImport,
   MigrationDocumentation,
 } from './types'
@@ -463,6 +464,95 @@ async function cleanupStaleImportRecords(
 }
 
 /**
+ * Read-only verdict on how the SIE file's räkenskapsår relates to the
+ * company's existing fiscal periods. Shared by the parse preview and by
+ * ensureFiscalPeriod, so what the wizard says before import is exactly what
+ * the import will do:
+ *
+ *   - match: a period already contains the file's date range; it is reused.
+ *   - create: no period covers the range; one is created. If an overlapping
+ *     period is empty (onboarding-seeded with the default calendar year but
+ *     never used) it is replaced: the user has a förlängt räkenskapsår per
+ *     BFL 3 kap. that doesn't match the seeded period, and the seeded period
+ *     carries no data to preserve.
+ *   - conflict: an overlapping period carries real content (posted entries,
+ *     opening balances set, closed, or locked). Silently reusing it would stamp
+ *     imported vouchers with a fiscal_period_id whose date window doesn't match
+ *     the voucher's own date: breaking the SIE invariant that #VER dates fall
+ *     inside #RAR and BFL 5 kap. (verifikationsnummer per räkenskapsår).
+ *
+ * Runs no writes. The date-shape rules (18 months, mid-month start, month-end
+ * finish) stay in ensureFiscalPeriod: they are about the file, not the company.
+ */
+export async function precheckFiscalPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  startDate: string,
+  endDate: string
+): Promise<FiscalYearPrecheck> {
+  // Check for an existing period that contains the SIE date range
+  const { data: containing } = await supabase
+    .from('fiscal_periods')
+    .select('id')
+    .eq('company_id', companyId)
+    .lte('period_start', startDate)
+    .gte('period_end', endDate)
+    .single()
+
+  if (containing) {
+    return { verdict: 'match', periodId: containing.id }
+  }
+
+  const { data: overlapping } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start, period_end, name, is_closed, locked_at, opening_balances_set')
+    .eq('company_id', companyId)
+    .lte('period_start', endDate)
+    .gte('period_end', startDate)
+    .order('period_start', { ascending: false })
+    .limit(1)
+
+  if (!overlapping || overlapping.length === 0) {
+    return { verdict: 'create', replacesEmptyPeriodId: null }
+  }
+
+  const existing = overlapping[0]
+  const existingPeriod = {
+    id: existing.id as string,
+    name: existing.name as string,
+    periodStart: existing.period_start as string,
+    periodEnd: existing.period_end as string,
+  }
+
+  const replaceableGateOpen =
+    !existing.is_closed && !existing.locked_at && !existing.opening_balances_set
+
+  let hasEntries = true
+  if (replaceableGateOpen) {
+    const { data: existingEntries } = await supabase
+      .from('journal_entries')
+      .select('id')
+      .eq('fiscal_period_id', existing.id)
+      .eq('company_id', companyId)
+      .limit(1)
+    hasEntries = (existingEntries?.length ?? 0) > 0
+  }
+
+  if (!replaceableGateOpen || hasEntries) {
+    return {
+      verdict: 'conflict',
+      existingPeriod,
+      message:
+        `SIE-filens räkenskapsår (${startDate} till ${endDate}) överlappar men matchar inte ett befintligt räkenskapsår i Accounted ` +
+        `(${existingPeriod.name}: ${existingPeriod.periodStart} till ${existingPeriod.periodEnd}). ` +
+        `Justera räkenskapsåret i Inställningar → Företag så att det matchar SIE-filen exakt, eller importera en SIE-fil som täcker exakt samma period.`,
+    }
+  }
+
+  return { verdict: 'create', replacesEmptyPeriodId: existingPeriod.id }
+}
+
+/**
  * Create a fiscal period if one doesn't exist for the date range.
  * Dates are ISO strings "YYYY-MM-DD" to avoid timezone issues.
  *
@@ -475,67 +565,20 @@ export async function ensureFiscalPeriod(
   startDate: string,
   endDate: string
 ): Promise<string> {
-  // Check for an existing period that contains the SIE date range
-  const { data: containing } = await supabase
-    .from('fiscal_periods')
-    .select('id')
-    .eq('company_id', companyId)
-    .lte('period_start', startDate)
-    .gte('period_end', endDate)
-    .single()
+  // Containment, overlap and the refuse-or-replace verdict live in
+  // precheckFiscalPeriod so the parse preview shows the same outcome the
+  // import will produce.
+  const precheck = await precheckFiscalPeriod(supabase, companyId, startDate, endDate)
 
-  if (containing) {
-    return containing.id
+  if (precheck.verdict === 'match') {
+    return precheck.periodId
   }
 
-  // An overlapping-but-not-containing period needs to be split into two cases:
-  //   - The period has any real content (posted entries, opening balances set,
-  //     closed, or locked): refuse. Silently reusing it would stamp imported
-  //     vouchers with a fiscal_period_id whose date window doesn't match the
-  //     voucher's own date: breaking the SIE invariant that #VER dates fall
-  //     inside #RAR and BFL 5 kap. (verifikationsnummer per räkenskapsår).
-  //   - The period is empty (onboarding-seeded with the default calendar year
-  //     but never used): replace it. The user has a förlängt räkenskapsår per
-  //     BFL 3 kap. that doesn't match the seeded period, and the seeded period
-  //     carries no data to preserve.
-  const { data: overlapping } = await supabase
-    .from('fiscal_periods')
-    .select('id, period_start, period_end, name, is_closed, locked_at, opening_balances_set')
-    .eq('company_id', companyId)
-    .lte('period_start', endDate)
-    .gte('period_end', startDate)
-    .order('period_start', { ascending: false })
-    .limit(1)
-
-  let periodToReplaceId: string | null = null
-
-  if (overlapping && overlapping.length > 0) {
-    const existing = overlapping[0]
-
-    const replaceableGateOpen =
-      !existing.is_closed && !existing.locked_at && !existing.opening_balances_set
-
-    let hasEntries = true
-    if (replaceableGateOpen) {
-      const { data: existingEntries } = await supabase
-        .from('journal_entries')
-        .select('id')
-        .eq('fiscal_period_id', existing.id)
-        .eq('company_id', companyId)
-        .limit(1)
-      hasEntries = (existingEntries?.length ?? 0) > 0
-    }
-
-    if (!replaceableGateOpen || hasEntries) {
-      throw new Error(
-        `SIE-filens räkenskapsår (${startDate} till ${endDate}) överlappar men matchar inte ett befintligt räkenskapsår i Accounted ` +
-          `(${existing.name}: ${existing.period_start} till ${existing.period_end}). ` +
-          `Justera räkenskapsåret i Inställningar → Företag så att det matchar SIE-filen exakt, eller importera en SIE-fil som täcker exakt samma period.`
-      )
-    }
-
-    periodToReplaceId = existing.id
+  if (precheck.verdict === 'conflict') {
+    throw new Error(precheck.message)
   }
+
+  const periodToReplaceId: string | null = precheck.replacesEmptyPeriodId
 
   const startParts = parseDateParts(startDate)
   const endParts = parseDateParts(endDate)
@@ -2292,6 +2335,7 @@ export async function executeSIEImport(
       result.errors.push(`Failed to create accounts: ${accountSync.error}`)
       return result
     }
+    result.accountsCreated = accountSync.created
     if (accountSync.renamed > 0) {
       result.warnings.push(
         accountSync.renamed === 1

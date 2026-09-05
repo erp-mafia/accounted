@@ -4,6 +4,7 @@ import {
   validateIBBalance,
   isBalanceSheetAccount,
   ensureFiscalPeriod,
+  precheckFiscalPeriod,
   importVouchers,
   computeVoucherNumberRanges,
   linkOpeningBalanceEntryToPeriod,
@@ -1546,5 +1547,142 @@ describe('IB derivation from #UB -1 (issue #675)', () => {
       expect(result.roundingAdjustment).toBe(7400.78)
       expect(result.fileImbalance).toBe(7400.78)
     })
+  })
+})
+
+describe('precheckFiscalPeriod', () => {
+  // The read-only verdict the parse preview shows. Mirrors the
+  // ensureFiscalPeriod cases above one-to-one: whatever this says at preview
+  // is what the import does.
+  type Supabase = Parameters<typeof precheckFiscalPeriod>[0]
+
+  const seededPeriod = {
+    id: 'seeded-2026',
+    period_start: '2026-01-01',
+    period_end: '2026-12-31',
+    name: 'Räkenskapsår 2026',
+    is_closed: false,
+    locked_at: null,
+    opening_balances_set: false,
+  }
+
+  it('reports match when an existing period contains the range', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: { id: 'existing-period-id' }, error: null }])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2026-01-01',
+      '2026-12-31',
+    )
+
+    expect(verdict).toEqual({ verdict: 'match', periodId: 'existing-period-id' })
+  })
+
+  it('reports create with nothing to replace when no period overlaps', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null }, // containing check, no match
+      { data: [], error: null }, // overlapping check, none
+    ])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2025-01-01',
+      '2025-12-31',
+    )
+
+    expect(verdict).toEqual({ verdict: 'create', replacesEmptyPeriodId: null })
+  })
+
+  it('reports create naming the empty seeded period it will replace', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null },
+      { data: [seededPeriod], error: null },
+      { data: [], error: null }, // journal_entries: none
+    ])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2025-10-20',
+      '2026-12-31',
+    )
+
+    expect(verdict).toEqual({ verdict: 'create', replacesEmptyPeriodId: 'seeded-2026' })
+  })
+
+  it('reports conflict with the import refusal text when the overlapping period has entries', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null },
+      { data: [seededPeriod], error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+    ])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2025-03-01',
+      '2026-02-28',
+    )
+
+    expect(verdict.verdict).toBe('conflict')
+    if (verdict.verdict !== 'conflict') return
+    expect(verdict.existingPeriod).toEqual({
+      id: 'seeded-2026',
+      name: 'Räkenskapsår 2026',
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+    })
+    expect(verdict.message).toMatch(/2025-03-01 till 2026-02-28/)
+    expect(verdict.message).toMatch(/Inställningar → Företag/)
+  })
+
+  it('reports conflict without reading entries when opening balances are set', async () => {
+    const { supabase, enqueueMany, calls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null },
+      { data: [{ ...seededPeriod, opening_balances_set: true }], error: null },
+    ])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2025-10-20',
+      '2026-12-31',
+    )
+
+    expect(verdict.verdict).toBe('conflict')
+    expect(calls.some((c) => c.table === 'journal_entries')).toBe(false)
+  })
+
+  it('is the verdict ensureFiscalPeriod acts on: conflict throws the same text', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null },
+      { data: [seededPeriod], error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+    ])
+    const precheck = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2025-03-01',
+      '2026-02-28',
+    )
+
+    const again = createQueuedMockSupabase()
+    again.enqueueMany([
+      { data: null, error: null },
+      { data: [seededPeriod], error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+    ])
+
+    await expect(
+      ensureFiscalPeriod(again.supabase as unknown as Supabase, 'company-id', '2025-03-01', '2026-02-28'),
+    ).rejects.toThrow(precheck.verdict === 'conflict' ? precheck.message : 'unreachable')
   })
 })

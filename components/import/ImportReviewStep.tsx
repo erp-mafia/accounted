@@ -540,9 +540,10 @@ export default function ImportReviewStep({
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground space-y-2">
           <p>1. Räkenskapsåret skapas om det inte finns</p>
-          <p>2. En verifikation för ingående balanser skapas</p>
-          <p>3. Alla verifikationer importeras med nya verifikationsnummer</p>
-          <p>4. Kontomappningarna sparas för framtida importer</p>
+          <p>2. {t('review_step_chart')}</p>
+          <p>3. En verifikation för ingående balanser skapas</p>
+          <p>4. Alla verifikationer importeras med nya verifikationsnummer</p>
+          <p>5. Kontomappningarna sparas för framtida importer</p>
           <p className="pt-2 font-medium">
             Importen kan inte ångras automatiskt, men du kan ta bort skapade verifikationer manuellt.
           </p>

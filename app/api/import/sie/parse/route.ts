@@ -7,9 +7,16 @@ import {
   calculateFileHash,
 } from '@/lib/import/sie-parser'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
+import { planChartChanges } from '@/lib/import/account-sync'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
-import { generateImportPreview, checkDuplicateImport, checkDuplicatePeriodImport } from '@/lib/import/sie-import'
+import {
+  generateImportPreview,
+  checkDuplicateImport,
+  checkDuplicatePeriodImport,
+  precheckFiscalPeriod,
+} from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
@@ -142,6 +149,34 @@ export const POST = withRouteContext(
       const preview = generateImportPreview(parsed, mappings)
       preview.excludedSystemAccounts = excludedSystemAccounts
       preview.accountCount = bookkeepingAccounts.length
+
+      // The mapping stats above score the file against the BAS reference. A
+      // consultant with a 41-account seeded company reads "150 mappade" as
+      // "your chart replaces mine", so also say what happens to THIS company's
+      // chart: how many of the file's accounts are new here, how many exist.
+      const chartRows = await fetchAllRows<{ account_number: string }>(({ from, to }) =>
+        supabase
+          .from('chart_of_accounts')
+          .select('account_number')
+          .eq('company_id', companyId)
+          .order('account_number')
+          .range(from, to),
+      )
+      preview.chart = planChartChanges(
+        mappings,
+        new Set(chartRows.map((r) => r.account_number)),
+      )
+
+      // Same containment/overlap verdict the import runs (ensureFiscalPeriod),
+      // so a fiscal-year conflict shows here instead of after the mapping step.
+      if (parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd) {
+        preview.fiscalYear = await precheckFiscalPeriod(
+          supabase,
+          companyId!,
+          parsed.stats.fiscalYearStart,
+          parsed.stats.fiscalYearEnd,
+        )
+      }
 
       const fileHash = await calculateFileHash(content)
 
