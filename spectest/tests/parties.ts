@@ -304,6 +304,27 @@ export const promoteToSuppliers = env.test(
 
     // The queue is empty now, and says so instead of showing a blank table.
     await expect(b.getByText(/^0 förslag/)).toBeVisible();
-    await expect(b.getByRole("link", { name: "Leverantörer", exact: true }).first()).toBeVisible();
+
+    // The supplier page shows what the register knows, where people look
+    // for it: legal name, org number, VAT number and the SCB facts under one
+    // source line, with a refresh action.
+    const vismaId = await db.sql<{ id: string }>`
+      select id from public.suppliers where company_id = ${ctx.parent.companyId} and name = 'Visma Spcs AB'`;
+    await b.goto(`${APP_URL}/suppliers/${vismaId[0]!.id.unwrap()}`);
+    await expect(b.getByRole("heading", { name: "Visma Spcs AB" })).toBeVisible();
+    await expect(b.getByText("Företagsuppgifter")).toBeVisible();
+    await expect(b.getByText("556252-9155")).toBeVisible();
+    await expect(b.getByText("SE556252915501")).toBeVisible();
+    await expect(b.getByText("Utgivning av annan programvara")).toBeVisible();
+    await expect(b.getByText(/^Från SCB · hämtat/)).toBeVisible();
+    await expect(b.getByRole("button", { name: "Uppdatera från SCB", exact: true })).toBeVisible();
+
+    // A foreign supplier says so instead of offering a search.
+    const framerId = await db.sql<{ id: string }>`
+      select id from public.suppliers where company_id = ${ctx.parent.companyId} and name = 'Framer B.V.'`;
+    await b.goto(`${APP_URL}/suppliers/${framerId[0]!.id.unwrap()}`);
+    await expect(b.getByText("Företagsuppgifter")).toBeVisible();
+    await expect(b.getByText(/Utländskt bolag \(Nederländerna\)/)).toBeVisible();
+    await expect(b.getByRole("button", { name: "Hitta i företagsregistret" })).toHaveCount(0);
   },
 );
