@@ -728,7 +728,7 @@ function ConnectStep({
           : 'Företags-ID'
 
   const tokenDescription = isClientCredentials
-    ? `Ange din företagsnyckel (User-Key) från Björn Lundén. ${branding.appName.toLowerCase()} ansluter automatiskt via sin integrationspartner-åtkomst.`
+    ? t('ext_arcim_bl_token_description', { appName: branding.appName })
     : isWintLogin
       ? `Logga in med dina WINT-uppgifter för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata. Lösenordet används en gång för att skapa anslutningen och sparas aldrig.`
       : provider === 'briox'
@@ -740,7 +740,7 @@ function ConnectStep({
         : `Ange din API-nyckel från ${providerName} för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
 
   const tokenHelpText = isClientCredentials
-    ? `Företagsnyckeln (User-Key) är ett GUID som du hittar i Lundify under Integrationer → kugghjulet vid integrationen, eller i aktiveringsmejlet från Björn Lundén.`
+    ? t('ext_arcim_bl_token_help')
     : isWintLogin
       ? `Använd samma e-postadress och lösenord som när du loggar in på app.wint.se. Kräver ditt WINT-konto BankID-inloggning kan anslutningen inte skapas ännu: be i så fall WINT om en SIE-fil och importera den manuellt.`
       : provider === 'bokio'

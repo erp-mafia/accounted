@@ -580,6 +580,18 @@ export const arcimMigrationExtension: Extension = {
                 details: { provider, reason: error.message },
               })
             }
+            // BL: a valid key whose company never activated the integration
+            // is not a credentials problem; say what actually unblocks it.
+            if (error.kind === 'integration-not-activated') {
+              return errorResponseFromCode('BL_INTEGRATION_NOT_ACTIVATED', moduleLog, {
+                details: { provider, reason: error.message },
+              })
+            }
+            if (error.kind === 'company-key-not-found') {
+              return errorResponseFromCode('BL_COMPANY_KEY_NOT_FOUND', moduleLog, {
+                details: { provider, reason: error.message },
+              })
+            }
             return errorResponseFromCode('PROVIDER_TOKEN_INVALID', moduleLog, {
               details: { provider, reason: error.message },
             })

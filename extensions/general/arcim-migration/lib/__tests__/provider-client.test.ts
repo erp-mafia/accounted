@@ -353,6 +353,82 @@ describe('submitProviderToken', () => {
     ).rejects.toBeInstanceOf(ProviderTokenInvalidError)
   })
 
+  it('maps a 403 "out of allowed scope" from the BL probe to integration-not-activated (live-verified body) and stores nothing', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    // Verbatim shape of BL's answer for a real customer key whose company
+    // never activated the integration (2026-09-05).
+    mockBlGet.mockRejectedValueOnce(
+      new BjornLundenApiError(
+        'Björn Lunden API error: 403 Forbidden',
+        403,
+        '{"headers":{},"body":{"status":"FORBIDDEN","message":"Calls to details:READ is out of allowed scope for service provider Arcim "},"statusCode":"FORBIDDEN","statusCodeValue":403}',
+      ),
+    )
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bjornlunden',
+      'client_credentials',
+      'user-key-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect((err as ProviderTokenInvalidError).kind).toBe('integration-not-activated')
+    expect(tablesTouched()).not.toContain('provider_consent_tokens')
+  })
+
+  it('keeps a 403 WITHOUT the scope wording as plain rejected credentials', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBlGet.mockRejectedValueOnce(new BjornLundenApiError('Björn Lunden API error: 403', 403, ''))
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bjornlunden',
+      'client_credentials',
+      'user-key-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect((err as ProviderTokenInvalidError).kind).toBe('credentials')
+  })
+
+  it('reports 500 (unknown key) and 404 as company-key-not-found, not generic bad credentials', async () => {
+    for (const status of [500, 404]) {
+      mock.enqueue({ data: [{ id: 'consent-1' }] })
+      mockBlGet.mockRejectedValueOnce(new BjornLundenApiError(`Björn Lunden API error: ${status}`, status))
+
+      const err: unknown = await submitProviderToken(
+        'consent-1',
+        'bjornlunden',
+        'client_credentials',
+        'user-key-guid',
+        'company-A',
+      ).catch((e: unknown) => e)
+
+      expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+      expect((err as ProviderTokenInvalidError).kind).toBe('company-key-not-found')
+    }
+  })
+
+  it('does NOT blame the pasted key for a 401 (that is our own client_credentials token being refused)', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBlGet.mockRejectedValueOnce(new BjornLundenApiError('Björn Lunden API error: 401', 401))
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bjornlunden',
+      'client_credentials',
+      'user-key-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(BjornLundenApiError)
+    expect(err).not.toBeInstanceOf(ProviderTokenInvalidError)
+    expect(tablesTouched()).not.toContain('provider_consent_tokens')
+  })
+
   it('stores BL tokens (and labels the consent) when the probe succeeds', async () => {
     mock.enqueue({ data: [{ id: 'consent-1' }] }) // ownership check
     mock.enqueue({ data: null }) // consent company_name update

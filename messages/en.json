@@ -5656,6 +5656,8 @@
     "ext_arcim_migration_long_description": "Move all bookkeeping data from your old system to accounted. Imports chart of accounts, vouchers, customers, suppliers and open invoices automatically via a secure API integration directly with the provider.",
     "ext_arcim_bokio_token_description": "Enter the integration token and company ID from Bokio to let {appName} read your bookkeeping data.",
     "ext_arcim_bokio_token_help": "Create or copy your integration token in Bokio under Settings → API Tokens. The company ID is the GUID in the browser address when you view the company overview. The token and company ID must come from the same Bokio company.",
+    "ext_arcim_bl_token_description": "First activate {appName} under Integrations in Lundify or BL Administration, then enter the company key (User-Key). {appName} connects through Björn Lundén's integration-partner access, so no API key of your own is needed.",
+    "ext_arcim_bl_token_help": "The company key (User-Key) is a GUID shown at the gear icon for the integration under Integrations in Lundify, or in the activation e-mail from Björn Lundén. The key only works once the integration is activated for the company.",
     "ext_arcim_bokio_token_label": "Integration token",
     "ext_arcim_bokio_token_placeholder": "Paste your integration token",
     "ext_arcim_bokio_company_id_label": "Company ID",

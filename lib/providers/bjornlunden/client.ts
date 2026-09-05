@@ -19,6 +19,31 @@ export class BjornLundenApiError extends Error {
   }
 }
 
+/**
+ * True when BL answered 403 because the company behind the User-Key has not
+ * activated our integration: the service provider holds no scopes for that
+ * company. Live-verified 2026-09-05 against a real customer key:
+ *
+ *   {"body":{"status":"FORBIDDEN","message":"Calls to details:READ is out of
+ *    allowed scope for service provider Arcim "}, "statusCodeValue":403}
+ *
+ * The key itself is right, so this must never be reported as "check what
+ * you pasted": the fix is on the BL side (activate the integration).
+ *
+ * An UNKNOWN key is a different signal: BL fails to bind the company database
+ * and answers 500. That body is not stable (observed both a null
+ * ServiceInfo.getCurrentUser() message and a Spring BeanCreationException for
+ * databaseConnector), so callers key the unknown-key verdict on the status
+ * alone; only the 403 case has a body worth matching.
+ */
+export function isBjornLundenScopeError(error: unknown): boolean {
+  return (
+    error instanceof BjornLundenApiError &&
+    error.statusCode === 403 &&
+    /out of allowed scope/i.test(error.body ?? '')
+  )
+}
+
 function isRetryableError(error: unknown): boolean {
   if (isTimeoutError(error)) return true;
   if (error instanceof BjornLundenApiError) {
