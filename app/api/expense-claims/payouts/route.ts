@@ -29,6 +29,10 @@ const PAYOUT_ERROR_MESSAGES: Record<string, { message: string; status: number }>
     status: 400,
   },
   BATCH_INSERT_FAILED: { message: 'Utbetalningen kunde inte sparas.', status: 500 },
+  PERIOD_LOCKED: { message: 'Perioden är låst. Lås upp den innan du bokför utbetalningen.', status: 409 },
+  ACCOUNT_NOT_IN_CHART: { message: 'Kontot finns inte i kontoplanen.', status: 400 },
+  INVALID_CASH_ACCOUNT: { message: 'Ange ett likvidkonto i 19xx-serien.', status: 400 },
+  FORBIDDEN: { message: 'Du saknar behörighet att bokföra utbetalningar i det här företaget.', status: 403 },
 }
 
 export const GET = withRouteContext('expense_claims.payouts.list', async (_request, { supabase, companyId }) => {

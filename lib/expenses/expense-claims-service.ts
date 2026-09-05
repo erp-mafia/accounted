@@ -502,174 +502,121 @@ export interface CreatePayoutBatchInput {
   notes?: string
 }
 
-export type CreatePayoutBatchResult =
-  | { ok: true; batch_id: string; journal_entry_id: string; total_sek: number; claim_count: number }
-  | {
-      ok: false
-      code:
-        | 'NO_CLAIMS'
-        | 'CLAIMS_NOT_FOUND'
-        | 'ALREADY_PAID'
-        | 'MIXED_CLAIMANTS'
-        | 'MIXED_LIABILITY'
-        | 'FISCAL_PERIOD_NOT_FOUND'
-        | 'BATCH_INSERT_FAILED'
-      detail?: string
-    }
+export type CreatePayoutBatchFailureCode =
+  | 'NO_CLAIMS'
+  | 'CLAIMS_NOT_FOUND'
+  | 'ALREADY_PAID'
+  | 'MIXED_CLAIMANTS'
+  | 'MIXED_LIABILITY'
+  | 'FISCAL_PERIOD_NOT_FOUND'
+  | 'PERIOD_LOCKED'
+  | 'ACCOUNT_NOT_IN_CHART'
+  | 'INVALID_CASH_ACCOUNT'
+  | 'FORBIDDEN'
+  | 'BATCH_INSERT_FAILED'
 
+export type CreatePayoutBatchResult =
+  | {
+      ok: true
+      batch_id: string
+      journal_entry_id: string
+      voucher_number: number | null
+      total_sek: number
+      claim_count: number
+    }
+  | { ok: false; code: CreatePayoutBatchFailureCode; detail?: string }
+
+const PAYOUT_RPC_CODES: ReadonlySet<string> = new Set<CreatePayoutBatchFailureCode>([
+  'NO_CLAIMS',
+  'CLAIMS_NOT_FOUND',
+  'ALREADY_PAID',
+  'MIXED_CLAIMANTS',
+  'MIXED_LIABILITY',
+  'FISCAL_PERIOD_NOT_FOUND',
+  'PERIOD_LOCKED',
+  'ACCOUNT_NOT_IN_CHART',
+  'INVALID_CASH_ACCOUNT',
+  'FORBIDDEN',
+])
+
+interface PayoutRpcRow {
+  ok: boolean
+  code?: string
+  details?: unknown
+  batch_id?: string
+  journal_entry_id?: string
+  voucher_number?: number | null
+  total_sek?: number | string
+  claim_count?: number
+}
+
+/**
+ * Reimburse N registered claims for one claimant in one bank transfer.
+ *
+ * Everything happens inside the create_expense_payout_batch RPC (migration
+ * 20260904171000): the claims are locked FOR UPDATE, the liability -> cash
+ * verifikat is posted through commit_journal_entry, the batch is linked and
+ * the claims are marked paid, all in one transaction. A concurrent or
+ * retried request for the same claims queues on the lock and is refused
+ * with ALREADY_PAID, so a double click can never book a second transfer.
+ * The claimant/liability/status rules are enforced by the RPC and echoed
+ * here as result codes.
+ */
 export async function createPayoutBatch(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   input: CreatePayoutBatchInput,
 ): Promise<CreatePayoutBatchResult> {
-  if (input.claim_ids.length === 0) return { ok: false, code: 'NO_CLAIMS' }
+  const claimIds = [...new Set(input.claim_ids)]
+  if (claimIds.length === 0) return { ok: false, code: 'NO_CLAIMS' }
 
-  const { data: claims, error } = await supabase
-    .from('expense_claims')
-    .select('*')
-    .eq('company_id', companyId)
-    .in('id', input.claim_ids)
-  if (error) return { ok: false, code: 'CLAIMS_NOT_FOUND', detail: error.message }
-  const rows = (claims ?? []) as ExpenseClaimRow[]
-  if (rows.length !== input.claim_ids.length) return { ok: false, code: 'CLAIMS_NOT_FOUND' }
-  if (rows.some((c) => c.status !== 'registered')) return { ok: false, code: 'ALREADY_PAID' }
-
-  // One batch = one transfer to one person against one liability account.
-  // employee_id when present; otherwise the normalized free-text name, so two
-  // distinct non-employee claimants never merge into one batch.
-  const claimantKey = (c: ExpenseClaimRow) =>
-    c.employee_id ?? `name:${c.claimant_name.trim().toLocaleLowerCase('sv-SE')}`
-  if (new Set(rows.map(claimantKey)).size > 1) return { ok: false, code: 'MIXED_CLAIMANTS' }
-  if (new Set(rows.map((c) => c.liability_account)).size > 1) {
-    return { ok: false, code: 'MIXED_LIABILITY' }
-  }
-
-  const total = roundOre(sumOre(rows.map((c) => c.amount_sek)))
-  const first = rows[0]
-
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, input.payout_date)
-  if (!fiscalPeriodId) return { ok: false, code: 'FISCAL_PERIOD_NOT_FOUND' }
-
-  const { data: batch, error: batchError } = await supabase
-    .from('expense_payout_batches')
-    .insert({
-      company_id: companyId,
-      user_id: userId,
-      employee_id: first.employee_id,
-      claimant_name: first.claimant_name,
-      payout_date: input.payout_date,
-      cash_account: input.cash_account,
-      liability_account: first.liability_account,
-      total_sek: total,
-      notes: input.notes ?? null,
+  const { data, error } = await supabase.rpc('create_expense_payout_batch', {
+    p_company_id: companyId,
+    p_claim_ids: claimIds,
+    p_payout_date: input.payout_date,
+    p_cash_account: input.cash_account,
+    p_notes: input.notes ?? null,
+    // Honored only for service-role callers (API-key / MCP paths run on the
+    // cookieless service client where auth.uid() is NULL); an authenticated
+    // caller is pinned to its own auth.uid() by the RPC.
+    p_user_id: userId,
+  })
+  if (error) {
+    // Period-lock and lock-date triggers surface here as Postgres errors;
+    // the message is the trigger's own text, which the route maps for the
+    // user. Sanitised log: code + message only.
+    log.error('create_expense_payout_batch RPC error', {
+      companyId,
+      code: (error as { code?: string }).code,
+      message: error.message,
     })
-    .select('id')
-    .single()
-  if (batchError || !batch) {
-    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: batchError?.message }
+    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: error.message }
   }
 
-  const desc = `Utbetalning utlägg: ${first.claimant_name} (${rows.length} st)`
-  const entryInput: CreateJournalEntryInput = {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: input.payout_date,
-    description: desc,
-    source_type: 'expense_payout',
-    source_id: batch.id,
-    lines: [
-      {
-        account_number: first.liability_account,
-        debit_amount: total,
-        credit_amount: 0,
-        line_description: desc,
-      },
-      {
-        account_number: input.cash_account,
-        debit_amount: 0,
-        credit_amount: total,
-        line_description: desc,
-      },
-    ],
-  }
-
-  let journalEntryId: string
-  try {
-    const entry = await createJournalEntry(supabase, companyId, userId, entryInput)
-    journalEntryId = entry.id
-  } catch (err) {
-    await supabase
-      .from('expense_payout_batches')
-      .delete()
-      .eq('id', batch.id)
-      .eq('company_id', companyId)
-    throw err
-  }
-
-  const { error: batchLinkError } = await supabase
-    .from('expense_payout_batches')
-    .update({ journal_entry_id: journalEntryId })
-    .eq('id', batch.id)
-    .eq('company_id', companyId)
-  if (batchLinkError) {
+  const row = (data ?? null) as PayoutRpcRow | null
+  if (!row) return { ok: false, code: 'BATCH_INSERT_FAILED', detail: 'empty RPC response' }
+  if (!row.ok) {
+    const code = row.code && PAYOUT_RPC_CODES.has(row.code)
+      ? (row.code as CreatePayoutBatchFailureCode)
+      : 'BATCH_INSERT_FAILED'
     return {
       ok: false,
-      code: 'BATCH_INSERT_FAILED',
-      detail: `batch ${batch.id} posted as entry ${journalEntryId}: ${batchLinkError.message}`,
+      code,
+      detail: row.details ? JSON.stringify(row.details) : row.code,
     }
   }
-
-  const { error: markError } = await supabase
-    .from('expense_claims')
-    .update({ status: 'paid', payout_batch_id: batch.id })
-    .eq('company_id', companyId)
-    .in('id', input.claim_ids)
-  if (markError) {
-    // Compensate: without this the transfer stays posted while the claims
-    // remain 'registered', so the next attempt would post a second payout
-    // verifikat for the same claims. Storno the entry (BFL 5 kap. 5 §: the
-    // posted one is never deleted) and drop the batch row, so a retry starts
-    // from a clean state. A failing compensation is reported verbatim: that
-    // is the case a human must reconcile.
-    try {
-      await reverseEntry(supabase, companyId, userId, journalEntryId)
-    } catch (compensationError) {
-      return {
-        ok: false,
-        code: 'BATCH_INSERT_FAILED',
-        detail: `mark paid failed (${markError.message}); the payout entry ${journalEntryId} could not be reversed automatically: ${
-          compensationError instanceof Error ? compensationError.message : String(compensationError)
-        }`,
-      }
-    }
-    // PostgREST reports a failed delete in `error` rather than throwing, so
-    // it needs its own check: a surviving batch row after a reversed entry
-    // is exactly the inconsistency the compensation exists to prevent.
-    const { error: batchDeleteError } = await supabase
-      .from('expense_payout_batches')
-      .delete()
-      .eq('id', batch.id)
-      .eq('company_id', companyId)
-    if (batchDeleteError) {
-      return {
-        ok: false,
-        code: 'BATCH_INSERT_FAILED',
-        detail: `mark paid failed (${markError.message}); the payout entry was reversed but batch ${batch.id} could not be removed: ${batchDeleteError.message}`,
-      }
-    }
-    return {
-      ok: false,
-      code: 'BATCH_INSERT_FAILED',
-      detail: `mark paid failed (${markError.message}); the payout entry was reversed, no claims were changed`,
-    }
+  if (!row.batch_id || !row.journal_entry_id) {
+    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: 'RPC returned ok without ids' }
   }
 
   return {
     ok: true,
-    batch_id: batch.id,
-    journal_entry_id: journalEntryId,
-    total_sek: total,
-    claim_count: rows.length,
+    batch_id: row.batch_id,
+    journal_entry_id: row.journal_entry_id,
+    voucher_number: row.voucher_number ?? null,
+    total_sek: roundOre(Number(row.total_sek ?? 0)),
+    claim_count: row.claim_count ?? claimIds.length,
   }
 }
 

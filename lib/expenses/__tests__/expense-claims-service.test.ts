@@ -370,125 +370,96 @@ describe('registerExpenseClaim', () => {
 })
 
 describe('createPayoutBatch', () => {
-  const registeredClaim = (over: Record<string, unknown> = {}) => ({
-    id: 'c1',
-    employee_id: null,
-    claimant_name: 'Joakim Hansson',
-    amount_sek: 500,
-    liability_account: '2893',
-    status: 'registered',
-    ...over,
-  })
+  const rpcCalls = () => (sb.rpc as unknown as { mock: { calls: unknown[][] } }).mock.calls
 
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
-    findFiscalPeriodMock.mockResolvedValue('period-1')
-    createJournalEntryMock.mockResolvedValue({ id: 'je-2' })
   })
 
-  it('reverses the posted transfer when marking the claims paid fails', async () => {
-    // Without the compensation the entry would stay posted while the claims
-    // stayed 'registered', so a retry would post a second payout for them.
-    reverseEntryMock.mockResolvedValue({ id: 'je-storno' })
-    enqueue({ data: [registeredClaim()] })
-    enqueue({ data: { id: 'batch-1' } }) // batch insert
-    enqueue({ data: null }) // batch je update
-    enqueue({ data: null, error: { message: 'mark failed' } }) // claims mark paid
-    enqueue({ data: null }) // batch delete (compensation)
-
+  it('returns NO_CLAIMS without calling the RPC', async () => {
     const result = await createPayoutBatch(sb, COMPANY, USER, {
-      claim_ids: ['c1'],
+      claim_ids: [],
       payout_date: '2026-09-05',
       cash_account: '1935',
     })
-
-    expect(result).toMatchObject({ ok: false, code: 'BATCH_INSERT_FAILED' })
-    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-2')
-    expect(findCall('expense_payout_batches', 'delete')).toBeTruthy()
+    expect(result).toEqual({ ok: false, code: 'NO_CLAIMS' })
+    expect(rpcCalls()).toHaveLength(0)
   })
 
-  it('reports a failed compensation delete instead of claiming a clean rollback', async () => {
-    reverseEntryMock.mockResolvedValue({ id: 'je-storno' })
-    enqueue({ data: [registeredClaim()] })
-    enqueue({ data: { id: 'batch-1' } }) // batch insert
-    enqueue({ data: null }) // batch je update
-    enqueue({ data: null, error: { message: 'mark failed' } }) // claims mark paid
-    enqueue({ data: null, error: { message: 'batch delete failed' } }) // compensation
-
-    const result = await createPayoutBatch(sb, COMPANY, USER, {
-      claim_ids: ['c1'],
-      payout_date: '2026-09-05',
-      cash_account: '1935',
-    })
-
-    expect(result).toMatchObject({ ok: false, code: 'BATCH_INSERT_FAILED' })
-    expect((result as { detail: string }).detail).toContain('could not be removed')
-  })
-
-  it('books one payout verifikat covering all claims and marks them paid', async () => {
-    enqueue({ data: [registeredClaim(), registeredClaim({ id: 'c2', amount_sek: 1601.77 })] })
-    enqueue({ data: { id: 'batch-1' } }) // batch insert
-    enqueue({ data: null }) // batch je update
-    enqueue({ data: null }) // claims mark paid
-
-    const result = await createPayoutBatch(sb, COMPANY, USER, {
-      claim_ids: ['c1', 'c2'],
-      payout_date: '2026-09-05',
-      cash_account: '1935',
-    })
-
-    expect(result).toMatchObject({ ok: true, total_sek: 2101.77, claim_count: 2 })
-    const input = createJournalEntryMock.mock.calls[0][3]
-    expect(input.source_type).toBe('expense_payout')
-    expect(input.lines).toEqual([
-      expect.objectContaining({ account_number: '2893', debit_amount: 2101.77 }),
-      expect.objectContaining({ account_number: '1935', credit_amount: 2101.77 }),
-    ])
-    const mark = findCall('expense_claims', 'update')
-    expect(mark?.[0]).toMatchObject({ status: 'paid', payout_batch_id: 'batch-1' })
-  })
-
-  it('refuses to mix claimants in one payout', async () => {
+  it('books the payout through the atomic RPC with deduplicated claim ids', async () => {
     enqueue({
-      data: [registeredClaim(), registeredClaim({ id: 'c2', employee_id: 'emp-1' })],
+      data: {
+        ok: true,
+        batch_id: 'batch-1',
+        journal_entry_id: 'je-2',
+        voucher_number: 7,
+        total_sek: '2101.77',
+        claim_count: 2,
+      },
     })
 
     const result = await createPayoutBatch(sb, COMPANY, USER, {
-      claim_ids: ['c1', 'c2'],
+      claim_ids: ['c1', 'c2', 'c1'],
       payout_date: '2026-09-05',
       cash_account: '1935',
+      notes: 'Septemberutlägg',
     })
-    expect(result).toEqual({ ok: false, code: 'MIXED_CLAIMANTS' })
+
+    expect(result).toEqual({
+      ok: true,
+      batch_id: 'batch-1',
+      journal_entry_id: 'je-2',
+      voucher_number: 7,
+      total_sek: 2101.77,
+      claim_count: 2,
+    })
+    expect(rpcCalls()).toHaveLength(1)
+    expect(rpcCalls()[0][0]).toBe('create_expense_payout_batch')
+    expect(rpcCalls()[0][1]).toEqual({
+      p_company_id: COMPANY,
+      p_claim_ids: ['c1', 'c2'],
+      p_payout_date: '2026-09-05',
+      p_cash_account: '1935',
+      p_notes: 'Septemberutlägg',
+      p_user_id: USER,
+    })
+    // No journal write happens outside the RPC.
     expect(createJournalEntryMock).not.toHaveBeenCalled()
+    expect(reverseEntryMock).not.toHaveBeenCalled()
   })
 
-  it('refuses claims that are already paid', async () => {
-    enqueue({ data: [registeredClaim({ status: 'paid' })] })
+  it('echoes a refusal code from the RPC (claims already paid by a concurrent request)', async () => {
+    enqueue({ data: { ok: false, code: 'ALREADY_PAID', details: { claim_id: 'c1' } } })
 
     const result = await createPayoutBatch(sb, COMPANY, USER, {
       claim_ids: ['c1'],
       payout_date: '2026-09-05',
       cash_account: '1935',
     })
-    expect(result).toEqual({ ok: false, code: 'ALREADY_PAID' })
+    expect(result).toEqual({ ok: false, code: 'ALREADY_PAID', detail: '{"claim_id":"c1"}' })
   })
 
-  it('removes the batch again when the booking throws', async () => {
-    enqueue({ data: [registeredClaim()] })
-    enqueue({ data: { id: 'batch-1' } }) // insert
-    enqueue({ data: null }) // delete (cleanup)
-    createJournalEntryMock.mockRejectedValue(new Error('period locked'))
+  it('maps an unknown refusal code to BATCH_INSERT_FAILED', async () => {
+    enqueue({ data: { ok: false, code: 'SOMETHING_NEW' } })
 
-    await expect(
-      createPayoutBatch(sb, COMPANY, USER, {
-        claim_ids: ['c1'],
-        payout_date: '2026-09-05',
-        cash_account: '1935',
-      }),
-    ).rejects.toThrow('period locked')
+    const result = await createPayoutBatch(sb, COMPANY, USER, {
+      claim_ids: ['c1'],
+      payout_date: '2026-09-05',
+      cash_account: '1935',
+    })
+    expect(result).toMatchObject({ ok: false, code: 'BATCH_INSERT_FAILED', detail: 'SOMETHING_NEW' })
+  })
 
-    expect(findCall('expense_payout_batches', 'delete')).toBeTruthy()
+  it('reports a database error (period lock trigger) as BATCH_INSERT_FAILED with the message', async () => {
+    enqueue({ data: null, error: { message: 'Perioden är låst', code: 'P0001' } })
+
+    const result = await createPayoutBatch(sb, COMPANY, USER, {
+      claim_ids: ['c1'],
+      payout_date: '2026-09-05',
+      cash_account: '1935',
+    })
+    expect(result).toEqual({ ok: false, code: 'BATCH_INSERT_FAILED', detail: 'Perioden är låst' })
   })
 })
 
