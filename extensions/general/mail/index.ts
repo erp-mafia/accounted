@@ -13,6 +13,7 @@ import {
 } from './lib/google-oauth'
 import { disconnect, listConnections, saveConnection } from './lib/connections'
 import { resolveCallbackOrigin } from './lib/callback-origin'
+import { isMailConnectEnabled } from './lib/connect-gate'
 import { requireFlowInitiator } from '@/lib/auth/oauth-flow-binding'
 
 // Registered as soon as the extension loads, so the receipt hunt can search
@@ -46,6 +47,8 @@ export const mailExtension: Extension = {
       handler: async (request, ctx) => {
         if (!ctx) return jsonError('Missing context', 500)
         if (!isGoogleMailConfigured()) return jsonError('provider_not_configured', 400)
+        // Withheld while Google's scope review is open; see connect-gate.ts.
+        if (!isMailConnectEnabled(ctx.companyId)) return jsonError('connect_disabled', 403)
         try {
           const url = new URL(request.url)
           const origin = resolveCallbackOrigin(url.origin)
@@ -138,7 +141,15 @@ export const mailExtension: Extension = {
       handler: async (_request, ctx) => {
         if (!ctx) return jsonError('Missing context', 500)
         const connections = await listConnections(createServiceClientNoCookies(), ctx.companyId)
-        return NextResponse.json({ data: { connections, configured: isGoogleMailConfigured() } })
+        return NextResponse.json({
+          data: {
+            connections,
+            configured: isGoogleMailConfigured(),
+            // Whether this company may start a NEW consent right now. Listing
+            // and disconnecting existing mailboxes never depend on it.
+            connectEnabled: isMailConnectEnabled(ctx.companyId),
+          },
+        })
       },
     },
 

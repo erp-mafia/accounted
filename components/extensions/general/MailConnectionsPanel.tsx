@@ -33,6 +33,9 @@ export function MailConnectionsPanel() {
   const t = useTranslations('mail')
   const [connections, setConnections] = useState<MailConnection[]>([])
   const [configured, setConfigured] = useState(true)
+  // False while Google's scope review keeps new consents withheld on hosted:
+  // the connect button is simply absent, existing mailboxes stay listed.
+  const [connectEnabled, setConnectEnabled] = useState(false)
   const [loading, setLoading] = useState(true)
   const [connecting, setConnecting] = useState(false)
   const [pendingDisconnect, setPendingDisconnect] = useState<MailConnection | null>(null)
@@ -45,10 +48,11 @@ export function MailConnectionsPanel() {
       const response = await fetch(`${BASE}/connections`)
       if (!response.ok) return
       const body = (await response.json()) as {
-        data: { connections: MailConnection[]; configured: boolean }
+        data: { connections: MailConnection[]; configured: boolean; connectEnabled?: boolean }
       }
       setConnections(body.data.connections)
       setConfigured(body.data.configured)
+      setConnectEnabled(body.data.connectEnabled === true)
     } finally {
       setLoading(false)
     }
@@ -179,19 +183,23 @@ export function MailConnectionsPanel() {
         </SettingsGroup>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <Button onClick={connect} disabled={connecting || !configured}>
-          {connecting ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <GoogleMark className="mr-2 h-4 w-4" />
-          )}
-          {t('connect')}
-        </Button>
-        {!configured ? <SettingsRowNote>{t('not_configured')}</SettingsRowNote> : null}
-      </div>
+      {connectEnabled ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button onClick={connect} disabled={connecting || !configured}>
+            {connecting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <GoogleMark className="mr-2 h-4 w-4" />
+            )}
+            {t('connect')}
+          </Button>
+          {!configured ? <SettingsRowNote>{t('not_configured')}</SettingsRowNote> : null}
+        </div>
+      ) : null}
 
-      <p className="max-w-[62ch] text-xs text-muted-foreground">{t('promise')}</p>
+      {connectEnabled || connections.length > 0 ? (
+        <p className="max-w-[62ch] text-xs text-muted-foreground">{t('promise')}</p>
+      ) : null}
 
       <ConfirmDialog
         open={pendingDisconnect !== null}

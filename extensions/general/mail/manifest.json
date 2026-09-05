@@ -4,7 +4,7 @@
   "exportName": "mailExtension",
   "entryPoint": "@/extensions/general/mail",
   "requiredEnvVars": ["GOOGLE_MAIL_CLIENT_ID", "GOOGLE_MAIL_CLIENT_SECRET"],
-  "optionalEnvVars": ["MAIL_TOKEN_ENCRYPTION_KEY"],
+  "optionalEnvVars": ["MAIL_TOKEN_ENCRYPTION_KEY", "GOOGLE_MAIL_CONNECT_COMPANY_IDS"],
   "npmDependencies": [],
   "definition": {
     "name": "Brevlådor",
