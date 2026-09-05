@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
@@ -74,6 +73,7 @@ import {
   type InboxKindFilter,
 } from '@/lib/documents/inbox-kind'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
+import RegisterExpenseDialog, { type ExpensePayer } from '@/components/extensions/general/RegisterExpenseDialog'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
 // InboxCustomDomainDialog (egen domän) is built but gated off: see
@@ -431,7 +431,6 @@ const WorkspaceSkeleton = InvoiceInboxSkeleton
 
 export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
-  const router = useRouter()
   const t = useTranslations('inbox_workspace')
   const tStart = useTranslations('start_cards')
   const dismissKeyCompanyId = useCompanyOptional()?.company?.id ?? null
@@ -494,6 +493,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [isRotating, setIsRotating] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [bookDirectOpen, setBookDirectOpen] = useState(false)
+  // "Vem betalade?" answered with a person: the utlägg confirm step.
+  const [registerExpensePayer, setRegisterExpensePayer] = useState<ExpensePayer | null>(null)
   // Bulk-book selected underlag (Modell B): the "Bokför valda" selection-bar
   // action. The dialog filters the selection to bookable items itself.
   const [bulkBookOpen, setBulkBookOpen] = useState(false)
@@ -2155,7 +2156,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               onDelete={() => handleDelete(selected.id)}
               onBookDirect={() => setBookDirectOpen(true)}
               onCreateSupplierInvoice={() => setCreateSupplierInvoiceOpen(true)}
-              onRegisterExpense={() => router.push(`/expenses?new=1&inbox_item=${selected.id}`)}
+              onRegisterExpense={(payer) => setRegisterExpensePayer(payer)}
               onMatchTransaction={() => setMatchPickerOpen(true)}
               onUnmatchTransaction={async () => {
                 const targetId = selected.id
@@ -2228,6 +2229,19 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         item={selected}
         docUrl={docUrl}
         docMime={docMime}
+        onSuccess={async () => {
+          await Promise.all([fetchItems(), handleSelect(selected.id)])
+        }}
+      />
+    )}
+    {selected && registerExpensePayer && (
+      <RegisterExpenseDialog
+        open
+        onOpenChange={(next) => {
+          if (!next) setRegisterExpensePayer(null)
+        }}
+        item={selected}
+        payer={registerExpensePayer}
         onSuccess={async () => {
           await Promise.all([fetchItems(), handleSelect(selected.id)])
         }}
@@ -3053,6 +3067,68 @@ function ProposedBooking({
   )
 }
 
+// ── Vem betalade? ────────────────────────────────────────────
+
+/**
+ * How an unmatched underlag gets booked, phrased as who paid for it.
+ * 'company' → match the bank line; 'unpaid' → supplier invoice (2440);
+ * 'owner' / 'employee' → utlägg against the person's liability account.
+ */
+export type PayerChoice = 'company' | 'unpaid' | ExpensePayer
+
+const PAYER_ORDER: PayerChoice[] = ['company', 'owner', 'employee', 'unpaid']
+
+export function PayerChoiceList({
+  value,
+  onChange,
+  accountingMethod,
+}: {
+  value: PayerChoice
+  onChange: (next: PayerChoice) => void
+  accountingMethod: AccountingMethod
+}) {
+  const t = useTranslations('inbox_workspace')
+  const helpKey = (choice: PayerChoice): string =>
+    choice === 'unpaid' && accountingMethod === 'cash' ? 'payer_help_unpaid_cash' : `payer_help_${choice}`
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[13px] font-medium">{t('payer_question')}</p>
+      <div role="radiogroup" aria-label={t('payer_question')} className="rounded-lg border border-border">
+        {PAYER_ORDER.map((choice) => {
+          const selected = choice === value
+          return (
+            <button
+              key={choice}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => onChange(choice)}
+              className={cn(
+                'flex w-full items-start gap-3 border-b border-border px-3 py-2.5 text-left transition-colors duration-150 last:border-b-0 hover:bg-secondary/30 first:rounded-t-lg last:rounded-b-lg',
+                selected && 'bg-secondary/40',
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border bg-background',
+                  selected ? 'border-primary' : 'border-input',
+                )}
+              >
+                {selected && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[13px]">{t(`payer_${choice}`)}</span>
+                <span className="block text-xs text-muted-foreground">{t(helpKey(choice))}</span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ── Fields rail ──────────────────────────────────────────────
 
 function FieldsRail({
@@ -3077,7 +3153,7 @@ function FieldsRail({
   onDelete: () => void
   onBookDirect: () => void
   onCreateSupplierInvoice: () => void
-  onRegisterExpense: () => void
+  onRegisterExpense: (payer: ExpensePayer) => void
   onMatchTransaction: () => void
   onUnmatchTransaction: () => Promise<void>
   onAskAssistant?: (transactionId: string) => void
@@ -3135,6 +3211,17 @@ function FieldsRail({
     setFieldsExpanded(false)
   }, [item.id])
   const t = useTranslations('inbox_workspace')
+  // "Vem betalade?": the one question that decides how an unmatched underlag
+  // is booked. Company money is matched against the bank line; a person's
+  // money books cost + moms against that person's liability account and puts
+  // them in Att göra; "ingen ännu" is an unpaid supplier invoice (2440). A
+  // supplier invoice defaults to unpaid, a receipt to paid by the company.
+  const [payer, setPayer] = useState<PayerChoice>(() =>
+    resolvedKind === 'supplier_invoice' ? 'unpaid' : 'company',
+  )
+  useEffect(() => {
+    setPayer(resolvedKind === 'supplier_invoice' ? 'unpaid' : 'company')
+  }, [item.id, resolvedKind])
 
   // WhatsApp chat context: verified human answers captured by the intake bot
   // (photo caption, representation deltagare + syfte, sender note). Rendered
@@ -3593,61 +3680,31 @@ function FieldsRail({
           </>
         ) : (
           <>
-            {/* Unmatched state: the canonical next step is to find the bank
-                transaction this underlag belongs to. Two escape hatches sit
-                below it: "Skapa leverantörsfaktura" for users who want
-                supplier-invoice tracking (accrual flow), and "Bokför som
-                verifikat" for underlag that aren't a supplier invoice at all
-                (bank fees, owner expenses, the underlag for a correction). The
-                latter opens the same BookDirectlyDialog as the matched state,
-                which works without a bank transaction and lets the user attach
-                one if they want. Per BFL 5 kap 6-7 § the underlag must be
-                bookable as a verifikat, not forced into a supplier invoice. */}
-            <Button
-              variant="default"
-              size="sm"
-              className="w-full"
-              onClick={onMatchTransaction}
+            {/* Unmatched state: one question decides the booking path. Every
+                answer keeps BFL 5 kap 6-7 § intact (the underlag is booked
+                as a verifikat, never forced into a supplier invoice), and the
+                verifikat editor stays reachable below as the escape hatch. */}
+            <PayerChoiceList value={payer} onChange={setPayer} accountingMethod={accountingMethod} />
+            {payer === 'company' ? (
+              <Button variant="default" size="sm" className="w-full" onClick={onMatchTransaction}>
+                Matcha mot transaktion
+              </Button>
+            ) : payer === 'unpaid' ? (
+              <Button variant="default" size="sm" className="w-full" onClick={onCreateSupplierInvoice}>
+                Skapa leverantörsfaktura
+              </Button>
+            ) : (
+              <Button variant="default" size="sm" className="w-full" onClick={() => onRegisterExpense(payer)}>
+                {t('payer_book_expense')}
+              </Button>
+            )}
+            <button
+              type="button"
+              onClick={onBookDirect}
+              className="w-full text-xs text-muted-foreground hover:text-foreground hover:underline pt-1"
             >
-              Matcha mot transaktion
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="w-full justify-between">
-                  Andra sätt att bokföra
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-64">
-                <DropdownMenuItem
-                  onClick={onCreateSupplierInvoice}
-                  className="flex flex-col items-start gap-1"
-                >
-                  <span>Skapa leverantörsfaktura</span>
-                  <span className="text-xs text-muted-foreground">
-                    För leverantörsskulder du vill följa (periodisering).
-                  </span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={onRegisterExpense}
-                  className="flex flex-col items-start gap-1"
-                >
-                  <span>Registrera som utlägg</span>
-                  <span className="text-xs text-muted-foreground">
-                    För köp du eller en anställd betalat privat.
-                  </span>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={onBookDirect}
-                  className="flex flex-col items-start gap-1"
-                >
-                  <span>Bokför som verifikat</span>
-                  <span className="text-xs text-muted-foreground">
-                    För underlag som inte är en leverantörsfaktura (bankavgift, utlägg).
-                  </span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+              {t('payer_open_editor')}
+            </button>
           </>
         )}
         <Button

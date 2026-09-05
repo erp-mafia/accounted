@@ -4,7 +4,7 @@ import {
   fetchUnlinkedDocuments,
   UNLINKED_DOCUMENT_SCAN_CAP,
 } from '@/lib/documents/unlinked-documents'
-import { countReconciliationDue } from '@/lib/worklist/categories'
+import { countReconciliationDue, listExpensePayoutsDue } from '@/lib/worklist/categories'
 import { fetchJunctionLinkedTxIds } from '@/lib/reconciliation/bank-reconciliation'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
@@ -415,6 +415,31 @@ export const attentionResource: McpResource = {
           description:
             'Läs Accounted://reconciliation/summary för bryggan per konto; koppla föreslagna par, bokför det som saknas och signera med gnubok_reconcile_signoff när oförklarat är 0.',
           resource: 'Accounted://reconciliation/summary',
+        },
+      })
+    }
+
+    // ── People owed for unpaid utlägg ───────────────────────────────
+    // Same predicate as the Att göra Betala band (lib/worklist
+    // listExpensePayoutsDue): one item per person, not per receipt.
+    const expensePayouts = await listExpensePayoutsDue(supabase, companyId)
+    if (expensePayouts.length > 0) {
+      categories.push({
+        key: 'expense_payout',
+        label_sv: 'Personer med utlägg att betala ut',
+        severity: 'info',
+        count: expensePayouts.length,
+        samples: expensePayouts.slice(0, SAMPLE_LIMIT).map((p) => ({
+          claimant_name: p.claimant_name,
+          employee_id: p.employee_id,
+          liability_account: p.liability_account,
+          claim_count: p.claim_count,
+          total_sek: p.total_sek,
+          oldest_expense_date: p.oldest_expense_date,
+        })),
+        next: {
+          description:
+            'Betala ut från företagskontot och bokför utbetalningen (2893/2820 D mot 19xx K) via /expenses eller POST /api/expense-claims/payouts.',
         },
       })
     }

@@ -3,7 +3,12 @@ import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import ResumePane from '@/components/dashboard/ResumePane'
 import { HemNotices } from '@/components/dashboard/HemNotices'
-import { getWorklistCounts, listSuggestedMatches, SUGGESTED_MATCH_SCAN_CAP } from '@/lib/worklist'
+import {
+  getWorklistCounts,
+  listExpensePayoutsDue,
+  listSuggestedMatches,
+  SUGGESTED_MATCH_SCAN_CAP,
+} from '@/lib/worklist'
 import { listResumeItems } from '@/lib/worklist/resume'
 import { getCompanyNotices } from '@/lib/notices'
 import { expiringBankConnectionsFrom } from '@/lib/notices/categories'
@@ -191,12 +196,19 @@ export async function HemPanesSection({
   // the worklist count is the list's length (it used to scan the same rows
   // twice). Everything else runs in the same wave.
   const suggestedMatchesPromise = listSuggestedMatches(supabase, companyId, SUGGESTED_MATCH_SCAN_CAP)
-  const [worklist, suggestedMatches, resumeItems, bankConnectionsRes, postedEntries] =
+  // Same pattern for people owed for utlägg: Hem renders one row per person
+  // and the worklist count is the list's length.
+  const expensePayoutsPromise = listExpensePayoutsDue(supabase, companyId)
+  const [worklist, suggestedMatches, expensePayouts, resumeItems, bankConnectionsRes, postedEntries] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
       // sidebar badges, so the numbers can never diverge.
-      getWorklistCounts(supabase, companyId, { suggestedMatches: suggestedMatchesPromise }),
+      getWorklistCounts(supabase, companyId, {
+        suggestedMatches: suggestedMatchesPromise,
+        expensePayoutsDue: expensePayoutsPromise,
+      }),
       suggestedMatchesPromise,
+      expensePayoutsPromise,
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
@@ -229,6 +241,7 @@ export async function HemPanesSection({
       <AttGoraSection
         worklist={worklist}
         suggestedMatches={suggestedMatches.slice(0, 5)}
+        expensePayouts={expensePayouts}
         expiringBankConnections={expiringBankConnections}
         emptyLedger={emptyLedger}
         hasActiveBankConnection={hasActiveBankConnection}
