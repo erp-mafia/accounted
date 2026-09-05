@@ -5,6 +5,8 @@
  * accounting data exchange between systems).
  */
 
+import type { ChartPlan } from './chart-plan'
+
 // SIE file types
 export type SIEType = 1 | 2 | 3 | 4
 
@@ -303,6 +305,13 @@ export interface ImportResult {
   journalEntriesCreated: number
   journalEntryIds: string[]
 
+  // Accounts the import itself inserted into chart_of_accounts (the mapped
+  // target accounts that did not exist yet). Accounts created from the
+  // preview's "Skapa saknade konton" button are not counted: they exist
+  // before the import runs. Optional: results produced before this field
+  // existed lack it.
+  accountsCreated?: number
+
   // Issues
   errors: string[]
   warnings: string[]
@@ -384,9 +393,54 @@ export interface ImportPreview {
   // before this field existed lack it; consumers must treat absence as [].
   voucherSeriesInFile?: string[]
 
+  // What the import does to the company's chart of accounts: the file's
+  // accounts are added unconditionally (a chart follows the company across
+  // fiscal years), so the preview must say how many are new to THIS company
+  // rather than how many matched the BAS reference. Counted per distinct
+  // mapped target account (planChartChanges in chart-plan.ts). Optional:
+  // previews built before this field existed lack it.
+  chart?: ChartPlan
+
+  // How the file's räkenskapsår relates to the company's existing fiscal
+  // periods, from the same precheck the import runs (precheckFiscalPeriod).
+  // Absent when the file carries no #RAR 0 dates.
+  fiscalYear?: FiscalYearPrecheck
+
   // Issues to review
   issues: ParseIssue[]
 }
+
+/**
+ * Verdict from precheckFiscalPeriod: how the SIE file's fiscal year relates
+ * to the company's existing fiscal periods.
+ */
+export type FiscalYearPrecheck =
+  | {
+      // A period already contains the file's date range; it is reused.
+      verdict: 'match'
+      periodId: string
+    }
+  | {
+      // No period covers the range; the import creates one. When an empty
+      // onboarding-seeded period overlaps it, that period is replaced.
+      verdict: 'create'
+      replacesEmptyPeriodId: string | null
+    }
+  | {
+      // An overlapping period carries real content; the import will refuse.
+      verdict: 'conflict'
+      existingPeriod: { id: string; name: string; periodStart: string; periodEnd: string }
+      // The Swedish refusal text the import raises, verbatim.
+      message: string
+    }
+  | {
+      // The file's own #RAR dates break a BFL 3 kap. shape rule (over 18
+      // months, mid-month start on a non-first year, or an end that is not
+      // the last day of its month); the import will refuse.
+      verdict: 'invalid'
+      // The Swedish refusal text the import raises, verbatim.
+      message: string
+    }
 
 /**
  * Structured systemdokumentation per BFNAR 2013:2 Chapter 9.

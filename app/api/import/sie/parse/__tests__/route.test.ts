@@ -15,7 +15,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import type { ParseIssue } from '@/lib/import/types'
+import type { ImportPreview, ParseIssue } from '@/lib/import/types'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
@@ -85,6 +85,7 @@ type ParseResponse = {
   success: boolean
   parsed: { issues: ParseIssue[] }
   validation: { valid: boolean; warnings: string[] }
+  preview: Pick<ImportPreview, 'chart' | 'fiscalYear' | 'mappingStatus'>
 }
 
 describe('POST /api/import/sie/parse', () => {
@@ -144,5 +145,76 @@ describe('POST /api/import/sie/parse', () => {
     expect(body.success).toBe(true)
     expect(body.parsed.issues.some((i) => i.message.includes('felaktigt teckenkodad'))).toBe(false)
     expect(body.validation.warnings.some((w) => w.includes('felaktigt teckenkodad'))).toBe(false)
+  })
+
+  // Queue order after the stored-mappings select from beforeEach:
+  //   chart_of_accounts page (fetchAllRows), fiscal_periods containing,
+  //   fiscal_periods overlapping, journal_entries (only when replaceable).
+  describe('chart and fiscal-year preview blocks', () => {
+    const seededPeriod = {
+      id: 'seeded-2024',
+      period_start: '2024-01-01',
+      period_end: '2024-12-31',
+      name: 'Räkenskapsår 2024',
+      is_closed: false,
+      locked_at: null,
+      opening_balances_set: false,
+    }
+
+    it('counts the file accounts against the company chart, not the BAS reference', async () => {
+      enqueue({ data: [{ account_number: '1930' }] }) // company chart: 1930 only
+      enqueue({ data: { id: 'p-2024' } }) // containing period
+
+      const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
+      const body = (await response.json()) as ParseResponse
+
+      expect(response.status).toBe(200)
+      // Both file accounts map to BAS, so the reference-based stats say 2 mapped
+      // while only one is new to this company.
+      expect(body.preview.mappingStatus.mapped).toBe(2)
+      expect(body.preview.chart).toEqual({
+        toCreate: 1,
+        existing: 1,
+        sample: [{ number: '4056', name: expect.any(String) }],
+      })
+    })
+
+    it('reports match when a fiscal period already contains the file year', async () => {
+      enqueue({ data: [] })
+      enqueue({ data: { id: 'p-2024' } })
+
+      const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
+      const body = (await response.json()) as ParseResponse
+
+      expect(body.preview.fiscalYear).toEqual({ verdict: 'match', periodId: 'p-2024' })
+    })
+
+    it('reports create when no period overlaps the file year', async () => {
+      enqueue({ data: [] })
+      enqueue({ data: null })
+      enqueue({ data: [] })
+
+      const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
+      const body = (await response.json()) as ParseResponse
+
+      expect(body.preview.fiscalYear).toEqual({ verdict: 'create', replacesEmptyPeriodId: null })
+    })
+
+    it('reports the conflict at preview that the import would otherwise refuse', async () => {
+      enqueue({ data: [] })
+      enqueue({ data: null })
+      enqueue({ data: [{ ...seededPeriod, period_start: '2023-07-01', period_end: '2024-06-30' }] })
+      enqueue({ data: [{ id: 'entry-1' }] }) // the overlapping period has entries
+
+      const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
+      const body = (await response.json()) as ParseResponse
+
+      expect(response.status).toBe(200)
+      expect(body.preview.fiscalYear?.verdict).toBe('conflict')
+      if (body.preview.fiscalYear?.verdict !== 'conflict') return
+      expect(body.preview.fiscalYear.existingPeriod.id).toBe('seeded-2024')
+      expect(body.preview.fiscalYear.message).toMatch(/2024-01-01 till 2024-12-31/)
+      expect(body.preview.fiscalYear.message).toMatch(/Inställningar → Företag/)
+    })
   })
 })

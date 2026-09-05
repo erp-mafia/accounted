@@ -256,7 +256,7 @@ export default function ImportResultStep({
 
       {/* Statistics */}
       {result.success && !showReveal && (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           <Card>
             <CardContent className="pt-6">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
@@ -264,6 +264,15 @@ export default function ImportResultStep({
                 <span className="text-sm">Verifikationer skapade</span>
               </div>
               <p className="text-2xl font-display tabular-nums">{result.journalEntriesCreated}</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-2 text-muted-foreground mb-1">
+                <span className="text-sm">{t('result_accounts_created')}</span>
+              </div>
+              <p className="text-2xl font-display tabular-nums">{result.accountsCreated ?? 0}</p>
             </CardContent>
           </Card>
 

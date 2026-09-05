@@ -219,4 +219,32 @@ describe('executeSIEImport: account name sync wiring', () => {
 
     expect(result.warnings.join(' ')).not.toMatch(/bytte namn/)
   })
+
+  it('reports the number of accounts the sync inserted', async () => {
+    mockSync.mockResolvedValue({
+      created: 109,
+      renamed: 0,
+      renamedAccounts: [],
+      renameFailed: 0,
+      error: null,
+    })
+
+    const result = await runImport()
+
+    expect(result.accountsCreated).toBe(109)
+  })
+
+  it('leaves accountsCreated unset when the create pass fails', async () => {
+    mockSync.mockResolvedValue({
+      created: 3,
+      renamed: 0,
+      renamedAccounts: [],
+      renameFailed: 0,
+      error: 'permission denied',
+    })
+
+    const result = await runImport()
+
+    expect(result.accountsCreated).toBeUndefined()
+  })
 })

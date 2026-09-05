@@ -1018,6 +1018,13 @@ function SIEImportWizard({
             mapped: newMapped,
             unmapped: Math.max(0, prev.mappingStatus.unmapped - createdSet.size),
           },
+          // The accounts just created now exist in the chart and are mapped
+          // to themselves: they move from "Ej mappade" to "Finns redan". They
+          // were never in "Läggs till" (planChartChanges counts mapped targets
+          // only), so that count and its sample stay as they are.
+          chart: prev.chart
+            ? { ...prev.chart, existing: prev.chart.existing + createdSet.size }
+            : prev.chart,
         }
       })
     } catch (err) {
