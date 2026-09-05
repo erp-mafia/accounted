@@ -301,6 +301,7 @@ export default async function DashboardLayout({
   ])
   const hasWebshop = navFlags.hasWebshop
   const hasMileageTrips = navFlags.hasMileageTrips
+  const hasExpenseClaims = navFlags.hasExpenseClaims
 
   const canonicalDomain = (() => {
     try {
@@ -591,6 +592,7 @@ export default async function DashboardLayout({
             salesOrdersEnabled={salesOrdersEnabled}
             hasWebshop={hasWebshop}
             hasMileage={hasMileage}
+            hasExpenseClaims={hasExpenseClaims}
             isSandbox={isSandbox}
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}

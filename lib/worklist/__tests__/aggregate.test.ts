@@ -12,6 +12,7 @@ vi.mock('../categories', () => ({
   countDeadlinesNeedingAction: vi.fn().mockResolvedValue(1),
   countPendingOperations: vi.fn().mockResolvedValue(2),
   countReconciliationDue: vi.fn().mockResolvedValue(1),
+  countExpensePayoutsDue: vi.fn().mockResolvedValue(2),
 }))
 
 import { getWorklistCounts } from '../aggregate'
@@ -36,6 +37,7 @@ describe('getWorklistCounts', () => {
       deadline_action: 1,
       pending_operations: 2,
       reconciliation_due: 1,
+      expense_payout: 2,
     })
   })
 
@@ -49,9 +51,20 @@ describe('getWorklistCounts', () => {
     expect(countSuggestedMatches).not.toHaveBeenCalled()
   })
 
+  it('takes the expense-payout count from a caller-supplied list instead of rescanning', async () => {
+    const { countExpensePayoutsDue } = await import('../categories')
+    const people = [{ key: 'owner:Anna' }, { key: 'emp-1' }, { key: 'emp-2' }] as never[]
+    const { counts } = await getWorklistCounts(supabase, 'company-1', {
+      expensePayoutsDue: Promise.resolve(people),
+    })
+    expect(counts.expense_payout).toBe(3)
+    expect(countExpensePayoutsDue).not.toHaveBeenCalled()
+  })
+
   it('excludes suggested_match from the total (subset of book_transaction)', async () => {
     const { total } = await getWorklistCounts(supabase, 'company-1')
-    // 4 + 7 + 6 + 1 + 3 + 5 + 1 + 2 + 1, without the 2 suggested matches.
-    expect(total).toBe(30)
+    // 4 + 7 + 6 + 1 + 3 + 5 + 1 + 2 + 1 + 2 (people owed for utlägg), without
+    // the 2 suggested matches.
+    expect(total).toBe(32)
   })
 })

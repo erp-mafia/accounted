@@ -5,6 +5,13 @@ export interface DashboardNavFlags {
   hasWebshop: boolean
   /** Existing mileage trips (created via UI, API or MCP). */
   hasMileageTrips: boolean
+  /**
+   * Existing expense claims (utlägg). Gates the Utlägg nav row the same way
+   * trips gate Körjournal: the entry point for a new utlägg is the Underlag
+   * pane ("Vem betalade?"), so the page only earns a rail row once there is
+   * something on it (a person to pay out).
+   */
+  hasExpenseClaims: boolean
 }
 
 const FALLBACK_CODES = new Set(['PGRST202', '42883', '42501'])
@@ -24,7 +31,13 @@ export async function getDashboardNavFlags(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<DashboardNavFlags> {
-  const rpc = await supabase.rpc('get_dashboard_nav_flags', { p_company_id: companyId })
+  // The expense probe runs beside the RPC rather than inside it: extending
+  // get_dashboard_nav_flags would need a migration for one limit-1 read, and
+  // the two waves overlap so the layout pays no extra round trip.
+  const [rpc, expenseClaims] = await Promise.all([
+    supabase.rpc('get_dashboard_nav_flags', { p_company_id: companyId }),
+    probeExpenseClaims(supabase, companyId),
+  ])
   if (!rpc.error) {
     const row = (Array.isArray(rpc.data) ? rpc.data[0] : rpc.data) as
       | { has_webshop?: boolean | null; has_mileage_trips?: boolean | null }
@@ -33,19 +46,30 @@ export async function getDashboardNavFlags(
     return {
       hasWebshop: row?.has_webshop === true,
       hasMileageTrips: row?.has_mileage_trips === true,
+      hasExpenseClaims: expenseClaims,
     }
   }
   if (!FALLBACK_CODES.has(rpc.error.code ?? '')) {
-    return { hasWebshop: false, hasMileageTrips: false }
+    return { hasWebshop: false, hasMileageTrips: false, hasExpenseClaims: expenseClaims }
   }
-  return getDashboardNavFlagsViaProbes(supabase, companyId)
+  return { ...(await getDashboardNavFlagsViaProbes(supabase, companyId)), hasExpenseClaims: expenseClaims }
+}
+
+async function probeExpenseClaims(supabase: SupabaseClient, companyId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('expense_claims')
+    .select('id')
+    .eq('company_id', companyId)
+    .limit(1)
+  // A failed probe hides the row; the page and API work regardless.
+  return !error && (data?.length ?? 0) > 0
 }
 
 /** The pre-RPC implementation, kept verbatim as the fallback. */
 export async function getDashboardNavFlagsViaProbes(
   supabase: SupabaseClient,
   companyId: string,
-): Promise<DashboardNavFlags> {
+): Promise<Omit<DashboardNavFlags, 'hasExpenseClaims'>> {
   const [woo, shopify, orders, trips] = await Promise.all([
     supabase.from('woocommerce_connections').select('id').eq('company_id', companyId).eq('status', 'active').limit(1),
     supabase.from('shopify_connections').select('id').eq('company_id', companyId).eq('status', 'active').limit(1),

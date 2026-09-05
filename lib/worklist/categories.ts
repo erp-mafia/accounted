@@ -11,11 +11,12 @@
 import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/invoices/matchable-statuses'
-import type { SuggestedMatch } from './types'
+import type { ExpensePayoutDue, SuggestedMatch } from './types'
 
 // Canonical home is lib/worklist/types.ts (dependency-free, client-safe);
 // re-exported here so existing server-side imports keep working.
@@ -561,4 +562,75 @@ export async function countReconciliationDue(
   if ((skvCount ?? 0) > 0) keys.push('skattekonto')
 
   return keys.filter((k) => !coveredKeys.has(k)).length
+}
+
+/**
+ * Upper bound on registered-claim rows scanned per company. Claims are
+ * marked paid in batches, so a backlog beyond this is pathological; the
+ * list clamps rather than paginating on every home render.
+ */
+export const EXPENSE_PAYOUT_SCAN_CAP = 500
+
+/**
+ * People owed for registered, unpaid utlägg, newest debt last. The canonical
+ * "att betala ut" predicate: expense_claims.status = 'registered'. Grouped
+ * here (not in SQL) because the owner has no employee row: two owner claims
+ * with the same claimant_name are one person, one transfer.
+ */
+export async function listExpensePayoutsDue(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<ExpensePayoutDue[]> {
+  const { data, error } = await supabase
+    .from('expense_claims')
+    .select('employee_id, claimant_name, liability_account, amount_sek, expense_date')
+    .eq('company_id', companyId)
+    .eq('status', 'registered')
+    .order('expense_date', { ascending: true })
+    .limit(EXPENSE_PAYOUT_SCAN_CAP)
+  if (error) {
+    logAndZero('expense_payout', companyId, error)
+    return []
+  }
+  const byPerson = new Map<string, ExpensePayoutDue>()
+  for (const row of (data ?? []) as Array<{
+    employee_id: string | null
+    claimant_name: string
+    liability_account: string
+    amount_sek: number | string
+    expense_date: string
+  }>) {
+    const key = row.employee_id ?? `owner:${row.claimant_name}`
+    const amount = Number(row.amount_sek) || 0
+    const existing = byPerson.get(key)
+    if (existing) {
+      existing.claim_count += 1
+      existing.total_sek = roundOre(existing.total_sek + amount)
+      if (row.expense_date < existing.oldest_expense_date) {
+        existing.oldest_expense_date = row.expense_date
+      }
+    } else {
+      byPerson.set(key, {
+        key,
+        employee_id: row.employee_id,
+        claimant_name: row.claimant_name,
+        liability_account: row.liability_account,
+        claim_count: 1,
+        total_sek: roundOre(amount),
+        oldest_expense_date: row.expense_date,
+      })
+    }
+  }
+  // Oldest debt first: the person who has waited longest tops the list.
+  return [...byPerson.values()].sort((a, b) =>
+    a.oldest_expense_date < b.oldest_expense_date ? -1 : a.oldest_expense_date > b.oldest_expense_date ? 1 : 0,
+  )
+}
+
+/** Number of people owed for unpaid utlägg (see listExpensePayoutsDue). */
+export async function countExpensePayoutsDue(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<number> {
+  return (await listExpensePayoutsDue(supabase, companyId)).length
 }

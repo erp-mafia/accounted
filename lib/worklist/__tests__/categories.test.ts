@@ -12,6 +12,7 @@ import {
   countUnbookedSkattekontoRows,
   countUnbookedTransactions,
   countVerifikatMissingDocument,
+  listExpensePayoutsDue,
   listSuggestedMatches,
 } from '../categories'
 import {
@@ -537,5 +538,48 @@ describe('countReconciliationDue', () => {
   it('soft-fails to 0 on a query error', async () => {
     enqueue({ error: { message: 'boom' } })
     await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(0)
+  })
+})
+
+describe('listExpensePayoutsDue', () => {
+  it('groups registered claims into one item per person, oldest debt first', async () => {
+    enqueue({
+      data: [
+        { employee_id: null, claimant_name: 'Jakob', liability_account: '2893', amount_sek: '1240.00', expense_date: '2026-09-03' },
+        { employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 1196, expense_date: '2026-09-02' },
+        { employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 400, expense_date: '2026-09-06' },
+        // Same owner name twice: one person, one transfer.
+        { employee_id: null, claimant_name: 'Jakob', liability_account: '2893', amount_sek: 0.1, expense_date: '2026-09-07' },
+      ],
+    })
+    const people = await listExpensePayoutsDue(supabase, COMPANY)
+    expect(mockSupabase.from).toHaveBeenCalledWith('expense_claims')
+    expect(findCalls('expense_claims', 'eq')).toContainEqual(['status', 'registered'])
+    expect(people).toEqual([
+      {
+        key: 'emp-1',
+        employee_id: 'emp-1',
+        claimant_name: 'Anna Berg',
+        liability_account: '2820',
+        claim_count: 2,
+        total_sek: 1596,
+        oldest_expense_date: '2026-09-02',
+      },
+      {
+        key: 'owner:Jakob',
+        employee_id: null,
+        claimant_name: 'Jakob',
+        liability_account: '2893',
+        claim_count: 2,
+        // 1240 + 0.1 in öre-safe arithmetic, never 1240.1000000000001.
+        total_sek: 1240.1,
+        oldest_expense_date: '2026-09-03',
+      },
+    ])
+  })
+
+  it('soft-fails to an empty list on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(listExpensePayoutsDue(supabase, COMPANY)).resolves.toEqual([])
   })
 })

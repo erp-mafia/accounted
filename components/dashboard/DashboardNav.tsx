@@ -102,6 +102,10 @@ interface DashboardNavProps {
   // toggle OR existing mileage_trips rows (trips created via API/MCP must
   // stay reachable). Computed by the dashboard layout.
   hasMileage?: boolean
+  // Whether the Utlägg row shows: existing expense_claims rows. New utlägg
+  // start from the Underlag pane ("Vem betalade?"), so the page only earns a
+  // rail row once there is a person to pay out. Computed by the layout.
+  hasExpenseClaims?: boolean
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
   // Signed-in user's full name + email: drives the bottom-left account
@@ -203,6 +207,9 @@ interface NavItem {
   // bookkeeping settings toggle (company_settings.mileage_enabled) or already
   // has trips. UI-visibility gate only; the page and APIs work regardless.
   requiresMileage?: boolean
+  // Utlägg row: visible only when the company already has expense claims
+  // (same "data stays reachable" gate as Körjournal). UI-visibility only.
+  requiresExpenses?: boolean
   // Paywall surfaces: hidden unless the active company holds this paid
   // capability. Cosmetic only, the page and API gates are the real
   // enforcement; this just keeps the sidebar honest for non-payers.
@@ -246,10 +253,12 @@ const navItems: NavItem[] = [
   // must still reach its already-imported orders (accounting underlag).
   { href: '/orders', labelKey: 'webshop_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true, betaBadge: true },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
-  // Utlägg: out-of-pocket purchases and their reimbursement batches. The
+  // Utlägg: out-of-pocket purchases and their reimbursement batches. Hidden
+  // until a claim exists: a receipt paid privately is registered from the
+  // Underlag pane, and the person to pay out surfaces in Att göra. The
   // /expenses route previously redirected to supplier invoices; the nav key
   // has existed in the nav namespace since then.
-  { href: '/expenses', labelKey: 'expenses', icon: Receipt, group: 'arbeta' },
+  { href: '/expenses', labelKey: 'expenses', icon: Receipt, group: 'arbeta', requiresExpenses: true },
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
   // Körjournal: hidden by default (most companies have no car); shows when
   // the settings toggle is on or trips already exist (hybrid gate, same
@@ -347,7 +356,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, hasWebshop = false, hasMileage = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -608,6 +617,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // Körjournal is hidden until the company opts in via the bookkeeping
     // settings toggle (or trips already exist, e.g. created via MCP).
     if (item.requiresMileage && !hasMileage) return false
+    // Utlägg is hidden until a claim exists (registered from Underlag).
+    if (item.requiresExpenses && !hasExpenseClaims) return false
     // Paywalled surfaces (e.g. the AI-only Dokumentinkorg) are hidden unless
     // the active company holds the capability. The page + API gates enforce
     // the paywall; this keeps the sidebar from advertising a dead workspace.

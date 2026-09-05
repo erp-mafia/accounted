@@ -23,22 +23,49 @@ function makeSupabase(
 }
 
 describe('getDashboardNavFlags', () => {
-  it('reads both flags from the RPC row and never touches the tables', async () => {
+  it('reads both flags from the RPC row and only probes expense_claims beside it', async () => {
     const { supabase, from, rpc } = makeSupabase({ data: [{ has_webshop: true, has_mileage_trips: false }] })
-    expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({ hasWebshop: true, hasMileageTrips: false })
+    expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({
+      hasWebshop: true,
+      hasMileageTrips: false,
+      hasExpenseClaims: false,
+    })
     expect(rpc).toHaveBeenCalledWith('get_dashboard_nav_flags', { p_company_id: 'c1' })
-    expect(from).not.toHaveBeenCalled()
+    // The Utlägg row is gated on existing claims (not part of the RPC): one
+    // limit-1 probe in the same wave, never the webshop/mileage tables.
+    expect(from.mock.calls.map((c) => c[0])).toEqual(['expense_claims'])
   })
 
   it('accepts a single-object payload and treats null flags as false', async () => {
     const { supabase } = makeSupabase({ data: { has_webshop: null, has_mileage_trips: true } })
-    expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({ hasWebshop: false, hasMileageTrips: true })
+    expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({
+      hasWebshop: false,
+      hasMileageTrips: true,
+      hasExpenseClaims: false,
+    })
+  })
+
+  it('shows the Utlägg row once a claim exists', async () => {
+    const { supabase } = makeSupabase(
+      { data: [{ has_webshop: false, has_mileage_trips: false }] },
+      { expense_claims: [{ id: 'ec1' }] },
+    )
+    expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({
+      hasWebshop: false,
+      hasMileageTrips: false,
+      hasExpenseClaims: true,
+    })
   })
 
   it.each(['PGRST202', '42883', '42501'])('falls back to the four probes when the RPC is unavailable (%s)', async (code) => {
     const { supabase, from } = makeSupabase({ error: { code } }, { webshop_orders: [{ id: 'o1' }] })
-    expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({ hasWebshop: true, hasMileageTrips: false })
+    expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({
+      hasWebshop: true,
+      hasMileageTrips: false,
+      hasExpenseClaims: false,
+    })
     expect(from.mock.calls.map((c) => c[0]).sort()).toEqual([
+      'expense_claims',
       'mileage_trips',
       'shopify_connections',
       'webshop_orders',
@@ -48,7 +75,11 @@ describe('getDashboardNavFlags', () => {
 
   it('degrades to hidden rows on any other error instead of probing', async () => {
     const { supabase, from } = makeSupabase({ error: { code: '57014', message: 'timeout' } })
-    expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({ hasWebshop: false, hasMileageTrips: false })
-    expect(from).not.toHaveBeenCalled()
+    expect(await getDashboardNavFlags(supabase, 'c1')).toEqual({
+      hasWebshop: false,
+      hasMileageTrips: false,
+      hasExpenseClaims: false,
+    })
+    expect(from.mock.calls.map((c) => c[0])).toEqual(['expense_claims'])
   })
 })
