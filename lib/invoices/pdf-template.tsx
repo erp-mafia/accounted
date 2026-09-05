@@ -22,6 +22,7 @@ import { getAmountToPay } from '@/lib/invoices/rounding'
 import { isTextLikeLine } from '@/lib/invoices/display'
 import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
 import { getCountryName } from '@/lib/vat/country-codes'
+import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
 
 type PdfLang = 'sv' | 'en'
 
@@ -102,6 +103,7 @@ const LABELS = {
     proformaNotice: 'Detta är en proformafaktura och utgör ingen betalningsanmodan.',
     quoteNotice: 'Detta är en offert och utgör ingen faktura eller betalningsanmodan.',
     exemptNotice: 'Undantag från skatteplikt, ML 3 kap.',
+    exportNotice: EXPORT_NOTICE_SV,
     notVatRegisteredNotice: 'Företaget är inte momsregistrerat. Mervärdesskatt redovisas ej.',
     // Payment
     paymentHeading: 'Betalningsinformation',
@@ -189,6 +191,7 @@ const LABELS = {
     proformaNotice: 'This is a proforma invoice and is not a request for payment.',
     quoteNotice: 'This is a quote and is not an invoice or a request for payment.',
     exemptNotice: 'Exempt from VAT (ML 3 kap., Swedish VAT Act).',
+    exportNotice: 'Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).',
     notVatRegisteredNotice: 'The seller is not VAT-registered. No VAT is charged on this invoice.',
     paymentHeading: 'Payment information',
     bank: 'Bank:',
@@ -210,16 +213,28 @@ const LABELS = {
     paymentLinkQrCaption: 'Scan to pay online',
     orgNoLong: 'Reg. no.:',
     vatRegNo: 'VAT reg. no.:',
-    // Statutory Swedish phrase: kept verbatim in both locales. Peppol SE-R-005
-    // and Skatteverket's F-skatt notation expect "Godkänd för F-skatt"; an
-    // English translation has no legal standing.
-    fSkatt: 'Godkänd för F-skatt',
+    // SFL 10 kap. 12 § requires the approval to be stated on the invoice but
+    // prescribes no language. Skatteverket's own English term is "approved
+    // for F-tax"; the Swedish phrase stays in parentheses so the statutory
+    // wording is still on the document. Peppol SE-R-005 is satisfied by the
+    // UBL file (peppol-bis-billing.ts), which is unaffected by PDF language.
+    fSkatt: 'Approved for F-tax (Godkänd för F-skatt)',
   },
 } as const
 
 // Swish on invoices (the number row + the payment QR). When true, the Swish row
 // and QR render on the invoice PDF and the settings "Visa Swish" toggle is live.
 export const SHOW_SWISH_ON_INVOICE = true
+
+// reverse_charge_text is stamped in Swedish at create time and stored on the
+// invoice, so an English PDF of an existing export invoice would otherwise
+// print "Omsättning utanför EU, ML 10 kap." verbatim. Known statutory defaults
+// are rendered from LABELS in the document language; any other text (custom
+// or unknown) is printed exactly as stored.
+export function localizeVatNotice(text: string, lang: PdfLang): string {
+  if (text === EXPORT_NOTICE_SV) return LABELS[lang].exportNotice
+  return text
+}
 
 // Labor-only disclaimer for the ROT/RUT block. Kept Swedish-only in both
 // locales: references Skatteverket's fakturamodell directly, which is a
@@ -476,27 +491,21 @@ function createStyles(branding?: InvoiceBranding) {
     paymentValue: {
       flex: 1,
     },
-    reverseChargeBox: {
-      marginTop: 20,
+    // One shape for every notice below the totals (proforma / quote notice,
+    // statutory VAT notice, free-text notes): the same border, radius,
+    // padding and spacing, in a neutral palette that does not fight the
+    // brand colour. Per-notice colours made the stack look patchy.
+    noticeBox: {
+      marginTop: 12,
       padding: 12,
-      backgroundColor: '#fff3cd',
+      backgroundColor: '#f8f9fa',
       borderRadius: 4,
       borderWidth: 1,
-      borderColor: '#ffc107',
+      borderColor: '#dee2e6',
     },
-    reverseChargeText: {
+    noticeText: {
       fontSize: 9,
-      color: '#856404',
-    },
-    notesBox: {
-      marginTop: 20,
-      padding: 12,
-      backgroundColor: '#e8f4fd',
-      borderRadius: 4,
-    },
-    notesText: {
-      fontSize: 9,
-      color: '#0c5460',
+      color: '#495057',
     },
     creditNoteBox: {
       marginBottom: 20,
@@ -1254,8 +1263,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Proforma notice */}
         {isProforma && (
-          <View style={[styles.reverseChargeBox, { backgroundColor: '#e8f4fd', borderColor: '#90cdf4' }]}>
-            <Text style={[styles.reverseChargeText, { color: '#2b6cb0' }]}>
+          <View style={styles.noticeBox}>
+            <Text style={styles.noticeText}>
               {L.proformaNotice}
             </Text>
           </View>
@@ -1263,8 +1272,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Quote notice */}
         {isQuote && (
-          <View style={[styles.reverseChargeBox, { backgroundColor: '#e8f4fd', borderColor: '#90cdf4' }]}>
-            <Text style={[styles.reverseChargeText, { color: '#2b6cb0' }]}>
+          <View style={styles.noticeBox}>
+            <Text style={styles.noticeText}>
               {L.quoteNotice}
             </Text>
           </View>
@@ -1388,19 +1397,19 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             since the "ej momsregistrerad" line would contradict the VAT
             shown in the totals block. */}
         {company.vat_registered === false && invoice.vat_amount === 0 ? (
-          <View style={styles.reverseChargeBox}>
-            <Text style={styles.reverseChargeText}>{L.notVatRegisteredNotice}</Text>
+          <View style={styles.noticeBox}>
+            <Text style={styles.noticeText}>{L.notVatRegisteredNotice}</Text>
           </View>
         ) : (
           <>
             {invoice.reverse_charge_text && (
-              <View style={styles.reverseChargeBox}>
-                <Text style={styles.reverseChargeText}>{invoice.reverse_charge_text}</Text>
+              <View style={styles.noticeBox}>
+                <Text style={styles.noticeText}>{localizeVatNotice(invoice.reverse_charge_text, lang)}</Text>
               </View>
             )}
             {invoice.vat_treatment === 'exempt' && !invoice.reverse_charge_text && (
-              <View style={styles.reverseChargeBox}>
-                <Text style={styles.reverseChargeText}>{L.exemptNotice}</Text>
+              <View style={styles.noticeBox}>
+                <Text style={styles.noticeText}>{L.exemptNotice}</Text>
               </View>
             )}
           </>
@@ -1408,8 +1417,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Notes */}
         {invoice.notes && (
-          <View style={styles.notesBox}>
-            <Text style={styles.notesText}>{invoice.notes}</Text>
+          <View style={styles.noticeBox}>
+            <Text style={styles.noticeText}>{invoice.notes}</Text>
           </View>
         )}
 
