@@ -824,7 +824,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           setPdfArchiveIssue('document')
           return
         }
-        throw new Error(t('pdf_generate_failed'))
+        toast({
+          title: t('pdf_download_failed_title'),
+          description: await describePdfRouteFailure(response),
+          variant: 'destructive',
+        })
+        return
       }
 
       const blob = await response.blob()
@@ -861,6 +866,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     } finally {
       setIsDownloading(false)
     }
+  }
+
+  /**
+   * Turn a refusal from the PDF route into the sentence the user needs. The
+   * route answers with the structured envelope ({ error: { code, message,
+   * details } }), and the mapper reads it whole: for a missing payment
+   * account it names what is missing for the invoice's currency and where to
+   * add it, instead of the generic "Kunde inte generera PDF".
+   */
+  async function describePdfRouteFailure(response: Response): Promise<string> {
+    const body: unknown = await response.json().catch(() => null)
+    return getUserErrorMessage(body ?? new Error(t('pdf_generate_failed')), {
+      locale: locale as ErrorLocale,
+      context: 'invoice',
+      statusCode: response.status,
+    })
   }
 
   async function downloadPDF() {
@@ -1105,8 +1126,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
    * delivery history could not be read. Only the mechanism differs, so a tab is
    * opened synchronously (before any await) to keep the click's user activation
    * and stay clear of the popup blocker.
+   *
+   * A re-render is fetched before the tab is pointed anywhere: the PDF route
+   * refuses with a JSON envelope when the invoice cannot be rendered (no
+   * payment account for its currency, for one), and navigating the tab
+   * straight to the route showed that JSON raw. The tab is opened blank
+   * first, then given the PDF, or closed again with the refusal in a toast.
+   * The archived copy is a stored document and keeps the direct open.
    */
-  function runInvoicePreview(source: InvoicePdfSource) {
+  async function runInvoicePreview(source: InvoicePdfSource) {
     if (!invoice) return
 
     if (source.kind === 'unavailable') {
@@ -1115,10 +1143,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       return
     }
 
-    const url =
-      source.kind === 'archived' ? source.url : invoiceRerenderUrl(invoice.id, { inline: true })
+    if (source.kind === 'archived') {
+      if (!window.open(source.url, '_blank', 'noopener,noreferrer')) {
+        toast({
+          title: t('pdf_preview_blocked_title'),
+          description: t('pdf_preview_blocked_description', { appName }),
+          variant: 'destructive',
+        })
+      }
+      return
+    }
 
-    if (!window.open(url, '_blank', 'noopener,noreferrer')) {
+    const tab = window.open('', '_blank')
+    if (!tab) {
       toast({
         title: t('pdf_preview_blocked_title'),
         description: t('pdf_preview_blocked_description', { appName }),
@@ -1126,6 +1163,34 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       })
       return
     }
+
+    let blob: Blob
+    try {
+      const response = await fetch(invoiceRerenderUrl(invoice.id, { inline: true }))
+      if (!response.ok) {
+        tab.close()
+        toast({
+          title: t('pdf_preview_failed_title'),
+          description: await describePdfRouteFailure(response),
+          variant: 'destructive',
+        })
+        return
+      }
+      blob = await response.blob()
+    } catch (error) {
+      tab.close()
+      toast({
+        title: t('pdf_preview_failed_title'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
+        variant: 'destructive',
+      })
+      return
+    }
+
+    // The blob URL is not revoked: the tab is a separate document that loads
+    // it after this function returns, and revoking on a timer would race a
+    // slow viewer. One PDF per click is a bounded leak for the page lifetime.
+    tab.location.href = window.URL.createObjectURL(blob)
 
     const caveat = invoiceDocumentCaveat(source)
     if (caveat) {
@@ -1139,7 +1204,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   function previewPDF() {
     if (!invoice) return
     setPdfArchiveIssue(null)
-    runInvoicePreview(
+    void runInvoicePreview(
       resolveInvoicePdfSource({
         invoiceId: invoice.id,
         invoiceStatus: invoice.status,
@@ -1169,7 +1234,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     // tab it opens is no longer inside the original click's activation window;
     // a blocked popup is reported rather than swallowed.
     if (pdfIntent === 'preview') {
-      runInvoicePreview(source)
+      await runInvoicePreview(source)
       return
     }
     await runInvoiceDownload(source)
@@ -1186,7 +1251,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       reason: 'archive_unreachable' as const,
     }
     if (pdfIntent === 'preview') {
-      runInvoicePreview(source)
+      await runInvoicePreview(source)
       return
     }
     await runInvoiceDownload(source)
