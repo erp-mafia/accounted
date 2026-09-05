@@ -1,6 +1,6 @@
 /**
  * Tests for /api/bookkeeping/accounts (list/create), /[number] (update/delete)
- * and /activate.
+ * /activate and /deactivate.
  *
  * The DELETE usage check is asserted with a call-capturing mock: the count
  * query must be scoped to the caller's company via the journal_entries join —
@@ -29,6 +29,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { GET as listGET, POST as createPOST } from '../route'
 import { DELETE, PUT } from '../[number]/route'
 import { POST as activatePOST } from '../activate/route'
+import { POST as deactivatePOST } from '../deactivate/route'
 
 interface CapturedCall {
   method: string
@@ -622,5 +623,136 @@ describe('POST /api/bookkeeping/accounts/activate', () => {
     expect(body.reactivated).toBe(0)
     expect(calls.some((c) => c.method === 'update')).toBe(false)
     expect(calls.some((c) => c.method === 'insert')).toBe(false)
+  })
+})
+
+describe('POST /api/bookkeeping/accounts/deactivate', () => {
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: {},
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const req = createMockRequest('/api/bookkeeping/accounts/deactivate', {
+      method: 'POST',
+      body: { account_numbers: ['4010'] },
+    })
+    const res = await deactivatePOST(req, routeParams)
+    expect(res.status).toBe(401)
+  })
+
+  it('returns 400 when account_numbers is missing or empty', async () => {
+    const { supabase } = createCapturingSupabase([])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/deactivate', {
+      method: 'POST',
+      body: { account_numbers: [] },
+    })
+    const { status, body } = await parseJsonResponse<{ error: string }>(
+      await deactivatePOST(req, routeParams)
+    )
+    expect(status).toBe(400)
+    expect(body.error).toBe('account_numbers array required')
+  })
+
+  it('returns 403 for a viewer', async () => {
+    const { supabase } = createCapturingSupabase([])
+    auth(supabase)
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+    const req = createMockRequest('/api/bookkeeping/accounts/deactivate', {
+      method: 'POST',
+      body: { account_numbers: ['4010'] },
+    })
+    const res = await deactivatePOST(req, routeParams)
+    expect(res.status).toBe(403)
+  })
+
+  // The post-migration sweep: only never-used, non-system, active accounts
+  // flip; everything else is reported back so the UI can say what it skipped.
+  it('deactivates the never-used accounts and reports what it skipped', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      {
+        data: [
+          { account_number: '4010', is_active: true, is_system_account: false }, // unused
+          { account_number: '4020', is_active: true, is_system_account: false }, // unused
+          { account_number: '5010', is_active: true, is_system_account: false }, // used
+          { account_number: '1930', is_active: true, is_system_account: true }, // system
+          { account_number: '6110', is_active: false, is_system_account: false }, // already off
+        ],
+      },
+      { data: [{ account_number: '5010', usage_count: 12 }] }, // get_account_usage_counts
+      { data: [{ account_number: '4010' }, { account_number: '4020' }] }, // update result
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/deactivate', {
+      method: 'POST',
+      body: { account_numbers: ['4010', '4020', '5010', '1930', '6110', '9999'] },
+    })
+    const { status, body } = await parseJsonResponse<{
+      deactivated: number
+      skipped_system: string[]
+      skipped_used: string[]
+      skipped_inactive: number
+      unknown: string[]
+    }>(await deactivatePOST(req, routeParams))
+
+    expect(status).toBe(200)
+    expect(body.deactivated).toBe(2)
+    expect(body.skipped_used).toEqual(['5010'])
+    expect(body.skipped_system).toEqual(['1930'])
+    expect(body.skipped_inactive).toBe(1)
+    expect(body.unknown).toEqual(['9999'])
+
+    // Usage is read through the company-scoped RPC, never an embed.
+    expect(calls.find((c) => c.method === 'rpc')?.args).toEqual([
+      'get_account_usage_counts',
+      { p_company_id: 'company-1' },
+    ])
+    // The update is scoped to the company and to exactly the unused set.
+    const updateCall = calls.find((c) => c.method === 'update')
+    expect(updateCall?.args).toEqual([{ is_active: false }])
+    const inAfterUpdate = calls.slice(calls.indexOf(updateCall!)).find((c) => c.method === 'in')
+    expect(inAfterUpdate?.args).toEqual(['account_number', ['4010', '4020']])
+  })
+
+  it('includes used accounts only when include_used is set', async () => {
+    const { supabase } = createCapturingSupabase([
+      { data: [{ account_number: '5010', is_active: true, is_system_account: false }] },
+      { data: [{ account_number: '5010', usage_count: 3 }] },
+      { data: [{ account_number: '5010' }] },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/deactivate', {
+      method: 'POST',
+      body: { account_numbers: ['5010'], include_used: true },
+    })
+    const { status, body } = await parseJsonResponse<{ deactivated: number; skipped_used: string[] }>(
+      await deactivatePOST(req, routeParams)
+    )
+    expect(status).toBe(200)
+    expect(body.deactivated).toBe(1)
+    expect(body.skipped_used).toEqual([])
+  })
+
+  it('skips the update entirely when nothing qualifies', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: [{ account_number: '5010', is_active: true, is_system_account: false }] },
+      { data: [{ account_number: '5010', usage_count: 3 }] },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/deactivate', {
+      method: 'POST',
+      body: { account_numbers: ['5010'] },
+    })
+    const { status, body } = await parseJsonResponse<{ deactivated: number; skipped_used: string[] }>(
+      await deactivatePOST(req, routeParams)
+    )
+    expect(status).toBe(200)
+    expect(body.deactivated).toBe(0)
+    expect(body.skipped_used).toEqual(['5010'])
+    expect(calls.find((c) => c.method === 'update')).toBeUndefined()
   })
 })

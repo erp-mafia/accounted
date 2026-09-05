@@ -46,6 +46,9 @@ export const ResponseMetaSchema = z.object({
   next_cursor: z.string().nullable().optional(),
   audit: ResponseAuditSchema.optional(),
   partial_expansions: z.array(z.string()).optional(),
+  // Endpoint-specific register-coverage disclosure (e.g. invoices.list:
+  // { covers_from, has_pre_register_invoices }). Documented per endpoint.
+  coverage: z.record(z.string(), z.unknown()).optional(),
 })
 
 /**

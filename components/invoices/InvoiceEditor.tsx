@@ -84,6 +84,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import {
@@ -91,7 +92,17 @@ import {
   buildSelfBilledPayload,
   hasDimensionValues,
 } from '@/lib/invoices/editor-payload'
-import type { Customer, Currency, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem } from '@/types'
+import type {
+  Article,
+  CashAccount,
+  CreateCustomerInput,
+  Currency,
+  Customer,
+  Invoice,
+  InvoiceDocumentType,
+  InvoiceItem,
+  InvoicePayeeDefault,
+} from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
@@ -114,6 +125,9 @@ export type InvoiceEditorProps = (
   /** Open with the självfaktura tab preselected (the "Självfaktura" entry in
    *  the invoice list's split button). Create mode only. */
   initialSelfBilled?: boolean
+  /** Open with this document type preselected (the "Ny offert" entry in the
+   *  invoice list's split button). Create mode only. */
+  initialDocumentType?: InvoiceDocumentType
 }
 
 // Subset of Article fields the line picker needs to pre-fill a row.
@@ -153,6 +167,16 @@ const CELL_SELECT_TRIGGER_CLASS =
 const SETTINGS_ROW_CLASS =
   'flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]'
 
+// Sentinel for "the company default" in the payee select: an empty option
+// value renders as the placeholder in Radix Select.
+const PAYEE_DEFAULT = '__default__'
+
+/** "Företagskonto (1930)" or the bare ledger account when the row has no name. */
+function payeeAccountLabel(account: CashAccount): string {
+  const name = account.name?.trim()
+  return name ? `${name} (${account.ledger_account})` : account.ledger_account
+}
+
 // Compact display of a dimensions bag, e.g. "KS01 · P001" (dim-number order).
 function compactDims(dims: Record<string, string>): string {
   return Object.entries(dims)
@@ -188,6 +212,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // 2026-08-17). Self-billing is never available when editing a draft.
   const mode: 'invoice' | 'self_billed' =
     props.initialSelfBilled && !isEditMode ? 'self_billed' : 'invoice'
+  const createDocumentType: InvoiceDocumentType =
+    !isEditMode && !isCopyMode && !props.initialSelfBilled && props.initialDocumentType
+      ? props.initialDocumentType
+      : 'invoice'
   // Company-wide opt-in from the invoice settings page: the whole payment
   // link section (manual field + Stripe auto toggle) stays hidden until the
   // company enables it. The send routes enforce the same setting server-side
@@ -270,6 +298,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       vat_rate: z.number().min(0).max(25),
       // Article linkage (artikelregister). Optional: free-text lines omit them.
       article_id: z.string().nullable().optional(),
+      // Kundorder line link: an invoice created from a sales order carries it
+      // per item; the draft editor replaces items wholesale on save, so the
+      // field must round-trip or the order line becomes re-invoiceable.
+      sales_order_item_id: z.string().nullable().optional(),
       revenue_account: z
         .string()
         .regex(INVOICE_POSTING_ACCOUNT_REGEX, t('posting_account_invalid'))
@@ -346,9 +378,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       customer_id: z.string().min(1, t('validation_customer_required')),
       invoice_date: z.string().min(1, t('validation_invoice_date_required')),
       due_date: z.string().min(1, t('validation_due_date_required')),
+      // Quotes only: the expiry date ("Giltig till"). due_date mirrors it on
+      // the wire (the column is NOT NULL); required for quotes via the
+      // superRefine below so the error lands under the visible field.
+      valid_until: z.string().optional(),
       delivery_date: z.string().optional(),
       currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
-      document_type: z.enum(['invoice', 'proforma', 'delivery_note']),
+      // Bank account the customer pays to; '' = the company default per currency.
+      payment_cash_account_id: z.string().optional(),
+      document_type: z.enum(['invoice', 'proforma', 'delivery_note', 'quote']),
       your_reference: z.string().optional(),
       our_reference: z.string().optional(),
       invoice_marking: z.string().optional(),
@@ -385,6 +423,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       deduction_personnummer: z.string().optional(),
       deduction_housing_designation: z.string().optional(),
       items: z.array(itemSchema).min(1, t('validation_min_one_row')),
+    }).superRefine((data, ctx) => {
+      if (data.document_type === 'quote' && !data.valid_until) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['valid_until'],
+          message: t('validation_valid_until_required'),
+        })
+      }
     })
   }, [t, ta])
 
@@ -536,8 +582,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           customer_id: initial.customer_id,
           invoice_date: initial.invoice_date,
           due_date: initial.due_date,
+          valid_until:
+            initial.document_type === 'quote' ? initial.valid_until ?? initial.due_date : '',
           delivery_date: initial.delivery_date ?? '',
           currency: initial.currency,
+          payment_cash_account_id: initial.payment_cash_account_id ?? '',
           document_type: (initial.document_type ?? 'invoice') as InvoiceDocumentType,
           your_reference: initial.your_reference ?? '',
           our_reference: initial.our_reference ?? '',
@@ -559,6 +608,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             discount_percent: hasLineDiscount(item.discount_percent) ? item.discount_percent : null,
             vat_rate: item.vat_rate ?? 25,
             article_id: item.article_id ?? null,
+            sales_order_item_id: item.sales_order_item_id ?? null,
             revenue_account: item.revenue_account ?? null,
             deduction_type: item.deduction_type ?? null,
             labor_hours: item.labor_hours ?? null,
@@ -577,8 +627,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             customer_id: copyInitial.customer_id,
             invoice_date: '',
             due_date: '',
+            valid_until: '',
             delivery_date: '',
             currency: copyInitial.currency,
+            payment_cash_account_id: copyInitial.payment_cash_account_id ?? '',
             document_type: 'invoice' as InvoiceDocumentType,
             your_reference: '',
             our_reference: copyInitial.our_reference,
@@ -597,8 +649,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           customer_id: '',
           invoice_date: '',
           due_date: '',
+          valid_until: '',
           currency: 'SEK',
-          document_type: 'invoice' as InvoiceDocumentType,
+          payment_cash_account_id: '',
+          document_type: createDocumentType,
           payment_link_url: '',
           payment_link_auto: true,
           external_invoice_number: '',
@@ -620,6 +674,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     setValue('invoice_date', format(new Date(), 'yyyy-MM-dd'))
     setValue('received_date', format(new Date(), 'yyyy-MM-dd'))
     setValue('due_date', format(addDays(new Date(), 30), 'yyyy-MM-dd'))
+    setValue('valid_until', format(addDays(new Date(), 30), 'yyyy-MM-dd'))
   }, [])
 
   const { fields, append, remove, move } = useFieldArray({
@@ -641,12 +696,48 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   const watchItems = watch('items')
   const watchCurrency = watch('currency')
+  const watchPayeeAccount = watch('payment_cash_account_id')
+  // The company's bank accounts that may be printed as payee, and the default
+  // per currency. Loaded once; the select only renders when there is a real
+  // choice (two or more usable accounts for the invoice currency).
+  const [payeeState, setPayeeState] = useState<{ accounts: CashAccount[]; defaults: InvoicePayeeDefault[] } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/cash-accounts/payee-defaults')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && json?.data) setPayeeState(json.data)
+      })
+      .catch(() => {
+        // Best-effort: without the list the invoice simply uses the default.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const payeeOptions = useMemo(
+    () => (payeeState ? payeeState.accounts.filter((a) => isUsableInvoicePayee(a, watchCurrency as Currency)) : []),
+    [payeeState, watchCurrency],
+  )
+  const defaultPayee = useMemo(() => {
+    const id = payeeState?.defaults.find((d) => d.currency === watchCurrency)?.cash_account_id
+    return id ? payeeState?.accounts.find((a) => a.id === id) ?? null : null
+  }, [payeeState, watchCurrency])
+  // A currency change can make the chosen account unusable (no IBAN for
+  // EUR): fall back to the default rather than submit an invalid choice.
+  useEffect(() => {
+    if (!payeeState || !watchPayeeAccount) return
+    if (!payeeOptions.some((a) => a.id === watchPayeeAccount)) {
+      setValue('payment_cash_account_id', '', { shouldDirty: true })
+    }
+  }, [payeeState, payeeOptions, watchPayeeAccount, setValue])
   const watchCustomerId = watch('customer_id')
   const watchDocumentType = watch('document_type') as InvoiceDocumentType
   // Subscribed at render level so the Förval chip line and the next-step line
   // stay live while the settings panel is collapsed.
   const watchInvoiceDate = watch('invoice_date')
   const watchDueDate = watch('due_date')
+  const watchValidUntil = watch('valid_until')
   const watchReceivedDate = watch('received_date')
   const watchDeliveryDate = watch('delivery_date')
   const watchYourReference = watch('your_reference')
@@ -836,6 +927,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       discount_percent: null,
       vat_rate: vatRegistered ? vatRatePlan.defaultRate : 0,
       article_id: null,
+      sales_order_item_id: null,
       revenue_account: null,
       deduction_type: null,
       labor_hours: null,
@@ -891,6 +983,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       discount_percent: null,
       vat_rate: 0,
       article_id: null,
+      sales_order_item_id: null,
       revenue_account: null,
       deduction_type: null,
       labor_hours: null,
@@ -1123,7 +1216,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }, 0)
 
   const vatRules = selectedCustomer
-    ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated)
+    ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated, selectedCustomer.country)
     : null
 
   // Rendered options and the default are deliberately two different sets:
@@ -1169,6 +1262,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const isSelfBilled = mode === 'self_billed'
   // ROT/RUT is an own-issued, B2C concept: never shown for a received self-bill.
   const isInvoiceDoc = watchDocumentType === 'invoice' && !isSelfBilled
+  // Offert: no due date (an expiry instead), no payment box, never books.
+  const isQuoteDoc = watchDocumentType === 'quote' && !isSelfBilled
   rotRutCompletenessAppliesRef.current = isInvoiceDoc
 
   // ROT/RUT yearly-ceiling context: what this customer has already been
@@ -1416,6 +1511,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }
 
+  // A quote's "Giltig till" is its own field; the shared schema still wants a
+  // due_date, so the wire body mirrors valid_until into it. Other document
+  // types never send valid_until (undefined disappears in JSON).
+  function withQuoteValidity(data: FormData): FormData {
+    if (data.document_type !== 'quote') return { ...data, valid_until: undefined }
+    const validUntil = data.valid_until || data.due_date
+    return { ...data, due_date: validUntil, valid_until: validUntil }
+  }
+
   async function onSubmit(data: FormData) {
     if (isEditMode) {
       // Editing a draft: no review dialog, straight to PATCH.
@@ -1487,6 +1591,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   function getDocLabel(type: InvoiceDocumentType): string {
     if (type === 'proforma') return t('doc_label_proforma')
     if (type === 'delivery_note') return t('doc_label_delivery_note')
+    if (type === 'quote') return t('doc_label_quote')
     return t('doc_label_invoice')
   }
 
@@ -1509,7 +1614,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // Shared body builder (lib/invoices/editor-payload.ts): dimension pruning,
     // ROT/RUT privacy strip, self-billing-carrier removal and the always-sent
     // ore_rounding / default_dimensions all live there, pinned by parity tests.
-    const sanitizedPayload = buildInvoiceWritePayload(pendingData, {
+    const sanitizedPayload = buildInvoiceWritePayload(withQuoteValidity(pendingData), {
       oreRounding,
       defaultDims,
     })
@@ -1565,7 +1670,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // failures keep their toasts: this replaces the client-side validation
   // toast only.
   function focusSettingsField(
-    name: 'invoice_date' | 'due_date' | 'received_date' | 'payment_link_url',
+    name: 'invoice_date' | 'due_date' | 'valid_until' | 'received_date' | 'payment_link_url',
   ) {
     // In self-billed mode fakturadatum and mottagningsdatum render uncollapsed
     // next to the external number: focus directly, no panel to expand.
@@ -1591,9 +1696,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         customerTriggerRef.current?.focus()
         break
       case 'invoice_date':
-      case 'due_date':
       case 'received_date':
         focusSettingsField(step.kind)
+        break
+      case 'due_date':
+        // A quote's date row is "Giltig till": the step reuses the due kind.
+        focusSettingsField(isQuoteDoc ? 'valid_until' : 'due_date')
         break
       case 'rows_empty':
         entryInputRef.current?.focus()
@@ -1649,6 +1757,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
     if (errs.customer_id) customerTriggerRef.current?.focus()
     else if (errs.invoice_date) focusSettingsField('invoice_date')
+    else if (errs.valid_until) focusSettingsField('valid_until')
     else if (errs.due_date) focusSettingsField('due_date')
   }
 
@@ -1659,7 +1768,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   async function saveDraftData(data: FormData) {
     setIsSavingDraft(true)
 
-    const payload = buildInvoiceWritePayload(data, {
+    const payload = buildInvoiceWritePayload(withQuoteValidity(data), {
       saveAsDraft: true,
       oreRounding,
       defaultDims,
@@ -1702,7 +1811,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (!initial) return
     setIsSubmitting(true)
 
-    const payload = buildInvoiceWritePayload(data, {
+    const payload = buildInvoiceWritePayload(withQuoteValidity(data), {
       oreRounding,
       defaultDims,
     })
@@ -1784,7 +1893,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         body: JSON.stringify({
           customer_id: data.customer_id,
           invoice_date: data.invoice_date,
-          due_date: data.due_date,
+          due_date: withQuoteValidity(data).due_date,
+          valid_until: withQuoteValidity(data).valid_until,
           currency: data.currency,
           document_type: data.document_type,
           items: data.items,
@@ -1793,6 +1903,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           invoice_marking: data.invoice_marking,
           notes: data.notes,
           payment_link_url: data.payment_link_url,
+          payment_cash_account_id: data.payment_cash_account_id || null,
           invoice_number: numberPreview,
           // ROT/RUT claim card: the preview shows the same masked personnummer
           // and fastighetsbeteckning in its deduction box as the created
@@ -1849,7 +1960,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     ? t('title_proforma')
     : watchDocumentType === 'delivery_note'
       ? t('title_delivery_note')
-      : t('title_invoice')
+      : watchDocumentType === 'quote'
+        ? t('title_quote')
+        : t('title_invoice')
   // In bare (dialog) mode the dialog owns the accessible title (sr-only
   // DialogTitle) and the page already has its own h1, so the visible heading
   // steps down to h2: it still tracks document type and number preview live.
@@ -1872,7 +1985,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     isSelfBilled,
     customerSelected: Boolean(watchCustomerId),
     invoiceDate: watchInvoiceDate || '',
-    dueDate: watchDueDate || '',
+    dueDate: (isQuoteDoc ? watchValidUntil : watchDueDate) || '',
     receivedDate: watchReceivedDate || '',
     externalInvoiceNumber: watchExternalNumber || '',
     items: watchItems ?? [],
@@ -1891,7 +2004,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const nextStepLabels: Record<Exclude<NextStep['kind'], 'ready' | 'row_incomplete'>, string> = {
     customer: t('next_step_customer'),
     invoice_date: t('next_step_invoice_date'),
-    due_date: t('next_step_due_date'),
+    due_date: isQuoteDoc ? t('next_step_valid_until') : t('next_step_due_date'),
     rows_empty: t('next_step_add_row'),
     payment_link: t('next_step_payment_link'),
     personnummer: t('next_step_personnummer'),
@@ -1916,6 +2029,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     currency: watchCurrency,
     invoiceDate: watchInvoiceDate || '',
     dueDate: watchDueDate || '',
+    validUntil: watchValidUntil || '',
     receivedDate: watchReceivedDate || '',
     deliveryDate: watchDeliveryDate || '',
     yourReference: watchYourReference || '',
@@ -1927,7 +2041,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const chipTexts = forvalChips.map((chip) => {
     switch (chip.kind) {
       case 'doc_type':
-        return chip.documentType === 'proforma' ? t('doctype_proforma') : t('doctype_delivery_note')
+        return chip.documentType === 'proforma'
+          ? t('doctype_proforma')
+          : chip.documentType === 'quote'
+            ? t('doctype_quote')
+            : t('doctype_delivery_note')
       case 'currency':
         return t('chip_currency', { currency: chip.currency })
       case 'invoice_date':
@@ -1936,6 +2054,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         return t('chip_due_days', { days: chip.days, date: chip.date })
       case 'due_date':
         return t('chip_due_date', { date: chip.date })
+      case 'valid_until':
+        return t('chip_valid_until', { date: chip.date })
       case 'received':
         return t('chip_received', { date: chip.date })
       case 'delivery':
@@ -2119,6 +2239,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     aria-required="true"
                     className="tabular-nums"
                   />
+                  <p className="text-xs text-muted-foreground">{ts('received_date_help')}</p>
                   {errors.received_date && (
                     <p className="text-sm text-destructive">{errors.received_date.message}</p>
                   )}
@@ -2917,13 +3038,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         name="document_type"
                         control={control}
                         render={({ field }) => (
-                          <Select value={field.value} onValueChange={field.onChange}>
+                          <Select
+                            value={field.value}
+                            onValueChange={field.onChange}
+                            // Quotes and delivery notes are numbered from their
+                            // own series at insert, so an existing one cannot
+                            // change type (the API refuses it too).
+                            disabled={isEditMode && (field.value === 'quote' || field.value === 'delivery_note')}
+                          >
                             <SelectTrigger className="h-8 w-44 text-[13px]">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="invoice">{t('doctype_invoice')}</SelectItem>
                               <SelectItem value="proforma">{t('doctype_proforma')}</SelectItem>
+                              <SelectItem value="quote">{t('doctype_quote')}</SelectItem>
                               <SelectItem value="delivery_note">{t('doctype_delivery_note')}</SelectItem>
                             </SelectContent>
                           </Select>
@@ -2954,6 +3083,41 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     />
                   </div>
 
+                  {!isSelfBilled
+                    && (watchDocumentType === 'invoice' || watchDocumentType === 'proforma')
+                    && payeeState
+                    && (payeeOptions.length > 1 || (payeeOptions.length === 1 && !defaultPayee) || (watchPayeeAccount && payeeOptions.length > 0)) && (
+                    <div className={SETTINGS_ROW_CLASS}>
+                      <Label className="text-[13px] font-normal">{t('payee_account_label')}</Label>
+                      <Controller
+                        name="payment_cash_account_id"
+                        control={control}
+                        render={({ field }) => (
+                          <Select
+                            value={field.value || PAYEE_DEFAULT}
+                            onValueChange={(value) => field.onChange(value === PAYEE_DEFAULT ? '' : value)}
+                          >
+                            <SelectTrigger className="h-8 w-64 text-[13px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={PAYEE_DEFAULT}>
+                                {defaultPayee
+                                  ? t('payee_account_default', { account: payeeAccountLabel(defaultPayee) })
+                                  : t('payee_account_default_none')}
+                              </SelectItem>
+                              {payeeOptions.map((account) => (
+                                <SelectItem key={account.id} value={account.id}>
+                                  {payeeAccountLabel(account)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      />
+                    </div>
+                  )}
+
                   {/* Self-billed mode renders fakturadatum and mottagningsdatum
                       uncollapsed next to the external number instead: they are
                       transcription fields there, and registering the same RHF
@@ -2977,22 +3141,41 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     </div>
                   )}
 
-                  <div className={SETTINGS_ROW_CLASS}>
-                    <Label className="text-[13px] font-normal">
-                      {t('due_date_label')}<RequiredMark />
-                    </Label>
-                    <div>
-                      <Input
-                        type="date"
-                        {...register('due_date')}
-                        aria-required="true"
-                        className="h-8 w-40 text-[13px] tabular-nums"
-                      />
-                      {errors.due_date && (
-                        <p className="mt-1 text-xs text-destructive">{errors.due_date.message}</p>
-                      )}
+                  {isQuoteDoc ? (
+                    <div className={SETTINGS_ROW_CLASS}>
+                      <Label className="text-[13px] font-normal">
+                        {t('valid_until_label')}<RequiredMark />
+                      </Label>
+                      <div>
+                        <Input
+                          type="date"
+                          {...register('valid_until')}
+                          aria-required="true"
+                          className="h-8 w-40 text-[13px] tabular-nums"
+                        />
+                        {errors.valid_until && (
+                          <p className="mt-1 text-xs text-destructive">{errors.valid_until.message}</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className={SETTINGS_ROW_CLASS}>
+                      <Label className="text-[13px] font-normal">
+                        {t('due_date_label')}<RequiredMark />
+                      </Label>
+                      <div>
+                        <Input
+                          type="date"
+                          {...register('due_date')}
+                          aria-required="true"
+                          className="h-8 w-40 text-[13px] tabular-nums"
+                        />
+                        {errors.due_date && (
+                          <p className="mt-1 text-xs text-destructive">{errors.due_date.message}</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {watchDocumentType === 'invoice' && !isSelfBilled && (
                     <div className={SETTINGS_ROW_CLASS}>
@@ -3300,21 +3483,27 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           isSubmitting={isSubmitting}
           title={watchDocumentType === 'proforma'
             ? t('review_dialog_title_proforma')
-            : watchDocumentType === 'delivery_note'
-              ? t('review_dialog_title_delivery_note')
-              : t('review_dialog_title_invoice')}
+            : watchDocumentType === 'quote'
+              ? t('review_dialog_title_quote')
+              : watchDocumentType === 'delivery_note'
+                ? t('review_dialog_title_delivery_note')
+                : t('review_dialog_title_invoice')}
           warningText={watchDocumentType === 'invoice'
             ? accountingMethod === 'cash'
               ? t('review_warning_invoice_cash')
               : t('review_warning_invoice_accrual')
             : watchDocumentType === 'proforma'
               ? t('review_warning_proforma')
-              : t('review_warning_delivery_note')}
+              : watchDocumentType === 'quote'
+                ? t('review_warning_quote')
+                : t('review_warning_delivery_note')}
           confirmLabel={watchDocumentType === 'proforma'
             ? t('confirm_create_proforma')
-            : watchDocumentType === 'delivery_note'
-              ? t('confirm_create_delivery_note')
-              : t('confirm_create_invoice')}
+            : watchDocumentType === 'quote'
+              ? t('confirm_create_quote')
+              : watchDocumentType === 'delivery_note'
+                ? t('confirm_create_delivery_note')
+                : t('confirm_create_invoice')}
           extraActions={
             <Button
               variant="outline"
@@ -3333,7 +3522,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           <InvoiceReviewContent
             customer={selectedCustomer}
             invoiceDate={pendingData?.invoice_date || ''}
-            dueDate={pendingData?.due_date || ''}
+            dueDate={(isQuoteDoc ? pendingData?.valid_until : pendingData?.due_date) || ''}
+            dueDateLabelKey={isQuoteDoc ? 'valid_until' : 'due_date'}
             currency={(pendingData?.currency || 'SEK') as Currency}
             items={(pendingData?.items || []).map((item) => ({
               ...item,

@@ -37,6 +37,11 @@ function resolveVariant(request: Request): 'invoice' | 'paid' {
   return requested === 'paid' ? 'paid' : 'invoice'
 }
 
+/** `?probe=1` asks only whether the render would be refused; see the handler. */
+function isProbe(request: Request): boolean {
+  return new URL(request.url).searchParams.get('probe') === '1'
+}
+
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.pdf',
   async (request, { supabase, companyId, log, requestId }, { params }) => {
@@ -93,6 +98,15 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     }))
   }
 
+  // `?probe=1`: every refusal above has been checked, so answer without
+  // rendering. The in-app preview asks this first, from a fetch whose JSON
+  // refusal it can show as a message, and only then points the new tab at the
+  // real inline URL. Navigating the tab straight here showed the refusal
+  // envelope as raw JSON in that tab.
+  if (isProbe(request)) {
+    return new NextResponse(null, { status: 204, headers: PRIVATE_NO_STORE_HEADERS })
+  }
+
   // Sort items by sort_order
   const items = (invoice.items as InvoiceItem[]).sort((a, b) => a.sort_order - b.sort_order)
 
@@ -116,7 +130,10 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
       (invoice as Invoice).currency,
-      { paymentAccountRequired: invoiceRequiresPaymentAccount(invoice as Invoice) },
+      {
+        paymentAccountRequired: invoiceRequiresPaymentAccount(invoice as Invoice),
+        payee: (invoice as Invoice).payment_details ?? null,
+      },
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, invoice as Invoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(invoice as Invoice)

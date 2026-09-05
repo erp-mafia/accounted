@@ -47,7 +47,9 @@ import type {
   SourceFilter,
   CategorizeHandler,
   PotentialVoucher,
+  PotentialRotRutPayout,
 } from '@/components/transactions/transaction-types'
+import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
 import { SuggestionReviewList } from '@/components/transactions/SuggestionReviewList'
 import {
   isSourceFilter,
@@ -98,6 +100,7 @@ function InlineDialogContentLoading() {
 const TransactionForm = dynamic(() => import('@/components/transactions/TransactionForm'), { loading: InlineDialogContentLoading })
 const BatchCategorySelector = dynamic(() => import('@/components/transactions/BatchCategorySelector'), { loading: DialogLoadingSkeleton })
 const InvoiceMatchDialog = dynamic(() => import('@/components/transactions/InvoiceMatchDialog'), { loading: DialogLoadingSkeleton })
+const RotRutPayoutMatchDialog = dynamic(() => import('@/components/transactions/RotRutPayoutMatchDialog'), { loading: DialogLoadingSkeleton })
 const MatchVoucherDialog = dynamic(
   () => import('@/components/transactions/MatchVoucherDialog').then((module) => module.MatchVoucherDialog),
   { loading: DialogLoadingSkeleton },
@@ -199,11 +202,19 @@ async function fetchPotentialMatches(
   rows: {
     potential_invoice_id: string | null
     potential_supplier_invoice_id: string | null
+    potential_rot_rut_payout_request_id?: string | null
     potential_journal_entry_id?: string | null
   }[],
 ) {
   const potentialInvoiceIds = Array.from(
     new Set(rows.flatMap((t) => (t.potential_invoice_id ? [t.potential_invoice_id] : []))),
+  )
+  const potentialRotRutRequestIds = Array.from(
+    new Set(
+      rows.flatMap((t) =>
+        t.potential_rot_rut_payout_request_id ? [t.potential_rot_rut_payout_request_id] : [],
+      ),
+    ),
   )
   const potentialSupplierInvoiceIds = Array.from(
     new Set(rows.flatMap((t) => (t.potential_supplier_invoice_id ? [t.potential_supplier_invoice_id] : []))),
@@ -227,7 +238,7 @@ async function fetchPotentialMatches(
   // an unmatchable candidate must not reach the row or the match dialog, which
   // would otherwise compare the transaction against a 0 kr remaining balance
   // and call it a partial payment.
-  const [invoiceResults, supplierInvoiceResults, voucherResults] = await Promise.all([
+  const [invoiceResults, supplierInvoiceResults, voucherResults, rotRutResults] = await Promise.all([
     Promise.all(
       chunks(potentialInvoiceIds).map((ids) =>
         supabase
@@ -261,6 +272,21 @@ async function fetchPotentialMatches(
           .eq('status', 'posted'),
       ),
     ),
+    // Open ROT/RUT begäran (Skatteverkets utbetalning). Revalidated like the
+    // invoice hints: a request settled by another row must not reach the
+    // dialog. Items ride along so the dialog can list the covered invoices.
+    Promise.all(
+      chunks(potentialRotRutRequestIds).map((ids) =>
+        supabase
+          .from('rot_rut_payout_requests')
+          .select(
+            'id, name, deduction_type, status, requested_total, decided_total, settlement_journal_entry_id, items:rot_rut_payout_request_items(requested_amount, invoice:invoices(invoice_number))',
+          )
+          .in('id', ids)
+          .in('status', [...OPEN_ROT_RUT_PAYOUT_STATUSES])
+          .is('settlement_journal_entry_id', null),
+      ),
+    ),
   ])
 
   // Non-fatal: the transaction list still renders without match hints, but
@@ -273,6 +299,38 @@ async function fetchPotentialMatches(
   }
   for (const r of voucherResults) {
     if (r.error) console.error('[fetchPotentialMatches] journal_entries query failed', r.error)
+  }
+  for (const r of rotRutResults) {
+    if (r.error) console.error('[fetchPotentialMatches] rot_rut_payout_requests query failed', r.error)
+  }
+
+  const rotRutMap: Record<string, PotentialRotRutPayout> = {}
+  for (const req of rotRutResults.flatMap((r) => (r.data ?? []) as Array<{
+    id: string
+    name: string
+    deduction_type: 'rot' | 'rut'
+    status: string
+    requested_total: number | string
+    decided_total: number | string | null
+    settlement_journal_entry_id: string | null
+    items?: Array<{
+      requested_amount: number | string
+      invoice?: { invoice_number: string | null } | { invoice_number: string | null }[] | null
+    }> | null
+  }>)) {
+    rotRutMap[req.id] = {
+      id: req.id,
+      name: req.name,
+      deduction_type: req.deduction_type,
+      status: req.status,
+      requested_total: req.requested_total,
+      decided_total: req.decided_total,
+      settlement_journal_entry_id: req.settlement_journal_entry_id,
+      invoices: (req.items ?? []).map((item) => {
+        const inv = Array.isArray(item.invoice) ? item.invoice[0] : item.invoice
+        return { invoice_number: inv?.invoice_number ?? null, requested_amount: item.requested_amount }
+      }),
+    }
   }
 
   const voucherMap: Record<string, PotentialVoucher> = {}
@@ -296,6 +354,7 @@ async function fetchPotentialMatches(
     invoiceMap: buildInvoiceMap(invoiceResults.flatMap((r) => r.data ?? [])),
     supplierInvoiceMap: buildSupplierInvoiceMap(supplierInvoiceResults.flatMap((r) => r.data ?? [])),
     voucherMap,
+    rotRutMap,
   }
 }
 
@@ -339,6 +398,9 @@ export default function TransactionsPage() {
   const [matchDialogOpen, setMatchDialogOpen] = useState(false)
   const [selectedTransaction, setSelectedTransaction] = useState<TransactionWithInvoice | null>(null)
   const [isConfirmingMatch, setIsConfirmingMatch] = useState(false)
+  // ROT/RUT payout confirm (Skatteverkets utbetalning for an open begäran):
+  // its own dialog, same selectedTransaction / isConfirmingMatch plumbing.
+  const [rotRutMatchDialogOpen, setRotRutMatchDialogOpen] = useState(false)
 
   // Booking dialog (journal entry form)
   const [bookingDialogOpen, setBookingDialogOpen] = useState(false)
@@ -612,8 +674,8 @@ export default function TransactionsPage() {
       // animation still finishes instead of being cut to a jump.
       .filter((t) => (t.is_business === null && !t.is_ignored) || exitingIds.has(t.id))
       .sort((a, b) => {
-        const aHasMatch = a.potential_invoice || a.potential_supplier_invoice ? 1 : 0
-        const bHasMatch = b.potential_invoice || b.potential_supplier_invoice ? 1 : 0
+        const aHasMatch = a.potential_invoice || a.potential_supplier_invoice || a.potential_rot_rut_payout ? 1 : 0
+        const bHasMatch = b.potential_invoice || b.potential_supplier_invoice || b.potential_rot_rut_payout ? 1 : 0
         if (aHasMatch !== bHasMatch) return bHasMatch - aHasMatch
         return b.date.localeCompare(a.date)
       }),
@@ -1060,7 +1122,7 @@ export default function TransactionsPage() {
       const windowIds = new Set(rows.map((r) => r.id))
       const olderPending = (pendingRows ?? []).filter((r) => !windowIds.has(r.id))
       const allRows = [...rows, ...olderPending].sort((a, b) => b.date.localeCompare(a.date))
-      const { invoiceMap, supplierInvoiceMap, voucherMap } = await fetchPotentialMatches(supabase, allRows)
+      const { invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap } = await fetchPotentialMatches(supabase, allRows)
 
       // Re-check after the second await: a scope change during the match
       // enrichment must also discard this response.
@@ -1071,6 +1133,9 @@ export default function TransactionsPage() {
         potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
         potential_supplier_invoice: t.potential_supplier_invoice_id
           ? supplierInvoiceMap[t.potential_supplier_invoice_id]
+          : undefined,
+        potential_rot_rut_payout: t.potential_rot_rut_payout_request_id
+          ? rotRutMap[t.potential_rot_rut_payout_request_id]
           : undefined,
         potential_voucher: t.potential_journal_entry_id
           ? voucherMap[t.potential_journal_entry_id]
@@ -1145,7 +1210,7 @@ export default function TransactionsPage() {
     setPagedThroughDate(txData.length >= PAGE_SIZE ? txData[txData.length - 1].date : null)
     setHasMore(txData.length >= PAGE_SIZE)
 
-    const { invoiceMap, supplierInvoiceMap, voucherMap } = await fetchPotentialMatches(supabase, txData)
+    const { invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap } = await fetchPotentialMatches(supabase, txData)
 
     // Same staleness rule after the enrichment await: the offsets above were
     // written under this generation, but a newer fetch has already reset them.
@@ -1159,6 +1224,9 @@ export default function TransactionsPage() {
       potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
       potential_supplier_invoice: t.potential_supplier_invoice_id
         ? supplierInvoiceMap[t.potential_supplier_invoice_id]
+        : undefined,
+      potential_rot_rut_payout: t.potential_rot_rut_payout_request_id
+        ? rotRutMap[t.potential_rot_rut_payout_request_id]
         : undefined,
       potential_voucher: t.potential_journal_entry_id
         ? voucherMap[t.potential_journal_entry_id]
@@ -2163,6 +2231,66 @@ export default function TransactionsPage() {
     }
   }
 
+  async function handleConfirmRotRutPayoutMatch() {
+    if (!selectedTransaction?.potential_rot_rut_payout) return
+    const request = selectedTransaction.potential_rot_rut_payout
+    setIsConfirmingMatch(true)
+    try {
+      const response = await fetch(
+        `/api/transactions/${selectedTransaction.id}/match-rot-rut-payout`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ request_id: request.id }),
+        },
+      )
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: t('rot_rut_payout_match_failed_title'),
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        setIsConfirmingMatch(false)
+        return
+      }
+
+      toast({
+        title: t('rot_rut_payout_matched_title'),
+        description: t('rot_rut_payout_matched_description', { name: request.name }),
+      })
+      setRotRutMatchDialogOpen(false)
+
+      setExitingIds((prev) => new Set(prev).add(selectedTransaction.id))
+      setTimeout(() => {
+        setTransactions((prev) =>
+          prev.map((tx) =>
+            tx.id === selectedTransaction.id
+              ? {
+                  ...tx,
+                  potential_rot_rut_payout_request_id: null,
+                  potential_rot_rut_payout: undefined,
+                  is_business: true,
+                  category: 'income_other' as TransactionCategory,
+                  journal_entry_id: result.journal_entry_id,
+                }
+              : tx,
+          ),
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(selectedTransaction.id)
+          return next
+        })
+        setSelectedTransaction(null)
+        setIsConfirmingMatch(false)
+      }, 350)
+    } catch {
+      toast({ title: t('match_failed_title'), description: t('match_failed_transaction'), variant: 'destructive' })
+      setIsConfirmingMatch(false)
+    }
+  }
+
   async function handleLinkToExistingVoucher(journalEntryId: string) {
     if (!selectedTransaction) return
     const invoiceId = selectedTransaction.potential_invoice?.id ?? null
@@ -2404,6 +2532,18 @@ export default function TransactionsPage() {
     setInvoicePickerTransaction(null)
     setSelectedTransaction({ ...tx, potential_invoice: invoice })
     setMatchDialogOpen(true)
+  }
+
+  function handleSelectRotRutPayoutFromPicker(request: PotentialRotRutPayout) {
+    if (!invoicePickerTransaction) return
+    // Same handoff as the invoice pick: close the picker, hang the request on
+    // the row and open the ROT/RUT confirm dialog so the user sees the
+    // 19xx / 1513 entry before it is booked.
+    const tx = invoicePickerTransaction
+    setInvoicePickerOpen(false)
+    setInvoicePickerTransaction(null)
+    setSelectedTransaction({ ...tx, potential_rot_rut_payout: request })
+    setRotRutMatchDialogOpen(true)
   }
 
   function handleSelectSupplierInvoiceFromPicker(invoice: SupplierInvoice & { supplier?: Supplier }) {
@@ -3423,6 +3563,16 @@ export default function TransactionsPage() {
 
   function openMatchDialog(transaction: TransactionWithInvoice) {
     setSelectedTransaction(transaction)
+    // An invoice hint wins when both are present (mirrors the inbox card's
+    // label precedence); the ROT/RUT payout has its own confirm dialog.
+    if (
+      !transaction.potential_invoice &&
+      !transaction.potential_supplier_invoice &&
+      transaction.potential_rot_rut_payout
+    ) {
+      setRotRutMatchDialogOpen(true)
+      return
+    }
     setMatchDialogOpen(true)
   }
 
@@ -4090,6 +4240,16 @@ export default function TransactionsPage() {
         />
       )}
 
+      {rotRutMatchDialogOpen && (
+        <RotRutPayoutMatchDialog
+          open
+          onOpenChange={setRotRutMatchDialogOpen}
+          transaction={selectedTransaction}
+          isConfirming={isConfirmingMatch}
+          onConfirm={handleConfirmRotRutPayoutMatch}
+        />
+      )}
+
       {matchVoucherTx && (
         <MatchVoucherDialog
           open
@@ -4241,6 +4401,7 @@ export default function TransactionsPage() {
               <InvoicePicker
                 transaction={invoicePickerTransaction}
                 onSelect={handleSelectInvoiceFromPicker}
+                onSelectRotRutPayout={handleSelectRotRutPayoutFromPicker}
               />
             </>
           )}

@@ -48,7 +48,7 @@ import {
   Globe,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatDateLong, formatDateTime } from '@/lib/utils'
 import { QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
@@ -222,6 +222,38 @@ interface InboxAddress {
   local_part: string
   status: string
 }
+
+// One received mail per inbox, from the InboundMailReceived history event
+// the inbound webhook appends (#2181). Sender, subject and address are
+// deliberately absent from the event (processing_history is outside the
+// erasure path); the route resolves inbox_id to the company's own address
+// at read time, and the filed item ids are what the panel links to.
+interface InboundMailAttachment {
+  id: string
+  outcome: 'filed' | 'duplicate' | 'rejected' | 'failed'
+  inbox_item_id?: string
+  reason?: string
+  mime?: string
+}
+interface InboundMail {
+  event_id: string
+  email_id: string
+  occurred_at: string
+  inbox_id: string | null
+  custom_domain: boolean
+  tags: string[]
+  unknown_tag_count: number
+  inbox_local_part: string | null
+  inbox_status: string | null
+  kind_hint: string | null
+  tag_conflict: boolean
+  outcome: string
+  attachment_count: number
+  inbox_item_id: string | null
+  attachments: InboundMailAttachment[]
+}
+// Window for the received-mail panel; the route caps at 365.
+const INBOUND_MAIL_DAYS = 30
 
 // `acme-x7f2@inbox.example` + 'lev' → `acme-x7f2+lev@inbox.example`. The
 // webhook splits the local part at the first `+` and looks up what is before
@@ -634,6 +666,29 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [mailConnections, setMailConnections] = useState<InboxMailConnection[]>([])
   const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phoneMasked?: string; verifiedAt?: string | null } | null>(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
+  // Received-mail history (#2181): read when its panel is first opened, so
+  // the sources strip costs nothing for people who never look.
+  const [inboundMails, setInboundMails] = useState<InboundMail[] | null>(null)
+  const [inboundMailsFailed, setInboundMailsFailed] = useState(false)
+  // The route caps the list; when the window held more, say so rather than
+  // let "every mail" stand over a list that is missing the oldest ones.
+  const [inboundMailsTruncated, setInboundMailsTruncated] = useState(false)
+
+  const fetchInboundMails = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/invoice-inbox/inbound-history?days=${INBOUND_MAIL_DAYS}`,
+      )
+      if (!res.ok) throw new Error(`inbound-history ${res.status}`)
+      const { data } = await res.json()
+      setInboundMails(Array.isArray(data?.mails) ? data.mails : [])
+      setInboundMailsTruncated(data?.has_more === true)
+      setInboundMailsFailed(false)
+    } catch (err) {
+      console.error('[invoice-inbox] fetchInboundMails failed:', err)
+      setInboundMailsFailed(true)
+    }
+  }, [])
 
   useEffect(() => {
     void (async () => {
@@ -804,6 +859,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }
     return counts
   }, [statusFilteredItems])
+
+  // Rows the type menu is hiding right now (#2181): a +lev mail filed as a
+  // leverantörsfaktura is invisible under Underlag, and the trigger's count
+  // alone does not say that anything is missing.
+  const hiddenByKindFilter = kindFilter === 'all' ? 0 : kindCounts.all - kindCounts[kindFilter]
 
   // The type menu only earns its row once something is classified (or the
   // user has already narrowed): an inbox of unclassified rows has nothing to
@@ -1545,6 +1605,61 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             </div>
           )}
 
+          {/* Every mail that reached the address (#2181), whatever became of
+              it: filed, duplicate, rejected, failed. This is where "I mailed
+              it and it is not there" gets an answer instead of a shrug. */}
+          {inboxAddress && (
+            <details
+              className="group border-b border-border"
+              onToggle={(e) => {
+                if (e.currentTarget.open && inboundMails === null && !inboundMailsFailed) {
+                  void fetchInboundMails()
+                }
+              }}
+            >
+              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
+                <Inbox className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="flex-1 truncate">{t('inbound_mail_title')}</span>
+                {inboundMails !== null && (
+                  <span className="tabular-nums text-muted-foreground shrink-0">{inboundMails.length}</span>
+                )}
+                <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
+              </summary>
+              <div className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-1.5">
+                <p>
+                  {inboundMailsTruncated && inboundMails
+                    ? t('inbound_mail_truncated', { count: inboundMails.length, days: INBOUND_MAIL_DAYS })
+                    : t('inbound_mail_hint', { days: INBOUND_MAIL_DAYS })}
+                </p>
+                {inboundMailsFailed ? (
+                  <AttnLine
+                    action={{ label: t('retry'), onClick: () => { void fetchInboundMails() } }}
+                  >
+                    {t('inbound_mail_load_failed')}
+                  </AttnLine>
+                ) : inboundMails === null ? (
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {t('inbound_mail_loading')}
+                  </span>
+                ) : inboundMails.length === 0 ? (
+                  <p>{t('inbound_mail_empty', { days: INBOUND_MAIL_DAYS })}</p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {inboundMails.map((mail) => (
+                      <InboundMailRow
+                        key={mail.event_id}
+                        mail={mail}
+                        domain={inboxAddress.address.split('@')[1] ?? ''}
+                        onOpenItem={handleSelect}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </details>
+          )}
+
           {mailConnections.map((c) => (
             <details key={c.id} className="group border-b border-border">
               <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
@@ -1880,6 +1995,22 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   ))}
             </ul>
           )}
+          {/* The type menu hides rows without saying so (#2181): a +lev mail
+              is a leverantörsfaktura and does not show under Underlag. Say
+              how many, with the one click that brings them back. The empty
+              state above already says it when nothing is left. */}
+          {filter !== 'missing' && filter !== 'portal' && filteredItems.length > 0 && hiddenByKindFilter > 0 && (
+            <div className="px-4 py-2 border-t text-[11px] text-muted-foreground">
+              {t('hidden_by_kind_filter', { count: hiddenByKindFilter })}{' '}
+              <button
+                type="button"
+                className={cn(QUIET_LINK_CLASS, 'underline')}
+                onClick={() => setKindFilter('all')}
+              >
+                {t('kind_filter_all')}
+              </button>
+            </div>
+          )}
         </aside>
 
         {/* Document preview (hero). When the inbox is empty there is nothing
@@ -2153,6 +2284,78 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 // swap for the state, one ochre AttnLine on failure, live region always
 // mounted. No toast on any path, so nothing here can be evicted by (or evict)
 // another toast under TOAST_LIMIT = 1.
+
+function InboundMailRow({
+  mail,
+  domain,
+  onOpenItem,
+}: {
+  mail: InboundMail
+  /** The shared inbound domain, from the company's own address. */
+  domain: string
+  onOpenItem: (id: string) => void
+}) {
+  const t = useTranslations('inbox_workspace')
+  // The address is reconstructed from the inbox row, never read from the
+  // event: one line per tag the mail used, or the bare address.
+  const tags = mail.tags ?? []
+  const address = mail.custom_domain
+    ? t('inbound_mail_custom_domain')
+    : mail.inbox_local_part
+      ? (tags.length > 0 ? tags : [null])
+          .map((tag) => `${mail.inbox_local_part}${tag ? `+${tag}` : ''}@${domain}`)
+          .join(', ')
+      : t('inbound_mail_former_address')
+  const counts = { filed: 0, duplicate: 0, rejected: 0, failed: 0 }
+  for (const a of mail.attachments ?? []) {
+    if (a.outcome in counts) counts[a.outcome] += 1
+  }
+  const parts: string[] = []
+  if (mail.outcome === 'rate_limited') parts.push(t('inbound_outcome_rate_limited'))
+  else if (mail.outcome === 'no_attachments') parts.push(t('inbound_outcome_empty'))
+  else if (mail.outcome === 'email_body') parts.push(t('inbound_outcome_body'))
+  else if (mail.outcome === 'email_body_duplicate') parts.push(t('inbound_outcome_body_duplicate'))
+  else if (mail.outcome === 'fan_out_capped') parts.push(t('inbound_outcome_fan_out_capped'))
+  else {
+    if (counts.filed > 0) parts.push(t('inbound_outcome_filed', { count: counts.filed }))
+    if (counts.duplicate > 0) parts.push(t('inbound_outcome_duplicate', { count: counts.duplicate }))
+    if (counts.rejected > 0) parts.push(t('inbound_outcome_rejected', { count: counts.rejected }))
+    if (counts.failed > 0) parts.push(t('inbound_outcome_failed', { count: counts.failed }))
+  }
+  const hasFailure =
+    mail.outcome === 'rate_limited' || mail.outcome === 'fan_out_capped' || counts.rejected > 0 || counts.failed > 0
+  // Every row the mail produced, in attachment order, each a click away.
+  const openable: string[] = []
+  if (mail.inbox_item_id) openable.push(mail.inbox_item_id)
+  for (const a of mail.attachments ?? []) {
+    if (a.inbox_item_id && !openable.includes(a.inbox_item_id)) openable.push(a.inbox_item_id)
+  }
+  return (
+    <li className="space-y-0.5">
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className="tabular-nums shrink-0">{formatDateTime(mail.occurred_at)}</span>
+        <span className="truncate text-foreground">{address}</span>
+        {(mail.unknown_tag_count ?? 0) > 0 && (
+          <span>{t('inbound_unknown_tags', { count: mail.unknown_tag_count })}</span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className={cn(hasFailure && 'text-destructive')}>{parts.join(', ')}</span>
+        {openable.map((id, i) => (
+          <button
+            key={id}
+            type="button"
+            className={cn(QUIET_LINK_CLASS, 'underline')}
+            onClick={() => onOpenItem(id)}
+          >
+            {openable.length === 1 ? t('inbound_open') : t('inbound_open_nth', { n: i + 1 })}
+          </button>
+        ))}
+      </div>
+      {mail.tag_conflict && <AttnLine>{t('inbound_tag_conflict')}</AttnLine>}
+    </li>
+  )
+}
 
 function InboxAddressBar({
   address,

@@ -1,8 +1,9 @@
 import crypto from 'crypto'
+import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { ensureInitialized } from '@/lib/init'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
-import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger } from '@/lib/logger'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
@@ -37,6 +38,10 @@ import {
 // product; a per-/24 cap on the seed endpoint keeps a single network from
 // spinning up arbitrary sandbox companies. Idempotent for legit users, so 5/h
 // covers retries; an attacker has to rotate /24s to scale abuse.
+// The database lease outlives this function's maximum runtime.
+export const maxDuration = 300
+ensureInitialized()
+
 const RATE_LIMIT = { maxRequests: 5, windowMs: 60 * 60 * 1000 }
 
 /**
@@ -90,65 +95,44 @@ export async function POST(request: Request) {
     )
   }
 
-  // Anonymous users start with no company. Create one before seeding.
-  // If a previous seed attempt already created a company for this user, reuse it
-  // (idempotency).
-  let companyId = await getActiveCompanyId(supabase, user.id)
-
-  if (!companyId) {
-    const { data: newCompanyId, error: companyError } = await supabase.rpc(
-      'create_company_with_owner',
-      {
-        p_name: 'Sandlådan Konsult',
-        p_entity_type: 'enskild_firma',
-      }
-    )
-
-    if (companyError || !newCompanyId) {
-      log.error('failed to create sandbox company', { error: companyError, userId: user.id })
-      return NextResponse.json(
-        { error: 'Failed to create sandbox company', requestId },
-        { status: 500 }
-      )
-    }
-
-    companyId = newCompanyId as string
+  const startedAt = Date.now()
+  const { data: attempt, error: claimError } = await supabase.rpc('claim_sandbox_seed')
+  if (claimError || !attempt) {
+    log.error('failed to claim sandbox seed', { error: claimError, userId: user.id })
+    return NextResponse.json({ error: 'Failed to prepare sandbox', requestId }, { status: 500 })
   }
-
-  // Idempotency: if the core seed already ran (company_settings exists), skip
-  // the bulk insert path. We still TOP UP the newer surfaces (agent_profile,
-  // suppliers, asset, pending operations) afterwards so an old sandbox session
-  // (created before those were added to the seed) picks them up on the next
-  // call instead of being stuck without a verified assistant.
-  const { data: existing } = await supabase
-    .from('company_settings')
-    .select('id')
-    .eq('company_id', companyId)
-    .maybeSingle()
-
-  if (existing) {
+  if (attempt.status === 'busy') {
+    return NextResponse.json(
+      { error: 'Sandbox creation is already in progress', requestId },
+      { status: 409, headers: { 'Retry-After': '5' } },
+    )
+  }
+  const companyId = attempt.company_id as string
+  if (attempt.status === 'complete') {
     try {
       await topUpSandboxAdditions(supabase, companyId)
       return NextResponse.json({ seeded: false, topped_up: true })
     } catch (err) {
       log.error('failed to top up sandbox additions', { error: err, userId: user.id, companyId })
-      return NextResponse.json({ seeded: false, topped_up: false })
+      return NextResponse.json({ error: 'Failed to prepare sandbox', requestId }, { status: 500 })
     }
   }
+  const attemptId = attempt.attempt_id as string
 
   try {
     const userId = user.id
 
     // 1. Update profile (auto-created by auth trigger)
-    await supabase
+    const { error: profileError } = await supabase
       .from('profiles')
       .update({ full_name: 'Demo Användare' })
       .eq('id', userId)
+    if (profileError) throw profileError
 
-    // 2. Create company settings
+    // 2. Fill the sandbox settings reserved by claim_sandbox_seed.
     const { error: settingsError } = await supabase
       .from('company_settings')
-      .insert({
+      .update({
         user_id: userId,
         company_id: companyId,
         entity_type: 'enskild_firma',
@@ -167,6 +151,7 @@ export async function POST(request: Request) {
         invoice_prefix: 'F',
         next_invoice_number: 5,
         next_delivery_note_number: 1,
+        next_quote_number: 1,
         invoice_default_days: 30,
         // Sender bank details: the pain.001 debtor for the betalfil demo.
         // Example IBAN from the Swedish IBAN documentation range; BIC derives
@@ -191,6 +176,9 @@ export async function POST(request: Request) {
         pays_salaries: true,
         employer_registered: true,
       })
+      .eq('company_id', companyId)
+      .select('id')
+      .single()
 
     if (settingsError) throw settingsError
 
@@ -269,6 +257,11 @@ export async function POST(request: Request) {
     thirtyDaysAgo.setDate(today.getDate() - 30)
     const fifteenDaysAgo = new Date(today)
     fifteenDaysAgo.setDate(today.getDate() - 15)
+    const overdueInvoiceDate = toDateStr(thirtyDaysAgo)
+    // The demo has one fiscal period. Keep invoice vouchers in it in January.
+    const yearStart = new Date(currentYear, 0, 1)
+    if (thirtyDaysAgo < yearStart) thirtyDaysAgo.setTime(yearStart.getTime())
+    if (fifteenDaysAgo < yearStart) fifteenDaysAgo.setTime(yearStart.getTime())
     const thirtyDaysFromNow = new Date(today)
     thirtyDaysFromNow.setDate(today.getDate() + 30)
     const fiveDaysAgo = new Date(today)
@@ -319,7 +312,7 @@ export async function POST(request: Request) {
           company_id: companyId,
           customer_id: customerMap['Anna Lindström'],
           invoice_number: 'F-2026003',
-          invoice_date: toDateStr(thirtyDaysAgo),
+          invoice_date: overdueInvoiceDate,
           due_date: toDateStr(fiveDaysAgo),
           status: 'overdue',
           subtotal: 5000,
@@ -493,7 +486,7 @@ export async function POST(request: Request) {
     // as broken rather than empty.
     //
     // Seeded BEFORE the invoice and payroll vouchers below on purpose.
-    // next_voucher_number hands out numbers in call order, so seeding January
+    // The engine assigns voucher numbers at commit, so seeding January
     // last would have produced A-1 dated in July followed by A-3 dated in
     // January: a gap-free sequence that runs backwards through the year, which
     // is not what BFNAR 2013:2 means by a chronological verifikationsserie.
@@ -505,78 +498,18 @@ export async function POST(request: Request) {
       accountMap,
     })
 
-    // One RPC per voucher: next_voucher_number is a counter table with a row
-    // lock (not MAX+1), so sequential calls are safe and gap-free. The two
-    // writes are batched rather than run per entry, which is what turns ~130
-    // round trips into ~45 for a seed that runs on every sandbox visit.
-    const historyVoucherNumbers: number[] = []
-    for (const historyEntry of ledgerHistory.entries) {
-      const { data: historyVoucherNumber, error: historyVoucherError } = await supabase.rpc(
-        'next_voucher_number',
-        {
-          p_company_id: companyId,
-          p_fiscal_period_id: fiscalPeriod.id,
-          p_series: historyEntry.voucher_series,
-        },
-      )
-      if (historyVoucherError) throw historyVoucherError
-      historyVoucherNumbers.push(historyVoucherNumber as number)
+    const historyEntryIds: string[] = []
+    for (const [index, entry] of ledgerHistory.entries.entries()) {
+      const posted = await createJournalEntry(supabase, companyId, userId, {
+        fiscal_period_id: entry.fiscal_period_id,
+        voucher_series: entry.voucher_series,
+        entry_date: entry.entry_date,
+        description: entry.description,
+        source_type: entry.source_type,
+        lines: ledgerHistory.linesByEntryIndex[index],
+      })
+      historyEntryIds.push(posted.id)
     }
-
-    // Inserted as draft and posted after the lines land: PostgREST autocommits
-    // each request, and check_balance_on_posted_insert (migration
-    // 20260806130000) rejects a posted header whose transaction carries no
-    // lines. The draft-to-posted UPDATE below fires check_balance_on_post
-    // against the finished verifikat instead.
-    //
-    // committed_at note: this route runs under the requester's authenticated
-    // client, and set_committed_at() (migration 20260806160000) preserves a
-    // preset committed_at only for trusted roles, so any backdated
-    // committed_at supplied here is overwritten with now() at posting. That
-    // is deliberate: an end-user role must never control the audit timestamp,
-    // and sandbox companies are disposable.
-    const { data: insertedHistoryEntries, error: historyEntryError } = await supabase
-      .from('journal_entries')
-      .insert(
-        ledgerHistory.entries.map((historyEntry, index) => ({
-          ...historyEntry,
-          voucher_number: historyVoucherNumbers[index],
-          status: 'draft',
-        })),
-      )
-      .select('id, voucher_number')
-    if (historyEntryError) throw historyEntryError
-
-    // Match on voucher_number, not on array position: PostgREST does not
-    // promise the returned rows come back in insertion order, and
-    // (company_id, fiscal_period_id, voucher_series, voucher_number) is unique.
-    const historyIdByVoucher = new Map(
-      (insertedHistoryEntries ?? []).map(row => [row.voucher_number as number, row.id as string]),
-    )
-
-    const historyEntryIds = historyVoucherNumbers.map(voucherNumber => {
-      const entryId = historyIdByVoucher.get(voucherNumber)
-      if (!entryId) {
-        throw new Error(`Sandbox seed: ledger history voucher ${voucherNumber} was not inserted`)
-      }
-      return entryId
-    })
-
-    const { error: historyLinesError } = await supabase
-      .from('journal_entry_lines')
-      .insert(
-        ledgerHistory.linesByEntryIndex.flatMap((lines, index) =>
-          lines.map(line => ({ ...line, journal_entry_id: historyEntryIds[index] })),
-        ),
-      )
-    if (historyLinesError) throw historyLinesError
-
-    const { error: historyPostError } = await supabase
-      .from('journal_entries')
-      .update({ status: 'posted' })
-      .in('id', historyEntryIds)
-      .eq('company_id', companyId)
-    if (historyPostError) throw historyPostError
 
     // The history is the company's books from before it arrived in Accounted:
     // its kvitton live in the previous system's binder, not here. Left
@@ -594,131 +527,36 @@ export async function POST(request: Request) {
       'Historisk bokföring: underlag arkiverade i det tidigare systemet.',
     )
 
-    // 10. Invoice vouchers (inserted directly, not via engine, to avoid event emission)
-    const { data: voucherNum1 } = await supabase.rpc('next_voucher_number', {
-      p_company_id: companyId,
-      p_fiscal_period_id: fiscalPeriod.id,
-      p_series: 'A',
+    // 10. Invoice vouchers use the engine's draft + atomic commit path.
+    const invoiceEntry = await createJournalEntry(supabase, companyId, userId, {
+      fiscal_period_id: fiscalPeriod.id,
+      voucher_series: 'A',
+      entry_date: toDateStr(thirtyDaysAgo),
+      description: 'Faktura F-2026001, Björk & Partner AB',
+      source_type: 'invoice_created',
+      source_id: invoiceMap['F-2026001'],
+      lines: [
+        { account_number: '1510', debit_amount: 18750, credit_amount: 0, dimensions: {} },
+        { account_number: '3001', debit_amount: 0, credit_amount: 15000, dimensions: { '1': 'BUTIK', '6': 'P001' } },
+        { account_number: '2611', debit_amount: 0, credit_amount: 3750, dimensions: {} },
+      ],
     })
-
-    const { data: je1, error: je1Error } = await supabase
-      .from('journal_entries')
-      .insert({
-        user_id: userId,
-        company_id: companyId,
-        fiscal_period_id: fiscalPeriod.id,
-        voucher_number: voucherNum1 ?? 1,
-        voucher_series: 'A',
-        entry_date: toDateStr(thirtyDaysAgo),
-        description: 'Faktura F-2026001, Björk & Partner AB',
-        source_type: 'invoice_created',
-        source_id: invoiceMap['F-2026001'],
-        // Draft until the lines exist; see the ledger-history comment above.
-        status: 'draft',
-        committed_at: toDateStr(thirtyDaysAgo),
-      })
-      .select('id')
-      .single()
-
-    if (je1Error) throw je1Error
-
-    const { data: voucherNum2 } = await supabase.rpc('next_voucher_number', {
-      p_company_id: companyId,
-      p_fiscal_period_id: fiscalPeriod.id,
-      p_series: 'A',
+    const je2 = await createJournalEntry(supabase, companyId, userId, {
+      fiscal_period_id: fiscalPeriod.id,
+      voucher_series: 'A',
+      entry_date: toDateStr(fifteenDaysAgo),
+      description: 'Betalning faktura F-2026001, Björk & Partner AB',
+      source_type: 'invoice_paid',
+      source_id: invoiceMap['F-2026001'],
+      lines: [
+        { account_number: '1930', debit_amount: 18750, credit_amount: 0, dimensions: {} },
+        { account_number: '1510', debit_amount: 0, credit_amount: 18750, dimensions: {} },
+      ],
     })
-
-    const { data: je2, error: je2Error } = await supabase
-      .from('journal_entries')
-      .insert({
-        user_id: userId,
-        company_id: companyId,
-        fiscal_period_id: fiscalPeriod.id,
-        voucher_number: voucherNum2 ?? 2,
-        voucher_series: 'A',
-        entry_date: toDateStr(fifteenDaysAgo),
-        description: 'Betalning faktura F-2026001, Björk & Partner AB',
-        source_type: 'invoice_paid',
-        source_id: invoiceMap['F-2026001'],
-        // Draft until the lines exist; see the ledger-history comment above.
-        status: 'draft',
-        committed_at: toDateStr(fifteenDaysAgo),
-      })
-      .select('id')
-      .single()
-
-    if (je2Error) throw je2Error
-
-    // 10. Create journal entry lines. The P&L line carries demo dimensions
-    // ({"1":"BUTIK","6":"P001"}) so the register's "antal taggade rader",
-    // voucher-detail badges, and the dimension P&L report light up in the
-    // sandbox. cost_center/project are GENERATED from the bag since the PR9
-    // cutover: writing them explicitly would error.
-    const revenueDims = { '1': 'BUTIK', '6': 'P001' }
-    const { error: jelError } = await supabase
-      .from('journal_entry_lines')
-      .insert([
-        // JE1: Invoice creation, Debit AR, Credit Revenue + VAT
-        // NB: `dimensions` must be set explicitly on EVERY row: same PostgREST
-        // bulk-insert normalization as paid_amount below: omitting it on some
-        // rows while one row sets it sends null (violating NOT NULL) instead
-        // of falling through to the schema default '{}'.
-        {
-          journal_entry_id: je1.id,
-          account_number: '1510',
-          account_id: accountMap['1510'] ?? null,
-          debit_amount: 18750,
-          credit_amount: 0,
-          sort_order: 0,
-          dimensions: {},
-        },
-        {
-          journal_entry_id: je1.id,
-          account_number: '3001',
-          account_id: accountMap['3001'] ?? null,
-          debit_amount: 0,
-          credit_amount: 15000,
-          sort_order: 1,
-          dimensions: revenueDims,
-        },
-        {
-          journal_entry_id: je1.id,
-          account_number: '2611',
-          account_id: accountMap['2611'] ?? null,
-          debit_amount: 0,
-          credit_amount: 3750,
-          sort_order: 2,
-          dimensions: {},
-        },
-        // JE2: Invoice payment, Debit Bank, Credit AR
-        {
-          journal_entry_id: je2.id,
-          account_number: '1930',
-          account_id: accountMap['1930'] ?? null,
-          debit_amount: 18750,
-          credit_amount: 0,
-          sort_order: 0,
-          dimensions: {},
-        },
-        {
-          journal_entry_id: je2.id,
-          account_number: '1510',
-          account_id: accountMap['1510'] ?? null,
-          debit_amount: 0,
-          credit_amount: 18750,
-          sort_order: 1,
-          dimensions: {},
-        },
-      ])
-
-    if (jelError) throw jelError
-
-    const { error: invoicePostError } = await supabase
-      .from('journal_entries')
-      .update({ status: 'posted' })
-      .in('id', [je1.id, je2.id])
-      .eq('company_id', companyId)
-    if (invoicePostError) throw invoicePostError
+    const { error: invoiceLinkError } = await supabase.from('invoices')
+      .update({ journal_entry_id: invoiceEntry.id })
+      .eq('id', invoiceMap['F-2026001']).eq('company_id', companyId)
+    if (invoiceLinkError) throw invoiceLinkError
 
     // 11. Create transactions
     const { data: txRows, error: txError } = await supabase
@@ -1178,9 +1016,8 @@ export async function POST(request: Request) {
 
     // 21. Verifikat for the BOOKED run. A run in status 'booked' that posted
     // nothing would be a lie: the real path (bookPaidSalaryRun) always writes
-    // these through the engine before advancing the status. The seed inserts
-    // journal rows directly to avoid event emission, so ./salary-vouchers
-    // mirrors the engine's account structure instead.
+    // these through the engine before advancing the status. The pure builder
+    // supplies the same account structure and the engine performs the writes.
     const bookedPeriod = resolveSandboxSalaryPeriods(today).booked
     const salaryVouchers = buildSandboxSalaryVouchers({
       userId,
@@ -1203,50 +1040,17 @@ export async function POST(request: Request) {
 
     const runEntryLinks: Record<string, string> = {}
     for (const voucher of salaryVouchers) {
-      const { data: salaryVoucherNumber, error: salaryVoucherError } = await supabase.rpc(
-        'next_voucher_number',
-        {
-          p_company_id: companyId,
-          p_fiscal_period_id: fiscalPeriod.id,
-          p_series: voucher.entry.voucher_series,
-        },
-      )
-      // A posted verifikat with no voucher number is a hole in the
-      // verifikationsserie (BFNAR 2013:2), so a failed counter read has to stop
-      // the seed rather than insert one.
-      if (salaryVoucherError) throw salaryVoucherError
-      if (salaryVoucherNumber == null) {
-        throw new Error('Sandbox seed: next_voucher_number returned no number for a salary voucher')
-      }
-
-      const { data: insertedSalaryEntry, error: salaryEntryError } = await supabase
-        .from('journal_entries')
-        // Draft until the lines exist; see the ledger-history comment above.
-        .insert({ ...voucher.entry, voucher_number: salaryVoucherNumber, status: 'draft' })
-        .select('id')
-        .single()
-      if (salaryEntryError) throw salaryEntryError
-
-      const { error: salaryEntryLinesError } = await supabase
-        .from('journal_entry_lines')
-        .insert(
-          voucher.lines.map(line => ({
-            ...line,
-            account_id: accountMap[line.account_number] ?? null,
-            journal_entry_id: insertedSalaryEntry.id,
-          })),
-        )
-      if (salaryEntryLinesError) throw salaryEntryLinesError
-
-      runEntryLinks[voucher.runColumn] = insertedSalaryEntry.id
+      const posted = await createJournalEntry(supabase, companyId, userId, {
+        fiscal_period_id: voucher.entry.fiscal_period_id,
+        voucher_series: voucher.entry.voucher_series,
+        entry_date: voucher.entry.entry_date,
+        description: voucher.entry.description,
+        source_type: voucher.entry.source_type,
+        source_id: voucher.entry.source_id,
+        lines: voucher.lines,
+      })
+      runEntryLinks[voucher.runColumn] = posted.id
     }
-
-    const { error: salaryPostError } = await supabase
-      .from('journal_entries')
-      .update({ status: 'posted' })
-      .in('id', Object.values(runEntryLinks))
-      .eq('company_id', companyId)
-    if (salaryPostError) throw salaryPostError
 
     const { error: linkRunError } = await supabase
       .from('salary_runs')
@@ -1256,8 +1060,20 @@ export async function POST(request: Request) {
 
     if (linkRunError) throw linkRunError
 
+    const { data: completed, error: completionError } = await supabase.rpc('finish_sandbox_seed', {
+      p_attempt_id: attemptId,
+      p_success: true,
+    })
+    if (completionError || !completed) throw completionError ?? new Error('Sandbox seed claim was lost')
+    log.info('sandbox seed completed', { companyId, attemptId, durationMs: Date.now() - startedAt })
     return NextResponse.json({ seeded: true })
   } catch (err) {
+    // A late failure cannot downgrade a completed attempt after a lost response.
+    const { error: failureError } = await supabase.rpc('finish_sandbox_seed', {
+      p_attempt_id: attemptId,
+      p_success: false,
+    })
+    if (failureError) log.error('failed to release sandbox seed', { error: failureError, companyId, attemptId })
     log.error('failed to seed sandbox data', { error: err, userId: user.id, companyId })
     return NextResponse.json(
       { error: 'Failed to seed sandbox data', requestId },
@@ -1269,7 +1085,7 @@ export async function POST(request: Request) {
 /**
  * Idempotent top-up for sandboxes that pre-date the agent_profile addition
  * to the seed. Re-running the seed on those older sandboxes short-circuits
- * at the company_settings idempotency check above, so they never get the
+ * after the verified completion check above, so they never get the
  * agent_profile without this hook. Delegates to ensureSandboxAgentProfile
  * so the profile data stays in exactly one place.
  *

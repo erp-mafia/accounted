@@ -77,17 +77,50 @@ export function claudeStepDone(input: { oauthKeyCount: number | null | undefined
 }
 
 /**
+ * The MCP server URL we hand to a client. `tool_namespace` is load-bearing
+ * (without it the server hands out legacy `gnubok_` tool names), `client`
+ * is a telemetry-only distribution marker, and the origin comes from the
+ * page so self-hosted and white-label domains link to themselves.
+ *
+ * `eagerAuth` appends `auth=required` (extensions/general/mcp-server/
+ * auth-mode.ts). Needed for clients whose Add-connector dialog probes the
+ * URL without credentials and reads the lazy 200 as "no authentication":
+ * claude.ai pre-fills "None" and Grok lists every tool without ever opening
+ * the sign-in. The 401 challenge is the only answer those dialogs read as
+ * OAuth. ChatGPT developer mode, Claude Code, Cursor and the stdio bridge
+ * keep the lazy URL.
+ */
+export function mcpServerUrl(input: { origin: string; client: string; eagerAuth?: boolean }): string {
+  const eager = input.eagerAuth ? '&auth=required' : ''
+  return `${input.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=${input.client}${eager}`
+}
+
+/**
+ * Clients that get a collapsed "Using X?" side door under the checklist's
+ * Claude step. Each value keys the i18n strings step_claude_<door>_link /
+ * _steps and the telemetry step name. Order is display order.
+ */
+export const SIDE_DOORS = ['chatgpt', 'grok'] as const
+export type SideDoor = (typeof SIDE_DOORS)[number]
+
+/**
+ * The URL a side door copies. Grok's connector dialog behaves like
+ * claude.ai's (a 200 probe means "no auth", so the OAuth flow never starts)
+ * and needs the eager flag; ChatGPT's developer mode honours the lazy 401
+ * on the first protected call and keeps the plain URL.
+ */
+export function sideDoorServerUrl(input: { origin: string; door: SideDoor }): string {
+  return mcpServerUrl({ origin: input.origin, client: input.door, eagerAuth: input.door === 'grok' })
+}
+
+/**
  * The claude.ai Add-custom-connector deep link the checklist's Claude step
- * opens. Same shape as the Settings → API & MCP button: `tool_namespace` is
- * load-bearing (without it the server hands out legacy `gnubok_` tool
- * names), `client` is a telemetry-only distribution marker, `auth=required`
- * makes claude.ai's dialog detect OAuth instead of "None" (see
- * extensions/general/mcp-server/auth-mode.ts), and the origin comes from the
- * page so self-hosted and white-label domains link to themselves. The link
- * only prefills the dialog; the user reviews there.
+ * opens. Same shape as the Settings → API & MCP button (see mcpServerUrl for
+ * the query parameters). The link only prefills the dialog; the user reviews
+ * there.
  */
 export function claudeConnectorLink(input: { origin: string; appName: string }): string {
-  const serverUrl = `${input.origin}/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector&auth=required`
+  const serverUrl = mcpServerUrl({ origin: input.origin, client: 'claude-connector', eagerAuth: true })
   return (
     'https://claude.ai/customize/connectors?modal=add-custom-connector' +
     `&connectorName=${encodeURIComponent(input.appName)}` +

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { useAccounts, useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
@@ -30,7 +30,7 @@ import type { EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 
-type DuplicateMatchReason = 'ocr_exact' | 'name_amount_fuzzy' | 'amount_only'
+type DuplicateMatchReason = 'ocr_exact' | 'name_amount_fuzzy' | 'amount_only' | 'aggregate_exact'
 
 interface DuplicateCandidate {
   id: string
@@ -41,6 +41,8 @@ interface DuplicateCandidate {
   reference: string | null
   match_reason: DuplicateMatchReason
   match_confidence: number
+  /** aggregate_exact: the other open invoices the bank row also covers. */
+  aggregate_invoice_numbers?: string[]
 }
 
 interface PaymentBookingDialogProps {
@@ -67,6 +69,7 @@ export default function PaymentBookingDialog({
     ocr_exact: t('match_reason_ocr_exact'),
     name_amount_fuzzy: t('match_reason_name_amount_fuzzy'),
     amount_only: t('match_reason_amount_only'),
+    aggregate_exact: t('match_reason_aggregate_exact'),
   }
 
   // Session-cached reference data (lib/reference-data), seeded by the
@@ -95,6 +98,13 @@ export default function PaymentBookingDialog({
   // debit, accrual against a 1510 credit.
   const accountingMethod: 'accrual' | 'cash' =
     companySettings?.accounting_method === 'cash' ? 'cash' : 'accrual'
+  // The bank account the invoice asked to be paid to (1930 when none was
+  // chosen): the proposed debit lands there, same as the route's default.
+  const { cashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
+  const chosenPaymentAccount = useMemo(() => {
+    const id = (invoice as { payment_cash_account_id?: string | null }).payment_cash_account_id
+    return id ? cashAccounts.find((a) => a.id === id)?.ledger_account ?? undefined : undefined
+  }, [cashAccounts, invoice])
   // source_type the booking will use: drives the voucher-series preview so the
   // number shown matches what mark-paid will actually create.
   const [sourceType, setSourceType] =
@@ -114,7 +124,7 @@ export default function PaymentBookingDialog({
 
     // Reference data still loading (no seed, first mount of the session):
     // the effect re-runs once it lands.
-    if (accountsLoading || settingsLoading) return
+    if (accountsLoading || settingsLoading || cashAccountsLoading) return
 
     let cancelled = false
 
@@ -167,6 +177,7 @@ export default function PaymentBookingDialog({
           },
           accountingMethod,
           entityType,
+          paymentAccount: chosenPaymentAccount,
           companyOreRounding:
             typeof settings?.ore_rounding === 'boolean' ? settings.ore_rounding : undefined,
         })
@@ -191,7 +202,7 @@ export default function PaymentBookingDialog({
   // background revalidation of the settings row must not re-run init()
   // (and reset the user's lines) mid-dialog.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, invoice.id, company?.id, accountsLoading, settingsLoading, accountsError, settingsError])
+  }, [open, invoice.id, company?.id, accountsLoading, settingsLoading, cashAccountsLoading, chosenPaymentAccount, accountsError, settingsError])
 
   // Voucher-series preview: resolve the upcoming serie + nummer the same way the
   // booking engine will, so a misconfigured series is visible before confirming.
@@ -355,11 +366,13 @@ export default function PaymentBookingDialog({
             <ul className="space-y-2">
               {duplicateCandidates.map((c) => {
                 const reasonVariant: 'success' | 'secondary' | 'outline' =
-                  c.match_reason === 'ocr_exact'
+                  c.match_reason === 'ocr_exact' || c.match_reason === 'aggregate_exact'
                     ? 'success'
                     : c.match_reason === 'name_amount_fuzzy'
                       ? 'secondary'
                       : 'outline'
+                const isAggregate =
+                  c.match_reason === 'aggregate_exact' && (c.aggregate_invoice_numbers?.length ?? 0) > 0
                 return (
                   <li
                     key={c.id}
@@ -378,6 +391,18 @@ export default function PaymentBookingDialog({
                       <p className="truncate text-xs text-muted-foreground">
                         {c.merchant_name || c.description || '-'}
                       </p>
+                      {/* A Bankgirot aggregate: the row also settles other
+                          invoices, so the remedy is the split under
+                          Transaktioner (one samlingsverifikation, row linked),
+                          never marking the invoices paid one by one. */}
+                      {isAggregate && (
+                        <p className="text-xs text-muted-foreground">
+                          {t('aggregate_covers', {
+                            count: c.aggregate_invoice_numbers!.length,
+                            numbers: c.aggregate_invoice_numbers!.join(', '),
+                          })}
+                        </p>
+                      )}
                     </div>
                     <Button
                       type="button"
@@ -386,7 +411,7 @@ export default function PaymentBookingDialog({
                       onClick={() => handleLinkExisting(c.id)}
                       className="shrink-0"
                     >
-                      {t('link_transaction')}
+                      {isAggregate ? t('allocate_transaction') : t('link_transaction')}
                     </Button>
                   </li>
                 )

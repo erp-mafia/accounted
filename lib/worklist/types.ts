@@ -25,6 +25,20 @@ export const WORKLIST_CATEGORIES = [
    */
   'book_transaction',
   /**
+   * Unbooked skattekonto rows ("N st skattekontohändelser att bokföra").
+   * Pending:  skattekonto_transactions with status = 'booked' (Skatteverket's
+   *           "tidigare": the event has happened on the tax account),
+   *           journal_entry_id IS NULL and is_ignored = false. Rows with
+   *           status = 'upcoming' are future charges with nothing to book
+   *           yet and never reach the Transaktioner inbox, so they are not
+   *           pending work either.
+   * Done:     the skattekonto booking flows set journal_entry_id (here it IS
+   *           the booked marker, unlike bank transactions), or the user
+   *           ignores the row (is_ignored = true). Same predicate as the
+   *           Transaktioner inbox's Skatteverket rows.
+   */
+  'book_skattekonto',
+  /**
    * Unconsumed documents in the inbox ("N st underlag att hantera").
    * Pending:  invoice_inbox_items with a document and no
    *           created_supplier_invoice_id / created_journal_entry_id /
@@ -45,7 +59,8 @@ export const WORKLIST_CATEGORIES = [
   'suggested_match',
   /**
    * Supplier invoices awaiting approval ("attestera").
-   * Pending:  supplier_invoices.status = 'registered'.
+   * Pending:  supplier_invoices.status = 'registered' and not a credit note
+   *           (a credit note is a reversal, never a payable).
    * Done:     status moves to approved/paid/credited/….
    */
   'supplier_invoice_approval',
@@ -110,8 +125,12 @@ export interface SuggestedMatch {
   transaction_description: string
   transaction_amount: number
   transaction_currency: string
-  /** Which match endpoint confirms it: match-invoice vs match-supplier-invoice. */
-  kind: 'invoice' | 'supplier_invoice'
+  /**
+   * Which match endpoint confirms it: match-invoice, match-supplier-invoice,
+   * or match-rot-rut-payout (Skatteverkets utbetalning for an open begäran;
+   * candidate_number is then the request name).
+   */
+  kind: 'invoice' | 'supplier_invoice' | 'rot_rut_payout'
   candidate_id: string
   candidate_number: string | null
   counterparty_name: string | null

@@ -159,11 +159,15 @@ export default function AttGoraSection({
       const url =
         match.kind === 'invoice'
           ? `/api/transactions/${match.transaction_id}/match-invoice`
-          : `/api/transactions/${match.transaction_id}/match-supplier-invoice`
+          : match.kind === 'rot_rut_payout'
+            ? `/api/transactions/${match.transaction_id}/match-rot-rut-payout`
+            : `/api/transactions/${match.transaction_id}/match-supplier-invoice`
       const body =
         match.kind === 'invoice'
           ? { invoice_id: match.candidate_id }
-          : { supplier_invoice_id: match.candidate_id }
+          : match.kind === 'rot_rut_payout'
+            ? { request_id: match.candidate_id }
+            : { supplier_invoice_id: match.candidate_id }
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -200,7 +204,11 @@ export default function AttGoraSection({
   }
 
   const showInboxDocuments = hasAi && counts.inbox_document > 0
-  const bokforRows = counts.book_transaction > 0 || showInboxDocuments || matches.length > 0
+  const bokforRows =
+    counts.book_transaction > 0 ||
+    counts.book_skattekonto > 0 ||
+    showInboxDocuments ||
+    matches.length > 0
   const granskaRows =
     counts.supplier_invoice_approval > 0 ||
     counts.verifikat_missing_document > 0 ||
@@ -277,6 +285,14 @@ export default function AttGoraSection({
                         count={counts.book_transaction}
                       />
                     )}
+                    {counts.book_skattekonto > 0 && (
+                      <WorklistRow
+                        href="/transactions?source=skatteverket"
+                        icon={Landmark}
+                        label={t('row_book_skattekonto')}
+                        count={counts.book_skattekonto}
+                      />
+                    )}
                     {matches.length > 0 && (
                       <div className="px-4 py-3">
                         <p className="text-xs text-muted-foreground mb-2">
@@ -311,7 +327,9 @@ export default function AttGoraSection({
                                     <ArrowRight className="inline h-3 w-3 mr-1" aria-hidden />
                                     {match.kind === 'invoice'
                                       ? t('suggested_kind_invoice')
-                                      : t('suggested_kind_supplier_invoice')}
+                                      : match.kind === 'rot_rut_payout'
+                                        ? t('suggested_kind_rot_rut_payout')
+                                        : t('suggested_kind_supplier_invoice')}
                                     {match.candidate_number ? ` ${match.candidate_number}` : ''}
                                     {match.counterparty_name ? ` · ${match.counterparty_name}` : ''}
                                     {' · '}

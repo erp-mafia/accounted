@@ -12,12 +12,13 @@ import {
   BookOpen,
   Receipt,
   Calculator,
-  Building2,
   FileText,
   FileDown,
   ExternalLink,
   ChevronDown,
   ChevronUp,
+  Briefcase,
+  Landmark,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { SupportLink } from '@/components/ui/support-link'
@@ -214,8 +215,8 @@ const categoryConfig = {
   moms: { labelKey: 'category_moms', icon: Receipt, color: 'bg-secondary text-muted-foreground' },
   faktura: { labelKey: 'category_faktura', icon: FileText, color: 'bg-secondary text-muted-foreground' },
   bokföring: { labelKey: 'category_bokforing', icon: BookOpen, color: 'bg-secondary text-muted-foreground' },
-  bank: { labelKey: 'category_bank', icon: Building2, color: 'bg-secondary text-muted-foreground' },
-  företag: { labelKey: 'category_foretag', icon: Building2, color: 'bg-secondary text-muted-foreground' },
+  bank: { labelKey: 'category_bank', icon: Landmark, color: 'bg-secondary text-muted-foreground' },
+  företag: { labelKey: 'category_foretag', icon: Briefcase, color: 'bg-secondary text-muted-foreground' },
 }
 
 function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpanded: boolean; onToggle: () => void }) {

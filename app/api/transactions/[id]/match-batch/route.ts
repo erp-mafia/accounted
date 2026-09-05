@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { MatchBatchSchema } from '@/lib/api/schemas'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { eventBus } from '@/lib/events/bus'
 import { clearSettledBatchAllocationSuggestions } from '@/lib/invoices/clear-settled-batch-allocations'
+import { detectExplainingVoucherSetForTransaction } from '@/lib/invoices/duplicate-payment-detection'
 import { ensureInitialized } from '@/lib/init'
 import type { Invoice, SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -73,6 +74,79 @@ export const POST = withRouteContext(
 
     // PR #607 round 3: p_user_id removed: RPC resolves caller from
     // auth.uid() directly. Keeps the attack surface off the API boundary.
+    // Only fakturor carry a receivable. The RPC gates on status alone, so a
+    // sent proforma or quote in the allocation list is refused here, as the
+    // single-invoice match route does.
+    const customerInvoiceIds = Array.from(
+      new Set(
+        validation.data.allocations.flatMap((a) =>
+          a.kind === 'customer_invoice' && a.invoice_id ? [a.invoice_id] : [],
+        ),
+      ),
+    )
+    if (customerInvoiceIds.length > 0) {
+      const { data: docRows, error: docError } = await supabase
+        .from('invoices')
+        .select('id, document_type')
+        .in('id', customerInvoiceIds)
+        .eq('company_id', companyId)
+      if (docError) {
+        txLog.error('match-batch: document lookup failed', docError)
+        return errorResponse(docError, txLog, { requestId })
+      }
+      const offender = (docRows ?? []).find((r) => r.document_type && r.document_type !== 'invoice')
+      if (offender) {
+        return errorResponseFromCode('MATCH_INVOICE_NOT_INVOICE_TYPE', txLog, {
+          requestId,
+          details: { invoiceId: offender.id, documentType: offender.document_type },
+        })
+      }
+    }
+
+    // Already-explained guard. A bank feed can deliver several affärshändelser
+    // as ONE row (a Bankgirot daily aggregate covering two customers'
+    // invoices), and each may already be booked on its own via "Markera som
+    // betald". The RPC only knows the invoices in the request: it correctly
+    // refuses the PAID ones, and then books the money a second time against
+    // whatever open invoices the user picked (the next period's identical
+    // ones, in the case that prompted this). The vouchers that explain the
+    // row are on the ledger, so refuse here and hand them back; the dialog
+    // links the row to them (1:N, /api/reconciliation/bank/link) instead of
+    // creating a new voucher. Fail-open on a detection error: the guard is
+    // advisory, the RPC remains the atomicity boundary.
+    let explaining: Awaited<ReturnType<typeof detectExplainingVoucherSetForTransaction>> = null
+    try {
+      explaining = await detectExplainingVoucherSetForTransaction(supabase, companyId!, transactionId)
+    } catch (err) {
+      txLog.warn('match-batch: explaining-voucher detection failed', err as Error)
+    }
+    if (explaining) {
+      const detectedIds = explaining.vouchers.map((v) => v.journal_entry_id).sort()
+      const expectedIds = [...(validation.data.expected_journal_entry_ids ?? [])].sort()
+      const acknowledged =
+        validation.data.force === true &&
+        detectedIds.length === expectedIds.length &&
+        detectedIds.every((id, i) => id === expectedIds[i])
+      if (!acknowledged) {
+        return errorResponseFromCode('BATCH_TX_POSSIBLE_DUPLICATE', txLog, {
+          requestId,
+          details: {
+            vouchers: explaining.vouchers,
+            total: explaining.total,
+            bank_account_number: explaining.bank_account_number,
+            same_date: explaining.same_date,
+            // force=true with a stale or missing set: the caller must re-read.
+            force_rejected: validation.data.force === true,
+          },
+        })
+      }
+      txLog.warn('match-batch: already-explained guard bypassed', {
+        reason: 'force=true',
+        journalEntryIds: detectedIds,
+        userId: user.id,
+      })
+    }
+
     const { data, error } = await supabase.rpc('match_batch_allocate', {
       p_tx_id: transactionId,
       p_allocations: validation.data.allocations,

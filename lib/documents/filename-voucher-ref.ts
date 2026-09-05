@@ -129,7 +129,11 @@ const YEAR_LIKE_RE = /^(?:19|20)\d{2}$/
  * Trim only. Directory components are NOT stripped: `file.name` from an
  * `<input type=file>` never carries a path, while the manual-reference box
  * feeds arbitrary user text through this same parser, where splitting on `/`
- * would quietly turn the typed date `2024/01/31` into voucher 31.
+ * would quietly turn the typed date `2024/01/31` into voucher 31. The one
+ * place a path does show up is the multipart `filename` of an upload (Chrome
+ * writes the folder-relative path for folder selections); the attach route
+ * reduces that to a basename before it reaches here, see
+ * `lib/documents/upload-file-name.ts`.
  */
 function baseName(fileName: string): string {
   return fileName.trim()

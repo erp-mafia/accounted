@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { detectDuplicatePaymentVoucher } from '../duplicate-payment-detection'
+import {
+  detectDuplicatePaymentVoucher,
+  detectExplainingVoucherSet,
+  detectExplainingVoucherSetForTransaction,
+} from '../duplicate-payment-detection'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
@@ -203,8 +207,8 @@ describe('detectDuplicatePaymentVoucher', () => {
         date: '2026-05-15',
       }),
     ])
-    // invoice_payments has a row linking this JE
-    enqueue({ data: [{ journal_entry_id: 'je-3' }], error: null })
+    // invoice_payments has a row linking this JE to a bank transaction
+    enqueue({ data: [{ journal_entry_id: 'je-3', transaction_id: 'tx-bank' }], error: null })
     enqueue({ data: [], error: null })
 
     const result = await detectDuplicatePaymentVoucher(supabase as never, {
@@ -216,6 +220,33 @@ describe('detectDuplicatePaymentVoucher', () => {
     })
 
     expect(result).toBeNull()
+  })
+
+  // #2019: "Markera som betald" and Stripe now write a payment row WITHOUT a
+  // bank transaction. That row means "paid by hand", not "reconciled to a
+  // bank line", so the voucher must still surface when the real bank line
+  // arrives; otherwise a second payment voucher posts silently.
+  it('still flags a voucher whose payment row carries no bank transaction (manual settlement)', async () => {
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-manual',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-15',
+      }),
+    ])
+    enqueue({ data: [{ journal_entry_id: 'je-manual', transaction_id: null }], error: null })
+    enqueue({ data: [], error: null })
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 1000,
+      transactionCurrency: 'SEK',
+    })
+
+    expect(result?.journal_entry_id).toBe('je-manual')
   })
 
   it('excludes JEs already linked from another transaction', async () => {
@@ -552,5 +583,274 @@ describe('detectDuplicatePaymentVoucher', () => {
 
     expect(result!.journal_entry_id).toBe('je-sek')
     expect(result!.amount_verified).toBe(true)
+  })
+})
+
+describe('detectExplainingVoucherSet', () => {
+  beforeEach(() => {
+    reset()
+  })
+
+  type SetLine = {
+    account_number: string
+    debit_amount: number
+    credit_amount: number
+    journal_entry: {
+      id: string
+      entry_date: string
+      description: string | null
+      voucher_series: string
+      voucher_number: number
+      status: string
+      source_type: string | null
+      company_id: string
+    }
+  }
+
+  function leg(opts: {
+    je_id: string
+    date: string
+    debit?: number
+    credit?: number
+    account?: string
+    label?: string
+    source_type?: string | null
+    description?: string
+  }): SetLine {
+    const label = opts.label ?? 'A1'
+    return {
+      account_number: opts.account ?? '1930',
+      debit_amount: opts.debit ?? 0,
+      credit_amount: opts.credit ?? 0,
+      journal_entry: {
+        id: opts.je_id,
+        entry_date: opts.date,
+        description: opts.description ?? `Voucher ${opts.je_id}`,
+        voucher_series: label[0],
+        voucher_number: parseInt(label.slice(1), 10) || 1,
+        status: 'posted',
+        source_type: opts.source_type === undefined ? 'invoice_paid' : opts.source_type,
+        company_id: 'company-1',
+      },
+    }
+  }
+
+  /** entries page, lines page, then the four link lookups (all empty unless given). */
+  function enqueueScan(
+    rows: SetLine[],
+    links: {
+      invoicePayments?: unknown[]
+      supplierPayments?: unknown[]
+      transactions?: unknown[]
+      junction?: unknown[]
+    } = {},
+  ) {
+    const entries = [...new Map(rows.map((r) => [r.journal_entry.id, r.journal_entry])).values()]
+    enqueue({ data: entries, error: null })
+    if (entries.length === 0) return
+    enqueue({
+      data: rows.map((r, i) => ({
+        id: `line-${i}`,
+        journal_entry_id: r.journal_entry.id,
+        account_number: r.account_number,
+        debit_amount: r.debit_amount,
+        credit_amount: r.credit_amount,
+      })),
+      error: null,
+    })
+    enqueue({ data: links.invoicePayments ?? [], error: null })
+    enqueue({ data: links.supplierPayments ?? [], error: null })
+    enqueue({ data: links.transactions ?? [], error: null })
+    enqueue({ data: links.junction ?? [], error: null })
+  }
+
+  const baseArgs = {
+    companyId: 'company-1',
+    transactionId: 'tx-bg',
+    transactionDate: '2026-07-31',
+    transactionCurrency: 'SEK',
+  }
+
+  it('explains a Bankgirot aggregate with the two mark-paid vouchers that sum to it', async () => {
+    // The reported case: 063 and 064 marked paid by hand (A57 + A58), then one
+    // 88 250 "BGGIRERING" row. Their payment rows carry no bank transaction.
+    enqueueScan(
+      [
+        leg({ je_id: 'A57', date: '2026-07-31', debit: 62500, label: 'A57', description: 'Inbetalning kundfaktura 063' }),
+        leg({ je_id: 'A58', date: '2026-07-31', debit: 25750, label: 'A58', description: 'Inbetalning kundfaktura 064' }),
+        leg({ je_id: 'A56', date: '2026-07-20', debit: 150, label: 'A56', source_type: 'bank_transaction' }),
+      ],
+      {
+        invoicePayments: [
+          { journal_entry_id: 'A57', transaction_id: null },
+          { journal_entry_id: 'A58', transaction_id: null },
+        ],
+      },
+    )
+
+    const set = await detectExplainingVoucherSet(supabase as never, {
+      ...baseArgs,
+      transactionAmount: 88250,
+      bankAccountNumber: '1930',
+    })
+
+    expect(set).not.toBeNull()
+    expect(set!.vouchers.map((v) => v.journal_entry_id).sort()).toEqual(['A57', 'A58'])
+    expect(set!.total).toBe(88250)
+    expect(set!.bank_account_number).toBe('1930')
+    expect(set!.same_date).toBe(true)
+    expect(set!.vouchers[0].voucher_label).toBe('A57')
+  })
+
+  it('scopes the scan to the row settlement account and the row direction', async () => {
+    const callsBefore = supabase.from.mock.calls.length
+    enqueueScan([leg({ je_id: 'je-1', date: '2026-07-31', credit: 1185 })])
+
+    const set = await detectExplainingVoucherSet(supabase as never, {
+      ...baseArgs,
+      transactionAmount: -1185,
+      bankAccountNumber: '1930',
+    })
+
+    const tables = supabase.from.mock.calls.slice(callsBefore).map((c) => c[0])
+    expect(tables.slice(0, 2)).toEqual(['journal_entries', 'journal_entry_lines'])
+    // Money out: the credit leg is the voucher's bank line.
+    expect(set?.vouchers.map((v) => v.amount)).toEqual([1185])
+  })
+
+  it('returns null when no set of at most four vouchers sums exactly to the row', async () => {
+    enqueueScan([
+      leg({ je_id: 'a', date: '2026-07-31', debit: 62500 }),
+      leg({ je_id: 'b', date: '2026-07-31', debit: 25000 }),
+    ])
+    const set = await detectExplainingVoucherSet(supabase as never, {
+      ...baseArgs,
+      transactionAmount: 88250,
+    })
+    expect(set).toBeNull()
+  })
+
+  it('drops vouchers a bank transaction already explains through any anchor', async () => {
+    enqueueScan(
+      [
+        leg({ je_id: 'via-tx', date: '2026-07-31', debit: 100 }),
+        leg({ je_id: 'via-payment', date: '2026-07-31', debit: 100 }),
+        leg({ je_id: 'via-supplier-payment', date: '2026-07-31', debit: 100 }),
+        leg({ je_id: 'via-junction', date: '2026-07-31', debit: 100 }),
+        leg({ je_id: 'free', date: '2026-07-31', debit: 100 }),
+      ],
+      {
+        invoicePayments: [{ journal_entry_id: 'via-payment', transaction_id: 'tx-other' }],
+        supplierPayments: [{ journal_entry_id: 'via-supplier-payment', transaction_id: 'tx-other' }],
+        transactions: [{ id: 'tx-other', journal_entry_id: 'via-tx' }],
+        junction: [{ journal_entry_id: 'via-junction' }],
+      },
+    )
+    const set = await detectExplainingVoucherSet(supabase as never, {
+      ...baseArgs,
+      transactionAmount: 100,
+    })
+    expect(set?.vouchers.map((v) => v.journal_entry_id)).toEqual(['free'])
+  })
+
+  it('never sums storno, correction or opening-balance entries', async () => {
+    enqueueScan([
+      leg({ je_id: 'storno', date: '2026-07-31', debit: 500, source_type: 'storno' }),
+      leg({ je_id: 'corr', date: '2026-07-31', debit: 300, source_type: 'correction' }),
+      leg({ je_id: 'ib', date: '2026-07-31', debit: 200, source_type: 'opening_balance' }),
+    ])
+    const set = await detectExplainingVoucherSet(supabase as never, {
+      ...baseArgs,
+      transactionAmount: 1000,
+    })
+    expect(set).toBeNull()
+  })
+
+  it('returns null without scanning when the row cannot be stated in SEK', async () => {
+    const callsBefore = supabase.from.mock.calls.length
+    const set = await detectExplainingVoucherSet(supabase as never, {
+      ...baseArgs,
+      transactionAmount: 1000,
+      transactionCurrency: 'EUR',
+      transactionAmountSek: null,
+      transactionExchangeRate: null,
+    })
+    expect(set).toBeNull()
+    expect(supabase.from.mock.calls.length).toBe(callsBefore)
+  })
+
+  it('states a foreign row in SEK before summing', async () => {
+    enqueueScan([leg({ je_id: 'je-eur', date: '2026-07-31', debit: 11500 })])
+    const set = await detectExplainingVoucherSet(supabase as never, {
+      ...baseArgs,
+      transactionAmount: 1000,
+      transactionCurrency: 'EUR',
+      transactionAmountSek: 11500,
+    })
+    expect(set?.vouchers.map((v) => v.journal_entry_id)).toEqual(['je-eur'])
+    expect(set?.total).toBe(11500)
+  })
+
+  it('fails open (null) when a link lookup resolves with an error instead of throwing', async () => {
+    const entries = [leg({ je_id: 'je-1', date: '2026-07-31', debit: 1000 })]
+    enqueue({ data: entries.map((r) => r.journal_entry), error: null })
+    enqueue({
+      data: entries.map((r, i) => ({ id: `line-${i}`, journal_entry_id: r.journal_entry.id, account_number: '1930', debit_amount: 1000, credit_amount: 0 })),
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    // transactions lookup fails: PostgREST resolves, it does not throw.
+    enqueue({ data: null, error: { message: 'permission denied' } })
+    enqueue({ data: [], error: null })
+    const set = await detectExplainingVoucherSet(supabase as never, {
+      ...baseArgs,
+      transactionAmount: 1000,
+    })
+    expect(set).toBeNull()
+  })
+
+  it('fails open (null) when the ledger scan throws', async () => {
+    enqueue({ data: null, error: { message: 'boom' } })
+    const set = await detectExplainingVoucherSet(supabase as never, {
+      ...baseArgs,
+      transactionAmount: 1000,
+    })
+    expect(set).toBeNull()
+  })
+})
+
+describe('detectExplainingVoucherSetForTransaction', () => {
+  beforeEach(() => {
+    reset()
+  })
+
+  it('returns null for a row that already carries a pointer, without scanning', async () => {
+    enqueue({ data: { id: 'tx-1', date: '2026-07-31', amount: 100, currency: 'SEK', journal_entry_id: 'je-live' }, error: null })
+    const callsBefore = supabase.from.mock.calls.length
+    const set = await detectExplainingVoucherSetForTransaction(supabase as never, 'company-1', 'tx-1')
+    expect(set).toBeNull()
+    expect(supabase.from.mock.calls.length - callsBefore).toBe(1)
+  })
+
+  it('fails open when the cash-account lookup errors instead of widening the scan', async () => {
+    const callsBefore = supabase.from.mock.calls.length
+    enqueue({ data: { id: 'tx-1', date: '2026-07-31', amount: 100, currency: 'SEK', cash_account_id: 'ca-1', journal_entry_id: null }, error: null })
+    enqueue({ data: null, error: { message: 'boom' } })
+    const set = await detectExplainingVoucherSetForTransaction(supabase as never, 'company-1', 'tx-1')
+    expect(set).toBeNull()
+    expect(supabase.from.mock.calls.length - callsBefore).toBe(2)
+  })
+
+  it('resolves the settlement account from the cash account before scanning', async () => {
+    const callsBefore = supabase.from.mock.calls.length
+    enqueue({ data: { id: 'tx-1', date: '2026-07-31', amount: 100, currency: 'SEK', cash_account_id: 'ca-1', journal_entry_id: null }, error: null })
+    enqueue({ data: { ledger_account: '1940' }, error: null })
+    // entries page: nothing on the account, scan ends.
+    enqueue({ data: [], error: null })
+    const set = await detectExplainingVoucherSetForTransaction(supabase as never, 'company-1', 'tx-1')
+    expect(set).toBeNull()
+    const tables = supabase.from.mock.calls.slice(callsBefore).map((c) => c[0])
+    expect(tables).toEqual(['transactions', 'cash_accounts', 'journal_entries'])
   })
 })

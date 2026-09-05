@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Search, ChevronDown, ChevronUp, AlertTriangle, Info, Building2, PenLine } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, AlertTriangle, Info, PenLine, Briefcase } from 'lucide-react'
 import {
   getCommonTemplates,
   getAdvancedTemplates,
@@ -519,7 +519,7 @@ export default function TemplatePicker({
             {sortedLibraryRaw.length > 0 && (
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Building2 className="h-3 w-3" />
+                  <Briefcase className="h-3 w-3" />
                   {t('my_templates')}
                 </p>
                 <div className="space-y-1.5">

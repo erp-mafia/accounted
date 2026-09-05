@@ -19,9 +19,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   const { data: invoice, error } = await supabase
     .from('supplier_invoices')
-    .select(
-      '*, supplier:suppliers(*), items:supplier_invoice_items(*), payments:supplier_invoice_payments(*), credited_original:supplier_invoices!credited_invoice_id(id, supplier_invoice_number, arrival_number)'
-    )
+    .select('*, supplier:suppliers(*), items:supplier_invoice_items(*), payments:supplier_invoice_payments(*)')
     .eq('id', id)
     .eq('company_id', companyId)
     .single()
@@ -30,7 +28,24 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     return NextResponse.json({ error: 'Supplier invoice not found' }, { status: 404 })
   }
 
-  return NextResponse.json({ data: invoice })
+  // The invoice a credit note reverses, fetched separately. credited_invoice_id
+  // is a self-reference, and PostgREST cannot pick a direction for a
+  // self-referencing embed from the column hint: the old
+  // `credited_original:supplier_invoices!credited_invoice_id(...)` resolved to
+  // the one-to-many side and came back as an empty array, which the detail
+  // page rendered as "Krediterar: Ankomst #" with no number.
+  let creditedOriginal: { id: string; supplier_invoice_number: string; arrival_number: number } | null = null
+  if (invoice.credited_invoice_id) {
+    const { data: original } = await supabase
+      .from('supplier_invoices')
+      .select('id, supplier_invoice_number, arrival_number')
+      .eq('id', invoice.credited_invoice_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    creditedOriginal = original ?? null
+  }
+
+  return NextResponse.json({ data: { ...invoice, credited_original: creditedOriginal } })
   },
 )
 

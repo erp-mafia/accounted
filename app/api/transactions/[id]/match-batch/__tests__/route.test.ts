@@ -28,6 +28,15 @@ vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
   clearSettledInvoiceSuggestions: mockClearSuggestions,
 }))
 
+// The already-explained guard (BATCH_TX_POSSIBLE_DUPLICATE) runs before the
+// RPC. Mocked so it consumes no slot in the queued Supabase mock; the
+// detector's own query shape is pinned by
+// lib/invoices/__tests__/duplicate-payment-detection.test.ts.
+const { mockDetectExplaining } = vi.hoisted(() => ({ mockDetectExplaining: vi.fn() }))
+vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
+  detectExplainingVoucherSetForTransaction: mockDetectExplaining,
+}))
+
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
@@ -51,6 +60,7 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     vi.clearAllMocks()
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    mockDetectExplaining.mockResolvedValue(null)
   })
 
   it('returns 400 when allocations is missing', async () => {
@@ -78,6 +88,8 @@ describe('POST /api/transactions/[id]/match-batch', () => {
 
   it('returns 200 with the RPC result on the happy path', async () => {
     // RPC returns success envelope
+    // document_type pre-check for the customer allocations (before the RPC)
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
     enqueue({
       data: {
         ok: true,
@@ -199,6 +211,8 @@ describe('POST /api/transactions/[id]/match-batch', () => {
   })
 
   it('maps an RPC structured failure to errorResponseFromCode', async () => {
+    // document_type pre-check for the customer allocations (before the RPC)
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
     enqueue({
       data: {
         ok: false,
@@ -221,6 +235,8 @@ describe('POST /api/transactions/[id]/match-batch', () => {
   })
 
   it('maps a raw RPC error to BATCH_RPC_FAILED', async () => {
+    // document_type pre-check for the customer allocations (before the RPC)
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
     enqueue({ data: null, error: { message: 'connection dropped' } })
 
     const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
@@ -233,5 +249,150 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(500)
     expect(body.error.code).toBe('BATCH_RPC_FAILED')
+  })
+
+  it('refuses a quote in the allocation list before the RPC runs', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'quote' }], error: null })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 }],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_INVOICE_NOT_INVOICE_TYPE')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/transactions/[id]/match-batch: already-explained guard', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const JE_A = '55555555-5555-4555-8555-555555555555'
+  const JE_B = '66666666-6666-4666-8666-666666666666'
+  const explainingSet = {
+    vouchers: [
+      { journal_entry_id: JE_A, voucher_label: 'A57', entry_date: '2026-07-31', description: 'Inbetalning kundfaktura 063', source_type: 'invoice_paid', amount: 62500, bank_account_number: '1930' },
+      { journal_entry_id: JE_B, voucher_label: 'A58', entry_date: '2026-07-31', description: 'Inbetalning kundfaktura 064', source_type: 'invoice_paid', amount: 25750, bank_account_number: '1930' },
+    ],
+    total: 88250,
+    bank_account_number: '1930',
+    same_date: true,
+  }
+
+  function enqueueHappyRpc() {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
+    enqueue({
+      data: {
+        ok: true,
+        journal_entry_id: 'je-batch-9',
+        voucher_series: 'A',
+        voucher_number: 59,
+        tx_id: TX_UUID,
+        allocations: [
+          { kind: 'customer_invoice', invoice_id: INV_UUID, payment_id: 'ip-9', status: 'paid', paid_amount: 88250, remaining_amount: 0, amount: 88250 },
+        ],
+        total_allocated: 88250,
+        leftover: 0,
+      },
+      error: null,
+    })
+    enqueue({ data: { id: TX_UUID, amount: 88250, currency: 'SEK' }, error: null })
+    enqueue({ data: { id: INV_UUID, currency: 'SEK', status: 'paid' }, error: null })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    mockDetectExplaining.mockResolvedValue(null)
+  })
+
+  it('refuses with 409 and the vouchers when unlinked vouchers already sum to the row', async () => {
+    mockDetectExplaining.mockResolvedValue(explainingSet)
+    // document_type pre-check runs before the guard.
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: { allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 88250 }] },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { vouchers: Array<{ voucher_label: string }>; total: number; force_rejected: boolean } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BATCH_TX_POSSIBLE_DUPLICATE')
+    expect(body.error.details.vouchers.map((v) => v.voucher_label)).toEqual(['A57', 'A58'])
+    expect(body.error.details.total).toBe(88250)
+    expect(body.error.details.force_rejected).toBe(false)
+    expect(mockDetectExplaining).toHaveBeenCalledWith(mockSupabase, 'company-1', TX_UUID)
+    // The RPC was never reached.
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('books anyway when force=true echoes exactly the reviewed voucher ids', async () => {
+    mockDetectExplaining.mockResolvedValue(explainingSet)
+    enqueueHappyRpc()
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 88250 }],
+        force: true,
+        // Order must not matter.
+        expected_journal_entry_ids: [JE_B, JE_A],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    expect(response.status).toBe(200)
+    expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses force=true whose ids do not match the set it re-detects', async () => {
+    mockDetectExplaining.mockResolvedValue(explainingSet)
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 88250 }],
+        force: true,
+        expected_journal_entry_ids: [JE_A],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { force_rejected: boolean } } }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BATCH_TX_POSSIBLE_DUPLICATE')
+    expect(body.error.details.force_rejected).toBe(true)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('rejects force=true without expected_journal_entry_ids at the schema (400)', async () => {
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 88250 }],
+        force: true,
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    expect(response.status).toBe(400)
+  })
+
+  it('fails open when the detector throws: the RPC still decides', async () => {
+    mockDetectExplaining.mockRejectedValue(new Error('ledger scan timed out'))
+    enqueueHappyRpc()
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: { allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 88250 }] },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    expect(response.status).toBe(200)
   })
 })

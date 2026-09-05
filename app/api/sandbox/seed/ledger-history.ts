@@ -33,10 +33,9 @@
  * enskild_firma, so every row in the reports carries its BAS name instead of the
  * "Konto 6212" fallback.
  *
- * The entries deliberately carry NO voucher_number: the caller assigns those by
- * calling the next_voucher_number RPC once per entry, in array order, so the
- * sequence stays unbroken (BFNAR 2013:2). Lines carry no journal_entry_id for
- * the same reason.
+ * The entries carry no posting metadata: the caller posts through the engine
+ * in array order. It assigns voucher numbers atomically when committing and
+ * links the lines to their journal entry.
  */
 
 import { roundOre } from '@/lib/money'
@@ -86,10 +85,8 @@ export interface SandboxLedgerEntryRow {
   voucher_series: string
   entry_date: string
   description: string
-  source_type: string
+  source_type: 'manual'
   source_id: null
-  status: string
-  committed_at: string
 }
 
 /** A journal_entry_lines row WITHOUT journal_entry_id: the caller fills it in. */
@@ -252,8 +249,6 @@ export function buildSandboxLedgerHistory({
       description,
       source_type: SOURCE_TYPE,
       source_id: null,
-      status: 'posted',
-      committed_at: entryDate,
     })
     linesByEntryIndex.push(
       lines.map((line, index) => ({

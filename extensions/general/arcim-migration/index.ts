@@ -17,7 +17,14 @@ import {
   ProviderCompanyMismatchError,
   ConsentNotFoundError,
 } from './lib/provider-client'
-import { providerSupportsSie, fetchProviderSieFiles, getAllowedFiscalYears } from './lib/sie-fetcher'
+import {
+  providerSupportsSie,
+  fetchProviderSieFiles,
+  getAllowedFiscalYears,
+  FiscalYearSelectionError,
+  MAX_SELECTED_FISCAL_YEARS,
+  type SourceFiscalYear,
+} from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
 import {
@@ -34,7 +41,7 @@ import { mergeParsedSIEFiles } from '@/lib/import/sie-merge'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
 import { loadMappings, generateImportPreview, executeSIEImport, findOverlappingPeriodImports } from '@/lib/import/sie-import'
-import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
+import { buildMappingTargets } from './lib/mapping-targets'
 import type { ProviderName } from '@/lib/providers/types'
 import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -837,6 +844,12 @@ export const arcimMigrationExtension: Extension = {
           // Try to fetch SIE data (Fortnox and Briox serve SIE over the API)
           let sieAvailable = false
           let sieStats: { accountCount: number; transactionCount: number; fiscalYears: number[] } | null = null
+          // Every fiscal year the source has, with the default selection
+          // marked: the preview step renders them as the year picker, so the
+          // user chooses BEFORE the import runs and no year is left out
+          // silently (issues #2211, #2238). The stats below stay on the
+          // default selection: that is what the preview fetched.
+          let sourceYears: SourceFiscalYear[] = []
 
           if (providerSupportsSie(provider)) {
             try {
@@ -848,11 +861,12 @@ export const arcimMigrationExtension: Extension = {
               // "0 verifikationer" and then imported 4153). Costs one SIE
               // export per extra year, the same work /sie-data repeats right
               // after: honest numbers are worth it.
-              const { files, availableYears } = await fetchProviderSieFiles(
+              const { files, availableYears, sourceYears: source } = await fetchProviderSieFiles(
                 provider,
                 resolved.accessToken,
                 resolved.providerCompanyId,
               )
+              sourceYears = source
               if (files.length > 0) {
                 const merged = mergeParsedSIEFiles(files.map((f) => parseSIEFile(f.rawContent)))
                 sieAvailable = true
@@ -896,6 +910,10 @@ export const arcimMigrationExtension: Extension = {
             companyInfo: mapped,
             sieAvailable,
             sieStats,
+            sourceYears,
+            // The picker enforces the same cap as /sie-data, read from here
+            // rather than duplicated in the client.
+            maxSelectedYears: MAX_SELECTED_FISCAL_YEARS,
             assetStats,
             hasSieData: (sieImportCount ?? 0) > 0,
           })
@@ -936,6 +954,34 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json({ error: 'consentId is required' }, { status: 400 })
         }
 
+        // `years`: the fiscal years the user ticked in the preview step
+        // (start years, comma-separated). Absent = the default selection.
+        // Every selected year is one SIE export fetched and parsed in THIS
+        // invocation, so the selection is the user's own wait; it fails
+        // loudly here, before any ledger write, if it is too much.
+        const yearsParam = url.searchParams.get('years')
+        let requestedYears: number[] | undefined
+        if (yearsParam !== null) {
+          const parsed = yearsParam.split(',').filter(Boolean).map(Number)
+          const valid = parsed.length > 0 && parsed.every((y) => Number.isInteger(y) && y >= 1900 && y <= 2200)
+          if (!valid) {
+            return errorResponseFromCode('VALIDATION_ERROR', moduleLog, {
+              details: { field: 'years', reason: 'comma-separated fiscal year start years' },
+            })
+          }
+          requestedYears = [...new Set(parsed)].sort((a, b) => a - b)
+          // The resource bound: each selected year is one provider export
+          // fetched and parsed in this invocation (derivation on the
+          // constant). Rejected before any provider call.
+          if (requestedYears.length > MAX_SELECTED_FISCAL_YEARS) {
+            return errorResponseFromCode('VALIDATION_ERROR', moduleLog, {
+              messageSv: `Högst ${MAX_SELECTED_FISCAL_YEARS} räkenskapsår kan hämtas per körning. Välj färre år; äldre år kan hämtas i en ny körning.`,
+              messageEn: `At most ${MAX_SELECTED_FISCAL_YEARS} fiscal years can be fetched per run. Select fewer years; older years can be fetched in a second run.`,
+              details: { field: 'years', reason: 'too_many', max: MAX_SELECTED_FISCAL_YEARS, requested: requestedYears.length },
+            })
+          }
+        }
+
         try {
           // Resolve consent
           const resolved = await resolveConsent(companyId, consentId)
@@ -947,19 +993,38 @@ export const arcimMigrationExtension: Extension = {
             })
           }
 
-          // Fetch SIE type 4 for each allowed fiscal year
-          const { files: sieFiles, failedYears } = await fetchProviderSieFiles(
-            provider,
-            resolved.accessToken,
-            resolved.providerCompanyId,
-          )
+          // Fetch SIE type 4 for each selected fiscal year. A selected year
+          // the source does not have is refused by the fetcher right after
+          // the year listing, before any export is fetched.
+          let fetched: Awaited<ReturnType<typeof fetchProviderSieFiles>>
+          try {
+            fetched = await fetchProviderSieFiles(
+              provider,
+              resolved.accessToken,
+              resolved.providerCompanyId,
+              requestedYears ? { years: requestedYears } : undefined,
+            )
+          } catch (err) {
+            if (err instanceof FiscalYearSelectionError) {
+              const years = err.unknownYears.join(', ')
+              return errorResponseFromCode('VALIDATION_ERROR', moduleLog, {
+                messageSv: `Räkenskapsår ${years} finns inte hos leverantören.`,
+                messageEn: `Fiscal years ${years} do not exist at the provider.`,
+                details: { field: 'years', reason: 'unknown_year', unknownYears: err.unknownYears },
+              })
+            }
+            throw err
+          }
+          const { files: sieFiles, failedYears, omittedYears } = fetched
 
           if (sieFiles.length === 0) {
-            // The allowed window is rolling (current year and the two before
-            // it): interpolate the actual range instead of the static
-            // registry message so the text never goes stale.
-            const allowedYears = [...getAllowedFiscalYears()].sort((a, b) => a - b)
-            const range = `${allowedYears[0]}-${allowedYears[allowedYears.length - 1]}`
+            // Name the selection: the explicit years when the picker sent
+            // them, else the rolling default window (interpolated so the
+            // text never goes stale).
+            const selection = requestedYears ?? [...getAllowedFiscalYears()].sort((a, b) => a - b)
+            const range = requestedYears
+              ? requestedYears.join(', ')
+              : `${selection[0]}-${selection[selection.length - 1]}`
             return errorResponseFromCode('PROVIDER_SIE_NO_YEARS', moduleLog, {
               messageSv: `Inga räkenskapsår ${range} hittades hos leverantören.`,
               messageEn: `No fiscal years available for ${range}.`,
@@ -1023,12 +1088,13 @@ export const arcimMigrationExtension: Extension = {
             updated_at: '',
           }))
 
-          // Suggest mappings
-          const basAccounts = BAS_REFERENCE.map(b => ({
-            account_number: b.account_number,
-            account_name: b.account_name,
-          }))
-          const mappings = suggestMappings(allAccounts, basAccounts, existingRecords)
+          // Mapping targets are the company's OWN chart of accounts first,
+          // then BAS for anything it does not have yet. BAS alone cannot
+          // express an account the company added outside the standard, so
+          // such an account was impossible to map onto. See
+          // ./lib/mapping-targets.
+          const mappingTargets = await buildMappingTargets(supabase, companyId)
+          const mappings = suggestMappings(allAccounts, mappingTargets, existingRecords)
           const mappingStats = getMappingStats(mappings)
 
           log.info(`Account mapping: ${allAccounts.length} unique accounts across ${sieFiles.length} files, ${mappingStats.unmapped} unmapped`)
@@ -1111,7 +1177,10 @@ export const arcimMigrationExtension: Extension = {
             // Allowed years whose provider export failed: the wizard warns
             // the user before proceeding so an IB/UB gap cannot slip through.
             failedYears,
-            basAccounts: BAS_REFERENCE,
+            // Source years outside the selection: the result step names them
+            // so nobody believes the books are complete (#2211).
+            omittedYears,
+            basAccounts: mappingTargets,
           })
         } catch (error) {
           log.error('arcim sie-data fetch failed', error as Error)

@@ -18,6 +18,7 @@
  * which loosens the Zod schema to prove the defence lives in the route.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { JAMKNING_ROW_INCOMPLETE } from '@/lib/salary/jamkning-rules'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
@@ -73,13 +74,19 @@ const EXISTING_ROW = {
  * to `.update()`, and resolves the update chain with the merged row. `captured.updates`
  * staying null is the assertion that no write was attempted at all.
  */
-function employeeSupabase(existing: Record<string, unknown> = { ...EXISTING_ROW }) {
+function employeeSupabase(
+  existing: Record<string, unknown> = { ...EXISTING_ROW },
+  updateError: { code: string; message: string } | null = null,
+) {
   const captured: { updates: Record<string, unknown> | null } = { updates: null }
 
   function chainFor(state: { isUpdate: boolean }): unknown {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
+          if (state.isUpdate && updateError) {
+            return (resolve: (v: unknown) => void) => resolve({ data: null, error: updateError })
+          }
           const data = state.isUpdate ? { ...existing, ...(captured.updates ?? {}) } : existing
           return (resolve: (v: unknown) => void) => resolve({ data, error: null })
         }
@@ -220,10 +227,11 @@ describe('personnummer contract on /api/salary/employees/[id]', () => {
  */
 describe('jämkning on PATCH /api/salary/employees/[id]', () => {
   const JAMKNING_START_REQUIRED = 'Jämkningens startdatum måste anges när jämkningsprocent sätts'
+  const JAMKNING_END_REQUIRED = 'Jämkningens slutdatum måste anges när jämkningsprocent sätts'
   const JAMKNING_ORDER = 'Jämkningens slutdatum måste vara efter startdatumet'
 
-  function useRow(existing: Record<string, unknown>) {
-    const mock = employeeSupabase(existing)
+  function useRow(existing: Record<string, unknown>, updateError: { code: string; message: string } | null = null) {
+    const mock = employeeSupabase(existing, updateError)
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
     return mock.captured
   }
@@ -256,6 +264,20 @@ describe('jämkning on PATCH /api/salary/employees/[id]', () => {
 
     expect(status).toBe(400)
     expect(body.error).toContain(JAMKNING_START_REQUIRED)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when a percentage is set with a start date but no end date (#2058)', async () => {
+    const captured = useRow({ ...EXISTING_ROW, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null })
+
+    const response = await PATCH(
+      patchRequest({ jamkning_percentage: 20, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null }),
+      params,
+    )
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain(JAMKNING_END_REQUIRED)
     expect(captured.updates).toBeNull()
   })
 
@@ -335,5 +357,65 @@ describe('jämkning on PATCH /api/salary/employees/[id]', () => {
 
     expect(response.status).toBe(200)
     expect(captured.updates).toEqual({ first_name: 'Ny' })
+  })
+
+  // The PostgREST error for employees_jamkning_dates_check (#2256), as
+  // observed against a real PostgREST: the constraint name is in `message`,
+  // `details` carries the failing row and must never reach the response.
+  const CHECK_CONSTRAINT_ERROR = {
+    code: '23514',
+    message: 'new row for relation "employees" violates check constraint "employees_jamkning_dates_check"',
+    details: 'Failing row contains (...).',
+    hint: null,
+  }
+
+  it('400 with the umbrella sentence when the CHECK constraint catches the race (#2256)', async () => {
+    // The snapshot this handler validated against was empty, so nulling only
+    // the end date is a no-op to the merged check... except another request
+    // stored a complete beslut in between. The constraint is the only thing
+    // that sees the real row: it must come back as a 400, not a 500, and the
+    // merged row cannot explain it, so the umbrella sentence is used.
+    const captured = useRow(
+      { ...EXISTING_ROW, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null },
+      CHECK_CONSTRAINT_ERROR,
+    )
+
+    const response = await PATCH(patchRequest({ jamkning_valid_to: null }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(JAMKNING_ROW_INCOMPLETE)
+    expect(JSON.stringify(body)).not.toContain('Failing row')
+    expect(captured.updates).toEqual({ jamkning_valid_to: null })
+  })
+
+  it('400 naming the missing date when a legacy incomplete row is edited in an unrelated column (NOT VALID trade-off)', async () => {
+    // The route lets the unrelated edit through (touched gate), the
+    // constraint refuses the row on its next UPDATE: the user is told exactly
+    // what to complete, with the validator's own sentence.
+    const captured = useRow(
+      { ...EXISTING_ROW, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null },
+      CHECK_CONSTRAINT_ERROR,
+    )
+
+    const response = await PATCH(patchRequest({ first_name: 'Ny' }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(JAMKNING_END_REQUIRED)
+    expect(captured.updates).toEqual({ first_name: 'Ny' })
+  })
+
+  it('500 through the generic mapper for any other database error on the update', async () => {
+    useRow(
+      { ...EXISTING_ROW, jamkning_percentage: null, jamkning_valid_from: null, jamkning_valid_to: null },
+      { code: '23514', message: 'new row for relation "employees" violates check constraint "employees_tax_column_check"' },
+    )
+
+    const response = await PATCH(patchRequest({ first_name: 'Ny' }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error).not.toContain('JAMKNING')
   })
 })

@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PendingOperation } from '@/types'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+// The payee write-through is its own unit (lib/cash-accounts/__tests__/invoice-payee.test.ts);
+// here it must not consume the queued company_settings results.
+vi.mock('@/lib/cash-accounts/invoice-payee', () => ({
+  propagateLegacyPayeeWrite: vi.fn().mockResolvedValue(['SEK']),
+}))
+
 import { commitPendingOperation } from '../commit'
 
 function makePendingOp(params: Record<string, unknown>): PendingOperation {

@@ -64,6 +64,43 @@ describe('gnubok_create_voucher: staging gates', () => {
     ).rejects.toThrow(/not balanced/i)
   })
 
+  it('names the missing amount keys instead of coercing an unknown line shape to 0/0 (feedback seq 318571)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    // Four "balanced" formats an agent actually sent: none names
+    // debit_amount/credit_amount, so every one used to read as
+    // "debits 0 SEK, credits 0 SEK" from the balance check.
+    for (const lines of [
+      [{ account_number: '6110', debit: 500 }, { account_number: '1930', credit: 500 }],
+      [{ account_number: '6110', amount: 500, side: 'debit' }, { account_number: '1930', amount: 500, side: 'credit' }],
+      [{ account_number: '6110', debitAmount: 500 }, { account_number: '1930', creditAmount: 500 }],
+      [{ account_number: '6110', amount: 500 }, { account_number: '1930', amount: -500 }],
+    ]) {
+      await expect(
+        createVoucher.execute(
+          { entry_date: '2026-05-12', description: 'shape', lines },
+          'company-1',
+          'user-1',
+          supabase as never,
+        ),
+      ).rejects.toThrow(/lines\[0\]: expected debit_amount and\/or credit_amount.*got .*Example/)
+    }
+    await expect(
+      createVoucher.execute(
+        {
+          entry_date: '2026-05-12',
+          description: 'shape',
+          lines: [
+            { account_number: '6110', debit_amount: '500 kr' },
+            { account_number: '1930', credit_amount: 500 },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/lines\[0\]\.debit_amount must be a number in SEK; got "500 kr"/)
+  })
+
   it('rejects when an explicit fiscal_period_id is closed', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // fiscal_periods fetch returns a closed period
@@ -653,6 +690,24 @@ describe('gnubok_correct_entry: registration', () => {
         supabase as never,
       ),
     ).rejects.toThrow(/not balanced/i)
+  })
+
+  it('names the missing amount keys on replacement lines instead of coercing to 0/0', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      correctEntry.execute(
+        {
+          entry_id: 'je-1',
+          lines: [
+            { account_number: '2645', debit: 250 },
+            { account_number: '2614', credit: 250 },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/lines\[0\]: expected debit_amount and\/or credit_amount.*got debit/)
   })
 
   it('shows preserved currency, tax, and dimension metadata in the correction preview', async () => {

@@ -97,9 +97,20 @@ export type InvoicePdfSource =
  * review instead of a download (#1190); the archived-delivery URL below is
  * already an inline proxy, so both source kinds can be previewed the same way.
  */
-export function invoiceRerenderUrl(invoiceId: string, options?: { inline?: boolean }): string {
+export function invoiceRerenderUrl(
+  invoiceId: string,
+  options?: { inline?: boolean; probe?: boolean },
+): string {
   const base = `/api/invoices/${encodeURIComponent(invoiceId)}/pdf`
-  return options?.inline ? `${base}?disposition=inline` : base
+  const params = new URLSearchParams()
+  if (options?.inline) params.set('disposition', 'inline')
+  // `probe=1` runs every refusal check the render would run and answers 204
+  // without rendering. The preview asks this first so a refusal can be shown
+  // as a message in the app, and the tab is then pointed at the real inline
+  // URL, keeping the filename and a reloadable address.
+  if (options?.probe) params.set('probe', '1')
+  const query = params.toString()
+  return query ? `${base}?${query}` : base
 }
 
 /**

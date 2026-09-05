@@ -37,6 +37,13 @@
  *      into a compile error; this guard keeps new reports on that path.
  *      Tracked as a file-set. Voucher/line LISTINGS are sanctioned in
  *      LEDGER_SCAN_SANCTIONED: they have no closingEntry decision to make.
+ *   3c. direct-invoice-payment-insert: a file that inserts into
+ *      `invoice_payments` outside lib/invoices/invoice-payment-row.ts. Five
+ *      hand-built inserts each computed their own `amount`, and the bank-match
+ *      ones stored the cash received instead of the amount applied to the
+ *      invoice, so a whole-krona overshoot absorbed on 3740 made the row
+ *      exceed the receivable (#2250). recordInvoicePaymentRow() is the one
+ *      writer. Tracked as a file-set, no baseline: the count is 0 today.
  *   4. pinned-dep    : a dependency pinned to an exact version (PINNED_DEPS)
  *      whose package.json spec or locked version drifted from the pin. Guards
  *      against a repeat of the @anthropic-ai/bedrock-sdk 0.32.0 prod outage
@@ -248,6 +255,30 @@ function findDirectJelInserts() {
     .sort()
 }
 
+// The one writer of invoice_payments rows: recordInvoicePaymentRow() owns the
+// field semantics (amount = applied to the invoice, never the cash received).
+const INVOICE_PAYMENT_INSERT_SANCTIONED = new Set(['lib/invoices/invoice-payment-row.ts'])
+const INVOICE_PAYMENT_INSERT_CHAIN_RE =
+  /\.from\(\s*['"]invoice_payments['"]\s*\)\s*\.\s*(insert|upsert)\(/
+
+/** Files that insert into invoice_payments outside the sanctioned writer. */
+function findDirectInvoicePaymentInserts() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  return files
+    .filter((f) => {
+      const r = rel(f)
+      if (INVOICE_PAYMENT_INSERT_SANCTIONED.has(r)) return false
+      if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
+      return INVOICE_PAYMENT_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
+    })
+    .map(rel)
+    .sort()
+}
+
 // The one module allowed to import supabase-js's createClient as a value: it
 // is the wrapper that applies SERVER_AUTH_OPTIONS.
 const LEAKY_CLIENT_SANCTIONED = new Set(['lib/supabase/service-client.ts'])
@@ -388,6 +419,34 @@ function countNaiveRound() {
     }
   }
   return count
+}
+
+/**
+ * 9. provider-host: files that talk to an external provider API directly.
+ * Provider integration logic is moving behind the connector (hosted
+ * `app/api/connect/*` today, the Accounted Connect service later): the open
+ * repo keeps the ledger, the contract and the manual file paths, and a
+ * self-hosted instance reaches every provider through its connector key.
+ * Per-file ratchet: the grandfathered set may only shrink. A NEW file naming a
+ * provider API host is a boundary violation unless it is the connector's own
+ * hosted adapter side.
+ */
+const PROVIDER_HOST_RE =
+  /api\.enablebanking\.com|api\.tilisy\.com|api\.skatteverket\.se|peroauth2\.skatteverket\.se|sso\.skatteverket\.se|api\.qvalia\.com|api-test\.qvalia\.com|api\.fortnox\.se|apps\.fortnox\.se|vismaonline\.com|briox\.services|apigateway\.blinfo\.se|api\.bokio\.se|api\.bolagsverket\.se|api-accept2\.bolagsverket\.se|id\.tic\.io|graph\.facebook\.com|gmail\.googleapis\.com/i
+
+function findProviderHostFiles() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  const found = []
+  for (const f of files) {
+    const r = rel(f)
+    if (r.includes('__tests__/') || r.endsWith('.test.ts') || r.endsWith('.test.tsx')) continue
+    if (PROVIDER_HOST_RE.test(fs.readFileSync(f, 'utf8'))) found.push(r)
+  }
+  return found.sort()
 }
 
 /**
@@ -1025,8 +1084,10 @@ const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
   handRolledInvariants: countHandRolledInvariants(),
+  providerHosts: findProviderHostFiles(),
   ledgerScanningReports: findLedgerScanningReports(),
   directJelInsert: findDirectJelInserts(),
+  directInvoicePaymentInsert: findDirectInvoicePaymentInserts(),
   leakySupabaseClients: findLeakySupabaseClients(),
   pinnedDepViolations: findPinnedDepViolations(),
   rawUserErrors: findRawUserErrors(),
@@ -1063,6 +1124,10 @@ if (isUpdate) {
     rawReferenceFetch: {
       count: current.rawReferenceFetch.length,
       files: current.rawReferenceFetch,
+    },
+    providerHosts: {
+      count: current.providerHosts.length,
+      files: current.providerHosts,
     },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
@@ -1107,6 +1172,22 @@ if (current.directJelInsert.length) {
     '  → route line writes through lib/bookkeeping/engine.ts, or derive cost_center/project via\n' +
       '    lineDimensionColumns() (lib/bookkeeping/dimension-resolver.ts) and add the file to\n' +
       '    JEL_INSERT_SANCTIONED in this script with a justification.',
+  )
+}
+
+// 1b1. direct-invoice-payment-insert: allowlist lives in this file
+// (INVOICE_PAYMENT_INSERT_SANCTIONED), no baseline: any unsanctioned insert
+// site is a hard failure.
+if (current.directInvoicePaymentInsert.length) {
+  failed = true
+  console.error(
+    `\n✗ direct-invoice-payment-insert: ${current.directInvoicePaymentInsert.length} file(s) insert into invoice_payments ` +
+      `outside lib/invoices/invoice-payment-row.ts:`,
+  )
+  current.directInvoicePaymentInsert.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → record the payment through recordInvoicePaymentRow() (lib/invoices/invoice-payment-row.ts):\n' +
+      '    it owns the row semantics (amount = applied to the invoice, never the cash received, #2250).',
   )
 }
 
@@ -1344,6 +1425,26 @@ if (newLedgerScans.length) {
   )
 }
 
+// 1c2. provider-host: a file naming a provider API host outside the
+// grandfathered set is a NEW direct integration in the open repo.
+const providerHostBaseline = new Set(baseline.providerHosts?.files ?? [])
+const newProviderHosts = current.providerHosts.filter((f) => !providerHostBaseline.has(f))
+const fixedProviderHosts = (baseline.providerHosts?.files ?? []).filter((f) => !current.providerHosts.includes(f))
+if (baseline.providerHosts && newProviderHosts.length) {
+  failed = true
+  console.error(
+    `\n✗ provider-host: ${newProviderHosts.length} new file(s) call a provider API host directly:`,
+  )
+  newProviderHosts.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → provider integration logic lives behind the connector, not in the open ledger:\n' +
+      '    route the call through the hosted connector (app/api/connect/*) and the\n' +
+      '    instance-side connector-mode seam (lib/connect/instance/upstreams.ts), or\n' +
+      '    keep the manual file path. If this file IS the connector\'s own hosted adapter\n' +
+      '    side, re-baseline with --update and say so in the PR.',
+  )
+}
+
 // 1d. raw-reference-fetch: per-file ratchet. A file outside the baseline set
 // that fetches reference data raw (see raw-reference-fetch.mjs) is a NEW
 // violation; grandfathered files stay until they move to the hooks. Once the
@@ -1410,6 +1511,7 @@ if (
   fixedLedgerScans.length ||
   fixedDialogOverflow.length ||
   fixedRawRefs.length ||
+  fixedProviderHosts.length ||
   current.naiveOreRound < baseline.naiveOreRound.count
 ) {
   console.log('\n✓ Progress since baseline:')
@@ -1422,6 +1524,8 @@ if (
     console.log(`    raw-reference-fetch: -${fixedRawRefs.length} file(s)`)
   if (current.naiveOreRound < baseline.naiveOreRound.count)
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
+  if (fixedProviderHosts.length)
+    console.log(`    provider-host: -${fixedProviderHosts.length} file(s) no longer call a provider directly`)
   console.log('    Run with --update to ratchet the baseline down and lock in the gains.')
 }
 if (migratedDirectAi.length) {
@@ -1444,5 +1548,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

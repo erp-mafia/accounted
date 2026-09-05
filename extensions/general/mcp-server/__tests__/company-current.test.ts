@@ -185,6 +185,16 @@ describe('Accounted://company/current query shape', () => {
     expect(argsOf(entries, 'eq')).toContainEqual(['source_type', 'bank_transaction'])
     expect(argsOf(entries, 'eq')).not.toContainEqual(['source_type', 'transaction'])
   })
+
+  it('counts only fakturor as open AR: proformas, delivery notes and quotes are never receivables', async () => {
+    const { supabase, calls } = createRecordingSupabase(emptyResults())
+
+    await companyCurrentResource.read(ctx(supabase))
+
+    const [invoices] = findCall(calls, 'invoices')
+    expect(invoices).toBeDefined()
+    expect(argsOf(invoices, 'eq')).toContainEqual(['document_type', 'invoice'])
+  })
 })
 
 describe('Accounted://company/current recency signals', () => {

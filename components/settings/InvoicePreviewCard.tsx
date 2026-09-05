@@ -90,8 +90,22 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         })
 
         if (!response.ok) {
-          const body = await response.json().catch(() => null)
-          throw new Error(body?.error || `HTTP ${response.status}`)
+          // The route answers with the structured envelope ({ error: { code,
+          // message, details } }); the mapper reads it whole and says exactly
+          // what is missing (e.g. no bankgiro for a SEK invoice). Wrapping
+          // `body.error` in `new Error()` stringified the object and left only
+          // the generic "Kunde inte hantera fakturan" fallback.
+          const body: unknown = await response.json().catch(() => null)
+          if (cancelled) return
+          setError(
+            getErrorMessage(body ?? new Error(`HTTP ${response.status}`), {
+              locale,
+              context: 'invoice',
+              statusCode: response.status,
+            }),
+          )
+          setIsLoading(false)
+          return
         }
 
         const blob = await response.blob()

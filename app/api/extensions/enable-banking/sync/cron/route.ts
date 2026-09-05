@@ -11,6 +11,8 @@ import {
   getDaysUntilExpiry,
   probeSessionHealth,
   SessionExpiredError,
+  AspspUnavailableError,
+  ConnectorSyncError,
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
 } from '@/extensions/general/enable-banking/lib/api-client'
@@ -29,6 +31,11 @@ import { getBranding } from '@/lib/branding/service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { updateBalancesFromSync } from '@/lib/cash-accounts/service'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
+import {
+  INCREMENTAL_LOOKBACK_DAYS,
+  MAX_LOOKBACK_DAYS,
+  incrementalLookbackDays,
+} from '@/extensions/general/enable-banking/lib/cron-lookback'
 
 ensureInitialized()
 
@@ -194,15 +201,26 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       }
 
       const toDate = new Date().toISOString().split('T')[0]
-      // First sync: 90-day lookback (PSD2 max). Subsequent: 7-day window.
+      // First sync: 90-day lookback (PSD2 max). Subsequent: 7-day window,
+      // widened to cover any gap since the last successful sync (a paused
+      // subscription that was paid again, a renewed consent) so the days in
+      // between are not lost. See cron-lookback.ts.
       // Gate on initial_sync_completed_at, not last_synced_at: manual "Sync now"
       // sets last_synced_at without doing the deep backfill, and we want the cron
       // to still fall back to 90 days if the inline activation backfill failed.
       const isFirstSync = !connection.initial_sync_completed_at
-      const lookbackDays = isFirstSync ? 90 : 7
+      const lookbackDays = isFirstSync
+        ? MAX_LOOKBACK_DAYS
+        : incrementalLookbackDays(connection.last_synced_at)
       if (isFirstSync) {
         ctx.log.info('first sync for connection: using 90-day lookback', {
           connectionId: connection.id,
+          lookbackDays,
+        })
+      } else if (lookbackDays > INCREMENTAL_LOOKBACK_DAYS) {
+        ctx.log.info('gap since last sync: widening lookback', {
+          connectionId: connection.id,
+          lastSyncedAt: connection.last_synced_at,
           lookbackDays,
         })
       }
@@ -246,11 +264,12 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         .maybeSingle()
 
       // First sync uses strategy=longest to pull the deepest history available
-      // from the ASPSP. Incremental syncs skip it: the implicit default is
-      // faster and we already have the older data.
+      // from the ASPSP, and so does a gap backfill of a month or more (same
+      // threshold as the manual sync route). Routine incremental syncs skip
+      // it: the implicit default is faster and we already have the older data.
       const syncOptions = {
         ...(sieOverlap ? { skipAutoCategorization: true } : {}),
-        ...(isFirstSync ? { strategy: 'longest' as const } : {}),
+        ...(isFirstSync || lookbackDays >= 30 ? { strategy: 'longest' as const } : {}),
       }
 
       const syncResults = await Promise.all(
@@ -368,6 +387,13 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       // the short Swedish user message in both cases: the raw Enable Banking
       // error body (an English JSON envelope) stays in the server log below.
       const isSessionDead = error instanceof SessionExpiredError
+      // A bank refusing right now, or the connector hop failing (timeout,
+      // error envelope, contract mismatch), says nothing about the PSD2
+      // session: retryable, and the row is left alone. Parking it in 'error'
+      // with SYNC_FAILED_MESSAGE told users to renew a consent that was fine
+      // (four canary companies on 2026-09-04). The probe below still checks
+      // the session, so a dead one is caught anyway.
+      const isTransient = error instanceof AspspUnavailableError || error instanceof ConnectorSyncError
       const failureStatus = isSessionDead ? 'expired' : 'error'
       const failureMessage = isSessionDead ? REAUTH_REQUIRED_MESSAGE : SYNC_FAILED_MESSAGE
 
@@ -386,14 +412,24 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
           ...failureContext,
           reason: error instanceof Error ? error.message : String(error),
         })
+      } else if (isTransient) {
+        ctx.log.warn('transient bank sync failure, connection left untouched', {
+          ...failureContext,
+          reason: error instanceof Error ? error.message : String(error),
+          ...(error instanceof ConnectorSyncError
+            ? { connectorCode: error.code, connectorStatus: error.status, issues: error.issues }
+            : { aspspReason: error instanceof AspspUnavailableError ? error.reason : undefined }),
+        })
       } else {
         ctx.log.error('sync failed for connection', error as Error, failureContext)
       }
 
-      await supabase
-        .from('bank_connections')
-        .update({ status: failureStatus, error_message: failureMessage })
-        .eq('id', connection.id)
+      if (!isTransient) {
+        await supabase
+          .from('bank_connections')
+          .update({ status: failureStatus, error_message: failureMessage })
+          .eq('id', connection.id)
+      }
 
       results.push({
         connectionId: connection.id,

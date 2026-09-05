@@ -8,7 +8,15 @@ import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import { AccountNumber } from '@/components/ui/account-number'
 import {
@@ -20,6 +28,7 @@ import { EditAccountDialog } from './EditAccountDialog'
 import { PruneAccountsDialog } from './PruneAccountsDialog'
 import {
   ChevronRight,
+  ListFilter,
   Plus,
   Pencil,
   Trash2,
@@ -43,6 +52,20 @@ interface ReferenceAccount extends BASReferenceAccount {
   is_active: boolean
   is_system_account: boolean
 }
+
+/**
+ * Column-header filter on "Verifikat" (#2186). "unused" means the account is
+ * absent from get_account_usage_counts, i.e. never posted to: the set a
+ * migrated chart wants pruned, since a short kontoplan is what keeps manual
+ * bookings off the wrong account.
+ */
+type UsageFilter = 'all' | 'unused' | 'used'
+
+const USAGE_FILTER_KEY = {
+  all: 'usage_filter_all',
+  unused: 'usage_filter_unused',
+  used: 'usage_filter_used',
+} as const
 
 // ---------------------------------------------------------------------------
 // Component
@@ -83,6 +106,14 @@ export default function ChartOfAccountsManager() {
   // leaving it off keeps first paint on the smaller active-only payload.
   // A deactivated account is otherwise invisible everywhere and unrecoverable.
   const [showInactive, setShowInactive] = useState(false)
+  const [usageFilter, setUsageFilter] = useState<UsageFilter>('all')
+  // Row selection for the bulk inactivate (#2186), keyed by account number
+  // (the PUT/deactivate routes key on it too). Cleared on view switch.
+  const [selectedNumbers, setSelectedNumbers] = useState<Set<string>>(new Set())
+  const [bulkDeactivating, setBulkDeactivating] = useState(false)
+  // The usage map loads after first paint; until it has, "utan verifikat"
+  // would match every account, so the filter stays disabled.
+  const [usageLoaded, setUsageLoaded] = useState(false)
 
   // Data state
   const [accounts, setAccounts] = useState<BASAccount[]>([])
@@ -166,6 +197,7 @@ export default function ChartOfAccountsManager() {
           ]),
         ),
       )
+      setUsageLoaded(true)
     } catch {
       // Leave the map empty — usage display is informational only.
     }
@@ -271,6 +303,68 @@ export default function ChartOfAccountsManager() {
     }
   }
 
+  // Bulk inactivate of the selection (#2186). Only never-used, non-system,
+  // active accounts go: a used account hides its balances from the kontoplan,
+  // so it keeps the per-row toggle with its own confirm. The route enforces
+  // the same partition server-side; the client partitions first so the
+  // confirm can say exactly what will and will not happen (convention 10).
+  async function bulkDeactivate() {
+    const byNumber = new Map(accounts.map((a) => [a.account_number, a]))
+    const unused: string[] = []
+    let used = 0
+    let system = 0
+    for (const number of selectedNumbers) {
+      const account = byNumber.get(number)
+      if (!account || !account.is_active) continue
+      if (account.is_system_account) {
+        system += 1
+        continue
+      }
+      if (usageCounts.has(number)) {
+        used += 1
+        continue
+      }
+      unused.push(number)
+    }
+    if (unused.length === 0) {
+      toast({ title: t('bulk_deactivate_none_unused') })
+      return
+    }
+    const skippedNote = [
+      used > 0 ? t('bulk_deactivate_skipped_used', { count: used }) : null,
+      system > 0 ? t('bulk_deactivate_skipped_system', { count: system }) : null,
+    ]
+      .filter(Boolean)
+      .join(' ')
+    const confirmed = await confirm({
+      title: t('bulk_deactivate_confirm_title', { count: unused.length }),
+      description: [t('bulk_deactivate_confirm', { count: unused.length }), skippedNote]
+        .filter(Boolean)
+        .join(' '),
+      confirmLabel: t('deactivate_confirm_action'),
+      variant: 'warning',
+    })
+    if (!confirmed) return
+
+    setBulkDeactivating(true)
+    try {
+      const res = await fetch('/api/bookkeeping/accounts/deactivate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_numbers: unused }),
+      })
+      if (!res.ok) throw new Error(t('toast_update_failed'))
+      const body = (await res.json().catch(() => ({}))) as { deactivated?: number }
+      toast({ title: t('bulk_deactivate_done', { count: Number(body.deactivated ?? 0) }) })
+      setSelectedNumbers(new Set())
+      await refreshAll()
+    } catch {
+      toast({ title: t('toast_update_failed'), variant: 'destructive' })
+    } finally {
+      setBulkDeactivating(false)
+    }
+  }
+
   async function deleteAccount(account: BASAccount) {
     const confirmed = await confirm({
       title: t('delete_confirm_title'),
@@ -364,12 +458,33 @@ export default function ChartOfAccountsManager() {
   // -------------------------------------------
 
   const filteredAccounts = useMemo(() => {
-    if (!searchQuery) return accounts
     const q = searchQuery.toLowerCase()
-    return accounts.filter(
-      (a) => a.account_number.includes(q) || a.account_name.toLowerCase().includes(q)
-    )
-  }, [accounts, searchQuery])
+    return accounts.filter((a) => {
+      if (q && !(a.account_number.includes(q) || a.account_name.toLowerCase().includes(q))) {
+        return false
+      }
+      // Absence from the usage map means never posted to (see /usage).
+      if (usageFilter === 'unused' && usageCounts.has(a.account_number)) return false
+      if (usageFilter === 'used' && !usageCounts.has(a.account_number)) return false
+      return true
+    })
+  }, [accounts, searchQuery, usageFilter, usageCounts])
+
+  const visibleNumbers = useMemo(
+    () => filteredAccounts.map((a) => a.account_number),
+    [filteredAccounts],
+  )
+  const allVisibleSelected =
+    visibleNumbers.length > 0 && visibleNumbers.every((n) => selectedNumbers.has(n))
+  const toggleSelect = (number: string) =>
+    setSelectedNumbers((prev) => {
+      const next = new Set(prev)
+      if (next.has(number)) next.delete(number)
+      else next.add(number)
+      return next
+    })
+  const toggleSelectAllVisible = () =>
+    setSelectedNumbers(allVisibleSelected ? new Set() : new Set(visibleNumbers))
 
   const groupedAccounts = useMemo(() => {
     const grouped: Record<number, BASAccount[]> = {}
@@ -431,17 +546,20 @@ export default function ChartOfAccountsManager() {
 
   const switchView = (next: 'my-accounts' | 'bas-catalog') => {
     setView(next)
+    setSelectedNumbers(new Set())
     setCollapsedMyClasses(new Set())
     setExpandedCatalogClasses(new Set())
     if (next === 'bas-catalog') void ensureReferenceLoaded()
   }
 
   // Concept band row (Klass N: label), clickable to fold the class away.
+  // It carries no per-class counter: the old "{active}/{total} aktiva" was
+  // derived from the filtered list and read as full coverage under the
+  // Verifikat filter (#2263). Shown/total lives once, in the page footer.
   const bandRow = (
     cls: number,
     open: boolean,
     onToggle: () => void,
-    countLabel: string,
     colSpan: number,
   ) => (
     <tr key={`band-${cls}`}>
@@ -454,7 +572,6 @@ export default function ChartOfAccountsManager() {
         >
           <ChevronRight className={cn('h-3 w-3 shrink-0 transition-transform duration-200', open && 'rotate-90')} />
           {t('class_heading', { cls, label: classLabel(cls) })}
-          <span className="font-normal normal-case tabular-nums">{countLabel}</span>
         </button>
       </td>
     </tr>
@@ -511,18 +628,86 @@ export default function ChartOfAccountsManager() {
       ) : view === 'my-accounts' ? (
         filteredAccounts.length === 0 ? (
           <p className="px-1 py-12 text-center text-sm text-muted-foreground">
-            {searchQuery ? t('no_matches') : t('no_accounts')}
+            {searchQuery || usageFilter !== 'all' ? t('no_matches') : t('no_accounts')}
           </p>
         ) : (
+          <div>
+            {/* Bulk bar: appears with the first selection, carries the count
+                and the one action the selection exists for. */}
+            {selectedNumbers.size > 0 && (
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border px-1 py-2 text-[12.5px] animate-fade-in">
+                <span className="whitespace-nowrap">
+                  <strong className="font-semibold tabular-nums">{selectedNumbers.size}</strong>{' '}
+                  {t('bulkbar_selected', { count: selectedNumbers.size })}
+                </span>
+                <Button size="sm" onClick={bulkDeactivate} disabled={bulkDeactivating}>
+                  {bulkDeactivating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {t('deactivate_confirm_action')}
+                </Button>
+                {!allVisibleSelected && (
+                  <button type="button" className={QUIET_LINK_CLASS} onClick={toggleSelectAllVisible}>
+                    {t('bulk_select_all', { count: visibleNumbers.length })}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={QUIET_LINK_CLASS}
+                  onClick={() => setSelectedNumbers(new Set())}
+                  disabled={bulkDeactivating}
+                >
+                  {t('bulk_clear_selection')}
+                </button>
+              </div>
+            )}
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
+                  <th className={cn(TH_CLASS, 'w-[36px] pr-0')}>
+                    <Checkbox
+                      checked={allVisibleSelected}
+                      onCheckedChange={toggleSelectAllVisible}
+                      aria-label={t('select_all_aria')}
+                      className="border-foreground"
+                    />
+                  </th>
                   <th className={cn(TH_CLASS, 'w-[96px]')}>{t('col_account')}</th>
                   <th className={cn(TH_CLASS, 'w-full')}>{t('col_name')}</th>
                   <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('col_sru')}</th>
                   <th className={cn(TH_CLASS, 'hidden md:table-cell')}>{t('col_type')}</th>
-                  <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('col_usage')}</th>
+                  <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>
+                    {/* The header is the filter (#2186): pick all / never
+                        posted to / posted to, the way the verifikat list
+                        filters from its headers. */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          disabled={!usageLoaded}
+                          aria-label={t('usage_filter_label')}
+                          className={cn(
+                            'inline-flex items-center gap-1 transition-colors duration-150 hover:text-foreground disabled:opacity-50',
+                            usageFilter !== 'all' && 'text-foreground',
+                          )}
+                        >
+                          {usageFilter === 'all' ? t('col_usage') : t(USAGE_FILTER_KEY[usageFilter])}
+                          <ListFilter className="h-3 w-3" aria-hidden />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuRadioGroup
+                          value={usageFilter}
+                          onValueChange={(v) => setUsageFilter(v as UsageFilter)}
+                        >
+                          {(['all', 'unused', 'used'] as const).map((value) => (
+                            <DropdownMenuRadioItem key={value} value={value}>
+                              {t(USAGE_FILTER_KEY[value])}
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </th>
                   <th className={TH_CLASS}>{t('col_active')}</th>
                   <th className={cn(TH_CLASS, 'w-[84px]')} aria-hidden="true"></th>
                 </tr>
@@ -533,16 +718,9 @@ export default function ChartOfAccountsManager() {
                   .map(([cls, classAccounts]) => {
                     const classNum = Number(cls)
                     const open = !collapsedMyClasses.has(classNum) || !!searchQuery
-                    const activeCount = classAccounts.filter((a) => a.is_active).length
                     return (
                       <Fragment key={cls}>
-                        {bandRow(
-                          classNum,
-                          open,
-                          () => toggleMyClass(classNum),
-                          t('active_count_label', { active: activeCount, total: classAccounts.length }),
-                          7,
-                        )}
+                        {bandRow(classNum, open, () => toggleMyClass(classNum), 8)}
                         {open &&
                           classAccounts.map((account) => (
                             <tr
@@ -555,6 +733,18 @@ export default function ChartOfAccountsManager() {
                                 !account.is_active && 'text-muted-foreground',
                               )}
                             >
+                              <td className={cn(TD_CLASS, 'w-[36px] pr-0 py-[9px]')}>
+                                <Checkbox
+                                  checked={selectedNumbers.has(account.account_number)}
+                                  onCheckedChange={() => toggleSelect(account.account_number)}
+                                  aria-label={t('select_row_aria', { number: account.account_number })}
+                                  className={cn(
+                                    'border-foreground',
+                                    CHECKBOX_REVEAL_CLASS,
+                                    selectedNumbers.has(account.account_number) && 'opacity-100',
+                                  )}
+                                />
+                              </td>
                               <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
                                 <AccountNumber number={account.account_number} name={account.account_name} />
                               </td>
@@ -641,6 +831,7 @@ export default function ChartOfAccountsManager() {
               </tbody>
             </table>
           </div>
+          </div>
         )
       ) : (
         <div>
@@ -670,19 +861,9 @@ export default function ChartOfAccountsManager() {
                     .map(([cls, classAccounts]) => {
                       const classNum = Number(cls)
                       const open = expandedCatalogClasses.has(classNum) || !!searchQuery
-                      // Row existence alone is not activation: a deactivated
-                      // account is in the chart but not usable, so it must not
-                      // count as active here either.
-                      const activatedCount = classAccounts.filter((a) => a.is_activated && a.is_active).length
                       return (
                         <Fragment key={cls}>
-                          {bandRow(
-                            classNum,
-                            open,
-                            () => toggleCatalogClass(classNum),
-                            t('active_count_label', { active: activatedCount, total: classAccounts.length }),
-                            5,
-                          )}
+                          {bandRow(classNum, open, () => toggleCatalogClass(classNum), 5)}
                           {open &&
                             classAccounts.map((account) => (
                               <tr

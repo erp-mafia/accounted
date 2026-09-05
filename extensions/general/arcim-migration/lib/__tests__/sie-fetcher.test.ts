@@ -3,6 +3,8 @@ import {
   providerSupportsSie,
   fetchProviderSieFiles,
   getAllowedFiscalYears,
+  FiscalYearSelectionError,
+  MAX_SELECTED_FISCAL_YEARS,
 } from '../sie-fetcher'
 
 // The allowed window is rolling (current year and the two before it): derive
@@ -54,7 +56,7 @@ function octetResponse(bytes: Uint8Array): Response {
   })
 }
 
-describe('getAllowedFiscalYears', () => {
+describe('getAllowedFiscalYears (the default selection)', () => {
   it('is a rolling three-year window ending at the current year', () => {
     const years = getAllowedFiscalYears(new Date('2031-06-15'))
     expect([...years].sort((a, b) => a - b)).toEqual([2029, 2030, 2031])
@@ -65,6 +67,14 @@ describe('getAllowedFiscalYears', () => {
     expect(years.has(CY)).toBe(true)
     expect(years.has(CY - 2)).toBe(true)
     expect(years.has(CY - 3)).toBe(false)
+  })
+})
+
+describe('MAX_SELECTED_FISCAL_YEARS', () => {
+  it('is six: 6 years x 48 s worst case (3 x 15 s timeout + 1 s + 2 s backoff) = 288 s inside the 300 s function', () => {
+    expect(MAX_SELECTED_FISCAL_YEARS).toBe(6)
+    expect(MAX_SELECTED_FISCAL_YEARS * (3 * 15 + 1 + 2)).toBeLessThan(300)
+    expect((MAX_SELECTED_FISCAL_YEARS + 1) * (3 * 15 + 1 + 2)).toBeGreaterThan(300)
   })
 })
 
@@ -125,6 +135,17 @@ describe('fetchProviderSieFiles', () => {
       expect(result.availableYears).toEqual([CY - 2, CY - 1])
       expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 2, CY - 1])
       expect(result.failedYears).toEqual([])
+      // Every source year is NAMED with the provider's own bounds and its
+      // default-selection flag (the picker), and the one outside the
+      // selection is reported as omitted (#2211): nothing is left out silently.
+      expect(result.sourceYears).toEqual([
+        { year: CY - 3, fromDate: `${CY - 3}-01-01`, toDate: `${CY - 3}-12-31`, inDefaultSelection: false },
+        { year: CY - 2, fromDate: `${CY - 2}-01-01`, toDate: `${CY - 2}-12-31`, inDefaultSelection: true },
+        { year: CY - 1, fromDate: `${CY - 1}-01-01`, toDate: `${CY - 1}-12-31`, inDefaultSelection: true },
+      ])
+      expect(result.omittedYears).toEqual([
+        { year: CY - 3, fromDate: `${CY - 3}-01-01`, toDate: `${CY - 3}-12-31`, inDefaultSelection: false },
+      ])
       // CP437 bytes decoded into proper Swedish characters
       expect(result.files[0].rawContent).toContain(`Företagskonto ${CY - 2}`)
       expect(result.files[1].rawContent).toContain(`Företagskonto ${CY - 1}`)
@@ -174,6 +195,9 @@ describe('fetchProviderSieFiles', () => {
       respond: () =>
         jsonResponse({
           FinancialYears: [
+            // A broken first year (issue #2211): starts before the window,
+            // so it is left out. Listed first as Fortnox does.
+            { Id: 4, FromDate: `${CY - 4}-09-01`, ToDate: `${CY - 3}-12-31` },
             { Id: 5, FromDate: `${CY - 2}-01-01`, ToDate: `${CY - 2}-12-31` },
             { Id: 6, FromDate: `${CY - 1}-01-01`, ToDate: `${CY - 1}-12-31` },
           ],
@@ -198,8 +222,82 @@ describe('fetchProviderSieFiles', () => {
       const sieUrls = fetchSpy.mock.calls
         .map((c: unknown[]) => String(c[0]))
         .filter((u: string) => u.includes('/sie/4'))
+      expect(sieUrls).toHaveLength(2)
       expect(sieUrls[0]).toContain('financialyear=5')
       expect(sieUrls[1]).toContain('financialyear=6')
+    })
+
+    it('names the broken first year outside the default selection, with the bounds Fortnox reports (#2211)', async () => {
+      routeFetch(fetchSpy, [
+        yearRoutes,
+        {
+          match: '/sie/4?financialyear=',
+          respond: () => new Response('#FLAGGA 0\n#KONTO 1930 "Företagskonto"\n', { status: 200 }),
+        },
+      ])
+
+      const result = await fetchProviderSieFiles('fortnox', 'token', undefined)
+
+      // Derived from the /financialyears list already fetched: no extra call,
+      // and no SIE export for the year outside the selection.
+      const broken = { year: CY - 4, fromDate: `${CY - 4}-09-01`, toDate: `${CY - 3}-12-31`, inDefaultSelection: false }
+      expect(result.sourceYears[0]).toEqual(broken)
+      expect(result.sourceYears.map((fy) => fy.inDefaultSelection)).toEqual([false, true, true])
+      expect(result.omittedYears).toEqual([broken])
+      const fyListCalls = fetchSpy.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/financialyears'))
+      expect(fyListCalls).toHaveLength(1)
+      expect(fetchSpy.mock.calls.map((c: unknown[]) => String(c[0]))).not.toContainEqual(
+        expect.stringContaining('financialyear=4'),
+      )
+    })
+
+    it('refuses a selected year the source does not have, before any SIE export', async () => {
+      routeFetch(fetchSpy, [
+        yearRoutes,
+        {
+          match: '/sie/4?financialyear=',
+          respond: () => new Response('#FLAGGA 0\n#KONTO 1930 "Företagskonto"\n', { status: 200 }),
+        },
+      ])
+
+      const attempt = fetchProviderSieFiles('fortnox', 'token', undefined, { years: [CY - 1, CY - 9] })
+
+      await expect(attempt).rejects.toBeInstanceOf(FiscalYearSelectionError)
+      await expect(attempt).rejects.toMatchObject({ unknownYears: [CY - 9] })
+      // Only the year listing was called: the unknown year cost no export,
+      // and neither did the known one.
+      const urls = fetchSpy.mock.calls.map((c: unknown[]) => String(c[0]))
+      expect(urls.filter((u: string) => u.includes('/financialyears'))).toHaveLength(1)
+      expect(urls.filter((u: string) => u.includes('/sie/4'))).toHaveLength(0)
+    })
+
+    it('fetches exactly the years the picker selected, oldest first (#2238)', async () => {
+      routeFetch(fetchSpy, [
+        yearRoutes,
+        {
+          match: '/sie/4?financialyear=',
+          respond: () => new Response('#FLAGGA 0\n#KONTO 1930 "Företagskonto"\n', { status: 200 }),
+        },
+      ])
+
+      // The broken first year ticked, the middle default year unticked.
+      const result = await fetchProviderSieFiles('fortnox', 'token', undefined, {
+        years: [CY - 1, CY - 4],
+      })
+
+      expect(result.availableYears).toEqual([CY - 4, CY - 1])
+      expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 4, CY - 1])
+      const sieUrls = fetchSpy.mock.calls
+        .map((c: unknown[]) => String(c[0]))
+        .filter((u: string) => u.includes('/sie/4'))
+      expect(sieUrls).toHaveLength(2)
+      expect(sieUrls[0]).toContain('financialyear=4')
+      expect(sieUrls[1]).toContain('financialyear=6')
+      // The unticked default year is the omitted one now; the flag still
+      // says what the default would have been.
+      expect(result.omittedYears).toEqual([
+        { year: CY - 2, fromDate: `${CY - 2}-01-01`, toDate: `${CY - 2}-12-31`, inDefaultSelection: true },
+      ])
     })
 
     it('decodes CP437 bytes from the Fortnox SIE endpoint (no blind UTF-8 text())', async () => {
@@ -238,6 +336,13 @@ describe('fetchProviderSieFiles', () => {
           respond: () =>
             jsonResponse([
               {
+                entityId: 0,
+                id: `${CY - 5}01`,
+                fromDate: `${CY - 5}-01-01`,
+                toDate: `${CY - 5}-12-31`,
+                open: false,
+              },
+              {
                 entityId: 1,
                 id: `${CY - 1}01`,
                 fromDate: `${CY - 1}-01-01`,
@@ -253,6 +358,12 @@ describe('fetchProviderSieFiles', () => {
       expect(result.files).toHaveLength(1)
       expect(result.files[0].fiscalYear).toBe(CY - 1)
       expect(result.files[0].rawContent).toContain(`Företagskonto ${CY - 1}`)
+      expect(result.omittedYears).toEqual([
+        { year: CY - 5, fromDate: `${CY - 5}-01-01`, toDate: `${CY - 5}-12-31`, inDefaultSelection: false },
+      ])
+      expect(fetchSpy.mock.calls.map((c: unknown[]) => String(c[0]))).not.toContainEqual(
+        expect.stringContaining(`/sie/export/${CY - 5}`),
+      )
 
       const exportCall = fetchSpy.mock.calls.find((c: unknown[]) => String(c[0]).includes('/sie/export/'))
       expect(exportCall).toBeDefined()
@@ -325,6 +436,8 @@ describe('fetchProviderSieFiles: wint (SIE rendered from voucher data)', () => {
             Name: 'Bolaget AB',
             Org: '556699-0011',
             FinancialYears: [
+              // Before the window: named in omittedYears, never fetched.
+              { Id: 0, Start: `${CY - 3}-01-01T00:00:00`, End: `${CY - 3}-12-31T00:00:00` },
               { Id: 1, Start: `${CY - 1}-01-01T00:00:00`, End: `${CY - 1}-12-31T00:00:00` },
               { Id: 2, Start: `${CY}-01-01T00:00:00`, End: `${CY}-12-31T00:00:00` },
             ],
@@ -385,6 +498,12 @@ describe('fetchProviderSieFiles: wint (SIE rendered from voucher data)', () => {
     expect(result.failedYears).toEqual([])
     expect(result.availableYears).toEqual([CY - 1, CY])
     expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 1, CY])
+    expect(result.omittedYears).toEqual([
+      { year: CY - 3, fromDate: `${CY - 3}-01-01`, toDate: `${CY - 3}-12-31`, inDefaultSelection: false },
+    ])
+    expect(fetchSpy.mock.calls.map((c: unknown[]) => String(c[0]))).not.toContainEqual(
+      expect.stringContaining(`BookingDateStart=${CY - 3}`),
+    )
 
     const prev = result.files[0].rawContent
     const curr = result.files[1].rawContent

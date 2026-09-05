@@ -35,6 +35,14 @@ export function budgetFor(service: UpstreamService): Budget {
       hourMax: intFromEnv('CONNECT_BANK_RPH_BUDGET', 3000), // ~30% of EB's 10 000/h
     }
   }
+  if (service === 'peppol') {
+    // Peppol is low-volume (invoices, not polling), so a modest ceiling well
+    // under Qvalia's limits is plenty; tune via env if a busy byrå needs more.
+    return {
+      minuteMax: intFromEnv('CONNECT_PEPPOL_RPM_BUDGET', 60),
+      hourMax: intFromEnv('CONNECT_PEPPOL_RPH_BUDGET', 1000),
+    }
+  }
   return {
     minuteMax: intFromEnv('CONNECT_SKV_RPM_BUDGET', 120),
     hourMax: intFromEnv('CONNECT_SKV_RPH_BUDGET', 4000),

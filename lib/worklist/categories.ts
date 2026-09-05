@@ -8,6 +8,7 @@
  * down the dashboard layout or the home page.
  */
 
+import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import {
@@ -68,6 +69,28 @@ export async function countUnbookedTransactions(
 }
 
 /**
+ * Unbooked skattekonto rows: every Skatteverket-side event the Transaktioner
+ * inbox lists (status = 'booked', i.e. "tidigare") that has no verifikat and
+ * was not ignored. `status` is Skatteverket's status, not booking status:
+ * 'upcoming' rows are future charges with nothing to book. journal_entry_id
+ * is the booked marker here (unlike bank transactions, which use is_business).
+ */
+export async function countUnbookedSkattekontoRows(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<number> {
+  const { count, error } = await supabase
+    .from('skattekonto_transactions')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('status', 'booked')
+    .is('journal_entry_id', null)
+    .eq('is_ignored', false)
+  if (error) return logAndZero('book_skattekonto', companyId, error)
+  return count ?? 0
+}
+
+/**
  * Unconsumed inbox documents. Mirrors /api/documents/inbox-available:
  * items with a file that have not become a supplier invoice, a journal
  * entry, or a transaction match, and whose document is still unlinked
@@ -124,7 +147,7 @@ export async function countInboxDocuments(
 
 /** Shared predicate for transactions carrying a match hint. */
 const SUGGESTED_MATCH_OR =
-  'potential_invoice_id.not.is.null,potential_supplier_invoice_id.not.is.null'
+  'potential_invoice_id.not.is.null,potential_supplier_invoice_id.not.is.null,potential_rot_rut_payout_request_id.not.is.null'
 
 /**
  * Cap on the hint scan behind countSuggestedMatches; clamps like
@@ -161,6 +184,13 @@ export async function countSupplierInvoicesAwaitingApproval(
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('status', 'registered')
+    // A credit note is a reversal, never a payable: there is nothing to
+    // attest on it and the detail page offers no attest button, so counting
+    // one here made an item nobody could clear. The CHECK
+    // supplier_invoices_credit_note_not_payable keeps credit notes out of
+    // 'registered' since 20260904190000; the predicate states the rule where
+    // the count is defined.
+    .eq('is_credit_note', false)
   if (error) return logAndZero('supplier_invoice_approval', companyId, error)
   return count ?? 0
 }
@@ -263,6 +293,14 @@ interface SuggestedMatchTxRow {
   currency: string | null
   potential_invoice_id: string | null
   potential_supplier_invoice_id: string | null
+  potential_rot_rut_payout_request_id?: string | null
+}
+
+type PayoutCandidateRow = {
+  id: string
+  name: string
+  requested_total: number | string
+  decided_total: number | string | null
 }
 
 type CandidateRow = {
@@ -323,7 +361,7 @@ export async function listSuggestedMatches(
   const { data: txRows, error } = await supabase
     .from('transactions')
     .select(
-      'id, date, description, amount, currency, potential_invoice_id, potential_supplier_invoice_id',
+      'id, date, description, amount, currency, potential_invoice_id, potential_supplier_invoice_id, potential_rot_rut_payout_request_id',
     )
     .eq('company_id', companyId)
     .is('is_business', null)
@@ -346,7 +384,13 @@ export async function listSuggestedMatches(
     ...new Set(txs.map((t) => t.potential_supplier_invoice_id).filter((x): x is string => !!x)),
   ]
 
-  const [invoiceRes, supplierRes] = await Promise.all([
+  const payoutRequestIds = [
+    ...new Set(
+      txs.map((t) => t.potential_rot_rut_payout_request_id).filter((x): x is string => !!x),
+    ),
+  ]
+
+  const [invoiceRes, supplierRes, payoutRes] = await Promise.all([
     fetchCandidatesChunked(invoiceIds, (chunk) =>
       supabase
         .from('invoices')
@@ -365,12 +409,23 @@ export async function listSuggestedMatches(
         .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
         .gt('remaining_amount', 0),
     ),
+    // Open, unsettled begäran only: a settled request must not render a
+    // one-click confirm that the route can only answer with INVALID_STATE.
+    fetchCandidatesChunked(payoutRequestIds, (chunk) =>
+      supabase
+        .from('rot_rut_payout_requests')
+        .select('id, name, requested_total, decided_total')
+        .eq('company_id', companyId)
+        .in('id', chunk)
+        .in('status', [...OPEN_ROT_RUT_PAYOUT_STATUSES])
+        .is('settlement_journal_entry_id', null),
+    ),
   ])
 
   // A failed candidate lookup must not pass for "nothing is matchable": that
   // would render an empty list and, through countSuggestedMatches, a silent
   // zero badge. Log it (with companyId) and bail, same as the tx query above.
-  const candidateError = invoiceRes.error ?? supplierRes.error
+  const candidateError = invoiceRes.error ?? supplierRes.error ?? payoutRes.error
   if (candidateError) {
     log.error('worklist listSuggestedMatches candidate lookup failed', {
       companyId,
@@ -381,6 +436,10 @@ export async function listSuggestedMatches(
 
   const invoiceById = new Map<string, CandidateRow>(invoiceRes.rows.map((r) => [r.id, r]))
   const supplierById = new Map<string, CandidateRow>(supplierRes.rows.map((r) => [r.id, r]))
+
+  const payoutById = new Map(
+    (payoutRes.rows as unknown as PayoutCandidateRow[]).map((r) => [r.id, r] as const),
+  )
 
   const matches: SuggestedMatch[] = []
   for (const tx of txs) {
@@ -418,6 +477,20 @@ export async function listSuggestedMatches(
         candidate_number: supplierInvoice.supplier_invoice_number ?? null,
         counterparty_name: supplierInvoice.supplier?.name ?? null,
         candidate_total: supplierInvoice.total ?? null,
+      })
+      continue
+    }
+    const payoutRequest = tx.potential_rot_rut_payout_request_id
+      ? payoutById.get(tx.potential_rot_rut_payout_request_id)
+      : undefined
+    if (payoutRequest) {
+      matches.push({
+        ...base,
+        kind: 'rot_rut_payout',
+        candidate_id: payoutRequest.id,
+        candidate_number: payoutRequest.name,
+        counterparty_name: 'Skatteverket',
+        candidate_total: Number(payoutRequest.decided_total ?? payoutRequest.requested_total),
       })
     }
     // Hint pointing at a deleted, foreign or already-settled candidate → drop

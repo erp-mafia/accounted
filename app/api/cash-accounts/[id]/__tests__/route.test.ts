@@ -17,8 +17,10 @@ vi.mock('@/lib/company/context', () => ({
 }))
 
 const requireWriteMock = vi.fn()
+const getCompanyRoleMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
+  getCompanyRole: (...args: unknown[]) => getCompanyRoleMock(...args),
 }))
 
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -51,6 +53,47 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
       error: null,
     })
     requireWriteMock.mockResolvedValue({ ok: true })
+    getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
+  })
+
+  it('payee fields: 403 for a member, no role lookup for a pure voucher_series write', async () => {
+    getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'member', companyId: 'company-1' })
+    const forbidden = await PATCH(patchReq({ bankgiro: '5050-1055' }), createMockRouteParams({ id: CA_1 }))
+    expect(forbidden.status).toBe(403)
+    expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+
+    enqueue({ data: { id: CA_1, voucher_series: 'M' } })
+    const series = await PATCH(patchReq({ voucher_series: 'M' }), createMockRouteParams({ id: CA_1 }))
+    expect(series.status).toBe(200)
+    expect(getCompanyRoleMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('payee fields: 400 on an invalid bankgiro or an unknown key', async () => {
+    expect((await PATCH(patchReq({ bankgiro: '12' }), createMockRouteParams({ id: CA_1 }))).status).toBe(400)
+    expect((await PATCH(patchReq({ ledger_account: '1931' }), createMockRouteParams({ id: CA_1 }))).status).toBe(400)
+    expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+  })
+
+  it('payee fields: 400 on a PSP clearing account (1686): only 19xx bank accounts print as payee', async () => {
+    enqueue({ data: { id: CA_1, ledger_account: '1686' } })
+    const response = await PATCH(patchReq({ bankgiro: '5050-1055', invoice_payee: true }), createMockRouteParams({ id: CA_1 }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAYEE_ACCOUNT_INVALID')
+    expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+  })
+
+  it('payee fields: owner writes bankgiro, clears plusgiro with "", and flags the account as payee', async () => {
+    enqueue({ data: { id: CA_1, ledger_account: '1930' } })
+    enqueue({ data: { id: CA_1, bankgiro: '5050-1055', plusgiro: null, invoice_payee: true } })
+    const response = await PATCH(
+      patchReq({ bankgiro: '5050-1055', plusgiro: '', invoice_payee: true }),
+      createMockRouteParams({ id: CA_1 }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { bankgiro: string } }>(response)
+    expect(status).toBe(200)
+    expect(body.data.bankgiro).toBe('5050-1055')
+    expect((findCalls('cash_accounts', 'update')[0][0] as Record<string, unknown>)).toMatchObject({ bankgiro: '5050-1055', plusgiro: null, invoice_payee: true })
   })
 
   it('returns 401 when not authenticated', async () => {

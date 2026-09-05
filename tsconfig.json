@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@accounted/connect-contract": ["./packages/connect-contract/src/index.ts"]
     },
     "types": ["vitest/globals"]
   },

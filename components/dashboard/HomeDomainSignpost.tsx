@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ArrowUpRight, Building2, Loader2 } from 'lucide-react'
+import { ArrowUpRight, Loader2, Briefcase } from 'lucide-react'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
 
@@ -39,7 +39,7 @@ export default function HomeDomainSignpost({
     <div className="stagger-enter mx-auto max-w-lg pt-12">
       <div className="flex flex-col items-center text-center">
         <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-muted/60">
-          <Building2 className="h-5 w-5 text-muted-foreground" />
+          <Briefcase className="h-5 w-5 text-muted-foreground" />
         </div>
         <h1 className="font-display text-2xl leading-8 tracking-tight">
           {t('title')}

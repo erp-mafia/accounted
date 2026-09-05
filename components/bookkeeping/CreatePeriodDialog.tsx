@@ -16,7 +16,7 @@ import { Label } from '@/components/ui/label'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2 } from 'lucide-react'
-import { computeSuggestedPeriod } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { computeSuggestedPeriod, fiscalYearName } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { fiscalPeriodAdvisoryText } from '@/lib/bookkeeping/fiscal-period-warnings'
 import type { FiscalPeriod } from '@/types'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -61,6 +61,11 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
   const suggested = useMemo(() => computeSuggestedPeriod(entryDate, periods), [entryDate, periods])
 
   const [name, setName] = useState(suggested.name)
+  // The name follows the dates until the user types a name of their own.
+  // Without this the seed suggestion (the next forward year, e.g.
+  // "Räkenskapsår 2027") survived the user re-dating the form to a backfilled
+  // first year and was saved verbatim.
+  const [nameEdited, setNameEdited] = useState(false)
   const [periodStart, setPeriodStart] = useState(suggested.period_start)
   const [periodEnd, setPeriodEnd] = useState(suggested.period_end)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -72,10 +77,19 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
   const [lastSuggested, setLastSuggested] = useState(suggested)
   if (suggested.name !== lastSuggested.name || suggested.period_start !== lastSuggested.period_start) {
     setName(suggested.name)
+    setNameEdited(false)
     setPeriodStart(suggested.period_start)
     setPeriodEnd(suggested.period_end)
     setLastSuggested(suggested)
     setCreated(null)
+  }
+
+  // A date input yields '' while incomplete and a full YYYY-MM-DD otherwise:
+  // only derive a name once both ends are known.
+  const updateDates = (start: string, end: string) => {
+    setPeriodStart(start)
+    setPeriodEnd(end)
+    if (!nameEdited && start && end) setName(fiscalYearName(start, end))
   }
 
   // Close, and refetch in the parent if this session created a period. The
@@ -175,16 +189,23 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
             <div className="space-y-3">
               <div>
                 <Label>Namn</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} className="mt-1" />
+                <Input
+                  value={name}
+                  onChange={(e) => {
+                    setName(e.target.value)
+                    setNameEdited(true)
+                  }}
+                  className="mt-1"
+                />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label>Startdatum</Label>
-                  <Input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} className="mt-1" />
+                  <Input type="date" value={periodStart} onChange={(e) => updateDates(e.target.value, periodEnd)} className="mt-1" />
                 </div>
                 <div>
                   <Label>Slutdatum</Label>
-                  <Input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} className="mt-1" />
+                  <Input type="date" value={periodEnd} onChange={(e) => updateDates(periodStart, e.target.value)} className="mt-1" />
                 </div>
               </div>
             </div>

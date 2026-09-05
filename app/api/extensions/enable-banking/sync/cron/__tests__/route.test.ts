@@ -86,6 +86,8 @@ vi.mock('@/extensions/general/enable-banking/lib/api-client', async () => {
 import {
   REAUTH_REQUIRED_MESSAGE,
   SessionExpiredError,
+  AspspUnavailableError,
+  ConnectorSyncError,
 } from '@/extensions/general/enable-banking/lib/api-client'
 import { GET } from '../route'
 
@@ -455,5 +457,123 @@ describe('GET /api/extensions/enable-banking/sync/cron: failure log level', () =
     const lines = consoleError.mock.calls.map(call => String(call[0]))
     expect(lines.some(line => line.includes('sync failed for connection'))).toBe(true)
     consoleError.mockRestore()
+  })
+})
+
+describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave the row alone', () => {
+  // 2026-09-04: a connector contract mismatch parked four canary companies in
+  // 'error' with "förnya anslutningen", and users re-authorized consents that
+  // were fine. Neither a connector-hop failure nor a bank refusing right now
+  // says anything about the PSD2 session, so the row keeps its status and the
+  // health probe still checks the session.
+  it('does not park a connection in error when the connector hop fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    state.active = [connection()]
+    mocks.syncAccountTransactions.mockRejectedValue(
+      new ConnectorSyncError(200, 'CONNECTOR_BAD_SHAPE', '{"transactions":[]}', ['transactions.0.amount: Invalid input']),
+    )
+
+    const response = await GET(cronRequest())
+
+    expect(state.updates).toEqual([])
+    await expect(response.json()).resolves.toMatchObject({ processed: 1 })
+    const errorLines = consoleError.mock.calls.map(call => String(call[0]))
+    expect(errorLines.some(line => line.includes('sync failed for connection'))).toBe(false)
+    consoleError.mockRestore()
+    consoleWarn.mockRestore()
+  })
+
+  it('does not park a connection in error when the bank is refusing right now', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    state.active = [connection()]
+    mocks.syncAccountTransactions.mockRejectedValue(
+      new AspspUnavailableError(400, '{"error":"ASPSP_ERROR"}', 'window-already-accepted', '2026-08-28'),
+    )
+
+    await GET(cronRequest())
+
+    expect(state.updates).toEqual([])
+    const errorLines = consoleError.mock.calls.map(call => String(call[0]))
+    expect(errorLines.some(line => line.includes('sync failed for connection'))).toBe(false)
+    consoleError.mockRestore()
+    consoleWarn.mockRestore()
+  })
+
+  it('still probes the session of a connection whose sync failed transiently', async () => {
+    state.active = [connection()]
+    state.probeCandidates = [connection()]
+    mocks.syncAccountTransactions.mockRejectedValue(new ConnectorSyncError(null, 'CONNECTOR_TIMEOUT', 'aborted'))
+    mocks.probeSessionHealth.mockResolvedValue('dead')
+
+    await GET(cronRequest())
+
+    expect(mocks.probeSessionHealth).toHaveBeenCalledTimes(1)
+    expect(state.updates.at(-1)?.payload).toMatchObject({ status: 'expired' })
+  })
+})
+
+describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000
+  // Pin the clock: the route reads Date.now() after the fixture does, and a
+  // single elapsed millisecond makes Math.ceil in incrementalLookbackDays
+  // count one more day than the fixture intended.
+  const NOW = Date.parse('2026-09-02T05:00:00.000Z')
+  const isoDate = (msAgo: number) => new Date(NOW - msAgo).toISOString().split('T')[0]
+  const syncedDaysAgo = (days: number) => new Date(NOW - days * DAY_MS).toISOString()
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(NOW)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('uses the 7-day window when the connection synced yesterday', async () => {
+    state.active = [connection({ last_synced_at: syncedDaysAgo(1) })]
+    mocks.probeSessionHealth.mockResolvedValue('alive')
+
+    await GET(cronRequest())
+
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
+    const [, , , , , fromDate, , , options] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(fromDate).toBe(isoDate(7 * DAY_MS))
+    expect(options).not.toHaveProperty('strategy')
+  })
+
+  it('widens the window to cover a gap since the last sync', async () => {
+    // A subscription that lapsed for 20 days and was paid again: a fixed
+    // 7-day window would silently drop the 13 days in between.
+    state.active = [connection({ last_synced_at: syncedDaysAgo(20) })]
+    mocks.probeSessionHealth.mockResolvedValue('alive')
+
+    await GET(cronRequest())
+
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
+    const [, , , , , fromDate] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(fromDate).toBe(isoDate(21 * DAY_MS))
+  })
+
+  it('asks for the deepest history the bank serves on a gap of a month or more', async () => {
+    state.active = [connection({ last_synced_at: syncedDaysAgo(40) })]
+    mocks.probeSessionHealth.mockResolvedValue('alive')
+
+    await GET(cronRequest())
+
+    const [, , , , , fromDate, , , options] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(fromDate).toBe(isoDate(41 * DAY_MS))
+    expect(options).toMatchObject({ strategy: 'longest' })
+  })
+
+  it('caps the widened window at 90 days', async () => {
+    state.active = [connection({ last_synced_at: syncedDaysAgo(200) })]
+    mocks.probeSessionHealth.mockResolvedValue('alive')
+
+    await GET(cronRequest())
+
+    const [, , , , , fromDate] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(fromDate).toBe(isoDate(90 * DAY_MS))
   })
 })

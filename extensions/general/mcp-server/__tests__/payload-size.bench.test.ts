@@ -382,6 +382,14 @@ describe('tools/list payload size guard', () => {
     //     pair's examples ARE the two-step flow, and
     //     list_uncategorized_transactions is the highest-traffic read.
     //
+    //   * +1 property, ~25 tokens (2026-09-02, MCP feedback seq 299742):
+    //     exchange_rate_override on create_supplier_invoice_from_inbox. A
+    //     foreign supplier invoice whose Riksbanken lookup fails stages with
+    //     exchange_rate: null and can never be approved (SI_FX_RATE_MISSING);
+    //     the property is the only way to unblock it from an agent. One short
+    //     description, no example; the lookup itself now goes through the
+    //     shared resolver with the cache, so the case is also rarer.
+    //
     // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
     // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
     // can only invoke what tools/list showed them, which is the constraint that
@@ -391,6 +399,22 @@ describe('tools/list payload size guard', () => {
     // Only READ tools may be demoted: gnubok_call_tool refuses writes, so a
     // search-only WRITE is uncallable on Claude.ai. That is why the three
     // bumps above happened instead of demotions.
+    //
+    //   * 2026-09-02, offert (#2163): gnubok_set_quote_status (a WRITE, so it
+    //     must stay in the default catalog) plus document_type / valid_until /
+    //     quote_status on create, list and get. Measured 60 306 after merging
+    //     the sales-order tools from #2166, then 60 093 after shortening every
+    //     quote description and dropping set_quote_status's outputSchema to a
+    //     bare object. The remaining ~100 tokens came from demoting
+    //     gnubok_get_arsredovisning_filing_status to search-only: iXBRL
+    //     filing is off until the Bolagsverket avtal exists, so no client
+    //     polls it. Ceiling unchanged.
+    //   * 2026-09-03, jamkning (#2240) landing on top of proforma (#2254):
+    //     two one-line field notes on create/update_employee measured 60 010
+    //     after merging main. Demoted gnubok_list_arsredovisning_versions to
+    //     search-only: versions exist only once a report is rendered for
+    //     signing or filing, which is the same switched-off iXBRL path as its
+    //     sibling filing_status tool. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(60_000)
   })
 
