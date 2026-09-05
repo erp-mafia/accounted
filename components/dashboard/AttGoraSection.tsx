@@ -21,6 +21,7 @@ import {
   ChevronRight,
   Eye,
   FileWarning,
+  HandCoins,
   Inbox,
   Landmark,
   Loader2,
@@ -29,14 +30,15 @@ import {
   ShieldCheck,
   Stamp,
 } from 'lucide-react'
-import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
+import type { ExpensePayoutDue, SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 
 /**
  * AttGoraSection: the dashboard's unified worklist ("Att göra").
  *
- * One flat ledger of everything actionable, grouped into three bands by
- * session intent: Bokför (the daily loop), Granska & komplettera (close the
- * gaps), Bevaka (time-driven). Every count comes from lib/worklist (the same
+ * One flat ledger of everything actionable, grouped into four bands by
+ * session intent: Bokför (the daily loop), Betala (money the company owes a
+ * person for utlägg), Granska & komplettera (close the gaps), Bevaka
+ * (time-driven). Every count comes from lib/worklist (the same
  * source as the sidebar badges) so the numbers can never disagree.
  *
  * Suggested transaction↔invoice matches render inline with one-click confirm:
@@ -53,6 +55,8 @@ interface ExpiringBankConnection {
 interface AttGoraSectionProps {
   worklist: WorklistCounts
   suggestedMatches: SuggestedMatch[]
+  /** People owed for registered, unpaid utlägg: one Betala row each. */
+  expensePayouts?: ExpensePayoutDue[]
   expiringBankConnections?: ExpiringBankConnection[]
   /**
    * True while the setup checklist is open and the company has zero posted
@@ -114,6 +118,7 @@ function BandHeader({ children }: { children: React.ReactNode }) {
 export default function AttGoraSection({
   worklist,
   suggestedMatches,
+  expensePayouts = [],
   expiringBankConnections = [],
   emptyLedger = false,
   hasActiveBankConnection = true,
@@ -209,6 +214,7 @@ export default function AttGoraSection({
     counts.book_skattekonto > 0 ||
     showInboxDocuments ||
     matches.length > 0
+  const betalaRows = expensePayouts.length > 0
   const granskaRows =
     counts.supplier_invoice_approval > 0 ||
     counts.verifikat_missing_document > 0 ||
@@ -218,7 +224,7 @@ export default function AttGoraSection({
     counts.deadline_action > 0 ||
     counts.reconciliation_due > 0 ||
     expiringBankConnections.length > 0
-  const allClear = !bokforRows && !granskaRows && !bevakaRows
+  const allClear = !bokforRows && !betalaRows && !granskaRows && !bevakaRows
 
   // The header total must equal what the section actually shows, computed off
   // the same visibleWorklistTotal helper as the dashboard KPI tile so the two
@@ -376,6 +382,36 @@ export default function AttGoraSection({
                         count={counts.inbox_document}
                       />
                     )}
+                  </div>
+                </div>
+              )}
+
+              {betalaRows && (
+                <div>
+                  <BandHeader>{t('band_betala')}</BandHeader>
+                  <div>
+                    {expensePayouts.map((p) => (
+                      <WorklistRow
+                        key={p.key}
+                        href="/expenses"
+                        icon={HandCoins}
+                        label={t('row_expense_payout', { name: p.claimant_name })}
+                        detail={
+                          p.claim_count === 1
+                            ? t('row_expense_payout_detail_one', { date: formatDate(p.oldest_expense_date) })
+                            : t('row_expense_payout_detail_other', {
+                                count: p.claim_count,
+                                date: formatDate(p.oldest_expense_date),
+                              })
+                        }
+                        count={p.claim_count}
+                        badge={
+                          <span className="text-xs tabular-nums text-muted-foreground">
+                            {formatCurrency(p.total_sek)}
+                          </span>
+                        }
+                      />
+                    ))}
                   </div>
                 </div>
               )}

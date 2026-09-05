@@ -1,8 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { SuggestedMatch } from './types'
+import type { ExpensePayoutDue, SuggestedMatch } from './types'
 import type { WorklistCounts } from './types'
 import {
   countDeadlinesNeedingAction,
+  countExpensePayoutsDue,
   countInboxDocuments,
   countOverdueInvoices,
   countPendingOperations,
@@ -32,6 +33,12 @@ export interface GetWorklistCountsOptions {
    * parallel with the other counts.
    */
   suggestedMatches?: SuggestedMatch[] | Promise<SuggestedMatch[]>
+  /**
+   * People owed for unpaid utlägg the caller is already fetching (Hem
+   * renders one row per person): the count is the list's length instead of
+   * a second scan of expense_claims.
+   */
+  expensePayoutsDue?: ExpensePayoutDue[] | Promise<ExpensePayoutDue[]>
 }
 
 export async function getWorklistCounts(
@@ -50,6 +57,7 @@ export async function getWorklistCounts(
     deadlineAction,
     pendingOperations,
     reconciliationDue,
+    expensePayout,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -63,6 +71,9 @@ export async function getWorklistCounts(
     countDeadlinesNeedingAction(supabase, companyId),
     countPendingOperations(supabase, companyId),
     countReconciliationDue(supabase, companyId),
+    options.expensePayoutsDue
+      ? Promise.resolve(options.expensePayoutsDue).then((p) => p.length)
+      : countExpensePayoutsDue(supabase, companyId),
   ])
 
   return {
@@ -77,6 +88,7 @@ export async function getWorklistCounts(
       deadline_action: deadlineAction,
       pending_operations: pendingOperations,
       reconciliation_due: reconciliationDue,
+      expense_payout: expensePayout,
     },
     total:
       bookTransaction +
@@ -87,6 +99,7 @@ export async function getWorklistCounts(
       overdueInvoice +
       deadlineAction +
       pendingOperations +
-      reconciliationDue,
+      reconciliationDue +
+      expensePayout,
   }
 }

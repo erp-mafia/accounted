@@ -105,9 +105,38 @@ export const WORKLIST_CATEGORIES = [
    * reconcile monthly, not a new chore for everyone.
    */
   'reconciliation_due',
+  /**
+   * People the company owes for out-of-pocket purchases ("Betala ut utlägg
+   * till Anna"), one item per person.
+   * Pending:  expense_claims.status = 'registered' (booked as cost against a
+   *           person-liability account 2893/2820/2018, nothing paid out yet),
+   *           grouped by employee_id, or by claimant_name for the owner.
+   * Done:     every claim of that person is marked 'paid' (a payout batch
+   *           posted the 1930 leg), or the claim is deleted (storno).
+   * Counts PEOPLE, not receipts: the action is one transfer per person.
+   */
+  'expense_payout',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
+
+/**
+ * One person the company owes for registered, unpaid utlägg: the Att göra
+ * row "Betala ut utlägg till {name}". Grouped server-side by employee_id
+ * (or claimant_name for the owner, who has no employee row).
+ */
+export interface ExpensePayoutDue {
+  /** employee_id, or `owner:<claimant_name>` for claims without one. */
+  key: string
+  employee_id: string | null
+  claimant_name: string
+  /** 2893 (AB owner), 2018 (EF owner) or 2820 (employee). */
+  liability_account: string
+  claim_count: number
+  total_sek: number
+  /** ISO date of the oldest unpaid claim. */
+  oldest_expense_date: string
+}
 
 export interface WorklistCounts {
   counts: Record<WorklistCategory, number>
