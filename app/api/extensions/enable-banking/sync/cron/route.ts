@@ -11,6 +11,8 @@ import {
   getDaysUntilExpiry,
   probeSessionHealth,
   SessionExpiredError,
+  AspspUnavailableError,
+  ConnectorSyncError,
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
 } from '@/extensions/general/enable-banking/lib/api-client'
@@ -385,6 +387,13 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       // the short Swedish user message in both cases: the raw Enable Banking
       // error body (an English JSON envelope) stays in the server log below.
       const isSessionDead = error instanceof SessionExpiredError
+      // A bank refusing right now, or the connector hop failing (timeout,
+      // error envelope, contract mismatch), says nothing about the PSD2
+      // session: retryable, and the row is left alone. Parking it in 'error'
+      // with SYNC_FAILED_MESSAGE told users to renew a consent that was fine
+      // (four canary companies on 2026-09-04). The probe below still checks
+      // the session, so a dead one is caught anyway.
+      const isTransient = error instanceof AspspUnavailableError || error instanceof ConnectorSyncError
       const failureStatus = isSessionDead ? 'expired' : 'error'
       const failureMessage = isSessionDead ? REAUTH_REQUIRED_MESSAGE : SYNC_FAILED_MESSAGE
 
@@ -403,14 +412,24 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
           ...failureContext,
           reason: error instanceof Error ? error.message : String(error),
         })
+      } else if (isTransient) {
+        ctx.log.warn('transient bank sync failure, connection left untouched', {
+          ...failureContext,
+          reason: error instanceof Error ? error.message : String(error),
+          ...(error instanceof ConnectorSyncError
+            ? { connectorCode: error.code, connectorStatus: error.status, issues: error.issues }
+            : { aspspReason: error instanceof AspspUnavailableError ? error.reason : undefined }),
+        })
       } else {
         ctx.log.error('sync failed for connection', error as Error, failureContext)
       }
 
-      await supabase
-        .from('bank_connections')
-        .update({ status: failureStatus, error_message: failureMessage })
-        .eq('id', connection.id)
+      if (!isTransient) {
+        await supabase
+          .from('bank_connections')
+          .update({ status: failureStatus, error_message: failureMessage })
+          .eq('id', connection.id)
+      }
 
       results.push({
         connectionId: connection.id,
