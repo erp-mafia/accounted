@@ -101,7 +101,7 @@ Returns active customers in created-first order. Pass ?include_archived=true to 
 Response `200`:
 ```ts
 {
-  data: { id: string, name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", email: string, org_number: string, vat_number: string, default_payment_terms: number, archived_at: string, created_at: string }[],
+  data: { id: string, name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", email: string, org_number: string, vat_number: string, default_payment_terms: number, party_id?: string, archived_at: string, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -266,7 +266,7 @@ Example response `200`:
 **Retrieve a single customer by id.**
 `scope:customers:read · risk:low · idempotent`
 
-Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response.
+Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response. Pass ?expand=party to embed the party (motpart) behind the customer: legal name, org and VAT number, country, the SCB company-register summary and what the ledger has seen for it. Private individuals have no party.
 
 **Use when:** You need the full customer record: address, payment terms, VAT validation status, contact details: before invoicing or syncing to another system.
 **Do not use for:** Listing customers (use the list endpoint). Looking up arbitrary supplier or employee records (different resources).
@@ -305,6 +305,8 @@ Response `200`:
     personal_number: string,
     default_payment_terms: number,
     notes: string,
+    party_id: string,
+    party?: { id: string, display_name: string, legal_name: string, org_number: string, vat_number: string, country: string, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string, customer_id: string }, registry: { legal_name: string, legal_form: string, status: { label: string, active: boolean }, warning: string, registrations: { f_tax: boolean, vat: boolean, employer: boolean }, industry: { code: string, label: string }, seat: string, registered_at: string, active_since: string, active_until: string, employees_band: string, turnover: { band: string, year: string }, workplaces: number, contact: { email: string, phone: string, address: { co: string, street: string, postal_code: string, city: string } }, vat_number: string, fetched_at: string }, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string, last_seen: string, dominant_account: string }, identities: { scheme: string, value: string, status: string, seen_count: number }[] },
     archived_at: string,
     created_at: string,
     updated_at: string
@@ -425,6 +427,8 @@ Response `200`:
     personal_number: string,
     default_payment_terms: number,
     notes: string,
+    party_id: string,
+    party?: { id: string, display_name: string, legal_name: string, org_number: string, vat_number: string, country: string, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string, customer_id: string }, registry: { legal_name: string, legal_form: string, status: { label: string, active: boolean }, warning: string, registrations: { f_tax: boolean, vat: boolean, employer: boolean }, industry: { code: string, label: string }, seat: string, registered_at: string, active_since: string, active_until: string, employees_band: string, turnover: { band: string, year: string }, workplaces: number, contact: { email: string, phone: string, address: { co: string, street: string, postal_code: string, city: string } }, vat_number: string, fetched_at: string }, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string, last_seen: string, dominant_account: string }, identities: { scheme: string, value: string, status: string, seen_count: number }[] },
     archived_at: string,
     created_at: string,
     updated_at: string

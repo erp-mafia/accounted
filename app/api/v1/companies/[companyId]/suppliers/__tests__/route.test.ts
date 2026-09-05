@@ -33,6 +33,12 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
+const expandParty = vi.fn()
+vi.mock('@/lib/parties/party-api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/parties/party-api')>('@/lib/parties/party-api')
+  return { ...actual, expandParty: (...args: unknown[]) => expandParty(...args) }
+})
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listSuppliers, POST as createSupplier } from '../route'
 import {
@@ -224,6 +230,43 @@ describe('GET /api/v1/companies/:companyId/suppliers/:id', () => {
       detailParams(COMPANY_ID, 'not-a-uuid'),
     )
     expect(res.status).toBe(400)
+  })
+})
+
+describe('GET /api/v1/companies/:companyId/suppliers/:id?expand=party', () => {
+  it('embeds the party behind the supplier on request, and leaves it out otherwise', async () => {
+    const party = { id: 'p-1', display_name: 'Office Depot AB', org_number: '5566778899', registry: { status: { label: 'Verksamt', active: true } } }
+    expandParty.mockResolvedValue(party)
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: { data: { ...SAMPLE_SUPPLIER, party_id: 'p-1' }, error: null },
+      }),
+    )
+    const withParty = await getSupplier(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}?expand=party`),
+      detailParams(COMPANY_ID, SUPPLIER_ID),
+    )
+    expect(withParty.status).toBe(200)
+    const body = await withParty.json()
+    expect(body.data.party_id).toBe('p-1')
+    expect(body.data.party).toEqual(party)
+    expect(expandParty).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, 'p-1')
+
+    expandParty.mockClear()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: { data: { ...SAMPLE_SUPPLIER, party_id: 'p-1' }, error: null },
+      }),
+    )
+    const plain = await getSupplier(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}`),
+      detailParams(COMPANY_ID, SUPPLIER_ID),
+    )
+    const plainBody = await plain.json()
+    expect(plainBody.data.party).toBeUndefined()
+    expect(expandParty).not.toHaveBeenCalled()
   })
 })
 

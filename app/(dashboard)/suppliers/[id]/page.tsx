@@ -20,6 +20,9 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import type { Supplier, SupplierType, CreateSupplierInput, SupplierInvoice } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
+import { usePartyDossier } from '@/components/parties/use-party-dossier'
+import { fromRegistry, addressRowsFromRegistry } from '@/lib/parties/registry-summary'
+import { formatOrgNumber } from '@/lib/utils'
 
 // Supplier invoices carry their own currency; "kr" is only correct for SEK.
 function amountWithCurrency(amount: number, currency?: string | null): string {
@@ -43,7 +46,12 @@ export default function SupplierDetailPage() {
   const router = useRouter()
   const { toast } = useToast()
   const t = useTranslations('supplier_detail')
+  const tParties = useTranslations('parties')
   const [supplier, setSupplier] = useState<Supplier & { stats?: SupplierStats } | null>(null)
+  const partyId = (supplier as { party_id?: string | null } | null)?.party_id ?? null
+  const party = usePartyDossier(partyId)
+  const registryAddress = party.registry?.contact.address ? addressRowsFromRegistry(party.registry.contact.address) : null
+  const scbNote = (isFromRegistry: boolean) => (isFromRegistry ? <span className="block text-xs text-muted-foreground">{tParties('facts_from_registry')}</span> : null)
   const [invoices, setInvoices] = useState<SupplierInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isEditOpen, setIsEditOpen] = useState(false)
@@ -197,7 +205,7 @@ export default function SupplierDetailPage() {
             <h1 className="font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {supplierTypeLabels[supplier.supplier_type]}
-              {supplier.org_number ? ` · ${t('kicker_org', { number: supplier.org_number })}` : ''}
+              {supplier.org_number ? ` · ${t('kicker_org', { number: formatOrgNumber(supplier.org_number) })}` : ''}
             </p>
           </div>
 
@@ -264,13 +272,30 @@ export default function SupplierDetailPage() {
         </div>
       </div>
 
-      {(supplier as { party_id?: string | null }).party_id ? (
-        <PartyFactsSection partyId={(supplier as { party_id?: string | null }).party_id as string} canWrite={canWrite} onChanged={() => void fetchSupplier()} />
+      {partyId && party.dossier ? (
+        <PartyFactsSection
+          partyId={partyId}
+          rowName={supplier.name}
+          canWrite={canWrite}
+          dossier={party.dossier}
+          registry={party.registry}
+          scbEnabled={party.scbEnabled}
+          onChanged={async () => {
+            await party.reload()
+            await fetchSupplier()
+          }}
+        />
       ) : null}
 
       <DetailSection kicker={t('contact_section_title')}>
-        <DefRow label={t('def_email')}>{supplier.email || <DefEmpty />}</DefRow>
-        <DefRow label={t('def_phone')}>{supplier.phone || <DefEmpty />}</DefRow>
+        <DefRow label={t('def_email')}>
+          {supplier.email || <DefEmpty />}
+          {scbNote(fromRegistry(supplier.email, party.registry?.contact.email))}
+        </DefRow>
+        <DefRow label={t('def_phone')}>
+          {supplier.phone || <DefEmpty />}
+          {scbNote(fromRegistry(supplier.phone, party.registry?.contact.phone))}
+        </DefRow>
         <DefRow label={t('def_address')}>
           {supplier.address_line1 || supplier.city ? (
             <div>
@@ -279,12 +304,22 @@ export default function SupplierDetailPage() {
               {(supplier.postal_code || supplier.city) && (
                 <p>{[supplier.postal_code, supplier.city].filter(Boolean).join(' ')}</p>
               )}
+              {scbNote(
+                !!registryAddress &&
+                  fromRegistry(supplier.address_line1, registryAddress.address_line1) &&
+                  fromRegistry(supplier.city, registryAddress.city),
+              )}
             </div>
           ) : (
             <DefEmpty />
           )}
         </DefRow>
-        {supplier.vat_number && <DefRow label={t('def_vat')}>{supplier.vat_number}</DefRow>}
+        {supplier.vat_number && (
+          <DefRow label={t('def_vat')}>
+            {supplier.vat_number}
+            {scbNote(fromRegistry(supplier.vat_number, party.registry?.vat_number))}
+          </DefRow>
+        )}
       </DetailSection>
 
       <DetailSection kicker={t('payment_section_title')}>

@@ -7,6 +7,7 @@ import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
 import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import { ScbApiError } from '@/lib/parties/scb/transport'
 import { displayNameFromRegistry, sameName } from '@/lib/parties/registry-name'
+import { contactFill, registrySummary, type ContactRow } from '@/lib/parties/registry-summary'
 
 /**
  * POST /api/parties/[id]/enrich: fetch the party's registry facts from SCB
@@ -94,6 +95,19 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ data: { found: false, orgNumber: p.org_number, inserted: 0, superseded: 0, refreshed: 0 } })
     }
 
+    // What the register said last time, read before the new facts land:
+    // a contact field that still carries it was never touched by a person
+    // and may follow the register.
+    const { data: previousFacts } = await supabase
+      .from('party_facts')
+      .select('field, value, source')
+      .eq('company_id', companyId)
+      .eq('party_id', id)
+      .eq('source', 'registry_scb')
+      .in('field', ['email', 'phone', 'postal_address'])
+      .is('superseded_at', null)
+    const before = registrySummary(Array.isArray(previousFacts) ? (previousFacts as Array<{ field: string; value: unknown; source: string }>) : [])?.contact ?? null
+
     const { data: summary, error: recordError } = await supabase.rpc('record_party_facts', {
       p_company_id: companyId,
       p_user_id: user.id,
@@ -148,9 +162,33 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       await supabase.from('customers').update({ vat_number: vat }).eq('company_id', companyId).eq('party_id', id).is('vat_number', null)
     }
 
+    // The register's contact details land on the supplier and customer rows
+    // that point at the party: an empty field, or one still carrying what
+    // the register said last time, takes the new value. A value a person
+    // typed stays. These are the fields payment files and documents use,
+    // which is why they live on the row and not only on the party.
+    const now = registrySummary(lookup.facts.map((f) => ({ ...f, source: 'registry_scb' as const })))?.contact
+    const filled: Record<string, string[]> = {}
+    if (now && (now.email || now.phone || now.address)) {
+      for (const table of ['suppliers', 'customers'] as const) {
+        const { data: rows } = await supabase
+          .from(table)
+          .select('id, email, phone, address_line1, address_line2, postal_code, city')
+          .eq('company_id', companyId)
+          .eq('party_id', id)
+        for (const row of (rows ?? []) as Array<ContactRow & { id: string }>) {
+          const update = contactFill(row, now, before)
+          if (Object.keys(update).length === 0) continue
+          const { error: fillError } = await supabase.from(table).update(update).eq('company_id', companyId).eq('id', row.id)
+          if (fillError) log.warn('contact fill failed', { table, rowId: row.id, message: fillError.message })
+          else filled[table] = [...(filled[table] ?? []), ...Object.keys(update)]
+        }
+      }
+    }
+
     const r = (summary ?? {}) as Partial<Record<'inserted' | 'superseded' | 'refreshed', number>>
     return NextResponse.json({
-      data: { found: true, orgNumber: p.org_number, inserted: r.inserted ?? 0, superseded: r.superseded ?? 0, refreshed: r.refreshed ?? 0, facts: lookup.facts, renamedTo },
+      data: { found: true, orgNumber: p.org_number, inserted: r.inserted ?? 0, superseded: r.superseded ?? 0, refreshed: r.refreshed ?? 0, facts: lookup.facts, renamedTo, filled },
     })
   },
   { requireWrite: true },
