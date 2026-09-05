@@ -30,6 +30,14 @@ export interface BrandingConfig {
   // Must match the From in your Supabase Auth SMTP config.
   authEmailFrom: string
 
+  /**
+   * Name the welcome email (lib/email/welcome-templates.ts) is sent as and
+   * signed with: the From header reads "<welcomeSenderName> via <appName>".
+   * A person, not a product, so replies feel answerable. Empty string = send
+   * and sign as the app instead.
+   */
+  welcomeSenderName: string
+
   // URLs
   appUrl: string
 
@@ -67,6 +75,7 @@ const DEFAULT_BRANDING: BrandingConfig = {
   privacyEmail: 'privacy@gnubok.se',
   securityEmail: 'security@arcim.io',
   authEmailFrom: 'noreply@gnubok.se',
+  welcomeSenderName: 'Jakob',
   appUrl: process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se',
   // The visible brand mark now renders as text via <BrandWordmark>; this
   // image path is kept as a fallback for any surface still using <Image>
@@ -109,6 +118,9 @@ function readEnvOverrides(): Partial<BrandingConfig> {
   if (env.BRANDING_PRIVACY_EMAIL) o.privacyEmail = env.BRANDING_PRIVACY_EMAIL
   if (env.BRANDING_SECURITY_EMAIL) o.securityEmail = env.BRANDING_SECURITY_EMAIL
   if (env.NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM) o.authEmailFrom = env.NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM
+  // Explicit empty string is a valid choice (sign as the app), so test for
+  // presence rather than truthiness.
+  if (env.BRANDING_WELCOME_SENDER_NAME !== undefined) o.welcomeSenderName = env.BRANDING_WELCOME_SENDER_NAME
   if (env.NEXT_PUBLIC_APP_URL) o.appUrl = env.NEXT_PUBLIC_APP_URL
   if (env.NEXT_PUBLIC_BRANDING_LOGO_PATH) o.logoPath = env.NEXT_PUBLIC_BRANDING_LOGO_PATH
   if (env.NEXT_PUBLIC_BRANDING_FAVICON_PATH) o.faviconPath = env.NEXT_PUBLIC_BRANDING_FAVICON_PATH

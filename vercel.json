@@ -127,6 +127,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/lifecycle-emails/welcome/cron",
+      "schedule": "*/2 * * * *"
+    },
+    {
       "path": "/api/peppol/outbound/status/cron",
       "schedule": "5,20,35,50 * * * *"
     }
