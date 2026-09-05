@@ -30,7 +30,7 @@ import type { EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 
-type DuplicateMatchReason = 'ocr_exact' | 'name_amount_fuzzy' | 'amount_only'
+type DuplicateMatchReason = 'ocr_exact' | 'name_amount_fuzzy' | 'amount_only' | 'aggregate_exact'
 
 interface DuplicateCandidate {
   id: string
@@ -41,6 +41,8 @@ interface DuplicateCandidate {
   reference: string | null
   match_reason: DuplicateMatchReason
   match_confidence: number
+  /** aggregate_exact: the other open invoices the bank row also covers. */
+  aggregate_invoice_numbers?: string[]
 }
 
 interface PaymentBookingDialogProps {
@@ -67,6 +69,7 @@ export default function PaymentBookingDialog({
     ocr_exact: t('match_reason_ocr_exact'),
     name_amount_fuzzy: t('match_reason_name_amount_fuzzy'),
     amount_only: t('match_reason_amount_only'),
+    aggregate_exact: t('match_reason_aggregate_exact'),
   }
 
   // Session-cached reference data (lib/reference-data), seeded by the
@@ -363,11 +366,13 @@ export default function PaymentBookingDialog({
             <ul className="space-y-2">
               {duplicateCandidates.map((c) => {
                 const reasonVariant: 'success' | 'secondary' | 'outline' =
-                  c.match_reason === 'ocr_exact'
+                  c.match_reason === 'ocr_exact' || c.match_reason === 'aggregate_exact'
                     ? 'success'
                     : c.match_reason === 'name_amount_fuzzy'
                       ? 'secondary'
                       : 'outline'
+                const isAggregate =
+                  c.match_reason === 'aggregate_exact' && (c.aggregate_invoice_numbers?.length ?? 0) > 0
                 return (
                   <li
                     key={c.id}
@@ -386,6 +391,17 @@ export default function PaymentBookingDialog({
                       <p className="truncate text-xs text-muted-foreground">
                         {c.merchant_name || c.description || '-'}
                       </p>
+                      {/* A Bankgirot aggregate: the row also settles other
+                          invoices, so the remedy is the split under
+                          Transaktioner (one samlingsverifikation, row linked),
+                          never marking the invoices paid one by one. */}
+                      {isAggregate && (
+                        <p className="text-xs text-muted-foreground">
+                          {t('aggregate_covers', {
+                            numbers: c.aggregate_invoice_numbers!.join(', '),
+                          })}
+                        </p>
+                      )}
                     </div>
                     <Button
                       type="button"
@@ -394,7 +410,7 @@ export default function PaymentBookingDialog({
                       onClick={() => handleLinkExisting(c.id)}
                       className="shrink-0"
                     >
-                      {t('link_transaction')}
+                      {isAggregate ? t('allocate_transaction') : t('link_transaction')}
                     </Button>
                   </li>
                 )

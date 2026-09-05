@@ -246,3 +246,115 @@ describe('findDuplicatePaymentCandidatesForInvoice', () => {
     expect(queries).toHaveLength(0)
   })
 })
+
+describe('findDuplicatePaymentCandidatesForInvoice: Bankgirot aggregate rows', () => {
+  const invoice063 = { ...sekInvoice, invoice_number: '063', customer_name: 'Twelve Football AB', total: 62500, total_sek: 62500 }
+
+  function aggregateRow(over: Partial<Record<string, unknown>> = {}) {
+    return {
+      id: 'tx-bg',
+      date: '2026-07-31',
+      amount: 88250,
+      description: 'BGGIRERING 03447786',
+      merchant_name: null,
+      reference: null,
+      ...over,
+    }
+  }
+
+  it('offers the aggregate row whose excess is exactly another open invoice', async () => {
+    // Name sweeps find nothing ("BGGIRERING" carries no payer), then the
+    // aggregate sweep: 88 250 - 62 500 = 25 750 = invoice 064's remaining.
+    const { supabase, queries } = createRecordingSupabase([
+      [],
+      [],
+      [aggregateRow()],
+      [
+        { id: 'inv-064', invoice_number: '064', remaining_amount: 25750, total: 25750, due_date: '2026-07-31' },
+        { id: 'inv-065', invoice_number: '065', remaining_amount: 25750, total: 25750, due_date: '2026-09-30' },
+        { id: 'inv-070', invoice_number: '070', remaining_amount: 999, total: 999, due_date: '2026-08-15' },
+      ],
+    ])
+
+    const candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
+      companyId: 'company-1',
+      invoice: invoice063,
+      paymentAmount: 62500,
+      paymentDate: '2026-07-31',
+    })
+
+    expect(queries).toHaveLength(4)
+    // Rows larger than the payment, unbooked, kronor, on the payment day ± 7.
+    expect(queries[2].gt).toContainEqual(['amount', 62500])
+    expect(queries[2].is).toContainEqual(['journal_entry_id', null])
+    expect(queries[2].or).toEqual([['currency.is.null,currency.eq.SEK']])
+    expect(queries[2].gte).toContainEqual(['date', '2026-07-24'])
+    expect(queries[2].lte).toContainEqual(['date', '2026-08-07'])
+    // Other open invoices only: this one is excluded by number.
+    expect(queries[3].neq).toContainEqual(['invoice_number', '063'])
+    expect(queries[3].in).toContainEqual(['status', ['sent', 'overdue', 'partially_paid']])
+
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({
+      id: 'tx-bg',
+      amount: 88250,
+      match_reason: 'aggregate_exact',
+      match_confidence: 0.9,
+    })
+    // The invoice due on the row's date wins over the identical one due later.
+    expect(candidates[0].aggregate_invoice_numbers).toEqual(['064'])
+  })
+
+  it('does not run the aggregate sweep when a 1:1 candidate already exists', async () => {
+    const { supabase, queries } = createRecordingSupabase([[bankRow()], []])
+    const candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
+      companyId: 'company-1',
+      invoice: sekInvoice,
+      paymentAmount: 12500,
+      paymentDate: '2026-05-10',
+    })
+    expect(queries).toHaveLength(2)
+    expect(candidates[0].match_reason).not.toBe('aggregate_exact')
+  })
+
+  it('stays silent when the excess is not an exact sum of other open invoices', async () => {
+    const { supabase } = createRecordingSupabase([
+      [],
+      [],
+      [aggregateRow()],
+      [{ id: 'inv-x', invoice_number: '099', remaining_amount: 25000, total: 25000, due_date: '2026-07-31' }],
+    ])
+    const candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
+      companyId: 'company-1',
+      invoice: invoice063,
+      paymentAmount: 62500,
+      paymentDate: '2026-07-31',
+    })
+    expect(candidates).toEqual([])
+  })
+
+  it('stops after the row sweep when no larger unbooked row exists', async () => {
+    const { supabase, queries } = createRecordingSupabase([[], [], []])
+    const candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
+      companyId: 'company-1',
+      invoice: invoice063,
+      paymentAmount: 62500,
+      paymentDate: '2026-07-31',
+    })
+    expect(queries).toHaveLength(3)
+    expect(candidates).toEqual([])
+  })
+
+  it('never runs for a foreign-currency invoice', async () => {
+    const { supabase, queries } = createRecordingSupabase([[], [], [], []])
+    const candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
+      companyId: 'company-1',
+      invoice: eurInvoiceWithRate,
+      paymentAmount: 1000,
+      paymentDate: '2026-05-10',
+    })
+    // The four name sweeps (two currencies x two patterns) and nothing more.
+    expect(queries).toHaveLength(4)
+    expect(candidates).toEqual([])
+  })
+})

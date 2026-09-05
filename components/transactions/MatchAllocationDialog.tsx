@@ -19,7 +19,7 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate, cn, isValidExchangeRate } from '@/lib/utils'
-import { Loader2, Search, X, Plus, Check, AlertTriangle } from 'lucide-react'
+import { Loader2, Search, X, Plus, Check, AlertTriangle, Link2 } from 'lucide-react'
 import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
 
@@ -51,6 +51,43 @@ interface AllocationCandidate {
   currency: string
   exchangeRate: number | null
   dueDate: string
+  /** Invoice date: an invoice issued AFTER the bank row cannot normally be what it paid. */
+  invoiceDate: string | null
+}
+
+/**
+ * Mirror of ExplainingVoucherSet (lib/invoices/duplicate-payment-detection.ts):
+ * the posted, unlinked vouchers whose bank legs add up exactly to this row.
+ * Served by GET /api/transactions/[id]/duplicate-payment-check and by the
+ * BATCH_TX_POSSIBLE_DUPLICATE refusal of POST match-batch.
+ */
+interface ExplainingVoucher {
+  journal_entry_id: string
+  voucher_label: string
+  entry_date: string
+  description: string | null
+  source_type: string | null
+  amount: number
+  bank_account_number: string
+}
+
+interface ExplainingSet {
+  vouchers: ExplainingVoucher[]
+  total: number
+  bank_account_number: string
+  same_date: boolean
+}
+
+function readExplainingSet(value: unknown): ExplainingSet | null {
+  if (!value || typeof value !== 'object') return null
+  const v = value as Partial<ExplainingSet>
+  if (!Array.isArray(v.vouchers) || v.vouchers.length === 0) return null
+  return {
+    vouchers: v.vouchers,
+    total: Number(v.total ?? 0),
+    bank_account_number: v.bank_account_number ?? v.vouchers[0].bank_account_number,
+    same_date: v.same_date === true,
+  }
 }
 
 type AllocationDraft = {
@@ -95,6 +132,13 @@ export default function MatchAllocationDialog({
   const [search, setSearch] = useState('')
   const [drafts, setDrafts] = useState<Record<string, AllocationDraft>>({})
   const [submitting, setSubmitting] = useState(false)
+  // Already-explained guard: the vouchers that already book this row, if any.
+  // Set from the pre-flight on open, or from the route's 409 on submit. The
+  // user either links the row to them (no new voucher) or acknowledges the
+  // set, which is what lets the confirm through with force=true.
+  const [explaining, setExplaining] = useState<ExplainingSet | null>(null)
+  const [explainingAcknowledged, setExplainingAcknowledged] = useState(false)
+  const [linking, setLinking] = useState(false)
 
   useEffect(() => {
     if (!open || !transaction || !company) return
@@ -129,6 +173,7 @@ export default function MatchAllocationDialog({
               currency: r.currency,
               exchangeRate: r.exchange_rate != null ? Number(r.exchange_rate) : null,
               dueDate: r.due_date,
+              invoiceDate: r.invoice_date ?? null,
             })),
           )
         } else {
@@ -152,6 +197,7 @@ export default function MatchAllocationDialog({
               currency: r.currency,
               exchangeRate: r.exchange_rate != null ? Number(r.exchange_rate) : null,
               dueDate: r.due_date,
+              invoiceDate: r.invoice_date ?? null,
             })),
           )
         }
@@ -165,16 +211,46 @@ export default function MatchAllocationDialog({
     }
   }, [open, transaction, company, kind, supabase, t])
 
+  // Pre-flight: does the ledger already explain this row? Same detector the
+  // route refuses with, so the panel shows before a doomed submit. Fail-open:
+  // a failed pre-flight only means the route's own check does the refusing.
+  useEffect(() => {
+    if (!open || !transaction) return
+    let cancelled = false
+    async function check() {
+      try {
+        const res = await fetch(`/api/transactions/${transaction!.id}/duplicate-payment-check`)
+        if (!res.ok) return
+        const json = (await res.json()) as { candidate_set?: unknown }
+        if (!cancelled) setExplaining(readExplainingSet(json.candidate_set))
+      } catch {
+        // Pre-flight is advisory; the POST guard still runs.
+      }
+    }
+    void check()
+    return () => {
+      cancelled = true
+    }
+  }, [open, transaction])
+
   // Reset state every time the dialog re-opens for a new tx.
   useEffect(() => {
     if (!open) {
       setDrafts({})
       setSearch('')
+      setExplaining(null)
+      setExplainingAcknowledged(false)
     }
   }, [open])
 
   const txAmountAbs = transaction ? Math.abs(transaction.amount) : 0
   const txCurrency = transaction?.currency ?? 'SEK'
+  // The explaining set is stated in SEK and the 1:N link slices are stated in
+  // the row's currency, so the one-click link is only offered for kronor rows;
+  // a foreign row is pointed to the reconciliation view instead.
+  const explainingLinkable = !!explaining && txCurrency === 'SEK'
+  const explainingBlocks = !!explaining && !explainingAcknowledged
+  const explainingLabels = explaining ? explaining.vouchers.map((v) => v.voucher_label).join(' + ') : ''
 
   // Each draft's `amount` is the allocation in TRANSACTION currency (SEK
   // for a Swedish bank import). For cross-currency invoices the FX
@@ -298,11 +374,34 @@ export default function MatchAllocationDialog({
       const response = await fetch(`/api/transactions/${transaction.id}/match-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ allocations }),
+        body: JSON.stringify({
+          allocations,
+          // Acknowledged set: echo its ids so the route can verify that what
+          // the user overrode is what it still detects.
+          ...(explaining && explainingAcknowledged
+            ? {
+                force: true,
+                expected_journal_entry_ids: explaining.vouchers.map((v) => v.journal_entry_id),
+              }
+            : {}),
+        }),
       })
 
       if (!response.ok) {
         const body = await response.json().catch(() => null)
+        const code = (body as { error?: { code?: string; details?: unknown } } | null)?.error?.code
+        if (code === 'BATCH_TX_POSSIBLE_DUPLICATE') {
+          // The pre-flight missed it (or the set changed since): show the
+          // vouchers instead of an error toast and let the user decide.
+          const set = readExplainingSet(
+            (body as { error?: { details?: unknown } }).error?.details,
+          )
+          if (set) {
+            setExplaining(set)
+            setExplainingAcknowledged(false)
+            return
+          }
+        }
         toast({
           title: t('error_submit_title'),
           description: getErrorMessage(body, {
@@ -331,6 +430,65 @@ export default function MatchAllocationDialog({
       })
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  /**
+   * Link the row to the vouchers that already book it. One voucher goes
+   * through the 1:1 link, several through the 1:N split
+   * (linkTransactionToVouchers): slices carry the row's sign and each
+   * voucher's SEK bank leg, which the engine checks against the voucher's
+   * line and against the row total. No new verifikat is created.
+   */
+  async function handleLinkToExplaining() {
+    if (!transaction || !explaining || !explainingLinkable) return
+    setLinking(true)
+    try {
+      const sign = transaction.amount > 0 ? 1 : -1
+      const body =
+        explaining.vouchers.length === 1
+          ? {
+              transaction_id: transaction.id,
+              journal_entry_id: explaining.vouchers[0].journal_entry_id,
+              account_number: explaining.bank_account_number,
+            }
+          : {
+              transaction_id: transaction.id,
+              account_number: explaining.bank_account_number,
+              allocations: explaining.vouchers.map((v) => ({
+                journal_entry_id: v.journal_entry_id,
+                amount: round2(sign * v.amount),
+              })),
+            }
+      const res = await fetch('/api/reconciliation/bank/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || (json as { error?: unknown } | null)?.error) {
+        toast({
+          title: t('already_booked_link_failed'),
+          description: getErrorMessage(json, { context: 'transaction', statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({
+        title: t('already_booked_link_success_title'),
+        description: t('already_booked_link_success_description', { labels: explainingLabels }),
+        variant: 'success',
+      })
+      onSuccess()
+      onOpenChange(false)
+    } catch (err) {
+      toast({
+        title: t('already_booked_link_failed'),
+        description: getErrorMessage(err, { context: 'transaction' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setLinking(false)
     }
   }
 
@@ -368,6 +526,106 @@ export default function MatchAllocationDialog({
               </span>
             </div>
           </div>
+
+          {/* Already-explained guard: the ledger already books this row.
+              Shown first, before any invoice can be picked: the mistake this
+              prevents is picking the next period's identical invoices for a
+              row whose payment was already booked by hand. */}
+          {explaining && (
+            <div
+              className={cn(
+                'rounded-lg border p-4 space-y-3',
+                explainingAcknowledged ? 'border-border bg-muted/20' : 'border-attn/40 bg-muted/30',
+              )}
+              data-testid="already-booked-panel"
+            >
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
+                <div className="min-w-0 flex-1 space-y-1 text-sm">
+                  <p className="font-medium text-attn">
+                    {explainingAcknowledged
+                      ? t('already_booked_acknowledged_title')
+                      : t('already_booked_title')}
+                  </p>
+                  {!explainingAcknowledged && (
+                    <p className="text-muted-foreground">
+                      {t(
+                        transaction.amount > 0 ? 'already_booked_body_in' : 'already_booked_body_out',
+                        {
+                          amount: formatCurrency(explaining.total, 'SEK'),
+                          count: explaining.vouchers.length,
+                        },
+                      )}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {!explainingAcknowledged && (
+                <ul className="space-y-1.5">
+                  {explaining.vouchers.map((v) => (
+                    <li
+                      key={v.journal_entry_id}
+                      className="flex items-center justify-between gap-3 rounded-sm border bg-card px-3 py-2 text-sm"
+                    >
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium tabular-nums">{v.voucher_label}</span>
+                          <span className="text-xs tabular-nums text-muted-foreground">
+                            {formatDate(v.entry_date)}
+                          </span>
+                        </div>
+                        {v.description && (
+                          <p className="truncate text-xs text-muted-foreground">{v.description}</p>
+                        )}
+                      </div>
+                      <span className="shrink-0 font-medium tabular-nums">
+                        {formatCurrency(v.amount, 'SEK')}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!explainingAcknowledged && (
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  {explainingLinkable ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleLinkToExplaining}
+                      disabled={linking || submitting}
+                      className="sm:flex-1"
+                    >
+                      {linking ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Link2 className="mr-2 h-4 w-4" />
+                      )}
+                      {t('already_booked_link', { labels: explainingLabels })}
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-muted-foreground sm:flex-1">
+                      {t('already_booked_foreign_hint', { currency: txCurrency })}
+                    </p>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setExplainingAcknowledged(true)}
+                    disabled={linking || submitting}
+                    className="text-muted-foreground"
+                  >
+                    {t('already_booked_book_anyway')}
+                  </Button>
+                </div>
+              )}
+              {explainingAcknowledged && (
+                <p className="text-xs text-muted-foreground">
+                  {t('already_booked_acknowledged_note', { labels: explainingLabels })}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Search */}
           <div className="relative">
@@ -424,6 +682,16 @@ export default function MatchAllocationDialog({
                             amount: formatCurrency(c.remaining, c.currency),
                           })}
                         </p>
+                        {/* Money that arrived before the invoice existed rarely
+                            paid it: the next period's identical invoice is the
+                            classic wrong pick when the real one is already
+                            settled. A hint, not a block: prepayments exist. */}
+                        {c.invoiceDate && c.invoiceDate > transaction.date && (
+                          <Badge variant="warning" className="gap-1">
+                            <AlertTriangle className="h-3 w-3" />
+                            {t('invoiced_after_payment_badge', { date: formatDate(c.invoiceDate) })}
+                          </Badge>
+                        )}
                       </div>
                       {isSelected ? (
                         <div className="flex flex-col items-end gap-1">
@@ -537,7 +805,7 @@ export default function MatchAllocationDialog({
             // Confirm requires sum == tx_abs exactly (within rounding).
             // Anything else lets the JE diverge from the bank line and
             // breaks reconciliation. PR #607 round-1 review fix.
-            disabled={submitting || !balanced || overshoot}
+            disabled={submitting || linking || !balanced || overshoot || explainingBlocks}
           >
             {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {t('confirm')}
