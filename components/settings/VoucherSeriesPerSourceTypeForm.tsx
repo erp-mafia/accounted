@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
@@ -13,9 +13,10 @@ import {
 } from '@/components/settings/SettingsRows'
 import { cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { VOUCHER_SERIES_PRESETS } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { CompanySettings, JournalEntrySourceType } from '@/types'
 
-const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+const SERIES_LETTER_RE = /^[A-Z]$/
 
 // Subset of source_types presented to the user. The DB column accepts every
 // JournalEntrySourceType, but several values (storno, correction, etc.) are
@@ -82,6 +83,29 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   const [isSaving, setIsSaving] = useState(false)
   const [showAll, setShowAll] = useState(false)
 
+  // Same closed list as the manual verifikat form and the per-bankkonto
+  // picker: the fixed Swedish presets, then any letter already configured in
+  // settings that the presets do not cover. The saved map is read alongside
+  // the draft so a non-preset letter stays selectable after the user changes
+  // that row away from it (otherwise a misclick could not be undone without
+  // a reload) and so a letter that lands in settings after mount is offered.
+  // A free A-Z list would let a typo start an undocumented series.
+  const seriesOptions = useMemo(() => {
+    const preset = new Set(VOUCHER_SERIES_PRESETS.map((p) => p.letter))
+    const extras = [
+      settings.default_voucher_series,
+      ...Object.values(settings.default_voucher_series_per_source_type ?? {}),
+      ...Object.values(draft),
+    ].filter(
+      (v): v is string => typeof v === 'string' && SERIES_LETTER_RE.test(v) && !preset.has(v),
+    )
+    const uniqueExtras = Array.from(new Set(extras)).sort()
+    return [
+      ...VOUCHER_SERIES_PRESETS,
+      ...uniqueExtras.map((letter) => ({ letter, label: '' })),
+    ]
+  }, [settings.default_voucher_series, settings.default_voucher_series_per_source_type, draft])
+
   const handleChange = (sourceType: JournalEntrySourceType, value: string) => {
     setDraft((prev) => ({ ...prev, [sourceType]: value }))
   }
@@ -142,9 +166,9 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
         onChange={(e) => handleChange(key, e.target.value)}
         className="font-mono"
       >
-        {SERIES_OPTIONS.map((letter) => (
-          <option key={letter} value={letter}>
-            {letter}
+        {seriesOptions.map((option) => (
+          <option key={option.letter} value={option.letter}>
+            {option.label ? `${option.letter}  ${option.label}` : option.letter}
           </option>
         ))}
       </SettingsSelect>
@@ -157,7 +181,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   return (
     <SettingsGroup
       label="Verifikationsserier per typ"
-      help="Tilldela en standardserie per typ av verifikat. Vanlig svensk praxis: leverantörsfakturor på serie B, löner på serie C, övrigt på serie A. Kan alltid ändras per verifikat när du bokför."
+      help="Tilldela en standardserie per typ av verifikat. Namnen i listan följer Fortnox-konventionen: kundfakturor på serie B, leverantörsfakturor på serie D, löner på serie K, övrigt på serie A. Andra program använder andra bokstäver; bokstaven är ett fritt val. Kan alltid ändras per verifikat när du bokför."
     >
       {alwaysVisible.map((entry, i) =>
         // The last always-visible row sits right above the fold toggle:

@@ -18,7 +18,7 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
   requireCapability: vi.fn().mockResolvedValue(null),
 }))
 
-import { SYNC_FAILED_MESSAGE } from '../lib/api-client'
+import { SYNC_FAILED_MESSAGE, CONNECTOR_UNAVAILABLE_MESSAGE, ConnectorSyncError } from '../lib/api-client'
 import { enableBankingExtension } from '../index'
 import { syncAccountTransactions } from '../lib/sync'
 
@@ -179,5 +179,30 @@ describe('POST /sync (enable-banking): retry from error status', () => {
     expect(body.error).toBe(SYNC_FAILED_MESSAGE)
     expect(body.error).not.toContain('ASPSP_ERROR')
     expect(updateSpy).toHaveBeenCalledWith({ error_message: SYNC_FAILED_MESSAGE })
+  })
+
+  it('answers 503 retryable without renewal advice when the connector hop fails, and leaves the row alone', async () => {
+    ;(syncAccountTransactions as unknown as Mock).mockRejectedValue(
+      new ConnectorSyncError(200, 'CONNECTOR_BAD_SHAPE', '{}', ['transactions.0.amount: Invalid input'])
+    )
+
+    const updateSpy = vi.fn()
+    const ctx = makeContext(makeConnection({ status: 'error', error_message: SYNC_FAILED_MESSAGE }), updateSpy)
+
+    const res = await syncRoute.handler(makeRequest(), ctx)
+
+    expect(res.status).toBe(503)
+    const body = await res.json()
+    expect(body).toMatchObject({ error: CONNECTOR_UNAVAILABLE_MESSAGE, code: 'CONNECTOR_UNAVAILABLE', retryable: true })
+    expect(body.error).not.toContain('Förnya')
+    expect(updateSpy).not.toHaveBeenCalled()
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      '[enable-banking] Sync: connector hop failed',
+      expect.objectContaining({ code: 'CONNECTOR_BAD_SHAPE', issues: ['transactions.0.amount: Invalid input'] })
+    )
+    // The raw connector body can carry bank data: never in the log line.
+    const logged = (ctx.log.warn as Mock).mock.calls.find((c) => c[0] === '[enable-banking] Sync: connector hop failed')?.[1]
+    expect(logged).not.toHaveProperty('body')
+    expect(logged).toHaveProperty('bodyLength', 2)
   })
 })

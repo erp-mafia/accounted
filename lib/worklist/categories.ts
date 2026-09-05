@@ -184,6 +184,13 @@ export async function countSupplierInvoicesAwaitingApproval(
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('status', 'registered')
+    // A credit note is a reversal, never a payable: there is nothing to
+    // attest on it and the detail page offers no attest button, so counting
+    // one here made an item nobody could clear. The CHECK
+    // supplier_invoices_credit_note_not_payable keeps credit notes out of
+    // 'registered' since 20260904190000; the predicate states the rule where
+    // the count is defined.
+    .eq('is_credit_note', false)
   if (error) return logAndZero('supplier_invoice_approval', companyId, error)
   return count ?? 0
 }
