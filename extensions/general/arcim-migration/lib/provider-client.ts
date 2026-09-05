@@ -17,7 +17,11 @@ import {
 import { exchangeFortnoxCode } from '@/lib/providers/fortnox/oauth'
 import { buildVismaAuthUrl, exchangeVismaCode } from '@/lib/providers/visma/oauth'
 import { refreshBjornLundenToken } from '@/lib/providers/bjornlunden/oauth'
-import { BjornLundenClient, BjornLundenApiError } from '@/lib/providers/bjornlunden/client'
+import {
+  BjornLundenClient,
+  BjornLundenApiError,
+  isBjornLundenScopeError,
+} from '@/lib/providers/bjornlunden/client'
 import { exchangeBrioxCode } from '@/lib/providers/briox/oauth'
 import { BrioxApiError } from '@/lib/providers/briox/client'
 import {
@@ -54,7 +58,14 @@ const wintClient = new WintClient()
 export class ProviderTokenInvalidError extends Error {
   constructor(
     message: string,
-    public readonly kind: 'credentials' | 'company-not-found' = 'credentials',
+    public readonly kind:
+      | 'credentials'
+      | 'company-not-found'
+      // BL: the User-Key opened a company that has not activated our
+      // integration (no scopes granted to the service provider).
+      | 'integration-not-activated'
+      // BL: no company could be bound to the User-Key at all.
+      | 'company-key-not-found' = 'credentials',
   ) {
     super(message)
     this.name = 'ProviderTokenInvalidError'
@@ -613,14 +624,32 @@ export async function submitProviderToken(
       }
     } catch (error) {
       if (error instanceof BjornLundenApiError) {
-        // 429 and gateway-style 5xx (502/503/504) are transient provider
-        // failures, not a verdict on the key: rethrow so the route reports a
-        // generic submit failure instead of "your key is wrong". 500 stays
-        // mapped to invalid credentials: per the sandbox finding above, 500
-        // IS the bad-key signal at BL. Tradeoff: a genuine BL 500 outage also
-        // reads as a rejected key.
-        if (error.statusCode === 429 || error.statusCode >= 501) {
+        // Live-verified 2026-09-05 against a real customer key: a company that
+        // has NOT activated our integration answers 403 "<service>:READ is out
+        // of allowed scope for service provider <name>". The key is right and
+        // the grant is missing, so this must not read as "check what you
+        // pasted": the fix is activating the integration in Lundify.
+        if (isBjornLundenScopeError(error)) {
+          throw new ProviderTokenInvalidError(
+            'Björn Lundén: the company behind this User-Key has not activated the integration (no scopes granted to the service provider)',
+            'integration-not-activated',
+          )
+        }
+        // 401 is OUR client_credentials token being refused, never the
+        // customer's key. 429 and gateway-style 5xx (502/503/504) are
+        // transient. All three rethrow so the route reports a generic submit
+        // failure instead of blaming the pasted key.
+        if (error.statusCode === 401 || error.statusCode === 429 || error.statusCode >= 501) {
           throw error
+        }
+        // Per the sandbox finding above, 500 IS the unknown-key signal at BL
+        // (404 is the same verdict from the gateway). Tradeoff: a genuine BL
+        // 500 outage also reads as an unknown key.
+        if (error.statusCode === 500 || error.statusCode === 404) {
+          throw new ProviderTokenInvalidError(
+            `Björn Lundén found no company for the key (HTTP ${error.statusCode})`,
+            'company-key-not-found',
+          )
         }
         throw new ProviderTokenInvalidError(
           `Björn Lundén rejected the company key (HTTP ${error.statusCode})`,
