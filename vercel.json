@@ -99,6 +99,10 @@
       "schedule": "45 5 * * *"
     },
     {
+      "path": "/api/extensions/arcim-migration/complete-invoice-lines/cron",
+      "schedule": "20 * * * *"
+    },
+    {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
     },
