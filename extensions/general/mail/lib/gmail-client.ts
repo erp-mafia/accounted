@@ -110,6 +110,20 @@ async function gmailFetch<T>(accessToken: string, path: string): Promise<T> {
   return (await response.json()) as T
 }
 
+/**
+ * The address of the mailbox a token belongs to.
+ *
+ * Read from Gmail's own profile endpoint, which gmail.readonly covers, so the
+ * consent flow never has to ask for `openid email` on top. The address is the
+ * unique key of a connection: without it two grants for the same company
+ * could not be told apart.
+ */
+export async function getMailboxAddress(accessToken: string): Promise<string | null> {
+  const data = await gmailFetch<{ emailAddress?: string }>(accessToken, '/profile')
+  const address = data.emailAddress?.trim()
+  return address ? address : null
+}
+
 export async function searchMessageIds(
   accessToken: string,
   query: string,

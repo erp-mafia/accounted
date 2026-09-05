@@ -3,6 +3,7 @@ import type { Extension } from '@/lib/extensions/types'
 import { registerMailSearchService } from '@/lib/mail-search/service'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GmailSearchService } from './lib/search-service'
+import { getMailboxAddress } from './lib/gmail-client'
 import { createOAuthState, verifyOAuthState } from './lib/crypto'
 import {
   buildAuthorizationUrl,
@@ -103,7 +104,10 @@ export const mailExtension: Extension = {
           if (!tokens.refreshToken) {
             return NextResponse.redirect(`${settingsUrl}?mail=no_refresh_token`)
           }
-          if (!tokens.email) {
+          // The address comes from Gmail's profile endpoint rather than an
+          // id_token, so the consent screen asks for gmail.readonly alone.
+          const email = await getMailboxAddress(tokens.accessToken)
+          if (!email) {
             // Without the address we cannot tell two grants apart, and the
             // unique key depends on it.
             return NextResponse.redirect(`${settingsUrl}?mail=no_address`)
@@ -113,7 +117,7 @@ export const mailExtension: Extension = {
             companyId: verified.companyId,
             userId: verified.userId,
             provider: 'gmail',
-            emailAddress: tokens.email,
+            emailAddress: email,
             refreshToken: tokens.refreshToken,
             accessToken: tokens.accessToken,
             expiresAt: tokens.expiresAt,

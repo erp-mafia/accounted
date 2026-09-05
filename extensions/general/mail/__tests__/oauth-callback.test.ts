@@ -30,6 +30,12 @@ vi.mock('../lib/connections', () => ({
   saveConnection: vi.fn(),
 }))
 
+// The mailbox address comes from Gmail's profile endpoint (gmail.readonly),
+// not from an id_token: the consent request carries that one scope only.
+vi.mock('../lib/gmail-client', () => ({
+  getMailboxAddress: vi.fn(),
+}))
+
 const { mockCreateClient } = vi.hoisted(() => ({ mockCreateClient: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({
   createClient: mockCreateClient,
@@ -39,6 +45,7 @@ vi.mock('@/lib/supabase/server', () => ({
 import { mailExtension } from '../index'
 import { createOAuthState } from '../lib/crypto'
 import { exchangeCodeForTokens } from '../lib/google-oauth'
+import { getMailboxAddress } from '../lib/gmail-client'
 import { saveConnection } from '../lib/connections'
 
 const APP_URL = 'https://app.example'
@@ -81,9 +88,9 @@ describe('mail GET /oauth/callback: the completing session must be the initiator
       refreshToken: 'refresh-1',
       accessToken: 'access-1',
       expiresAt: '2030-01-01T00:00:00Z',
-      email: 'ekonomi@example.se',
-      scopes: 'gmail.readonly',
+      scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
     })
+    ;(getMailboxAddress as Mock).mockResolvedValue('ekonomi@example.se')
     ;(saveConnection as Mock).mockResolvedValue(undefined)
   })
 
@@ -109,6 +116,18 @@ describe('mail GET /oauth/callback: the completing session must be the initiator
         emailAddress: 'ekonomi@example.se',
       }),
     )
+    // The address is read with the freshly granted token, under the one scope.
+    expect(getMailboxAddress).toHaveBeenCalledWith('access-1')
+  })
+
+  it('saves nothing when Gmail returns no address for the grant', async () => {
+    useSession('user-1')
+    ;(getMailboxAddress as Mock).mockResolvedValue(null)
+
+    const res = await callbackRoute().handler(callbackRequest(state))
+
+    expect(res.headers.get('location')).toBe(`${APP_URL}/settings/mail?mail=no_address`)
+    expect(saveConnection).not.toHaveBeenCalled()
   })
 
   it('refuses a completion by a different signed-in user: no exchange, no save', async () => {

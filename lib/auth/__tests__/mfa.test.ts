@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { isMfaRequired, shouldEnforceMfa } from '../mfa'
+import { isMfaExemptionActive, isMfaRequired, shouldEnforceMfa } from '../mfa'
 
 describe('mfa helpers', () => {
   afterEach(() => {
@@ -38,10 +38,41 @@ describe('mfa helpers', () => {
       expect(shouldEnforceMfa({ app_metadata: {} })).toBe(true)
     })
 
+    it('skips MFA while a service-role exemption is still in the future', () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+      expect(shouldEnforceMfa({ app_metadata: { mfa_exempt_until: future } })).toBe(false)
+    })
+
+    it('enforces MFA again once the exemption has expired', () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      const past = new Date(Date.now() - 60 * 1000).toISOString()
+      expect(shouldEnforceMfa({ app_metadata: { mfa_exempt_until: past } })).toBe(true)
+    })
+
+    it('treats a malformed or non-string exemption as no exemption', () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      expect(shouldEnforceMfa({ app_metadata: { mfa_exempt_until: 'soon' } })).toBe(true)
+      expect(shouldEnforceMfa({ app_metadata: { mfa_exempt_until: true } })).toBe(true)
+      expect(shouldEnforceMfa({ app_metadata: { mfa_exempt_until: 4102444800000 } })).toBe(true)
+      expect(shouldEnforceMfa({ app_metadata: { mfa_exempt: true } })).toBe(true)
+    })
+
     it('returns true when app_metadata is undefined', () => {
       vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
       vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
       expect(shouldEnforceMfa({})).toBe(true)
+    })
+  })
+
+  describe('isMfaExemptionActive', () => {
+    it('compares against the clock it is given', () => {
+      const user = { app_metadata: { mfa_exempt_until: '2026-10-01T00:00:00Z' } }
+      expect(isMfaExemptionActive(user, new Date('2026-09-30T23:59:59Z'))).toBe(true)
+      expect(isMfaExemptionActive(user, new Date('2026-10-01T00:00:00Z'))).toBe(false)
     })
   })
 })
