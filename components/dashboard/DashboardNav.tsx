@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import {
   LayoutDashboard,
   Home,
+  Receipt,
   ReceiptText,
   Users,
   ArrowLeftRight,
@@ -137,6 +138,7 @@ type NavLabelKey =
   | 'reports'
   | 'import'
   | 'salary'
+  | 'expenses'
   | 'mileage'
   | 'employees'
   | 'vat_declaration'
@@ -244,6 +246,10 @@ const navItems: NavItem[] = [
   // must still reach its already-imported orders (accounting underlag).
   { href: '/orders', labelKey: 'webshop_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true, betaBadge: true },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
+  // Utlägg: out-of-pocket purchases and their reimbursement batches. The
+  // /expenses route previously redirected to supplier invoices; the nav key
+  // has existed in the nav namespace since then.
+  { href: '/expenses', labelKey: 'expenses', icon: Receipt, group: 'arbeta' },
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
   // Körjournal: hidden by default (most companies have no car); shows when
   // the settings toggle is on or trips already exist (hybrid gate, same
