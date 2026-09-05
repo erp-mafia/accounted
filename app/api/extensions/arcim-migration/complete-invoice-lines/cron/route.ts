@@ -15,17 +15,23 @@ import {
  *
  * The migration hydrates the provider's detail form inside a fixed budget
  * and reports the shortfall; this is what picks the shortfall up. Every run
- * walks the recently accepted consents, newest first, and for each company
- * completes as many of its row-less invoices as its share of the run allows.
- * A company with nothing left costs one query and no provider call (the
- * pass checks our side before it touches the consent). Scheduled hourly in
- * vercel.json (and the Docker crontabs); a company the size of Clearstoq
- * (1 125 invoices) is done after two or three runs.
+ * walks the accepted consents whose credentials can still be used, newest
+ * first, and for each company completes as many of its row-less invoices as
+ * its share of the run allows. A company with nothing left costs one query
+ * and no provider call (the pass checks our side before it touches the
+ * consent), so walking every live consent is cheap and no company waits
+ * behind a fixed page of newer ones. Scheduled hourly in vercel.json (and
+ * the Docker crontabs); a company the size of Clearstoq (1 125 invoices) is
+ * done after two or three runs.
  *
- * The consent window matches the providers' refresh-token lifetime (Fortnox:
- * 45 days). Older consents cannot be refreshed, so trying them every hour
- * would only log the same PROVIDER_AUTH_EXPIRED; a company whose window has
- * passed reconnects through the wizard, and the next run finds it here.
+ * "Can still be used" is read off the token row, not the consent's age:
+ * Fortnox issues a new refresh token on every refresh and each one lives 45
+ * days, so a pair whose access token expired more than 45 days ago has not
+ * been refreshed since and its refresh token is dead. Trying such a consent
+ * every hour would only log the same PROVIDER_AUTH_EXPIRED; when the company
+ * reconnects through the wizard, the token row is renewed and the next run
+ * finds it here. A token without an expiry (Bokio's private tokens) is
+ * always eligible.
  */
 
 export const maxDuration = 300
@@ -36,14 +42,37 @@ const RUN_BUDGET_MS = 240_000
 const PER_COMPANY_BUDGET_MS = 120_000
 /** Below this the remaining companies wait for the next run. */
 const MIN_COMPANY_BUDGET_MS = 20_000
-const CONSENT_WINDOW_DAYS = 60
-const MAX_CONSENTS_PER_RUN = 25
+/**
+ * A token pair not refreshed for this long cannot be refreshed any more
+ * (Fortnox: refresh tokens live 45 days and rotate on every refresh).
+ */
+const TOKEN_STALE_DAYS = 45
+/** Hard safety on the consent scan; prod holds ~120 accepted consents in total. */
+const MAX_CONSENTS_SCANNED = 500
 
 interface ConsentRow {
   id: string
   company_id: string
   provider: string | null
   created_at: string
+  provider_consent_tokens: { token_expires_at: string | null } | { token_expires_at: string | null }[] | null
+}
+
+/** The consent's token row, whichever cardinality PostgREST rendered it with. */
+function tokenOf(consent: ConsentRow): { token_expires_at: string | null } | null {
+  const tokens = consent.provider_consent_tokens
+  if (!tokens) return null
+  return Array.isArray(tokens) ? (tokens[0] ?? null) : tokens
+}
+
+/** Does this consent still hold credentials a run can use? */
+export function consentIsUsable(consent: ConsentRow, now: number): boolean {
+  const token = tokenOf(consent)
+  if (!token) return false
+  if (token.token_expires_at === null) return true
+  const expiredAt = Date.parse(token.token_expires_at)
+  if (Number.isNaN(expiredAt)) return false
+  return now - expiredAt <= TOKEN_STALE_DAYS * 24 * 60 * 60 * 1000
 }
 
 export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines', async (_request, ctx) => {
@@ -61,23 +90,23 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
   }
 
   const supabase = createServiceClientNoCookies()
-  const since = new Date(Date.now() - CONSENT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
   const { data, error } = await supabase
     .from('provider_consents')
-    .select('id, company_id, provider, created_at')
+    .select('id, company_id, provider, created_at, provider_consent_tokens(token_expires_at)')
     .eq('status', 1)
     .not('provider', 'is', null)
-    .gte('created_at', since)
     .order('created_at', { ascending: false })
-    .limit(MAX_CONSENTS_PER_RUN)
+    .limit(MAX_CONSENTS_SCANNED)
 
   if (error) {
     throw new Error(`provider_consents lookup failed: ${error.message}`)
   }
 
-  const consents = (data ?? []) as ConsentRow[]
-  const deadline = Date.now() + RUN_BUDGET_MS
+  const now = Date.now()
+  const scanned = (data ?? []) as ConsentRow[]
+  const consents = scanned.filter((consent) => consentIsUsable(consent, now))
+  const deadline = now + RUN_BUDGET_MS
   let skippedForBudget = 0
   const totals = {
     companies: 0,
@@ -127,11 +156,14 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
     }
   })
 
-  ctx.log.info('complete-invoice-lines run finished', { ...totals, skippedForBudget, consents: summary.total })
+  ctx.log.info('complete-invoice-lines run finished', {
+    ...totals, skippedForBudget, consents: summary.total, consentsStale: scanned.length - consents.length,
+  })
 
   return NextResponse.json({
     data: {
       consents: summary.total,
+      consentsStale: scanned.length - consents.length,
       consentsFailed: summary.failed,
       skippedForBudget,
       ...totals,
