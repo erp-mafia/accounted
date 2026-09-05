@@ -439,7 +439,7 @@ export const attentionResource: McpResource = {
         })),
         next: {
           description:
-            'Betala ut från företagskontot och bokför utbetalningen (2893/2820 D mot 19xx K) via /expenses eller POST /api/expense-claims/payouts.',
+            'Betala ut från företagskontot och bokför utbetalningen: debitera radens liability_account (2893 ägare i AB, 2018 ägare i enskild firma, 2820 anställd) mot 19xx K, via /expenses eller POST /api/expense-claims/payouts.',
         },
       })
     }

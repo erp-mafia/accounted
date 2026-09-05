@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
+import { useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -495,6 +496,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [bookDirectOpen, setBookDirectOpen] = useState(false)
   // "Vem betalade?" answered with a person: the utlägg confirm step.
   const [registerExpensePayer, setRegisterExpensePayer] = useState<ExpensePayer | null>(null)
+  // The layout computes the Utlägg nav gate (hasExpenseClaims) on the server;
+  // the first booked claim must re-run it or the row stays hidden until reload.
+  const router = useRouter()
   // Bulk-book selected underlag (Modell B): the "Bokför valda" selection-bar
   // action. The dialog filters the selection to bookable items itself.
   const [bulkBookOpen, setBulkBookOpen] = useState(false)
@@ -2244,6 +2248,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         payer={registerExpensePayer}
         onSuccess={async () => {
           await Promise.all([fetchItems(), handleSelect(selected.id)])
+          router.refresh()
         }}
       />
     )}
