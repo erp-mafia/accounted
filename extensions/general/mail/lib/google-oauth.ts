@@ -6,6 +6,14 @@
  * and it structurally cannot send, modify or delete: the promise made in the
  * consent screen is enforced by the grant, not by our code being careful.
  *
+ * Exactly one scope, on purpose. Google's restricted-scope review compares the
+ * scopes the authorization URL requests with the ones declared in the Cloud
+ * Console, string for string, and bounced the first submission because the
+ * URL also carried `openid email`. Those only served to learn the mailbox
+ * address, which Gmail's profile endpoint returns under gmail.readonly anyway
+ * (getMailboxAddress in gmail-client.ts). Adding a scope here means adding it
+ * in the console and re-recording the demo video.
+ *
  * Consequence worth remembering: because we never hold a send scope, the agent
  * can prepare a forward for the user but can never send one itself.
  */
@@ -59,7 +67,7 @@ export function buildAuthorizationUrl(env: GoogleOAuthEnv, state: string): strin
     client_id: env.clientId,
     redirect_uri: env.redirectUri,
     response_type: 'code',
-    scope: `openid email ${GMAIL_READONLY_SCOPE}`,
+    scope: GMAIL_READONLY_SCOPE,
     // Signed, self-expiring CSRF token. The callback refuses anything without
     // it, so omitting this breaks the flow as well as the protection.
     state,
@@ -79,7 +87,6 @@ export interface GoogleTokens {
   refreshToken: string | null
   expiresAt: Date
   scopes: string[]
-  email: string | null
 }
 
 /** Raised when a grant is dead rather than the request being unlucky. */
@@ -90,19 +97,6 @@ export class MailTokenRefreshError extends Error {
   ) {
     super(message)
     this.name = 'MailTokenRefreshError'
-  }
-}
-
-function decodeIdTokenEmail(idToken: string | undefined): string | null {
-  if (!idToken) return null
-  try {
-    const payload = idToken.split('.')[1]
-    const json = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
-      email?: string
-    }
-    return json.email ?? null
-  } catch {
-    return null
   }
 }
 
@@ -127,7 +121,6 @@ export async function exchangeCodeForTokens(
     refresh_token?: string
     expires_in?: number
     scope?: string
-    id_token?: string
     error?: string
     error_description?: string
   }
@@ -147,7 +140,6 @@ export async function exchangeCodeForTokens(
     refreshToken: body.refresh_token,
     expiresAt: new Date(Date.now() + (body.expires_in ?? 3600) * 1000),
     scopes: (body.scope ?? '').split(' ').filter(Boolean),
-    email: decodeIdTokenEmail(body.id_token),
   }
 }
 

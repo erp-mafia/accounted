@@ -38,6 +38,19 @@ describe('mfa helpers', () => {
       expect(shouldEnforceMfa({ app_metadata: {} })).toBe(true)
     })
 
+    it('returns false when the account is flagged mfa_exempt by the service role', () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      expect(shouldEnforceMfa({ app_metadata: { mfa_exempt: true } })).toBe(false)
+    })
+
+    it('ignores a truthy but non-boolean mfa_exempt', () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      expect(shouldEnforceMfa({ app_metadata: { mfa_exempt: 'true' } })).toBe(true)
+      expect(shouldEnforceMfa({ app_metadata: { mfa_exempt: 1 } })).toBe(true)
+    })
+
     it('returns true when app_metadata is undefined', () => {
       vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
       vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')

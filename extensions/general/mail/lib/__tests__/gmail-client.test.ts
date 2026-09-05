@@ -7,7 +7,7 @@
  * the format and the MIME walk.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { clearMessageCache, getMessageSummary } from '../gmail-client'
+import { clearMessageCache, getMailboxAddress, getMessageSummary } from '../gmail-client'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', (...args: unknown[]) => mockFetch(...args))
@@ -129,5 +129,21 @@ describe('message reads are not repeated', () => {
     await getMessageSummary('token', 'shared', 'conn-2', 'jakob@arcim.io')
 
     expect(mockFetch).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('getMailboxAddress', () => {
+  it('reads the address from the Gmail profile endpoint, which gmail.readonly covers', async () => {
+    respond({ emailAddress: 'Owner@Example.test', messagesTotal: 12 })
+    const address = await getMailboxAddress('token')
+    expect(String(mockFetch.mock.calls[0][0])).toBe(
+      'https://gmail.googleapis.com/gmail/v1/users/me/profile',
+    )
+    expect(address).toBe('Owner@Example.test')
+  })
+
+  it('returns null when the profile carries no address', async () => {
+    respond({ messagesTotal: 0 })
+    expect(await getMailboxAddress('token')).toBeNull()
   })
 })
