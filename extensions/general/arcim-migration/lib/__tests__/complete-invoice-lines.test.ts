@@ -239,6 +239,45 @@ describe('completeMigratedInvoiceLines', () => {
     expect(headerUpdates(calls)[0]).toMatchObject({ subtotal: 1000, subtotal_sek: 11200, vat_amount: 250, vat_amount_sek: 2800 })
   })
 
+  it('refuses rows that do not add up to the header the same payload established', async () => {
+    // The shape Profilio's 345 invoices took: rows priced with VAT inside,
+    // summing to the gross, beside a header that was right. Storing them
+    // would put a row list under the invoice that contradicts its totals.
+    mFetchAll.mockResolvedValue([storedRow()])
+    const dto = providerInvoice({
+      lines: [
+        { id: '1', description: 'Mugg', quantity: 1, unitPrice: amount(1250), lineExtensionAmount: amount(1250), taxPercent: 25 },
+      ],
+    })
+    mList.mockResolvedValue([dto])
+    mHydrate.mockResolvedValue(hydratedAll([dto]))
+    const { supabase, calls } = makeSupabase(() => ok)
+
+    const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
+
+    expect(result).toMatchObject({ matched: 1, completed: 0, rowsMismatch: 1, remaining: 1 })
+    expect(insertedRows(calls)).toHaveLength(0)
+    expect(headerUpdates(calls)).toHaveLength(0)
+  })
+
+  it('tolerates öresavrundning between the rows and the header', async () => {
+    // Fortnox rounds Total to whole kronor; the header net absorbs the öre.
+    mFetchAll.mockResolvedValue([storedRow({ total: 12263 })])
+    const dto = providerInvoice({
+      lines: [{ id: '1', description: 'Konsult', quantity: 1, unitPrice: amount(9810), lineExtensionAmount: amount(9810), taxPercent: 25 }],
+      taxTotal: { taxAmount: amount(2452.5) },
+      legalMonetaryTotal: { lineExtensionAmount: amount(9810.5), taxInclusiveAmount: amount(12263), payableAmount: amount(12263) },
+    })
+    mList.mockResolvedValue([dto])
+    mHydrate.mockResolvedValue(hydratedAll([dto]))
+    const { supabase, calls } = makeSupabase(() => ok)
+
+    const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
+
+    expect(result).toMatchObject({ completed: 1, rowsMismatch: 0 })
+    expect(insertedRows(calls)).toHaveLength(1)
+  })
+
   it('leaves an invoice untouched when the provider total differs from the stored one', async () => {
     mFetchAll.mockResolvedValue([storedRow({ total: 1300, subtotal: 1300 })])
     const dto = providerInvoice()

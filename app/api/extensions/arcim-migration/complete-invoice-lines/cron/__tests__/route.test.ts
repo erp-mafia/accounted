@@ -44,7 +44,7 @@ const mockComplete = vi.mocked(completeMigratedInvoiceLines)
 
 const EMPTY = {
   candidates: 0, providerInvoices: 0, matched: 0, unmatched: 0, completed: 0, headersUpdated: 0,
-  totalMismatch: 0, noLinesAtProvider: 0, notHydrated: 0, vatUnresolved: 0, failed: 0, remaining: 0,
+  totalMismatch: 0, noLinesAtProvider: 0, rowsMismatch: 0, notHydrated: 0, vatUnresolved: 0, failed: 0, remaining: 0,
   hydration: { needed: 0, hydrated: 0, failed: 0, skippedForBudget: 0 }, dryRun: false,
 }
 

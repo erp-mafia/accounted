@@ -116,6 +116,7 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
     remaining: 0,
     notHydrated: 0,
     totalMismatch: 0,
+    rowsMismatch: 0,
     failed: 0,
   }
 
@@ -141,6 +142,7 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
       totals.remaining += result.remaining
       totals.notHydrated += result.notHydrated
       totals.totalMismatch += result.totalMismatch
+      totals.rowsMismatch += result.rowsMismatch
       totals.failed += result.failed
       itemCtx.log.info('migrated invoice rows completed for company', {
         companyId: consent.company_id,
@@ -151,6 +153,7 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
         remaining: result.remaining,
         notHydrated: result.notHydrated,
         totalMismatch: result.totalMismatch,
+        rowsMismatch: result.rowsMismatch,
         hydration: result.hydration,
       })
     }
