@@ -291,6 +291,16 @@ function treatmentForRate(rate: number, currencyCode?: string): VatTreatment {
  * and keeps only the figure that IS known, the gross the customer owes; the
  * rate goes to null so no downstream reader can mistake silence for 25 %.
  */
+/**
+ * A free-text row: no quantity, no amount, no unit price. Providers ship
+ * these as ordinary rows (Fortnox: DeliveredQuantity "0", Total 0, VAT 0);
+ * Accounted models them as `line_type = 'text'`, which the invoice page
+ * renders without amounts and the booking engine leaves out.
+ */
+function isTextLine(line: { quantity?: number; unitPrice?: { value: number }; lineExtensionAmount: { value: number } }): boolean {
+  return !line.quantity && !line.unitPrice?.value && line.lineExtensionAmount.value === 0
+}
+
 function resolveInvoiceVat(
   dto: { currencyCode: string; lines: readonly { taxPercent?: number; taxAmount?: { value: number } }[]; taxTotal?: { taxAmount: { value: number } }; legalMonetaryTotal: { lineExtensionAmount?: { value: number }; payableAmount: { value: number } } },
 ): InvoiceVatResolution {
@@ -324,9 +334,13 @@ function resolveInvoiceVat(
   // one divided out of the totals, because a mixed-rate invoice divides out to
   // a blended figure matching no statutory rate at all (25 % goods plus 6 %
   // books lands near 21 %).
+  // A row that carries no money states no rate: Fortnox ships its free-text
+  // rows ("5 st M, 8 st L") with Total 0 and VAT 0, and counting that 0 %
+  // beside the 25 % of the priced rows made every such invoice "mixed" and
+  // nulled its header rate.
   const statedRates = [...new Set(
     dto.lines
-      .filter((line) => line.taxPercent != null)
+      .filter((line) => line.taxPercent != null && !isTextLine(line))
       .map((line) => snapToSwedishRate(line.taxPercent as number) ?? (line.taxPercent as number)),
   )]
 
@@ -828,6 +842,20 @@ function mapSalesInvoiceLine(
   // credit note issued in-app (lib/invoices/build-credit-note-item.ts).
   const sign = (n: number): number => (isCreditNote ? negate(n) : n)
 
+  if (isTextLine(line)) {
+    return {
+      sort_order: index + 1,
+      description: line.description || line.itemName || '',
+      quantity: 0,
+      unit: line.unitCode || 'st',
+      unit_price: 0,
+      line_total: 0,
+      vat_rate: 0,
+      vat_amount: 0,
+      line_type: 'text',
+    }
+  }
+
   return {
     sort_order: index + 1,
     description: line.description || line.itemName || '',
@@ -839,6 +867,7 @@ function mapSalesInvoiceLine(
     // 0 % line beside 0 kr of VAT is at least internally consistent.
     vat_rate: rate ?? 0,
     vat_amount: sign(round2(vatAmount ?? 0)),
+    line_type: 'product',
   }
 }
 

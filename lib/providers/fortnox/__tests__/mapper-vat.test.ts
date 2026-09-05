@@ -169,3 +169,116 @@ describe('mapFortnoxToSalesInvoice: VATIncluded rows', () => {
     expect(dto.lines[1]?.taxAmount).toBeUndefined();
   });
 });
+
+describe('mapFortnoxToSalesInvoice: header-level freight and fee', () => {
+  // Live shapes from Profilio (2026-09-05). Fortnox keeps freight and the
+  // administration fee on the header: `Net` excludes them, `Total` and
+  // `TotalVAT` include them, and the *VAT fields are amounts, not rates.
+  const base = {
+    DocumentNumber: 295,
+    InvoiceDate: '2026-04-02',
+    Currency: 'SEK',
+    Balance: 0,
+    FullyPaid: true,
+    AdministrationFee: 0,
+    AdministrationFeeVAT: 0,
+  };
+
+  it('adds a freight row net of VAT on an invoice priced excluding VAT', () => {
+    const dto = mapFortnoxToSalesInvoice({
+      ...base,
+      VATIncluded: false,
+      Total: 9504,
+      Net: 7515.2,
+      TotalVAT: 1900.8,
+      Freight: 88,
+      FreightVAT: 22,
+      InvoiceRows: [
+        { RowId: 687, Description: 'Hoodie', DeliveredQuantity: '14', Price: 359.2, PriceExcludingVAT: 359.2, Total: 5028.8, TotalExcludingVAT: 5028.8, VAT: 25 },
+        { RowId: 689, Description: 'T-shirt', DeliveredQuantity: '12', Price: 207.2, PriceExcludingVAT: 207.2, Total: 2486.4, TotalExcludingVAT: 2486.4, VAT: 25 },
+      ],
+    });
+
+    const freight = dto.lines.at(-1);
+    expect(freight).toMatchObject({ id: 'freight', description: 'Frakt', quantity: 1, taxPercent: 25 });
+    expect(freight?.lineExtensionAmount.value).toBe(88);
+    expect(freight?.taxAmount?.value).toBe(22);
+    // Rows now add up to the header net the migration derives (gross - VAT).
+    const rowsNet = dto.lines.reduce((s, l) => s + l.lineExtensionAmount.value, 0);
+    expect(rowsNet).toBeCloseTo(9504 - 1900.8, 2);
+  });
+
+  it('reads the freight as gross when the invoice is priced including VAT', () => {
+    const dto = mapFortnoxToSalesInvoice({
+      ...base,
+      DocumentNumber: 242,
+      VATIncluded: true,
+      Total: 2327.8,
+      Net: 1783.04,
+      TotalVAT: 465.56,
+      Freight: 99,
+      FreightVAT: 19.8,
+      InvoiceRows: [
+        { RowId: 544, Description: 'Carnegie-tshirts', DeliveredQuantity: '14', Price: 199, PriceExcludingVAT: 159.2, Total: 2228.8, TotalExcludingVAT: 1783.04, VAT: 25, Discount: 20, DiscountType: 'PERCENT' },
+        { RowId: 548, Description: '20 % rabatt på grund av försenad leverans.', DeliveredQuantity: '0', Price: 0, PriceExcludingVAT: 0, Total: 0, TotalExcludingVAT: 0, VAT: 0 },
+      ],
+    });
+
+    const freight = dto.lines.at(-1);
+    expect(freight?.lineExtensionAmount.value).toBe(79.2);
+    expect(freight?.taxAmount?.value).toBe(19.8);
+    expect(freight?.taxPercent).toBe(25);
+    const rowsNet = dto.lines.reduce((s, l) => s + l.lineExtensionAmount.value, 0);
+    expect(rowsNet).toBeCloseTo(2327.8 - 465.56, 2);
+  });
+
+  it('adds no row when the header carries no charge', () => {
+    const dto = mapFortnoxToSalesInvoice({
+      ...base,
+      VATIncluded: true,
+      Total: 956,
+      Net: 764.8,
+      TotalVAT: 191.2,
+      Freight: 0,
+      FreightVAT: 0,
+      InvoiceRows: [{ RowId: 541, Description: 'Hoodie', DeliveredQuantity: '1', Price: 419, PriceExcludingVAT: 335.2, Total: 419, TotalExcludingVAT: 335.2, VAT: 25 }],
+    });
+
+    expect(dto.lines).toHaveLength(1);
+  });
+
+  it('adds an administration fee row the same way', () => {
+    const dto = mapFortnoxToSalesInvoice({
+      ...base,
+      VATIncluded: false,
+      Total: 1311,
+      Net: 1000,
+      TotalVAT: 262.25,
+      Freight: 0,
+      FreightVAT: 0,
+      AdministrationFee: 49,
+      AdministrationFeeVAT: 12.25,
+      InvoiceRows: [{ RowId: 1, Total: 1000, TotalExcludingVAT: 1000, VAT: 25 }],
+    });
+
+    const fee = dto.lines.at(-1);
+    expect(fee).toMatchObject({ id: 'administration-fee', description: 'Administrationsavgift', taxPercent: 25 });
+    expect(fee?.lineExtensionAmount.value).toBe(49);
+    expect(fee?.taxAmount?.value).toBe(12.25);
+  });
+
+  it('reads the string quantity Fortnox serialises as a number', () => {
+    const dto = mapFortnoxToSalesInvoice({
+      ...base,
+      VATIncluded: false,
+      Total: 1250,
+      Net: 1000,
+      TotalVAT: 250,
+      Freight: 0,
+      FreightVAT: 0,
+      InvoiceRows: [{ RowId: 1, DeliveredQuantity: '14', Total: 1000, TotalExcludingVAT: 1000, VAT: 25 }],
+    });
+
+    expect(dto.lines[0]?.quantity).toBe(14);
+  });
+});

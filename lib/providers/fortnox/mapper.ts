@@ -129,6 +129,39 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
   };
 }
 
+/** Header-level charges Fortnox keeps outside InvoiceRows, as rows. */
+const FORTNOX_HEADER_CHARGES = [
+  { id: 'freight', amountKey: 'Freight', vatKey: 'FreightVAT', description: 'Frakt' },
+  { id: 'administration-fee', amountKey: 'AdministrationFee', vatKey: 'AdministrationFeeVAT', description: 'Administrationsavgift' },
+] as const;
+
+function headerChargeLines(
+  raw: Record<string, unknown>,
+  vatIncluded: boolean,
+  currency: string,
+): SalesInvoiceLineDto[] {
+  const lines: SalesInvoiceLineDto[] = [];
+  for (const charge of FORTNOX_HEADER_CHARGES) {
+    const stated = readNumber(raw, [charge.amountKey]);
+    if (!stated) continue;
+    const vatAmount = readNumber(raw, [charge.vatKey]) ?? 0;
+    const net = vatIncluded ? roundOre(stated - vatAmount) : stated;
+    // The rate is not stated for a charge; it follows from the two amounts.
+    const taxPercent = net !== 0 ? Math.round((vatAmount / net) * 100) : 0;
+    lines.push({
+      id: charge.id,
+      description: charge.description,
+      quantity: 1,
+      unitPrice: amount(net, currency),
+      lineExtensionAmount: amount(net, currency),
+      taxPercent,
+      taxAmount: amount(vatAmount, currency),
+      itemName: charge.description,
+    });
+  }
+  return lines;
+}
+
 export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['Currency'] as string) ?? 'SEK';
   const total = raw['Total'] as number ?? 0;
@@ -161,7 +194,8 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
     return {
       id: String(row['RowId'] ?? idx + 1),
       description: row['Description'] as string | undefined,
-      quantity: row['DeliveredQuantity'] as number | undefined,
+      // Fortnox serialises the quantity as a string ("14"); read it as a number.
+      quantity: readNumber(row, ['DeliveredQuantity']),
       unitCode: row['Unit'] as string | undefined,
       unitPrice: unitPrice !== undefined ? amount(unitPrice, currency) : undefined,
       lineExtensionAmount: amount(lineNet, currency),
@@ -175,6 +209,16 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
       itemName: row['Description'] as string | undefined,
     };
   });
+
+  // Freight and administration fee live on the header, not in InvoiceRows,
+  // and Fortnox's `Net` excludes them while `TotalVAT` and `Total` include
+  // them. Verified on live payloads (Profilio 295 and 242, 2026-09-05):
+  // `Freight` is the fee as the customer saw it (gross when VATIncluded,
+  // net otherwise) and `FreightVAT` is the VAT AMOUNT on it, not a rate
+  // (88 and 22 on a 25 % invoice). The same pair exists for the fee. Without
+  // these as rows, the rows sum to less than the header by exactly the
+  // charge and the migration's rows-versus-header check refuses the invoice.
+  lines.push(...headerChargeLines(raw, vatIncluded, currency));
 
   const vat = resolveVatTriple({
     gross: total,
