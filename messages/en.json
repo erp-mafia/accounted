@@ -5873,6 +5873,21 @@
     "banner_affected": "Your access to {companyName} will be paused in {days, plural, =1 {1 day} other {# days}} unless the company upgrades.",
     "banner_cta": "Upgrade"
   },
+  "email_verification": {
+    "banner": "Confirm your email address: click the link in the email we sent to {email}.",
+    "resend": "Send again",
+    "sent": "A new email has been sent to {email}.",
+    "change": "Change address",
+    "change_label": "New email address",
+    "save": "Save",
+    "cancel": "Cancel",
+    "changed": "Address changed and an email has been sent to {email}.",
+    "error_generic": "That did not work right now. Please try again shortly.",
+    "error_cooldown": "An email was just sent. Wait a moment before trying again.",
+    "error_exists": "That address is already used by another account.",
+    "error_invalid": "Enter a valid email address.",
+    "dismiss": "Close"
+  },
   "paused": {
     "title": "Your account is paused",
     "body_single": "Your account is paused in {companyName}. Only one person can work in the company without a paid plan.",

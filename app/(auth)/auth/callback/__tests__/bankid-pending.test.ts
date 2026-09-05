@@ -15,6 +15,8 @@ const verifyOtp = vi.fn()
 const exchangeCodeForSession = vi.fn()
 const getUserById = vi.fn()
 const updateUserById = vi.fn()
+/** revoke_user_sessions: kills the BankID holder's sessions on revoke. */
+const rpc = vi.fn()
 
 /** Every builder call on the service client, in order: { table, method, args }. */
 const serviceCalls: Array<{ table: string; method: string; args: unknown[] }> = []
@@ -49,6 +51,7 @@ vi.mock('@supabase/ssr', () => ({
       return {
         from: vi.fn((table: string) => serviceChain(table)),
         auth: { admin: { getUserById, updateUserById } },
+        rpc,
       }
     }
     const chain: Record<string, ReturnType<typeof vi.fn>> = {
@@ -112,7 +115,14 @@ beforeEach(() => {
   writeResult = { error: null }
   getUserById.mockResolvedValue({ data: { user: pendingUser }, error: null })
   updateUserById.mockResolvedValue({ data: {}, error: null })
+  rpc.mockResolvedValue({ data: 1, error: null })
 })
+
+/** An unsigned JWT-shaped token whose payload carries a session_id claim. */
+function accessTokenWithSession(sessionId: string): string {
+  const b64 = (s: string) => Buffer.from(s).toString('base64url')
+  return `${b64('{"alg":"HS256"}')}.${b64(JSON.stringify({ sub: 'user-1', session_id: sessionId }))}.sig`
+}
 
 describe('GET /auth/callback: pending BankID identity', () => {
   it('promotes the identity when the BankID holder clicks the confirmation mail', async () => {
@@ -187,6 +197,65 @@ describe('GET /auth/callback: pending BankID identity', () => {
     // Never the MFA exemption.
     const written = updateUserById.mock.calls[0][1].app_metadata as Record<string, unknown>
     expect(written.bankid_linked).toBeUndefined()
+    // BankID instant login: the holder may hold sessions; they die with the
+    // link. No session id could be read from the bare session here.
+    expect(rpc).toHaveBeenCalledWith('revoke_user_sessions', {
+      p_user_id: 'user-1',
+      p_keep_session_id: null,
+    })
+  })
+
+  it('keeps the address owner\'s own session when revoking (session_id claim of the fresh token)', async () => {
+    verifyOtp.mockResolvedValue({
+      data: { user: pendingUser, session: { access_token: accessTokenWithSession('sess-owner') } },
+      error: null,
+    })
+
+    await GET(request('recovery', '/reset-password'))
+
+    expect(rpc).toHaveBeenCalledWith('revoke_user_sessions', {
+      p_user_id: 'user-1',
+      p_keep_session_id: 'sess-owner',
+    })
+  })
+
+  it('revokes on a Google sign-in (PKCE code exchange), which is how the address owner adopts the account', async () => {
+    // GoTrue auto-links the Google identity by verified e-mail; the pending
+    // BankID link and the BankID holder's sessions must go, this exchange's
+    // session must stay.
+    exchangeCodeForSession.mockResolvedValue({
+      data: {
+        user: { ...pendingUser, identities: [{ provider: 'email' }, { provider: 'google' }] },
+        session: { access_token: accessTokenWithSession('sess-google') },
+      },
+      error: null,
+    })
+    getUserById.mockResolvedValue({
+      data: { user: { ...pendingUser, identities: [{ provider: 'email' }, { provider: 'google' }] } },
+      error: null,
+    })
+    const url = new URL('http://localhost:3000/auth/callback')
+    url.searchParams.set('code', 'pkce-code')
+
+    await GET(new NextRequest(url))
+
+    expect(identityWrites().map((c) => c.method)).toContain('delete')
+    expect(updateUserById).toHaveBeenCalledWith('user-1', {
+      app_metadata: { has_password: false, bankid_pending: null },
+    })
+    expect(rpc).toHaveBeenCalledWith('revoke_user_sessions', {
+      p_user_id: 'user-1',
+      p_keep_session_id: 'sess-google',
+    })
+  })
+
+  it('never revokes sessions when promoting', async () => {
+    verifyOtp.mockResolvedValue({ data: { user: pendingUser, session: {} }, error: null })
+
+    await GET(request('magiclink'))
+
+    expect(identityWrites().map((c) => c.method)).toContain('update')
+    expect(rpc).not.toHaveBeenCalled()
   })
 
   it('revokes when the account already carries a Google identity, even on a confirmation link', async () => {

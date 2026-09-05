@@ -22,6 +22,15 @@ vi.mock('../lib/bankid-confirmation-mail', () => ({
   sendBankIdSignupConfirmation: vi.fn(),
 }))
 
+// The password-grant session mint (bankid-session-grant.ts) talks to GoTrue
+// with a throwaway anon client; here it is a seam so the route tests can
+// assert WHEN a pending account is signed in and that no magic link is ever
+// minted for it. The rollback flag is a seam too (mail-gated mode).
+vi.mock('../lib/bankid-session-grant', () => ({
+  mintPendingSession: vi.fn(),
+  signupRequiresMailConfirmation: vi.fn(),
+}))
+
 // The invite-only brand gate reads the brands table for any non-empty host;
 // it has its own tests. Open here so a forwarded host can be asserted on the
 // mail without a database.
@@ -39,6 +48,7 @@ import {
   startBankIdAuth,
 } from '../lib/bankid-client'
 import { sendBankIdSignupConfirmation } from '../lib/bankid-confirmation-mail'
+import { mintPendingSession, signupRequiresMailConfirmation } from '../lib/bankid-session-grant'
 import { createServiceClient } from '@/lib/supabase/server'
 import { ticExtension } from '../index'
 import {
@@ -160,10 +170,14 @@ function mockServiceClient(
 /** A verified identity row, as every pre-2026-09 row is after the backfill. */
 const VERIFIED_AT = '2026-01-01T00:00:00Z'
 
+const MINTED_SESSION = { accessToken: 'access-token', refreshToken: 'refresh-token' }
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('BANKID_ENCRYPTION_KEY', TEST_KEY)
   vi.mocked(sendBankIdSignupConfirmation).mockResolvedValue({ ok: true })
+  vi.mocked(mintPendingSession).mockResolvedValue({ ok: true, session: MINTED_SESSION })
+  vi.mocked(signupRequiresMailConfirmation).mockReturnValue(false)
 })
 
 afterEach(() => {
@@ -233,12 +247,94 @@ describe('POST /bankid/complete', () => {
     })
   })
 
-  describe('signup mode: happy path (account pre-hijacking fix, audit 2026-09)', () => {
-    it('creates an UNCONFIRMED user with a PENDING identity, mails the typed address, and returns no session', async () => {
-      // The address came from the request body and nothing proved it belongs
-      // to the BankID holder. The old flow confirmed it, granted the MFA
-      // exemption and handed the browser a magic link; the real owner of the
-      // address could later adopt the account while the BankID kept a login.
+  describe('signup mode: happy path (BankID instant login, 2026-09-05)', () => {
+    it('creates a PENDING identity, signs the holder in with a password grant, and mails the typed address', async () => {
+      // BankID proved the person; the mail proves the mailbox. The holder is
+      // signed in at once, the identity stays pending (no MFA exemption via
+      // bankid_linked, no invite acceptance) until the mailed link is
+      // clicked, and the address owner can still adopt the account.
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin, client } = mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+      ])
+      const insertSpy = vi.fn().mockResolvedValue({ error: null })
+      const origFrom = client.from as unknown as ReturnType<typeof vi.fn>
+      const queuedFrom = origFrom.getMockImplementation() as (table: string) => unknown
+      let identityCalls = 0
+      origFrom.mockImplementation((table: string) => {
+        if (table === 'bankid_identities' && ++identityCalls === 2) {
+          return { insert: insertSpy }
+        }
+        return queuedFrom(table)
+      })
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: { ...(await flowCookie('signup')), 'x-forwarded-host': 'app.gnubok.se', 'x-forwarded-proto': 'https' },
+        body: { email: 'Fresh@Example.com ' },
+      })
+      const response = await findCompleteHandler()(req)
+      const raw = await response.clone().text()
+      const { status, body } = await parseJsonResponse<{
+        data?: Record<string, unknown>
+      }>(response)
+
+      expect(status).toBe(200)
+      expect(body.data).toEqual({
+        type: 'session',
+        session: MINTED_SESSION,
+        isNewUser: true,
+        emailPending: true,
+        email: 'fresh@example.com',
+      })
+      // Never a magic link for a pending account: it would void the
+      // verification mail in flight (one token slot per user in GoTrue).
+      expect(raw).not.toContain('magic-token-hash')
+      expect(raw).not.toContain('tokenHash')
+      expect(admin.generateLink).not.toHaveBeenCalled()
+      expect(mintPendingSession).toHaveBeenCalledWith(client, 'new-user-uuid', 'fresh@example.com')
+
+      expect(admin.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'fresh@example.com', email_confirm: false })
+      )
+      // Pending, not linked: bankid_linked (the MFA exemption) is granted by
+      // /auth/callback once the mail is clicked.
+      expect(admin.updateUserById).toHaveBeenCalledWith(
+        'new-user-uuid',
+        expect.objectContaining({
+          app_metadata: { bankid_pending: true, has_password: false },
+        })
+      )
+      expect(insertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: 'new-user-uuid', email_verified_at: null })
+      )
+      expect(insertSpy.mock.calls[0][0]).not.toHaveProperty('bankid_linked')
+
+      expect(sendBankIdSignupConfirmation).toHaveBeenCalledTimes(1)
+      expect(sendBankIdSignupConfirmation).toHaveBeenCalledWith({
+        supabase: client,
+        email: 'fresh@example.com',
+        host: 'app.gnubok.se',
+        proto: 'https',
+      })
+      // The send is stamped for the re-send cooldown, flags preserved.
+      expect(admin.updateUserById).toHaveBeenCalledWith(
+        'new-user-uuid',
+        expect.objectContaining({
+          app_metadata: expect.objectContaining({
+            bankid_pending: true,
+            has_password: false,
+            bankid_pending_mail_sent_at: expect.any(String),
+          }),
+        })
+      )
+      expect(admin.deleteUser).not.toHaveBeenCalled()
+    })
+
+    it('mail-gated mode (BANKID_SIGNUP_REQUIRE_EMAIL_CONFIRMATION): mails the typed address and returns no session', async () => {
+      // The rollback flag restores the audit-2026-09 flow byte for byte: the
+      // browser gets nothing to sign in with until the mailed link is clicked.
+      vi.mocked(signupRequiresMailConfirmation).mockReturnValue(true)
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin, client } = mockServiceClient([
         { data: null }, // pnr lookup → not linked
@@ -271,6 +367,8 @@ describe('POST /bankid/complete', () => {
       expect(body.data).toEqual({ status: 'confirmation_sent', email: 'fresh@example.com' })
       expect(raw).not.toContain('magic-token-hash')
       expect(raw).not.toContain('tokenHash')
+      expect(raw).not.toContain('accessToken')
+      expect(mintPendingSession).not.toHaveBeenCalled()
       // The route itself mints no link; only the mail helper does, server-side.
       expect(admin.generateLink).not.toHaveBeenCalled()
 
@@ -354,9 +452,63 @@ describe('POST /bankid/complete', () => {
       expect(admin.generateLink).not.toHaveBeenCalled()
     })
 
-    it('deletes the created user when the confirmation mail cannot be sent', async () => {
+    it('instant login: a failed verification mail does NOT roll the signup back (the banner re-sends)', async () => {
+      // The mail is what used to strand signups (recipient-side filtering);
+      // the account is usable without it, so its failure is a warning.
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+        { error: null }, // identity insert OK
+      ])
+      vi.mocked(sendBankIdSignupConfirmation).mockResolvedValueOnce({
+        ok: false,
+        step: 'send',
+        message: 'Email service not configured',
+      })
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('signup'),
+        body: { email: 'fresh@example.com' },
+      })
+      const { status, body } = await parseJsonResponse<{ data?: { type?: string } }>(
+        await findCompleteHandler()(req)
+      )
+
+      expect(status).toBe(200)
+      expect(body.data?.type).toBe('session')
+      expect(admin.deleteUser).not.toHaveBeenCalled()
+    })
+
+    it('deletes the created user when the session cannot be minted', async () => {
+      // Without a session the instant-login signup is worth nothing, and the
+      // account would block the address: same rollback as any other step.
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+        { error: null }, // identity insert OK
+      ])
+      vi.mocked(mintPendingSession).mockResolvedValueOnce({ ok: false, step: 'password_grant' })
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('signup'),
+        body: { email: 'fresh@example.com' },
+      })
+      const { status, body } = await parseJsonResponse<{ error?: string }>(
+        await findCompleteHandler()(req)
+      )
+
+      expect(status).toBe(500)
+      expect(body.error).toBe('internal_error')
+      expect(admin.deleteUser).toHaveBeenCalledWith('new-user-uuid')
+      expect(sendBankIdSignupConfirmation).not.toHaveBeenCalled()
+    })
+
+    it('mail-gated mode: deletes the created user when the confirmation mail cannot be sent', async () => {
       // An account whose address will never receive its confirmation link is
       // unusable AND blocks the address; roll it back so a retry starts clean.
+      vi.mocked(signupRequiresMailConfirmation).mockReturnValue(true)
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin } = mockServiceClient([
         { data: null }, // pnr lookup → not linked
@@ -531,7 +683,82 @@ describe('POST /bankid/complete', () => {
         .some((c) => c.startsWith(`${BANKID_FLOW_COOKIE}=`) && /Max-Age=0/i.test(c))
     }
 
-    it('login: refuses a pending identity, re-sends the confirmation mail, and mints nothing', async () => {
+    it('login: signs a pending identity in with a password grant, never a magic link, and keeps it pending', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin, client } = mockServiceClient([
+        { data: { user_id: 'pending-user', email_verified_at: null } },
+      ])
+      admin.getUserById.mockResolvedValue({ data: { user: pendingShell }, error: null } as never)
+
+      const response = await findCompleteHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+          method: 'POST',
+          headers: { ...(await flowCookie('login')), 'x-forwarded-host': 'app.gnubok.se' },
+        })
+      )
+      const raw = await response.clone().text()
+      const { status, body } = await parseJsonResponse<{ data?: Record<string, unknown> }>(response)
+
+      expect(status).toBe(200)
+      expect(body.data).toEqual({
+        type: 'session',
+        session: MINTED_SESSION,
+        isNewUser: false,
+        emailPending: true,
+      })
+      expect(raw).not.toContain('tokenHash')
+      expect(admin.generateLink).not.toHaveBeenCalled()
+      expect(mintPendingSession).toHaveBeenCalledWith(client, 'pending-user', 'typed@example.com')
+      // No mail on login: the outstanding one is still valid (no token slot
+      // was touched) and the in-app banner re-sends on request.
+      expect(sendBankIdSignupConfirmation).not.toHaveBeenCalled()
+      // The flag was already set, so nothing to heal; the row stays pending.
+      expect(admin.updateUserById).not.toHaveBeenCalled()
+      expect(vi.mocked(client.from).mock.calls.map((c) => c[0])).toEqual([
+        'bankid_identities',
+        'bankid_consumed_sessions',
+      ])
+      // Terminal for this identification: the flow is spent.
+      expect(clearedFlow(response)).toBe(true)
+    })
+
+    it('login: heals a missing bankid_pending flag before signing in (rows from the old flow)', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: { user_id: 'legacy-user', email_verified_at: null } },
+      ])
+      admin.getUserById.mockResolvedValue({
+        data: {
+          user: {
+            ...pendingShell,
+            id: 'legacy-user',
+            email_confirmed_at: '2026-09-02T08:00:00Z',
+            app_metadata: { bankid_linked: true, has_password: false },
+          },
+        },
+        error: null,
+      } as never)
+
+      const { status, body } = await parseJsonResponse<{ data?: { type?: string } }>(
+        await findCompleteHandler()(
+          createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+            method: 'POST',
+            headers: await flowCookie('login'),
+          })
+        )
+      )
+
+      expect(status).toBe(200)
+      expect(body.data?.type).toBe('session')
+      // /auth/callback, the MFA gate and the invite acceptance key on the flag.
+      expect(admin.updateUserById).toHaveBeenCalledWith('legacy-user', {
+        app_metadata: { bankid_linked: true, has_password: false, bankid_pending: true },
+      })
+      expect(mintPendingSession).toHaveBeenCalledWith(expect.anything(), 'legacy-user', 'typed@example.com')
+    })
+
+    it('mail-gated mode: login refuses a pending identity, re-sends the confirmation mail, and mints nothing', async () => {
+      vi.mocked(signupRequiresMailConfirmation).mockReturnValue(true)
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin, client } = mockServiceClient([
         { data: { user_id: 'pending-user', email_verified_at: null } },
@@ -562,7 +789,8 @@ describe('POST /bankid/complete', () => {
       expect(clearedFlow(response)).toBe(true)
     })
 
-    it('login: heals a missing bankid_pending flag before re-sending (rows from the old flow)', async () => {
+    it('mail-gated mode: login heals a missing bankid_pending flag before re-sending (rows from the old flow)', async () => {
+      vi.mocked(signupRequiresMailConfirmation).mockReturnValue(true)
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin } = mockServiceClient([
         { data: { user_id: 'legacy-user', email_verified_at: null } },
@@ -691,7 +919,7 @@ describe('POST /bankid/complete', () => {
       )
 
       expect(status).toBe(200)
-      expect(body.data?.status).toBe('confirmation_sent')
+      expect(body.data?.type).toBe('session')
       // The unconfirmed shell (cascades its identity row) goes; a fresh one is made.
       expect(admin.deleteUser).toHaveBeenCalledTimes(1)
       expect(admin.deleteUser).toHaveBeenCalledWith('stale-user')
@@ -836,7 +1064,7 @@ describe('POST /bankid/complete', () => {
       }>(await findCompleteHandler()(req))
 
       expect(status).toBe(200)
-      expect(body.data?.status).toBe('confirmation_sent')
+      expect(body.data?.type).toBe('session')
       expect(vi.mocked(requestEnrichment)).toHaveBeenCalledWith(
         'test-session',
         ['SPAR', 'CompanyRoles']

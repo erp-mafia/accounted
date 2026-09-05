@@ -50,6 +50,21 @@ describe('POST /api/team/accept', () => {
     expect(status).toBe(401)
   })
 
+  it('returns 403 before any lookup for a BankID account whose address is unproven', async () => {
+    // BankID instant login: signed in, but the e-mail match below would prove
+    // nothing. The mailed verification link accepts the invite instead.
+    requireAuthMock.mockResolvedValue({
+      user: { ...mockUser, app_metadata: { bankid_pending: true, has_password: false } },
+      supabase: serviceSupabase,
+      error: null,
+    })
+    const res = await POST(makeReq({ token: 'abc' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(403)
+    expect(body.error).toContain('Bekräfta din e-postadress')
+    expect(findCalls('company_invitations', 'select')).toEqual([])
+  })
+
   it('returns 400 when the token is missing', async () => {
     const res = await POST(makeReq({}))
     const { status, body } = await parseJsonResponse<{ error: string }>(res)

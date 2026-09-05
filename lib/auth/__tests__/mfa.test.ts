@@ -32,6 +32,14 @@ describe('mfa helpers', () => {
       expect(shouldEnforceMfa({ app_metadata: { bankid_linked: true } })).toBe(false)
     })
 
+    it('returns false for a pending BankID signup (person proven, mailbox not)', () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      expect(shouldEnforceMfa({ app_metadata: { bankid_pending: true, has_password: false } })).toBe(false)
+      // Only the literal flag counts: a stale or falsy value enforces.
+      expect(shouldEnforceMfa({ app_metadata: { bankid_pending: null } })).toBe(true)
+    })
+
     it('returns true when MFA required and no bankid', () => {
       vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
       vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')

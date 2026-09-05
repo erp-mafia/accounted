@@ -266,12 +266,19 @@ export function LoginClient({
       return
     }
 
-    if (result.tokenHash && result.type) {
+    if (result.session || (result.tokenHash && result.type)) {
       try {
-        const { error } = await supabase.auth.verifyOtp({
-          token_hash: result.tokenHash,
-          type: result.type as 'magiclink',
-        })
+        // A pending BankID account (address unproven) arrives with a ready
+        // session rather than a magic-link hash: see bankid-session-grant.ts.
+        const { error } = result.session
+          ? await supabase.auth.setSession({
+              access_token: result.session.accessToken,
+              refresh_token: result.session.refreshToken,
+            })
+          : await supabase.auth.verifyOtp({
+              token_hash: result.tokenHash!,
+              type: result.type as 'magiclink',
+            })
 
         if (error) {
           console.error('[login] BankID verifyOtp failed', error)

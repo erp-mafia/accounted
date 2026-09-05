@@ -58,9 +58,29 @@ function hasForeignCredential(user: {
  * paths cost nothing extra. Failures are logged and never block the redirect:
  * a pending identity simply stays pending, which is the safe state.
  */
+/**
+ * The session_id claim of a GoTrue access token, or null. Used to keep the
+ * address owner's own fresh session when every other session of the account
+ * is revoked; a token that cannot be read simply keeps nothing.
+ */
+function sessionIdFromAccessToken(accessToken: string | null | undefined): string | null {
+  if (!accessToken) return null
+  const parts = accessToken.split('.')
+  if (parts.length < 2) return null
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as {
+      session_id?: unknown
+    }
+    return typeof payload.session_id === 'string' ? payload.session_id : null
+  } catch {
+    return null
+  }
+}
+
 async function reconcilePendingBankIdIdentity(
   user: { id: string; app_metadata?: Record<string, unknown> },
   type: string,
+  keepSessionId: string | null = null,
 ): Promise<void> {
   if (user.app_metadata?.bankid_pending !== true) return
 
@@ -110,6 +130,17 @@ async function reconcilePendingBankIdIdentity(
           '[auth/callback] pending BankID identity revoked: account adopted through another credential',
           { userId: user.id, type },
         )
+        // BankID instant login: the holder may be signed in right now. The
+        // revoke only bites once their sessions die too; GoTrue checks the
+        // session_id of every access token, so this cuts them off at once.
+        // The address owner's own session (this request) is the one kept.
+        const { error: revokeError } = await service.rpc('revoke_user_sessions', {
+          p_user_id: user.id,
+          p_keep_session_id: keepSessionId,
+        })
+        if (revokeError) {
+          console.error('[auth/callback] session revoke after pending BankID revoke failed:', revokeError.message)
+        }
       }
       await service.auth.admin.updateUserById(user.id, {
         app_metadata: { ...prior, bankid_pending: null },
@@ -226,8 +257,19 @@ export async function GET(request: NextRequest) {
 
   // Handle PKCE flow (code exchange)
   if (code) {
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code)
     authenticated = !error
+    // A Google sign-in on an address a pending BankID signup typed is the
+    // address owner adopting the account (GoTrue links the Google identity
+    // by verified e-mail). The pending BankID link must go, and with it the
+    // BankID holder's sessions; only this exchange's session survives.
+    if (!error && data?.user) {
+      await reconcilePendingBankIdIdentity(
+        data.user,
+        'oauth',
+        sessionIdFromAccessToken(data.session?.access_token),
+      )
+    }
   }
   // Handle token hash flow (email verification / magic link)
   else if (token_hash && type) {
@@ -260,7 +302,11 @@ export async function GET(request: NextRequest) {
     // reset on that address proves the opposite. Runs before the recovery
     // early-return below so both outcomes are handled here.
     if (!error && data?.user) {
-      await reconcilePendingBankIdIdentity(data.user, type)
+      await reconcilePendingBankIdIdentity(
+        data.user,
+        type,
+        sessionIdFromAccessToken(data.session?.access_token),
+      )
     }
 
     authenticated = !error

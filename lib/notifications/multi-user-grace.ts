@@ -11,6 +11,7 @@ import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sende
 import { getBranding } from '@/lib/branding/service'
 import { formatDate } from '@/lib/utils'
 import { createLogger } from '@/lib/logger'
+import { unverifiedAddressUserIds } from '@/lib/notifications/member-email'
 
 const logger = createLogger('notifications/multi-user-grace')
 
@@ -208,8 +209,14 @@ async function sendGraceMail(
     .from('profiles')
     .select('id, email')
     .in('id', memberRows.map((m) => m.user_id))
+  const unverified = await unverifiedAddressUserIds(
+    supabase,
+    memberRows.map((m) => m.user_id),
+  )
   const emailById = new Map(
-    ((profiles ?? []) as { id: string; email: string | null }[]).map((p) => [p.id, p.email]),
+    ((profiles ?? []) as { id: string; email: string | null }[])
+      .filter((p) => !unverified.has(p.id))
+      .map((p) => [p.id, p.email]),
   )
   const ownerEmails = owners.map((o) => emailById.get(o.user_id)).filter((e): e is string => !!e)
   const affectedEmails = affected

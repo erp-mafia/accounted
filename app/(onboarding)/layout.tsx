@@ -3,6 +3,7 @@ import { Settings } from 'lucide-react'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
+import { EmailVerificationBanner } from '@/components/auth/EmailVerificationBanner'
 
 export default async function OnboardingLayout({
   children,
@@ -37,6 +38,13 @@ export default async function OnboardingLayout({
   return (
     <div className="min-h-dvh bg-background flex items-center justify-center">
       {user && <SessionTimeoutController />}
+      {/* A BankID signup lands here signed in with its address unproven:
+          the banner is the way to re-send or correct the mail. */}
+      {user?.app_metadata?.bankid_pending === true && (
+        <div className="absolute inset-x-0 top-0 z-20">
+          <EmailVerificationBanner email={user.email ?? ''} />
+        </div>
+      )}
       <OnboardingBackdrop />
 
       <div className="relative z-10 w-full max-w-lg px-5">

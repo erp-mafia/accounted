@@ -50,6 +50,13 @@ interface BankIdSession {
 export interface BankIdResult {
   tokenHash?: string
   type?: string
+  /**
+   * A ready session (pending BankID account, address unproven): installed
+   * with setSession() instead of verifying a token hash.
+   */
+  session?: { accessToken: string; refreshToken: string }
+  /** True when the account's e-mail is still unproven (banner in the app). */
+  emailPending?: boolean
   isNewUser?: boolean
   error?: 'no_account' | 'already_linked' | 'session_invalid' | 'service_unavailable' | 'email_unconfirmed'
   /** Server-provided Swedish explanation for errors that carry one (e.g. email_unconfirmed). */
@@ -316,6 +323,8 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
               onCompleteRef.current({
                 tokenHash: completeJson.data.tokenHash,
                 type: completeJson.data.type,
+                session: completeJson.data.session,
+                emailPending: completeJson.data.emailPending,
                 isNewUser: completeJson.data.isNewUser,
               })
             } catch {

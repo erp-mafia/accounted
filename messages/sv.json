@@ -5873,6 +5873,21 @@
     "banner_affected": "Din åtkomst till {companyName} pausas om {days, plural, =1 {1 dag} other {# dagar}} om företaget inte uppgraderar.",
     "banner_cta": "Uppgradera"
   },
+  "email_verification": {
+    "banner": "Bekräfta din e-postadress: klicka på länken i mailet vi skickade till {email}.",
+    "resend": "Skicka igen",
+    "sent": "Ett nytt mail är skickat till {email}.",
+    "change": "Byt adress",
+    "change_label": "Ny e-postadress",
+    "save": "Spara",
+    "cancel": "Avbryt",
+    "changed": "Adressen är bytt och ett mail är skickat till {email}.",
+    "error_generic": "Det gick inte just nu. Försök igen om en stund.",
+    "error_cooldown": "Ett mail skickades nyss. Vänta en stund innan du försöker igen.",
+    "error_exists": "Adressen används redan av ett annat konto.",
+    "error_invalid": "Ange en giltig e-postadress.",
+    "dismiss": "Stäng"
+  },
   "paused": {
     "title": "Ditt konto är pausat",
     "body_single": "Ditt konto är pausat i {companyName}. Endast en person kan arbeta i företaget utan betald plan.",

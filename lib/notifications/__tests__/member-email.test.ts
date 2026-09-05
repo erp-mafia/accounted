@@ -35,6 +35,9 @@ function makeSupabase(opts: {
   membersError?: { message: string } | null
   profileRows?: Array<{ id: string; email: string | null }> | null
   profilesError?: { message: string } | null
+  /** bankid_identities rows with email_verified_at NULL (unproven addresses). */
+  unverifiedRows?: Array<{ user_id: string }> | null
+  unverifiedError?: { message: string } | null
 }) {
   const queries: QueryRecord[] = []
   const from = (table: string) => {
@@ -53,6 +56,12 @@ function makeSupabase(opts: {
           error: opts.profilesError ?? null,
         }
       }
+      if (table === 'bankid_identities') {
+        return {
+          data: opts.unverifiedError ? null : opts.unverifiedRows ?? [],
+          error: opts.unverifiedError ?? null,
+        }
+      }
       return { data: null, error: null }
     }
     const builder: Record<string, unknown> = {}
@@ -66,6 +75,10 @@ function makeSupabase(opts: {
         return builder
       },
       in: (key: string, value: unknown) => {
+        record.filters[key] = value
+        return builder
+      },
+      is: (key: string, value: unknown) => {
         record.filters[key] = value
         return builder
       },
@@ -110,6 +123,19 @@ describe('resolveMemberEmail', () => {
     const profileQuery = queries.find((q) => q.table === 'profiles')
     expect(profileQuery?.columns).toBe('email')
     expect(profileQuery?.filters).toMatchObject({ id: 'user-1' })
+  })
+
+  it('returns null for a member whose login address is still unproven (pending BankID signup)', async () => {
+    const { supabase, queries } = makeSupabase({
+      memberRows: [{ user_id: 'user-1' }],
+      profileRows: [{ id: 'user-1', email: 'stranger@example.com' }],
+      unverifiedRows: [{ user_id: 'user-1' }],
+    })
+
+    const email = await resolveMemberEmail(supabase, 'company-1', 'user-1')
+
+    expect(email).toBeNull()
+    expect(queries.some((q) => q.table === 'profiles')).toBe(false)
   })
 
   it('returns null for a user who is no longer a member (no profile query at all)', async () => {
@@ -169,6 +195,37 @@ describe('resolveMemberEmails', () => {
     const profileQuery = queries.find((q) => q.table === 'profiles')
     expect(profileQuery?.columns).toBe('id, email')
     expect(profileQuery?.filters).toMatchObject({ id: ['user-1', 'user-2', 'user-3'] })
+  })
+
+  it('drops members whose login address is still unproven (pending BankID signup)', async () => {
+    const { supabase, queries } = makeSupabase({
+      memberRows: [{ user_id: 'user-1' }, { user_id: 'user-2' }],
+      profileRows: [
+        { id: 'user-1', email: 'owner@example.com' },
+        { id: 'user-2', email: 'stranger@example.com' },
+      ],
+      unverifiedRows: [{ user_id: 'user-2' }],
+    })
+
+    const emails = await resolveMemberEmails(supabase, 'company-1')
+
+    expect(emails.get('user-1')).toBe('owner@example.com')
+    expect(emails.has('user-2')).toBe(false)
+    const pendingQuery = queries.find((q) => q.table === 'bankid_identities')
+    expect(pendingQuery?.filters).toMatchObject({ user_id: ['user-1', 'user-2'], email_verified_at: null })
+  })
+
+  it('excludes nobody (and warns) when the pending lookup fails', async () => {
+    const { supabase } = makeSupabase({
+      memberRows: [{ user_id: 'user-1' }],
+      profileRows: [{ id: 'user-1', email: 'owner@example.com' }],
+      unverifiedError: { message: 'boom' },
+    })
+
+    const emails = await resolveMemberEmails(supabase, 'company-1')
+
+    expect(emails.get('user-1')).toBe('owner@example.com')
+    expect(warnedWith('pending bankid identities')).toBe(true)
   })
 
   it('returns an empty map for a company with no members (no profile query)', async () => {

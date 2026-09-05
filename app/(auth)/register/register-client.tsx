@@ -255,11 +255,19 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
         return
       }
 
-      // Exchange token hash for Supabase session
-      const { error } = await supabase.auth.verifyOtp({
-        token_hash: json.data.tokenHash,
-        type: json.data.type as 'magiclink',
-      })
+      // BankID instant login: the account is signed in now with a ready
+      // session (the address stays unproven until the mailed link is
+      // clicked; the app shows a banner). The token-hash exchange remains
+      // for the mail-gated mode.
+      const { error } = json.data?.type === 'session' && json.data.session
+        ? await supabase.auth.setSession({
+            access_token: json.data.session.accessToken,
+            refresh_token: json.data.session.refreshToken,
+          })
+        : await supabase.auth.verifyOtp({
+            token_hash: json.data.tokenHash,
+            type: json.data.type as 'magiclink',
+          })
 
       if (error) {
         console.error('[register] BankID verifyOtp failed', error.message)

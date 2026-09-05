@@ -11,6 +11,7 @@ import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
+import { EmailVerificationBanner } from '@/components/auth/EmailVerificationBanner'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
 import MultiUserGraceBanner from '@/components/billing/MultiUserGraceBanner'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
@@ -576,6 +577,9 @@ export default async function DashboardLayout({
             Hoppa till innehåll
           </a>
           {isSandbox && <SandboxBanner />}
+          {user.app_metadata?.bankid_pending === true && (
+            <EmailVerificationBanner email={user.email ?? ''} />
+          )}
           {graceBanner && (
             <MultiUserGraceBanner
               graceEndsAt={graceBanner.graceEndsAt}

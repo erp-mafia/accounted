@@ -35,9 +35,48 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 const log = createLogger('member-email')
 
 /**
+ * Users whose login address is still unproven: a BankID signup that is
+ * signed in before its typed address was confirmed (bankid_identities row
+ * with email_verified_at NULL; BankID instant login, 2026-09-05). Company
+ * mail must not go there: the address may belong to a stranger, and the
+ * only mail an unproven address should ever receive is the one that proves
+ * it. Best-effort like everything here: a failed lookup excludes nobody, so
+ * a transient error costs at most one mail to an unproven address rather
+ * than every notification of the company.
+ */
+export async function unverifiedAddressUserIds(
+  supabase: SupabaseClient,
+  userIds: string[],
+): Promise<Set<string>> {
+  const unverified = new Set<string>()
+  if (userIds.length === 0) return unverified
+  try {
+    const { data, error } = await supabase
+      .from('bankid_identities')
+      .select('user_id')
+      .in('user_id', userIds)
+      .is('email_verified_at', null)
+    if (error) {
+      log.warn('could not read pending bankid identities for notification recipients', {
+        error: error.message,
+      })
+      return unverified
+    }
+    for (const row of (data ?? []) as Array<{ user_id: string | null }>) {
+      if (row.user_id) unverified.add(row.user_id)
+    }
+  } catch (err) {
+    log.warn('could not read pending bankid identities for notification recipients', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+  return unverified
+}
+
+/**
  * Resolve one user's email, only if they are still an active member of the
  * company. Returns null (never throws) when the user is not a member, has no
- * profile email, or a query fails.
+ * profile email, an unproven login address, or a query fails.
  */
 export async function resolveMemberEmail(
   supabase: SupabaseClient,
@@ -59,6 +98,8 @@ export async function resolveMemberEmail(
     return null
   }
   if (!member) return null
+
+  if ((await unverifiedAddressUserIds(supabase, [userId])).has(userId)) return null
 
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
@@ -132,8 +173,9 @@ export async function resolveMemberEmails(
     return emails
   }
 
+  const unverified = await unverifiedAddressUserIds(supabase, userIds)
   for (const row of profiles) {
-    if (row.email) emails.set(row.id, row.email)
+    if (row.email && !unverified.has(row.id)) emails.set(row.id, row.email)
   }
   return emails
 }

@@ -37,12 +37,16 @@ export function isMfaExemptionActive(
 
 /**
  * Check if MFA should be enforced for a specific user.
- * BankID-linked users skip TOTP because BankID is inherently 2FA.
+ * BankID-linked users skip TOTP because BankID is inherently 2FA. So does a
+ * BankID signup whose address is still unproven (bankid_pending): the person
+ * is just as verified, only the mailbox is not, and such an account has no
+ * password of its own (has_password: false) so it could not even enrol TOTP.
  * A live, time-boxed exemption (see isMfaExemptionActive) also skips it.
  */
 export function shouldEnforceMfa(user: { app_metadata?: Record<string, unknown> }): boolean {
   if (!isMfaRequired()) return false
   if (user.app_metadata?.bankid_linked) return false
+  if (user.app_metadata?.bankid_pending === true) return false
   if (isMfaExemptionActive(user)) return false
   return true
 }

@@ -113,6 +113,19 @@ export async function POST(request: NextRequest) {
   const { user, error } = await requireAuth()
   if (error) return error
 
+  // An invite is addressed to a mailbox. A BankID signup whose typed address
+  // is still unproven (bankid_pending, BankID instant login) may be signed
+  // in, but it has not shown it owns that mailbox, so the address match
+  // below would prove nothing. The mailed verification link lands on
+  // /auth/callback, which promotes the identity and accepts the invite in
+  // the same request.
+  if (user.app_metadata?.bankid_pending === true) {
+    return NextResponse.json(
+      { error: 'Bekräfta din e-postadress innan du accepterar inbjudan.' },
+      { status: 403 },
+    )
+  }
+
   const body = await request.json()
   const token = body.token as string
   if (!token) {

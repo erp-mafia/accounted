@@ -41,6 +41,8 @@ import {
   revokePendingIdentity,
 } from './lib/bankid-pending'
 import { sendBankIdSignupConfirmation } from './lib/bankid-confirmation-mail'
+import { mintPendingSession, signupRequiresMailConfirmation } from './lib/bankid-session-grant'
+import { bankIdPendingRoutes, sendPendingVerificationMail } from './lib/bankid-pending-routes'
 import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
 import {
   evaluateBrandSignupGate,
@@ -1179,15 +1181,63 @@ export const ticExtension: Extension = {
             const { data: userData } = await supabase.auth.admin.getUserById(existing.user_id)
 
             if (existing.email_verified_at === null) {
-              return settle(
-                await refusePendingLogin(
-                  supabase,
-                  existing.user_id,
-                  userData?.user,
-                  { givenName, surname },
-                  request,
+              const pendingUser = userData?.user
+              // Adopted by the address owner (or gone): revoke and refuse.
+              // Mail-gated mode (rollback flag): refuse and re-send, as
+              // before instant login.
+              if (
+                signupRequiresMailConfirmation() ||
+                !pendingUser?.email ||
+                hasForeignCredential(pendingUser)
+              ) {
+                return settle(
+                  await refusePendingLogin(
+                    supabase,
+                    existing.user_id,
+                    pendingUser,
+                    { givenName, surname },
+                    request,
+                  )
                 )
-              )
+              }
+
+              // BankID instant login: the holder is proven, only the mailbox
+              // is not. Sign them in with a password grant (never a magic
+              // link: that would void the verification mail in flight, see
+              // bankid-session-grant.ts) and keep the identity pending.
+              if (!await consumeBankIdSession(supabase, sessionId)) {
+                return settle(NextResponse.json(
+                  { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
+                  { status: 400 }
+                ))
+              }
+
+              // Rows from the old flow may lack the flag; /auth/callback,
+              // the MFA gate and the invite acceptance all key on it.
+              if (pendingUser.app_metadata?.bankid_pending !== true) {
+                await supabase.auth.admin.updateUserById(existing.user_id, {
+                  app_metadata: { ...(pendingUser.app_metadata ?? {}), bankid_pending: true },
+                })
+              }
+
+              const minted = await mintPendingSession(supabase, existing.user_id, pendingUser.email)
+              if (!minted.ok) {
+                return settle(NextResponse.json(
+                  { error: 'Failed to create session' },
+                  { status: 500 }
+                ))
+              }
+
+              await fetchAndStoreEnrichment(sessionId, existing.user_id, supabase)
+
+              return settle(NextResponse.json({
+                data: {
+                  type: 'session',
+                  session: minted.session,
+                  isNewUser: false,
+                  emailPending: true,
+                },
+              }))
             }
 
             if (!userData?.user?.email) {
@@ -1410,37 +1460,80 @@ export const ticExtension: Extension = {
             ))
           }
 
-          // Mail the confirmation link to the typed address. The token never
-          // reaches the browser: whoever reads that inbox proves the address,
-          // and /auth/callback promotes the identity when they click.
-          const sent = await sendBankIdSignupConfirmation({
-            supabase,
-            email: trimmedEmail!,
-            host,
-            proto: request.headers.get('x-forwarded-proto'),
-          })
+          if (signupRequiresMailConfirmation()) {
+            // Mail-gated mode (rollback flag): the mail is the only way in.
+            // The token never reaches the browser: whoever reads that inbox
+            // proves the address, and /auth/callback promotes the identity
+            // when they click.
+            const sent = await sendBankIdSignupConfirmation({
+              supabase,
+              email: trimmedEmail!,
+              host,
+              proto: request.headers.get('x-forwarded-proto'),
+            })
 
+            if (!sent.ok) {
+              log.error('bankid signup confirmation mail failed', { step: sent.step, message: sent.message })
+              await rollbackSignup(`confirmation mail (${sent.step})`)
+              // The session was already consumed above, so this flow cannot be
+              // retried; settle() clears it rather than leaving a spent,
+              // rolled-back flow to be re-offered as resumable.
+              return settle(NextResponse.json(
+                { error: 'internal_error', message: 'Kunde inte skicka bekräftelsemailet. Försök igen.' },
+                { status: 500 }
+              ))
+            }
+
+            // Enrichment (CompanyRoles): pre-fills /select-company picker.
+            await fetchAndStoreEnrichment(sessionId, userId, supabase)
+
+            // settle(): account created and the mail is out. The flow is spent.
+            // Same shape as POST /api/auth/signup, so the register page can show
+            // its existing "check your inbox" screen. No session, no token.
+            return settle(NextResponse.json({
+              data: {
+                status: 'confirmation_sent',
+                email: trimmedEmail!,
+              },
+            }))
+          }
+
+          // BankID instant login (default): BankID proved the person, so the
+          // holder is signed in now. The mailbox is what the mail proves, and
+          // until it does the identity stays pending: no invite acceptance,
+          // no company mail, and the address owner can still take the
+          // account over (see /auth/callback). The session is minted first
+          // because without it the signup is worthless; the mail is best
+          // effort because the in-app banner can re-send it.
+          const minted = await mintPendingSession(supabase, userId, trimmedEmail!)
+          if (!minted.ok) {
+            log.error('bankid signup could not mint a session', { step: minted.step, message: minted.message })
+            await rollbackSignup(`session mint (${minted.step})`)
+            return settle(NextResponse.json(SIGNUP_FAILED, { status: 500 }))
+          }
+
+          const sent = await sendPendingVerificationMail(
+            supabase,
+            { id: userId, email: trimmedEmail!, app_metadata: { bankid_pending: true, has_password: false } },
+            request,
+          )
           if (!sent.ok) {
-            log.error('bankid signup confirmation mail failed', { step: sent.step, message: sent.message })
-            await rollbackSignup(`confirmation mail (${sent.step})`)
-            // The session was already consumed above, so this flow cannot be
-            // retried; settle() clears it rather than leaving a spent,
-            // rolled-back flow to be re-offered as resumable.
-            return settle(NextResponse.json(
-              { error: 'internal_error', message: 'Kunde inte skicka bekräftelsemailet. Försök igen.' },
-              { status: 500 }
-            ))
+            log.warn('bankid signup verification mail failed; the banner offers a re-send', {
+              userId,
+              step: sent.step,
+            })
           }
 
           // Enrichment (CompanyRoles): pre-fills /select-company picker.
           await fetchAndStoreEnrichment(sessionId, userId, supabase)
 
-          // settle(): account created and the mail is out. The flow is spent.
-          // Same shape as POST /api/auth/signup, so the register page can show
-          // its existing "check your inbox" screen. No session, no token.
+          // settle(): account created and signed in. The flow is spent.
           return settle(NextResponse.json({
             data: {
-              status: 'confirmation_sent',
+              type: 'session',
+              session: minted.session,
+              isNewUser: true,
+              emailPending: true,
               email: trimmedEmail!,
             },
           }))
@@ -1694,6 +1787,9 @@ export const ticExtension: Extension = {
         }
       },
     },
+
+    // Re-send / change the unproven address of a pending BankID signup.
+    ...bankIdPendingRoutes,
   ],
 
   eventHandlers: [],

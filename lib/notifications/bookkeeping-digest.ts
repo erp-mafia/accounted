@@ -35,6 +35,7 @@ import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
 import { escapeHtml } from '@/lib/email/user-text'
+import { unverifiedAddressUserIds } from '@/lib/notifications/member-email'
 
 const log = createLogger('bookkeeping-digest')
 
@@ -468,8 +469,9 @@ async function resolveCompanyMemberEmails(
     })
     return emails
   }
+  const unverified = await unverifiedAddressUserIds(supabase, memberIds)
   for (const row of (profiles ?? []) as Array<{ id: string; email: string | null }>) {
-    if (row.email) emails.set(row.id, row.email)
+    if (row.email && !unverified.has(row.id)) emails.set(row.id, row.email)
   }
   return emails
 }
