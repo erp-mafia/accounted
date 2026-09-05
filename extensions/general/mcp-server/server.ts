@@ -8499,6 +8499,9 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_party',
+    // Specialized: found through gnubok_search_tools and named from the list
+    // tools' party_id; keeps the default tools/list under its byte budget.
+    catalogVisibility: 'search',
     keywords: ['motpart', 'part', 'leverantör', 'kund', 'företagsregistret', 'scb', 'org.nr', 'organisationsnummer', 'bolagsform', 'f-skatt'],
     title: 'Get Party (Motpart) Behind a Supplier or Customer',
     description:
