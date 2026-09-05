@@ -312,13 +312,28 @@ export const promoteToSuppliers = env.test(
       select id from public.suppliers where company_id = ${ctx.parent.companyId} and name = 'Visma Spcs AB'`;
     await b.goto(`${APP_URL}/suppliers/${vismaId[0]!.id.unwrap()}`);
     await expect(b.getByRole("heading", { name: "Visma Spcs AB" })).toBeVisible();
+    // The org number lives in the header, formatted, and nowhere else.
+    await expect(b.getByText("Org.nr 556252-9155")).toBeVisible();
     await expect(b.getByText("Företagsuppgifter")).toBeVisible();
-    await expect(b.getByText("556252-9155")).toBeVisible();
-    // The VAT number shows both under Kontaktuppgifter and Företagsuppgifter.
-    await expect(b.getByText("SE556252915501").first()).toBeVisible();
+    // The block carries what only the register knows: one status line,
+    // industry, seat, size; the VAT number sits under Kontaktuppgifter once.
+    await expect(b.getByText("Övriga aktiebolag · Är verksam")).toBeVisible();
+    await expect(b.getByText("Registrerad för F-skatt, moms, arbetsgivare")).toBeVisible();
     await expect(b.getByText("Utgivning av annan programvara")).toBeVisible();
+    await expect(b.getByText("SE556252915501")).toHaveCount(1);
     await expect(b.getByText(/^Från SCB · hämtat/)).toBeVisible();
     await expect(b.getByRole("button", { name: "Uppdatera från SCB", exact: true })).toBeVisible();
+    // The register's contact details landed on the supplier itself, marked
+    // as such, so the row is what payment files and documents will use.
+    const vismaRow = await db.sql<{ email: string | null; phone: string | null; address_line1: string | null; postal_code: string | null; city: string | null }>`
+      select email, phone, address_line1, postal_code, city from public.suppliers where id = ${vismaId[0]!.id.unwrap()}`;
+    expect(vismaRow[0]?.email).toBe("info@vismaspcs.se");
+    expect(vismaRow[0]?.phone).toBe("047056000");
+    expect(vismaRow[0]?.address_line1).toBe("SAMBANDSVÄGEN 5");
+    expect(vismaRow[0]?.postal_code).toBe("351 94");
+    expect(vismaRow[0]?.city).toBe("VÄXJÖ");
+    await expect(b.getByText("info@vismaspcs.se")).toBeVisible();
+    await expect(b.getByText("från SCB").first()).toBeVisible();
 
     // A foreign supplier says so instead of offering a search.
     const framerId = await db.sql<{ id: string }>`

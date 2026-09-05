@@ -21,6 +21,10 @@ const BASE = "/nv0101/v1/sokpavar/api/Je";
 interface Company {
   orgNr: string;
   name: string;
+  /** Street line of the postal address, as SCB's PostAdress. */
+  adress?: string;
+  telefon?: string;
+  epost?: string;
   postNr: string;
   ort: string;
   kommun: string;
@@ -33,7 +37,7 @@ interface Company {
 
 /** Org numbers are Luhn-valid legal persons; the names are what the picker shows. */
 const COMPANIES: Company[] = [
-  { orgNr: "5562529155", name: "Visma Spcs AB", postNr: "351 94", ort: "VÄXJÖ", kommun: "Växjö", lan: "Kronoberg", branschKod: "58290", bransch: "Utgivning av annan programvara" },
+  { orgNr: "5562529155", name: "Visma Spcs AB", adress: "SAMBANDSVÄGEN 5", telefon: "047056000", epost: "info@vismaspcs.se", postNr: "351 94", ort: "VÄXJÖ", kommun: "Växjö", lan: "Kronoberg", branschKod: "58290", bransch: "Utgivning av annan programvara" },
   { orgNr: "5567947535", name: "Visma Software AB", postNr: "111 23", ort: "STOCKHOLM", kommun: "Stockholm", lan: "Stockholm", branschKod: "62010", bransch: "Dataprogrammering" },
   { orgNr: "5594871682", name: "The Intelligence Company AB (publ)", postNr: "824 30", ort: "HUDIKSVALL", kommun: "Hudiksvall", lan: "Gävleborg", branschKod: "82910", bransch: "Inkassoföretags och kreditupplysningsföretags verksamhet" },
   { orgNr: "5560125790", name: "AKTIEBOLAGET VOLVO", postNr: "405 08", ort: "GÖTEBORG", kommun: "Göteborg", lan: "Västra Götaland", branschKod: "70100", bransch: "Verksamheter som utövas av huvudkontor" },
@@ -45,7 +49,7 @@ function row(c: Company): Record<string, string> {
     OrgNr: c.orgNr,
     Företagsnamn: c.name,
     COAdress: "",
-    PostAdress: "",
+    PostAdress: c.adress ?? "",
     PostNr: c.postNr,
     PostOrt: c.ort,
     "Säteskommun, kod": "0000",
@@ -69,8 +73,8 @@ function row(c: Company): Record<string, string> {
     "Omsättning, år": "2025",
     "Stkl, oms, kod": "6",
     "Storleksklass, oms": "20 000 - 49 999 tkr",
-    Telefon: "",
-    "E-post": "",
+    Telefon: c.telefon ?? "",
+    "E-post": c.epost ?? "",
     "Arbetsgivarstatus, kod": "1",
     Arbetsgivarstatus: "Är registrerad som vanlig arbetsgivare",
     "Momsstatus, kod": "1",
