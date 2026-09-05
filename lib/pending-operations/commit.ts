@@ -65,6 +65,7 @@ import {
   canApproveSupplierInvoice,
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
+import { buildSupplierCreditNoteRow } from '@/lib/supplier-invoices/credit-note'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { ISO_DATE_RE } from '@/lib/invariants/iso-date'
@@ -4934,31 +4935,14 @@ async function commitCreditSupplierInvoice(
 
   const { data: creditNote, error: creditError } = await supabase
     .from('supplier_invoices')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      supplier_id: original.supplier_id,
-      arrival_number: arrivalNum,
-      supplier_invoice_number: `KREDIT-${original.supplier_invoice_number}`,
-      invoice_date: new Date().toISOString().split('T')[0],
-      due_date: new Date().toISOString().split('T')[0],
-      status: 'registered',
-      currency: original.currency,
-      exchange_rate: original.exchange_rate,
-      vat_treatment: original.vat_treatment,
-      reverse_charge: original.reverse_charge,
-      subtotal: original.subtotal,
-      subtotal_sek: original.subtotal_sek,
-      vat_amount: original.vat_amount,
-      vat_amount_sek: original.vat_amount_sek,
-      total: original.total,
-      total_sek: original.total_sek,
-      remaining_amount: 0,
-      is_credit_note: true,
-      credited_invoice_id: id,
-      // Dimensions PR7: copy so the reversal nets against the same cells.
-      default_dimensions: original.default_dimensions ?? {},
-    })
+    .insert(
+      buildSupplierCreditNoteRow(original, {
+        userId,
+        companyId,
+        arrivalNumber: arrivalNum,
+        date: new Date().toISOString().split('T')[0],
+      }),
+    )
     .select()
     .single()
 
