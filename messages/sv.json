@@ -4208,6 +4208,8 @@
     "peppol_send_limit_reached": "Bolagets Peppol-sändningar är slut. Hör av dig till support för fler.",
     "pdf_rerender_downloaded_title": "Nyskapad PDF nedladdad",
     "pdf_rerender_preview_title": "Nyskapad PDF visas",
+    "pdf_preview_failed_title": "Kunde inte förhandsgranska fakturan",
+    "pdf_preview_opening": "Öppnar fakturan...",
     "pdf_preview_blocked_title": "Kunde inte öppna förhandsgranskningen",
     "pdf_preview_blocked_description": "Tillåt popupfönster för {appName} i webbläsaren och försök igen.",
     "pdf_rerender_reason_sent_outside": "Det senaste utskicket gjordes utanför {appName}, så det finns ingen arkiverad kopia av just det utskicket. Filen skapades nyss, utifrån dagens uppgifter, mall och logotyp.",
