@@ -158,6 +158,59 @@ describe('GET /api/invoices/[id]/pdf', () => {
     expect(renderToBufferMock).not.toHaveBeenCalled()
   })
 
+  // The in-app preview probes before pointing a tab at the inline URL, so a
+  // refusal is shown as a message in the app instead of as raw JSON in the tab.
+  describe('?probe=1', () => {
+    it('answers 204 without rendering when the PDF would be served', async () => {
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: company, error: null })
+
+      const response = await GET(
+        createMockRequest('/api/invoices/invoice-1/pdf', {
+          searchParams: { disposition: 'inline', probe: '1' },
+        }),
+        createMockRouteParams({ id: 'invoice-1' }),
+      )
+
+      expect(response.status).toBe(204)
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+      expect(renderToBufferMock).not.toHaveBeenCalled()
+    })
+
+    it('returns the same refusal envelope the render would', async () => {
+      enqueue({ data: { ...invoice, currency: 'EUR' }, error: null })
+      enqueue({ data: { ...company, invoice_payment_accounts: {} }, error: null })
+
+      const response = await GET(
+        createMockRequest('/api/invoices/invoice-1/pdf', {
+          searchParams: { disposition: 'inline', probe: '1' },
+        }),
+        createMockRouteParams({ id: 'invoice-1' }),
+      )
+      const body = await response.json()
+
+      expect(response.status).toBe(400)
+      expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+      expect(body.error.details.currency).toBe('EUR')
+      expect(renderToBufferMock).not.toHaveBeenCalled()
+    })
+
+    it('ignores any other probe value and renders', async () => {
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: company, error: null })
+
+      const response = await GET(
+        createMockRequest('/api/invoices/invoice-1/pdf', {
+          searchParams: { probe: 'yes' },
+        }),
+        createMockRouteParams({ id: 'invoice-1' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(renderToBufferMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
   // #1693: the betalningsbekräftelse variant. Same render, refused unless the
   // faktura is fully paid, named as a payment confirmation, archive untouched.
   describe('?variant=paid', () => {

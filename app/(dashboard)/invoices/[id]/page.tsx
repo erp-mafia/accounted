@@ -86,6 +86,7 @@ import {
 import type { Invoice, InvoiceItem, InvoiceStatus, InvoiceReminder, InvoiceDocumentType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { useBranding } from '@/lib/branding/brand-context'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
@@ -106,6 +107,11 @@ const PEPPOL_STATUS_KEYS = new Set([
   'no_route', 'failed',
 ])
 const PEPPOL_SENDABLE_STATUSES = new Set<InvoiceStatus>(['draft', 'sent', 'overdue'])
+
+// How long the preview waits for the PDF route to say whether it will render
+// before giving up and closing the placeholder tab. Generous: a cold
+// serverless start plus the invoice and settings reads, not the render itself.
+const PDF_PROBE_TIMEOUT_MS = 20_000
 
 // Why the downloaded file is not the invoice the customer received. One key
 // per reason: "no archived copy exists" and "the archive could not be reached"
@@ -1127,12 +1133,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
    * opened synchronously (before any await) to keep the click's user activation
    * and stay clear of the popup blocker.
    *
-   * A re-render is fetched before the tab is pointed anywhere: the PDF route
+   * The tab comes from openDeferredTab: window.open() with 'noopener' returns
+   * null by spec even on success, so the direct call this replaced fired the
+   * "popup blocked" toast on every open (#1613 had the same defect).
+   *
+   * A re-render is probed before the tab is pointed at it: the PDF route
    * refuses with a JSON envelope when the invoice cannot be rendered (no
    * payment account for its currency, for one), and navigating the tab
-   * straight to the route showed that JSON raw. The tab is opened blank
-   * first, then given the PDF, or closed again with the refusal in a toast.
-   * The archived copy is a stored document and keeps the direct open.
+   * straight to the route showed that JSON raw. The probe runs the same
+   * checks without rendering; on refusal the tab is closed again and the
+   * message goes in a toast, otherwise the tab gets the real inline URL, so
+   * the viewer keeps the invoice filename and the address survives a reload.
    */
   async function runInvoicePreview(source: InvoicePdfSource) {
     if (!invoice) return
@@ -1143,19 +1154,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       return
     }
 
-    if (source.kind === 'archived') {
-      if (!window.open(source.url, '_blank', 'noopener,noreferrer')) {
-        toast({
-          title: t('pdf_preview_blocked_title'),
-          description: t('pdf_preview_blocked_description', { appName }),
-          variant: 'destructive',
-        })
-      }
-      return
-    }
-
-    const tab = window.open('', '_blank')
-    if (!tab) {
+    const tab = openDeferredTab(t('pdf_preview_opening'))
+    if (tab.blocked) {
       toast({
         title: t('pdf_preview_blocked_title'),
         description: t('pdf_preview_blocked_description', { appName }),
@@ -1164,33 +1164,41 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       return
     }
 
-    let blob: Blob
+    if (source.kind === 'archived') {
+      tab.navigate(source.url)
+      return
+    }
+
     try {
-      const response = await fetch(invoiceRerenderUrl(invoice.id, { inline: true }))
-      if (!response.ok) {
+      // Bounded: a stalled probe must not leave the placeholder tab open with
+      // no word from the app. The abort lands in the catch below.
+      const probe = await fetch(invoiceRerenderUrl(invoice.id, { inline: true, probe: true }), {
+        signal: AbortSignal.timeout(PDF_PROBE_TIMEOUT_MS),
+      })
+      if (!probe.ok) {
         tab.close()
         toast({
           title: t('pdf_preview_failed_title'),
-          description: await describePdfRouteFailure(response),
+          description: await describePdfRouteFailure(probe),
           variant: 'destructive',
         })
         return
       }
-      blob = await response.blob()
     } catch (error) {
       tab.close()
       toast({
         title: t('pdf_preview_failed_title'),
-        description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
+        description: error instanceof Error
+          ? getUserErrorMessage(error, { locale: locale as ErrorLocale, context: 'invoice' })
+          : t('fallback_try_again'),
         variant: 'destructive',
       })
       return
     }
 
-    // The blob URL is not revoked: the tab is a separate document that loads
-    // it after this function returns, and revoking on a timer would race a
-    // slow viewer. One PDF per click is a bounded leak for the page lifetime.
-    tab.location.href = window.URL.createObjectURL(blob)
+    // The user may have closed the placeholder tab while the probe ran; then
+    // nothing is shown and the caveat about what would have been shown is moot.
+    if (!tab.navigate(invoiceRerenderUrl(invoice.id, { inline: true }))) return
 
     const caveat = invoiceDocumentCaveat(source)
     if (caveat) {

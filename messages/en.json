@@ -4209,6 +4209,7 @@
     "pdf_rerender_downloaded_title": "Freshly generated PDF downloaded",
     "pdf_rerender_preview_title": "Showing a freshly generated PDF",
     "pdf_preview_failed_title": "Could not preview the invoice",
+    "pdf_preview_opening": "Opening the invoice...",
     "pdf_preview_blocked_title": "Could not open the preview",
     "pdf_preview_blocked_description": "Allow pop-up windows for {appName} in your browser and try again.",
     "pdf_rerender_reason_sent_outside": "The latest send happened outside {appName}, so there is no archived copy of that particular send. The file was generated just now, from today's data, template and logo.",
