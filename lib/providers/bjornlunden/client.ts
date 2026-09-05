@@ -27,28 +27,20 @@ export class BjornLundenApiError extends Error {
  *   {"body":{"status":"FORBIDDEN","message":"Calls to details:READ is out of
  *    allowed scope for service provider Arcim "}, "statusCodeValue":403}
  *
- * The key itself is right (an unknown key answers 500, see
- * isBjornLundenUnknownKeyError), so this must never be reported as "check
- * what you pasted": the fix is on the BL side (activate the integration).
+ * The key itself is right, so this must never be reported as "check what
+ * you pasted": the fix is on the BL side (activate the integration).
+ *
+ * An UNKNOWN key is a different signal: BL fails to bind the company database
+ * and answers 500. That body is not stable (observed both a null
+ * ServiceInfo.getCurrentUser() message and a Spring BeanCreationException for
+ * databaseConnector), so callers key the unknown-key verdict on the status
+ * alone; only the 403 case has a body worth matching.
  */
 export function isBjornLundenScopeError(error: unknown): boolean {
   return (
     error instanceof BjornLundenApiError &&
     error.statusCode === 403 &&
     /out of allowed scope/i.test(error.body ?? '')
-  )
-}
-
-/**
- * True when BL could not bind a company to the User-Key at all. Sandbox- and
- * live-verified: the gateway answers 500 with a body naming the null current
- * user ("...ServiceInfo.getCurrentUser()\" is null"), not 401/403/404.
- */
-export function isBjornLundenUnknownKeyError(error: unknown): boolean {
-  return (
-    error instanceof BjornLundenApiError &&
-    error.statusCode === 500 &&
-    /getCurrentUser\(\)/.test(error.body ?? '')
   )
 }
 
