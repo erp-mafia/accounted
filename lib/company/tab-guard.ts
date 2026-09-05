@@ -162,6 +162,26 @@ export function isTabMismatch(
 }
 
 /**
+ * Name of the company another tab switched to, for the guard dialog. Looks
+ * through the memberships the shell already handed the client (the switcher
+ * list and the foreign-host signpost list), so no request is needed at the
+ * moment the tab is being told to stop. Null when the id is not among them
+ * (a company this login cannot see on this host): the dialog then falls back
+ * to its unnamed wording rather than guessing.
+ */
+export function resolveObservedCompanyName(
+  observedCompanyId: string | null | undefined,
+  companies: readonly { company: { id: string; name: string } }[],
+  foreignCompanies: readonly { id: string; name: string }[] = [],
+): string | null {
+  if (!observedCompanyId) return null
+  const local = companies.find((entry) => entry.company.id === observedCompanyId)
+  if (local?.company.name) return local.company.name
+  const foreign = foreignCompanies.find((entry) => entry.id === observedCompanyId)
+  return foreign?.name || null
+}
+
+/**
  * Whether a fetch about to leave this tab must be blocked. Guards mutating
  * same-origin requests on two shapes:
  *

@@ -8,6 +8,7 @@ import {
   markCompanySwitchInFlight,
   markSelfSwitchTarget,
   requestHasNextActionHeader,
+  resolveObservedCompanyName,
   shouldBlockMutation,
 } from '../tab-guard'
 
@@ -242,5 +243,27 @@ describe('guardBrowserWrite', () => {
 
   it('allows the write when no guard is mounted (no tab belief)', () => {
     expect(guardBrowserWrite()).toBe(true)
+  })
+})
+
+describe('resolveObservedCompanyName', () => {
+  const companies = [
+    { company: { id: 'c-arcim', name: 'Arcim Technology AB' } },
+    { company: { id: 'c-demo', name: 'Demo AB' } },
+  ]
+  const foreign = [{ id: 'c-byra', name: 'Klientbolaget AB' }]
+
+  it('names a company from the switcher list', () => {
+    expect(resolveObservedCompanyName('c-demo', companies, foreign)).toBe('Demo AB')
+  })
+
+  it('names a company homed on another host from the signpost list', () => {
+    expect(resolveObservedCompanyName('c-byra', companies, foreign)).toBe('Klientbolaget AB')
+  })
+
+  it('is null for unknown ids and for no observation, so the dialog keeps its unnamed wording', () => {
+    expect(resolveObservedCompanyName('c-elsewhere', companies, foreign)).toBeNull()
+    expect(resolveObservedCompanyName(null, companies, foreign)).toBeNull()
+    expect(resolveObservedCompanyName(undefined, companies)).toBeNull()
   })
 })
