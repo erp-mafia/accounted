@@ -228,12 +228,23 @@ export async function findDuplicatePaymentCandidatesForInvoice(
   // remaining amounts stored in invoice currency.
   if (data.length === 0) {
     if (paymentCurrency !== 'SEK') return []
-    return findAggregateCandidates(supabase, {
-      companyId,
-      invoiceNumber: invoice.invoice_number,
-      paymentAmount,
-      paymentDate,
-    })
+    try {
+      return await findAggregateCandidates(supabase, {
+        companyId,
+        invoiceNumber: invoice.invoice_number,
+        paymentAmount,
+        paymentDate,
+      })
+    } catch (err) {
+      // Advisory guard: a failed sweep must never block "Markera som betald".
+      // Logged so the blind spot is visible rather than passing silently.
+      log.warn('duplicate-payment guard: aggregate sweep failed', {
+        companyId,
+        invoiceNumber: invoice.invoice_number,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return []
+    }
   }
 
   const invoiceOcr = normalizeOcrReference(invoice.invoice_number)
@@ -317,7 +328,9 @@ async function findAggregateCandidates(
     .lte('date', dateHigh)
     .order('date', { ascending: false })
     .limit(AGGREGATE_MAX_ROWS)
-  const rows = (rowsData ?? []) as AggregateRow[]
+  // Defensive shape check: a client that answers a list query with a single
+  // object (older test doubles do) must read as "no rows", not throw.
+  const rows = (Array.isArray(rowsData) ? rowsData : []) as AggregateRow[]
   if (rows.length === 0) return []
 
   let othersQuery = supabase
@@ -333,7 +346,7 @@ async function findAggregateCandidates(
   const { data: othersData } = await othersQuery
     .order('due_date', { ascending: true })
     .limit(AGGREGATE_MAX_OPEN_INVOICES)
-  const others = ((othersData ?? []) as OpenInvoiceRow[]).filter(
+  const others = ((Array.isArray(othersData) ? othersData : []) as OpenInvoiceRow[]).filter(
     (inv) => inv.invoice_number && Number(inv.remaining_amount ?? inv.total ?? 0) > 0,
   )
   if (others.length === 0) return []
