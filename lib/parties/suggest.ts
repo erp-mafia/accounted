@@ -18,7 +18,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
-import { coreKey, displayNameFromVoucherText } from './ledger-key'
+import { coreKey, displayNameFromVoucherText, legacyLedgerKey } from './ledger-key'
 import { extractNameCandidates, extractVatNumbers } from './name-extract'
 import { getObservedParties, type ObservedParty } from './observed'
 
@@ -220,6 +220,19 @@ export function buildSuggestions(input: {
     const org = orgs.length === 1 ? orgs[0]!.org : undefined
     const name = pickName(o, ev)
     let existing = (org && byOrg.get(org)) || byAlias.get(o.key) || undefined
+    if (!existing) {
+      // A party claimed under the pre-2026-09-04 key keeps its vouchers: the
+      // old key is still an alias on it, and the same texts now produce the
+      // new key. Without this, every confirmed party from before the key
+      // change would come back as a fresh suggestion.
+      for (const text of voucherTexts(o)) {
+        const legacy = byAlias.get(legacyLedgerKey(text))
+        if (legacy) {
+          existing = legacy
+          break
+        }
+      }
+    }
     let attach: SuggestionReason['attach'] = existing ? (org && byOrg.get(org) === existing ? 'org_number' : 'alias_key') : 'new'
     if (!existing && name.anchored) {
       const byName = byLegalName.get(name.display.trim().toLowerCase())
