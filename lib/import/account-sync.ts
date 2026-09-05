@@ -38,47 +38,6 @@ function emptyResult(): AccountSyncResult {
   return { created: 0, renamed: 0, renamedAccounts: [], renameFailed: 0, error: null }
 }
 
-/** How many accounts are shown by number in the preview's chart card. */
-const CHART_SAMPLE_SIZE = 8
-
-/**
- * Pure preview of what syncMappedAccounts will insert: the distinct target
- * accounts of `mappings` split into those absent from the company's chart
- * and those already present. Unmapped source accounts count as new under
- * their own number: the preview's "Skapa saknade konton" button creates them
- * there, and until it does the import skips their vouchers.
- *
- * Counts targets, not source accounts, so two sources remapped onto one
- * target count once, the same way the insert pass dedupes.
- */
-export function planChartChanges(
-  mappings: AccountMapping[],
-  existingNumbers: ReadonlySet<string>,
-): { toCreate: number; existing: number; sample: { number: string; name: string }[] } {
-  const seen = new Set<string>()
-  const toCreate: { number: string; name: string }[] = []
-  let existing = 0
-
-  for (const m of mappings) {
-    const number = m.targetAccount || m.sourceAccount
-    if (!number || seen.has(number)) continue
-    seen.add(number)
-    if (existingNumbers.has(number)) {
-      existing += 1
-    } else {
-      toCreate.push({ number, name: m.targetName || m.sourceName || '' })
-    }
-  }
-
-  toCreate.sort((a, b) => a.number.localeCompare(b.number))
-
-  return {
-    toCreate: toCreate.length,
-    existing,
-    sample: toCreate.slice(0, CHART_SAMPLE_SIZE),
-  }
-}
-
 /**
  * Build a chart_of_accounts insert row with the richest metadata available:
  * BAS reference when the number is in BAS_REFERENCE (incl. description and

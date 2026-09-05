@@ -7,7 +7,7 @@ import {
   calculateFileHash,
 } from '@/lib/import/sie-parser'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
-import { planChartChanges } from '@/lib/import/account-sync'
+import { planChartChanges } from '@/lib/import/chart-plan'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import {
   generateImportPreview,

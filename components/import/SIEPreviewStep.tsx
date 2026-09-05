@@ -54,6 +54,10 @@ export default function SIEPreviewStep({
   // lacks them, and the card then falls back to the BAS-reference counts.
   const chart = preview.chart
   const fiscalYear = preview.fiscalYear
+  // Both refusals carry the import's own text: an overlap with a period that
+  // has content, or #RAR dates that break a BFL 3 kap. shape rule.
+  const fiscalYearRefused =
+    fiscalYear?.verdict === 'conflict' || fiscalYear?.verdict === 'invalid'
 
   // Opening-balance imbalance. The importer plugs any diff > 0.01 to 2099, but a
   // diff under ~1 SEK is genuine öresavrundning. Anything larger is a real
@@ -96,7 +100,7 @@ export default function SIEPreviewStep({
       </Card>
 
       {/* Fiscal year */}
-      <Card className={fiscalYear?.verdict === 'conflict' ? 'border-destructive/50' : undefined}>
+      <Card className={fiscalYearRefused ? 'border-destructive/50' : undefined}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Calendar className="h-5 w-5" />
@@ -118,7 +122,7 @@ export default function SIEPreviewStep({
                 {preview.fiscalYearEnd ?? 'Okänt'}
               </p>
             </div>
-            {fiscalYear && fiscalYear.verdict !== 'conflict' && (
+            {fiscalYear && (fiscalYear.verdict === 'match' || fiscalYear.verdict === 'create') && (
               <span className="ml-auto text-sm text-muted-foreground">
                 {fiscalYear.verdict === 'match'
                   ? t('fiscal_year_match')
@@ -128,7 +132,7 @@ export default function SIEPreviewStep({
               </span>
             )}
           </div>
-          {fiscalYear?.verdict === 'conflict' && (
+          {fiscalYear && (fiscalYear.verdict === 'conflict' || fiscalYear.verdict === 'invalid') && (
             <div className="mt-4 flex items-start gap-2 text-sm text-destructive">
               <XCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
               <span>{fiscalYear.message}</span>

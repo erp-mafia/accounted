@@ -7536,7 +7536,7 @@
     "fiscal_year_match": "Already exists in Accounted",
     "fiscal_year_create": "Created at import",
     "fiscal_year_create_replaces": "Created at import, replacing the empty fiscal year that was created automatically",
-    "review_step_chart": "The file's chart of accounts comes along: new accounts are created, existing accounts keep their name unless you choose to update them",
+    "review_step_chart": "The file's chart of accounts comes along: new accounts are created, and existing accounts take the names from the file while Use account names from the file is on",
     "result_accounts_created": "Accounts created",
     "next_steps_title": "Next step: fetch your bank history",
     "next_steps_match_copy": "Connect your bank or upload bank statements, and we match the bank history against what you just imported.",

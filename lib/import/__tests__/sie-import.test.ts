@@ -1597,12 +1597,71 @@ describe('precheckFiscalPeriod', () => {
     expect(verdict).toEqual({ verdict: 'create', replacesEmptyPeriodId: null })
   })
 
+  it('reports invalid with the import refusal text for a 19-month #RAR', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null },
+      { data: [], error: null },
+    ])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2024-01-01',
+      '2025-07-31',
+    )
+
+    expect(verdict.verdict).toBe('invalid')
+    if (verdict.verdict !== 'invalid') return
+    expect(verdict.message).toMatch(/omfattar 19 månader/)
+  })
+
+  it('reports invalid for an end date that is not the last day of its month', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null },
+      { data: [], error: null },
+    ])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2024-01-01',
+      '2024-12-30',
+    )
+
+    expect(verdict.verdict).toBe('invalid')
+    if (verdict.verdict !== 'invalid') return
+    expect(verdict.message).toMatch(/måste sluta på månadens sista dag/)
+  })
+
+  it('reports invalid for a mid-month start when an earlier period exists', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null },
+      { data: [], error: null },
+      { data: [{ id: 'earlier' }], error: null }, // earlier period exists
+    ])
+
+    const verdict = await precheckFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2026-04-16',
+      '2026-12-31',
+    )
+
+    expect(verdict.verdict).toBe('invalid')
+    if (verdict.verdict !== 'invalid') return
+    expect(verdict.message).toMatch(/kronologiskt första räkenskapsår får börja mitt i månaden/)
+  })
+
   it('reports create naming the empty seeded period it will replace', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
       { data: null, error: null },
       { data: [seededPeriod], error: null },
       { data: [], error: null }, // journal_entries: none
+      { data: [], error: null }, // earlier-period check, none (mid-month start)
     ])
 
     const verdict = await precheckFiscalPeriod(

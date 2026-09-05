@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { syncMappedAccounts, planChartChanges } from '../account-sync'
+import { syncMappedAccounts } from '../account-sync'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import type { AccountMapping } from '../types'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -509,60 +509,5 @@ describe('syncMappedAccounts: rename pass', () => {
     expect(updates).toHaveLength(1)
     expect(updates[0].filters.account_number).toBe('1930')
     expect(result.renamed).toBe(1)
-  })
-})
-
-describe('planChartChanges', () => {
-  it('splits distinct target accounts into new and existing for this company', () => {
-    const plan = planChartChanges(
-      [
-        mapping({ sourceAccount: '1930', targetAccount: '1930', sourceName: 'Företagskonto' }),
-        mapping({ sourceAccount: '3010', targetAccount: '3010', sourceName: 'Konsultarvoden' }),
-        mapping({ sourceAccount: '6110', targetAccount: '6110', targetName: 'Kontorsmateriel' }),
-      ],
-      new Set(['1930']),
-    )
-
-    expect(plan.toCreate).toBe(2)
-    expect(plan.existing).toBe(1)
-    expect(plan.sample).toEqual([
-      { number: '3010', name: 'Konsultarvoden' },
-      { number: '6110', name: 'Kontorsmateriel' },
-    ])
-  })
-
-  it('counts two sources remapped onto one target once', () => {
-    const plan = planChartChanges(
-      [
-        mapping({ sourceAccount: '1910', targetAccount: '1930' }),
-        mapping({ sourceAccount: '1920', targetAccount: '1930' }),
-      ],
-      new Set(),
-    )
-
-    expect(plan.toCreate).toBe(1)
-    expect(plan.existing).toBe(0)
-  })
-
-  it('counts an unmapped source under its own number', () => {
-    const plan = planChartChanges(
-      [mapping({ sourceAccount: '9030', targetAccount: '', sourceName: 'Obokat resultat' })],
-      new Set(),
-    )
-
-    expect(plan.toCreate).toBe(1)
-    expect(plan.sample).toEqual([{ number: '9030', name: 'Obokat resultat' }])
-  })
-
-  it('caps the sample but not the count', () => {
-    const mappings = Array.from({ length: 12 }, (_, i) =>
-      mapping({ sourceAccount: `40${10 + i}`, targetAccount: `40${10 + i}` }),
-    )
-
-    const plan = planChartChanges(mappings, new Set())
-
-    expect(plan.toCreate).toBe(12)
-    expect(plan.sample).toHaveLength(8)
-    expect(plan.sample[0].number).toBe('4010')
   })
 })

@@ -5,6 +5,8 @@
  * accounting data exchange between systems).
  */
 
+import type { ChartPlan } from './chart-plan'
+
 // SIE file types
 export type SIEType = 1 | 2 | 3 | 4
 
@@ -395,16 +397,9 @@ export interface ImportPreview {
   // accounts are added unconditionally (a chart follows the company across
   // fiscal years), so the preview must say how many are new to THIS company
   // rather than how many matched the BAS reference. Counted per distinct
-  // target account after mapping. Optional: previews built before this
-  // field existed lack it.
-  chart?: {
-    // Target accounts absent from chart_of_accounts today.
-    toCreate: number
-    // Target accounts already present in chart_of_accounts.
-    existing: number
-    // First few accounts that will be created, for the preview card.
-    sample: { number: string; name: string }[]
-  }
+  // mapped target account (planChartChanges in chart-plan.ts). Optional:
+  // previews built before this field existed lack it.
+  chart?: ChartPlan
 
   // How the file's räkenskapsår relates to the company's existing fiscal
   // periods, from the same precheck the import runs (precheckFiscalPeriod).
@@ -435,6 +430,14 @@ export type FiscalYearPrecheck =
       // An overlapping period carries real content; the import will refuse.
       verdict: 'conflict'
       existingPeriod: { id: string; name: string; periodStart: string; periodEnd: string }
+      // The Swedish refusal text the import raises, verbatim.
+      message: string
+    }
+  | {
+      // The file's own #RAR dates break a BFL 3 kap. shape rule (over 18
+      // months, mid-month start on a non-first year, or an end that is not
+      // the last day of its month); the import will refuse.
+      verdict: 'invalid'
       // The Swedish refusal text the import raises, verbatim.
       message: string
     }

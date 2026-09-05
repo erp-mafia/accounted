@@ -513,6 +513,8 @@ export async function precheckFiscalPeriod(
     .limit(1)
 
   if (!overlapping || overlapping.length === 0) {
+    const invalid = await checkFiscalYearShape(supabase, companyId, startDate, endDate)
+    if (invalid) return invalid
     return { verdict: 'create', replacesEmptyPeriodId: null }
   }
 
@@ -549,7 +551,88 @@ export async function precheckFiscalPeriod(
     }
   }
 
+  const invalid = await checkFiscalYearShape(supabase, companyId, startDate, endDate)
+  if (invalid) return invalid
+
   return { verdict: 'create', replacesEmptyPeriodId: existingPeriod.id }
+}
+
+/**
+ * The BFL 3 kap. shape rules a new period must satisfy, in the order the
+ * import has always applied them. Returns the 'invalid' verdict with the
+ * refusal text, or null when the dates are fine. Runs after the overlap
+ * verdict so a conflict with an existing period is reported first, as before.
+ */
+async function checkFiscalYearShape(
+  supabase: SupabaseClient,
+  companyId: string,
+  startDate: string,
+  endDate: string
+): Promise<Extract<FiscalYearPrecheck, { verdict: 'invalid' }> | null> {
+  const startParts = parseDateParts(startDate)
+  const endParts = parseDateParts(endDate)
+
+  // Max 18 months per BFL 3 kap. Reuses monthsBetween() from
+  // lib/bookkeeping/validate-period-duration.ts, the same arithmetic and the
+  // same threshold validatePeriodDuration() applies on every other
+  // period-creation path (fiscal-periods POST/PATCH, period-service's
+  // createNextPeriod, onboarding's computeFiscalPeriod),
+  // so an 18-month förlängt räkenskapsår imports exactly as it does there and
+  // a 19-month one does not. 18 is the ceiling for an extended or re-laid
+  // year; ongoing years are 12. BFL sets no minimum, so there is no floor here.
+  //
+  // Refuse rather than warn: no reading of BFL 3 kap. permits a räkenskapsår
+  // longer than 18 months, so this is a malformed or merged #RAR, not
+  // historical data booked under different rules. Continuing would stamp every
+  // imported voucher with an illegal period that no UI path can repair
+  // afterwards (the fiscal-period editor rejects the very same span), leaving
+  // undo_sie_import as the only way out. Checked before the destructive delete
+  // in ensureFiscalPeriod so a refused import leaves the company untouched.
+  const months = monthsBetween(startDate, endDate)
+  if (months > 18) {
+    return {
+      verdict: 'invalid',
+      message:
+        `SIE-filens räkenskapsår (${startDate} till ${endDate}) omfattar ${months} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.). ` +
+        `Kontrollera #RAR-raden i filen och exportera om från källsystemet med ett räkenskapsår per fil.`,
+    }
+  }
+
+  // Pre-validate against the DB-side enforce_period_start_day trigger so the
+  // user gets an actionable Swedish error instead of a raw Postgres message.
+  // Per BFL 3 kap., only the company's chronologically FIRST fiscal year may
+  // start mid-month (förlängt första räkenskapsår). Any period that comes
+  // after an earlier one must start on day 1. We check "is there a period
+  // that starts earlier?" rather than "does any period exist?" so a user can
+  // retroactively import an old first fiscal year via SIE even after an
+  // onboarding-created period already exists later in time.
+  if (startParts.day !== 1) {
+    const { data: earlier } = await supabase
+      .from('fiscal_periods')
+      .select('id')
+      .eq('company_id', companyId)
+      .lt('period_start', startDate)
+      .limit(1)
+
+    if (earlier && earlier.length > 0) {
+      return {
+        verdict: 'invalid',
+        message: `SIE-filens räkenskapsår börjar ${startDate}: endast företagets kronologiskt första räkenskapsår får börja mitt i månaden. Efterföljande räkenskapsår måste börja den 1:a i en månad (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`,
+      }
+    }
+  }
+
+  // Matches the fiscal_period_end_last_of_month CHECK constraint on prod;
+  // surface it as a clean message instead of a DB error.
+  const lastDayOfEndMonth = new Date(endParts.year, endParts.month, 0).getDate()
+  if (endParts.day !== lastDayOfEndMonth) {
+    return {
+      verdict: 'invalid',
+      message: `SIE-filens räkenskapsår slutar ${endDate}: räkenskapsår måste sluta på månadens sista dag (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`,
+    }
+  }
+
+  return null
 }
 
 /**
@@ -574,7 +657,7 @@ export async function ensureFiscalPeriod(
     return precheck.periodId
   }
 
-  if (precheck.verdict === 'conflict') {
+  if (precheck.verdict === 'conflict' || precheck.verdict === 'invalid') {
     throw new Error(precheck.message)
   }
 
@@ -583,63 +666,8 @@ export async function ensureFiscalPeriod(
   const startParts = parseDateParts(startDate)
   const endParts = parseDateParts(endDate)
 
-  // Max 18 months per BFL 3 kap. Reuses monthsBetween() from
-  // lib/bookkeeping/validate-period-duration.ts, the same arithmetic and the
-  // same threshold validatePeriodDuration() applies on every other
-  // period-creation path (fiscal-periods POST/PATCH, period-service's
-  // createNextPeriod, onboarding's computeFiscalPeriod),
-  // so an 18-month förlängt räkenskapsår imports exactly as it does there and
-  // a 19-month one does not. 18 is the ceiling for an extended or re-laid
-  // year; ongoing years are 12. BFL sets no minimum, so there is no floor here.
-  //
-  // Refuse rather than warn: no reading of BFL 3 kap. permits a räkenskapsår
-  // longer than 18 months, so this is a malformed or merged #RAR, not
-  // historical data booked under different rules. Continuing would stamp every
-  // imported voucher with an illegal period that no UI path can repair
-  // afterwards (the fiscal-period editor rejects the very same span), leaving
-  // undo_sie_import as the only way out. Checked before the destructive delete
-  // below so a refused import leaves the company untouched.
-  const months = monthsBetween(startDate, endDate)
-  if (months > 18) {
-    throw new Error(
-      `SIE-filens räkenskapsår (${startDate} till ${endDate}) omfattar ${months} månader: ett räkenskapsår får vara högst 18 månader (BFL 3 kap.). ` +
-        `Kontrollera #RAR-raden i filen och exportera om från källsystemet med ett räkenskapsår per fil.`
-    )
-  }
-
-  // Pre-validate against the DB-side enforce_period_start_day trigger so the
-  // user gets an actionable Swedish error instead of a raw Postgres message.
-  // Per BFL 3 kap., only the company's chronologically FIRST fiscal year may
-  // start mid-month (förlängt första räkenskapsår). Any period that comes
-  // after an earlier one must start on day 1. We check "is there a period
-  // that starts earlier?" rather than "does any period exist?" so a user can
-  // retroactively import an old first fiscal year via SIE even after an
-  // onboarding-created period already exists later in time.
-  if (startParts.day !== 1) {
-    const { data: earlier } = await supabase
-      .from('fiscal_periods')
-      .select('id')
-      .eq('company_id', companyId)
-      .lt('period_start', startDate)
-      .limit(1)
-
-    if (earlier && earlier.length > 0) {
-      throw new Error(
-        `SIE-filens räkenskapsår börjar ${startDate}: endast företagets kronologiskt första räkenskapsår får börja mitt i månaden. Efterföljande räkenskapsår måste börja den 1:a i en månad (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`
-      )
-    }
-  }
-
-  // Matches the fiscal_period_end_last_of_month CHECK constraint on prod;
-  // surface it as a clean message instead of a DB error.
-  const lastDayOfEndMonth = new Date(endParts.year, endParts.month, 0).getDate()
-  if (endParts.day !== lastDayOfEndMonth) {
-    throw new Error(
-      `SIE-filens räkenskapsår slutar ${endDate}: räkenskapsår måste sluta på månadens sista dag (BFL 3 kap.). Kontrollera datumen i #RAR-raden.`
-    )
-  }
-
-  // All date validation passed. If we identified an empty seeded period above,
+  // All date validation passed (checkFiscalYearShape, via the precheck). If we
+  // identified an empty seeded period above,
   // delete it now, deferring the destructive step until after every check
   // keeps the seeded period intact when an SIE has malformed dates.
   // FK cascades: account_balances, voucher_sequences, voucher_gap_explanations

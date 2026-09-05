@@ -7536,7 +7536,7 @@
     "fiscal_year_match": "Finns redan i Accounted",
     "fiscal_year_create": "Skapas vid import",
     "fiscal_year_create_replaces": "Skapas vid import och ersätter det tomma räkenskapsår som skapades automatiskt",
-    "review_step_chart": "Kontoplanen från filen tas med: nya konton skapas, befintliga konton behåller sitt namn om du inte väljer att uppdatera dem",
+    "review_step_chart": "Kontoplanen från filen tas med: nya konton skapas, och befintliga konton får namnen från filen om valet Använd kontonamn från filen är på",
     "result_accounts_created": "Konton skapade",
     "next_steps_title": "Nästa steg: hämta bankhistoriken",
     "next_steps_match_copy": "Koppla din bank eller ladda upp kontoutdrag, så matchar vi bankhistoriken mot det du just importerade.",
