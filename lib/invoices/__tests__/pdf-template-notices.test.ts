@@ -13,6 +13,7 @@ import { EU_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV, getVatRules } from '@/lib/i
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import type { InvoiceItem } from '@/types'
 
+/** Every string leaf in the element tree, in document order. */
 function textLeaves(node: ReactNode, out: string[] = []): string[] {
   if (node === null || node === undefined || typeof node === 'boolean') return out
   if (typeof node === 'string' || typeof node === 'number') {
@@ -47,6 +48,7 @@ const items: InvoiceItem[] = [
 
 const company = makeCompanySettings({ f_skatt: true, vat_registered: true })
 
+/** Render the PDF for a non-EU business customer and return its visible text. */
 function renderText(invoice: InvoicePdfInvoice, language: 'sv' | 'en'): string {
   const tree = InvoicePDF({
     invoice,
@@ -59,6 +61,7 @@ function renderText(invoice: InvoicePdfInvoice, language: 'sv' | 'en'): string {
   return textLeaves(tree).join('\n')
 }
 
+/** A GBP proforma to a non-EU customer, stamped with the export notice as getVatRules() writes it. */
 const exportInvoice = (overrides: Partial<InvoicePdfInvoice> = {}): InvoicePdfInvoice =>
   makeInvoice({
     id: 'inv-1',

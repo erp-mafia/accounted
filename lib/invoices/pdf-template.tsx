@@ -213,11 +213,13 @@ const LABELS = {
     paymentLinkQrCaption: 'Scan to pay online',
     orgNoLong: 'Reg. no.:',
     vatRegNo: 'VAT reg. no.:',
-    // SFL 10 kap. 12 § requires the approval to be stated on the invoice but
-    // prescribes no language. Skatteverket's own English term is "approved
-    // for F-tax"; the Swedish phrase stays in parentheses so the statutory
-    // wording is still on the document. Peppol SE-R-005 is satisfied by the
-    // UBL file (peppol-bis-billing.ts), which is unaffected by PDF language.
+    // The F-skatt approval must be stated on the invoice, but ML sets no
+    // language requirement for invoice text (swedish-invoice-compliance,
+    // invoice-rules.md §4). Skatteverket's own English term is "approved for
+    // F-tax"; the Swedish phrase stays in parentheses so the literal statutory
+    // wording is still on the document. Peppol SE-R-005 (the literal string
+    // rule) applies to the UBL file (peppol-bis-billing.ts), which is
+    // unaffected by PDF language.
     fSkatt: 'Approved for F-tax (Godkänd för F-skatt)',
   },
 } as const
@@ -226,11 +228,16 @@ const LABELS = {
 // and QR render on the invoice PDF and the settings "Visa Swish" toggle is live.
 export const SHOW_SWISH_ON_INVOICE = true
 
-// reverse_charge_text is stamped in Swedish at create time and stored on the
-// invoice, so an English PDF of an existing export invoice would otherwise
-// print "Omsättning utanför EU, ML 10 kap." verbatim. Known statutory defaults
-// are rendered from LABELS in the document language; any other text (custom
-// or unknown) is printed exactly as stored.
+/**
+ * Render a stored VAT notice in the document language.
+ *
+ * reverse_charge_text is stamped in Swedish at create time and stored on the
+ * invoice, so an English PDF of an existing export invoice would otherwise
+ * print "Omsättning utanför EU, ML 10 kap." verbatim. Known statutory defaults
+ * (byte-identical to the constants getVatRules() writes) are rendered from
+ * LABELS in the document language; any other text (custom or unknown) is
+ * printed exactly as stored.
+ */
 export function localizeVatNotice(text: string, lang: PdfLang): string {
   if (text === EXPORT_NOTICE_SV) return LABELS[lang].exportNotice
   return text
