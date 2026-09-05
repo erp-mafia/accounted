@@ -302,3 +302,61 @@ describe('end to end: the reported Fortnox invoice', () => {
     expect((invoice.subtotal as number) + (invoice.vat_amount as number)).toBe(invoice.total)
   })
 })
+
+describe('mapSalesInvoice: free-text rows', () => {
+  const sek = (value: number) => ({ value, currencyCode: 'SEK' })
+
+  it('does not let a text row state a 0 % rate beside the priced rows', () => {
+    // Fortnox ships "5 st M, 8 st L" as a row with Total 0 and VAT 0. Counting
+    // that as a stated rate made the invoice "mixed" and nulled the header
+    // rate on roughly half of the Loftux and Clearstoq registers.
+    const { invoice } = mapSalesInvoice(
+      salesDto({
+        lines: [
+          { id: '687', description: 'Hoodie', quantity: 14, unitPrice: sek(359.2), lineExtensionAmount: sek(5028.8), taxPercent: 25, taxAmount: sek(1257.2) },
+          { id: '688', description: '5 st M, 8 st L, 1 st XL', quantity: 0, unitPrice: sek(0), lineExtensionAmount: sek(0), taxPercent: 0, taxAmount: sek(0) },
+        ],
+        taxTotal: { taxAmount: sek(1257.2) },
+        legalMonetaryTotal: { lineExtensionAmount: sek(5028.8), payableAmount: sek(6286) },
+      }),
+      USER, COMPANY, COUNTERPARTY,
+    )
+
+    expect(invoice.vat_rate).toBe(25)
+    expect(invoice.vat_treatment).toBe('standard_25')
+  })
+
+  it('lands a text row as line_type text with no amounts, and a priced row as product', () => {
+    const { items } = mapSalesInvoice(
+      salesDto({
+        lines: [
+          { id: '687', description: 'Hoodie', quantity: 14, unitPrice: sek(359.2), lineExtensionAmount: sek(5028.8), taxPercent: 25, taxAmount: sek(1257.2) },
+          { id: '688', description: '5 st M, 8 st L, 1 st XL', quantity: 0, unitPrice: sek(0), lineExtensionAmount: sek(0), taxPercent: 0, taxAmount: sek(0) },
+        ],
+        taxTotal: { taxAmount: sek(1257.2) },
+        legalMonetaryTotal: { lineExtensionAmount: sek(5028.8), payableAmount: sek(6286) },
+      }),
+      USER, COMPANY, COUNTERPARTY,
+    )
+
+    expect(items[0]).toMatchObject({ line_type: 'product', quantity: 14, line_total: 5028.8, vat_rate: 25 })
+    expect(items[1]).toMatchObject({ line_type: 'text', description: '5 st M, 8 st L, 1 st XL', quantity: 0, unit_price: 0, line_total: 0, vat_amount: 0 })
+  })
+
+  it('still reports a genuinely mixed invoice as mixed', () => {
+    const { invoice } = mapSalesInvoice(
+      salesDto({
+        lines: [
+          { id: '1', quantity: 1, unitPrice: sek(1000), lineExtensionAmount: sek(1000), taxPercent: 25, taxAmount: sek(250) },
+          { id: '2', quantity: 1, unitPrice: sek(100), lineExtensionAmount: sek(100), taxPercent: 6, taxAmount: sek(6) },
+        ],
+        taxTotal: { taxAmount: sek(256) },
+        legalMonetaryTotal: { lineExtensionAmount: sek(1100), payableAmount: sek(1356) },
+      }),
+      USER, COMPANY, COUNTERPARTY,
+    )
+
+    expect(invoice.vat_rate).toBeNull()
+    expect(invoice.vat_treatment).toBe('standard_25')
+  })
+})
