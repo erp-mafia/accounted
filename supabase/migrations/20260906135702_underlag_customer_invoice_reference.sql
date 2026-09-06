@@ -134,16 +134,25 @@ BEGIN
       -- side (registration booking, kontantmetod inbetalning, delbetalning,
       -- "matcha mot befintligt verifikat"), so an imported or manual entry
       -- keeps its own source_type and must be resolved from here. Tenant
-      -- scoped on the link row, never on the entry alone.
+      -- scoped on the link row, never on the entry alone. The invoice must
+      -- be ISSUED: a draft or cancelled invoice is no document (the schema
+      -- agrees: outside those two statuses an invoice_number is required,
+      -- migration 20260427150000), the counterpart of the anchored-document
+      -- requirement on the supplier arms. Mirrors NON_ISSUED_INVOICE_STATUSES
+      -- (lib/invoices/matchable-statuses.ts).
       AND NOT EXISTS (
         SELECT 1 FROM invoices i
         WHERE i.company_id = p_company_id
           AND i.journal_entry_id = je.id
+          AND i.status NOT IN ('draft', 'cancelled')
       )
       AND NOT EXISTS (
-        SELECT 1 FROM invoice_payments ip
+        SELECT 1
+        FROM invoice_payments ip
+        JOIN invoices ipi ON ipi.id = ip.invoice_id
         WHERE ip.company_id = p_company_id
           AND ip.journal_entry_id = je.id
+          AND ipi.status NOT IN ('draft', 'cancelled')
       )
       AND (p_since IS NULL OR je.entry_date >= p_since)
     GROUP BY je.id
@@ -271,16 +280,21 @@ BEGIN
           AND sip_si.company_id = p_company_id
           AND sipd.journal_entry_id IS NOT NULL
       )
-      -- Customer-invoice hänvisning (#2298); see verifikat_without_documents.
+      -- Customer-invoice hänvisning, issued invoices only (#2298); see
+      -- verifikat_without_documents.
       AND NOT EXISTS (
         SELECT 1 FROM invoices i
         WHERE i.company_id = p_company_id
           AND i.journal_entry_id = je.id
+          AND i.status NOT IN ('draft', 'cancelled')
       )
       AND NOT EXISTS (
-        SELECT 1 FROM invoice_payments ip
+        SELECT 1
+        FROM invoice_payments ip
+        JOIN invoices ipi ON ipi.id = ip.invoice_id
         WHERE ip.company_id = p_company_id
           AND ip.journal_entry_id = je.id
+          AND ipi.status NOT IN ('draft', 'cancelled')
       )
       AND (p_since IS NULL OR t.date >= p_since)
   ),

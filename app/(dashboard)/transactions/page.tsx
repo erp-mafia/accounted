@@ -1398,12 +1398,16 @@ export default function TransactionsPage() {
           }
         }
         // Customer invoices pointing at the JE (registration link or payment
-        // row) back it under BFL 5 kap 7 §: same soft-fail as the reads above.
+        // row) back it under BFL 5 kap 7 §. On a failed lookup this chunk's
+        // verdict is UNKNOWN: without the references, 'missing' would be a
+        // false warning and 'has' a false pass, so the chunk gets no badges
+        // (the same degrade the reads above use) while the remaining chunks
+        // still get theirs.
         let invoiceRefs: Map<string, string[]>
         try {
           invoiceRefs = await getInvoiceReferencesForJournalEntries(supabase, companyId, chunk)
         } catch {
-          break
+          continue
         }
         for (const journalEntryId of invoiceRefs.keys()) jeIdsWithDocs.add(journalEntryId)
         const exemptIds = new Set(

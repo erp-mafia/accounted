@@ -603,3 +603,105 @@ describe('legacy country names on customers (#2028)', () => {
     expect(report.warnings.find((w) => w.code === 'NON_EU_COUNTRY_ON_EU_ACCOUNT')?.message).toContain('ATLANTIS')
   })
 })
+
+// ============================================================
+// One verifikat settling several invoices (#2298 review)
+// ============================================================
+
+describe('one verifikat settling several invoices (#2298 review)', () => {
+  function invFR(id: string): InvoiceFx {
+    return {
+      id,
+      customer: {
+        id: 'cust-fr',
+        name: 'FR Customer',
+        country: 'FR',
+        vat_number: 'FR999',
+        vat_number_validated: true,
+        vat_number_validated_at: RECENT,
+      },
+    }
+  }
+
+  /** An imported deposit (two PS lines) that a payment row links to two invoices. */
+  function settlement(lines: LineFx[]) {
+    return {
+      ...entryOther('je-imp', 'import', lines),
+      voucher_series: 'A',
+      voucher_number: 7,
+    }
+  }
+  const twoPayments = [
+    { id: 'pay-1', invoice_id: 'inv-a', journal_entry_id: 'je-imp' },
+    { id: 'pay-2', invoice_id: 'inv-b', journal_entry_id: 'je-imp' },
+  ]
+
+  it('same customer on every linked invoice: filed once, in full', async () => {
+    results = [
+      { data: [settlement([lineEU('3308', 10000)])], error: null },
+      { data: [], error: null }, // invoices by journal_entry_id
+      { data: twoPayments, error: null },
+      { data: [invDE('inv-a'), invDE('inv-b')], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.warnings).toEqual([])
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0]).toMatchObject({ country: 'DE', vatNumber: '123456789', services: 10000 })
+  })
+
+  it('different customers on the linked invoices: blocking MIXED_CUSTOMER_SETTLEMENT, amount left out', async () => {
+    results = [
+      { data: [settlement([lineEU('3308', 6000), lineEU('3108', 4000)])], error: null },
+      { data: [], error: null },
+      { data: twoPayments, error: null },
+      { data: [invDE('inv-a'), invFR('inv-b')], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.rows).toEqual([])
+    expect(report.totals.grand).toBe(0)
+    // Once per verifikat even though it carries two PS lines; blocking, so
+    // the CSV route refuses the file (it keys on level === 'error').
+    expect(report.warnings).toHaveLength(1)
+    expect(report.warnings[0]).toMatchObject({
+      level: 'error',
+      code: 'MIXED_CUSTOMER_SETTLEMENT',
+      journalEntryId: 'je-imp',
+      amount: 10000,
+    })
+    expect(report.warnings[0].message).toContain('A7')
+    expect(report.warnings[0].message).toContain('2 olika kunder')
+  })
+
+  it('two customer rows with the same VAT number still count as different customers', async () => {
+    results = [
+      { data: [settlement([lineEU('3308', 10000)])], error: null },
+      { data: [], error: null },
+      { data: twoPayments, error: null },
+      { data: [invDE('inv-a', 'cust-de'), invDE('inv-b', 'cust-de-duplicate')], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.rows).toEqual([])
+    expect(report.warnings.map((w) => w.code)).toEqual(['MIXED_CUSTOMER_SETTLEMENT'])
+  })
+
+  it('an engine entry is never a settlement: source_id names exactly one invoice', async () => {
+    // Even if a payment row also points at it (invoice_cash_payment does),
+    // the engine's own source_id wins and no settlement check runs.
+    const entry = { ...entryOther('je-cash', 'invoice_cash_payment', [lineEU('3308', 5000)]), source_id: 'inv-a' }
+    results = [
+      { data: [entry], error: null },
+      { data: [invDE('inv-a')], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.warnings).toEqual([])
+    expect(report.rows[0]).toMatchObject({ services: 5000 })
+  })
+})

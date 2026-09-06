@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { NON_ISSUED_INVOICE_STATUSES_FILTER } from '@/lib/invoices/matchable-statuses'
 
 /**
  * A followable reference from a verifikation back to its underlag: the customer
@@ -87,9 +88,13 @@ export async function getJournalEntryUnderlagReferences(
   const invoices = new Map<string, string>()
 
   // Direct link (faktureringsmetod registration, or invoices.journal_entry_id).
+  // Issued invoices only: a draft or cancelled invoice is no underlag, and the
+  // verifikat page counts these references as underlag (same verdict as the
+  // missing-underlag surfaces: NON_ISSUED_INVOICE_STATUSES).
   const directInvoices = await fetchAllRows<InvoiceRow>(({ from, to }) =>
     supabase.from('invoices').select('id, invoice_number')
       .eq('company_id', companyId).eq('journal_entry_id', journalEntryId)
+      .not('status', 'in', NON_ISSUED_INVOICE_STATUSES_FILTER)
       .order('id', { ascending: true }).range(from, to),
   )
 
@@ -112,6 +117,7 @@ export async function getJournalEntryUnderlagReferences(
     const paidInvoices = await fetchAllRows<InvoiceRow>(({ from, to }) =>
       supabase.from('invoices').select('id, invoice_number')
         .eq('company_id', companyId).in('id', Array.from(paymentInvoiceIds))
+        .not('status', 'in', NON_ISSUED_INVOICE_STATUSES_FILTER)
         .order('id', { ascending: true }).range(from, to),
     )
 
@@ -214,7 +220,10 @@ export async function getJournalEntryUnderlagReferences(
  *
  * Values are invoice ids per journal entry id, direct link first and then
  * payment rows in id order, deduplicated. Only entries with at least one link
- * are present. Every query is company-scoped (defense in depth alongside RLS).
+ * to an ISSUED invoice are present: a draft or cancelled invoice is no
+ * document, so it cannot back a verifikat (NON_ISSUED_INVOICE_STATUSES, the
+ * counterpart of the anchored-document requirement on the supplier arm).
+ * Every query is company-scoped (defense in depth alongside RLS).
  *
  * Callers pass at most one PostgREST `.in()` chunk (the ~150-id URL-length
  * convention in lib/worklist/categories.ts). The two queries run in a fixed
@@ -240,17 +249,21 @@ export async function getInvoiceReferencesForJournalEntries(
     ({ from, to }) =>
       supabase.from('invoices').select('id, journal_entry_id')
         .eq('company_id', companyId).in('journal_entry_id', ids)
+        .not('status', 'in', NON_ISSUED_INVOICE_STATUSES_FILTER)
         .order('id', { ascending: true }).range(from, to),
   )
   for (const row of direct) add(row.journal_entry_id, row.id)
 
+  // The invoice's status rides along as an inner embed so the filter drops
+  // payment rows of non-issued invoices server-side (one query, no id list).
   const payments = await fetchAllRows<{
     id: string
     invoice_id: string | null
     journal_entry_id: string | null
   }>(({ from, to }) =>
-    supabase.from('invoice_payments').select('id, invoice_id, journal_entry_id')
+    supabase.from('invoice_payments').select('id, invoice_id, journal_entry_id, invoices!inner(status)')
       .eq('company_id', companyId).in('journal_entry_id', ids)
+      .not('invoices.status', 'in', NON_ISSUED_INVOICE_STATUSES_FILTER)
       .order('id', { ascending: true }).range(from, to),
   )
   for (const row of payments) add(row.journal_entry_id, row.invoice_id)

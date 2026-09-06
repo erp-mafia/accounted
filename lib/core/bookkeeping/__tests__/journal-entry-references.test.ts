@@ -159,6 +159,27 @@ describe('getJournalEntryUnderlagReferences', () => {
       { type: 'supplier_invoice', id: 'si-2', number: 'LF-2' },
     ])
   })
+
+  it('asks only for ISSUED customer invoices: a draft or cancelled one is no underlag (#2298)', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: [] }, // 1. invoices direct
+      { data: [{ invoice_id: 'inv-x' }] }, // 2. invoice_payments
+      { data: [] }, // 3. invoices by id: the cancelled invoice is filtered out server-side
+      { data: [] }, // 4. supplier registration
+      { data: [] }, // 5. supplier payment
+      { data: [] }, // 6. supplier_invoice_payments
+    ])
+    const refs = await getJournalEntryUnderlagReferences(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      'je-1',
+    )
+    expect(refs).toEqual([])
+    const notCalls = mock.findCalls('invoices', 'not')
+    expect(notCalls).toHaveLength(2)
+    for (const call of notCalls) expect(call).toEqual(['status', 'in', '("draft","cancelled")'])
+  })
 })
 
 /**
@@ -224,6 +245,26 @@ describe('getInvoiceReferencesForJournalEntries', () => {
     expect(mock.findCalls('invoice_payments', 'in')).toContainEqual([
       'journal_entry_id',
       ['je-1', 'je-2'],
+    ])
+  })
+
+  it('asks only for ISSUED invoices on both links, mirroring the RPC status guard', async () => {
+    const mock = setup([{ data: [] }, { data: [] }])
+    await getInvoiceReferencesForJournalEntries(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      ['je-1'],
+    )
+    expect(mock.findCalls('invoices', 'not')).toContainEqual(['status', 'in', '("draft","cancelled")'])
+    // The payment query carries the invoice status as an inner embed and
+    // filters on it, so a non-issued invoice's payment row never comes back.
+    expect(mock.findCall('invoice_payments', 'select')).toEqual([
+      'id, invoice_id, journal_entry_id, invoices!inner(status)',
+    ])
+    expect(mock.findCalls('invoice_payments', 'not')).toContainEqual([
+      'invoices.status',
+      'in',
+      '("draft","cancelled")',
     ])
   })
 })
