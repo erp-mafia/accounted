@@ -14,6 +14,7 @@ import {
   countVerifikatMissingDocument,
   listExpensePayoutsDue,
   listExpensePayoutSuggestions,
+  listRotRutPayoutSetSuggestions,
   listSuggestedMatches,
 } from '../categories'
 import {
@@ -264,6 +265,75 @@ describe('listSuggestedMatches', () => {
     ])
     const lookup = findCall('rot_rut_payout_requests', 'is')
     expect(lookup).toEqual(['settlement_journal_entry_id', null])
+  })
+
+  it('offers a bundled Skatteverket payout (sum of several begäran) with request_ids', async () => {
+    enqueue({ data: [] }) // no hinted rows
+    enqueue({ data: [] }) // expense_claims: nobody is owed
+    enqueue({
+      data: [
+        { id: 'rr-1', name: 'ROT 2026-07', deduction_type: 'rot', status: 'submitted', requested_total: '3000.00', decided_total: null, settlement_journal_entry_id: null },
+        { id: 'rr-2', name: 'RUT 2026-07', deduction_type: 'rut', status: 'submitted', requested_total: '2250.00', decided_total: null, settlement_journal_entry_id: null },
+      ],
+    })
+    enqueue({
+      data: [
+        {
+          id: 'tx-bundle',
+          date: '2026-07-12',
+          description: 'SKATTEVERKET',
+          merchant_name: null,
+          amount: 5250,
+          currency: 'SEK',
+          is_business: null,
+          journal_entry_id: null,
+          potential_rot_rut_payout_request_id: null,
+        },
+        {
+          id: 'tx-other',
+          date: '2026-07-11',
+          description: 'Kund AB',
+          merchant_name: null,
+          amount: 4000,
+          currency: 'SEK',
+          is_business: null,
+          journal_entry_id: null,
+          potential_rot_rut_payout_request_id: null,
+        },
+      ],
+    })
+
+    const matches = await listSuggestedMatches(supabase, COMPANY)
+    expect(matches).toEqual([
+      {
+        transaction_id: 'tx-bundle',
+        transaction_date: '2026-07-12',
+        transaction_description: 'SKATTEVERKET',
+        transaction_amount: 5250,
+        transaction_currency: 'SEK',
+        kind: 'rot_rut_payout',
+        candidate_id: 'rr-1',
+        candidate_number: 'ROT 2026-07 + RUT 2026-07',
+        counterparty_name: 'Skatteverket',
+        candidate_total: 5250,
+        request_ids: ['rr-1', 'rr-2'],
+      },
+    ])
+    // The scan is bounded to the pool's amount range and to unbooked, unreviewed rows.
+    const gte = findCall('transactions', 'gte')
+    const lte = findCall('transactions', 'lte')
+    expect(gte).toEqual(['amount', 2250])
+    expect(lte).toEqual(['amount', 5250])
+  })
+
+  it('returns no bundle suggestions for a company with fewer than two open begäran', async () => {
+    enqueue({
+      data: [
+        { id: 'rr-1', name: 'ROT 2026-07', deduction_type: 'rot', status: 'submitted', requested_total: 3000, decided_total: null, settlement_journal_entry_id: null },
+      ],
+    })
+    await expect(listRotRutPayoutSetSuggestions(supabase, COMPANY)).resolves.toEqual([])
+    expect(findCalls('transactions', 'select')).toEqual([])
   })
 
   it('maps invoice and supplier-invoice hints to confirmable rows', async () => {

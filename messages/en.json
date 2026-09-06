@@ -2971,7 +2971,8 @@
     "move_account_currency_mismatch": "Different currency ({currency})",
     "move_account_cancel": "Cancel",
     "move_account_save": "Move",
-    "method_line": "Payment method: {method}"
+    "method_line": "Payment method: {method}",
+    "match_rot_rut_payout_set_btn": "Match ROT/RUT payout ({count} requests)"
   },
   "tx_method": {
     "card": "Card purchase",
@@ -3222,7 +3223,14 @@
     "on_confirm_voucher": "A journal entry is created automatically",
     "cancel": "Cancel",
     "confirming": "Confirming...",
-    "confirm": "Confirm match"
+    "confirm": "Confirm match",
+    "requests_label": "Payout requests ({count})",
+    "requests_total_label": "Requests total",
+    "amounts_match_set": "The amount matches the sum of the requests",
+    "amounts_differ_set": "The amount differs from the sum of the requests",
+    "set_exact_required": "Several requests can only be booked together when the transaction equals the sum of their decided amounts exactly. Match them one at a time or book the transaction another way.",
+    "booking_receivable_line_named": "1513 Receivable, split invoice ({name})",
+    "on_confirm_requests": "All {count} requests are marked as paid out"
   },
   "tx_invoice_picker": {
     "loading": "Loading invoices...",
@@ -6249,7 +6257,8 @@
     "review_rerun_done_description": "{applied, plural, one {# transaction was linked automatically} other {# transactions were linked automatically}}, {suggested, plural, one {# new suggestion to review} other {# new suggestions to review}}.",
     "footer_to_handle": "{count, plural, =0 {Nothing to handle} =1 {1 to handle} other {# to handle}}",
     "recon_attn": "{count, plural, one {1 unbooked bank transaction: the bank reconciliation can find automatic matches against existing vouchers.} other {# unbooked bank transactions: the bank reconciliation can find automatic matches against existing vouchers.}}",
-    "recon_attn_action": "Preview matches"
+    "recon_attn_action": "Preview matches",
+    "rot_rut_payout_matched_set_description": "The payout from Skatteverket was booked against {count} requests: {names}"
   },
   "bookkeeping": {
     "toast_post_failed": "Could not post",

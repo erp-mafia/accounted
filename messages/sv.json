@@ -2971,7 +2971,8 @@
     "move_account_currency_mismatch": "Annan valuta ({currency})",
     "move_account_cancel": "Avbryt",
     "move_account_save": "Flytta",
-    "method_line": "Betalsätt: {method}"
+    "method_line": "Betalsätt: {method}",
+    "match_rot_rut_payout_set_btn": "Matcha ROT/RUT-utbetalning ({count} begäran)"
   },
   "tx_method": {
     "card": "Kortköp",
@@ -3222,7 +3223,14 @@
     "on_confirm_voucher": "Bokföringsverifikation skapas automatiskt",
     "cancel": "Avbryt",
     "confirming": "Bekräftar...",
-    "confirm": "Bekräfta matchning"
+    "confirm": "Bekräfta matchning",
+    "requests_label": "Begäran om utbetalning ({count} st)",
+    "requests_total_label": "Summa begäran",
+    "amounts_match_set": "Beloppet stämmer med summan av begäran",
+    "amounts_differ_set": "Beloppet skiljer sig från summan av begäran",
+    "set_exact_required": "Flera begäran kan bara bokföras tillsammans när transaktionen exakt motsvarar summan av deras beslutade belopp. Matcha dem en i taget eller bokför transaktionen på annat sätt.",
+    "booking_receivable_line_named": "1513 Kundfordringar delad faktura ({name})",
+    "on_confirm_requests": "Alla {count} begäran markeras som utbetalda"
   },
   "tx_invoice_picker": {
     "loading": "Laddar fakturor...",
@@ -6249,7 +6257,8 @@
     "review_rerun_done_description": "{applied, plural, one {# transaktion kopplades automatiskt} other {# transaktioner kopplades automatiskt}}, {suggested, plural, one {# nytt förslag att granska} other {# nya förslag att granska}}.",
     "footer_to_handle": "{count, plural, =0 {Inget att hantera} =1 {1 att hantera} other {# att hantera}}",
     "recon_attn": "{count, plural, one {1 obokförd banktransaktion: bankavstämningen kan hitta automatiska träffar mot befintliga verifikationer.} other {# obokförda banktransaktioner: bankavstämningen kan hitta automatiska träffar mot befintliga verifikationer.}}",
-    "recon_attn_action": "Förhandsgranska träffar"
+    "recon_attn_action": "Förhandsgranska träffar",
+    "rot_rut_payout_matched_set_description": "Utbetalningen från Skatteverket bokfördes mot {count} begäran: {names}"
   },
   "bookkeeping": {
     "toast_post_failed": "Kunde inte bokföra",

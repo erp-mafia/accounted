@@ -2,10 +2,18 @@ import type { Transaction, TransactionCategory, Invoice, Customer, SupplierInvoi
 import type { RotRutPayoutRequestCandidate } from '@/lib/invoices/rot-rut-payout-matching'
 import type { ExpensePayoutDue } from '@/lib/worklist/types'
 
-/** Open ROT/RUT begäran hung onto an income row as a match suggestion, with
- *  the invoices it covers (so the user sees which fakturor the payout settles). */
-export interface PotentialRotRutPayout extends RotRutPayoutRequestCandidate {
+/** An open ROT/RUT begäran offered to an income row, with the invoices it
+ *  covers (so the user sees which fakturor the payout settles). */
+export interface PotentialRotRutPayoutRequest extends RotRutPayoutRequestCandidate {
   invoices: Array<{ invoice_number: string | null; requested_amount: number | string }>
+}
+
+/** The ROT/RUT match suggestion hung onto an income row: the begäran
+ *  Skatteverkets utbetalning settles. One for a persisted 1:1 hint or a
+ *  manual pick; several when the transfer bundles the beslut paid that day
+ *  (computed at read time, lib/invoices/rot-rut-payout-set-matching.ts). */
+export interface PotentialRotRutPayout {
+  requests: PotentialRotRutPayoutRequest[]
 }
 
 /** Revalidated journal-entry match suggestion hung onto a row (mirrors
