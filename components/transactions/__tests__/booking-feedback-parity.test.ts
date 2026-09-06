@@ -83,12 +83,13 @@ describe('transactions page booking feedback', () => {
   it('decrements the unbooked count on every path that removes a row', () => {
     // finishBooking, handleTransactionBooked (manual booking dialog / voucher
     // match), the three other single-row exits already on the page, the
-    // duplicate-dialog "Ignorera transaktionen" tail, and
-    // handleDeleteTransaction (deleting a pending row must not leave the
-    // inbox badge stale: the realtime echo is not guaranteed for DELETE).
+    // duplicate-dialog "Ignorera transaktionen" tail, handleDeleteTransaction
+    // (deleting a pending row must not leave the inbox badge stale: the
+    // realtime echo is not guaranteed for DELETE), and applyExpensePayoutBooked
+    // (a transfer booked as the repayment of utlägg leaves the inbox too).
     expect(
       PAGE_SRC.match(/setTotalUncategorizedCount\(\(prev\) => Math\.max\(0, \(prev \?\? 1\) - 1\)\)/g) ?? [],
-    ).toHaveLength(7)
+    ).toHaveLength(8)
   })
 
   it('ships the undo strings it renders in both locales', () => {
