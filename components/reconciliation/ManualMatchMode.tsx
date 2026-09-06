@@ -1,6 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  DEFAULT_RECON_SORT,
+  nextReconSort,
+  sortReconciliationItems,
+  type ReconSort,
+  type ReconSortColumn,
+} from '@/lib/reconciliation/item-sort'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -39,6 +46,51 @@ interface ManualMatchModeProps {
 
 const LIMIT = 200
 
+/**
+ * Sortable header for the two match tables. Deliberately local: the matching
+ * view is not on a shared list table (a selection in one table constrains the
+ * other), so it borrows the idiom rather than a component.
+ */
+function SortTh({
+  label,
+  column,
+  sort,
+  onSort,
+  className,
+  align,
+}: {
+  label: string
+  column: ReconSortColumn
+  sort: ReconSort
+  onSort: (column: ReconSortColumn) => void
+  className?: string
+  align?: 'right'
+}) {
+  const active = sort.column === column
+  return (
+    <th
+      className={cn(TH_CLASS, className)}
+      // Only the active header carries aria-sort. "none" is the default, so
+      // stating it on every other column adds noise without adding meaning.
+      aria-sort={active ? (sort.direction === 'asc' ? 'ascending' : 'descending') : undefined}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className={cn(
+          'inline-flex min-h-8 items-center gap-1 rounded-sm uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          align === 'right' && 'ml-auto justify-end',
+        )}
+      >
+        {label}
+        <span aria-hidden="true" className={cn('text-[9px]', !active && 'text-muted-foreground/60')}>
+          {active ? (sort.direction === 'asc' ? '\u2191' : '\u2193') : '\u2195'}
+        </span>
+      </button>
+    </th>
+  )
+}
+
 export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeProps) {
   const t = useTranslations('reconciliation')
   const { toast } = useToast()
@@ -49,6 +101,32 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
   const [pickedEntries, setPickedEntries] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [residualKind, setResidualKind] = useState<ResidualKind | ''>('')
+
+  // One sort per table, not one shared: the two sides hold different rows and
+  // the whole task is comparing them, so pinning both to the same order would
+  // work against the person doing the matching.
+  const [ledgerSort, setLedgerSort] = useState<ReconSort>(DEFAULT_RECON_SORT)
+  const [externalSort, setExternalSort] = useState<ReconSort>(DEFAULT_RECON_SORT)
+  const onLedgerSort = useCallback(
+    (column: ReconSortColumn) => setLedgerSort((s) => nextReconSort(s, column)),
+    [],
+  )
+  const onExternalSort = useCallback(
+    (column: ReconSortColumn) => setExternalSort((s) => nextReconSort(s, column)),
+    [],
+  )
+
+  // Sorted copies for rendering. Memoised so a re-render from selection state
+  // does not resort on every checkbox click. Selection is keyed by item_id, so
+  // reordering never disturbs what is picked.
+  const sortedLedger = useMemo(
+    () => (ledger ? sortReconciliationItems(ledger, ledgerSort) : null),
+    [ledger, ledgerSort],
+  )
+  const sortedExternal = useMemo(
+    () => (external ? sortReconciliationItems(external, externalSort) : null),
+    [external, externalSort],
+  )
 
   const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
   const isSkv = account.kind === 'skattekonto'
@@ -219,13 +297,13 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-8 px-2')} />
-                  <th className={cn(TH_CLASS, 'w-[96px]')}>{t('col_date')}</th>
-                  <th className={TH_CLASS}>{t('col_event')}</th>
-                  <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
+                  <SortTh label={t('col_date')} column="date" sort={externalSort} onSort={onExternalSort} className="w-[96px]" />
+                  <SortTh label={t('col_event')} column="description" sort={externalSort} onSort={onExternalSort} />
+                  <SortTh label={t('col_amount')} column="amount" sort={externalSort} onSort={onExternalSort} className="w-[120px] text-right" align="right" />
                 </tr>
               </thead>
               <tbody className="stagger-enter">
-                {external.map((item) => {
+                {(sortedExternal ?? []).map((item) => {
                   const picked = pickedExternal.has(item.item_id)
                   return (
                     <tr
@@ -273,14 +351,14 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-8 px-2')} />
-                  <th className={cn(TH_CLASS, 'w-[96px]')}>{t('col_date')}</th>
-                  <th className={cn(TH_CLASS, 'w-[90px]')}>{t('col_voucher')}</th>
-                  <th className={TH_CLASS}>{t('col_event')}</th>
-                  <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
+                  <SortTh label={t('col_date')} column="date" sort={ledgerSort} onSort={onLedgerSort} className="w-[96px]" />
+                  <SortTh label={t('col_voucher')} column="voucher" sort={ledgerSort} onSort={onLedgerSort} className="w-[90px]" />
+                  <SortTh label={t('col_event')} column="description" sort={ledgerSort} onSort={onLedgerSort} />
+                  <SortTh label={t('col_amount')} column="amount" sort={ledgerSort} onSort={onLedgerSort} className="w-[120px] text-right" align="right" />
                 </tr>
               </thead>
               <tbody className="stagger-enter">
-                {ledger.map((item) => {
+                {(sortedLedger ?? []).map((item) => {
                   const picked = pickedEntries.has(item.item_id)
                   return (
                     <tr
