@@ -159,6 +159,7 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
     totalMismatch: 0,
     rowsMismatch: 0,
     failed: 0,
+    historyAppended: 0,
   }
 
   const completing = await ctx.forEach('register', registers, async ({ consent, candidates }, itemCtx) => {
@@ -188,6 +189,7 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
     totals.totalMismatch += result.totalMismatch
     totals.rowsMismatch += result.rowsMismatch
     totals.failed += result.failed
+    totals.historyAppended += result.historyAppended
     itemCtx.log.info('migrated invoice rows completed for company', {
       companyId: consent.company_id,
       provider: consent.provider,
@@ -198,6 +200,8 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
       notHydrated: result.notHydrated,
       totalMismatch: result.totalMismatch,
       rowsMismatch: result.rowsMismatch,
+      failed: result.failed,
+      historyAppended: result.historyAppended,
       hydration: result.hydration,
     })
   })

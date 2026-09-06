@@ -827,7 +827,7 @@
     "status_picker_aria": "Filter by status",
     "search_placeholder": "Search supplier invoices …",
     "status_paid_date": "Paid {date}",
-    "help_body": "Approval attests the invoice for payment. Select invoices with the checkbox and create a payment file to upload in your internet bank. Payments are reconciled automatically when they are matched against the bank.",
+    "help_body": "Approval attests the invoice for payment. Select invoices with the checkbox and create a payment file to upload in your internet bank, or tick In bank on the row once you have entered the payment by hand. Payments are reconciled automatically when they are matched against the bank, and the tick then clears itself.",
     "bulkbar_selected": "{count, plural, one {invoice selected} other {invoices selected}}",
     "bulk_create_file": "Create payment file",
     "bulk_select_all": "Select all payable ({count})",
@@ -843,7 +843,10 @@
     "group_supplier": "Supplier",
     "group_month": "Month",
     "group_none": "No grouping",
-    "group_unknown": "Missing"
+    "group_unknown": "Missing",
+    "bank_entered_label": "In bank",
+    "bank_entered_aria": "Mark as entered at the bank",
+    "bank_entered_failed_title": "Could not save the mark"
   },
   "supplier_payment_files": {
     "dialog_title": "Create payment file",
@@ -1299,7 +1302,9 @@
     "submit_save": "Save customer",
     "submit_saving": "Saving...",
     "viewer_disabled_tooltip": "You only have viewer access in this company",
-    "personal_number_unreadable": "The stored personal number cannot be read. Enter it again to replace it."
+    "personal_number_unreadable": "The stored personal number cannot be read. Enter it again to replace it.",
+    "address_line2_label": "Address line 2",
+    "address_line2_placeholder": "c/o"
   },
   "form_supplier": {
     "name_label": "Name *",
@@ -1345,7 +1350,9 @@
     "notes_placeholder": "Internal notes about the supplier...",
     "submit_save": "Save supplier",
     "submit_saving": "Saving...",
-    "viewer_disabled_tooltip": "You only have viewer access in this company"
+    "viewer_disabled_tooltip": "You only have viewer access in this company",
+    "address_line2_label": "Address line 2",
+    "address_line2_placeholder": "c/o"
   },
   "initial_setup": {
     "completed_verdict": "Your bookkeeping is up and running.",
@@ -1883,7 +1890,11 @@
     "related_chart_of_accounts": "Chart of accounts (BAS)",
     "periodisering_label": "Accruals",
     "periodisering_help": "The year-end wizard scans invoices for date ranges extending into the next fiscal year and suggests accruals. Nothing is booked without your review.",
-    "periodisering_open_wizard": "Open the accruals wizard"
+    "periodisering_open_wizard": "Open the accruals wizard",
+    "series_standard_set_button": "Use the standard set",
+    "series_standard_set_help": "Fills in the set new companies start with: customer invoices B, customer payments C, supplier invoices D, supplier payments E, accruals H, year-end I, salaries K, cash invoices L, VAT settlement M, everything else A. Review the rows and save. Preferably switch at the start of a fiscal year: vouchers already posted stay in their series, new ones land in the new series from the moment you save, and the change shows in the processing history.",
+    "series_row_accrual_only": "Applies to the invoice method (faktureringsmetoden), which this company does not use. The choice is saved and applies if the method changes.",
+    "series_row_cash_only": "Applies to the cash method (kontantmetoden), which this company does not use. The choice is saved and applies if the method changes."
   },
   "settings_tax": {},
   "settings_team": {},
@@ -2964,7 +2975,8 @@
     "move_account_currency_mismatch": "Different currency ({currency})",
     "move_account_cancel": "Cancel",
     "move_account_save": "Move",
-    "method_line": "Payment method: {method}"
+    "method_line": "Payment method: {method}",
+    "match_rot_rut_payout_set_btn": "Match ROT/RUT payout ({count} requests)"
   },
   "tx_method": {
     "card": "Card purchase",
@@ -3215,7 +3227,14 @@
     "on_confirm_voucher": "A journal entry is created automatically",
     "cancel": "Cancel",
     "confirming": "Confirming...",
-    "confirm": "Confirm match"
+    "confirm": "Confirm match",
+    "requests_label": "Payout requests ({count})",
+    "requests_total_label": "Requests total",
+    "amounts_match_set": "The amount matches the sum of the requests",
+    "amounts_differ_set": "The amount differs from the sum of the requests",
+    "set_exact_required": "Several requests can only be booked together when the transaction equals the sum of their decided amounts exactly. Match them one at a time or book the transaction another way.",
+    "booking_receivable_line_named": "1513 Receivable, split invoice ({name})",
+    "on_confirm_requests": "All {count} requests are marked as paid out"
   },
   "tx_invoice_picker": {
     "loading": "Loading invoices...",
@@ -4632,7 +4651,6 @@
     "forval_books_at_payment": "Posted at payment",
     "forval_toggle_open": "Change defaults",
     "forval_toggle_close": "Close",
-    "chip_paid_privately": "Paid privately",
     "chip_ore_rounding_off": "No öre rounding",
     "chip_delivery_date": "Delivery date {date}",
     "chip_notes": "Notes",
@@ -4676,9 +4694,6 @@
     "create_and_select": "Create & select",
     "section_accounting": "Accounting",
     "account_from_history": "Account {account} suggested from previous bookings of {counterparty}",
-    "paid_privately_label": "I paid this privately",
-    "paid_privately_help_ef": "Booked as a liability from the company to you (2018 Egen insättning). Refund manually later from the company account.",
-    "paid_privately_help_ab": "Booked as a liability from the company to you (2893 Skuld till ägare). Refund manually later from the company account.",
     "supplier_placeholder": "Select supplier",
     "no_suppliers_yet": "No suppliers yet",
     "add_new_supplier": "+ Add new supplier...",
@@ -4802,7 +4817,8 @@
     "debit_short": "D {amount}",
     "credit_short": "C {amount}",
     "debit_credit_short": "D {debit} / C {credit}",
-    "review_accrual_line_info": "Accrued {from} to {to}"
+    "review_accrual_line_info": "Accrued {from} to {to}",
+    "expense_registered_description": "The debt to {name} is now in To do. Arrival number: {number}"
   },
   "supplier_invoice_detail": {
     "title_invoice": "Supplier invoice {number}",
@@ -4917,7 +4933,11 @@
     "duplicate_payment_show_voucher": "Show verifikat",
     "bank_transaction_fallback": "Bank transaction",
     "go_to": "Go to",
-    "create_voucher_anyway": "Create new verifikat anyway"
+    "create_voucher_anyway": "Create new verifikat anyway",
+    "bank_entered_label": "Entered at bank",
+    "bank_entered_aria": "Mark as entered at the bank",
+    "bank_entered_meta": "Entered at bank {date}",
+    "bank_entered_failed_title": "Could not save the mark"
   },
   "supplier_detail": {
     "back": "Back",
@@ -6241,7 +6261,8 @@
     "review_rerun_done_description": "{applied, plural, one {# transaction was linked automatically} other {# transactions were linked automatically}}, {suggested, plural, one {# new suggestion to review} other {# new suggestions to review}}.",
     "footer_to_handle": "{count, plural, =0 {Nothing to handle} =1 {1 to handle} other {# to handle}}",
     "recon_attn": "{count, plural, one {1 unbooked bank transaction: the bank reconciliation can find automatic matches against existing vouchers.} other {# unbooked bank transactions: the bank reconciliation can find automatic matches against existing vouchers.}}",
-    "recon_attn_action": "Preview matches"
+    "recon_attn_action": "Preview matches",
+    "rot_rut_payout_matched_set_description": "The payout from Skatteverket was booked against {count} requests: {names}"
   },
   "bookkeeping": {
     "toast_post_failed": "Could not post",
@@ -7151,7 +7172,13 @@
     "toast_payslips_downloaded_detail": "{count} files in a zip archive.",
     "toast_zip_failed": "Could not create zip file",
     "toast_agi_failed": "AGI file could not be generated",
-    "toast_agi_downloaded": "AGI file downloaded"
+    "toast_agi_downloaded": "AGI file downloaded",
+    "add_expense_claims": "Add {count, plural, one {# expense claim} other {# expense claims}} · {amount}",
+    "add_expense_claims_aria": "Add {name}'s open expense claims to the payslip",
+    "add_expense_claims_title": "Add open expense claims to the payslip: paid out tax-free with the salary",
+    "toast_expense_claims_added": "Expense claims added to the payslip",
+    "toast_expense_claims_added_detail": "{count, plural, one {# expense claim} other {# expense claims}} · {amount}. Calculate the run to update the net.",
+    "toast_expense_claims_failed": "Could not add expense claims"
   },
   "salary_agi": {
     "title": "Arbetsgivardeklaration (AGI)",
@@ -7589,7 +7616,10 @@
     "th_type": "Type",
     "th_description": "Description",
     "th_quantity": "Quantity",
-    "th_amount": "Amount"
+    "th_amount": "Amount",
+    "th_actions": "Actions",
+    "li_expense_reimbursement": "Expense reimbursement (tax-free)",
+    "remove_expense_claim_line_aria": "Remove the expense claim from the payslip"
   },
   "salary_tax_tables": {
     "checking": "Checking tax tables…",
@@ -8120,7 +8150,9 @@
     "manual_spec_hint": "The specification comes from the system: {label}. The difference should be zero before you sign; otherwise sign with a note.",
     "signoff_external_balance": "Balance per supporting documents",
     "signoff_external_balance_help": "Same sign as in the books, liabilities with a minus. Booked: {amount}.",
-    "signoff_external_balance_optional": "Leave empty to sign with a note only."
+    "signoff_external_balance_optional": "Leave empty to sign with a note only.",
+    "proposal_set_title": "{count} vouchers that together make up the amount",
+    "proposal_set_same_day": "same day"
   },
   "skattekonto": {
     "help_text": "The balance and events are fetched from Skatteverket and synced automatically every night. Completed events are booked against 1630 Skattekonto, usually automatically; anything that cannot be matched is flagged in the list. Pay in via bankgiro 5050-1055 with your OCR number.",
@@ -8823,8 +8855,16 @@
     "open_dossier": "Open {name}",
     "attn_create": "Create suggestions",
     "auto_created_title": "{count} suggestions created from the books",
-    "auto_created_description": "Counterparts your vouchers name that are not in the register. Add them, or hide the ones that do not belong here."
-},
+    "auto_created_description": "Counterparts your vouchers name that are not in the register. Add them, or hide the ones that do not belong here.",
+    "autofill_looking": "Searching the SCB business register…",
+    "autofill_filled": "{name} · {fields} from SCB. Edit freely.",
+    "autofill_found": "{name} according to the SCB register. Nothing changed, the fields were already filled in.",
+    "autofill_not_found": "No company with org. no. {org} in the SCB register.",
+    "autofill_field_name": "name",
+    "autofill_field_email": "email",
+    "autofill_field_phone": "phone",
+    "autofill_field_vat": "VAT number"
+  },
   "tx_expense_payout_match": {
     "title": "Book expense reimbursement",
     "description": "The transfer is booked against the person's liability account, the claims are marked as paid and the transaction is linked to the voucher.",

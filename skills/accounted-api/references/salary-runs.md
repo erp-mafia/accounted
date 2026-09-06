@@ -946,7 +946,7 @@ Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, 
 Request body:
 ```ts
 {
-  item_type: "monthly_salary" | "hourly_salary" | "overtime" | "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday" | "bonus" | "commission" | "gross_deduction_pension" | "gross_deduction_other" | "benefit_car" | "benefit_housing" | "benefit_meals" | "benefit_wellness" | "benefit_bike" | "benefit_other" | "sick_karens" | "sick_day2_14" | "sick_day15_plus" | "vab" | "parental_leave" | "vacation" | "semesterersattning" | "traktamente_taxfree" | "traktamente_taxable" | "mileage_taxfree" | "mileage_taxable" | "net_deduction_advance" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "correction" | "other",
+  item_type: "monthly_salary" | "hourly_salary" | "overtime" | "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday" | "bonus" | "commission" | "gross_deduction_pension" | "gross_deduction_other" | "benefit_car" | "benefit_housing" | "benefit_meals" | "benefit_wellness" | "benefit_bike" | "benefit_other" | "sick_karens" | "sick_day2_14" | "sick_day15_plus" | "vab" | "parental_leave" | "vacation" | "semesterersattning" | "traktamente_taxfree" | "traktamente_taxable" | "mileage_taxfree" | "mileage_taxable" | "expense_reimbursement" | "net_deduction_advance" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "correction" | "other",
   description: string,
   quantity?: number,
   unit_price?: number,
@@ -1122,7 +1122,7 @@ Updates fields on a salary_line_items row (amount, description, quantity, unit_p
 Request body:
 ```ts
 {
-  item_type?: "monthly_salary" | "hourly_salary" | "overtime" | "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday" | "bonus" | "commission" | "gross_deduction_pension" | "gross_deduction_other" | "benefit_car" | "benefit_housing" | "benefit_meals" | "benefit_wellness" | "benefit_bike" | "benefit_other" | "sick_karens" | "sick_day2_14" | "sick_day15_plus" | "vab" | "parental_leave" | "vacation" | "semesterersattning" | "traktamente_taxfree" | "traktamente_taxable" | "mileage_taxfree" | "mileage_taxable" | "net_deduction_advance" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "correction" | "other",
+  item_type?: "monthly_salary" | "hourly_salary" | "overtime" | "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday" | "bonus" | "commission" | "gross_deduction_pension" | "gross_deduction_other" | "benefit_car" | "benefit_housing" | "benefit_meals" | "benefit_wellness" | "benefit_bike" | "benefit_other" | "sick_karens" | "sick_day2_14" | "sick_day15_plus" | "vab" | "parental_leave" | "vacation" | "semesterersattning" | "traktamente_taxfree" | "traktamente_taxable" | "mileage_taxfree" | "mileage_taxable" | "expense_reimbursement" | "net_deduction_advance" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "correction" | "other",
   description?: string,
   quantity?: number,
   unit_price?: number,

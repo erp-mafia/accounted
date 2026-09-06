@@ -32,4 +32,9 @@ export const PAYOUT_ERROR_MESSAGES: Record<string, { message: string; status: nu
     message: 'Beloppet stämmer inte med de valda utläggen. Välj de utlägg som överföringen täcker.',
     status: 400,
   },
+  // Scheduled on a payslip (#2331): that salary run repays it.
+  ON_PAYSLIP: {
+    message: 'Något av utläggen ligger på ett lönebesked och betalas ut via lön. Ta bort raden från lönebeskedet först.',
+    status: 409,
+  },
 }

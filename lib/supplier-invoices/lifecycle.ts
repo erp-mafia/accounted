@@ -96,6 +96,32 @@ export function canApproveSupplierInvoice(invoice: {
 }
 
 /**
+ * Statuses in which "Inlagd i banken" (#2220) can be recorded: the invoice
+ * has passed attest and money is still outstanding. Exactly the rows the
+ * detail page offers "Markera som betald" for, because the mark is the step
+ * right before that one. Kept in sync with the CAS predicate in
+ * app/api/supplier-invoices/[id]/bank-entered/route.ts.
+ */
+export const BANK_ENTERED_SUPPLIER_INVOICE_STATUSES = [
+  'approved',
+  'overdue',
+  'partially_paid',
+] as const
+
+/**
+ * True when the user may mark the invoice as entered at the bank by hand. A
+ * credit note is never a payment instruction, so it can never be "in the
+ * bank". Clearing the mark is always allowed and does not go through here.
+ */
+export function canMarkSupplierInvoiceBankEntered(invoice: {
+  status: string
+  is_credit_note?: boolean | null
+}): boolean {
+  if (invoice.is_credit_note) return false
+  return (BANK_ENTERED_SUPPLIER_INVOICE_STATUSES as readonly string[]).includes(invoice.status)
+}
+
+/**
  * Fields that are copied onto the registration verifikat when it is posted:
  *
  *   - invoice_date   -> journal_entries.entry_date (and the fiscal period the

@@ -136,7 +136,7 @@ Bankkonto 1930 avstäms via bankavstämningsmodulen (flerstegs matchning: exakt 
 
 Verifikationsnummer tilldelas sekventiellt av systemet vid bokföring. Numreringen är unik per företag, räkenskapsår och verifikationsserie. Numren tilldelas via en databasfunktion som är säker vid samtidiga anrop och kan inte sättas manuellt.
 
-Systemet stödjer flera verifikationsserier. Standardserien är A. Vilken serie som används kan styras per underlagstyp (t.ex. egen serie för löner) under **Inställningar > Bokföring**.
+Systemet stödjer flera verifikationsserier. Nya företag får standarduppsättningen: A för manuella verifikationer och banktransaktioner, B kundfakturor, C inbetalningar från kunder, D leverantörsfakturor, E utbetalningar till leverantörer, H periodiseringar, I bokslut, K lön, L kontantfakturor och M momsredovisning. Företag upplagda före september 2026 har alla verifikationer i serie A om inget annat valts. Vilken serie som används kan styras per underlagstyp under **Inställningar > Bokföring**, där standarduppsättningen också kan väljas i efterhand; ett byte gäller nya verifikationer och görs lämpligen vid ett räkenskapsårs början.
 
 Verifikationsserier som används i detta företag: [ANGE, t.ex. "Endast serie A" eller "A för löpande bokföring, L för löner"]
 

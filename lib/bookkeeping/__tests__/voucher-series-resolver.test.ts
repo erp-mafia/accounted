@@ -3,11 +3,15 @@ import {
   applyDefaultSeriesToMap,
   buildVoucherSeriesOptions,
   formatVoucher,
+  isStandardVoucherSeriesMap,
   parseVoucher,
   resolveDefaultSeriesForSource,
+  STANDARD_VOUCHER_SERIES_MAP,
   voucherSeriesLabel,
   VOUCHER_SERIES_PRESETS,
 } from '../voucher-series-resolver'
+import { JournalEntrySourceTypeSchema } from '@/lib/api/schemas'
+import type { JournalEntrySourceType } from '@/types'
 
 describe('resolveDefaultSeriesForSource', () => {
   it('returns A when settings is null', () => {
@@ -282,5 +286,82 @@ describe('buildVoucherSeriesOptions', () => {
   it('ignores malformed keys in the label map', () => {
     const options = buildVoucherSeriesOptions({ ab: 'x', n: 'y', '': 'z' }, [])
     expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLM')
+  })
+})
+
+describe('STANDARD_VOUCHER_SERIES_MAP', () => {
+  const sourceTypes = JournalEntrySourceTypeSchema.options
+  const legacyAllA = Object.fromEntries(sourceTypes.map((type) => [type, 'A']))
+
+  it('assigns a letter to every journal source type, so a new type cannot fall back to A unnoticed', () => {
+    expect(Object.keys(STANDARD_VOUCHER_SERIES_MAP).sort()).toEqual([...sourceTypes].sort())
+  })
+
+  it('only uses letters the presets name, so every series in the set has a name in the pickers', () => {
+    for (const letter of new Set(Object.values(STANDARD_VOUCHER_SERIES_MAP))) {
+      expect(letter).toMatch(/^[A-Z]$/)
+      expect(voucherSeriesLabel(letter)).not.toBe('')
+    }
+  })
+
+  it('keeps manual entries and bank transactions in A, the general series', () => {
+    expect(STANDARD_VOUCHER_SERIES_MAP.manual).toBe('A')
+    expect(STANDARD_VOUCHER_SERIES_MAP.bank_transaction).toBe('A')
+  })
+
+  it('separates the reskontra, lön, moms, periodisering and bokslut flows', () => {
+    expect(STANDARD_VOUCHER_SERIES_MAP.invoice_created).toBe('B')
+    expect(STANDARD_VOUCHER_SERIES_MAP.invoice_paid).toBe('C')
+    expect(STANDARD_VOUCHER_SERIES_MAP.invoice_cash_payment).toBe('C')
+    expect(STANDARD_VOUCHER_SERIES_MAP.supplier_invoice_registered).toBe('D')
+    expect(STANDARD_VOUCHER_SERIES_MAP.supplier_invoice_paid).toBe('E')
+    expect(STANDARD_VOUCHER_SERIES_MAP.supplier_invoice_cash_payment).toBe('E')
+    expect(STANDARD_VOUCHER_SERIES_MAP.accrual).toBe('H')
+    expect(STANDARD_VOUCHER_SERIES_MAP.year_end).toBe('I')
+    expect(STANDARD_VOUCHER_SERIES_MAP.salary_payment).toBe('K')
+    expect(STANDARD_VOUCHER_SERIES_MAP.vat_settlement).toBe('M')
+  })
+
+  it('books each type of a fresh company in its series, and an explicit override still wins', () => {
+    const fresh = { default_voucher_series_per_source_type: { ...STANDARD_VOUCHER_SERIES_MAP } }
+    expect(resolveDefaultSeriesForSource(fresh, 'invoice_created')).toBe('B')
+    expect(resolveDefaultSeriesForSource(fresh, 'salary_payment')).toBe('K')
+    expect(resolveDefaultSeriesForSource(fresh, 'manual')).toBe('A')
+
+    const overridden = {
+      default_voucher_series_per_source_type: { ...STANDARD_VOUCHER_SERIES_MAP, invoice_created: 'F' },
+    }
+    expect(resolveDefaultSeriesForSource(overridden, 'invoice_created')).toBe('F')
+  })
+
+  it('never reaches an existing company: the resolver reads the row, not the standard set', () => {
+    const existing = { default_voucher_series_per_source_type: legacyAllA }
+    for (const type of sourceTypes) {
+      expect(resolveDefaultSeriesForSource(existing, type)).toBe('A')
+    }
+    // A row that predates a source type keeps falling back to A for it too.
+    expect(
+      resolveDefaultSeriesForSource(
+        { default_voucher_series_per_source_type: { manual: 'A' } },
+        'expense_payout',
+      ),
+    ).toBe('A')
+  })
+})
+
+describe('isStandardVoucherSeriesMap', () => {
+  it('is true for the standard set and for a superset that adds an unknown key', () => {
+    expect(isStandardVoucherSeriesMap({ ...STANDARD_VOUCHER_SERIES_MAP })).toBe(true)
+    expect(isStandardVoucherSeriesMap({ ...STANDARD_VOUCHER_SERIES_MAP, future_type: 'Q' })).toBe(true)
+  })
+
+  it('is false when one type deviates, when a type is missing, and for no map', () => {
+    expect(isStandardVoucherSeriesMap({ ...STANDARD_VOUCHER_SERIES_MAP, salary_payment: 'L' })).toBe(false)
+    const partial: Partial<Record<JournalEntrySourceType, string>> = { ...STANDARD_VOUCHER_SERIES_MAP }
+    delete partial.storno
+    expect(isStandardVoucherSeriesMap(partial as Record<string, string>)).toBe(false)
+    expect(isStandardVoucherSeriesMap(null)).toBe(false)
+    expect(isStandardVoucherSeriesMap(undefined)).toBe(false)
+    expect(isStandardVoucherSeriesMap({})).toBe(false)
   })
 })

@@ -2,10 +2,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { fetchJunctionLinkedTxIds, fetchUnlinkedGLLines, scopeTransactionsToAccount } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
+import { proposeCoveringSets } from './covering-set-candidate'
 import {
   parseAccountKey,
   type ReconciliationItem,
   type ReconciliationItemBucket,
+  type ReconciliationProposal,
 } from './schemas'
 
 /**
@@ -160,13 +162,30 @@ export async function listAccountItems(
         companyId,
         rows.filter((tx) => !tx.journal_entry_id && !tx.is_ignored).map((tx) => tx.id),
       )
+      // Rows nothing explains 1:1 are searched for a set of unlinked verifikat
+      // summing exactly to them (#2293) before they are offered as unmatched:
+      // "Bokför" is the door only when the ledger has nothing for the row.
+      const coveringSets = buckets.some((b) => b === 'proposed' || b === 'unmatched_external')
+        ? await proposeCoveringSets(
+            supabase,
+            companyId,
+            account,
+            rows
+              .filter(
+                (tx) =>
+                  !tx.is_ignored && !tx.journal_entry_id && !junctionLinked.has(tx.id) && !tx.potential_journal_entry_id,
+              )
+              .map((tx) => ({ id: tx.id, date: tx.date, amount: Number(tx.amount), currency: tx.currency })),
+          )
+        : new Map<string, ReconciliationProposal>()
       {
         for (const tx of rows) {
+          const coveringSet = coveringSets.get(tx.id) ?? null
           const bucket: ReconciliationItemBucket = tx.is_ignored
             ? 'ignored'
             : tx.journal_entry_id || junctionLinked.has(tx.id)
               ? 'matched'
-              : tx.potential_journal_entry_id
+              : tx.potential_journal_entry_id || coveringSet
                 ? 'proposed'
                 : 'unmatched_external'
           if (!buckets.includes(bucket)) continue
@@ -191,7 +210,7 @@ export async function listAccountItems(
                   confidence: Number(tx.potential_match_confidence ?? 0.75),
                   reasons: [tx.potential_match_method ?? 'föreslagen av matcharen'],
                 }
-              : null,
+              : coveringSet,
             actions:
               bucket === 'matched'
                 ? ['unmatch']

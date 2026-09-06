@@ -48,8 +48,10 @@ import type {
   CategorizeHandler,
   PotentialVoucher,
   PotentialRotRutPayout,
+  PotentialRotRutPayoutRequest,
 } from '@/components/transactions/transaction-types'
 import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
+import { matchTransactionsToRotRutPayoutSets } from '@/lib/invoices/rot-rut-payout-set-matching'
 import {
   groupExpenseClaimsByPerson,
   matchTransactionsToExpensePayouts,
@@ -241,7 +243,15 @@ async function fetchExpensePayoutMatches(
 // prod schema cache (see DECISIONS.md 2026-07-06).
 async function fetchPotentialMatches(
   supabase: SupabaseClient,
+  companyId: string | null,
   rows: {
+    id: string
+    amount: number
+    currency: string | null
+    description?: string | null
+    merchant_name?: string | null
+    is_business: boolean | null
+    journal_entry_id: string | null
     potential_invoice_id: string | null
     potential_supplier_invoice_id: string | null
     potential_rot_rut_payout_request_id?: string | null
@@ -250,13 +260,6 @@ async function fetchPotentialMatches(
 ) {
   const potentialInvoiceIds = Array.from(
     new Set(rows.flatMap((t) => (t.potential_invoice_id ? [t.potential_invoice_id] : []))),
-  )
-  const potentialRotRutRequestIds = Array.from(
-    new Set(
-      rows.flatMap((t) =>
-        t.potential_rot_rut_payout_request_id ? [t.potential_rot_rut_payout_request_id] : [],
-      ),
-    ),
   )
   const potentialSupplierInvoiceIds = Array.from(
     new Set(rows.flatMap((t) => (t.potential_supplier_invoice_id ? [t.potential_supplier_invoice_id] : []))),
@@ -280,7 +283,7 @@ async function fetchPotentialMatches(
   // an unmatchable candidate must not reach the row or the match dialog, which
   // would otherwise compare the transaction against a 0 kr remaining balance
   // and call it a partial payment.
-  const [invoiceResults, supplierInvoiceResults, voucherResults, rotRutResults] = await Promise.all([
+  const [invoiceResults, supplierInvoiceResults, voucherResults, rotRutResult] = await Promise.all([
     Promise.all(
       chunks(potentialInvoiceIds).map((ids) =>
         supabase
@@ -314,21 +317,22 @@ async function fetchPotentialMatches(
           .eq('status', 'posted'),
       ),
     ),
-    // Open ROT/RUT begäran (Skatteverkets utbetalning). Revalidated like the
-    // invoice hints: a request settled by another row must not reach the
-    // dialog. Items ride along so the dialog can list the covered invoices.
-    Promise.all(
-      chunks(potentialRotRutRequestIds).map((ids) =>
-        supabase
+    // Open ROT/RUT begäran (Skatteverkets utbetalning): the company's whole
+    // open pool, not the hinted ids. It serves both the persisted 1:1 hint
+    // (revalidated: a request settled by another row must not reach the
+    // dialog) and the read-time covering set for a row Skatteverket paid
+    // together with other beslut (#2239). Items ride along so the dialog can
+    // list the covered invoices. A handful of rows per company.
+    companyId
+      ? supabase
           .from('rot_rut_payout_requests')
           .select(
             'id, name, deduction_type, status, requested_total, decided_total, settlement_journal_entry_id, items:rot_rut_payout_request_items(requested_amount, invoice:invoices(invoice_number))',
           )
-          .in('id', ids)
+          .eq('company_id', companyId)
           .in('status', [...OPEN_ROT_RUT_PAYOUT_STATUSES])
-          .is('settlement_journal_entry_id', null),
-      ),
-    ),
+          .is('settlement_journal_entry_id', null)
+      : Promise.resolve({ data: null, error: null }),
   ])
 
   // Non-fatal: the transaction list still renders without match hints, but
@@ -342,12 +346,11 @@ async function fetchPotentialMatches(
   for (const r of voucherResults) {
     if (r.error) console.error('[fetchPotentialMatches] journal_entries query failed', r.error)
   }
-  for (const r of rotRutResults) {
-    if (r.error) console.error('[fetchPotentialMatches] rot_rut_payout_requests query failed', r.error)
+  if (rotRutResult.error) {
+    console.error('[fetchPotentialMatches] rot_rut_payout_requests query failed', rotRutResult.error)
   }
 
-  const rotRutMap: Record<string, PotentialRotRutPayout> = {}
-  for (const req of rotRutResults.flatMap((r) => (r.data ?? []) as Array<{
+  const rotRutRequests: PotentialRotRutPayoutRequest[] = ((rotRutResult.data ?? []) as Array<{
     id: string
     name: string
     deduction_type: 'rot' | 'rut'
@@ -359,20 +362,31 @@ async function fetchPotentialMatches(
       requested_amount: number | string
       invoice?: { invoice_number: string | null } | { invoice_number: string | null }[] | null
     }> | null
-  }>)) {
-    rotRutMap[req.id] = {
-      id: req.id,
-      name: req.name,
-      deduction_type: req.deduction_type,
-      status: req.status,
-      requested_total: req.requested_total,
-      decided_total: req.decided_total,
-      settlement_journal_entry_id: req.settlement_journal_entry_id,
-      invoices: (req.items ?? []).map((item) => {
-        const inv = Array.isArray(item.invoice) ? item.invoice[0] : item.invoice
-        return { invoice_number: inv?.invoice_number ?? null, requested_amount: item.requested_amount }
-      }),
-    }
+  }>).map((req) => ({
+    id: req.id,
+    name: req.name,
+    deduction_type: req.deduction_type,
+    status: req.status,
+    requested_total: req.requested_total,
+    decided_total: req.decided_total,
+    settlement_journal_entry_id: req.settlement_journal_entry_id,
+    invoices: (req.items ?? []).map((item) => {
+      const inv = Array.isArray(item.invoice) ? item.invoice[0] : item.invoice
+      return { invoice_number: inv?.invoice_number ?? null, requested_amount: item.requested_amount }
+    }),
+  }))
+  const rotRutById = new Map(rotRutRequests.map((req) => [req.id, req] as const))
+  // Per row: the persisted 1:1 hint when its begäran is still open, else the
+  // exact covering set over the open pool (several begäran in one transfer).
+  const rotRutByTransaction = new Map<string, PotentialRotRutPayout>()
+  for (const row of rows) {
+    const hinted = row.potential_rot_rut_payout_request_id
+      ? rotRutById.get(row.potential_rot_rut_payout_request_id)
+      : undefined
+    if (hinted) rotRutByTransaction.set(row.id, { requests: [hinted] })
+  }
+  for (const [txId, match] of matchTransactionsToRotRutPayoutSets(rows, rotRutRequests)) {
+    rotRutByTransaction.set(txId, { requests: match.requests })
   }
 
   const voucherMap: Record<string, PotentialVoucher> = {}
@@ -396,7 +410,7 @@ async function fetchPotentialMatches(
     invoiceMap: buildInvoiceMap(invoiceResults.flatMap((r) => r.data ?? [])),
     supplierInvoiceMap: buildSupplierInvoiceMap(supplierInvoiceResults.flatMap((r) => r.data ?? [])),
     voucherMap,
-    rotRutMap,
+    rotRutByTransaction,
   }
 }
 
@@ -1171,8 +1185,8 @@ export default function TransactionsPage() {
       const windowIds = new Set(rows.map((r) => r.id))
       const olderPending = (pendingRows ?? []).filter((r) => !windowIds.has(r.id))
       const allRows = [...rows, ...olderPending].sort((a, b) => b.date.localeCompare(a.date))
-      const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap }, expensePayouts] = await Promise.all([
-        fetchPotentialMatches(supabase, allRows),
+      const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutByTransaction }, expensePayouts] = await Promise.all([
+        fetchPotentialMatches(supabase, companyId, allRows),
         fetchExpensePayoutMatches(supabase, companyId, allRows),
       ])
       const expensePayoutMap = expensePayouts.byTransaction
@@ -1189,9 +1203,7 @@ export default function TransactionsPage() {
         potential_supplier_invoice: t.potential_supplier_invoice_id
           ? supplierInvoiceMap[t.potential_supplier_invoice_id]
           : undefined,
-        potential_rot_rut_payout: t.potential_rot_rut_payout_request_id
-          ? rotRutMap[t.potential_rot_rut_payout_request_id]
-          : undefined,
+        potential_rot_rut_payout: rotRutByTransaction.get(t.id),
         potential_voucher: t.potential_journal_entry_id
           ? voucherMap[t.potential_journal_entry_id]
           : undefined,
@@ -1265,8 +1277,8 @@ export default function TransactionsPage() {
     setPagedThroughDate(txData.length >= PAGE_SIZE ? txData[txData.length - 1].date : null)
     setHasMore(txData.length >= PAGE_SIZE)
 
-    const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap }, expensePayouts] = await Promise.all([
-      fetchPotentialMatches(supabase, txData),
+    const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutByTransaction }, expensePayouts] = await Promise.all([
+      fetchPotentialMatches(supabase, companyId, txData),
       fetchExpensePayoutMatches(supabase, companyId, txData),
     ])
     const expensePayoutMap = expensePayouts.byTransaction
@@ -1285,9 +1297,7 @@ export default function TransactionsPage() {
       potential_supplier_invoice: t.potential_supplier_invoice_id
         ? supplierInvoiceMap[t.potential_supplier_invoice_id]
         : undefined,
-      potential_rot_rut_payout: t.potential_rot_rut_payout_request_id
-        ? rotRutMap[t.potential_rot_rut_payout_request_id]
-        : undefined,
+      potential_rot_rut_payout: rotRutByTransaction.get(t.id),
       potential_voucher: t.potential_journal_entry_id
         ? voucherMap[t.potential_journal_entry_id]
         : undefined,
@@ -2393,15 +2403,18 @@ export default function TransactionsPage() {
 
   async function handleConfirmRotRutPayoutMatch() {
     if (!selectedTransaction?.potential_rot_rut_payout) return
-    const request = selectedTransaction.potential_rot_rut_payout
+    const { requests } = selectedTransaction.potential_rot_rut_payout
+    if (requests.length === 0) return
     setIsConfirmingMatch(true)
     try {
+      // One begäran or a bundle Skatteverket paid together: the route books
+      // one voucher either way and takes the ids as request_ids.
       const response = await fetch(
         `/api/transactions/${selectedTransaction.id}/match-rot-rut-payout`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ request_id: request.id }),
+          body: JSON.stringify({ request_ids: requests.map((request) => request.id) }),
         },
       )
       const result = await response.json()
@@ -2417,7 +2430,13 @@ export default function TransactionsPage() {
 
       toast({
         title: t('rot_rut_payout_matched_title'),
-        description: t('rot_rut_payout_matched_description', { name: request.name }),
+        description:
+          requests.length === 1
+            ? t('rot_rut_payout_matched_description', { name: requests[0].name })
+            : t('rot_rut_payout_matched_set_description', {
+                count: requests.length,
+                names: requests.map((request) => request.name).join(', '),
+              }),
       })
       setRotRutMatchDialogOpen(false)
 
@@ -2694,7 +2713,7 @@ export default function TransactionsPage() {
     setMatchDialogOpen(true)
   }
 
-  function handleSelectRotRutPayoutFromPicker(request: PotentialRotRutPayout) {
+  function handleSelectRotRutPayoutFromPicker(request: PotentialRotRutPayoutRequest) {
     if (!invoicePickerTransaction) return
     // Same handoff as the invoice pick: close the picker, hang the request on
     // the row and open the ROT/RUT confirm dialog so the user sees the
@@ -2702,7 +2721,7 @@ export default function TransactionsPage() {
     const tx = invoicePickerTransaction
     setInvoicePickerOpen(false)
     setInvoicePickerTransaction(null)
-    setSelectedTransaction({ ...tx, potential_rot_rut_payout: request })
+    setSelectedTransaction({ ...tx, potential_rot_rut_payout: { requests: [request] } })
     setRotRutMatchDialogOpen(true)
   }
 

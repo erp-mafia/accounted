@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   canApproveSupplierInvoice,
+  canMarkSupplierInvoiceBankEntered,
   findChangedVerifikatFields,
   findLockedVerifikatFields,
   isOverduePayable,
@@ -191,5 +192,24 @@ describe('findChangedVerifikatFields', () => {
 
   it('is empty for a metadata-only update', () => {
     expect(findChangedVerifikatFields({ due_date: '2026-09-30' }, ROW)).toEqual([])
+  })
+})
+
+describe('canMarkSupplierInvoiceBankEntered', () => {
+  // "Inlagd i banken" (#2220) is the step right before "Markera som betald",
+  // so it is offered on exactly the rows that action is offered on.
+  it.each(['approved', 'overdue', 'partially_paid'])('allows a payable %s invoice', (status) => {
+    expect(canMarkSupplierInvoiceBankEntered({ status })).toBe(true)
+  })
+
+  it.each(['registered', 'paid', 'credited', 'reversed', 'disputed'])(
+    'refuses a %s invoice',
+    (status) => {
+      expect(canMarkSupplierInvoiceBankEntered({ status })).toBe(false)
+    },
+  )
+
+  it('refuses a credit note whatever its status', () => {
+    expect(canMarkSupplierInvoiceBankEntered({ status: 'approved', is_credit_note: true })).toBe(false)
   })
 })

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
 import { insertAuthUser, insertCompany, insertCompanyMember } from '@/tests/pg/fixtures'
+import { STANDARD_VOUCHER_SERIES_MAP } from '@/lib/bookkeeping/voucher-series-resolver'
 
 describe('company_settings.default_voucher_series_per_source_type', () => {
   it('column exists with the expected default JSONB shape', async () => {
@@ -23,7 +24,12 @@ describe('company_settings.default_voucher_series_per_source_type', () => {
     expect(defaultValue).toMatch(/salary_payment/)
   })
 
-  it('a freshly inserted company_settings row gets all-A defaults', async () => {
+  // Since migration 20260906210500 (#2184) a fresh row starts on the standard
+  // set, not on all-A; the exhaustive equality with the TS map and the
+  // "existing rows untouched" rule live in
+  // tests/pg/voucher-series-standard-default.pg.test.ts. This test keeps the
+  // representative letters readable at a glance.
+  it('a freshly inserted company_settings row gets the standard series set', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     await insertCompanyMember({ companyId, userId, role: 'owner' })
@@ -47,10 +53,16 @@ describe('company_settings.default_voucher_series_per_source_type', () => {
     expect(rows).toHaveLength(1)
     const map = rows[0]!.default_voucher_series_per_source_type
     expect(map).toBeDefined()
+    // A stays the general series; the reskontra, lön and moms flows get their own.
     expect(map.manual).toBe('A')
-    expect(map.supplier_invoice_registered).toBe('A')
-    expect(map.salary_payment).toBe('A')
     expect(map.bank_transaction).toBe('A')
+    expect(map.invoice_created).toBe('B')
+    expect(map.invoice_paid).toBe('C')
+    expect(map.supplier_invoice_registered).toBe('D')
+    expect(map.supplier_invoice_paid).toBe('E')
+    expect(map.salary_payment).toBe('K')
+    expect(map.vat_settlement).toBe('M')
+    expect(map).toEqual(STANDARD_VOUCHER_SERIES_MAP)
   })
 
   it('accepts user updates to per-source-type series mapping', async () => {
@@ -65,12 +77,13 @@ describe('company_settings.default_voucher_series_per_source_type', () => {
       [userId, companyId],
     )
 
-    // Configure per common Swedish convention: B for supplier, C for salary.
+    // An explicit layout of the company's own (Björn Lundén style letters)
+    // replaces the default wholesale; nothing merges the standard set back in.
     const updated = {
       manual: 'A',
-      supplier_invoice_registered: 'B',
-      supplier_invoice_paid: 'B',
-      salary_payment: 'C',
+      supplier_invoice_registered: 'L',
+      supplier_invoice_paid: 'U',
+      salary_payment: 'N',
     }
     await getPool().query(
       `UPDATE public.company_settings

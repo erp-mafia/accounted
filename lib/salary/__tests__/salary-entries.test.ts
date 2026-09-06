@@ -655,3 +655,87 @@ describe('salary entries: dimensions propagation (PR8)', () => {
     expect(linesOn(salary, '7210')[0].dimensions).toBeUndefined()
   })
 })
+
+describe('salary entries: kostnadsersättning (#2331)', () => {
+  const claimLine = (amount: number, account: string | null = '2820') => ({
+    item_type: 'expense_reimbursement',
+    amount,
+    account_number: account,
+    is_net_deduction: false,
+    is_gross_deduction: false,
+  })
+
+  it('debits 2820 for an utlägg line on top of the full gross and keeps the entry balanced', async () => {
+    // net = gross - tax + reimbursement: the 1930 credit carries the claim.
+    const run = makeRun([
+      makeEmployee({
+        net_salary: 23000 + 1234.5,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 30000, account_number: '7210', is_net_deduction: false, is_gross_deduction: false },
+          claimLine(1234.5),
+        ],
+      }),
+    ])
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7210')).toEqual([expect.objectContaining({ debit_amount: 30000 })])
+    expect(linesOn(salary, '2820')).toEqual([
+      expect.objectContaining({ debit_amount: 1234.5, credit_amount: 0, line_description: 'Lön 2026-06: Kortfristiga skulder till anställda' }),
+    ])
+    expect(linesOn(salary, '1930')[0].credit_amount).toBe(24234.5)
+    assertBalanced(salary)
+  })
+
+  it('falls back to 2820 without an account on the line and never dimensions the liability leg', async () => {
+    const run = makeRun([
+      makeEmployee({ net_salary: 23500, default_dimensions: { '1': 'KS01' }, line_items: [claimLine(500, null)] }),
+    ])
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7210')[0]).toEqual(
+      expect.objectContaining({ debit_amount: 30000, dimensions: { '1': 'KS01' } }),
+    )
+    expect(linesOn(salary, '2820')[0].debit_amount).toBe(500)
+    expect(linesOn(salary, '2820')[0].dimensions).toBeUndefined()
+    assertBalanced(salary)
+  })
+
+  it('books skattefri milersättning on 7331 on top of gross, following the employee bag', async () => {
+    const run = makeRun([
+      makeEmployee({
+        net_salary: 23250,
+        default_dimensions: { '1': 'KS01' },
+        line_items: [
+          { item_type: 'mileage_taxfree', amount: 250, account_number: '7331', is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+    // The base salary debit is NOT reduced by the reimbursement.
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7331')[0]).toEqual(
+      expect.objectContaining({ debit_amount: 250, dimensions: { '1': 'KS01' } }),
+    )
+    assertBalanced(salary)
+  })
+
+  it('books a run that only repays utlägg as 2820 D / 1930 K', async () => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 0,
+        tax_withheld: 0,
+        net_salary: 800,
+        avgifter_amount: 0,
+        avgifter_basis: 0,
+        line_items: [claimLine(800)],
+      }),
+    ])
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+    expect(salary.lines).toEqual([
+      expect.objectContaining({ account_number: '2820', debit_amount: 800, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '1930', debit_amount: 0, credit_amount: 800 }),
+    ])
+  })
+})

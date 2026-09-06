@@ -25,6 +25,7 @@ import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/typ
 import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import { roundOre, sumOre } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
@@ -86,6 +87,8 @@ export interface ExpenseClaimLineInput {
   debit_amount: number
   credit_amount: number
   line_description?: string | null
+  /** SIE dimension bag ({sie_dim_no: code}), carried onto the posted line. */
+  dimensions?: Record<string, string>
 }
 
 export type RegisterExpenseClaimResult =
@@ -253,6 +256,7 @@ export async function registerExpenseClaim(
             ? roundOre(l.credit_amount * rate)
             : 0,
       line_description: l.line_description?.trim() || desc,
+      dimensions: l.dimensions,
     }))
     const residual = roundOre(
       sumOre(converted.map((l) => l.debit_amount)) - sumOre(converted.map((l) => l.credit_amount)),
@@ -273,6 +277,7 @@ export async function registerExpenseClaim(
       debit_amount: l.debit_amount,
       credit_amount: l.credit_amount,
       line_description: l.line_description,
+      ...(l.dimensions ? { dimensions: l.dimensions } : {}),
       ...(input.currency !== 'SEK' && l.account_number === liability
         ? { currency: input.currency, amount_in_currency: roundOre(input.amount), exchange_rate: rate }
         : {}),
@@ -433,7 +438,11 @@ export async function listExpenseClaims(
 
 export type DeleteExpenseClaimResult =
   | { ok: true; reversal_entry_id: string | null }
-  | { ok: false; code: 'NOT_FOUND' | 'ALREADY_PAID' | 'UNLINKED' | 'DELETE_FAILED'; detail?: string }
+  | {
+      ok: false
+      code: 'NOT_FOUND' | 'ALREADY_PAID' | 'ON_PAYSLIP' | 'UNLINKED' | 'DELETE_FAILED'
+      detail?: string
+    }
 
 /**
  * Remove a registered claim. The booked verifikat is never deleted: it is
@@ -456,6 +465,29 @@ export async function deleteExpenseClaim(
   if (error) return { ok: false, code: 'DELETE_FAILED', detail: error.message }
   if (!claim) return { ok: false, code: 'NOT_FOUND' }
   if (claim.status === 'paid') return { ok: false, code: 'ALREADY_PAID' }
+
+  // Scheduled on a payslip (#2331). The FK is ON DELETE RESTRICT, so the
+  // database refuses the delete while a line references the claim. Once the
+  // run has left draft its stored totals include the line: refuse. On a draft
+  // run the line is removed first (before the storno, so a failure here
+  // leaves nothing half-done); the claim goes back to Att göra and can be
+  // re-added.
+  const payslip = await findPayslipLineForClaim(supabase, companyId, claimId)
+  if (payslip && payslip.run_status !== 'draft') {
+    return {
+      ok: false,
+      code: 'ON_PAYSLIP',
+      detail: `claim ${claimId} is on salary run ${payslip.salary_run_id} (${payslip.run_status})`,
+    }
+  }
+  if (payslip) {
+    const { error: lineError } = await supabase
+      .from('salary_line_items')
+      .delete()
+      .eq('id', payslip.line_id)
+      .eq('company_id', companyId)
+    if (lineError) return { ok: false, code: 'DELETE_FAILED', detail: lineError.message }
+  }
 
   if (!claim.journal_entry_id) {
     // Registered claims always book a verifikat; a missing link means the
@@ -523,6 +555,7 @@ export type CreatePayoutBatchFailureCode =
   | 'TX_ALREADY_BOOKED'
   | 'TX_CURRENCY'
   | 'TX_AMOUNT_MISMATCH'
+  | 'ON_PAYSLIP'
   | 'BATCH_INSERT_FAILED'
 
 export type CreatePayoutBatchResult =
@@ -551,6 +584,7 @@ const PAYOUT_RPC_CODES: ReadonlySet<string> = new Set<CreatePayoutBatchFailureCo
   'TX_ALREADY_BOOKED',
   'TX_CURRENCY',
   'TX_AMOUNT_MISMATCH',
+  'ON_PAYSLIP',
 ])
 
 interface PayoutRpcRow {

@@ -977,6 +977,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The amount cannot be booked against the request: it exceeds the requested or decided amount. Book the transaction another way.',
   },
+  ROT_RUT_SETTLE_SET_AMOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppet stämmer inte med summan av de valda begäran. Skatteverket betalar ut exakt beslutade belopp, så flera begäran kan bara bokföras tillsammans när transaktionen motsvarar summan till öret.',
+    message_en:
+      'The amount does not equal the sum of the selected requests. Skatteverket pays exactly the decided amounts, so several requests can only be booked together when the transaction equals their sum to the öre.',
+  },
   ROT_RUT_SETTLE_RACE: {
     httpStatus: 409,
     message_sv:
@@ -3025,6 +3032,13 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'Leverantörsfakturan kan inte markeras som betald i nuvarande status.',
     message_en: 'Supplier invoice is not in a payable state.',
   },
+  SI_BANK_ENTERED_NOT_PAYABLE: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan kan bara markeras som inlagd i banken när den är godkänd och har något kvar att betala.',
+    message_en:
+      'The invoice can only be marked as entered at the bank while it is approved and has an outstanding amount.',
+  },
   SI_PAID_PERIOD_LOCKED: {
     httpStatus: 400,
     message_sv: 'Bokföringen är låst. Betalningen kan inte registreras.',
@@ -3380,6 +3394,22 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Lönekörningen är kopplad till en verifikation och kan inte raderas (BFL 5 kap räkenskapsinformation).',
     message_en: 'Salary run is linked to a journal entry and cannot be deleted (BFL 5 kap räkenskapsinformation).',
+  },
+  // Utlägg repaid with the salary (#2331).
+  SALARY_RUN_NO_OPEN_EXPENSE_CLAIMS: {
+    httpStatus: 404,
+    message_sv: 'Den anställda har inga öppna utlägg att lägga till.',
+    message_en: 'The employee has no open expense claims to add.',
+  },
+  EXPENSE_CLAIM_ALREADY_ON_PAYSLIP: {
+    httpStatus: 409,
+    message_sv: 'Utlägget ligger redan på ett lönebesked.',
+    message_en: 'The expense claim is already on a payslip.',
+  },
+  SALARY_RUN_EXPENSE_CLAIM_NOT_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Ett utlägg på lönebeskedet är inte längre öppet (utbetalt eller borttaget). Ta bort raden och beräkna om innan bokföring.',
+    message_en: 'An expense claim on the payslip is no longer open (paid or removed). Remove the line and recalculate before booking.',
   },
   // Phase 5 PR-3: additional import error codes.
   SIE_IMPORT_DUPLICATE: {

@@ -9,7 +9,7 @@ import { roundOre } from '@/lib/money'
 import { Search, FileText, Loader2, Landmark } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { Invoice, Customer } from '@/types'
-import type { PotentialRotRutPayout, TransactionWithInvoice } from './transaction-types'
+import type { PotentialRotRutPayoutRequest, TransactionWithInvoice } from './transaction-types'
 import {
   DOMESTIC_CURRENCY,
   normalizeCurrency,
@@ -27,7 +27,7 @@ interface InvoicePickerProps {
   onSelect: (invoice: OpenInvoice) => void
   /** Pick an open ROT/RUT begäran instead of an invoice (Skatteverkets
    *  utbetalning). The section only renders when the company has one. */
-  onSelectRotRutPayout?: (request: PotentialRotRutPayout) => void
+  onSelectRotRutPayout?: (request: PotentialRotRutPayoutRequest) => void
 }
 
 type RotRutRequestRow = {
@@ -49,7 +49,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
   const [invoices, setInvoices] = useState<OpenInvoice[]>([])
-  const [rotRutRequests, setRotRutRequests] = useState<PotentialRotRutPayout[]>([])
+  const [rotRutRequests, setRotRutRequests] = useState<PotentialRotRutPayoutRequest[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [search, setSearch] = useState('')
   // Boolean, not the callback: a fresh function identity per parent render

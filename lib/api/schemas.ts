@@ -1343,6 +1343,17 @@ export const CreateSupplierInvoiceSchema = z.object({
   // Per-invoice öresavrundning toggle (display-only). Omitted → stored as null (off).
   ore_rounding: z.boolean().optional(),
   paid_with_private_funds: z.boolean().optional(),
+  // For paid_with_private_funds: who paid. An employee (2820) by id, or the
+  // owner by name (2893 in an AB, 2018 in an enskild firma); an omitted name
+  // falls back to the shared owner label so Hem groups the owner as one
+  // person. Both are ignored unless paid_with_private_funds is true.
+  employee_id: uuid.optional().nullable(),
+  claimant_name: z.string().trim().max(200).optional(),
+  // For paid_with_private_funds: the invoice-inbox item whose document is the
+  // underlag. The route takes the document from the item and settles the item
+  // itself, so a privately paid inbox document never goes through the
+  // extension's convert endpoint (which registers on 2440 only).
+  inbox_item_id: uuid.optional().nullable(),
   // For paid_with_private_funds: the date the owner paid out-of-pocket.
   // Defaults to invoice_date (common for kvitto where the two coincide).
   payment_date: isoDate.optional(),
@@ -1384,6 +1395,16 @@ export const MarkSupplierInvoicePaidSchema = z.object({
     // no-override path re-propagates the invoice's default_dimensions).
     dimensions: DimensionsBagSchema.optional(),
   })).min(2).optional(),
+})
+
+/**
+ * "Inlagd i banken" (#2220): a boolean mark, not a payment. `entered: true`
+ * records that the user typed the payment into the bank by hand; `false`
+ * takes the mark back. No amount, no date: the payment itself is still
+ * recorded by mark-paid or the bank match, which also clears the mark.
+ */
+export const SupplierInvoiceBankEnteredSchema = z.object({
+  entered: z.boolean(),
 })
 
 export const UpdateSupplierInvoiceSchema = z.object({
@@ -2158,13 +2179,21 @@ export const CreateTransactionFromDocumentSchema = z.object({
 })
 
 /**
- * POST /api/transactions/[id]/match-rot-rut-payout: settle a ROT/RUT begäran
- * with the bank row that carried Skatteverkets utbetalning. Amount, date and
- * bank account all come from the transaction, so the body is just the target.
+ * POST /api/transactions/[id]/match-rot-rut-payout: settle one or several
+ * ROT/RUT begäran with the bank row that carried Skatteverkets utbetalning.
+ * Amount, date and bank account all come from the transaction, so the body
+ * is just the target(s): `request_id` for one begäran, `request_ids` when
+ * Skatteverket paid several beslut in one transfer (#2239). Exactly one of
+ * the two.
  */
-export const MatchRotRutPayoutSchema = z.object({
-  request_id: uuid,
-})
+export const MatchRotRutPayoutSchema = z
+  .object({
+    request_id: uuid.optional(),
+    request_ids: z.array(uuid).min(1).max(10).optional(),
+  })
+  .refine((body) => (body.request_id ? 1 : 0) + (body.request_ids ? 1 : 0) === 1, {
+    message: 'Ange antingen request_id eller request_ids',
+  })
 
 /** Bank outflow → the registered utlägg it repays (one person). */
 export const MatchExpensePayoutSchema = z.object({
@@ -3047,6 +3076,7 @@ export const SalaryLineItemTypeSchema = z.enum([
   'vab', 'parental_leave', 'vacation', 'semesterersattning',
   'traktamente_taxfree', 'traktamente_taxable',
   'mileage_taxfree', 'mileage_taxable',
+  'expense_reimbursement',
   'net_deduction_advance', 'net_deduction_union', 'net_deduction_benefit_payment',
   'net_deduction_other',
   'oresavrundning',
@@ -4246,6 +4276,16 @@ export const PartyEnrichSchema = z.object({
 
 export const PartySearchRegistryQuerySchema = z.object({
   q: z.string().max(120).optional(),
+})
+
+/**
+ * GET /api/parties/registry: the org number a customer or supplier form is
+ * being filled for. Shape, check digit and the legal-person rule are one
+ * function (registryLookupKey in lib/parties/registry-form-fill), so the
+ * form and the route cannot disagree about what may be looked up.
+ */
+export const PartyRegistryLookupQuerySchema = z.object({
+  org_number: z.string().trim().min(1).max(20),
 })
 
 export const PartyUndoMergeSchema = z.object({

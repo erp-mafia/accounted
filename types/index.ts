@@ -293,6 +293,7 @@ export type ProcessingHistoryAggregateType =
   | 'Period'
   | 'Migration'
   | 'System'
+  | 'Invoice'
 
 // Bank connection status
 // 'pending_selection' = PSD2 consent granted, awaiting user to pick which
@@ -1222,6 +1223,13 @@ export interface SupplierInvoice {
   // directly against 2893 (AB) or 2018 (EF). Status is set to 'paid' at
   // creation and mark-paid is rejected by the existing status guard.
   paid_with_private_funds: boolean
+
+  /**
+   * "Inlagd i banken" (#2220): the user entered this payment in the internet
+   * bank by hand; money not yet gone. A mellanlage between attesterad and
+   * betald, never a status. Cleared by a DB trigger when a payment lands.
+   */
+  bank_entered_at: string | null
 
   notes: string | null
 
@@ -4070,6 +4078,7 @@ export type SalaryLineItemType =
   | 'vab' | 'parental_leave' | 'unpaid_leave' | 'vacation' | 'semesterersattning'
   | 'traktamente_taxfree' | 'traktamente_taxable'
   | 'mileage_taxfree' | 'mileage_taxable'
+  | 'expense_reimbursement'
   | 'net_deduction_advance' | 'net_deduction_union' | 'net_deduction_benefit_payment'
   | 'net_deduction_other'
   | 'oresavrundning'
@@ -4265,6 +4274,8 @@ export interface SalaryLineItem {
   is_net_deduction: boolean
   account_number: string | null
   sort_order: number
+  /** The registered utlägg an expense_reimbursement line repays (#2331). */
+  source_expense_claim_id?: string | null
   created_at: string
   updated_at: string
 }

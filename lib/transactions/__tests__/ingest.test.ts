@@ -1813,6 +1813,53 @@ describe('ingestTransactions', () => {
   })
 
   // -----------------------------------------------------------------------
+  // 4a'. Skatteverket bundles the beslut it pays that day into ONE transfer
+  //      (#2239): a row equal to the SUM of several open begäran gets no hint
+  //      column (the inbox recomputes the set) but must still skip the mapping
+  //      engine and drain the pool, exactly like a 1:1 hint.
+  // -----------------------------------------------------------------------
+  it('recognises a bundled ROT/RUT payout (sum of several begäran) without persisting a hint', async () => {
+    const { supabase, enqueue, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: 5250, description: 'Skatteverket utbetalning' })
+    const inserted = makeTransaction({
+      id: 'tx-skv-set',
+      amount: 5250,
+      currency: 'SEK',
+      description: 'Skatteverket utbetalning',
+      external_id: raw.external_id,
+    })
+    const request = (id: string, name: string, requestedTotal: number) => ({
+      id,
+      name,
+      deduction_type: 'rot' as const,
+      status: 'submitted',
+      requested_total: requestedTotal,
+      decided_total: null,
+      settlement_journal_entry_id: null,
+    })
+    mockLoadOpenRotRutPayoutRequests.mockResolvedValueOnce([
+      request('rr-1', 'ROT 2026-07', 3000),
+      request('rr-2', 'ROT 2026-08', 2250),
+    ])
+    mockGetBestInvoiceMatch.mockResolvedValue(null)
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked bank-synced map
+    enqueue({ data: [], error: null }) // supplier invoices pool
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.imported).toBe(1)
+    expect(result.auto_matched_invoices).toBe(1)
+    // No single begäran equals the row, so no 1:1 hint is written; the set is
+    // recomputed at read time instead of persisted.
+    expect(updates['transactions'] ?? []).toEqual([])
+    expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
+  })
+
+  // -----------------------------------------------------------------------
   // 4b. Supplier-invoice match at sync is ALWAYS a suggestion, never a hard
   //     link. Regression: a high-confidence hit used to set
   //     supplier_invoice_id directly (with no payment voucher booked) which

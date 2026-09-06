@@ -20,6 +20,13 @@ vi.mock('@/lib/currency/riksbanken', () => ({
   fetchExchangeRate: (...args: unknown[]) => fetchExchangeRateMock(...args),
 }))
 
+// Utlägg on a payslip (#2331): the delete guard's lookup is mocked so the
+// queued Supabase mock keeps its existing call order.
+const findPayslipLineForClaimMock = vi.fn()
+vi.mock('@/lib/salary/expense-claim-lines', () => ({
+  findPayslipLineForClaim: (...args: unknown[]) => findPayslipLineForClaimMock(...args),
+}))
+
 import { registerExpenseClaim, createPayoutBatch, deleteExpenseClaim } from '../expense-claims-service'
 
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
@@ -503,6 +510,61 @@ describe('deleteExpenseClaim', () => {
     vi.clearAllMocks()
     reset()
     reverseEntryMock.mockResolvedValue({ id: 'je-storno' })
+    findPayslipLineForClaimMock.mockResolvedValue(null)
+  })
+
+  it('refuses a claim scheduled on a payslip that has left draft, before any storno', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    findPayslipLineForClaimMock.mockResolvedValue({
+      line_id: 'li-1',
+      salary_run_id: 'run-1',
+      run_status: 'review',
+      period_year: 2026,
+      period_month: 6,
+    })
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toMatchObject({ ok: false, code: 'ON_PAYSLIP' })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+    expect(findCall('expense_claims', 'delete')).toBeUndefined()
+  })
+
+  it('on a draft payslip removes the line first (the FK is RESTRICT), then the storno, then the claim', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    enqueue({ data: null }) // salary_line_items delete
+    enqueue({ data: { status: 'posted', reversed_by_id: null } })
+    enqueue({ data: null }) // expense_claims delete
+    findPayslipLineForClaimMock.mockResolvedValue({
+      line_id: 'li-1',
+      salary_run_id: 'run-1',
+      run_status: 'draft',
+      period_year: 2026,
+      period_month: 6,
+    })
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno' })
+    expect(findCall('salary_line_items', 'delete')).toBeTruthy()
+    expect(findCall('salary_line_items', 'eq')).toEqual(['id', 'li-1'])
+    expect(findCall('expense_claims', 'delete')).toBeTruthy()
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1')
+  })
+
+  it('stops before the storno when the draft line cannot be removed', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    enqueue({ data: null, error: { message: 'permission denied' } }) // salary_line_items delete
+    findPayslipLineForClaimMock.mockResolvedValue({
+      line_id: 'li-1',
+      salary_run_id: 'run-1',
+      run_status: 'draft',
+      period_year: 2026,
+      period_month: 6,
+    })
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toEqual({ ok: false, code: 'DELETE_FAILED', detail: 'permission denied' })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+    expect(findCall('expense_claims', 'delete')).toBeUndefined()
   })
 
   it('reverses the verifikat and removes the row', async () => {
@@ -539,5 +601,93 @@ describe('deleteExpenseClaim', () => {
     enqueue({ data: null })
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c-x')
     expect(result).toEqual({ ok: false, code: 'NOT_FOUND' })
+  })
+})
+
+describe('createPayoutBatch: claim scheduled on a payslip (#2331)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  it('echoes ON_PAYSLIP as a typed refusal instead of BATCH_INSERT_FAILED', async () => {
+    enqueue({
+      data: { ok: false, code: 'ON_PAYSLIP', details: { claim_id: 'c1', salary_run_id: 'run-1', period: '2026-06' } },
+    })
+
+    const result = await createPayoutBatch(sb, COMPANY, USER, {
+      claim_ids: ['c1'],
+      payout_date: '2026-06-30',
+      cash_account: '1930',
+    })
+    expect(result).toEqual({
+      ok: false,
+      code: 'ON_PAYSLIP',
+      detail: '{"claim_id":"c1","salary_run_id":"run-1","period":"2026-06"}',
+    })
+  })
+})
+
+describe('registerExpenseClaim: custom lines from a supplier invoice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    findFiscalPeriodMock.mockResolvedValue('period-1')
+    createJournalEntryMock.mockResolvedValue({ id: 'je-1' })
+  })
+
+  it('carries each line dimension bag onto the posted verifikat (dimensions PR7)', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { id: 'claim-1' } }) // insert
+    enqueue({ data: null }) // update
+
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Faktura LF-001, Pressbyrån (ankomstnr 1)',
+      expense_date: '2026-09-01',
+      amount: 500,
+      vat_amount: 100,
+      currency: 'SEK',
+      expense_account: '6110',
+      claimant_name: 'Ägare',
+      lines: [
+        { account_number: '6110', debit_amount: 400, credit_amount: 0, dimensions: { '1': 'KS01', '6': 'P001' } },
+        { account_number: '2641', debit_amount: 100, credit_amount: 0, dimensions: { '1': 'KS01' } },
+        { account_number: '2893', debit_amount: 0, credit_amount: 500, dimensions: { '1': 'KS01' } },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    const input = createJournalEntryMock.mock.calls[0][3]
+    const byAccount = Object.fromEntries(
+      input.lines.map((l: { account_number: string }) => [l.account_number, l]),
+    )
+    expect(byAccount['6110'].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(byAccount['2641'].dimensions).toEqual({ '1': 'KS01' })
+    expect(byAccount['2893'].dimensions).toEqual({ '1': 'KS01' })
+    // A line without a bag posts without the key, not with dimensions: undefined.
+    expect(byAccount['2893'].credit_amount).toBe(500)
+  })
+
+  it('a line without a bag posts without a dimensions key', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: { id: 'claim-1' } })
+    enqueue({ data: null })
+
+    await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Kvitto',
+      expense_date: '2026-09-01',
+      amount: 100,
+      vat_amount: 0,
+      currency: 'SEK',
+      expense_account: '5410',
+      claimant_name: 'Ägare',
+      lines: [
+        { account_number: '5410', debit_amount: 100, credit_amount: 0 },
+        { account_number: '2893', debit_amount: 0, credit_amount: 100 },
+      ],
+    })
+
+    const input = createJournalEntryMock.mock.calls[0][3]
+    for (const line of input.lines) expect(line).not.toHaveProperty('dimensions')
   })
 })

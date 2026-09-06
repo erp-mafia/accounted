@@ -827,7 +827,7 @@
     "status_picker_aria": "Filtrera på status",
     "search_placeholder": "Sök leverantörsfaktura …",
     "status_paid_date": "Betald {date}",
-    "help_body": "Godkännandet attesterar fakturan för betalning. Markera fakturor med kryssrutan och skapa en betalfil som laddas upp i internetbanken. Betalningar prickas av automatiskt när de matchas mot banken.",
+    "help_body": "Godkännandet attesterar fakturan för betalning. Markera fakturor med kryssrutan och skapa en betalfil som laddas upp i internetbanken, eller bocka i I banken på raden när du lagt in betalningen för hand. Betalningar prickas av automatiskt när de matchas mot banken, och bocken försvinner då av sig själv.",
     "bulkbar_selected": "{count, plural, one {faktura vald} other {fakturor valda}}",
     "bulk_create_file": "Skapa betalfil",
     "bulk_select_all": "Välj alla betalbara ({count})",
@@ -843,7 +843,10 @@
     "group_supplier": "Leverantör",
     "group_month": "Månad",
     "group_none": "Ingen gruppering",
-    "group_unknown": "Saknas"
+    "group_unknown": "Saknas",
+    "bank_entered_label": "I banken",
+    "bank_entered_aria": "Markera som inlagd i banken",
+    "bank_entered_failed_title": "Kunde inte spara markeringen"
   },
   "supplier_payment_files": {
     "dialog_title": "Skapa betalfil",
@@ -1299,7 +1302,9 @@
     "submit_save": "Spara kund",
     "submit_saving": "Sparar...",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
-    "personal_number_unreadable": "Det sparade personnumret kan inte läsas. Skriv in det igen för att ersätta det."
+    "personal_number_unreadable": "Det sparade personnumret kan inte läsas. Skriv in det igen för att ersätta det.",
+    "address_line2_label": "Adressrad 2",
+    "address_line2_placeholder": "c/o"
   },
   "form_supplier": {
     "name_label": "Namn *",
@@ -1345,7 +1350,9 @@
     "notes_placeholder": "Interna anteckningar om leverantören...",
     "submit_save": "Spara leverantör",
     "submit_saving": "Sparar...",
-    "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag"
+    "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
+    "address_line2_label": "Adressrad 2",
+    "address_line2_placeholder": "c/o"
   },
   "initial_setup": {
     "completed_verdict": "Bokföringen är igång.",
@@ -1883,7 +1890,11 @@
     "related_chart_of_accounts": "Kontoplan (BAS)",
     "periodisering_label": "Periodisering",
     "periodisering_help": "I bokslut-wizarden skannas fakturor efter datumintervall som sträcker sig in i nästa räkenskapsår och periodiseringar föreslås. Inget bokförs utan din granskning.",
-    "periodisering_open_wizard": "Öppna periodiserings-wizarden"
+    "periodisering_open_wizard": "Öppna periodiserings-wizarden",
+    "series_standard_set_button": "Använd standarduppsättningen",
+    "series_standard_set_help": "Fyller i uppsättningen som nya företag får: kundfakturor B, inbetalningar C, leverantörsfakturor D, utbetalningar E, periodiseringar H, bokslut I, lön K, kontantfakturor L, momsredovisning M, övrigt A. Granska raderna och spara. Byt helst vid ett räkenskapsårs början: redan bokförda verifikationer ligger kvar i sina serier, nya hamnar i de nya serierna från och med att du sparar, och bytet syns i behandlingshistoriken.",
+    "series_row_accrual_only": "Gäller faktureringsmetoden, som företaget inte använder. Valet sparas och gäller om metoden byts.",
+    "series_row_cash_only": "Gäller kontantmetoden, som företaget inte använder. Valet sparas och gäller om metoden byts."
   },
   "settings_tax": {},
   "settings_team": {},
@@ -2964,7 +2975,8 @@
     "move_account_currency_mismatch": "Annan valuta ({currency})",
     "move_account_cancel": "Avbryt",
     "move_account_save": "Flytta",
-    "method_line": "Betalsätt: {method}"
+    "method_line": "Betalsätt: {method}",
+    "match_rot_rut_payout_set_btn": "Matcha ROT/RUT-utbetalning ({count} begäran)"
   },
   "tx_method": {
     "card": "Kortköp",
@@ -3215,7 +3227,14 @@
     "on_confirm_voucher": "Bokföringsverifikation skapas automatiskt",
     "cancel": "Avbryt",
     "confirming": "Bekräftar...",
-    "confirm": "Bekräfta matchning"
+    "confirm": "Bekräfta matchning",
+    "requests_label": "Begäran om utbetalning ({count} st)",
+    "requests_total_label": "Summa begäran",
+    "amounts_match_set": "Beloppet stämmer med summan av begäran",
+    "amounts_differ_set": "Beloppet skiljer sig från summan av begäran",
+    "set_exact_required": "Flera begäran kan bara bokföras tillsammans när transaktionen exakt motsvarar summan av deras beslutade belopp. Matcha dem en i taget eller bokför transaktionen på annat sätt.",
+    "booking_receivable_line_named": "1513 Kundfordringar delad faktura ({name})",
+    "on_confirm_requests": "Alla {count} begäran markeras som utbetalda"
   },
   "tx_invoice_picker": {
     "loading": "Laddar fakturor...",
@@ -4632,7 +4651,6 @@
     "forval_books_at_payment": "Bokförs vid betalning",
     "forval_toggle_open": "Ändra förval",
     "forval_toggle_close": "Stäng",
-    "chip_paid_privately": "Betald privat",
     "chip_ore_rounding_off": "Utan öresavrundning",
     "chip_delivery_date": "Leveransdatum {date}",
     "chip_notes": "Anteckningar",
@@ -4676,9 +4694,6 @@
     "create_and_select": "Skapa & välj",
     "section_accounting": "Kontering",
     "account_from_history": "Konto {account} föreslaget från tidigare bokföringar av {counterparty}",
-    "paid_privately_label": "Jag har betalat detta privat",
-    "paid_privately_help_ef": "Bokförs som skuld från bolaget till dig (2018 Egen insättning). Återbetalas senare manuellt från företagskontot.",
-    "paid_privately_help_ab": "Bokförs som skuld från bolaget till dig (2893 Skuld till ägare). Återbetalas senare manuellt från företagskontot.",
     "supplier_placeholder": "Välj leverantör",
     "no_suppliers_yet": "Inga leverantörer än",
     "add_new_supplier": "+ Lägg till ny leverantör...",
@@ -4802,7 +4817,8 @@
     "debit_short": "D {amount}",
     "credit_short": "K {amount}",
     "debit_credit_short": "D {debit} / K {credit}",
-    "review_accrual_line_info": "Periodiseras {from} till {to}"
+    "review_accrual_line_info": "Periodiseras {from} till {to}",
+    "expense_registered_description": "Skulden till {name} finns nu i Att göra. Ankomstnummer: {number}"
   },
   "supplier_invoice_detail": {
     "title_invoice": "Leverantörsfaktura {number}",
@@ -4917,7 +4933,11 @@
     "duplicate_payment_show_voucher": "Visa verifikation",
     "bank_transaction_fallback": "Banktransaktion",
     "go_to": "Gå till",
-    "create_voucher_anyway": "Skapa ny verifikation ändå"
+    "create_voucher_anyway": "Skapa ny verifikation ändå",
+    "bank_entered_label": "Inlagd i banken",
+    "bank_entered_aria": "Markera som inlagd i banken",
+    "bank_entered_meta": "Inlagd i banken {date}",
+    "bank_entered_failed_title": "Kunde inte spara markeringen"
   },
   "supplier_detail": {
     "back": "Tillbaka",
@@ -6241,7 +6261,8 @@
     "review_rerun_done_description": "{applied, plural, one {# transaktion kopplades automatiskt} other {# transaktioner kopplades automatiskt}}, {suggested, plural, one {# nytt förslag att granska} other {# nya förslag att granska}}.",
     "footer_to_handle": "{count, plural, =0 {Inget att hantera} =1 {1 att hantera} other {# att hantera}}",
     "recon_attn": "{count, plural, one {1 obokförd banktransaktion: bankavstämningen kan hitta automatiska träffar mot befintliga verifikationer.} other {# obokförda banktransaktioner: bankavstämningen kan hitta automatiska träffar mot befintliga verifikationer.}}",
-    "recon_attn_action": "Förhandsgranska träffar"
+    "recon_attn_action": "Förhandsgranska träffar",
+    "rot_rut_payout_matched_set_description": "Utbetalningen från Skatteverket bokfördes mot {count} begäran: {names}"
   },
   "bookkeeping": {
     "toast_post_failed": "Kunde inte bokföra",
@@ -7151,7 +7172,13 @@
     "toast_payslips_downloaded_detail": "{count} stycken i zip-arkiv.",
     "toast_zip_failed": "Kunde inte skapa zip-fil",
     "toast_agi_failed": "AGI-fil kunde inte genereras",
-    "toast_agi_downloaded": "AGI-fil nedladdad"
+    "toast_agi_downloaded": "AGI-fil nedladdad",
+    "add_expense_claims": "Lägg till {count, plural, one {# utlägg} other {# utlägg}} · {amount}",
+    "add_expense_claims_aria": "Lägg till öppna utlägg för {name} på lönebeskedet",
+    "add_expense_claims_title": "Lägg till öppna utlägg på lönebeskedet: betalas ut skattefritt med lönen",
+    "toast_expense_claims_added": "Utlägg tillagda på lönebeskedet",
+    "toast_expense_claims_added_detail": "{count, plural, one {# utlägg} other {# utlägg}} · {amount}. Beräkna körningen för att uppdatera nettot.",
+    "toast_expense_claims_failed": "Kunde inte lägga till utlägg"
   },
   "salary_agi": {
     "title": "Arbetsgivardeklaration (AGI)",
@@ -7589,7 +7616,10 @@
     "th_type": "Typ",
     "th_description": "Beskrivning",
     "th_quantity": "Antal",
-    "th_amount": "Belopp"
+    "th_amount": "Belopp",
+    "th_actions": "Åtgärder",
+    "li_expense_reimbursement": "Utlägg (skattefritt)",
+    "remove_expense_claim_line_aria": "Ta bort utlägget från lönebeskedet"
   },
   "salary_tax_tables": {
     "checking": "Kontrollerar skattetabeller…",
@@ -8120,7 +8150,9 @@
     "manual_spec_hint": "Specifikationen kommer från systemet: {label}. Differensen ska vara noll innan du signerar, annars signerar du med en notering.",
     "signoff_external_balance": "Saldo enligt underlag",
     "signoff_external_balance_help": "Samma tecken som i bokföringen, skulder anges med minus. Bokfört: {amount}.",
-    "signoff_external_balance_optional": "Lämna tomt om du bara vill signera med en notering."
+    "signoff_external_balance_optional": "Lämna tomt om du bara vill signera med en notering.",
+    "proposal_set_title": "{count} verifikat som tillsammans ger beloppet",
+    "proposal_set_same_day": "samma dag"
   },
   "skattekonto": {
     "help_text": "Saldot och händelserna hämtas från Skatteverket och synkas automatiskt varje natt. Genomförda händelser bokförs mot 1630 Skattekonto, oftast automatiskt; det som inte kan matchas flaggas i listan. Betala in via bankgiro 5050-1055 med ditt OCR-nummer.",
@@ -8823,8 +8855,16 @@
     "open_dossier": "Öppna {name}",
     "attn_create": "Skapa förslag",
     "auto_created_title": "{count} förslag skapade från bokföringen",
-    "auto_created_description": "Motparter som dina verifikat namnger men som inte finns i registret. Lägg upp dem, eller dölj de som inte hör hemma här."
-},
+    "auto_created_description": "Motparter som dina verifikat namnger men som inte finns i registret. Lägg upp dem, eller dölj de som inte hör hemma här.",
+    "autofill_looking": "Söker i SCB:s företagsregister…",
+    "autofill_filled": "{name} · {fields} från SCB. Ändra fritt.",
+    "autofill_found": "{name} enligt SCB:s register. Inget ändrat, fälten var redan ifyllda.",
+    "autofill_not_found": "Inget företag med org.nr {org} i SCB:s register.",
+    "autofill_field_name": "namn",
+    "autofill_field_email": "e-post",
+    "autofill_field_phone": "telefon",
+    "autofill_field_vat": "momsnummer"
+  },
   "tx_expense_payout_match": {
     "title": "Bokför återbetalning av utlägg",
     "description": "Överföringen bokförs mot personens skuldkonto, utläggen markeras som utbetalda och transaktionen kopplas till verifikatet.",

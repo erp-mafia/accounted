@@ -191,8 +191,13 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     if (!item.proposal) return
     setBusy(item.item_id)
     try {
+      // A set proposal (#2293) links the row to every verifikat in it (1:N,
+      // all or nothing, slices revalidated server-side); a 1:1 proposal to one.
+      const journalEntryIds = item.proposal.vouchers?.map((v) => v.journal_entry_id) ?? [
+        item.proposal.journal_entry_id,
+      ]
       const data = await postJson(`${base}/links`, {
-        pairs: [{ external_ids: [item.item_id], journal_entry_ids: [item.proposal.journal_entry_id] }],
+        pairs: [{ external_ids: [item.item_id], journal_entry_ids: journalEntryIds }],
       })
       if (data) {
         const skipped = data.skipped as Array<{ message: string }>
@@ -916,6 +921,43 @@ function ItemRow({
         {item.entry_status === 'draft' && <Chip>{t('chip_draft')}</Chip>}
         {item.entry_status === 'reversed' && <Chip>{t('chip_reversed')}</Chip>}
         {item.awaiting_external && <Chip>{t('chip_awaiting', { source: sourceLabel })}</Chip>}
+      </span>
+    )
+  } else if (item.proposal && item.proposal.vouchers && item.proposal.vouchers.length > 1) {
+    // An explaining set (#2293): "= A57 + A58", the legs' amounts underneath,
+    // one Koppla that links the row to all of them.
+    const p = item.proposal
+    const setVouchers = p.vouchers ?? []
+    const sameDay = setVouchers.every((v) => v.entry_date === item.date)
+    voucherCell = (
+      <span className="flex flex-col gap-0.5">
+        <span
+          className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5"
+          title={t('proposal_set_title', { count: setVouchers.length })}
+        >
+          <span className="text-muted-foreground" aria-hidden>
+            =
+          </span>
+          {setVouchers.map((v, i) => (
+            <Fragment key={v.journal_entry_id}>
+              {i > 0 && (
+                <span className="text-muted-foreground" aria-hidden>
+                  +
+                </span>
+              )}
+              <Link href={`/bookkeeping/${v.journal_entry_id}`} className={QUIET_LINK_CLASS} data-ph-mask>
+                {voucherOf(v) ?? v.journal_entry_id.slice(0, 8)}
+              </Link>
+            </Fragment>
+          ))}
+          <span className="text-[11px] text-muted-foreground">
+            {t('confidence', { percent: Math.round(p.confidence * 100) })}
+          </span>
+        </span>
+        <span className="truncate text-[12px] tabular-nums text-muted-foreground" data-ph-mask>
+          {setVouchers.map((v) => formatCurrency(v.amount, currency)).join(' + ')}
+          {sameDay ? ` · ${t('proposal_set_same_day')}` : ''}
+        </span>
       </span>
     )
   } else if (item.proposal) {

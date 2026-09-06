@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useRef, type RefObject } from 'react'
+import { useState, type RefObject } from 'react'
 import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { findIllegalVatRateRow } from '@/lib/vat/supplier-invoice-line-checks'
-import { rateToPctString, type SupplierInvoiceFormData } from '@/lib/supplier-invoices/form-payload'
+import { rateToPctString, supplierInvoiceCreateUrl, type SupplierInvoiceFormData } from '@/lib/supplier-invoices/form-payload'
+import { isPersonPayer } from '@/lib/expenses/payer'
 import type { InvoiceExtractionResult } from '@/types'
 
 // The existing invoice surfaced on a duplicate-number conflict, used to drive
@@ -22,7 +23,12 @@ export interface ExistingSupplierInvoice {
 // envelope's inner object ({ code, message, details }); a few legacy convert
 // paths still return a flat string, so accept both.
 export interface CreateResult {
-  data?: { id: string; arrival_number: number }
+  data?: {
+    id: string
+    arrival_number: number
+    /** Set when the invoice was booked as an utlägg (a person paid). */
+    expense_claim?: { id: string; claimant_name: string; liability_account: string } | null
+  }
   warnings?: Array<{ code: string; message: string }>
   error?:
     | string
@@ -50,6 +56,8 @@ interface UseSupplierInvoiceSubmitParams {
   showNoPeriodWarning: boolean
   canUseAccrual: boolean
   invoiceNumberInputRef: RefObject<HTMLInputElement | null>
+  /** After an utlägg booked: the host refreshes server data (the Utlägg nav gate). */
+  onExpenseRegistered?: () => void
   /**
    * Focus router for the always-enabled primary: called instead of a toast
    * when a required field is missing (supplier, invoice number, row account),
@@ -85,6 +93,7 @@ export function useSupplierInvoiceSubmit({
   showNoPeriodWarning,
   canUseAccrual,
   invoiceNumberInputRef,
+  onExpenseRegistered,
   onMissingField,
 }: UseSupplierInvoiceSubmitParams) {
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -94,11 +103,6 @@ export function useSupplierInvoiceSubmit({
   // Match-on-create state
   const [showBankPicker, setShowBankPicker] = useState(false)
   const [pendingTransactionId, setPendingTransactionId] = useState<string | null>(null)
-  // The button's onClick and the form's onSubmit run in the same React event
-  // batch, so a `useState`-backed submitMode would still hold the previous
-  // render's value when onSubmit reads it. A ref bridges the two synchronous
-  // handlers; the matching state mirror only drives the review-dialog UI.
-  const submitModeRef = useRef<'register' | 'register_and_match'>('register')
 
   // Conflict state for duplicate-supplier-invoice-number
   const [conflict, setConflict] = useState<{
@@ -147,8 +151,9 @@ export function useSupplierInvoiceSubmit({
     }
   }
 
-  // Single submit endpoint chooser: convert when we came from inbox, plain
-  // POST otherwise. Both endpoints validate the same CreateSupplierInvoiceSchema
+  // Single submit endpoint chooser: convert when we came from inbox and the
+  // company pays, plain POST otherwise (a person paying is an utlägg, which
+  // only the core route books). Both endpoints validate the same CreateSupplierInvoiceSchema
   // and return the same canonical error envelope ({ error: { code, message,
   // details } }): including the recoverable duplicate-number 409.
   async function postCreate(data: SupplierInvoiceFormData): Promise<{
@@ -156,9 +161,7 @@ export function useSupplierInvoiceSubmit({
     status: number
     result: CreateResult
   }> {
-    const url = inboxItemId
-      ? `/api/extensions/ext/invoice-inbox/items/${inboxItemId}/convert`
-      : '/api/supplier-invoices'
+    const url = supplierInvoiceCreateUrl(data.payer, inboxItemId)
 
     const res = await fetch(url, {
       method: 'POST',
@@ -281,18 +284,19 @@ export function useSupplierInvoiceSubmit({
       return
     }
 
-    if (submitModeRef.current === 'register_and_match') {
-      // Open the bank-transaction picker; actual create happens on pick.
-      // For AB the review dialog is shown after a transaction is picked.
+    if (data.payer === 'company') {
+      // "Företaget" is register-and-match: open the bank-transaction picker;
+      // the actual create happens on pick. For AB the review dialog is shown
+      // after a transaction is picked.
       setPendingData(data)
       setShowBankPicker(true)
       return
     }
 
-    // Privately-paid skips the AB review dialog: the toggle itself is the
+    // A person paying skips the AB review dialog: the answer itself is the
     // explicit user intent, and the resulting verifikat is just expense + VAT
-    // against the owner account (2893/2018). Same path for EF.
-    if (isEF || data.paid_with_private_funds) {
+    // against that person's liability account. Same path for EF.
+    if (isEF || isPersonPayer(data.payer)) {
       setPendingData(data)
       handleDirectSubmit(data)
     } else {
@@ -327,11 +331,21 @@ export function useSupplierInvoiceSubmit({
     // beforeunload prompt while we navigate away on a successful submit.
     reset(data)
 
-    if (data.paid_with_private_funds) {
+    if (isPersonPayer(data.payer)) {
+      const claim = result.data.expense_claim
       toast({
         title: t('expense_registered_title'),
-        description: t('arrival_number_label', { number: result.data.arrival_number }),
+        // An enskild firma owner's claim is an egen insättning (2018): no
+        // debt, so there is no Att göra row to point at.
+        description:
+          claim && claim.liability_account !== '2018'
+            ? t('expense_registered_description', {
+                name: claim.claimant_name,
+                number: result.data.arrival_number,
+              })
+            : t('arrival_number_label', { number: result.data.arrival_number }),
       })
+      onExpenseRegistered?.()
       finishCreate()
       setIsSubmitting(false)
       return
@@ -376,7 +390,6 @@ export function useSupplierInvoiceSubmit({
         })
         const matchResult = await matchRes.json()
         setPendingTransactionId(null)
-        submitModeRef.current = 'register'
 
         if (matchRes.ok) {
           toast({
@@ -534,7 +547,6 @@ export function useSupplierInvoiceSubmit({
     })
     const matchResult = await matchRes.json()
     setIsSubmitting(false)
-    submitModeRef.current = 'register'
 
     if (matchRes.ok) {
       toast({
@@ -560,7 +572,6 @@ export function useSupplierInvoiceSubmit({
     showBankPicker,
     setShowBankPicker,
     setPendingTransactionId,
-    submitModeRef,
     conflict,
     setConflict,
     isResolvingConflict,

@@ -119,6 +119,9 @@ Request body:
   notes?: string,
   ore_rounding?: boolean,
   paid_with_private_funds?: boolean,
+  employee_id?: string,
+  claimant_name?: string,
+  inbox_item_id?: string,
   payment_date?: string,
   default_dimensions?: Record<string, string>,
   items: { description: string, amount?: number, account_number: string, vat_rate?: 0 | 0.06 | 0.12 | 0.25, vat_amount?: number, reverse_charge_rate?: number, apply_slp?: boolean, vat_code?: string, quantity?: number, unit?: string, unit_price?: number, accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
