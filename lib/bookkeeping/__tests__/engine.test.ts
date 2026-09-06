@@ -922,15 +922,17 @@ describe('reverseEntry: bank transaction unlink', () => {
    * the delete (a row anchored to some other verifikat too), as ids (one
    * bank_line row each, no amount) or as full rows. `txRows` is what the
    * partial-split read returns for the rows that still have anchors.
-   * `pointerRows` are the ids whose journal_entry_id column points at entry-1
-   * (the read that precedes the pointer reset).
+   * `release` is what the release_reversed_entry_transactions RPC answers
+   * (the pointer reset and the supplementary-link drop live in that RPC since
+   * #2061; its semantics are pinned in tests/pg/release-reversed-entry-
+   * transactions.pg.test.ts, here only the call and the fallthrough are).
    */
   function setup(
     opts: {
       voucherLinks?: string[]
       remainingLinks?: Array<string | RemainingRow>
       txRows?: TxRow[]
-      pointerRows?: string[]
+      release?: { data: unknown; error: unknown }
     } = {},
   ) {
     let jeCall = 0
@@ -981,7 +983,11 @@ describe('reverseEntry: bank transaction unlink', () => {
     }
 
     const supabase = {
-      rpc: vi.fn().mockResolvedValue({ data: 8, error: null }),
+      rpc: vi.fn().mockImplementation(async (name: string) =>
+        name === 'release_reversed_entry_transactions'
+          ? (opts.release ?? { data: { released: 0, dropped: 0 }, error: null })
+          : { data: 8, error: null },
+      ),
       from: vi.fn().mockImplementation((table: string) => {
         if (table === 'journal_entries') return jeBuilder()
         if (table === 'chart_of_accounts') {
@@ -1001,13 +1007,9 @@ describe('reverseEntry: bank transaction unlink', () => {
           return { insert: vi.fn().mockResolvedValue({ error: null }) }
         }
         if (table === 'transactions') {
-          return recorder(txWrites, (current) => {
-            if (current.op !== 'select') return { error: null }
-            if (current.payload === 'id') {
-              return { data: (opts.pointerRows ?? []).map((id) => ({ id })), error: null }
-            }
-            return { data: opts.txRows ?? [], error: null }
-          })
+          return recorder(txWrites, (current) =>
+            current.op === 'select' ? { data: opts.txRows ?? [], error: null } : { error: null },
+          )
         }
         if (table === 'transaction_voucher_links') {
           return recorder(linkOps, (current) => {
@@ -1029,32 +1031,23 @@ describe('reverseEntry: bank transaction unlink', () => {
   }
 
   it('resets journal_entry_id, is_business and category so the row returns to Att bokföra (#1950)', async () => {
-    const { supabase, txWrites, linkOps } = setup()
+    const { supabase, txWrites, linkOps } = setup({
+      release: { data: { released: 1, dropped: 1 }, error: null },
+    })
 
     const result = await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(result.id).toBe('reversal-1')
-    // [0] the read of the rows the reset is about to release, [1] the reset.
-    expect(txWrites).toHaveLength(2)
-    expect(txWrites[0]).toEqual({
-      op: 'select',
-      payload: 'id',
-      filters: [
-        ['eq', 'company_id', 'company-1'],
-        ['eq', 'journal_entry_id', 'entry-1'],
-      ],
+    // The pointer reset (journal_entry_id, is_business, category,
+    // reconciliation_method to null) and the drop of the released rows'
+    // supplementary junction links run inside one RPC statement (#2061),
+    // scoped to this company and this entry: never a company-wide reset.
+    expect(supabase.rpc).toHaveBeenCalledWith('release_reversed_entry_transactions', {
+      p_company_id: 'company-1',
+      p_entry_id: 'entry-1',
     })
-    expect(txWrites[1].payload).toEqual({
-      journal_entry_id: null,
-      is_business: null,
-      category: null,
-      reconciliation_method: null,
-    })
-    // Scoped to rows linked to the reversed entry only: never a company-wide reset.
-    expect(txWrites[1].filters).toEqual([
-      ['eq', 'company_id', 'company-1'],
-      ['eq', 'journal_entry_id', 'entry-1'],
-    ])
+    // No direct write to transactions is left on this path.
+    expect(txWrites).toHaveLength(0)
     // The junction is consulted for this entry only; nothing to delete or
     // release when it holds no rows.
     expect(linkOps).toEqual([
@@ -1107,10 +1100,10 @@ describe('reverseEntry: bank transaction unlink', () => {
       },
     ])
 
-    // [0] pointer read, [1] unlink, [2] the partial-split read for the row
-    // still anchored (tx-c), [3] the release of the rows with no anchor left.
-    expect(txWrites).toHaveLength(4)
-    expect(txWrites[2]).toEqual({
+    // [0] the partial-split read for the row still anchored (tx-c), [1] the
+    // release of the rows with no anchor left.
+    expect(txWrites).toHaveLength(2)
+    expect(txWrites[0]).toEqual({
       op: 'select',
       payload: 'id, amount, journal_entry_id',
       filters: [
@@ -1118,10 +1111,10 @@ describe('reverseEntry: bank transaction unlink', () => {
         ['in', 'id', ['tx-c']],
       ],
     })
-    expect(txWrites[3].payload).toEqual({ is_business: null, category: null, reconciliation_method: null })
+    expect(txWrites[1].payload).toEqual({ is_business: null, category: null, reconciliation_method: null })
     // Only rows with no anchor left, and never a row whose journal_entry_id
     // still points at another verifikat (residual booking).
-    expect(txWrites[3].filters).toEqual([
+    expect(txWrites[1].filters).toEqual([
       ['eq', 'company_id', 'company-1'],
       ['in', 'id', ['tx-a', 'tx-b']],
       ['is', 'journal_entry_id', null],
@@ -1137,8 +1130,8 @@ describe('reverseEntry: bank transaction unlink', () => {
     await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(linkOps.map((o) => o.op)).toEqual(['select', 'delete', 'select'])
-    // The pointer read, the unlink, the partial-split read; no release.
-    expect(txWrites.map((w) => w.op)).toEqual(['select', 'update', 'select'])
+    // Only the partial-split read; no release.
+    expect(txWrites.map((w) => w.op)).toEqual(['select'])
   })
 
   it('releases a 1:N split whole when one of its verifikat is reversed (#1553): surviving slices dropped', async () => {
@@ -1189,48 +1182,24 @@ describe('reverseEntry: bank transaction unlink', () => {
     await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(linkOps.map((o) => o.op)).toEqual(['select', 'delete', 'select'])
-    expect(txWrites.map((w) => w.op)).toEqual(['select', 'update', 'select'])
+    expect(txWrites.map((w) => w.op)).toEqual(['select'])
   })
 
-  it('drops the supplementary junction links of a row whose main verifikat is reversed (#2061)', async () => {
-    // Residual booking: tx-r points at entry-1 (the main verifikat) and one
-    // junction row of role 'other' anchors the small residual verifikat.
-    // Reversing entry-1 releases tx-r whole: the pointer reset takes the
-    // 'other' row with it, so no reader (unmatched list, bulk_book RPC,
-    // is_transaction_booked) keeps calling the row booked.
-    const { supabase, txWrites, linkOps } = setup({ pointerRows: ['tx-r'] })
+  it('runs the release RPC before the junction cleanup, and the storno still completes when the RPC fails', async () => {
+    // The release is best effort like the junction cleanup below it: the
+    // storno is already posted by then, so an RPC error is logged and the
+    // entry-scoped junction cleanup still runs.
+    const { supabase, txWrites, linkOps } = setup({
+      release: { data: null, error: { message: 'boom' } },
+    })
 
-    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+    const result = await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
-    expect(txWrites.map((w) => w.op)).toEqual(['select', 'update'])
-    expect(linkOps).toEqual([
-      {
-        op: 'delete',
-        payload: undefined,
-        filters: [
-          ['eq', 'company_id', 'company-1'],
-          ['in', 'transaction_id', ['tx-r']],
-          // Links to the reversed entry itself belong to the junction cleanup.
-          ['neq', 'journal_entry_id', 'entry-1'],
-        ],
-      },
-      {
-        op: 'select',
-        payload: 'transaction_id',
-        filters: [
-          ['eq', 'company_id', 'company-1'],
-          ['eq', 'journal_entry_id', 'entry-1'],
-        ],
-      },
-    ])
-  })
-
-  it('does not touch the junction when no row pointed at the reversed entry', async () => {
-    const { supabase, linkOps } = setup({ pointerRows: [] })
-
-    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
-
+    expect(result.id).toBe('reversal-1')
+    const rpcNames = (supabase.rpc as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(rpcNames).toContain('release_reversed_entry_transactions')
     expect(linkOps.map((o) => o.op)).toEqual(['select'])
+    expect(txWrites).toHaveLength(0)
   })
 })
 
@@ -1318,8 +1287,8 @@ describe('reverseEntry: opening balance unlink', () => {
         }
         if (table === 'transactions') {
           const b: Record<string, unknown> = {}
-          for (const m of ['select', 'update', 'eq']) b[m] = vi.fn().mockReturnValue(b)
-          b.then = (resolve: (v: unknown) => void) => resolve({ data: [], error: null })
+          for (const m of ['update', 'eq']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) => resolve({ error: null })
           return b
         }
         return createMockChain()
