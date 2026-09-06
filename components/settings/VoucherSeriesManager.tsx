@@ -38,12 +38,18 @@ const NAME_MAX_LENGTH = 40
 /**
  * The series this company uses, with a name per letter.
  *
- * Rows are the union of the letters that have vouchers (voucher_sequences),
- * the letters configured as defaults, and the letters that already carry a
- * name, so a freshly assigned series (L for löner, no voucher yet) can be
- * named before its first verifikat. The name is display only: it is what the
- * pickers show next to the letter, with the Swedish preset as the fallback.
- * The letter itself stays the identifier on every journal entry.
+ * Rows are the union of every series that has vouchers (voucher_sequences,
+ * including multi-character series such as FT or SKV carried over from a
+ * Fortnox or Bokio import), the letters configured as defaults, and the
+ * letters that already carry a name, so a freshly assigned series (L for
+ * löner, no voucher yet) can be named before its first verifikat.
+ *
+ * Only single-letter series can be named: those are the ones the pickers
+ * offer and the settings schema accepts. Imported multi-character series are
+ * listed with their highest number, as before, and cannot be picked for new
+ * vouchers anyway. The name is display only: it is what the pickers show
+ * next to the letter, with the Swedish preset as the fallback. The letter
+ * itself stays the identifier on every journal entry.
  */
 export function VoucherSeriesManager({ settings, onSettingsUpdated }: VoucherSeriesManagerProps) {
   const t = useTranslations('settings_voucher_series')
@@ -53,18 +59,28 @@ export function VoucherSeriesManager({ settings, onSettingsUpdated }: VoucherSer
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
 
-  const savedLabels = useMemo<Record<string, string>>(() => {
-    const out: Record<string, string> = {}
+  // The saved names, keyed by CONTENT rather than object identity. The
+  // settings hook revalidates on window focus and hands out a fresh object
+  // even when nothing changed; re-seeding the draft on that identity change
+  // would wipe whatever the user is typing. Serializing the filtered entries
+  // gives a key that only changes when a name actually changes.
+  const savedKey = useMemo(() => {
+    const entries: Array<[string, string]> = []
     for (const [letter, name] of Object.entries(settings.voucher_series_labels ?? {})) {
       if (SERIES_LETTER_RE.test(letter) && typeof name === 'string' && name.trim()) {
-        out[letter] = name.trim()
+        entries.push([letter, name.trim()])
       }
     }
-    return out
+    entries.sort(([a], [b]) => a.localeCompare(b))
+    return JSON.stringify(entries)
   }, [settings.voucher_series_labels])
+  const savedLabels = useMemo<Record<string, string>>(
+    () => Object.fromEntries(JSON.parse(savedKey) as Array<[string, string]>),
+    [savedKey],
+  )
   const [draft, setDraft] = useState<Record<string, string>>(savedLabels)
-  // Re-seed the draft when the saved names change underneath us (another
-  // form on the page saved, or the settings were refetched).
+  // Re-seed only when a saved name actually changed (another form on the
+  // page saved, or the settings were refetched with different content).
   useEffect(() => { setDraft(savedLabels) }, [savedLabels])
 
   const defaultSeries = settings.default_voucher_series || 'A'
@@ -83,37 +99,43 @@ export function VoucherSeriesManager({ settings, onSettingsUpdated }: VoucherSer
 
   useEffect(() => { fetchSeries() }, [fetchSeries])
 
-  // Highest last_number per letter across fiscal periods.
+  // Highest last_number per series across fiscal periods. Every series the
+  // ledger holds counts, whatever its shape: the number is the only place in
+  // the UI that shows how far an imported series has run.
   const lastNumbers = useMemo(() => {
     const acc: Record<string, number> = {}
     for (const s of series) {
-      if (!SERIES_LETTER_RE.test(s.voucher_series)) continue
-      acc[s.voucher_series] = Math.max(acc[s.voucher_series] || 0, s.last_number)
+      const key = s.voucher_series?.trim()
+      if (!key) continue
+      acc[key] = Math.max(acc[key] || 0, s.last_number)
     }
     return acc
   }, [series])
 
-  const letters = useMemo(() => {
-    const set = new Set<string>()
-    const consider = (value: unknown) => {
+  const rows = useMemo(() => {
+    const set = new Set<string>(Object.keys(lastNumbers))
+    const considerLetter = (value: unknown) => {
       if (typeof value === 'string' && SERIES_LETTER_RE.test(value)) set.add(value)
     }
-    Object.keys(lastNumbers).forEach(consider)
-    consider(defaultSeries)
-    Object.values(settings.default_voucher_series_per_source_type ?? {}).forEach(consider)
-    Object.keys(savedLabels).forEach(consider)
-    return Array.from(set).sort()
+    considerLetter(defaultSeries)
+    Object.values(settings.default_voucher_series_per_source_type ?? {}).forEach(considerLetter)
+    Object.keys(savedLabels).forEach(considerLetter)
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
   }, [lastNumbers, defaultSeries, settings.default_voucher_series_per_source_type, savedLabels])
 
-  // The map the API receives: every listed letter, empty string meaning
-  // "clear this name" (the schema strips empties before storing).
-  const hasChanges = letters.some((letter) => (draft[letter] ?? '').trim() !== (savedLabels[letter] ?? ''))
+  const nameableLetters = useMemo(() => rows.filter((s) => SERIES_LETTER_RE.test(s)), [rows])
+
+  const hasChanges = nameableLetters.some(
+    (letter) => (draft[letter] ?? '').trim() !== (savedLabels[letter] ?? ''),
+  )
 
   const handleSave = async () => {
     setIsSaving(true)
     try {
+      // Every nameable letter is sent, empty string meaning "clear this
+      // name"; the schema strips empties before storing.
       const payload: Record<string, string> = {}
-      for (const letter of letters) payload[letter] = (draft[letter] ?? '').trim()
+      for (const letter of nameableLetters) payload[letter] = (draft[letter] ?? '').trim()
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -144,40 +166,39 @@ export function VoucherSeriesManager({ settings, onSettingsUpdated }: VoucherSer
   }
 
   return (
-    <SettingsGroup label={t('heading')} help={t('name_help')}>
+    <SettingsGroup label={t('heading')} help={`${t('name_help')} ${t('footnote')}`}>
       {isLoading ? (
         <div className="space-y-2 px-1 py-3">
           <Skeleton className="h-4 w-32" />
           <Skeleton className="h-4 w-24" />
         </div>
-      ) : letters.length === 0 ? (
-        <p className="px-1 py-3 text-sm text-muted-foreground">
-          {t('empty_state', { series: defaultSeries })}
-        </p>
       ) : (
         <>
-          {letters.map((letter, i) => {
-            const lastNum = lastNumbers[letter]
+          {rows.map((seriesKey, i) => {
+            const lastNum = lastNumbers[seriesKey]
+            const nameable = SERIES_LETTER_RE.test(seriesKey)
             // Placeholder shows the preset the name would fall back to, so an
             // empty field never reads as "this series has no meaning".
-            const preset = voucherSeriesLabel(letter)
+            const preset = nameable ? voucherSeriesLabel(seriesKey) : ''
             return (
               <SettingsRow
-                key={letter}
-                label={`${t('series_prefix')} ${letter}`}
-                htmlFor={`series-name-${letter}`}
-                borderless={i === letters.length - 1}
+                key={seriesKey}
+                label={`${t('series_prefix')} ${seriesKey}`}
+                htmlFor={nameable ? `series-name-${seriesKey}` : undefined}
+                borderless={i === rows.length - 1}
               >
-                <SettingsInput
-                  id={`series-name-${letter}`}
-                  value={draft[letter] ?? ''}
-                  maxLength={NAME_MAX_LENGTH}
-                  placeholder={preset || t('name_placeholder')}
-                  aria-label={`${t('name_column')} ${letter}`}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, [letter]: e.target.value }))}
-                  className="w-full md:w-64"
-                />
-                {letter === defaultSeries && (
+                {nameable && (
+                  <SettingsInput
+                    id={`series-name-${seriesKey}`}
+                    value={draft[seriesKey] ?? ''}
+                    maxLength={NAME_MAX_LENGTH}
+                    placeholder={preset || t('name_placeholder')}
+                    aria-label={`${t('name_column')} ${seriesKey}`}
+                    onChange={(e) => setDraft((prev) => ({ ...prev, [seriesKey]: e.target.value }))}
+                    className="w-full md:w-64"
+                  />
+                )}
+                {seriesKey === defaultSeries && (
                   <SettingsRowNote>{t('default_badge')}</SettingsRowNote>
                 )}
                 <span className="ml-auto shrink-0 text-sm text-muted-foreground tabular-nums">
