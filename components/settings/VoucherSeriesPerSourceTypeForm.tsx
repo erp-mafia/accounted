@@ -13,10 +13,8 @@ import {
 } from '@/components/settings/SettingsRows'
 import { cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { VOUCHER_SERIES_PRESETS } from '@/lib/bookkeeping/voucher-series-resolver'
+import { buildVoucherSeriesOptions } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { CompanySettings, JournalEntrySourceType } from '@/types'
-
-const SERIES_LETTER_RE = /^[A-Z]$/
 
 // Subset of source_types presented to the user. The DB column accepts every
 // JournalEntrySourceType, but several values (storno, correction, etc.) are
@@ -89,22 +87,22 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   // the draft so a non-preset letter stays selectable after the user changes
   // that row away from it (otherwise a misclick could not be undone without
   // a reload) and so a letter that lands in settings after mount is offered.
-  // A free A-Z list would let a typo start an undocumented series.
-  const seriesOptions = useMemo(() => {
-    const preset = new Set(VOUCHER_SERIES_PRESETS.map((p) => p.letter))
-    const extras = [
+  // A free A-Z list would let a typo start an undocumented series. Names
+  // come from the company's own voucher_series_labels, presets as fallback.
+  const seriesOptions = useMemo(
+    () =>
+      buildVoucherSeriesOptions(settings.voucher_series_labels, [
+        settings.default_voucher_series,
+        ...Object.values(settings.default_voucher_series_per_source_type ?? {}),
+        ...Object.values(draft),
+      ]),
+    [
+      settings.voucher_series_labels,
       settings.default_voucher_series,
-      ...Object.values(settings.default_voucher_series_per_source_type ?? {}),
-      ...Object.values(draft),
-    ].filter(
-      (v): v is string => typeof v === 'string' && SERIES_LETTER_RE.test(v) && !preset.has(v),
-    )
-    const uniqueExtras = Array.from(new Set(extras)).sort()
-    return [
-      ...VOUCHER_SERIES_PRESETS,
-      ...uniqueExtras.map((letter) => ({ letter, label: '' })),
-    ]
-  }, [settings.default_voucher_series, settings.default_voucher_series_per_source_type, draft])
+      settings.default_voucher_series_per_source_type,
+      draft,
+    ],
+  )
 
   const handleChange = (sourceType: JournalEntrySourceType, value: string) => {
     setDraft((prev) => ({ ...prev, [sourceType]: value }))
