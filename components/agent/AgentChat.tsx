@@ -18,7 +18,8 @@ import {
 import dynamic from 'next/dynamic'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { useCapability } from '@/contexts/CompanyContext'
+import { useTranslations } from 'next-intl'
+import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
@@ -251,6 +252,11 @@ export default function AgentChat({
   // though it were the new one.
   const turnStartRef = useRef(0)
   const hasAi = useCapability(CAPABILITY.ai)
+  // Whether the deployment can run this runtime at all (#2204). Every entry
+  // point hides itself when it cannot; this is the last line of defense for a
+  // resumed thread or a deep link: never fire an invoke that answers 503.
+  const assistantAvailable = useAssistantAvailable()
+  const tChat = useTranslations('agent_chat')
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   // Turn boundaries for the status channel are derived from the streaming flag
@@ -312,9 +318,10 @@ export default function AgentChat({
     const hasResumeState = !!initialConversationId
     if (hasResumeState) return
 
-    // Paywall: never auto-fire the first invoke without the ai capability;
-    // the composer is already replaced by the upgrade note.
-    if (!hasAi) return
+    // Paywall / no runtime: never auto-fire the first invoke without the ai
+    // capability or the tool-loop runtime; the composer is already replaced
+    // by the upgrade note or the unavailable notice.
+    if (!hasAi || !assistantAvailable) return
 
     // Seed-message path: render the user's pre-baked starter in the timeline
     // and send it as the first turn's user_message (skips intent.capture +
@@ -543,7 +550,7 @@ export default function AgentChat({
   }
 
   function handleRegenerate() {
-    if (!hasAi) return
+    if (!hasAi || !assistantAvailable) return
     // Re-run the last user message and let the agent produce a fresh
     // response. UI truncates back to the last user message; DB rows are
     // append-only, so the previous assistant turn stays in agent_messages
@@ -611,7 +618,7 @@ export default function AgentChat({
   // user turn so the agent re-proposes inline: no synthetic user bubble (we
   // don't add a user row, and the turn is persisted hidden).
   function handleCorrection(correctionMessage: string) {
-    if (!hasAi) return
+    if (!hasAi || !assistantAvailable) return
     void startTurn({ conversationId, userMessage: correctionMessage, hidden: true })
   }
 
@@ -865,6 +872,7 @@ export default function AgentChat({
               showRegenerate={
                 !streaming &&
                 hasAi &&
+                assistantAvailable &&
                 i === lastAssistantIdx &&
                 m.role === 'assistant' &&
                 m.text.length > 0
@@ -923,6 +931,15 @@ export default function AgentChat({
       {!hasAi ? (
         <div className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
           <UpgradeNote>AI-assistenten kräver ett abonnemang.</UpgradeNote>
+        </div>
+      ) : !assistantAvailable ? (
+        /* No tool-loop runtime on this deployment (#2204): same swap as the
+           paywall, so a resumed or deep-linked thread never offers a send
+           that answers 503. */
+        <div className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
+          <p className="text-sm text-muted-foreground" role="status">
+            {tChat('assistant_unavailable')}
+          </p>
         </div>
       ) : (
       <form

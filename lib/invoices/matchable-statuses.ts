@@ -71,3 +71,18 @@ export function isMatchableSupplierInvoice(
 ): boolean {
   return getSupplierInvoiceMatchTargetState(candidate) === 'matchable'
 }
+
+/**
+ * Statuses under which an invoice has NOT been issued: no document exists that
+ * could serve as underlag for a verifikat. The schema says the same thing from
+ * the other side (migration 20260427150000: an invoice outside these statuses
+ * must carry an invoice_number). Every reader that treats a customer invoice
+ * pointing at a verifikat as its underlag (BFL 5 kap 7 § hänvisning) must
+ * exclude these, in step with the SQL arm in verifikat_without_documents /
+ * transactions_without_documents (migration 20260906135702, #2298).
+ */
+export const NON_ISSUED_INVOICE_STATUSES = ['draft', 'cancelled'] as const
+
+/** PostgREST `not.in` literal for {@link NON_ISSUED_INVOICE_STATUSES}. */
+export const NON_ISSUED_INVOICE_STATUSES_FILTER =
+  '(' + NON_ISSUED_INVOICE_STATUSES.map((s) => `"${s}"`).join(',') + ')'

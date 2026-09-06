@@ -50,6 +50,16 @@ interface CompanyContextValue {
   /** PAID capability keys the active company currently holds (entitled + enabled). */
   capabilities: CapabilityKey[]
   /**
+   * Whether this deployment can run the in-app assistant, i.e. the tool-loop
+   * runtime behind /api/agent/invoke: getAiStatus().assistantAvailable, false
+   * without AI credentials or on an OpenAI-compatible endpoint (#2204).
+   * Deployment-level, not per company. Gates ONLY the surfaces that open
+   * that runtime; provider-agnostic AI (the single-call ask console,
+   * categorization, document extraction) never reads it. The route's 503
+   * stays the real enforcement.
+   */
+  assistantAvailable: boolean
+  /**
    * Trial expiry while the trial is the company's only source of paid access;
    * null when paying/comped or after the trial lapsed. Drives the countdown
    * touchpoint in the sidebar.
@@ -110,4 +120,17 @@ export function useCapability(key: CapabilityKey): boolean {
   const ctx = useContext(CompanyContext)
   if (!ctx) return true
   return ctx.capabilities.includes(key)
+}
+
+/**
+ * Whether the deployment can run the in-app assistant (see
+ * CompanyContextValue.assistantAvailable). Read it at every entry point that
+ * opens AgentChat / /api/agent/invoke; the single-call console (general.help)
+ * runs on any provider and does not need it. Fail-open outside a
+ * CompanyProvider for the same reason as useCapability: the server answers 503.
+ */
+export function useAssistantAvailable(): boolean {
+  const ctx = useContext(CompanyContext)
+  if (!ctx) return true
+  return ctx.assistantAvailable
 }

@@ -45,7 +45,7 @@ describe('vatDeadlineLine', () => {
 
 describe('checklistNumbers', () => {
   it('numbers all five steps when both extensions are on', () => {
-    expect(checklistNumbers({ hasSkatteverket: true, hasInbox: true })).toEqual({
+    expect(checklistNumbers({ hasSkatteverket: true, hasInbox: true, hasAssistant: true })).toEqual({
       count: 5,
       skv: 3,
       receipts: 4,
@@ -54,7 +54,7 @@ describe('checklistNumbers', () => {
   })
 
   it('collapses to four steps without the inbox extension', () => {
-    expect(checklistNumbers({ hasSkatteverket: true, hasInbox: false })).toEqual({
+    expect(checklistNumbers({ hasSkatteverket: true, hasInbox: false, hasAssistant: true })).toEqual({
       count: 4,
       skv: 3,
       receipts: 4,
@@ -63,7 +63,7 @@ describe('checklistNumbers', () => {
   })
 
   it('collapses to four steps without the skatteverket extension', () => {
-    expect(checklistNumbers({ hasSkatteverket: false, hasInbox: true })).toEqual({
+    expect(checklistNumbers({ hasSkatteverket: false, hasInbox: true, hasAssistant: true })).toEqual({
       count: 4,
       skv: 3,
       receipts: 3,
@@ -72,8 +72,25 @@ describe('checklistNumbers', () => {
   })
 
   it('collapses to three steps with neither extension', () => {
-    expect(checklistNumbers({ hasSkatteverket: false, hasInbox: false })).toEqual({
+    expect(checklistNumbers({ hasSkatteverket: false, hasInbox: false, hasAssistant: true })).toEqual({
       count: 3,
+      skv: 3,
+      receipts: 3,
+      assistant: 3,
+    })
+  })
+
+  // A deployment that cannot run the assistant (#2204) drops the Claude step:
+  // the title counts one step fewer, the other ordinals stay put.
+  it('drops the assistant step from the count without moving the other ordinals', () => {
+    expect(checklistNumbers({ hasSkatteverket: true, hasInbox: true, hasAssistant: false })).toEqual({
+      count: 4,
+      skv: 3,
+      receipts: 4,
+      assistant: 5,
+    })
+    expect(checklistNumbers({ hasSkatteverket: false, hasInbox: false, hasAssistant: false })).toEqual({
+      count: 2,
       skv: 3,
       receipts: 3,
       assistant: 3,

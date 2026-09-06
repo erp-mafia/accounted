@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { chunk } from '@/lib/utils'
+import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
 import { calculatePeriodDates, formatPeriodLabel } from './period-dates'
 import { calculateVatDeclaration } from './vat-declaration'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
@@ -17,6 +18,13 @@ import { normalizeCountryCode } from '@/lib/vat/country-codes'
  * momsdeklaration Ruta 35/38/39 can never drift. See §1.2 of the plan.
  *
  * Notes:
+ *   - Which invoice a posting belongs to is resolved through every link the
+ *     register keeps (the engine's source_id, invoices.journal_entry_id,
+ *     invoice_payments.journal_entry_id), so a SIE-imported sale matched to
+ *     its invoice afterwards and a kontantmetod inbetalning are filed too
+ *     (#2298). A 3308/3108 posting no invoice points at is not filed (there
+ *     is no customer to name); the momsdeklaration reconciliation (ruta
+ *     35/38/39) is where such a gap shows.
  *   - Account 3305/3105 (non-EU export) are NOT in this report: they go to
  *     Ruta 36/40 only.
  *   - Trepartshandel (3107) is included so the report works if someone posts
@@ -47,6 +55,8 @@ export type PsWarningCode =
   | 'CUSTOMER_NOT_FOUND'
   | 'ZERO_NET_EXCLUDED'
   | 'GOODS_SOLD_WITH_QUARTERLY_PERIOD'
+  /** One verifikat linked to invoices of different customers: cannot be split per customer. */
+  | 'MIXED_CUSTOMER_SETTLEMENT'
 
 export interface PsWarning {
   level: 'error' | 'warning'
@@ -55,6 +65,8 @@ export interface PsWarning {
   customerId?: string
   customerName?: string
   invoiceId?: string
+  /** The verifikat a MIXED_CUSTOMER_SETTLEMENT warning is about. */
+  journalEntryId?: string
   amount?: number
 }
 
@@ -105,18 +117,36 @@ const ACCOUNT_TO_BUCKET: Record<string, 'services' | 'goods' | 'triangulation'> 
 
 const PS_ACCOUNTS = Object.keys(ACCOUNT_TO_BUCKET)
 
-interface RawLine {
+/**
+ * Source types the invoice engine writes with `source_id` = the register
+ * invoice id AND that can carry EU revenue lines: issuance
+ * (faktureringsmetod), credit notes, and the kontantmetod inbetalning, which
+ * is where a cash-method company books its revenue at all.
+ */
+const INVOICE_SOURCED_ENTRY_TYPES = new Set(['invoice_created', 'credit_note', 'invoice_cash_payment'])
+
+/** Ids per PostgREST `.in()` filter (URL-length convention, lib/worklist/categories.ts). */
+const LINK_LOOKUP_CHUNK = 100
+
+interface RawEntryLine {
   account_number: string
   debit_amount: number | string
   credit_amount: number | string
-  journal_entries: {
-    company_id: string
-    entry_date: string
-    status: string
-    source_type: string
-    source_id: string | null
-  } | null
 }
+
+interface RawEntry {
+  id: string
+  voucher_series: string | null
+  voucher_number: number | null
+  entry_date: string
+  status: string
+  source_type: string | null
+  source_id: string | null
+  /** Only the PS-account lines: the embed is filtered on account_number. */
+  journal_entry_lines: RawEntryLine[] | null
+}
+
+type FlatLine = RawEntryLine & { entry: RawEntry }
 
 interface RawInvoice {
   id: string
@@ -151,6 +181,34 @@ function round(value: number): number {
   return Math.round(value)
 }
 
+/** Voucher label for messages ("A123"), or the id when the entry has none. */
+function voucherLabel(entry: RawEntry): string {
+  return entry.voucher_number != null
+    ? `${entry.voucher_series ?? ''}${entry.voucher_number}`
+    : entry.id
+}
+
+/** Net credit of the entry's PS-account lines: what the file would carry. */
+function entryNet(entry: RawEntry): number {
+  let net = 0
+  for (const line of entry.journal_entry_lines ?? []) {
+    net += (Number(line.credit_amount) || 0) - (Number(line.debit_amount) || 0)
+  }
+  return net
+}
+
+/**
+ * Who a linked invoice is filed under: the customer row plus the (country,
+ * VAT number) pair its PS row would carry. Two invoices agree only when all
+ * of it agrees; an invoice that could not be loaded is its own unknown party.
+ */
+function customerIdentity(invoice: RawInvoice | undefined, invoiceId: string): string {
+  const customer = invoice?.customer
+  if (!customer) return `unknown:${invoiceId}`
+  const country = (customer.country ?? '').trim().toUpperCase()
+  return `${customer.id}|${country}|${normalizeVatNumber(customer.vat_number)}`
+}
+
 interface Accumulator {
   country: string
   vatNumber: string
@@ -183,33 +241,58 @@ export async function generatePeriodiskSammanstallning(
 
   const { start, end } = calculatePeriodDates(periodType, year, period)
 
-  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
-  const lines = await fetchEntryLines<RawLine>({
-    supabase,
-    entryColumns: 'company_id, entry_date, status, source_type, source_id',
-    lineColumns: 'account_number, debit_amount, credit_amount',
-    filterEntries: (q: EntryLinesQuery) =>
-      q
-        .eq('company_id', companyId)
-        .in('status', ['posted', 'reversed'])
-        // Cash sales on 3308/3108 are not a real flow (EU reverse-charge sales
-        // always go through AR); excluded to avoid phantom rows.
-        .in('source_type', ['invoice_created', 'credit_note'])
-        .gte('entry_date', start)
-        .lte('entry_date', end),
-    filterLines: (q: EntryLinesQuery) => q.in('account_number', PS_ACCOUNTS),
-  })
-
-  const invoiceIds = Array.from(
-    new Set(
-      lines
-        .map(l => l.journal_entries?.source_id)
-        .filter((id): id is string => typeof id === 'string'),
-    ),
+  // Driven from journal_entries (company + date indexed) with the EU-revenue
+  // condition as an inner embed: the planner probes journal_entry_lines per
+  // entry, so only entries carrying a posting on a PS account come back, with
+  // just those lines. Never the inverse shape (lines with an entries embed):
+  // see lib/bookkeeping/entry-lines.ts. No source_type filter: which register
+  // invoice a posting belongs to is resolved below through every link the
+  // register keeps, not only the engine's own source columns.
+  const entries = await fetchAllRows<RawEntry>(({ from, to }) =>
+    supabase
+      .from('journal_entries')
+      .select('id, voucher_series, voucher_number, entry_date, status, source_type, source_id, journal_entry_lines!inner(account_number, debit_amount, credit_amount)')
+      .eq('company_id', companyId)
+      .in('status', ['posted', 'reversed'])
+      .gte('entry_date', start)
+      .lte('entry_date', end)
+      .in('journal_entry_lines.account_number', PS_ACCOUNTS)
+      // Stable total order for correct paging (see fetch-all.ts).
+      .order('id', { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: RawEntry[] | null; error: { message: string } | null }>,
   )
 
+  // Which register invoice does each posting belong to? Three links; only
+  // the first lives on the entry itself:
+  //   1. the engine's own entries: source_id IS the invoice id;
+  //   2. invoices.journal_entry_id (registration booking, backfilled);
+  //   3. invoice_payments.journal_entry_id: kontantmetod inbetalning,
+  //      delbetalning, and "matcha mot befintligt verifikat", which is how a
+  //      SIE-imported sale gets its invoice after migration (#2298).
+  // Following 1 alone (the old source_type filter) dropped every linked
+  // import and every kontantmetod sale from the filing while the
+  // account-based momsdeklaration kept showing them in ruta 39.
+  // Every invoice each entry resolves to. The engine's own entries name one
+  // (source_id); a linked entry may name several when one inbetalning settled
+  // several invoices. All of them are loaded so the loop below can tell "two
+  // invoices, one customer" from "two customers on one posting".
+  const invoiceIdsByEntry = new Map<string, string[]>()
+  for (const entry of entries) {
+    if (entry.source_id && INVOICE_SOURCED_ENTRY_TYPES.has(entry.source_type ?? '')) {
+      invoiceIdsByEntry.set(entry.id, [entry.source_id])
+    }
+  }
+  const unresolved = entries.filter((e) => !invoiceIdsByEntry.has(e.id)).map((e) => e.id)
+  for (const ids of chunk(unresolved, LINK_LOOKUP_CHUNK)) {
+    const refs = await getInvoiceReferencesForJournalEntries(supabase, companyId, ids)
+    for (const [entryId, invoiceIds] of refs) invoiceIdsByEntry.set(entryId, invoiceIds)
+  }
+
+  const allInvoiceIds = new Set<string>()
+  for (const ids of invoiceIdsByEntry.values()) for (const id of ids) allInvoiceIds.add(id)
+
   const invoiceMap = new Map<string, RawInvoice>()
-  if (invoiceIds.length > 0) {
+  for (const ids of chunk(Array.from(allInvoiceIds), LINK_LOOKUP_CHUNK)) {
     const invoices = await fetchAllRows<RawInvoice>(({ from, to }) =>
       supabase
         .from('invoices')
@@ -225,7 +308,8 @@ export async function generatePeriodiskSammanstallning(
             vat_number_validated_at
           )
         `)
-        .in('id', invoiceIds)
+        .eq('company_id', companyId)
+        .in('id', ids)
         // Stable total order for correct paging (see fetch-all.ts).
         .order('id', { ascending: true })
         .range(from, to) as unknown as PromiseLike<{ data: RawInvoice[] | null; error: { message: string } | null }>,
@@ -233,18 +317,53 @@ export async function generatePeriodiskSammanstallning(
     for (const inv of invoices) invoiceMap.set(inv.id, inv)
   }
 
+  // One flat line list with its parent entry, in entry-id then line order.
+  const lines: FlatLine[] = []
+  for (const entry of entries) {
+    for (const line of entry.journal_entry_lines ?? []) lines.push({ ...line, entry })
+  }
+
   const accumulators = new Map<string, Accumulator>()
   const warnings: PsWarning[] = []
   let goodsLineSeen = false
+  // Verifikat already reported as MIXED_CUSTOMER_SETTLEMENT: one warning per
+  // verifikat, not one per line.
+  const mixedReported = new Set<string>()
 
   for (const line of lines) {
-    const je = line.journal_entries
-    if (!je) continue
-    const sourceId = je.source_id
-    const invoice = sourceId ? invoiceMap.get(sourceId) : null
     const bucket = ACCOUNT_TO_BUCKET[line.account_number]
     if (!bucket) continue
+    const invoiceIds = invoiceIdsByEntry.get(line.entry.id)
+    // A manual or imported posting no register invoice points at is not
+    // filed (see the header). The engine's own entries never take this exit:
+    // an engine entry whose invoice is gone is a data defect and falls
+    // through to CUSTOMER_NOT_FOUND below.
+    if (!invoiceIds && !INVOICE_SOURCED_ENTRY_TYPES.has(line.entry.source_type ?? '')) continue
     if (bucket === 'goods' || bucket === 'triangulation') goodsLineSeen = true
+
+    // One posting, several invoices (a deposit settling more than one): fine
+    // while they are the same customer, undecidable when they are not. The
+    // ledger cannot split the line per customer, so the verifikat is kept out
+    // of the file and reported as blocking, the way CUSTOMER_NOT_FOUND is.
+    if (invoiceIds && invoiceIds.length > 1) {
+      const customers = new Set(invoiceIds.map((id) => customerIdentity(invoiceMap.get(id), id)))
+      if (customers.size > 1) {
+        if (!mixedReported.has(line.entry.id)) {
+          mixedReported.add(line.entry.id)
+          warnings.push({
+            level: 'error',
+            code: 'MIXED_CUSTOMER_SETTLEMENT',
+            message:
+              `Verifikat ${voucherLabel(line.entry)} är kopplat till fakturor från ${customers.size} olika kunder ` +
+              'och kan inte fördelas per kund i sammanställningen. Kontrollera kopplingarna innan inlämning.',
+            journalEntryId: line.entry.id,
+            amount: entryNet(line.entry),
+          })
+        }
+        continue
+      }
+    }
+    const invoice = invoiceIds ? invoiceMap.get(invoiceIds[0]) ?? null : null
 
     const debit = Number(line.debit_amount) || 0
     const credit = Number(line.credit_amount) || 0

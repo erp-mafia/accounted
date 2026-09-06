@@ -1,6 +1,33 @@
 import { describe, it, expect } from 'vitest'
 import { routeToIntent, contextRefToTarget } from '../route-mapping'
 
+describe('routeToIntent without the tool-loop runtime', () => {
+  // getAiStatus().assistantAvailable is false on an OpenAI-compatible or
+  // unconfigured deployment (#2204): the trigger keeps working on the
+  // single-call console, so every route collapses onto general.help.
+  it('dispatches every specialized route to general.help', () => {
+    for (const route of [
+      '/invoices/new',
+      '/invoices/abc-123',
+      '/supplier-invoices/sup-1',
+      '/bookkeeping/year-end',
+      '/kpi',
+      '/settings/invoicing',
+    ]) {
+      const out = routeToIntent(route, { assistantAvailable: false })
+      expect(out.intentId).toBe('general.help')
+      expect(out.intentArgs).toEqual({ route })
+      expect(out.contextRef).toBeUndefined()
+      expect(out.labelSuffix).toBeNull()
+    }
+  })
+
+  it('leaves the specialized dispatch alone when the option is omitted or true', () => {
+    expect(routeToIntent('/kpi').intentId).toBe('kpi.explain')
+    expect(routeToIntent('/kpi', { assistantAvailable: true }).intentId).toBe('kpi.explain')
+  })
+})
+
 describe('routeToIntent', () => {
   it('falls back to general.help when pathname is null/undefined/empty', () => {
     for (const input of [null, undefined, '']) {

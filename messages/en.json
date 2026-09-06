@@ -122,6 +122,9 @@
     "cta_primary": "View subscription",
     "cta_secondary": "Continue without"
   },
+  "agent_chat": {
+    "assistant_unavailable": "The assistant cannot run on the AI provider configured for this installation."
+  },
   "agentKnowledge": {
     "load_error_title": "Couldn't load the knowledge profile",
     "load_error_description": "Something went wrong loading what your agent knows. Try reopening this tab.",
