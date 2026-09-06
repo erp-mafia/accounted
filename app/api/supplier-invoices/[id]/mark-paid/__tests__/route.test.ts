@@ -497,6 +497,140 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
   })
 
+  it('issue #2299: flags the row whose description is the abbreviated bank text "HI3G", merchant_name empty', async () => {
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      total: 1249,
+      remaining_amount: 1249,
+      paid_amount: 0,
+      supplier: makeSupplier({ name: 'Hi3G Access AB' }),
+      items: [],
+    })
+
+    enqueue({ data: invoice, error: null })
+    // The single counterparty sweep: the bank feed wrote "HI3G" and nothing in
+    // merchant_name. The full-name needle never hit this row.
+    enqueue({
+      data: [
+        {
+          id: 'tx-hi3g',
+          date: '2026-09-01',
+          amount: -1249,
+          description: 'HI3G',
+          merchant_name: null,
+          reference: null,
+          journal_entry_id: null,
+          currency: 'SEK',
+          amount_sek: null,
+          exchange_rate: null,
+        },
+      ],
+      error: null,
+    })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-09-01' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { candidates: Array<{ id: string; match_reason: string }> } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_PAID_LIKELY_DUPLICATE')
+    expect(body.error.details.candidates.map((c) => [c.id, c.match_reason])).toEqual([
+      ['tx-hi3g', 'name_amount_fuzzy'],
+    ])
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a bank row already booked as an expense as already_booked, with its verifikat id', async () => {
+    // A61 in the case: booked straight from the bank row, then the invoice
+    // registered and paid on top of it. The remedy is a rättelse, not a link,
+    // so the reason has to be its own code for the UI and the agent to word.
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      total: 1249,
+      remaining_amount: 1249,
+      paid_amount: 0,
+      supplier: makeSupplier({ name: 'Hi3G Access AB' }),
+      items: [],
+    })
+
+    enqueue({ data: invoice, error: null })
+    enqueue({
+      data: [
+        {
+          id: 'tx-a61',
+          date: '2026-08-28',
+          amount: -1249,
+          description: 'HI3G',
+          merchant_name: null,
+          reference: null,
+          journal_entry_id: 'je-a61',
+          currency: 'SEK',
+          amount_sek: null,
+          exchange_rate: null,
+        },
+      ],
+      error: null,
+    })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-09-01' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: {
+        code: string
+        details: { candidates: Array<{ id: string; match_reason: string; journal_entry_id: string | null }> }
+      }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_PAID_LIKELY_DUPLICATE')
+    expect(body.error.details.candidates).toHaveLength(1)
+    expect(body.error.details.candidates[0]).toMatchObject({
+      id: 'tx-a61',
+      match_reason: 'already_booked',
+      journal_entry_id: 'je-a61',
+    })
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('an invoice whose supplier has no resolved name skips the guard and books (logged, not blocked)', async () => {
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      total: 10000,
+      remaining_amount: 10000,
+      paid_amount: 0,
+      supplier: makeSupplier({ name: '' }),
+      items: [],
+    })
+
+    enqueue({ data: invoice, error: null })
+    // No sweep is issued without a needle: the next query is the settings fetch.
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {},
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+  })
+
   // ── Duplicate-guard currency: the plus-minus 2 % band and the column it is
   // applied to must share a unit. `remaining_amount` is invoice currency,
   // `transactions.amount` is the bank row's currency; at ~11,50 SEK/EUR a EUR

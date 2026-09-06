@@ -127,6 +127,9 @@ export default function SupplierInvoiceDetailPage() {
       amount: number
       description: string | null
       merchant_name: string | null
+      /** `already_booked`: the row is already a verifikat; the remedy is a rättelse, not a link. */
+      match_reason?: string
+      journal_entry_id?: string | null
     }> | null
   >(null)
   const [markPaidPreview, setMarkPaidPreview] = useState<MarkPaidPreview | null>(null)
@@ -1251,31 +1254,50 @@ export default function SupplierInvoiceDetailPage() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              {duplicateCandidates?.length === 1
-                ? t('duplicate_payment_description_one')
-                : t('duplicate_payment_description_many')}
+              {duplicateCandidates?.every((c) => c.match_reason === 'already_booked')
+                ? t('duplicate_payment_already_booked_description')
+                : duplicateCandidates?.length === 1
+                  ? t('duplicate_payment_description_one')
+                  : t('duplicate_payment_description_many')}
             </p>
             <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-              {duplicateCandidates?.map((c) => (
-                <div key={c.id} className="flex items-center justify-between gap-3 text-sm">
-                  <div className="min-w-0">
-                    <div className="font-medium tabular-nums">{formatDate(c.date)}</div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {c.merchant_name || c.description || t('bank_transaction_fallback')}
+              {duplicateCandidates?.map((c) => {
+                // A row that is already a verifikat: "link it" is the wrong
+                // remedy (the money would be booked twice), so point at the
+                // existing voucher instead of the transaction list.
+                const alreadyBooked = c.match_reason === 'already_booked' && !!c.journal_entry_id
+                return (
+                  <div key={c.id} className="flex items-center justify-between gap-3 text-sm">
+                    <div className="min-w-0">
+                      <div className="font-medium tabular-nums">{formatDate(c.date)}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {c.merchant_name || c.description || t('bank_transaction_fallback')}
+                      </div>
+                      {alreadyBooked && (
+                        <div className="text-xs text-muted-foreground">
+                          {t('duplicate_payment_already_booked_hint')}
+                        </div>
+                      )}
                     </div>
+                    <div className="tabular-nums font-medium">
+                      {formatCurrency(Math.abs(c.amount), invoice.currency)}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        router.push(
+                          alreadyBooked
+                            ? `/bookkeeping/${c.journal_entry_id}`
+                            : `/transactions?highlight=${c.id}`,
+                        )
+                      }
+                    >
+                      {alreadyBooked ? t('duplicate_payment_show_voucher') : t('go_to')}
+                    </Button>
                   </div>
-                  <div className="tabular-nums font-medium">
-                    {formatCurrency(Math.abs(c.amount), invoice.currency)}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => router.push(`/transactions?highlight=${c.id}`)}
-                  >
-                    {t('go_to')}
-                  </Button>
-                </div>
-              ))}
+                )
+              })}
             </div>
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <Button variant="outline" onClick={() => setDuplicateCandidates(null)}>
