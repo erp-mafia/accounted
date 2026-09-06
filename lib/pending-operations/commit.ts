@@ -2553,12 +2553,19 @@ async function commitMarkInvoicePaid(
         log.warn('duplicate-payment detection failed (continuing)', err)
       }
       if (candidates.length > 0) {
+        // Reason-aware wording: a row that is already a verifikat must not be
+        // "matched" (that books the money twice); it must be corrected.
+        const alreadyBooked = candidates.some((c) => c.match_reason === 'already_booked')
         return {
-          error:
-            `Möjlig dubbelbetalning: en obokförd banktransaktion ser ut att vara betalningen för faktura ` +
-            `${invoice.invoice_number}. Matcha banktransaktionen mot fakturan (gnubok_match_transaction_to_invoice) ` +
-            `i stället för att bokföra en separat betalning. Om det verkligen rör sig om en annan betalning, ` +
-            `kör om med allow_duplicate=true.`,
+          error: alreadyBooked
+            ? `Möjlig dubbelbokning: banktransaktionen som ser ut att vara betalningen för faktura ` +
+              `${invoice.invoice_number} är redan bokförd som en egen verifikation. Bokför inte betalningen ` +
+              `igen: rätta dubbelbokföringen i stället (makulera en av verifikationerna och koppla underlaget ` +
+              `till den som blir kvar). Kör om med allow_duplicate=true bara om det verkligen är en separat betalning.`
+            : `Möjlig dubbelbetalning: en obokförd banktransaktion ser ut att vara betalningen för faktura ` +
+              `${invoice.invoice_number}. Matcha banktransaktionen mot fakturan (gnubok_match_transaction_to_invoice) ` +
+              `i stället för att bokföra en separat betalning. Om det verkligen rör sig om en annan betalning, ` +
+              `kör om med allow_duplicate=true.`,
           status: 409,
         }
       }

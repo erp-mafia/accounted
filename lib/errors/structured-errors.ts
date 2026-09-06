@@ -3007,12 +3007,12 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
   SI_PAID_LIKELY_DUPLICATE: {
     httpStatus: 409,
     message_sv:
-      'Det finns redan en obokförd banktransaktion som kan vara denna betalning. Länka den istället, eller markera som betald ändå om du är säker.',
+      'Det finns redan en banktransaktion som kan vara denna betalning. Länka den istället, eller markera som betald ändå om du är säker.',
     message_en:
-      'A likely-matching unlinked bank transaction was found for this supplier. Suggest linking it instead of creating a new payment entry.',
+      'A likely-matching bank transaction was found for this supplier. Suggest linking it instead of creating a new payment entry.',
     remediation: {
       description:
-        'Match the candidate transaction via POST /api/transactions/{id}/match-supplier-invoice, or resend mark-paid with force: true to create the payment entry anyway.',
+        'Inspect details.candidates[].match_reason. For an unlinked row, match it via POST /api/transactions/{id}/match-supplier-invoice. For `already_booked`, the row is already a posted verifikat (booked straight from the bank side): do NOT pay the invoice, correct the double booking instead (reverse one of the two bookings and attach the underlag to the one that stays). Resend mark-paid with force: true only when the payment really is separate; on the v1 endpoint that retry needs a fresh Idempotency-Key.',
     },
   },
   SI_CREDIT_ALREADY_CREDITED: {
