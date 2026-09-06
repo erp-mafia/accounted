@@ -3,6 +3,7 @@ import {
   COUNTERPARTY_NEEDLE_SHAPE,
   counterpartyNeedle,
   counterpartySearchTerms,
+  counterpartySweepLogic,
   escapeLikePattern,
   normalizeOcrReference,
 } from '../duplicate-payment-guard'
@@ -121,5 +122,30 @@ describe('counterpartySearchTerms', () => {
     expect(counterpartySearchTerms('Acme, Inc.')).toEqual(['acme'])
     expect(counterpartySearchTerms('SJ AB')).toEqual([])
     expect(counterpartySearchTerms(null)).toEqual([])
+  })
+})
+
+describe('counterpartySweepLogic', () => {
+  // The currency predicate and the name probe must travel in ONE logic
+  // expression: two `.or()` calls would send `or=` twice and lean on how
+  // PostgREST treats a repeated key. PostgREST nests logic operators, and an
+  // `or` with a single `and` child is valid grammar (proven against a real
+  // PostgREST in duplicate-payment-candidates.tool.test.ts).
+  it('nests the kronor clause and both name columns under one and()', () => {
+    expect(counterpartySweepLogic('currency.is.null,currency.eq.SEK', 'hi3g')).toBe(
+      'and(or(currency.is.null,currency.eq.SEK),or(merchant_name.ilike.*hi3g*,description.ilike.*hi3g*))',
+    )
+  })
+
+  it('wraps a single-currency clause in its own or() so the shape is the same for every currency', () => {
+    expect(counterpartySweepLogic('currency.eq.EUR', 'volvo')).toBe(
+      'and(or(currency.eq.EUR),or(merchant_name.ilike.*volvo*,description.ilike.*volvo*))',
+    )
+  })
+
+  it('refuses a needle that could carry DSL or LIKE metacharacters', () => {
+    expect(() => counterpartySweepLogic('currency.eq.SEK', 'a,b')).toThrow(/letters and digits/)
+    expect(() => counterpartySweepLogic('currency.eq.SEK', 'x.ilike.%')).toThrow(/letters and digits/)
+    expect(() => counterpartySweepLogic('currency.eq.SEK', '')).toThrow(/letters and digits/)
   })
 })

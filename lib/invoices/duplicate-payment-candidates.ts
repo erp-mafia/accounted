@@ -5,6 +5,7 @@ import {
   DUPLICATE_DATE_WINDOW_DAYS,
   counterpartyNeedle,
   counterpartySearchTerms,
+  counterpartySweepLogic,
   normalizeOcrReference,
 } from './duplicate-payment-guard'
 import {
@@ -285,12 +286,14 @@ export async function findDuplicatePaymentCandidatesForSupplierInvoice(
  * into a shared unit is excluded rather than compared as a raw number. A SEK
  * invoice produces exactly one query.
  *
- * The name probe is a single `.or('merchant_name.ilike.%x%,description.ilike.%x%')`
- * per currency sweep. That interpolates the needle into PostgREST's filter
- * DSL, which is only safe because `counterpartyNeedle` reduces the name to
- * letters and digits (`COUNTERPARTY_NEEDLE_SHAPE`): no `,` `.` `(` `)` to
- * inject a clause, no `%` `_` `\` to widen the LIKE. The shape is re-checked
- * here so a future needle builder cannot silently reopen that hole.
+ * Each currency sweep is ONE query with ONE `.or()`: the currency predicate
+ * and the name probe are nested into a single logic expression by
+ * `counterpartySweepLogic`, so the guard never depends on how PostgREST
+ * treats a repeated `or=` key. Interpolating the needle into that DSL string
+ * is only safe because `counterpartyNeedle` reduces the name to letters and
+ * digits (`COUNTERPARTY_NEEDLE_SHAPE`): no `,` `.` `(` `)` to inject a clause,
+ * no LIKE wildcard to widen the match. The shape is re-checked here so a
+ * future needle builder cannot silently reopen that hole.
  */
 async function sweepByCounterparty(
   supabase: SupabaseClient,
@@ -332,7 +335,6 @@ async function sweepByCounterparty(
   const dayMs = 24 * 3600 * 1000
   const dateLow = new Date(dateMs - DUPLICATE_DATE_WINDOW_DAYS * dayMs).toISOString().split('T')[0]
   const dateHigh = new Date(dateMs + DUPLICATE_DATE_WINDOW_DAYS * dayMs).toISOString().split('T')[0]
-  const nameFilter = `merchant_name.ilike.%${needle}%,description.ilike.%${needle}%`
 
   const responses = await Promise.all(
     sweeps.map((sweep) => {
@@ -345,20 +347,12 @@ async function sweepByCounterparty(
         .is('supplier_invoice_id', null)
       const banded =
         direction === 'inbound'
-          ? base
-              .gt('amount', 0)
-              .or(sweep.currencyFilter)
-              .gte('amount', sweep.low)
-              .lte('amount', sweep.high)
-          : base
-              .lt('amount', 0)
-              .or(sweep.currencyFilter)
-              .gte('amount', -sweep.high)
-              .lte('amount', -sweep.low)
+          ? base.gt('amount', 0).gte('amount', sweep.low).lte('amount', sweep.high)
+          : base.lt('amount', 0).gte('amount', -sweep.high).lte('amount', -sweep.low)
       return banded
         .gte('date', dateLow)
         .lte('date', dateHigh)
-        .or(nameFilter)
+        .or(counterpartySweepLogic(sweep.currencyFilter, needle))
         .order('date', { ascending: false })
         .limit(5)
     }),

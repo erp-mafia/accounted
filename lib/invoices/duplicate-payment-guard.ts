@@ -111,3 +111,31 @@ export function counterpartySearchTerms(name: string | null | undefined): string
     .map((token) => token.replace(NON_NAME_CHARS, ''))
     .filter((token) => token.length > 2 && !LEGAL_FORM_TOKENS.has(token))
 }
+
+/**
+ * ONE logic expression per currency sweep: the currency predicate AND the
+ * counterparty probe, nested so the whole thing rides a single `or=` query
+ * parameter.
+ *
+ * WHY ONE EXPRESSION. postgrest-js `.or()` appends a query parameter; calling
+ * it twice on one chain sends `or=` twice, and whether PostgREST ANDs a
+ * repeated key is a grammar this repo does not otherwise rely on. If it ever
+ * kept only one, the currency clause would be gone and a foreign row would be
+ * banded against a kronor figure. Nesting the two groups under one `and()`
+ * inside one top-level `or()` (PostgREST nests logic operators; `or` with a
+ * single child is valid) makes the guard independent of duplicate-key
+ * semantics. Proven against a real PostgREST in
+ * lib/invoices/__tests__/duplicate-payment-candidates.tool.test.ts.
+ *
+ * WHY IT IS SAFE TO INTERPOLATE. The needle is letters and digits only
+ * (`COUNTERPARTY_NEEDLE_SHAPE`, re-checked here), so it cannot carry the DSL
+ * characters `,` `.` `(` `)` or the LIKE wildcards. `currencyFilter` comes from
+ * `currencyRowFilter()` over an ISO 4217 code validated by `planAmountSweeps`.
+ * `*` is PostgREST's URL form of the LIKE `%` wildcard.
+ */
+export function counterpartySweepLogic(currencyFilter: string, needle: string): string {
+  if (!COUNTERPARTY_NEEDLE_SHAPE.test(needle)) {
+    throw new Error('counterpartySweepLogic: needle must be letters and digits only')
+  }
+  return `and(or(${currencyFilter}),or(merchant_name.ilike.*${needle}*,description.ilike.*${needle}*))`
+}

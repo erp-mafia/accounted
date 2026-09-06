@@ -45,8 +45,10 @@ function createRecordingSupabase(pages: Array<Array<Record<string, unknown>>>) {
 }
 
 const SEK_ROWS = 'currency.is.null,currency.eq.SEK'
-const nameFilter = (needle: string) =>
-  `merchant_name.ilike.%${needle}%,description.ilike.%${needle}%`
+/** The ONE logic expression a currency sweep sends: currency AND name probe. */
+const sweepLogic = (currency: 'SEK' | 'EUR', needle: string) =>
+  `and(or(${currency === 'SEK' ? SEK_ROWS : 'currency.eq.EUR'}),` +
+  `or(merchant_name.ilike.*${needle}*,description.ilike.*${needle}*))`
 
 const sekInvoice = {
   invoice_number: '2026-0042',
@@ -120,9 +122,10 @@ describe('findDuplicatePaymentCandidatesForInvoice', () => {
     expect(queries[0].gte).toContainEqual(['amount', 12250])
     expect(queries[0].lte).toContainEqual(['amount', 12750])
     expect(queries[0].gt).toContainEqual(['amount', 0])
-    // Band is kronor, so the rows it is applied to must be kronor.
-    expect(queries[0].or).toContainEqual([SEK_ROWS])
-    expect(queries[0].or).toContainEqual([nameFilter('acme')])
+    // Band is kronor, so the rows it is applied to must be kronor, and the
+    // currency clause rides the SAME .or() as the name probe: one expression,
+    // one query parameter, no dependence on repeated-key semantics.
+    expect(queries[0].or).toEqual([[sweepLogic('SEK', 'acme')]])
     expect(queries[0].ilike).toBeUndefined()
     expect(queries[0].select?.[0][0]).toContain('currency')
     expect(queries[0].select?.[0][0]).toContain('amount_sek')
@@ -147,7 +150,7 @@ describe('findDuplicatePaymentCandidatesForInvoice', () => {
       paymentDate: '2026-05-10',
     })
 
-    expect(queries[0].or).toContainEqual([nameFilter('hi3g')])
+    expect(queries[0].or).toEqual([[sweepLogic('SEK', 'hi3g')]])
     expect(candidates.map((c) => [c.id, c.match_reason])).toEqual([['tx-hi3g', 'name_amount_fuzzy']])
   })
 
@@ -182,12 +185,12 @@ describe('findDuplicatePaymentCandidatesForInvoice', () => {
       paymentDate: '2026-05-10',
     })
 
-    // One query per currency sweep (EUR, SEK).
+    // One query per currency sweep (EUR, SEK), one .or() each.
     expect(queries).toHaveLength(2)
-    expect(queries[0].or).toContainEqual(['currency.eq.EUR'])
+    expect(queries[0].or).toEqual([[sweepLogic('EUR', 'acme')]])
     expect(queries[0].gte).toContainEqual(['amount', 980])
     expect(queries[0].lte).toContainEqual(['amount', 1020])
-    expect(queries[1].or).toContainEqual([SEK_ROWS])
+    expect(queries[1].or).toEqual([[sweepLogic('SEK', 'acme')]])
     expect(queries[1].gte).toContainEqual(['amount', 11270])
     expect(queries[1].lte).toContainEqual(['amount', 11730])
   })
@@ -259,7 +262,7 @@ describe('findDuplicatePaymentCandidatesForInvoice', () => {
 
     // No SEK sweep can be planned without a rate: only the EUR sweep runs.
     expect(queries).toHaveLength(1)
-    expect(queries[0].or).toContainEqual(['currency.eq.EUR'])
+    expect(queries[0].or).toEqual([[sweepLogic('EUR', 'acme')]])
     expect(candidates).toEqual([])
     expect(warn).toHaveBeenCalled()
     expect(JSON.stringify(warn.mock.calls)).toContain('invoice_missing_sek_value')
@@ -479,8 +482,7 @@ describe('findDuplicatePaymentCandidatesForSupplierInvoice', () => {
     expect(q.is).toContainEqual(['supplier_invoice_id', null])
     expect(q.is).toContainEqual(['invoice_id', null])
     expect(q.eq).toContainEqual(['is_business', true])
-    expect(q.or).toContainEqual([SEK_ROWS])
-    expect(q.or).toContainEqual([nameFilter('hi3g')])
+    expect(q.or).toEqual([[sweepLogic('SEK', 'hi3g')]])
     expect(q.ilike).toBeUndefined()
 
     expect(candidates).toHaveLength(1)
@@ -569,10 +571,10 @@ describe('findDuplicatePaymentCandidatesForSupplierInvoice', () => {
       paymentDate: '2026-09-01',
     })
     expect(queries).toHaveLength(2)
-    expect(queries[0].or).toContainEqual(['currency.eq.EUR'])
+    expect(queries[0].or).toEqual([[sweepLogic('EUR', 'hi3g')]])
     expect(queries[0].gte).toContainEqual(['amount', -1020])
     expect(queries[0].lte).toContainEqual(['amount', -980])
-    expect(queries[1].or).toContainEqual([SEK_ROWS])
+    expect(queries[1].or).toEqual([[sweepLogic('SEK', 'hi3g')]])
     expect(queries[1].gte).toContainEqual(['amount', -11730])
     expect(queries[1].lte).toContainEqual(['amount', -11270])
     expect(candidates.map((c) => c.id)).toEqual(['tx-out'])

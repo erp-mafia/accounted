@@ -276,9 +276,12 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     // Nothing was booked and nothing was flipped.
     expect(calls.some((c) => c.table === 'supplier_invoices' && c.method === 'update')).toBe(false)
     expect(calls.some((c) => c.table === 'supplier_invoice_payments' && c.method === 'insert')).toBe(false)
-    // The probe is the first distinctive token on both name columns, outbound.
+    // The probe is the first distinctive token on both name columns, nested
+    // with the currency clause into ONE .or(), outbound.
     const sweep = calls.filter((c) => c.table === 'transactions')
-    expect(sweep.map((c) => c.args)).toContainEqual(['merchant_name.ilike.%hi3g%,description.ilike.%hi3g%'])
+    expect(sweep.filter((c) => c.method === 'or').map((c) => c.args)).toEqual([[
+      'and(or(currency.is.null,currency.eq.SEK),or(merchant_name.ilike.*hi3g*,description.ilike.*hi3g*))',
+    ]])
     expect(sweep.map((c) => c.args)).toContainEqual(['amount', 0])
   })
 
