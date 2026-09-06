@@ -347,14 +347,28 @@ export async function getInvoicesExplainingJournalEntries(
 
   // Chain entries waiting for their parent's attribution, by parent id.
   const waitingOn = new Map<string, string[]>()
+  // Links between an attributed entry and the root that explains it: 0 for
+  // an entry attributed by its own source_id or invoice-side link.
+  const depthOf = new Map<string, number>()
   // Every id considered so far (the batch plus fetched parents): a cycle, or
   // a parent shared by several children, is never fetched twice.
   const seen = new Set<string>(entries.map((e) => e.id))
 
-  const assign = (entryId: string, invoiceIds: string[]): void => {
-    if (result.has(entryId)) return
-    result.set(entryId, invoiceIds)
-    for (const child of waitingOn.get(entryId) ?? []) assign(child, [...invoiceIds])
+  // Attribute an entry and every descendant waiting on it. Iterative, so a
+  // pathological in-batch chain cannot exhaust the stack, and with the depth
+  // carried along: a descendant more than MAX_CHAIN_WALK links below the root
+  // resolves to "no invoice", the cap the fetched walk below applies, so an
+  // in-batch chain and an out-of-batch chain of the same length agree.
+  const assign = (entryId: string, invoiceIds: string[], depth: number): void => {
+    const queue: [string, number][] = [[entryId, depth]]
+    for (let i = 0; i < queue.length; i++) {
+      const [id, d] = queue[i]
+      if (result.has(id)) continue
+      result.set(id, i === 0 ? invoiceIds : [...invoiceIds])
+      depthOf.set(id, d)
+      if (d >= MAX_CHAIN_WALK) continue
+      for (const child of waitingOn.get(id) ?? []) queue.push([child, d + 1])
+    }
   }
 
   let frontier: ExplainableJournalEntry[] = [...entries]
@@ -362,7 +376,7 @@ export async function getInvoicesExplainingJournalEntries(
     const unresolved: ExplainableJournalEntry[] = []
     for (const entry of frontier) {
       if (entry.source_id && INVOICE_SOURCED_ENTRY_TYPES.has(entry.source_type ?? '')) {
-        assign(entry.id, [entry.source_id])
+        assign(entry.id, [entry.source_id], 0)
       } else {
         unresolved.push(entry)
       }
@@ -370,7 +384,7 @@ export async function getInvoicesExplainingJournalEntries(
 
     for (const ids of chunk(unresolved.map((e) => e.id), LINK_LOOKUP_CHUNK)) {
       const refs = await getInvoiceReferencesForJournalEntries(supabase, companyId, ids)
-      for (const [entryId, invoiceIds] of refs) assign(entryId, invoiceIds)
+      for (const [entryId, invoiceIds] of refs) assign(entryId, invoiceIds, 0)
     }
 
     const parentIds: string[] = []
@@ -380,7 +394,8 @@ export async function getInvoicesExplainingJournalEntries(
       if (!parentId) continue
       const inherited = result.get(parentId)
       if (inherited) {
-        assign(entry.id, [...inherited])
+        const depth = (depthOf.get(parentId) ?? 0) + 1
+        if (depth <= MAX_CHAIN_WALK) assign(entry.id, [...inherited], depth)
         continue
       }
       const waiting = waitingOn.get(parentId)

@@ -436,6 +436,23 @@ describe('getInvoicesExplainingJournalEntries', () => {
     expect(parentFetches(mock)).toEqual([])
   })
 
+  it('bounds an in-batch chain at MAX_CHAIN_WALK links, in either batch order (PR #2354 review)', async () => {
+    // je-0 is the engine root and je-k the storno of je-(k-1): eleven links
+    // in one batch. The ten within the cap inherit, the eleventh does not,
+    // the same answer the fetched walk gives a chain of that length. Both
+    // orders: ascending resolves each child off an already attributed
+    // parent, descending queues them all and propagates from the root.
+    const chain = [engine('je-0', 'inv-1')]
+    for (let k = 1; k <= MAX_CHAIN_WALK + 1; k++) chain.push(storno(`je-${k}`, `je-${k - 1}`))
+    for (const batch of [chain, [...chain].reverse()]) {
+      const mock = setup([{ data: [] }, { data: [] }])
+      const refs = await run(mock, batch)
+      for (let k = 0; k <= MAX_CHAIN_WALK; k++) expect(refs.get(`je-${k}`), `je-${k}`).toEqual(['inv-1'])
+      expect(refs.has(`je-${MAX_CHAIN_WALK + 1}`)).toBe(false)
+      expect(parentFetches(mock)).toEqual([])
+    }
+  })
+
   it('stops a chain that never reaches a root at MAX_CHAIN_WALK generations', async () => {
     const mock = createQueuedMockSupabase()
     for (let k = 0; k <= MAX_CHAIN_WALK; k++) {
