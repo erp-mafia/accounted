@@ -2601,7 +2601,7 @@ async function commitMarkInvoicePaid(
           error: alreadyBooked
             ? `Möjlig dubbelbokning: banktransaktionen som ser ut att vara betalningen för faktura ` +
               `${invoice.invoice_number} är redan bokförd som en egen verifikation. Bokför inte betalningen ` +
-              `igen: rätta dubbelbokföringen i stället (makulera en av verifikationerna och koppla underlaget ` +
+              `igen: rätta dubbelbokföringen i stället (vänd en av verifikationerna med storno och koppla underlaget ` +
               `till den som blir kvar). Kör om med allow_duplicate=true bara om det verkligen är en separat betalning.`
             : `Möjlig dubbelbetalning: en obokförd banktransaktion ser ut att vara betalningen för faktura ` +
               `${invoice.invoice_number}. Matcha banktransaktionen mot fakturan (gnubok_match_transaction_to_invoice) ` +

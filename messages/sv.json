@@ -4892,7 +4892,7 @@
     "duplicate_payment_title": "Möjlig dubbelbetalning",
     "duplicate_payment_description_one": "Vi hittade en banktransaktion som verkar matcha denna betalning. Länka den befintliga transaktionen istället för att skapa en ny verifikation.",
     "duplicate_payment_description_many": "Vi hittade banktransaktioner som verkar matcha denna betalning. Länka den befintliga transaktionen istället för att skapa en ny verifikation.",
-    "duplicate_payment_already_booked_description": "Banktransaktionen är redan bokförd som en egen verifikation. Registrerar du betalningen bokförs pengarna två gånger. Rätta i stället: makulera en av bokföringarna och koppla underlaget till den som blir kvar.",
+    "duplicate_payment_already_booked_description": "Banktransaktionen är redan bokförd som en egen verifikation. Registrerar du betalningen bokförs pengarna två gånger. Rätta i stället: vänd en av verifikationerna med storno och koppla underlaget till den som blir kvar.",
     "duplicate_payment_already_booked_hint": "Redan bokförd på en verifikation",
     "duplicate_payment_show_voucher": "Visa verifikation",
     "bank_transaction_fallback": "Banktransaktion",

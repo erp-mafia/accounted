@@ -39,7 +39,7 @@ export type DuplicatePaymentMatchReason =
    * the bank side, as an expense or an income. Marking the invoice paid now
    * books the same movement a second time (the 2026-09-04 case doubled both
    * 6212 and 1930). The remedy is a rättelse, not a link: reverse one of the
-   * two bookings and attach the underlag to the one that stays.
+   * two vouchers with a storno entry and attach the underlag to the remaining one.
    */
   | 'already_booked'
 

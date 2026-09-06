@@ -4892,7 +4892,7 @@
     "duplicate_payment_title": "Possible duplicate payment",
     "duplicate_payment_description_one": "We found a bank transaction that appears to match this payment. Link the existing transaction instead of creating a new verifikat.",
     "duplicate_payment_description_many": "We found bank transactions that appear to match this payment. Link the existing transaction instead of creating a new verifikat.",
-    "duplicate_payment_already_booked_description": "This bank transaction is already booked as its own verifikat. Registering the payment would book the money twice. Correct it instead: reverse one of the two bookings and attach the document to the one that stays.",
+    "duplicate_payment_already_booked_description": "This bank transaction is already booked as its own verifikat. Registering the payment would book the money twice. Correct it instead: reverse one of the two vouchers with a storno entry and attach the underlag to the remaining one.",
     "duplicate_payment_already_booked_hint": "Already booked on a verifikat",
     "duplicate_payment_show_voucher": "Show verifikat",
     "bank_transaction_fallback": "Bank transaction",
