@@ -103,6 +103,11 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
   const [employeesLoaded, setEmployeesLoaded] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const currency = (data?.invoice?.currency ?? 'SEK').toUpperCase()
+  // A foreign receipt carries VAT the company cannot deduct on 2641: the whole
+  // amount is cost. The wizard asked for the seller's country; here the
+  // currency is the signal, and the note under the preview says so.
+  const isForeign = currency !== 'SEK'
+  const isEf = entityType === 'enskild_firma'
 
   // Reset per open so a previous underlag's numbers never carry over.
   useEffect(() => {
@@ -112,10 +117,10 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
     const total = data?.totals?.total
     const vat = data?.totals?.vatAmount
     setAmountInput(total != null && total > 0 ? String(roundOre(total)).replace('.', ',') : '')
-    setVatInput(vat != null && vat > 0 ? String(roundOre(vat)).replace('.', ',') : '0')
+    setVatInput(!isForeign && vat != null && vat > 0 ? String(roundOre(vat)).replace('.', ',') : '0')
     setExpenseAccount('')
     setEmployeeId('')
-  }, [open, item.id, data])
+  }, [open, item.id, data, isForeign])
 
   useEffect(() => {
     if (!open || payer !== 'employee' || employeesLoaded) return
@@ -221,7 +226,9 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
           <DialogTitle>{t('expense_dialog_title')}</DialogTitle>
           <DialogDescription>
             {payer === 'owner'
-              ? t('expense_dialog_help_owner', { account: liabilityAccount })
+              ? isEf
+                ? t('expense_dialog_help_owner_ef')
+                : t('expense_dialog_help_owner', { account: liabilityAccount })
               : t('expense_dialog_help_employee')}
           </DialogDescription>
         </DialogHeader>
@@ -321,10 +328,12 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
                 {vatAmount > 0 ? ` · 2641 D ${formatCurrency(vatAmount, currency)}` : ''}
                 {` · ${liabilityAccount} K ${formatCurrency(amount, currency)}`}
               </p>
-              {claimantName && (
-                <p>{t('expense_outcome_att_gora', { name: claimantName })}</p>
+              {payer === 'owner' && isEf ? (
+                <p>{t('expense_outcome_ef')}</p>
+              ) : (
+                claimantName && <p>{t('expense_outcome_att_gora', { name: claimantName })}</p>
               )}
-              {currency !== 'SEK' && <p>{t('expense_fx_note')}</p>}
+              {isForeign && <p>{t('expense_fx_note')}</p>}
             </div>
           )}
         </div>

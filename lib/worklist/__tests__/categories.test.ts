@@ -13,6 +13,7 @@ import {
   countUnbookedTransactions,
   countVerifikatMissingDocument,
   listExpensePayoutsDue,
+  listExpensePayoutSuggestions,
   listSuggestedMatches,
 } from '../categories'
 import {
@@ -545,11 +546,11 @@ describe('listExpensePayoutsDue', () => {
   it('groups registered claims into one item per person, oldest debt first', async () => {
     enqueue({
       data: [
-        { employee_id: null, claimant_name: 'Jakob', liability_account: '2893', amount_sek: '1240.00', expense_date: '2026-09-03' },
-        { employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 1196, expense_date: '2026-09-02' },
-        { employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 400, expense_date: '2026-09-06' },
+        { id: 'c1', employee_id: null, claimant_name: 'Jakob', liability_account: '2893', amount_sek: '1240.00', expense_date: '2026-09-03' },
+        { id: 'c2', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 1196, expense_date: '2026-09-02' },
+        { id: 'c3', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 400, expense_date: '2026-09-06' },
         // Same owner name twice: one person, one transfer.
-        { employee_id: null, claimant_name: 'Jakob', liability_account: '2893', amount_sek: 0.1, expense_date: '2026-09-07' },
+        { id: 'c4', employee_id: null, claimant_name: 'Jakob', liability_account: '2893', amount_sek: 0.1, expense_date: '2026-09-07' },
       ],
     })
     const people = await listExpensePayoutsDue(supabase, COMPANY)
@@ -562,6 +563,7 @@ describe('listExpensePayoutsDue', () => {
         claimant_name: 'Anna Berg',
         liability_account: '2820',
         claim_count: 2,
+        claim_ids: ['c2', 'c3'],
         total_sek: 1596,
         oldest_expense_date: '2026-09-02',
       },
@@ -571,6 +573,7 @@ describe('listExpensePayoutsDue', () => {
         claimant_name: 'Jakob',
         liability_account: '2893',
         claim_count: 2,
+        claim_ids: ['c1', 'c4'],
         // 1240 + 0.1 in öre-safe arithmetic, never 1240.1000000000001.
         total_sek: 1240.1,
         oldest_expense_date: '2026-09-03',
@@ -581,5 +584,48 @@ describe('listExpensePayoutsDue', () => {
   it('soft-fails to an empty list on query error', async () => {
     enqueue({ error: { message: 'boom' } })
     await expect(listExpensePayoutsDue(supabase, COMPANY)).resolves.toEqual([])
+  })
+})
+
+describe('listExpensePayoutSuggestions', () => {
+  it('pairs an unbooked SEK outflow with the person whose open total it equals', async () => {
+    // Open claims: Anna 1 596 (two receipts), owner 1 240.
+    enqueue({
+      data: [
+        { id: 'c2', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 1196, expense_date: '2026-09-02' },
+        { id: 'c3', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 400, expense_date: '2026-09-06' },
+        { id: 'c1', employee_id: null, claimant_name: 'Jakob', liability_account: '2893', amount_sek: 1240, expense_date: '2026-09-03' },
+      ],
+    })
+    // Unbooked outflows: one repays Anna exactly, one is a different amount.
+    enqueue({
+      data: [
+        { id: 'tx-1', date: '2026-09-10', description: 'Överföring Anna Berg', amount: -1596, currency: 'SEK', is_business: null, journal_entry_id: null },
+        { id: 'tx-2', date: '2026-09-10', description: 'Telia', amount: -2450, currency: 'SEK', is_business: null, journal_entry_id: null },
+      ],
+    })
+    const out = await listExpensePayoutSuggestions(supabase, COMPANY)
+    expect(findCalls('transactions', 'in')).toContainEqual(['amount', [-1596, -1240]])
+    expect(out).toEqual([
+      {
+        transaction_id: 'tx-1',
+        transaction_date: '2026-09-10',
+        transaction_description: 'Överföring Anna Berg',
+        transaction_amount: -1596,
+        transaction_currency: 'SEK',
+        kind: 'expense_payout',
+        candidate_id: 'emp-1',
+        candidate_number: null,
+        counterparty_name: 'Anna Berg',
+        candidate_total: 1596,
+        claim_ids: ['c2', 'c3'],
+      },
+    ])
+  })
+
+  it('does nothing for a company without open claims', async () => {
+    enqueue({ data: [] })
+    await expect(listExpensePayoutSuggestions(supabase, COMPANY)).resolves.toEqual([])
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('transactions')
   })
 })

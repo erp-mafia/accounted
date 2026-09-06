@@ -72,6 +72,10 @@ interface TransactionInboxCardProps {
   /** Open the existing-verifikat matcher: link the bank tx to an already-booked
    *  voucher (salary, Fortnox import, manual entry) with no new bokföring. */
   onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
+  /** Open the utlägg picker: book this outflow as the repayment of chosen
+   *  registered claims (sum must equal the row). Passed only while the company
+   *  has open claims, so the item never shows for the companies without any. */
+  onOpenMatchExpense?: (transaction: TransactionWithInvoice) => void
   /** Open the attach-underlag dialog: pin an inbox document or a fresh upload
    *  to the transaction (the tx→doc mirror of the Documents view's matcher). */
   onOpenAttachDocument?: (transaction: TransactionWithInvoice) => void
@@ -116,6 +120,7 @@ export default function TransactionInboxCard({
   onOpenMatchInvoicePicker,
   onOpenSplitMatch,
   onOpenMatchVoucher,
+  onOpenMatchExpense,
   onOpenAttachDocument,
   onDetachDocument,
   onOpenCategoryDialog,
@@ -184,6 +189,9 @@ export default function TransactionInboxCard({
   // Skatteverkets ROT/RUT-utbetalning for an open begäran: same 1-click
   // shortcut as an invoice match, confirmed in its own dialog.
   const hasRotRutPayoutMatch = !!transaction.potential_rot_rut_payout && !transaction.journal_entry_id
+  // A transfer that repays one person's registered utlägg to the öre: same
+  // 1-click shortcut, confirmed in its own dialog.
+  const hasExpensePayoutMatch = !!transaction.potential_expense_payout && !transaction.journal_entry_id
   const isUncategorized = transaction.is_business === null && !transaction.journal_entry_id
   const selectable = isUncategorized && canWrite
   // Unbooked rows are still actionable (match, split, edit, categorize): that
@@ -207,7 +215,9 @@ export default function TransactionInboxCard({
         })
       : hasRotRutPayoutMatch
         ? t('match_rot_rut_payout_btn', { name: transaction.potential_rot_rut_payout!.name })
-        : null
+        : hasExpensePayoutMatch
+          ? t('match_expense_payout_btn', { name: transaction.potential_expense_payout!.claimant_name })
+          : null
 
   // Primary action: invoice/supplier-invoice match keeps the 1-click
   // shortcut; otherwise the user opens the template picker. Rendered as the
@@ -221,7 +231,7 @@ export default function TransactionInboxCard({
   // Manual invoice-match affordance. Hidden once an auto-detected match is
   // already shown as the primary button: having both makes the row noisy.
   const showInvoiceMatchButton =
-    isUnbooked && !hasInvoiceMatch && !hasSupplierInvoiceMatch && !hasRotRutPayoutMatch
+    isUnbooked && !hasInvoiceMatch && !hasSupplierInvoiceMatch && !hasRotRutPayoutMatch && !hasExpensePayoutMatch
 
   const invoiceMatchLabel = isIncome
     ? 'Matcha mot kundfaktura'
@@ -238,6 +248,7 @@ export default function TransactionInboxCard({
   // invoice match was auto-detected: the user may want to point the bank line at
   // an existing salary/Fortnox/manual voucher instead of confirming a payment.
   const showMatchVoucherItem = isUnbooked && !!onOpenMatchVoucher
+  const showMatchExpenseItem = isUnbooked && !isIncome && !!onOpenMatchExpense && !hasExpensePayoutMatch
   // "Matcha mot underlag": pin an inbox doc / fresh upload to the tx. The
   // tx→doc mirror of the Documents view's "Matcha mot transaktion".
   const showAttachDocumentItem = isUnbooked && canWrite && !!onOpenAttachDocument
@@ -260,7 +271,7 @@ export default function TransactionInboxCard({
   const showIgnoreItem = isUnbooked && isImportedTransaction(transaction) && !!onIgnore
   const showDeleteItem = canDelete && !!onDelete
   const showOverflowMenu =
-    showInvoiceMatchButton || showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem
+    showInvoiceMatchButton || showMatchVoucherItem || showMatchExpenseItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem
 
   // Pre-migration history row (ISO dates compare lexically): most likely
   // corresponds to an already-imported verifikat, so it carries a quiet
@@ -442,6 +453,17 @@ export default function TransactionInboxCard({
                     >
                       <FileSearch className="h-4 w-4" />
                       {t('match_voucher_btn')}
+                    </DropdownMenuItem>
+                  )}
+                  {showMatchExpenseItem && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenMatchExpense!(transaction)
+                      }}
+                    >
+                      <FileSearch className="h-4 w-4" />
+                      {t('match_expense_btn')}
                     </DropdownMenuItem>
                   )}
                   {showAttachDocumentItem && (

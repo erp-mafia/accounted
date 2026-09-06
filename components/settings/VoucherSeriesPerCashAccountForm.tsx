@@ -7,18 +7,19 @@ import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup, SettingsRow, SettingsSelect } from '@/components/settings/SettingsRows'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { VOUCHER_SERIES_PRESETS } from '@/lib/bookkeeping/voucher-series-resolver'
+import { buildVoucherSeriesOptions } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { CashAccount, CompanySettings } from '@/types'
 
 // Sentinel for "no override" in the <select>: an empty option value renders
 // as the placeholder in some browsers, so use an explicit token instead.
 const FOLLOW_DEFAULT = '__default__'
 
-const SERIES_LETTER_RE = /^[A-Z]$/
-
 interface Props {
-  /** Company settings, for the letters the company has already configured. */
-  settings: Pick<CompanySettings, 'default_voucher_series' | 'default_voucher_series_per_source_type'>
+  /** Company settings, for the letters the company has already configured and named. */
+  settings: Pick<
+    CompanySettings,
+    'default_voucher_series' | 'default_voucher_series_per_source_type' | 'voucher_series_labels'
+  >
 }
 
 /** "Företagskort (1931)" or the bare ledger account when the row has no name. */
@@ -47,20 +48,21 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
 
   // Presets first, then any configured or already-assigned letter the presets
   // do not cover, so a Select never renders blank on a value it does not offer.
-  const seriesOptions = useMemo(() => {
-    const preset = new Set(VOUCHER_SERIES_PRESETS.map((p) => p.letter))
-    const extras = [
+  // Names come from the company's own voucher_series_labels, presets as fallback.
+  const seriesOptions = useMemo(
+    () =>
+      buildVoucherSeriesOptions(settings.voucher_series_labels, [
+        settings.default_voucher_series,
+        ...Object.values(settings.default_voucher_series_per_source_type ?? {}),
+        ...cashAccounts.map((a) => a.voucher_series),
+      ]),
+    [
+      settings.voucher_series_labels,
       settings.default_voucher_series,
-      ...Object.values(settings.default_voucher_series_per_source_type ?? {}),
-      ...cashAccounts.map((a) => a.voucher_series),
-    ]
-      .filter((v): v is string => typeof v === 'string' && SERIES_LETTER_RE.test(v) && !preset.has(v))
-    const uniqueExtras = Array.from(new Set(extras)).sort()
-    return [
-      ...VOUCHER_SERIES_PRESETS,
-      ...uniqueExtras.map((letter) => ({ letter, label: '' })),
-    ]
-  }, [settings.default_voucher_series, settings.default_voucher_series_per_source_type, cashAccounts])
+      settings.default_voucher_series_per_source_type,
+      cashAccounts,
+    ],
+  )
 
   /** PATCH one account's override, then refresh the shared cash-account cache. */
   const handleChange = async (account: CashAccount, value: string) => {

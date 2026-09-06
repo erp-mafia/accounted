@@ -2378,7 +2378,14 @@
     "per_account_saved_title": "Verifikationsserie sparad",
     "per_account_saved_set": "Nya verifikat från {account} hamnar i serie {series}.",
     "per_account_saved_cleared": "{account} följer nu standardserien för banktransaktioner.",
-    "per_account_save_failed": "Kunde inte spara"
+    "per_account_save_failed": "Kunde inte spara",
+    "name_column": "Namn",
+    "name_placeholder": "Namn (valfritt)",
+    "name_help": "Namnet visas bredvid bokstaven överallt där du väljer serie, till exempel i verifikatfönstret. Tomt fält visar standardbeskrivningen.",
+    "no_vouchers_yet": "Inga verifikat ännu",
+    "save_names": "Spara namn",
+    "names_saved_title": "Serienamn sparade",
+    "names_saved_description": "Namnen visas nu i serieväljarna."
   },
   "settings_team_panel": {
     "role_owner": "Ägare",
@@ -2908,6 +2915,8 @@
     "invoices_help": "Förfallodatum för fakturor"
   },
   "tx_inbox_card": {
+    "match_expense_btn": "Matcha mot utlägg",
+    "match_expense_payout_btn": "Bokför återbetalning av utlägg till {name}",
     "skv_counterpart_label": "Möjlig 1930↔1630-överföring.",
     "skv_counterpart_body": "Det finns en skattekonto-händelse den {date} som matchar: bokför detta verifikat först, koppla sedan skattekonto-raden mot samma verifikat istället för att bokföra två gånger.",
     "match_invoice_btn": "Matcha Faktura {number}",
@@ -3302,6 +3311,9 @@
     "mixed_currency_note": "Underlag i olika valutor kan inte summeras till ett belopp. Varje underlag bokförs ändå var för sig, mot sin matchade banktransaktion och det belopp banken faktiskt drog i SEK."
   },
   "inbox_workspace": {
+    "payer_help_owner_ef": "Bokförs som egen insättning (2018). Inget att betala ut.",
+    "expense_dialog_help_owner_ef": "Kostnad och moms bokförs nu som egen insättning på konto 2018. Firman har ingen skuld till dig: tar du ut pengar senare är det ett eget uttag.",
+    "expense_outcome_ef": "Ingen rad i Att göra: en egen insättning är inget som ska betalas ut.",
     "payer_question": "Vem betalade?",
     "payer_company": "Företaget",
     "payer_owner": "Jag, privat",
@@ -3326,7 +3338,7 @@
     "expense_vat": "Moms",
     "expense_account": "Kostnadskonto",
     "expense_outcome_att_gora": "Hamnar i Att göra: Betala ut utlägg till {name}.",
-    "expense_fx_note": "Bokförs i SEK med Riksbankens kurs för datumet.",
+    "expense_fx_note": "Utländskt kvitto: momsen dras inte av, hela beloppet bokförs som kostnad i SEK med Riksbankens kurs för datumet.",
     "expense_cancel": "Avbryt",
     "expense_confirm": "Bokför",
     "expense_booked_title": "Utlägget är bokfört",
@@ -4390,6 +4402,14 @@
     "customer_placeholder": "Välj kund",
     "day_label": "Dag i månaden",
     "day_hint": "29-31 körs sista dagen i kortare månader.",
+    "run_date_label": "Första faktureringsdatum",
+    "run_date_edit_label": "Nästa faktureringsdatum",
+    "run_date_hint": "Styr vilken månad fakturan skapas, t.ex. februari varje år.",
+    "upcoming_runs": "Därefter: {dates}",
+    "validation_run_date_required": "Ange ett datum",
+    "validation_run_date_past": "Datumet får inte vara passerat",
+    "validation_run_date_not_future": "Datumet måste vara efter idag",
+    "validation_run_date_grid": "Datumet måste ligga på dag {day} i månaden",
     "interval_label": "Intervall",
     "interval_monthly": "Varje månad",
     "interval_quarterly": "Varje kvartal",
@@ -5998,6 +6018,9 @@
     "load_failed": "Kunde inte hämta varumärket. Prova att ladda om sidan."
   },
   "transactions": {
+    "expense_payout_matched_title": "Återbetalning av utlägg bokförd",
+    "expense_payout_matched_description": "Överföringen till {name} bokfördes och utläggen markerades som utbetalda.",
+    "expense_payout_match_failed_title": "Kunde inte bokföra återbetalningen",
     "counterparty_suggestion_gone_title": "Motparten är inte längre tillgänglig",
     "counterparty_suggestion_gone_description": "Förslaget hann uppdateras. Stäng rutan, öppna den igen och välj motparten på nytt.",
     "page_title": "Transaktioner",
@@ -6674,6 +6697,7 @@
     "dismiss": "Dölj"
   },
   "dashboard": {
+    "suggested_kind_expense_payout": "Återbetalning utlägg",
     "band_betala": "Betala",
     "row_expense_payout": "Betala ut utlägg till {name}",
     "row_expense_payout_detail_one": "1 kvitto · {date}",
@@ -8768,5 +8792,26 @@
     "attn_create": "Skapa förslag",
     "auto_created_title": "{count} förslag skapade från bokföringen",
     "auto_created_description": "Motparter som dina verifikat namnger men som inte finns i registret. Lägg upp dem, eller dölj de som inte hör hemma här."
-}
+},
+  "tx_expense_payout_match": {
+    "title": "Bokför återbetalning av utlägg",
+    "description": "Överföringen bokförs mot personens skuldkonto, utläggen markeras som utbetalda och transaktionen kopplas till verifikatet.",
+    "claims_one": "1 kvitto · {date}",
+    "claims_other": "{count} kvitton · äldsta {date}",
+    "outcome": "Skulden till personen blir 0 kr och raden försvinner från Att göra.",
+    "cancel": "Avbryt",
+    "confirm": "Bokför återbetalningen"
+  },
+  "tx_expense_claim_picker": {
+    "title": "Matcha mot utlägg",
+    "description": "Välj de utlägg som överföringen täcker. Summan måste stämma exakt med beloppet på raden.",
+    "person_label": "Person",
+    "no_claims": "Inga öppna utlägg att matcha.",
+    "selected_sum": "Valda utlägg: {amount}",
+    "transfer_sum": "Överföring: {amount}",
+    "diff": "Skillnad: {amount}",
+    "cancel": "Avbryt",
+    "confirm": "Bokför återbetalningen",
+    "failed_title": "Kunde inte bokföra återbetalningen"
+  }
 }

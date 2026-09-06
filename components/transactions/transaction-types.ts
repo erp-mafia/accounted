@@ -1,5 +1,6 @@
 import type { Transaction, TransactionCategory, Invoice, Customer, SupplierInvoice, VatTreatment } from '@/types'
 import type { RotRutPayoutRequestCandidate } from '@/lib/invoices/rot-rut-payout-matching'
+import type { ExpensePayoutDue } from '@/lib/worklist/types'
 
 /** Open ROT/RUT begäran hung onto an income row as a match suggestion, with
  *  the invoices it covers (so the user sees which fakturor the payout settles). */
@@ -23,6 +24,10 @@ export interface TransactionWithInvoice extends Transaction {
   potential_supplier_invoice?: SupplierInvoice
   potential_rot_rut_payout?: PotentialRotRutPayout
   potential_voucher?: PotentialVoucher
+  /** The person whose registered utlägg this outflow repays in full
+   *  (lib/expenses/expense-payout-candidates): computed at read time, no
+   *  hint column. Present only while their claims are still registered. */
+  potential_expense_payout?: ExpensePayoutDue
 }
 
 // Page view modes. 'review' is the migrator surface: rows whose sweep
