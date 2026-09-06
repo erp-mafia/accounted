@@ -11,7 +11,7 @@ import { FiscalYearsManager } from '@/components/settings/FiscalYearsManager'
 import { VoucherSeriesManager } from '@/components/settings/VoucherSeriesManager'
 import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSeriesPerSourceTypeForm'
 import { VoucherSeriesPerCashAccountForm } from '@/components/settings/VoucherSeriesPerCashAccountForm'
-import { applyDefaultSeriesToMap } from '@/lib/bookkeeping/voucher-series-resolver'
+import { applyDefaultSeriesToMap, voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
 import { MileageToggle } from '@/components/settings/MileageToggle'
 import { SalesOrdersToggle } from '@/components/settings/SalesOrdersToggle'
@@ -152,11 +152,15 @@ export function BookkeepingSettingsContent() {
               defaultValue={settings.default_voucher_series || 'A'}
               className="font-mono"
             >
-              {SERIES_OPTIONS.map((letter) => (
-                <option key={letter} value={letter}>
-                  {letter}
-                </option>
-              ))}
+              {SERIES_OPTIONS.map((letter) => {
+                // Same name the pickers show: the company's own, else the preset.
+                const label = voucherSeriesLabel(letter, settings.voucher_series_labels)
+                return (
+                  <option key={letter} value={letter}>
+                    {label ? `${letter}  ${label}` : letter}
+                  </option>
+                )
+              })}
             </SettingsSelect>
           </SettingsRow>
         </SettingsGroup>
@@ -173,7 +177,7 @@ export function BookkeepingSettingsContent() {
 
       <VoucherSeriesPerCashAccountForm settings={settings} />
 
-      <VoucherSeriesManager defaultSeries={settings.default_voucher_series || 'A'} />
+      <VoucherSeriesManager settings={settings} onSettingsUpdated={updateSettings} />
 
       <SettingsGroup label={t('group_automation')}>
         {/* Periodisering is a review-gated wizard step, not an automation
