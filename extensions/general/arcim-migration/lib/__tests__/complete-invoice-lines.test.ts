@@ -10,8 +10,16 @@ import type { SalesInvoiceDto } from '@/lib/providers/dto'
  * when the provider's total agrees with the stored one, and leave anything it
  * could not reach for the next run rather than guessing. Every write goes
  * through the complete_invoice_rows RPC, one call per invoice, which is what
- * keeps two writers from doubling an invoice's rows.
+ * keeps two writers from doubling an invoice's rows, and every write that
+ * landed leaves one InvoiceRowsCompleted row in processing_history (#2312).
+ * The history append runs for real against the fake client, so the payload
+ * below is what the PII guard and the row shape actually accept.
  */
+
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: vi.fn(),
+  createServiceClient: vi.fn(),
+}))
 
 vi.mock('@/lib/providers/resolve-consent', () => ({
   resolveConsent: vi.fn().mockResolvedValue({
@@ -86,6 +94,7 @@ function storedRow(overrides: Record<string, unknown> = {}) {
     subtotal: 1250,
     vat_amount: 0,
     vat_rate: 25,
+    vat_treatment: 'standard_25',
     currency: 'SEK',
     exchange_rate: null,
     invoice_items: [],
@@ -175,6 +184,18 @@ function headerUpdates(calls: Call[]): Record<string, unknown>[] {
     .filter((h): h is Record<string, unknown> => h !== null)
 }
 
+/** The processing_history rows the run appended, in order. */
+function historyRows(calls: Call[]): Record<string, unknown>[] {
+  return calls
+    .filter((c) => c.table === 'processing_history' && c.method === 'insert')
+    .map((c) => c.args[0] as Record<string, unknown>)
+}
+
+/** Every call that touched a table other than the trail. */
+function tableWrites(calls: Call[]): Call[] {
+  return calls.filter((c) => c.method !== 'rpc' && c.table !== 'processing_history')
+}
+
 describe('completeMigratedInvoiceLines', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -193,6 +214,7 @@ describe('completeMigratedInvoiceLines', () => {
     expect(result).toMatchObject({
       candidates: 1, providerInvoices: 1, matched: 1, unmatched: 0,
       completed: 1, headersUpdated: 1, remaining: 0, totalMismatch: 0, notHydrated: 0, failed: 0,
+      historyAppended: 1,
     })
     // Only the matched subset is hydrated, so the budget is never spent on
     // invoices already complete on our side.
@@ -228,8 +250,30 @@ describe('completeMigratedInvoiceLines', () => {
     // Never the total, status or payments.
     expect(Object.keys(sent[0].p_header!)).not.toContain('total')
     expect(Object.keys(sent[0].p_header!)).not.toContain('status')
-    // Nothing is written outside the RPC.
-    expect(calls.filter((c) => c.method !== 'rpc')).toHaveLength(0)
+    // Nothing is written outside the RPC, except the trail.
+    expect(tableWrites(calls)).toHaveLength(0)
+
+    // One InvoiceRowsCompleted on the invoice: the writer, the provider,
+    // the consent, and the header split before and after (the pre-#1745
+    // 25 %-beside-0-kr shape replaced by what the detail form established).
+    const trail = historyRows(calls)
+    expect(trail).toHaveLength(1)
+    expect(trail[0]).toMatchObject({
+      company_id: 'co-1',
+      aggregate_type: 'Invoice',
+      aggregate_id: 'inv-1',
+      event_type: 'InvoiceRowsCompleted',
+      actor: { type: 'cron', id: 'complete-invoice-lines' },
+      payload: {
+        source: 'complete-invoice-lines',
+        provider: 'fortnox',
+        consent_id: 'c-1',
+        rows: 1,
+        header_updated: true,
+        header_before: { subtotal: 1250, vat_amount: 0, vat_rate: 25, vat_treatment: 'standard_25' },
+        header_after: { subtotal: 1000, vat_amount: 250, vat_rate: 25, vat_treatment: 'standard_25' },
+      },
+    })
   })
 
   it('writes the rows but leaves a header whose split is consistent (momsfri)', async () => {
@@ -241,10 +285,14 @@ describe('completeMigratedInvoiceLines', () => {
 
     const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
 
-    expect(result).toMatchObject({ completed: 1, headersUpdated: 0 })
+    expect(result).toMatchObject({ completed: 1, headersUpdated: 0, historyAppended: 1 })
     expect(insertedRows(calls)).toHaveLength(1)
     expect(writes(calls)[0].p_header).toBeNull()
     expect(headerUpdates(calls)).toHaveLength(0)
+    // The event says the header was left alone, and carries no split.
+    expect(historyRows(calls)[0]).toMatchObject({
+      payload: { rows: 1, header_updated: false, header_before: null, header_after: null },
+    })
   })
 
   it('fills a header whose rate is null (the post-#1745 "source did not say")', async () => {
@@ -390,9 +438,11 @@ describe('completeMigratedInvoiceLines', () => {
 
     const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
 
-    expect(result).toMatchObject({ completed: 0, headersUpdated: 0, failed: 0, remaining: 1 })
+    expect(result).toMatchObject({ completed: 0, headersUpdated: 0, failed: 0, remaining: 1, historyAppended: 0 })
     expect(writes(calls)).toHaveLength(1)
     expect(writes(calls)[0].p_header).not.toBeNull()
+    // Nothing changed, so nothing is recorded.
+    expect(historyRows(calls)).toHaveLength(0)
   })
 
   it('counts a refused or failed call as failed and goes on with the rest', async () => {
@@ -419,8 +469,46 @@ describe('completeMigratedInvoiceLines', () => {
 
     const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
 
-    expect(result).toMatchObject({ completed: 1, failed: 2, headersUpdated: 1, remaining: 2 })
+    expect(result).toMatchObject({ completed: 1, failed: 2, headersUpdated: 1, remaining: 2, historyAppended: 1 })
     expect(writes(calls).map((w) => w.p_invoice_id)).toEqual(['inv-1', 'inv-2', 'inv-3'])
+    // The trail names only the invoice whose write landed.
+    expect(historyRows(calls).map((r) => r.aggregate_id)).toEqual(['inv-1'])
+  })
+
+  it('threads one correlation id through every event of a run, attributed to the caller\'s actor', async () => {
+    mFetchAll.mockResolvedValue([storedRow(), storedRow({ id: 'inv-2', invoice_number: '1002' })])
+    const dtos = [providerInvoice(), providerInvoice({ id: '1002', invoiceNumber: '1002' })]
+    mList.mockResolvedValue(dtos)
+    mHydrate.mockResolvedValue(hydratedAll(dtos))
+    const { supabase, calls } = makeSupabase(() => ok)
+
+    const result = await completeMigratedInvoiceLines({
+      supabase, companyId: 'co-1', consentId: 'c-1', actor: { type: 'user', id: 'user-9' },
+    })
+
+    expect(result).toMatchObject({ completed: 2, historyAppended: 2 })
+    const trail = historyRows(calls)
+    expect(trail.map((r) => r.aggregate_id)).toEqual(['inv-1', 'inv-2'])
+    expect(trail[0].correlation_id).toMatch(/^[0-9a-f-]{36}$/)
+    expect(trail[1].correlation_id).toBe(trail[0].correlation_id)
+    expect(trail.every((r) => (r.actor as { id: string }).id === 'user-9')).toBe(true)
+  })
+
+  it('counts a write whose trail append failed as completed, not appended', async () => {
+    // The rows are committed by then; a missing change-log row is a logged
+    // gap, never a failed invoice the next run would find full.
+    mFetchAll.mockResolvedValue([storedRow()])
+    const dto = providerInvoice()
+    mList.mockResolvedValue([dto])
+    mHydrate.mockResolvedValue(hydratedAll([dto]))
+    const { supabase, calls } = makeSupabase((table) =>
+      table === 'processing_history' ? { data: null, error: { message: 'connection reset' } } : ok,
+    )
+
+    const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
+
+    expect(result).toMatchObject({ completed: 1, failed: 0, historyAppended: 0 })
+    expect(historyRows(calls)).toHaveLength(1)
   })
 
   it('dry run: reports the plan and writes nothing', async () => {
@@ -432,7 +520,7 @@ describe('completeMigratedInvoiceLines', () => {
 
     const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1', dryRun: true })
 
-    expect(result).toMatchObject({ dryRun: true, completed: 1, headersUpdated: 1, remaining: 0 })
+    expect(result).toMatchObject({ dryRun: true, completed: 1, headersUpdated: 1, remaining: 0, historyAppended: 0 })
     expect(calls).toHaveLength(0)
   })
 

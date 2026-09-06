@@ -35,11 +35,22 @@
  * locks the invoice, inserts the rows only when the invoice still has none
  * and applies the header split in the same transaction, so an invoice's rows
  * are written at most once whichever writer gets there first, and "rows
- * landed, header did not" is not a reachable state.
+ * landed, header did not" is not a reachable state. The call goes through
+ * completeInvoiceRows (lib/invoices/complete-invoice-rows.ts), which also
+ * writes the behandlingshistorik event for every invoice the RPC filled: one
+ * InvoiceRowsCompleted per invoice, with the header split before and after
+ * (BFL 5 kap 11 §, BFNAR 2013:2 p. 9.16). Every invoice a run completes
+ * shares one correlation id, so a run is one thread in the trail.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ProcessingHistoryActor } from '@/types'
 import { ISO_DATE_RE } from '@/lib/invariants'
+import {
+  completeInvoiceRows,
+  type CompleteInvoiceRowsTrail,
+  type InvoiceHeaderVatSplit,
+} from '@/lib/invoices/complete-invoice-rows'
 import { createLogger } from '@/lib/logger'
 import { equalOre, roundOre } from '@/lib/money'
 import type { SalesInvoiceDto } from '@/lib/providers/dto'
@@ -54,6 +65,9 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { mapSalesInvoice } from './entity-mapper'
 
 const log = createLogger('extensions/arcim-migration/complete-invoice-lines')
+
+/** The writer named in the trail; also the default actor id (the hourly cron). */
+export const COMPLETE_INVOICE_LINES_SOURCE = 'complete-invoice-lines'
 
 /**
  * How many invoices in this company the pass would try to complete: the
@@ -87,6 +101,8 @@ export interface CompleteInvoiceLinesOptions {
   dryRun?: boolean
   /** Wall-clock ceiling for the provider detail fetches, in ms. */
   budgetMs?: number
+  /** Who the behandlingshistorik events are attributed to; the hourly cron when unset. */
+  actor?: ProcessingHistoryActor
 }
 
 export interface CompleteInvoiceLinesResult {
@@ -118,6 +134,8 @@ export interface CompleteInvoiceLinesResult {
   vatUnresolved: number
   /** Invoices whose write failed at the database. */
   failed: number
+  /** Of `completed`, those whose InvoiceRowsCompleted event landed in processing_history. */
+  historyAppended: number
   /** Candidates still without rows after this run: `candidates - completed`. */
   remaining: number
   hydration: HydrationReport
@@ -134,6 +152,7 @@ interface CandidateRow {
   subtotal: number | null
   vat_amount: number | null
   vat_rate: number | null
+  vat_treatment: string | null
   currency: string | null
   exchange_rate: number | null
   invoice_items: { id: string }[] | null
@@ -208,7 +227,7 @@ async function loadCandidates(supabase: SupabaseClient, companyId: string): Prom
     supabase
       .from('invoices')
       .select(
-        'id, user_id, customer_id, invoice_number, invoice_date, total, subtotal, vat_amount, vat_rate, currency, exchange_rate, invoice_items(id)',
+        'id, user_id, customer_id, invoice_number, invoice_date, total, subtotal, vat_amount, vat_rate, vat_treatment, currency, exchange_rate, invoice_items(id)',
       )
       .eq('company_id', companyId)
       .eq('document_type', 'invoice')
@@ -222,39 +241,21 @@ async function loadCandidates(supabase: SupabaseClient, companyId: string): Prom
   return rows.filter((row) => (row.invoice_items?.length ?? 0) === 0)
 }
 
-/**
- * The header VAT split the detail form established, as the RPC's p_header:
- * the six invoice columns it may rewrite, all present or none.
- */
-interface HeaderFill {
-  subtotal: number
-  subtotal_sek: number | null
-  vat_amount: number
-  vat_amount_sek: number | null
-  vat_rate: number | null
-  vat_treatment: string
-}
-
 interface PlannedWrite {
   row: CandidateRow
   /** The invoice_items columns per row; the RPC stamps invoice_id itself. */
   items: Record<string, unknown>[]
-  header: HeaderFill | null
-}
-
-/** What complete_invoice_rows returns (migration 20260906135730). */
-interface CompleteRowsOutcome {
-  ok: boolean
-  code?: string
-  wrote?: boolean
-  rows?: number
-  header_updated?: boolean
+  /** The header VAT split the detail form established, as the RPC's p_header. */
+  header: InvoiceHeaderVatSplit | null
 }
 
 export async function completeMigratedInvoiceLines(
   options: CompleteInvoiceLinesOptions,
 ): Promise<CompleteInvoiceLinesResult> {
-  const { supabase, companyId, consentId, dryRun = false, budgetMs } = options
+  const {
+    supabase, companyId, consentId, dryRun = false, budgetMs,
+    actor = { type: 'cron', id: COMPLETE_INVOICE_LINES_SOURCE },
+  } = options
 
   const result: CompleteInvoiceLinesResult = {
     candidates: 0,
@@ -269,6 +270,7 @@ export async function completeMigratedInvoiceLines(
     notHydrated: 0,
     vatUnresolved: 0,
     failed: 0,
+    historyAppended: 0,
     remaining: 0,
     hydration: { needed: 0, hydrated: 0, failed: 0, skippedForBudget: 0 },
     dryRun,
@@ -355,7 +357,7 @@ export async function completeMigratedInvoiceLines(
       }
     }
 
-    let header: HeaderFill | null = null
+    let header: InvoiceHeaderVatSplit | null = null
     if (mapped.vatUnresolved) {
       result.vatUnresolved++
     } else if (headerHoldsNoVatEvidence(row)) {
@@ -381,36 +383,55 @@ export async function completeMigratedInvoiceLines(
     return result
   }
 
+  // One run, one correlation id: the invoices this run completed read as
+  // one thread in the behandlingshistorik.
+  const trail: CompleteInvoiceRowsTrail = {
+    source: COMPLETE_INVOICE_LINES_SOURCE,
+    provider,
+    consentId,
+    correlationId: crypto.randomUUID(),
+    actor,
+  }
+
   for (const plan of planned) {
     // One call per invoice, so a bad row set rejects its own invoice and not
     // the hundred beside it. A concurrent run (the wizard and the cron, or
     // two crons overlapping) that filled this invoice since the candidates
-    // were loaded leaves this call with wrote = false: rows are appended,
-    // never replaced, and the RPC's invoice lock is what keeps a second
-    // writer from doubling them.
-    const { data, error } = await supabase.rpc('complete_invoice_rows', {
-      p_company_id: companyId,
-      p_invoice_id: plan.row.id,
-      p_rows: plan.items,
-      p_header: plan.header,
+    // were loaded leaves this call already_filled: rows are appended, never
+    // replaced, and the RPC's invoice lock is what keeps a second writer
+    // from doubling them. The trail event is written only for a write that
+    // landed, by completeInvoiceRows itself.
+    const outcome = await completeInvoiceRows(supabase, {
+      companyId,
+      invoiceId: plan.row.id,
+      rows: plan.items,
+      header: plan.header,
+      headerBefore: {
+        subtotal: plan.row.subtotal,
+        vat_amount: plan.row.vat_amount,
+        vat_rate: plan.row.vat_rate,
+        vat_treatment: plan.row.vat_treatment,
+      },
+      trail,
+      // The cron's client is the service client already.
+      historyClient: supabase,
     })
-    const outcome = (data ?? null) as CompleteRowsOutcome | null
-    if (error || !outcome?.ok) {
+    if (outcome.status === 'failed') {
       result.failed++
       log.error('complete_invoice_rows failed', {
-        companyId, invoiceId: plan.row.id, invoiceNumber: plan.row.invoice_number,
-        reason: error?.message ?? outcome?.code ?? 'empty RPC response',
+        companyId, invoiceId: plan.row.id, invoiceNumber: plan.row.invoice_number, reason: outcome.reason,
       })
       continue
     }
-    if (!outcome.wrote) {
+    if (outcome.status === 'already_filled') {
       log.info('invoice gained rows since the candidates were loaded; left as is', {
         companyId, invoiceId: plan.row.id,
       })
       continue
     }
     result.completed++
-    if (outcome.header_updated) result.headersUpdated++
+    if (outcome.headerUpdated) result.headersUpdated++
+    if (outcome.eventId) result.historyAppended++
   }
 
   result.remaining = candidates.length - result.completed
@@ -424,6 +445,7 @@ export async function completeMigratedInvoiceLines(
     totalMismatch: result.totalMismatch,
     rowsMismatch: result.rowsMismatch,
     failed: result.failed,
+    historyAppended: result.historyAppended,
     remaining: result.remaining,
     hydration: result.hydration,
   })
