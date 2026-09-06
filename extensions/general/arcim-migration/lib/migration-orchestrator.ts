@@ -86,6 +86,8 @@ export interface MigrationOptions {
  * PostgREST's practical size limit while minimising round-trips.
  */
 const INSERT_CHUNK_SIZE = 500
+/** Sales-invoice row writes in flight at once (one complete_invoice_rows call per invoice). */
+const ITEM_RPC_CONCURRENCY = 8
 const ENRICHMENT_CONCURRENCY = 10
 
 function emitProgress(options: MigrationOptions, progress: MigrationProgress) {
@@ -736,13 +738,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             errorSample ??= outcome.firstError
           }
 
-          const allItems: Record<string, unknown>[] = []
+          const rowsByInvoice: { invoiceId: string; rows: Record<string, unknown>[] }[] = []
           for (let i = 0; i < mappedBatch.length; i++) {
             const insertedRow = outcome.returned[i]
             if (!insertedRow) continue
             const invoiceId = insertedRow.id
-            for (const item of mappedBatch[i].items) {
-              allItems.push({ ...item, invoice_id: invoiceId })
+            if (mappedBatch[i].items.length > 0) {
+              rowsByInvoice.push({ invoiceId: String(invoiceId), rows: mappedBatch[i].items })
             }
             registrationLinkInputs.push({
               invoiceId: String(invoiceId),
@@ -772,13 +774,27 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             imported++
           }
 
-          if (allItems.length > 0) {
-            for (const itemBatch of chunk(allItems, INSERT_CHUNK_SIZE)) {
-              const { error: itemErr } = await supabase.from('invoice_items').insert(itemBatch)
-              if (itemErr) {
-                console.error(`[migration] Sales invoice items insert failed (${itemBatch.length}):`, itemErr.message)
+          // One complete_invoice_rows call per invoice (migration
+          // 20260906135730): the write path the row-completion pass uses, so
+          // an invoice's rows are written at most once whichever writer gets
+          // there first, and a bad row set rejects its own invoice rather than
+          // the whole chunk. Small concurrent groups keep the round trips off
+          // the wizard's clock.
+          for (const group of chunk(rowsByInvoice, ITEM_RPC_CONCURRENCY)) {
+            await Promise.all(group.map(async ({ invoiceId, rows }) => {
+              const { data, error: itemErr } = await supabase.rpc('complete_invoice_rows', {
+                p_company_id: companyId,
+                p_invoice_id: invoiceId,
+                p_rows: rows,
+              })
+              const rpcOutcome = (data ?? null) as { ok?: boolean; code?: string } | null
+              if (itemErr || !rpcOutcome?.ok) {
+                console.error(
+                  `[migration] Sales invoice items insert failed for ${invoiceId}:`,
+                  itemErr?.message ?? rpcOutcome?.code ?? 'empty RPC response',
+                )
               }
-            }
+            }))
           }
         }
 

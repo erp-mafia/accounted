@@ -8,7 +8,9 @@ import type { SalesInvoiceDto } from '@/lib/providers/dto'
  * migration's detail hydration is budget-bounded). It must start from OUR
  * row-less invoices, join strictly, hydrate only that subset, write rows only
  * when the provider's total agrees with the stored one, and leave anything it
- * could not reach for the next run rather than guessing.
+ * could not reach for the next run rather than guessing. Every write goes
+ * through the complete_invoice_rows RPC, one call per invoice, which is what
+ * keeps two writers from doubling an invoice's rows.
  */
 
 vi.mock('@/lib/providers/resolve-consent', () => ({
@@ -102,11 +104,33 @@ function hydratedAll(invoices: SalesInvoiceDto[], unhydratedIds: string[] = []) 
 
 interface Call { table: string; method: string; args: unknown[] }
 
+/** The complete_invoice_rows payload, as the pass sends it. */
+interface RpcArgs {
+  p_company_id: string
+  p_invoice_id: string
+  p_rows: Record<string, unknown>[]
+  p_header: Record<string, unknown> | null
+}
+
+/** What the real RPC answers a caller that wrote: N rows, header iff one was sent. */
+function rpcWrote(args: RpcArgs) {
+  return {
+    data: { ok: true, wrote: true, rows: args.p_rows.length, header_updated: args.p_header !== null },
+    error: null,
+  }
+}
+
+const rpcAlreadyFilled = { data: { ok: true, wrote: false, rows: 0, header_updated: false }, error: null }
+
 /**
- * Thenable query-builder stand-in. Records every call; resolves with what
- * `respond` returns for the table and the methods used on the chain.
+ * Query-builder and RPC stand-in. Records every call; `respond` answers the
+ * table chains, `respondRpc` answers `.rpc()` (defaults to a successful
+ * write shaped like the real function's reply).
  */
-function makeSupabase(respond: (table: string, methods: string[], calls: Call[]) => unknown) {
+function makeSupabase(
+  respond: (table: string, methods: string[], calls: Call[]) => unknown,
+  respondRpc: (fn: string, args: RpcArgs) => unknown = (_fn, args) => rpcWrote(args),
+) {
   const calls: Call[] = []
   const from = vi.fn((table: string) => {
     const chain: Call[] = []
@@ -125,21 +149,30 @@ function makeSupabase(respond: (table: string, methods: string[], calls: Call[])
         .then(resolve, reject)
     return builder
   })
-  return { supabase: { from } as unknown as SupabaseClient, calls }
+  const rpc = vi.fn((fn: string, args: RpcArgs) => {
+    calls.push({ table: `rpc:${fn}`, method: 'rpc', args: [fn, args] })
+    return Promise.resolve(respondRpc(fn, args))
+  })
+  return { supabase: { from, rpc } as unknown as SupabaseClient, calls }
 }
 
 const ok = { data: [], error: null }
 
-function insertedRows(calls: Call[]): Record<string, unknown>[] {
+function writes(calls: Call[]): RpcArgs[] {
   return calls
-    .filter((c) => c.table === 'invoice_items' && c.method === 'insert')
-    .flatMap((c) => c.args[0] as Record<string, unknown>[])
+    .filter((c) => c.method === 'rpc' && c.args[0] === 'complete_invoice_rows')
+    .map((c) => c.args[1] as RpcArgs)
+}
+
+/** The rows sent, each tagged with the invoice the call named. */
+function insertedRows(calls: Call[]): Record<string, unknown>[] {
+  return writes(calls).flatMap((w) => w.p_rows.map((row) => ({ ...row, invoice_id: w.p_invoice_id })))
 }
 
 function headerUpdates(calls: Call[]): Record<string, unknown>[] {
-  return calls
-    .filter((c) => c.table === 'invoices' && c.method === 'update')
-    .map((c) => c.args[0] as Record<string, unknown>)
+  return writes(calls)
+    .map((w) => w.p_header)
+    .filter((h): h is Record<string, unknown> => h !== null)
 }
 
 describe('completeMigratedInvoiceLines', () => {
@@ -148,7 +181,7 @@ describe('completeMigratedInvoiceLines', () => {
     mResolve.mockResolvedValue({ consent: { provider: 'fortnox' }, accessToken: 'tok', providerCompanyId: undefined })
   })
 
-  it('writes the rows and fills a header that held no VAT evidence', async () => {
+  it('writes the rows and fills a header that held no VAT evidence, through one RPC call per invoice', async () => {
     mFetchAll.mockResolvedValue([storedRow()])
     const dto = providerInvoice()
     mList.mockResolvedValue([dto])
@@ -166,10 +199,14 @@ describe('completeMigratedInvoiceLines', () => {
     expect(mHydrate).toHaveBeenCalledTimes(1)
     expect(mHydrate.mock.calls[0][3]).toEqual([dto])
 
-    const rows = insertedRows(calls)
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({
-      invoice_id: 'inv-1',
+    // One call, scoped to the company as well as the invoice: the RPC locks
+    // the invoice and stamps invoice_id itself, so the rows carry none.
+    const sent = writes(calls)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ p_company_id: 'co-1', p_invoice_id: 'inv-1' })
+    expect(sent[0].p_rows).toHaveLength(1)
+    expect(sent[0].p_rows[0]).not.toHaveProperty('invoice_id')
+    expect(sent[0].p_rows[0]).toEqual({
       sort_order: 1,
       description: 'Konsulttid',
       quantity: 10,
@@ -178,11 +215,9 @@ describe('completeMigratedInvoiceLines', () => {
       line_total: 1000,
       vat_rate: 25,
       vat_amount: 250,
+      line_type: 'product',
     })
-
-    const headers = headerUpdates(calls)
-    expect(headers).toHaveLength(1)
-    expect(headers[0]).toEqual({
+    expect(sent[0].p_header).toEqual({
       subtotal: 1000,
       subtotal_sek: 1000,
       vat_amount: 250,
@@ -190,14 +225,11 @@ describe('completeMigratedInvoiceLines', () => {
       vat_rate: 25,
       vat_treatment: 'standard_25',
     })
-    // Scoped to the company as well as the id: defense in depth on a
-    // service-role client.
-    const update = calls.find((c) => c.table === 'invoices' && c.method === 'update')!
-    const scope = calls.filter((c) => c.table === 'invoices' && c.method === 'eq' && calls.indexOf(c) > calls.indexOf(update))
-    expect(scope.map((c) => c.args)).toEqual([['id', 'inv-1'], ['company_id', 'co-1']])
     // Never the total, status or payments.
-    expect(Object.keys(headers[0])).not.toContain('total')
-    expect(Object.keys(headers[0])).not.toContain('status')
+    expect(Object.keys(sent[0].p_header!)).not.toContain('total')
+    expect(Object.keys(sent[0].p_header!)).not.toContain('status')
+    // Nothing is written outside the RPC.
+    expect(calls.filter((c) => c.method !== 'rpc')).toHaveLength(0)
   })
 
   it('writes the rows but leaves a header whose split is consistent (momsfri)', async () => {
@@ -211,6 +243,7 @@ describe('completeMigratedInvoiceLines', () => {
 
     expect(result).toMatchObject({ completed: 1, headersUpdated: 0 })
     expect(insertedRows(calls)).toHaveLength(1)
+    expect(writes(calls)[0].p_header).toBeNull()
     expect(headerUpdates(calls)).toHaveLength(0)
   })
 
@@ -256,8 +289,7 @@ describe('completeMigratedInvoiceLines', () => {
     const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
 
     expect(result).toMatchObject({ matched: 1, completed: 0, rowsMismatch: 1, remaining: 1 })
-    expect(insertedRows(calls)).toHaveLength(0)
-    expect(headerUpdates(calls)).toHaveLength(0)
+    expect(writes(calls)).toHaveLength(0)
   })
 
   it('tolerates öresavrundning between the rows and the header', async () => {
@@ -288,8 +320,7 @@ describe('completeMigratedInvoiceLines', () => {
     const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
 
     expect(result).toMatchObject({ matched: 1, completed: 0, totalMismatch: 1, remaining: 1 })
-    expect(insertedRows(calls)).toHaveLength(0)
-    expect(headerUpdates(calls)).toHaveLength(0)
+    expect(writes(calls)).toHaveLength(0)
   })
 
   it('reverses the rows of a kreditfaktura the way the migration does', async () => {
@@ -318,7 +349,7 @@ describe('completeMigratedInvoiceLines', () => {
     const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
 
     expect(result).toMatchObject({ candidates: 2, matched: 2, completed: 1, notHydrated: 1, remaining: 1 })
-    expect(insertedRows(calls).map((r) => r.invoice_id)).toEqual(['inv-1'])
+    expect(writes(calls).map((w) => w.p_invoice_id)).toEqual(['inv-1'])
   })
 
   it('does not join an ambiguous key, and does not hydrate when nothing joined', async () => {
@@ -332,7 +363,7 @@ describe('completeMigratedInvoiceLines', () => {
 
     expect(result).toMatchObject({ candidates: 2, matched: 0, unmatched: 2, completed: 0, remaining: 2 })
     expect(mHydrate).not.toHaveBeenCalled()
-    expect(insertedRows(calls)).toHaveLength(0)
+    expect(writes(calls)).toHaveLength(0)
   })
 
   it('costs one query and no provider call when the company has nothing to complete', async () => {
@@ -347,39 +378,49 @@ describe('completeMigratedInvoiceLines', () => {
     expect(calls).toHaveLength(0)
   })
 
-  it('skips an invoice that gained rows since the candidates were loaded', async () => {
+  it('counts an invoice that gained rows since the candidates were loaded as skipped, not completed', async () => {
+    // The RPC answers wrote = false: another writer (the wizard, an
+    // overlapping cron) got there first. The header in the payload must not
+    // be counted either; header_updated comes from the RPC, not the plan.
     mFetchAll.mockResolvedValue([storedRow()])
     const dto = providerInvoice()
     mList.mockResolvedValue([dto])
     mHydrate.mockResolvedValue(hydratedAll([dto]))
-    const { supabase, calls } = makeSupabase((table, methods) =>
-      table === 'invoice_items' && methods.includes('in') ? { data: [{ invoice_id: 'inv-1' }], error: null } : ok,
-    )
+    const { supabase, calls } = makeSupabase(() => ok, () => rpcAlreadyFilled)
 
     const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
 
-    expect(result).toMatchObject({ completed: 0, failed: 0, remaining: 1 })
-    expect(insertedRows(calls)).toHaveLength(0)
-    expect(headerUpdates(calls)).toHaveLength(0)
+    expect(result).toMatchObject({ completed: 0, headersUpdated: 0, failed: 0, remaining: 1 })
+    expect(writes(calls)).toHaveLength(1)
+    expect(writes(calls)[0].p_header).not.toBeNull()
   })
 
-  it('retries per invoice when the batch insert fails, and counts the offender', async () => {
-    mFetchAll.mockResolvedValue([storedRow(), storedRow({ id: 'inv-2', invoice_number: '1002' })])
-    const first = providerInvoice()
-    const second = providerInvoice({ id: '1002', invoiceNumber: '1002' })
-    mList.mockResolvedValue([first, second])
-    mHydrate.mockResolvedValue(hydratedAll([first, second]))
-    const { supabase, calls } = makeSupabase((table, methods, chain) => {
-      if (table !== 'invoice_items' || !methods.includes('insert')) return ok
-      const rows = chain[0].args[0] as { invoice_id: string }[]
-      if (rows.length > 1) return { data: null, error: { message: 'batch rejected' } }
-      return rows[0].invoice_id === 'inv-2' ? { data: null, error: { message: 'check violation' } } : ok
+  it('counts a refused or failed call as failed and goes on with the rest', async () => {
+    mFetchAll.mockResolvedValue([
+      storedRow(),
+      storedRow({ id: 'inv-2', invoice_number: '1002' }),
+      storedRow({ id: 'inv-3', invoice_number: '1003' }),
+    ])
+    const dtos = [
+      providerInvoice(),
+      providerInvoice({ id: '1002', invoiceNumber: '1002' }),
+      providerInvoice({ id: '1003', invoiceNumber: '1003' }),
+    ]
+    mList.mockResolvedValue(dtos)
+    mHydrate.mockResolvedValue(hydratedAll(dtos))
+    const { supabase, calls } = makeSupabase(() => ok, (_fn, args) => {
+      // A Postgres error (a check violation inside the RPC) and a refusal
+      // the function answers with ok = false: both leave the invoice for a
+      // human to look at, neither stops the run.
+      if (args.p_invoice_id === 'inv-2') return { data: null, error: { message: 'check violation' } }
+      if (args.p_invoice_id === 'inv-3') return { data: { ok: false, code: 'INVOICE_NOT_FOUND' }, error: null }
+      return rpcWrote(args)
     })
 
     const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
 
-    expect(result).toMatchObject({ completed: 1, failed: 1, headersUpdated: 1, remaining: 1 })
-    expect(headerUpdates(calls)).toHaveLength(1)
+    expect(result).toMatchObject({ completed: 1, failed: 2, headersUpdated: 1, remaining: 2 })
+    expect(writes(calls).map((w) => w.p_invoice_id)).toEqual(['inv-1', 'inv-2', 'inv-3'])
   })
 
   it('dry run: reports the plan and writes nothing', async () => {
