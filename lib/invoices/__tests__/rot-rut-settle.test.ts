@@ -507,6 +507,63 @@ describe('settleRotRutPayoutRequestSet', () => {
     expect(mockLogMatchEvent).not.toHaveBeenCalled()
   })
 
+  it('leaves a partially decided begäran partially_paid and un-mirrored inside a bundle', async () => {
+    // Skatteverket decided 2 500 of the 3 000 requested on the first begäran:
+    // its leg is the beslut, the bundle is 2 500 + 2 250 = 4 750 exactly.
+    enqueue({
+      data: [
+        makeRequestRow({ decided_total: 2500, decided_at: '2026-07-01T00:00:00Z' }),
+        makeSecondRequestRow(),
+      ],
+    })
+    mockCreatePayoutSetEntry.mockResolvedValue({ id: 'je-set' })
+    enqueue({
+      data: makeRequestRow({
+        status: 'partially_paid',
+        settlement_journal_entry_id: 'je-set',
+        decided_total: 2500,
+      }),
+    })
+    enqueue({
+      data: makeSecondRequestRow({ status: 'paid', settlement_journal_entry_id: 'je-set', decided_total: 2250 }),
+    })
+    enqueue({ data: [{ id: 'item-2', requested_amount: 2250 }] }) // items, request 2 only
+    enqueue({ data: null }) // item mirror, request 2
+
+    const outcome = await settleRotRutPayoutRequestSet(supabase, 'user-1', 'company-1', {
+      ...setParams,
+      amount: 4750,
+    })
+
+    expect(outcome).toMatchObject({ ok: true, journalEntryId: 'je-set', amount: 4750 })
+    expect(outcome.ok && outcome.requests.map((r) => r.status)).toEqual(['partially_paid', 'paid'])
+    expect(mockCreatePayoutSetEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        legs: [
+          expect.objectContaining({ requestId: REQUEST_ID, amount: 2500 }),
+          expect.objectContaining({ requestId: REQUEST_ID_2, amount: 2250 }),
+        ],
+      }),
+    )
+    const requestUpdates = findCalls('rot_rut_payout_requests', 'update').map((c) => c[0])
+    expect(requestUpdates).toEqual([
+      { settlement_journal_entry_id: 'je-set', status: 'partially_paid', decided_total: 2500 },
+      expect.objectContaining({ settlement_journal_entry_id: 'je-set', status: 'paid', decided_total: 2250 }),
+    ])
+    // Only the fully paid begäran mirrors requested_amount onto its items.
+    expect(
+      findCalls('rot_rut_payout_request_items', 'eq').filter((c) => c[0] === 'request_id'),
+    ).toEqual([['request_id', REQUEST_ID_2]])
+    expect(findCalls('rot_rut_payout_request_items', 'update').map((c) => c[0])).toEqual([
+      { decided_amount: 2250 },
+    ])
+    // Both carry a voucher now, so both retire their sibling hints.
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(2)
+  })
+
   it('surfaces an engine failure as a raw error without touching any request', async () => {
     enqueue({ data: [makeRequestRow(), makeSecondRequestRow()] })
     mockCreatePayoutSetEntry.mockRejectedValue(new Error('No open fiscal period'))

@@ -440,12 +440,15 @@ export type SettleRotRutPayoutSetOutcome =
 
 /**
  * Settle several begäran with ONE bank transfer: one voucher (debit 19xx for
- * the transfer, one 1513 credit per begäran), every request marked paid and
- * pointed at it, the row linked once. Refuses before booking anything unless
- * every request is open and unsettled and the expected payouts sum to the
- * transfer exactly: Skatteverket pays the decided sums, so a bundle has no
- * partial variant (a delutbetalning on one begäran is the single path with
- * a recorded beslut).
+ * the transfer, one 1513 credit per begäran), every request pointed at it,
+ * the row linked once. Refuses before booking anything unless every request
+ * is open and unsettled and the expected payouts sum to the transfer
+ * exactly: Skatteverket pays the decided sums, so a bundle never books
+ * anything but decided_total ?? requested_total per begäran. A begäran
+ * Skatteverket decided at less than requested is a legitimate member (its
+ * leg is the beslut) and ends up partially_paid with its items untouched,
+ * exactly as the single path leaves it for manual handling; the others
+ * complete as paid.
  */
 export async function settleRotRutPayoutRequestSet(
   supabase: SupabaseClient,
@@ -493,10 +496,16 @@ export async function settleRotRutPayoutRequestSet(
     }
   }
 
-  const legs = requests.map((request) => ({
-    request,
-    amount: roundOre(Number(request.decided_total ?? request.requested_total)),
-  }))
+  const legs = requests.map((request) => {
+    const amount = roundOre(Number(request.decided_total ?? request.requested_total))
+    return {
+      request,
+      amount,
+      // Same rule as the single path: only a leg covering the requested total
+      // completes the begäran; a recorded lower beslut stays partially_paid.
+      fullyPaid: amount >= Number(request.requested_total),
+    }
+  })
   const expectedTotal = roundOre(legs.reduce((sum, leg) => sum + leg.amount, 0))
   const amount = roundOre(params.amount)
   if (Math.abs(amount - expectedTotal) > 0.005) {
@@ -538,7 +547,7 @@ export async function settleRotRutPayoutRequestSet(
       leg.request,
       journalEntryId,
       leg.amount,
-      true,
+      leg.fullyPaid,
     )
     if (updateError) {
       log.error('rot/rut payout set entry booked but request update failed', updateError as Error, {
@@ -575,7 +584,7 @@ export async function settleRotRutPayoutRequestSet(
       journalEntryId,
       logState: {
         rot_rut_payout_request_ids: requestIds,
-        request_status: 'paid',
+        request_statuses: settled.map((request) => request.status),
         amount,
       },
       logContext: { payoutRequestIds: requestIds },
@@ -590,9 +599,13 @@ export async function settleRotRutPayoutRequestSet(
     }
   }
 
-  for (const request of settled) {
-    await mirrorDecidedAmounts(supabase, request.id)
-    await clearSettledInvoiceSuggestions(supabase, companyId, 'rot_rut_payout_request', request.id, {
+  // Every settled begäran carries a voucher now and is no longer matchable,
+  // so its sibling hints die either way; the item mirror is for the fully
+  // paid ones only (a partial beslut keeps its item amounts for the manual
+  // follow-up, as on the single path).
+  for (const leg of legs) {
+    if (leg.fullyPaid) await mirrorDecidedAmounts(supabase, leg.request.id)
+    await clearSettledInvoiceSuggestions(supabase, companyId, 'rot_rut_payout_request', leg.request.id, {
       exceptTransactionId: params.transactionId ?? null,
     })
   }
