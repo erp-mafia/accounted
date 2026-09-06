@@ -8271,10 +8271,18 @@ export const tools: McpTool[] = [
           paymentDate,
         })
         if (candidates.length > 0) {
+          // Reason-aware wording: a row that is already a verifikat must not
+          // be "matched" (that books the money twice); it must be corrected.
+          const alreadyBooked = candidates.some((c) => c.match_reason === 'already_booked')
           throw new Error(
-            `Möjlig dubbelbetalning: en obokförd banktransaktion ser ut att vara betalningen för faktura ` +
-            `${invoice.invoice_number}. Matcha banktransaktionen mot fakturan med gnubok_match_transaction_to_invoice ` +
-            `i stället. Anropa igen med allow_duplicate=true om det verkligen är en separat betalning.`,
+            alreadyBooked
+              ? `Möjlig dubbelbokning: banktransaktionen som ser ut att vara betalningen för faktura ` +
+                `${invoice.invoice_number} är redan bokförd som en egen verifikation. Bokför inte betalningen igen: ` +
+                `rätta dubbelbokföringen i stället (vänd en av verifikationerna med storno och koppla underlaget till den ` +
+                `som blir kvar). Anropa igen med allow_duplicate=true bara om det verkligen är en separat betalning.`
+              : `Möjlig dubbelbetalning: en obokförd banktransaktion ser ut att vara betalningen för faktura ` +
+                `${invoice.invoice_number}. Matcha banktransaktionen mot fakturan med gnubok_match_transaction_to_invoice ` +
+                `i stället. Anropa igen med allow_duplicate=true om det verkligen är en separat betalning.`,
           )
         }
       }

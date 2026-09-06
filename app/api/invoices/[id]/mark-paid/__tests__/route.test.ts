@@ -161,9 +161,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
 
     // Fetch invoice
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: merchant_name ILIKE, no candidates
-    enqueue({ data: [], error: null })
-    // Duplicate-payment guard: description ILIKE, no candidates
+    // Duplicate-payment guard: ONE counterparty probe (merchant_name OR
+    // description in a single .or(), issue #2299), no candidates
     enqueue({ data: [], error: null })
     // Duplicate-payment guard: aggregate sweep (larger unbooked kronor rows), none
     enqueue({ data: [], error: null })
@@ -234,8 +233,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
 
     // Fetch invoice
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: two ILIKE probes, no candidates
-    enqueue({ data: [], error: null })
+    // Duplicate-payment guard: one counterparty probe, no candidates
     enqueue({ data: [], error: null })
     // Duplicate-payment guard: aggregate sweep (larger unbooked kronor rows), none
     enqueue({ data: [], error: null })
@@ -266,9 +264,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: merchant_name ILIKE, no candidates
-    enqueue({ data: [], error: null })
-    // Duplicate-payment guard: description ILIKE, no candidates
+    // Duplicate-payment guard: ONE counterparty probe (merchant_name OR
+    // description in a single .or(), issue #2299), no candidates
     enqueue({ data: [], error: null })
     // Duplicate-payment guard: aggregate sweep (larger unbooked kronor rows), none
     enqueue({ data: [], error: null })
@@ -426,7 +423,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: merchant_name ILIKE returns the match
+    // Duplicate-payment guard: the single counterparty probe returns the match
     enqueue({
       data: [
         {
@@ -440,8 +437,6 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       ],
       error: null,
     })
-    // description ILIKE, no additional match (dedup keeps merchant_name result)
-    enqueue({ data: [], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -803,8 +798,6 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       ],
       error: null,
     })
-    // description ILIKE, no additional match
-    enqueue({ data: [], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -851,8 +844,6 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       ],
       error: null,
     })
-    // description ILIKE, no additional matches
-    enqueue({ data: [], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -877,9 +868,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: merchant_name ILIKE, no candidates
-    enqueue({ data: [], error: null })
-    // Duplicate-payment guard: description ILIKE, no candidates
+    // Duplicate-payment guard: ONE counterparty probe (merchant_name OR
+    // description in a single .or(), issue #2299), no candidates
     enqueue({ data: [], error: null })
     // Duplicate-payment guard: aggregate sweep (larger unbooked kronor rows), none
     enqueue({ data: [], error: null })
@@ -994,8 +984,9 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // merchant_name ILIKE probe: the bank row is in kronor, because the
-    // candidate lookup scans transactions.amount, which is SEK.
+    // EUR currency sweep (one counterparty probe per currency, issue #2299):
+    // the queued stub ignores filters, so the kronor row lands here and is
+    // kept by the per-row re-check as a SEK magnitude of the EUR payment.
     enqueue({
       data: [
         {
@@ -1009,7 +1000,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       ],
       error: null,
     })
-    // description ILIKE probe: no additional match.
+    // SEK currency sweep: no additional match.
     enqueue({ data: [], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
@@ -1159,8 +1150,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    enqueue({ data: [], error: null }) // duplicate guard: merchant_name
-    enqueue({ data: [], error: null }) // duplicate guard: description
+    enqueue({ data: [], error: null }) // duplicate guard: one counterparty probe
     enqueue({ data: [], error: null }) // duplicate guard: aggregate sweep
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert

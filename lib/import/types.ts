@@ -253,6 +253,14 @@ export interface ImportResultDetails {
     singleLine: number
     empty: number
     total: number
+    /**
+     * The source accounts behind `unmapped`, with how many vouchers each one
+     * excluded. Lets the result step name the accounts instead of leaving
+     * the user to diff the general ledger against the source system
+     * (issue #2212). Absent when `unmapped` is 0 and on results recorded
+     * before this field existed.
+     */
+    unmappedAccounts?: Array<{ account: string; vouchers: number }>
   }
 
   /** Opening balance imbalance info */

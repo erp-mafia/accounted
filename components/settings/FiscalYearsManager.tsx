@@ -14,11 +14,12 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
-import { Plus, Lock, Unlock, Loader2, Eraser } from 'lucide-react'
+import { Plus, Lock, Unlock, Loader2, Eraser, Pencil } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { FiscalYearResetDialog } from '@/components/settings/FiscalYearResetDialog'
+import { FiscalYearEditDialog } from '@/components/settings/FiscalYearEditDialog'
 import { suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -49,6 +50,7 @@ export function FiscalYearsManager() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [mutatingId, setMutatingId] = useState<string | null>(null)
   const [resetTarget, setResetTarget] = useState<FiscalPeriod | null>(null)
+  const [editTarget, setEditTarget] = useState<FiscalPeriod | null>(null)
 
   // Only owners/admins may change a period's lock state. The API enforces this
   // too (requireWrite); this just hides controls a viewer/member can't use.
@@ -165,6 +167,21 @@ export function FiscalYearsManager() {
                     {closedExternally ? t('fy_status_closed_external') : t(`fy_status_${status}`)}
                   </Badge>
                 )}
+                {/* Ändra is offered on open years only, like Lås and
+                    Nollställ: the PATCH route refuses locked and closed years
+                    outright, and the row already carries that chip. */}
+                {canManage && status === 'open' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    disabled={isMutating}
+                    onClick={() => setEditTarget(p)}
+                  >
+                    <Pencil className="mr-1.5 h-4 w-4" />
+                    {t('fy_action_edit')}
+                  </Button>
+                )}
                 {canManage && status === 'open' && (
                   <Button
                     variant="outline"
@@ -258,6 +275,17 @@ export function FiscalYearsManager() {
         periods={periods}
         onCreated={refreshPeriods}
       />
+
+      {editTarget && (
+        <FiscalYearEditDialog
+          period={editTarget}
+          open={editTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setEditTarget(null)
+          }}
+          onSaved={refreshPeriods}
+        />
+      )}
 
       {resetTarget && (
         <FiscalYearResetDialog

@@ -597,3 +597,85 @@ describe('buildInvoiceWriteData kundkort fallback customer-type gate', () => {
     expect(result.items[0]).toMatchObject({ sales_order_item_id: null })
   })
 })
+
+describe('buildInvoiceWriteData article company scope (issue #2059)', () => {
+  const ARTICLE_A = 'a1000000-0000-4000-8000-000000000001'
+  const ARTICLE_B = 'a1000000-0000-4000-8000-000000000002'
+  const FOREIGN_ARTICLE = 'a1000000-0000-4000-8000-0000000000ff'
+  const customer = makeCustomer({ customer_type: 'swedish_business' })
+
+  it('refuses an article id the company-scoped select cannot see', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: [], error: null }) // articles: no company-scoped hit
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [
+        { description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25, article_id: FOREIGN_ARTICLE },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok || !('code' in result)) return
+    expect(result.code).toBe('INVOICE_CREATE_ARTICLE_INVALID')
+    expect(result.details).toEqual({ invalidArticleIds: [FOREIGN_ARTICLE] })
+    // The select is scoped on company_id: the FK alone only proves existence.
+    expect(findCall('articles', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(findCall('articles', 'in')).toEqual(['id', [FOREIGN_ARTICLE]])
+  })
+
+  it('accepts company-owned articles, deduping repeated ids into one select', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: [{ id: ARTICLE_A }, { id: ARTICLE_B }], error: null }) // articles
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [
+        { description: 'Rad 1', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 25, article_id: ARTICLE_A },
+        { description: 'Rad 2', quantity: 2, unit: 'st', unit_price: 100, vat_rate: 25, article_id: ARTICLE_A },
+        { description: 'Rad 3', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 25, article_id: ARTICLE_B },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.items.map((i) => i.article_id)).toEqual([ARTICLE_A, ARTICLE_A, ARTICLE_B])
+    expect(findCall('articles', 'in')).toEqual(['id', [ARTICLE_A, ARTICLE_B]])
+  })
+
+  it('never queries articles when no product line carries an article id', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [
+        { description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 },
+        // A text row never persists an article, so an id on it must not be checked.
+        { line_type: 'text', description: 'Fri text', quantity: 0, unit: '', unit_price: 0, article_id: FOREIGN_ARTICLE },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    expect(supabase.from).not.toHaveBeenCalledWith('articles')
+  })
+
+  it('surfaces a DB error on the article lookup as dbError, not as a refusal', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: null, error: { message: 'connection reset' } }) // articles
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [
+        { description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25, article_id: ARTICLE_A },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect('dbError' in result).toBe(true)
+  })
+})

@@ -49,6 +49,30 @@ import { mapSalesInvoice } from './entity-mapper'
 
 const log = createLogger('extensions/arcim-migration/complete-invoice-lines')
 
+/**
+ * How many invoices in this company the pass would try to complete: the
+ * predicate `loadCandidates` uses (non-draft sales invoices with no rows),
+ * counted in the database instead of loaded. `invoice_items=is.null` is
+ * PostgREST's anti-join on a to-many embed (the parents whose embed is
+ * empty), so a company whose 2 000 invoices are all complete costs one
+ * indexed count rather than two pages of rows. The cron sizes and orders its
+ * run with this before any consent is touched; zero means the pass would
+ * return before its first provider call. Keep the filters in step with
+ * `loadCandidates`: complete-invoice-lines-count.tool.test.ts checks that
+ * the two agree on a real PostgREST.
+ */
+export async function countRowlessInvoices(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('invoices')
+    .select('id, invoice_items(id)', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('document_type', 'invoice')
+    .neq('status', 'draft')
+    .is('invoice_items', null)
+  if (error) throw new Error(`invoices count failed: ${error.message}`)
+  return count ?? 0
+}
+
 export interface CompleteInvoiceLinesOptions {
   supabase: SupabaseClient
   companyId: string

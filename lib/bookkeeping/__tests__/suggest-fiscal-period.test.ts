@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computeSuggestedPeriod,
   fiscalYearName,
+  isDerivedFiscalYearName,
   suggestSeedDate,
   resolveCurrentPeriodId,
 } from '../suggest-fiscal-period'
@@ -24,6 +25,29 @@ describe('fiscalYearName', () => {
     // The customer case: the create dialog seeded "Räkenskapsår 2027" and the
     // user re-dated the form to the company's first, extended year.
     expect(fiscalYearName('2022-07-28', '2023-12-31')).toBe('Räkenskapsår 2022/2023')
+  })
+})
+
+describe('isDerivedFiscalYearName', () => {
+  it('recognises the names fiscalYearName produces', () => {
+    expect(isDerivedFiscalYearName('Räkenskapsår 2025')).toBe(true)
+    expect(isDerivedFiscalYearName('Räkenskapsår 2024/2025')).toBe(true)
+    expect(isDerivedFiscalYearName(fiscalYearName('2022-07-28', '2023-12-31'))).toBe(true)
+  })
+
+  it('recognises a derived name whose years no longer match the dates', () => {
+    // The customer row (#2286, #2287): seeded "Räkenskapsår 2027" on a
+    // 2022/2023 year. The edit dialog must let it follow corrected dates.
+    expect(isDerivedFiscalYearName('Räkenskapsår 2027')).toBe(true)
+    expect(isDerivedFiscalYearName('  Räkenskapsår 2027  ')).toBe(true)
+  })
+
+  it('leaves hand-written names alone', () => {
+    expect(isDerivedFiscalYearName('Första året')).toBe(false)
+    expect(isDerivedFiscalYearName('Räkenskapsår 2025 (förlängt)')).toBe(false)
+    expect(isDerivedFiscalYearName('2025')).toBe(false)
+    expect(isDerivedFiscalYearName('Fiscal year 2025')).toBe(false)
+    expect(isDerivedFiscalYearName('')).toBe(false)
   })
 })
 

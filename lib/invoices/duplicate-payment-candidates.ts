@@ -1,8 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  COUNTERPARTY_NEEDLE_SHAPE,
   DUPLICATE_AMOUNT_TOLERANCE_PCT,
   DUPLICATE_DATE_WINDOW_DAYS,
-  escapeLikePattern,
+  counterpartyNeedle,
+  counterpartySearchTerms,
+  counterpartySweepLogic,
   normalizeOcrReference,
 } from './duplicate-payment-guard'
 import {
@@ -30,6 +33,15 @@ export type DuplicatePaymentMatchReason =
    * them. No counterparty text is consulted; such rows carry none.
    */
   | 'aggregate_exact'
+  /**
+   * The bank row already carries a posted verifikat (`journal_entry_id` set)
+   * but was never linked to this invoice: the money was booked straight from
+   * the bank side, as an expense or an income. Marking the invoice paid now
+   * books the same movement a second time (the 2026-09-04 case doubled both
+   * 6212 and 1930). The remedy is a rättelse, not a link: reverse one of the
+   * two vouchers with a storno entry and attach the underlag to the remaining one.
+   */
+  | 'already_booked'
 
 export interface DuplicatePaymentCandidate {
   id: string
@@ -38,6 +50,8 @@ export interface DuplicatePaymentCandidate {
   description: string | null
   merchant_name: string | null
   reference: string | null
+  /** The verifikat the row is already booked on; set iff `match_reason` is `already_booked`. */
+  journal_entry_id: string | null
   match_reason: DuplicatePaymentMatchReason
   match_confidence: number
   /** For aggregate_exact: the other open invoices the row also covers. */
@@ -45,18 +59,27 @@ export interface DuplicatePaymentCandidate {
 }
 
 const MATCH_REASON_RANK: Record<DuplicatePaymentMatchReason, number> = {
-  ocr_exact: 0,
-  aggregate_exact: 1,
-  name_amount_fuzzy: 2,
-  amount_only: 3,
+  already_booked: 0,
+  ocr_exact: 1,
+  aggregate_exact: 2,
+  name_amount_fuzzy: 3,
+  amount_only: 4,
 }
 
 const MATCH_REASON_CONFIDENCE: Record<DuplicatePaymentMatchReason, number> = {
+  already_booked: 0.85,
   ocr_exact: 0.99,
   aggregate_exact: 0.9,
   name_amount_fuzzy: 0.7,
   amount_only: 0.5,
 }
+
+/**
+ * Fewer digits than this is not an OCR / invoice number, it is a coincidence:
+ * a supplier invoice numbered "7" must not read every bank reference with a 7
+ * in it as an exact match.
+ */
+const MIN_OCR_DIGITS = 4
 
 /** ± days around the payment date an aggregate row is looked for: a Bankgirot
  *  aggregate lands on the payment day, so the wide name-sweep window would only
@@ -85,6 +108,23 @@ interface CustomerInvoice {
   exchange_rate: number | null
 }
 
+/**
+ * The supplier-side twin of `CustomerInvoice`. Same currency contract; the
+ * name is the supplier's, and the OCR signal is the invoice's payment
+ * reference (or its number) rather than our own invoice number.
+ */
+interface SupplierInvoiceForGuard {
+  supplier_invoice_number: string | null
+  /** The OCR / payment reference printed on the supplier's invoice, if captured. */
+  payment_reference?: string | null
+  supplier_name: string | null | undefined
+  /** `supplier_invoices.currency` (NOT NULL DEFAULT 'SEK'; null tolerated). */
+  currency: string | null
+  total: number | null
+  total_sek: number | null
+  exchange_rate: number | null
+}
+
 type Row = {
   id: string
   date: string
@@ -92,39 +132,31 @@ type Row = {
   description: string | null
   merchant_name: string | null
   reference: string | null
+  journal_entry_id: string | null
   currency: string | null
   amount_sek: number | null
   exchange_rate: number | null
 }
+
+const ROW_COLUMNS =
+  'id, date, amount, description, merchant_name, reference, journal_entry_id, currency, amount_sek, exchange_rate'
 
 /**
  * Scan unlinked positive (inbound) business bank transactions that could be
  * the payment for this customer invoice. Used by the mark-paid duplicate
  * guard: callers route the user to "link existing" instead of double-booking.
  *
- * Customer-side adaptations vs the supplier guard:
+ * Customer-side adaptations vs the supplier twin below:
  *  - amount > 0 (inbound) instead of < 0
- *  - matches BOTH `merchant_name` AND `description` (banks often describe an
- *    inbound payment by payer name without populating merchant_name)
- *  - per-candidate scoring with OCR (invoice_number normalized) as the
- *    strongest signal
+ *  - OCR signal is OUR invoice number (the payer quotes it as reference)
+ *  - falls through to the Bankgirot aggregate sweep when nothing 1:1 turns up
  *
- * Units: `paymentAmount` is denominated in the INVOICE's currency (that is what
- * `invoices.remaining_amount` and `total` are stored in), while
- * `transactions.amount` is denominated in the bank row's own currency. The
- * plus-minus tolerance band is therefore planned per currency by
- * `planAmountSweeps` and re-checked per row by `magnitudesWithinTolerance`:
- * band and column always share a unit, and a candidate that cannot be brought
- * into a shared unit is excluded rather than compared as a raw number. A SEK
- * invoice produces exactly one sweep with the same band as before.
- *
- * The merchant_name and description searches are issued as two separate
- * parameterised `.ilike()` queries and deduplicated by id. We deliberately
- * avoid `.or('merchant_name.ilike.%X%,description.ilike.%X%')` because that
- * interpolates the customer name into PostgREST's filter-DSL string, where
- * `escapeLikePattern` only neutralises the LIKE wildcards (`%_\\`) and not
- * the DSL chars (`,`, `.`, `(`, `)`). A name like `Acme,fake.eq.true` would
- * otherwise inject a synthetic filter clause.
+ * Both sides share `sweepByCounterparty` and `scoreCandidate`, so the
+ * prefilter (first distinctive token of the name against merchant_name OR
+ * description), the currency banding and the ranking cannot drift apart
+ * again: the supplier side used to carry its own copy that probed
+ * merchant_name only, with the full legal name as needle, and missed the
+ * abbreviated bank text the feed actually writes (issue #2299).
  */
 export async function findDuplicatePaymentCandidatesForInvoice(
   supabase: SupabaseClient,
@@ -137,25 +169,148 @@ export async function findDuplicatePaymentCandidatesForInvoice(
   },
 ): Promise<DuplicatePaymentCandidate[]> {
   const { companyId, invoice, paymentAmount, paymentDate } = params
-  const customerName = invoice.customer_name
   const paymentCurrency = normalizeCurrencyCode(invoice.currency)
+  const aggregate = () =>
+    paymentCurrency === 'SEK'
+      ? runAggregateSweep(supabase, { companyId, invoice, paymentAmount, paymentDate })
+      : Promise.resolve([] as DuplicatePaymentCandidate[])
 
-  // The name sweeps need a payer to look for; the aggregate sweep does not
+  // The name sweep needs a payer to look for; the aggregate sweep does not
   // (a Bankgirot row names nobody), so a nameless invoice skips straight to it.
-  if (!customerName) {
-    if (paymentCurrency !== 'SEK') return []
-    return runAggregateSweep(supabase, { companyId, invoice, paymentAmount, paymentDate })
-  }
-  const reference: ComparableAmount = {
-    amount: paymentAmount,
-    currency: paymentCurrency,
-    sek: invoiceAmountSek({
+  const needle = counterpartyNeedle(invoice.customer_name)
+  if (!needle) return aggregate()
+
+  const rows = await sweepByCounterparty(supabase, {
+    companyId,
+    direction: 'inbound',
+    needle,
+    reference: {
       amount: paymentAmount,
       currency: paymentCurrency,
-      total: invoice.total,
-      totalSek: invoice.total_sek,
-      exchangeRate: invoice.exchange_rate,
-    }),
+      sek: invoiceAmountSek({
+        amount: paymentAmount,
+        currency: paymentCurrency,
+        total: invoice.total,
+        totalSek: invoice.total_sek,
+        exchangeRate: invoice.exchange_rate,
+      }),
+    },
+    paymentDate,
+    logContext: { companyId, invoiceNumber: invoice.invoice_number },
+  })
+
+  // Nothing of this invoice's own size: look for the row that paid it TOGETHER
+  // with other invoices. One warning is enough, so the sweep only runs when
+  // the name sweep came back empty. Kronor only: the sum is taken over
+  // remaining amounts stored in invoice currency.
+  if (rows.length === 0) return aggregate()
+
+  return rankCandidates(rows, {
+    invoiceOcrs: ocrKeys([invoice.invoice_number]),
+    searchTerms: counterpartySearchTerms(invoice.customer_name),
+  })
+}
+
+/**
+ * Supplier-side twin: unlinked NEGATIVE (outbound) business bank rows that
+ * could be the payment of this supplier invoice. Same sweep, same scorer,
+ * same reasons as the customer side; the OCR signal is the supplier's payment
+ * reference (or the invoice number) as the payer typed it into the bank
+ * transfer. No aggregate sweep: a Bankgirot daily aggregate is an inbound
+ * shape, and our own outbound batches (betalfil) link every row explicitly.
+ *
+ * A candidate with `match_reason: 'already_booked'` is the case the issue
+ * names third: the bank row was booked straight as an expense, and the
+ * invoice then registered on top of it. Paying it would double 6212 and 1930.
+ */
+export async function findDuplicatePaymentCandidatesForSupplierInvoice(
+  supabase: SupabaseClient,
+  params: {
+    companyId: string
+    invoice: SupplierInvoiceForGuard
+    /** The payment being booked, in `invoice.currency`. */
+    paymentAmount: number
+    paymentDate: string
+  },
+): Promise<DuplicatePaymentCandidate[]> {
+  const { companyId, invoice, paymentAmount, paymentDate } = params
+  const needle = counterpartyNeedle(invoice.supplier_name)
+  if (!needle) {
+    // An invoice without a usable supplier name is arguably HIGHER risk for
+    // duplicate booking, not lower (BFL 5 kap 7 §: motpart should be
+    // identifiable). Log the skip so the gap is visible in audit.
+    log.warn('duplicate-payment guard skipped', {
+      reason: invoice.supplier_name ? 'unusable_supplier_name' : 'missing_supplier_name',
+      companyId,
+      supplierInvoiceNumber: invoice.supplier_invoice_number,
+    })
+    return []
+  }
+  const paymentCurrency = normalizeCurrencyCode(invoice.currency)
+
+  const rows = await sweepByCounterparty(supabase, {
+    companyId,
+    direction: 'outbound',
+    needle,
+    reference: {
+      amount: paymentAmount,
+      currency: paymentCurrency,
+      sek: invoiceAmountSek({
+        amount: paymentAmount,
+        currency: paymentCurrency,
+        total: invoice.total,
+        totalSek: invoice.total_sek,
+        exchangeRate: invoice.exchange_rate,
+      }),
+    },
+    paymentDate,
+    logContext: { companyId, supplierInvoiceNumber: invoice.supplier_invoice_number },
+  })
+  if (rows.length === 0) return []
+
+  return rankCandidates(rows, {
+    invoiceOcrs: ocrKeys([invoice.payment_reference, invoice.supplier_invoice_number]),
+    searchTerms: counterpartySearchTerms(invoice.supplier_name),
+  })
+}
+
+/**
+ * The one counterparty sweep both sides run.
+ *
+ * Units: `reference.amount` is denominated in the INVOICE's currency (that is
+ * what `remaining_amount` and `total` are stored in), while
+ * `transactions.amount` is denominated in the bank row's own currency. The
+ * plus-minus tolerance band is therefore planned per currency by
+ * `planAmountSweeps` and re-checked per row by `magnitudesWithinTolerance`:
+ * band and column always share a unit, and a candidate that cannot be brought
+ * into a shared unit is excluded rather than compared as a raw number. A SEK
+ * invoice produces exactly one query.
+ *
+ * Each currency sweep is ONE query with ONE `.or()`: the currency predicate
+ * and the name probe are nested into a single logic expression by
+ * `counterpartySweepLogic`, so the guard never depends on how PostgREST
+ * treats a repeated `or=` key. Interpolating the needle into that DSL string
+ * is only safe because `counterpartyNeedle` reduces the name to letters and
+ * digits (`COUNTERPARTY_NEEDLE_SHAPE`): no `,` `.` `(` `)` to inject a clause,
+ * no LIKE wildcard to widen the match. The shape is re-checked here so a
+ * future needle builder cannot silently reopen that hole.
+ */
+async function sweepByCounterparty(
+  supabase: SupabaseClient,
+  args: {
+    companyId: string
+    /** inbound = customer payment (amount > 0); outbound = supplier payment (amount < 0). */
+    direction: 'inbound' | 'outbound'
+    needle: string
+    reference: ComparableAmount
+    paymentDate: string
+    logContext: Record<string, unknown>
+  },
+): Promise<Row[]> {
+  const { companyId, direction, needle, reference, paymentDate, logContext } = args
+  if (!COUNTERPARTY_NEEDLE_SHAPE.test(needle)) {
+    log.warn('duplicate-payment guard skipped', { reason: 'unsafe_needle', ...logContext })
+    return []
   }
   const { sweeps, crossCurrencyUnverifiable } = planAmountSweeps(
     reference,
@@ -166,88 +321,70 @@ export async function findDuplicatePaymentCandidatesForInvoice(
     // A foreign invoice with neither a usable total_sek nor an exchange_rate
     // cannot be stated in kronor, so kronor bank rows are excluded rather than
     // compared raw (a raw compare reads 1 000 kr as 1 000 EUR). Same-currency
-    // rows are still swept. Logged for the same reason the supplier-side twin
-    // logs it: an unevaluated candidate set is not a clean "no duplicate", and
-    // the gap must be visible in behandlingshistorik (BFNAR 2013:2 p. 9.16)
-    // rather than pass silently.
+    // rows are still swept. Logged because an unevaluated candidate set is not
+    // a clean "no duplicate": the gap must be visible in behandlingshistorik
+    // (BFNAR 2013:2 p. 9.16) rather than pass silently.
     log.warn('duplicate-payment guard: cross-currency candidates not evaluated', {
       reason: 'invoice_missing_sek_value',
-      companyId,
-      currency: paymentCurrency,
-      invoiceNumber: invoice.invoice_number,
+      currency: reference.currency,
+      ...logContext,
     })
   }
 
   const dateMs = new Date(paymentDate).getTime()
-  const dateLow = new Date(dateMs - DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
-    .toISOString()
-    .split('T')[0]
-  const dateHigh = new Date(dateMs + DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
-    .toISOString()
-    .split('T')[0]
-  const pattern = `%${escapeLikePattern(customerName)}%`
-
-  const base = (sweepIndex: number) => {
-    const sweep = sweeps[sweepIndex]
-    return supabase
-      .from('transactions')
-      .select(
-        'id, date, amount, description, merchant_name, reference, currency, amount_sek, exchange_rate',
-      )
-      .eq('company_id', companyId)
-      .eq('is_business', true)
-      .is('invoice_id', null)
-      .is('supplier_invoice_id', null)
-      .gt('amount', 0)
-      .or(sweep.currencyFilter)
-      .gte('amount', sweep.low)
-      .lte('amount', sweep.high)
-      .gte('date', dateLow)
-      .lte('date', dateHigh)
-  }
+  const dayMs = 24 * 3600 * 1000
+  const dateLow = new Date(dateMs - DUPLICATE_DATE_WINDOW_DAYS * dayMs).toISOString().split('T')[0]
+  const dateHigh = new Date(dateMs + DUPLICATE_DATE_WINDOW_DAYS * dayMs).toISOString().split('T')[0]
 
   const responses = await Promise.all(
-    sweeps.flatMap((_sweep, i) => [
-      base(i).ilike('merchant_name', pattern).order('date', { ascending: false }).limit(5),
-      base(i).ilike('description', pattern).order('date', { ascending: false }).limit(5),
-    ]),
+    sweeps.map((sweep) => {
+      const base = supabase
+        .from('transactions')
+        .select(ROW_COLUMNS)
+        .eq('company_id', companyId)
+        .eq('is_business', true)
+        .is('invoice_id', null)
+        .is('supplier_invoice_id', null)
+      const banded =
+        direction === 'inbound'
+          ? base.gt('amount', 0).gte('amount', sweep.low).lte('amount', sweep.high)
+          : base.lt('amount', 0).gte('amount', -sweep.high).lte('amount', -sweep.low)
+      return banded
+        .gte('date', dateLow)
+        .lte('date', dateHigh)
+        .or(counterpartySweepLogic(sweep.currencyFilter, needle))
+        .order('date', { ascending: false })
+        .limit(5)
+    }),
   )
 
   const merged = new Map<string, Row>()
   for (const res of responses) {
-    for (const row of (res.data ?? []) as Row[]) {
+    for (const row of (Array.isArray(res.data) ? res.data : []) as Row[]) {
       if (!merged.has(row.id)) merged.set(row.id, row)
     }
   }
 
-  const data = Array.from(merged.values())
+  return Array.from(merged.values())
     .filter((row) =>
       magnitudesWithinTolerance(reference, rowAmount(row), DUPLICATE_AMOUNT_TOLERANCE_PCT),
     )
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
     .slice(0, 5)
+}
 
-  // Nothing of this invoice's own size: look for the row that paid it TOGETHER
-  // with other invoices. One warning is enough, so the sweep only runs when
-  // the name sweeps came back empty. Kronor only: the sum is taken over
-  // remaining amounts stored in invoice currency.
-  if (data.length === 0) {
-    if (paymentCurrency !== 'SEK') return []
-    return runAggregateSweep(supabase, { companyId, invoice, paymentAmount, paymentDate })
-  }
+/** Normalised OCR keys worth comparing: digits only, at least MIN_OCR_DIGITS, deduplicated. */
+function ocrKeys(values: Array<string | null | undefined>): string[] {
+  const keys = values.map(normalizeOcrReference).filter((key) => key.length >= MIN_OCR_DIGITS)
+  return Array.from(new Set(keys))
+}
 
-  const invoiceOcr = normalizeOcrReference(invoice.invoice_number)
-  const searchTerms = customerName
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((term) => term.length > 2)
-
-  const candidates: DuplicatePaymentCandidate[] = data.map((row) => {
-    const reason = scoreCandidate({
-      row,
-      invoiceOcr,
-      searchTerms,
-    })
+function rankCandidates(
+  rows: Row[],
+  args: { invoiceOcrs: string[]; searchTerms: string[] },
+): DuplicatePaymentCandidate[] {
+  const candidates: DuplicatePaymentCandidate[] = rows.map((row) => {
+    const reason = scoreCandidate({ row, ...args })
     return {
       id: row.id,
       date: row.date,
@@ -255,11 +392,11 @@ export async function findDuplicatePaymentCandidatesForInvoice(
       description: row.description,
       merchant_name: row.merchant_name,
       reference: row.reference,
+      journal_entry_id: row.journal_entry_id ?? null,
       match_reason: reason,
       match_confidence: MATCH_REASON_CONFIDENCE[reason],
     }
   })
-
   candidates.sort((a, b) => MATCH_REASON_RANK[a.match_reason] - MATCH_REASON_RANK[b.match_reason])
   return candidates
 }
@@ -395,6 +532,7 @@ async function findAggregateCandidates(
       description: row.description,
       merchant_name: row.merchant_name,
       reference: row.reference,
+      journal_entry_id: null,
       match_reason: 'aggregate_exact',
       match_confidence: MATCH_REASON_CONFIDENCE.aggregate_exact,
       aggregate_invoice_numbers: set.map((s) => s.invoiceNumber),
@@ -424,15 +562,22 @@ function rowAmount(row: Row): ComparableAmount {
 }
 
 function scoreCandidate(args: {
-  row: { reference: string | null; description: string | null; merchant_name: string | null }
-  invoiceOcr: string
+  row: {
+    reference: string | null
+    description: string | null
+    merchant_name: string | null
+    journal_entry_id?: string | null
+  }
+  invoiceOcrs: string[]
   searchTerms: string[]
 }): DuplicatePaymentMatchReason {
-  const { row, invoiceOcr, searchTerms } = args
-  if (invoiceOcr && row.reference) {
-    if (normalizeOcrReference(row.reference) === invoiceOcr) {
-      return 'ocr_exact'
-    }
+  const { row, invoiceOcrs, searchTerms } = args
+  // Booked-ness decides the REMEDY, so it outranks every match-strength signal:
+  // a row that is already a verifikat must never be offered as "link it".
+  if (row.journal_entry_id) return 'already_booked'
+  if (invoiceOcrs.length > 0 && row.reference) {
+    const rowOcr = normalizeOcrReference(row.reference)
+    if (rowOcr && invoiceOcrs.includes(rowOcr)) return 'ocr_exact'
   }
   if (searchTerms.length > 0) {
     const haystack = `${row.description ?? ''} ${row.merchant_name ?? ''}`.toLowerCase()

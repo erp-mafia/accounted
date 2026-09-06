@@ -260,6 +260,7 @@ describe('commitPendingOperation: update_invoice', () => {
     enqueue({ data: [{ id: ARTICLE_ID }] }) // articles: company-scope gate
     enqueue({ data: { vat_registered: true } }) // company_settings (builder VAT gate)
     enqueue({ data: [{ account_number: '3041' }] }) // chart_of_accounts: override account
+    enqueue({ data: [{ id: ARTICLE_ID }] }) // articles: builder company-scope check (#2059)
     enqueue({ data: [{ id: INVOICE_ID }] }) // invoices update (draft-guarded)
     enqueue({ data: [] }) // invoice_items snapshot (replaceInvoiceItems)
     enqueue({ data: null }) // invoice_items delete
