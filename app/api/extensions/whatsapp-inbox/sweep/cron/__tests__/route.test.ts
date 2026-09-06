@@ -80,6 +80,7 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
       expiredQuestions: 1,
       clearedPins: 0,
       outboundFailed24h: 3,
+      reopenedOrphans: 0,
     })
 
     const response = await GET(makeRequest())
@@ -96,6 +97,7 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
       expiredQuestions: 1,
       clearedPins: 0,
       outboundFailed24h: 3,
+      reopenedOrphans: 0,
     })
   })
 })

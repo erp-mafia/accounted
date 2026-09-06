@@ -8,7 +8,7 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null }),
     markReadWithTyping: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn(),
   }
@@ -149,7 +149,7 @@ function lastUpdate(findCalls: (table: string, method: string) => unknown[][]): 
 describe('processInboundMessage (media intake)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
+    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null })
     askCompanyQuestionMock.mockResolvedValue('asked')
     rateLimitMock.mockResolvedValue({ ok: true })
     downloadMediaMock.mockResolvedValue({
@@ -185,6 +185,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() }) // load link
     enqueue({ data: makeConversation() }) // load conversation
     enqueue({ data: [{ company_id: 'company-1' }] }) // sole membership
+    enqueue({ data: [] }) // drain: nothing expired
     enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // sha256 dup check: none
     enqueue({ data: null }) // item channel_context load
@@ -241,6 +242,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() }) // load link
     enqueue({ data: makeConversation() }) // load conversation
     enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership
+    enqueue({ data: [] }) // drain: nothing past the media window
     enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // drain: two rows were parked
     enqueue({ data: null }) // sha256 dup check: none
     enqueue({ data: null }) // item channel_context load
@@ -264,6 +266,40 @@ describe('processInboundMessage (media intake)', () => {
     // The re-opened rows were kicked: the follow-up run loaded the first one.
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(kick.findCalls('whatsapp_messages', 'eq')).toContainEqual(['id', 'stg-1'])
+    kickClient.current = null
+  })
+
+  it('single-company drain leaves month-old receipts expired and says so once', async () => {
+    const kick = createQueuedMockSupabase()
+    kickClient.current = kick.supabase
+    kick.enqueue({ data: null })
+
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() }) // load row
+    enqueue({ data: { id: 'msg-1' } }) // claim
+    enqueue({ data: makeLink() }) // load link
+    enqueue({ data: makeConversation() }) // load conversation
+    enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership
+    enqueue({ data: [{ id: 'old-1' }] }) // drain: one row past the media window
+    enqueue({ data: [{ id: 'stg-1' }] }) // drain: one row re-opened
+    enqueue({ data: null }) // sha256 dup check: none
+    enqueue({ data: null }) // item channel_context load
+    enqueue({ data: null }) // item channel_context update
+    enqueue({ data: null }) // final markStatus done
+
+    const outcome = await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+    expect(outcome).toEqual({ kind: 'media_processed', conversationId: 'conv-1' })
+
+    const patches = findCalls('whatsapp_messages', 'update').map(
+      (args) => args[0] as Record<string, unknown>,
+    )
+    expect(patches.some((p) => p.error_message === 'company_choice_expired')).toBe(true)
+    const notice = sendTextMock.mock.calls.find((c) => c[1].template === TEMPLATE.m20ReceiptsExpired)
+    expect(notice).toBeTruthy()
+    expect(notice![1].body).toContain('30 dagar')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(kick.findCalls('whatsapp_messages', 'eq')).toContainEqual(['id', 'stg-1'])
+    expect(kick.findCalls('whatsapp_messages', 'eq')).not.toContainEqual(['id', 'old-1'])
     kickClient.current = null
   })
 
@@ -308,6 +344,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() }) // load link
     enqueue({ data: makeConversation({ state: 'awaiting_company', context: deadQuestion }) })
     enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership (company-2 archived)
+    enqueue({ data: [] }) // drain: nothing past the media window
     enqueue({ data: [{ id: 'stg-1' }] }) // drain: one row was parked
     enqueue({ data: [makeConversation({ state: 'idle', context: { budget: deadQuestion.budget } })] }) // guarded clear won
     enqueue({ data: null }) // sha256 dup check: none
@@ -346,6 +383,7 @@ describe('processInboundMessage (media intake)', () => {
       }),
     })
     enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership
+    enqueue({ data: [] }) // drain: nothing past the media window
     enqueue({ data: [] }) // drain: the parked rows already expired
     enqueue({ data: [makeConversation()] }) // guarded clear won
     enqueue({ data: null }) // dup check
@@ -376,6 +414,7 @@ describe('processInboundMessage (media intake)', () => {
       }),
     })
     enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership
+    enqueue({ data: [] }) // drain: nothing expired
     enqueue({ data: [] }) // drain: nothing parked
     enqueue({ data: null }) // dup check
     enqueue({ data: null }) // item context load
@@ -587,6 +626,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing expired
     enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // M17 notice check: none sent yet
     enqueue({ data: null }) // markStatus skipped
@@ -611,6 +651,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing expired
     enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: { id: 'earlier-m17' } }) // notice already sent
     enqueue({ data: null }) // markStatus skipped
@@ -627,6 +668,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing expired
     enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // no inbox item for this message yet
     enqueue({ data: { id: 'existing-doc' } }) // dup found
@@ -666,6 +708,7 @@ describe('processInboundMessage (media intake)', () => {
       }),
     })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing expired
     enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // dup check
     enqueue({ data: null }) // new item context load
@@ -711,6 +754,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing expired
     enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // no inbox item yet
     enqueue({ data: null }) // markStatus error
@@ -736,6 +780,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing expired
     enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // no inbox item yet
     enqueue({ data: null }) // markStatus error
@@ -756,6 +801,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing expired
     enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: null }) // no inbox item yet
     enqueue({ data: null }) // markStatus error
@@ -774,6 +820,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: [] }) // drain: nothing expired
     enqueue({ data: [] }) // drain: nothing parked behind an old company question
     enqueue({ data: { id: 'item-winner' } }) // the winner's item
     enqueue({ data: null }) // markStatus done
@@ -791,7 +838,7 @@ describe('processInboundMessage (media intake)', () => {
 describe('processInboundMessage: linked-sender silences become replies (#1552)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
+    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null })
   })
 
   it('missing media reference: marks error AND owns the failure with M18 via the link', async () => {

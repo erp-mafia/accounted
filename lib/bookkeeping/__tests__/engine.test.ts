@@ -922,9 +922,18 @@ describe('reverseEntry: bank transaction unlink', () => {
    * the delete (a row anchored to some other verifikat too), as ids (one
    * bank_line row each, no amount) or as full rows. `txRows` is what the
    * partial-split read returns for the rows that still have anchors.
+   * `release` is what the release_reversed_entry_transactions RPC answers
+   * (the pointer reset and the supplementary-link drop live in that RPC since
+   * #2061; its semantics are pinned in tests/pg/release-reversed-entry-
+   * transactions.pg.test.ts, here only the call and the fallthrough are).
    */
   function setup(
-    opts: { voucherLinks?: string[]; remainingLinks?: Array<string | RemainingRow>; txRows?: TxRow[] } = {},
+    opts: {
+      voucherLinks?: string[]
+      remainingLinks?: Array<string | RemainingRow>
+      txRows?: TxRow[]
+      release?: { data: unknown; error: unknown }
+    } = {},
   ) {
     let jeCall = 0
     const jeResults = [
@@ -968,12 +977,17 @@ describe('reverseEntry: bank transaction unlink', () => {
       b.eq = filter('eq')
       b.in = filter('in')
       b.is = filter('is')
+      b.neq = filter('neq')
       b.then = (resolve: (v: unknown) => void) => resolve(resolveWith(current))
       return b
     }
 
     const supabase = {
-      rpc: vi.fn().mockResolvedValue({ data: 8, error: null }),
+      rpc: vi.fn().mockImplementation(async (name: string) =>
+        name === 'release_reversed_entry_transactions'
+          ? (opts.release ?? { data: { released: 0, dropped: 0 }, error: null })
+          : { data: 8, error: null },
+      ),
       from: vi.fn().mockImplementation((table: string) => {
         if (table === 'journal_entries') return jeBuilder()
         if (table === 'chart_of_accounts') {
@@ -1017,23 +1031,23 @@ describe('reverseEntry: bank transaction unlink', () => {
   }
 
   it('resets journal_entry_id, is_business and category so the row returns to Att bokföra (#1950)', async () => {
-    const { supabase, txWrites, linkOps } = setup()
+    const { supabase, txWrites, linkOps } = setup({
+      release: { data: { released: 1, dropped: 1 }, error: null },
+    })
 
     const result = await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(result.id).toBe('reversal-1')
-    expect(txWrites).toHaveLength(1)
-    expect(txWrites[0].payload).toEqual({
-      journal_entry_id: null,
-      is_business: null,
-      category: null,
-      reconciliation_method: null,
+    // The pointer reset (journal_entry_id, is_business, category,
+    // reconciliation_method to null) and the drop of the released rows'
+    // supplementary junction links run inside one RPC statement (#2061),
+    // scoped to this company and this entry: never a company-wide reset.
+    expect(supabase.rpc).toHaveBeenCalledWith('release_reversed_entry_transactions', {
+      p_company_id: 'company-1',
+      p_entry_id: 'entry-1',
     })
-    // Scoped to rows linked to the reversed entry only: never a company-wide reset.
-    expect(txWrites[0].filters).toEqual([
-      ['eq', 'company_id', 'company-1'],
-      ['eq', 'journal_entry_id', 'entry-1'],
-    ])
+    // No direct write to transactions is left on this path.
+    expect(txWrites).toHaveLength(0)
     // The junction is consulted for this entry only; nothing to delete or
     // release when it holds no rows.
     expect(linkOps).toEqual([
@@ -1086,10 +1100,10 @@ describe('reverseEntry: bank transaction unlink', () => {
       },
     ])
 
-    // [0] unlink, [1] the partial-split read for the row still anchored
-    // (tx-c), [2] the release of the rows with no anchor left.
-    expect(txWrites).toHaveLength(3)
-    expect(txWrites[1]).toEqual({
+    // [0] the partial-split read for the row still anchored (tx-c), [1] the
+    // release of the rows with no anchor left.
+    expect(txWrites).toHaveLength(2)
+    expect(txWrites[0]).toEqual({
       op: 'select',
       payload: 'id, amount, journal_entry_id',
       filters: [
@@ -1097,10 +1111,10 @@ describe('reverseEntry: bank transaction unlink', () => {
         ['in', 'id', ['tx-c']],
       ],
     })
-    expect(txWrites[2].payload).toEqual({ is_business: null, category: null, reconciliation_method: null })
+    expect(txWrites[1].payload).toEqual({ is_business: null, category: null, reconciliation_method: null })
     // Only rows with no anchor left, and never a row whose journal_entry_id
     // still points at another verifikat (residual booking).
-    expect(txWrites[2].filters).toEqual([
+    expect(txWrites[1].filters).toEqual([
       ['eq', 'company_id', 'company-1'],
       ['in', 'id', ['tx-a', 'tx-b']],
       ['is', 'journal_entry_id', null],
@@ -1116,8 +1130,8 @@ describe('reverseEntry: bank transaction unlink', () => {
     await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(linkOps.map((o) => o.op)).toEqual(['select', 'delete', 'select'])
-    // The unlink plus the partial-split read; no release.
-    expect(txWrites.map((w) => w.op)).toEqual(['update', 'select'])
+    // Only the partial-split read; no release.
+    expect(txWrites.map((w) => w.op)).toEqual(['select'])
   })
 
   it('releases a 1:N split whole when one of its verifikat is reversed (#1553): surviving slices dropped', async () => {
@@ -1149,9 +1163,10 @@ describe('reverseEntry: bank transaction unlink', () => {
 
   it('keeps a row whose surviving slices still sum to its amount, or that carries a non-bank_line anchor', async () => {
     // tx-full: a bulk-booked-style anchor on another verifikat covering the
-    // whole amount. tx-res: a residual booking's 'other' row (its main
-    // verifikat pointer is null here because the storno of THAT verifikat is
-    // what left it; the residual row is not a slice and is never judged).
+    // whole amount. tx-res: a residual booking's 'other' row whose main
+    // verifikat pointer is already null (a row left behind before the main
+    // storno started dropping such links, #2061); the residual row is not a
+    // slice and the partial-split judgement never touches it.
     const { supabase, txWrites, linkOps } = setup({
       voucherLinks: ['tx-full', 'tx-res'],
       remainingLinks: [
@@ -1167,7 +1182,24 @@ describe('reverseEntry: bank transaction unlink', () => {
     await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(linkOps.map((o) => o.op)).toEqual(['select', 'delete', 'select'])
-    expect(txWrites.map((w) => w.op)).toEqual(['update', 'select'])
+    expect(txWrites.map((w) => w.op)).toEqual(['select'])
+  })
+
+  it('runs the release RPC before the junction cleanup, and the storno still completes when the RPC fails', async () => {
+    // The release is best effort like the junction cleanup below it: the
+    // storno is already posted by then, so an RPC error is logged and the
+    // entry-scoped junction cleanup still runs.
+    const { supabase, txWrites, linkOps } = setup({
+      release: { data: null, error: { message: 'boom' } },
+    })
+
+    const result = await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(result.id).toBe('reversal-1')
+    const rpcNames = (supabase.rpc as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(rpcNames).toContain('release_reversed_entry_transactions')
+    expect(linkOps.map((o) => o.op)).toEqual(['select'])
+    expect(txWrites).toHaveLength(0)
   })
 })
 

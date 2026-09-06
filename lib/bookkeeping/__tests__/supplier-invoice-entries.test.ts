@@ -91,7 +91,8 @@ const {
   createSupplierInvoicePaymentEntry,
   createSupplierInvoiceCashEntry,
   createSupplierCreditNoteEntry,
-  createSupplierInvoicePrivatelyPaidEntry,
+  buildSupplierInvoicePrivatelyPaidLines,
+  largestExpenseAccount,
   SupplierInvoiceFxRateMissingError,
 } = await import('../supplier-invoice-entries')
 
@@ -996,21 +997,6 @@ describe('supplier invoice booking: foreign currency without an exchange rate', 
     ).rejects.toThrow(SupplierInvoiceFxRateMissingError)
     expect(mockedCreateEntry).not.toHaveBeenCalled()
   })
-
-  it('eget utlägg in EUR WITHOUT a rate throws instead of booking 1:1', async () => {
-    const invoice = makeSupplierInvoice({
-      subtotal: 1000, vat_amount: 250, total: 1250,
-      currency: 'EUR', exchange_rate: null,
-    })
-    const items = [makeItem({ line_total: 1000, vat_rate: 0.25, account_number: '6200' })]
-
-    await expect(
-      createSupplierInvoicePrivatelyPaidEntry(
-        null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag'
-      )
-    ).rejects.toThrow(SupplierInvoiceFxRateMissingError)
-    expect(mockedCreateEntry).not.toHaveBeenCalled()
-  })
 })
 
 // ============================================================
@@ -1758,163 +1744,175 @@ describe('createSupplierCreditNoteEntry', () => {
 })
 
 // ============================================================
-// createSupplierInvoicePrivatelyPaidEntry: eget utlägg
+// buildSupplierInvoicePrivatelyPaidLines: utlägg (a person paid)
 // ============================================================
 
-describe('createSupplierInvoicePrivatelyPaidEntry', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockedFindFiscalPeriod.mockResolvedValue('period-1')
-  })
+type ClaimLine = ReturnType<typeof buildSupplierInvoicePrivatelyPaidLines>[number]
 
-  it('returns null when no fiscal period found', async () => {
-    mockedFindFiscalPeriod.mockResolvedValue(null)
-    const invoice = makeSupplierInvoice()
-    const items = [makeItem()]
+function claimLinesByAccount(lines: ClaimLine[], account: string) {
+  return lines.filter((l) => l.account_number === account)
+}
 
-    const result = await createSupplierInvoicePrivatelyPaidEntry(
-      null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag'
-    )
+function assertClaimLinesBalanced(lines: ClaimLine[]) {
+  const debits = lines.reduce((s, l) => s + l.debit_amount, 0)
+  const credits = lines.reduce((s, l) => s + l.credit_amount, 0)
+  expect(Math.round(debits * 100)).toBe(Math.round(credits * 100))
+  for (const l of lines) {
+    // Exactly one side per line: the claims service refuses anything else.
+    expect(l.debit_amount >= 0 && l.credit_amount >= 0).toBe(true)
+    expect((l.debit_amount > 0) !== (l.credit_amount > 0)).toBe(true)
+  }
+}
 
-    expect(result).toBeNull()
-    expect(mockedCreateEntry).not.toHaveBeenCalled()
-  })
+const DESC = 'Faktura LF-001, Pressbyrån (ankomstnr 1)'
 
-  it('AB: credits 2893 (D expense + D 2641 + C 2893)', async () => {
-    const invoice = makeSupplierInvoice({
-      subtotal: 400,
-      vat_amount: 100,
-      total: 500,
-    })
+describe('buildSupplierInvoicePrivatelyPaidLines', () => {
+  it('AB owner: D expense + D 2641, C 2893 with the total; no 2440, no 1930', () => {
+    const invoice = makeSupplierInvoice({ subtotal: 400, vat_amount: 100, total: 500 })
     const items = [makeItem({ line_total: 400, account_number: '6110', vat_rate: 0.25 })]
 
-    await createSupplierInvoicePrivatelyPaidEntry(
-      null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag', 'Pressbyrån'
-    )
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
 
-    expect(mockedCreateEntry).toHaveBeenCalledOnce()
-    const input = mockedCreateEntry.mock.calls[0][3]
-
-    expect(input.source_type).toBe('supplier_invoice_privately_paid')
-
-    const debit6110 = findByAccount(input.lines, '6110')
-    expect(debit6110).toHaveLength(1)
-    expect(debit6110[0].debit_amount).toBe(400)
-
-    const debit2641 = findByAccount(input.lines, '2641')
-    expect(debit2641).toHaveLength(1)
-    expect(debit2641[0].debit_amount).toBe(100)
-
-    const credit2893 = findByAccount(input.lines, '2893')
-    expect(credit2893).toHaveLength(1)
-    expect(credit2893[0].credit_amount).toBe(500)
-
-    // AP account 2440 must NOT appear: privately-paid bypasses AP entirely.
-    expect(findByAccount(input.lines, '2440')).toHaveLength(0)
-    // Bank account 1930 must NOT appear: the owner paid, not the company.
-    expect(findByAccount(input.lines, '1930')).toHaveLength(0)
-    // EF owner account 2018 must NOT appear for AB.
-    expect(findByAccount(input.lines, '2018')).toHaveLength(0)
-
-    assertBalanced(input)
+    expect(claimLinesByAccount(lines, '6110')).toHaveLength(1)
+    expect(claimLinesByAccount(lines, '6110')[0].debit_amount).toBe(400)
+    expect(claimLinesByAccount(lines, '6110')[0].line_description).toBe(DESC)
+    expect(claimLinesByAccount(lines, '2641')).toHaveLength(1)
+    expect(claimLinesByAccount(lines, '2641')[0].debit_amount).toBe(100)
+    expect(claimLinesByAccount(lines, '2641')[0].line_description).toContain('Ingående moms 25%')
+    // The liability credit is what the claims service checks against the
+    // claim total and what the payout later reimburses.
+    expect(claimLinesByAccount(lines, '2893')).toHaveLength(1)
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(500)
+    // AP account 2440 must NOT appear: an utlägg bypasses AP entirely.
+    expect(claimLinesByAccount(lines, '2440')).toHaveLength(0)
+    // Bank account 1930 must NOT appear: the person paid, not the company.
+    expect(claimLinesByAccount(lines, '1930')).toHaveLength(0)
+    expect(claimLinesByAccount(lines, '2018')).toHaveLength(0)
+    assertClaimLinesBalanced(lines)
   })
 
-  it('EF: credits 2018 instead of 2893', async () => {
-    const invoice = makeSupplierInvoice({
-      subtotal: 400,
-      vat_amount: 100,
-      total: 500,
-    })
+  it('credits whatever liability the caller resolved: 2018 for an EF owner, 2820 for an employee', () => {
+    const invoice = makeSupplierInvoice({ subtotal: 400, vat_amount: 100, total: 500 })
     const items = [makeItem({ line_total: 400, account_number: '6110', vat_rate: 0.25 })]
 
-    await createSupplierInvoicePrivatelyPaidEntry(
-      null as never, 'company-1', 'user-1', invoice, items, 'enskild_firma', 'Pressbyrån'
-    )
+    const ef = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2018', DESC)
+    expect(claimLinesByAccount(ef, '2018')[0].credit_amount).toBe(500)
+    expect(claimLinesByAccount(ef, '2893')).toHaveLength(0)
 
-    const input = mockedCreateEntry.mock.calls[0][3]
-
-    const credit2018 = findByAccount(input.lines, '2018')
-    expect(credit2018).toHaveLength(1)
-    expect(credit2018[0].credit_amount).toBe(500)
-
-    expect(findByAccount(input.lines, '2893')).toHaveLength(0)
-    expect(findByAccount(input.lines, '2440')).toHaveLength(0)
-
-    assertBalanced(input)
+    const employee = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2820', DESC)
+    expect(claimLinesByAccount(employee, '2820')[0].credit_amount).toBe(500)
+    expect(claimLinesByAccount(employee, '2893')).toHaveLength(0)
+    assertClaimLinesBalanced(employee)
   })
 
-  it('skips 2641 line when invoice has zero VAT', async () => {
-    const invoice = makeSupplierInvoice({
-      subtotal: 500,
-      vat_amount: 0,
-      total: 500,
-    })
+  it('skips the 2641 line when the invoice has zero VAT', () => {
+    const invoice = makeSupplierInvoice({ subtotal: 500, vat_amount: 0, total: 500 })
     const items = [makeItem({ line_total: 500, account_number: '5460', vat_rate: 0 })]
 
-    await createSupplierInvoicePrivatelyPaidEntry(
-      null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag'
-    )
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
 
-    const input = mockedCreateEntry.mock.calls[0][3]
-
-    expect(findByAccount(input.lines, '5460')[0].debit_amount).toBe(500)
-    expect(findByAccount(input.lines, '2641')).toHaveLength(0)
-    expect(findByAccount(input.lines, '2893')[0].credit_amount).toBe(500)
-
-    assertBalanced(input)
+    expect(claimLinesByAccount(lines, '5460')[0].debit_amount).toBe(500)
+    expect(claimLinesByAccount(lines, '2641')).toHaveLength(0)
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(500)
+    assertClaimLinesBalanced(lines)
   })
 
-  it('handles mixed-rate kvitto with separate 2641 lines per rate', async () => {
+  it('mixed-rate kvitto: one 2641 line per rate, liability = sum of debits', () => {
     // Lunch (12%) + parking (25%) on the same kvitto
-    const invoice = makeSupplierInvoice({
-      subtotal: 200,
-      vat_amount: 36, // 100*0.12 + 100*0.25 = 12 + 25 = 37; off-by-one from rounding
-      total: 237,
-    })
+    const invoice = makeSupplierInvoice({ subtotal: 200, vat_amount: 37, total: 237 })
     const items = [
       makeItem({ line_total: 100, account_number: '5810', vat_rate: 0.12 }),
       makeItem({ line_total: 100, account_number: '5611', vat_rate: 0.25 }),
     ]
 
-    await createSupplierInvoicePrivatelyPaidEntry(
-      null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag'
-    )
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
 
-    const input = mockedCreateEntry.mock.calls[0][3]
-
-    // One 2641 line per rate
-    const vat2641 = findByAccount(input.lines, '2641')
-    expect(vat2641).toHaveLength(2)
-
-    // Credit 2893 = sum of all debits
-    const totalDebits = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
-    const credit2893 = findByAccount(input.lines, '2893')[0]
-    expect(Math.round(credit2893.credit_amount * 100)).toBe(Math.round(totalDebits * 100))
-
-    assertBalanced(input)
+    expect(claimLinesByAccount(lines, '2641')).toHaveLength(2)
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(237)
+    assertClaimLinesBalanced(lines)
   })
 
-  it('aggregates expense lines per account number', async () => {
-    // Two items on the same expense account should collapse to one debit line
-    const invoice = makeSupplierInvoice({
-      subtotal: 600,
-      vat_amount: 150,
-      total: 750,
-    })
+  it('a stored VAT override wins over line_total x rate', () => {
+    // Bilförmån: 25 % charged, only half deductible.
+    const invoice = makeSupplierInvoice({ subtotal: 10000, vat_amount: 1250, total: 11250 })
+    const items = [makeItem({ line_total: 10000, account_number: '5611', vat_rate: 0.25, vat_amount: 1250 })]
+
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
+
+    expect(claimLinesByAccount(lines, '2641')[0].debit_amount).toBe(1250)
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(11250)
+  })
+
+  it('aggregates items on the same account into one line', () => {
+    const invoice = makeSupplierInvoice({ subtotal: 600, vat_amount: 150, total: 750 })
     const items = [
       makeItem({ line_total: 300, account_number: '6110', vat_rate: 0.25 }),
       makeItem({ line_total: 300, account_number: '6110', vat_rate: 0.25 }),
     ]
 
-    await createSupplierInvoicePrivatelyPaidEntry(
-      null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag'
-    )
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
 
-    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(claimLinesByAccount(lines, '6110')).toHaveLength(1)
+    expect(claimLinesByAccount(lines, '6110')[0].debit_amount).toBe(600)
+  })
 
-    const debit6110 = findByAccount(input.lines, '6110')
-    expect(debit6110).toHaveLength(1)
-    expect(debit6110[0].debit_amount).toBe(600)
+  it('keeps invoice-currency amounts: the claims service converts at the claim rate', () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 250, total: 1250, currency: 'EUR', exchange_rate: 11.5,
+    })
+    const items = [makeItem({ line_total: 1000, account_number: '6200', vat_rate: 0.25 })]
+
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
+
+    expect(claimLinesByAccount(lines, '6200')[0].debit_amount).toBe(1000)
+    expect(claimLinesByAccount(lines, '2641')[0].debit_amount).toBe(250)
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(1250)
+  })
+
+  it('a discount row that nets an account below zero becomes a credit and lowers the liability', () => {
+    const invoice = makeSupplierInvoice({ subtotal: 900, vat_amount: 0, total: 900 })
+    const items = [
+      makeItem({ line_total: 1000, account_number: '4010', vat_rate: 0 }),
+      makeItem({ line_total: -100, account_number: '3730', vat_rate: 0 }),
+    ]
+
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
+
+    expect(claimLinesByAccount(lines, '3730')[0].credit_amount).toBe(100)
+    expect(claimLinesByAccount(lines, '3730')[0].debit_amount).toBe(0)
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(900)
+    assertClaimLinesBalanced(lines)
+  })
+
+  it('drops a bucket that nets to zero instead of posting a 0/0 line', () => {
+    const invoice = makeSupplierInvoice({ subtotal: 500, vat_amount: 0, total: 500 })
+    const items = [
+      makeItem({ line_total: 500, account_number: '6110', vat_rate: 0 }),
+      makeItem({ line_total: 200, account_number: '6250', vat_rate: 0 }),
+      makeItem({ line_total: -200, account_number: '6250', vat_rate: 0 }),
+    ]
+
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
+
+    expect(claimLinesByAccount(lines, '6250')).toHaveLength(0)
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(500)
+    assertClaimLinesBalanced(lines)
+  })
+})
+
+describe('largestExpenseAccount', () => {
+  it('picks the account of the largest line by magnitude, first line on a tie', () => {
+    const items = [
+      makeItem({ line_total: 300, account_number: '6110' }),
+      makeItem({ line_total: 1200, account_number: '5410' }),
+      makeItem({ line_total: 1200, account_number: '6250' }),
+    ]
+    expect(largestExpenseAccount(items)).toBe('5410')
+    expect(largestExpenseAccount([makeItem({ line_total: -50, account_number: '3730' }), makeItem({ line_total: 20, account_number: '6110' })])).toBe('3730')
+  })
+
+  it('returns an empty string for no items', () => {
+    expect(largestExpenseAccount([])).toBe('')
   })
 })
 
@@ -2125,13 +2123,8 @@ describe('dimensions propagation (PR7): createSupplierInvoiceCashEntry', () => {
   })
 })
 
-describe('dimensions propagation (PR7): createSupplierInvoicePrivatelyPaidEntry', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockedFindFiscalPeriod.mockResolvedValue('period-1')
-  })
-
-  it('expense lines carry merged bags; 2641 and the owner account carry the default', async () => {
+describe('dimensions propagation (PR7): buildSupplierInvoicePrivatelyPaidLines', () => {
+  it('expense lines carry merged bags; 2641 and the liability carry the default', () => {
     const invoice = makeSupplierInvoice({
       subtotal: 400,
       vat_amount: 100,
@@ -2142,17 +2135,25 @@ describe('dimensions propagation (PR7): createSupplierInvoicePrivatelyPaidEntry'
       makeItem({ line_total: 400, account_number: '6110', vat_rate: 0.25, dimensions: { '6': 'P001' } }),
     ]
 
-    await createSupplierInvoicePrivatelyPaidEntry(
-      null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag'
-    )
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
 
-    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(claimLinesByAccount(lines, '6110')[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(claimLinesByAccount(lines, '2641')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(claimLinesByAccount(lines, '2893')[0].dimensions).toEqual({ '1': 'KS01' })
+    assertClaimLinesBalanced(lines)
+  })
 
-    expect(findByAccount(input.lines, '6110')[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
-    expect(findByAccount(input.lines, '2641')[0].dimensions).toEqual({ '1': 'KS01' })
-    expect(findByAccount(input.lines, '2893')[0].dimensions).toEqual({ '1': 'KS01' })
+  it('two items on the same account with different bags stay on separate lines', () => {
+    const invoice = makeSupplierInvoice({ subtotal: 600, vat_amount: 0, total: 600 })
+    const items = [
+      makeItem({ line_total: 300, account_number: '6110', vat_rate: 0, dimensions: { '6': 'P001' } }),
+      makeItem({ line_total: 300, account_number: '6110', vat_rate: 0, dimensions: { '6': 'P002' } }),
+    ]
 
-    assertBalanced(input)
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
+
+    expect(claimLinesByAccount(lines, '6110')).toHaveLength(2)
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(600)
   })
 })
 
@@ -2343,22 +2344,19 @@ describe('SLP pair injection (apply_slp)', () => {
     assertBalanced(input)
   })
 
-  it('privately paid (eget utlägg): pair injected and the owner account stays at the invoice total', async () => {
+  it('privately paid (utlägg): pair injected and the liability stays at the invoice total', () => {
     const invoice = makeSupplierInvoice({ subtotal: 10000, vat_amount: 0, total: 10000 })
     const items = [
       makeItem({ line_total: 10000, account_number: '7412', vat_rate: 0, apply_slp: true }),
     ]
 
-    await createSupplierInvoicePrivatelyPaidEntry(
-      null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag'
-    )
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
 
-    const input = mockedCreateEntry.mock.calls[0][3]
-    expect(findByAccount(input.lines, '7533')[0].debit_amount).toBe(2426)
-    expect(findByAccount(input.lines, '2514')[0].credit_amount).toBe(2426)
-    // The SLP pair must not inflate what the owner is owed.
-    expect(findByAccount(input.lines, '2893')[0].credit_amount).toBe(10000)
-    assertBalanced(input)
+    expect(claimLinesByAccount(lines, '7533')[0].debit_amount).toBe(2426)
+    expect(claimLinesByAccount(lines, '2514')[0].credit_amount).toBe(2426)
+    // The SLP pair must not inflate what the person is owed.
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(10000)
+    assertClaimLinesBalanced(lines)
   })
 
   it('credit note reverses the pair (7533 K / 2514 D) and keeps 2440 at the invoice total', async () => {

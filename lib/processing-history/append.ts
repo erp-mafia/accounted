@@ -46,6 +46,7 @@ type SupabaseClientLike = Pick<SupabaseClient, 'from'>
 export const PROCESSING_EVENT_TYPES = [
   'AttachmentsTruncated',
   'BankTransactionDuplicateDismissed',
+  'BankTransactionStrandedRepaired',
   'ChannelQuestionAnswered',
   'ChannelQuestionAsked',
   'ChannelQuestionExpired',
@@ -59,6 +60,7 @@ export const PROCESSING_EVENT_TYPES = [
   'InvoiceDuplicatePaymentDismissed',
   'InvoiceJournalEntrySkipped',
   'InvoicePaymentRowBackfilled',
+  'InvoiceRowsCompleted',
   'OAuthClientRevoked',
   'PendingOperationApproved',
   'PendingOperationRejected',

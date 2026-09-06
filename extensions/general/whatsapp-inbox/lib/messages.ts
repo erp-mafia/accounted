@@ -57,6 +57,8 @@ export const TEMPLATE = {
   m17RateLimitedDay: 'm17_rate_limited_day',
   m18Error: 'm18_error',
   m19NoCompany: 'm19_no_company',
+  m20ReceiptsExpired: 'm20_receipts_expired',
+  m21CodeRetry: 'm21_code_retry',
 } as const
 
 export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
@@ -202,6 +204,21 @@ const SV = {
   // the old silent parking.
   m19NoCompany: () =>
     'Jag kunde inte koppla kvittot till något företag. Öppna Accounted och kontrollera WhatsApp-kopplingen under *Inställningar -> WhatsApp*, och skicka sedan kvittot igen.',
+
+  // Receipts parked behind the company question for longer than Meta keeps
+  // the media. Sent once, at the moment the rest of the parked rows are
+  // re-opened (the service window is open then, and only then), so the user
+  // learns which files never made it instead of finding out by absence.
+  m20ReceiptsExpired: ({ count }: { count: number }) =>
+    count > 1
+      ? `${count} äldre kvitton gick inte längre att hämta, WhatsApp sparar filer i cirka 30 dagar. Skicka gärna dem igen.`
+      : 'Ett äldre kvitto gick inte längre att hämta, WhatsApp sparar filer i cirka 30 dagar. Skicka gärna det igen.',
+
+  // The code could not be CHECKED (a database blip), which is not the same
+  // as a wrong code: the M2 wording sends a user with a valid code back to
+  // the panel for a new one. Neutral, and the code stays valid for a retry.
+  m21CodeRetry: () =>
+    'Jag kunde inte kontrollera koden just nu. Skicka samma kod igen om en liten stund.',
 }
 
 const EN: typeof SV = {
@@ -329,6 +346,14 @@ const EN: typeof SV = {
 
   m19NoCompany: () =>
     'I could not assign the receipt to any company. Open Accounted and check the WhatsApp linking under *Settings -> WhatsApp*, then send the receipt again.',
+
+  m20ReceiptsExpired: ({ count }: { count: number }) =>
+    count > 1
+      ? `${count} older receipts could no longer be fetched, WhatsApp keeps files for about 30 days. Please send them again.`
+      : 'One older receipt could no longer be fetched, WhatsApp keeps files for about 30 days. Please send it again.',
+
+  m21CodeRetry: () =>
+    'I could not check the code just now. Send the same code again in a moment.',
 }
 
 const COPY: Record<BotLocale, typeof SV> = { sv: SV, en: EN }

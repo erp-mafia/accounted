@@ -12,7 +12,7 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null }),
     sendReaction: vi.fn().mockResolvedValue(undefined),
     markReadWithTyping: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn(),
@@ -115,7 +115,7 @@ describe('POST /webhook', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
+    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null })
     process.env.WHATSAPP_APP_SECRET = SECRET
     process.env.WHATSAPP_PHONE_HASH_KEY = 'test-pepper'
     process.env.WHATSAPP_PHONE_ENCRYPTION_KEY = 'a'.repeat(64)
@@ -728,6 +728,25 @@ describe('POST /webhook', () => {
       expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m2BadCode)
     })
 
+    it('answers a code it could not CHECK with M21 (retry), never with M2 (bad code)', async () => {
+      // #2062 residual 5: the quota RPC succeeded but the whatsapp_link_codes
+      // read failed. The code is untouched and still valid, so "the code is
+      // wrong" would send a user holding a VALID code back to mint another.
+      const { enqueue, findCalls } = mockSupabase()
+      enqueue({ data: null }) // no active link
+      enqueue({ data: { ok: true } }) // quota ok
+      enqueue({ error: { message: 'canceling statement due to statement timeout' } }) // code lookup failed
+      enqueue({ data: null }) // trace row insert
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('AC-7KP4QF')] })))
+      expect(sendTextMock).toHaveBeenCalledTimes(1)
+      expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m21CodeRetry)
+      // Nothing was claimed: the same code works on the retry.
+      expect(findCalls('whatsapp_link_codes', 'update')).toHaveLength(0)
+      const [row] = findCalls('whatsapp_messages', 'insert')[0] as [Record<string, unknown>]
+      expect(row.error_message).toContain('link code lookup failed')
+    })
+
     it('hashLinkCode matches what the webhook looks up', () => {
       // Regression guard: panel mints, webhook consumes; both must hash alike.
       expect(hashLinkCode('AC-7KP4QF')).toMatch(/^[0-9a-f]{64}$/)
@@ -921,6 +940,7 @@ describe('POST /webhook', () => {
       mock.enqueue({ data: { company_id: 'company-2' } }) // membership check
       mock.enqueue({ data: null }) // guarded conversation pin update
       mock.enqueue({ data: null }) // link last_company_id
+      mock.enqueue({ data: [] }) // expiry stamp: nothing past the media window
       mock.enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // staged reopen
       mock.enqueue({ data: null }) // terminal row insert
 
@@ -943,6 +963,7 @@ describe('POST /webhook', () => {
       mock.enqueue({ data: { company_id: 'company-1' } }) // membership check
       mock.enqueue({ data: null }) // guarded conversation pin update
       mock.enqueue({ data: null }) // link last_company_id
+      mock.enqueue({ data: [] }) // expiry stamp: nothing past the media window
       mock.enqueue({ data: [{ id: 'stg-1' }] }) // staged reopen
       mock.enqueue({ data: null }) // terminal row insert
 
@@ -1153,6 +1174,7 @@ describe('POST /webhook', () => {
       mock.enqueue({ data: { company_id: 'company-2' } }) // membership check
       mock.enqueue({ data: null }) // guarded pin write
       mock.enqueue({ data: null }) // link last_company_id
+      mock.enqueue({ data: [] }) // expiry stamp: nothing past the media window
       mock.enqueue({ data: [{ id: 'stg-1' }] }) // staged reopen
       mock.enqueue({ data: null }) // terminal row insert
 

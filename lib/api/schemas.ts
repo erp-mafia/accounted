@@ -1343,6 +1343,17 @@ export const CreateSupplierInvoiceSchema = z.object({
   // Per-invoice öresavrundning toggle (display-only). Omitted → stored as null (off).
   ore_rounding: z.boolean().optional(),
   paid_with_private_funds: z.boolean().optional(),
+  // For paid_with_private_funds: who paid. An employee (2820) by id, or the
+  // owner by name (2893 in an AB, 2018 in an enskild firma); an omitted name
+  // falls back to the shared owner label so Hem groups the owner as one
+  // person. Both are ignored unless paid_with_private_funds is true.
+  employee_id: uuid.optional().nullable(),
+  claimant_name: z.string().trim().max(200).optional(),
+  // For paid_with_private_funds: the invoice-inbox item whose document is the
+  // underlag. The route takes the document from the item and settles the item
+  // itself, so a privately paid inbox document never goes through the
+  // extension's convert endpoint (which registers on 2440 only).
+  inbox_item_id: uuid.optional().nullable(),
   // For paid_with_private_funds: the date the owner paid out-of-pocket.
   // Defaults to invoice_date (common for kvitto where the two coincide).
   payment_date: isoDate.optional(),
@@ -1384,6 +1395,16 @@ export const MarkSupplierInvoicePaidSchema = z.object({
     // no-override path re-propagates the invoice's default_dimensions).
     dimensions: DimensionsBagSchema.optional(),
   })).min(2).optional(),
+})
+
+/**
+ * "Inlagd i banken" (#2220): a boolean mark, not a payment. `entered: true`
+ * records that the user typed the payment into the bank by hand; `false`
+ * takes the mark back. No amount, no date: the payment itself is still
+ * recorded by mark-paid or the bank match, which also clears the mark.
+ */
+export const SupplierInvoiceBankEnteredSchema = z.object({
+  entered: z.boolean(),
 })
 
 export const UpdateSupplierInvoiceSchema = z.object({
@@ -4247,6 +4268,16 @@ export const PartyEnrichSchema = z.object({
 
 export const PartySearchRegistryQuerySchema = z.object({
   q: z.string().max(120).optional(),
+})
+
+/**
+ * GET /api/parties/registry: the org number a customer or supplier form is
+ * being filled for. Shape, check digit and the legal-person rule are one
+ * function (registryLookupKey in lib/parties/registry-form-fill), so the
+ * form and the route cannot disagree about what may be looked up.
+ */
+export const PartyRegistryLookupQuerySchema = z.object({
+  org_number: z.string().trim().min(1).max(20),
 })
 
 export const PartyUndoMergeSchema = z.object({

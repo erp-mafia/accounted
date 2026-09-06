@@ -21,7 +21,7 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null }),
     getDisplayPhoneNumber: vi.fn().mockResolvedValue(null),
   }
 })
@@ -164,5 +164,84 @@ describe('GET /link', () => {
     const { data } = (await response.json()) as { data: { linked: boolean } }
     expect(data).toEqual({ linked: false })
     expect(vi.mocked(createServiceClient)).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /link/default-company', () => {
+  const route = findRoute('POST', '/link/default-company')
+
+  function jsonRequest(body: unknown): Request {
+    return new Request('http://localhost:3000/api/extensions/ext/whatsapp-inbox/link/default-company', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+  const COMPANY = '11111111-1111-4111-8111-111111111111'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('401s without an authenticated context', async () => {
+    const response = await route.handler(jsonRequest({ companyId: COMPANY }))
+    expect(response.status).toBe(401)
+  })
+
+  it('400s on a malformed body', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const response = await route.handler(jsonRequest({ companyId: 'not-a-uuid' }), makeCtx(supabase))
+    expect(response.status).toBe(400)
+  })
+
+  it('checks LIVE membership: the same archived filter intake applies (#2062)', async () => {
+    const { supabase, enqueue, findCalls, calls } = createQueuedMockSupabase()
+    enqueue({ data: { company_id: COMPANY } }) // live membership
+    enqueue({ data: null }) // link update
+
+    const response = await route.handler(jsonRequest({ companyId: COMPANY }), makeCtx(supabase))
+    expect(response.status).toBe(200)
+    expect(findCalls('company_members', 'select')[0][0]).toContain('companies!inner(archived_at)')
+    expect(findCalls('company_members', 'is')).toContainEqual(['companies.archived_at', null])
+    expect(
+      calls.some(
+        (c) =>
+          c.table === 'company_members' &&
+          c.method === 'eq' &&
+          c.args[0] === 'user_id' &&
+          c.args[1] === 'user-1',
+      ),
+    ).toBe(true)
+    const [patch] = findCalls('whatsapp_phone_links', 'update')[0] as [Record<string, unknown>]
+    expect(patch).toEqual({ default_company_id: COMPANY })
+  })
+
+  it('403s when the company is archived or the caller is not a member', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null }) // filtered out by the archived join
+
+    const response = await route.handler(jsonRequest({ companyId: COMPANY }), makeCtx(supabase))
+    expect(response.status).toBe(403)
+    expect(findCalls('whatsapp_phone_links', 'update')).toHaveLength(0)
+  })
+
+  it('500s on a failed membership read instead of reading it as "not a member"', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ error: { message: 'connection reset' } })
+
+    const response = await route.handler(jsonRequest({ companyId: COMPANY }), makeCtx(supabase))
+    expect(response.status).toBe(500)
+    expect(findCalls('whatsapp_phone_links', 'update')).toHaveLength(0)
+  })
+
+  it('clears the default without any membership check', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null }) // link update
+
+    const response = await route.handler(jsonRequest({ companyId: null }), makeCtx(supabase))
+    expect(response.status).toBe(200)
+    expect(findCalls('company_members', 'select')).toHaveLength(0)
+    const [patch] = findCalls('whatsapp_phone_links', 'update')[0] as [Record<string, unknown>]
+    expect(patch).toEqual({ default_company_id: null })
   })
 })

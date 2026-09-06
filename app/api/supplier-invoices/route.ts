@@ -2,8 +2,12 @@ import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import {
   createSupplierInvoiceRegistrationEntry,
-  createSupplierInvoicePrivatelyPaidEntry,
+  buildSupplierInvoicePrivatelyPaidLines,
+  largestExpenseAccount,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
+import { registerExpenseClaim } from '@/lib/expenses/expense-claims-service'
+import { OWNER_FALLBACK_NAME, resolveExpenseLiabilityAccount } from '@/lib/expenses/payer'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
@@ -20,7 +24,7 @@ import {
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { Currency, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -77,11 +81,46 @@ export const POST = withRouteContext(
     const body = validation.data
     const paidPrivately = body.paid_with_private_funds === true
 
-    if (body.document_id) {
+    // A privately paid inbox document: the item's document is the underlag
+    // and the item is settled here (registerExpenseClaim stamps
+    // created_journal_entry_id; the route adds created_supplier_invoice_id).
+    // The extension's convert endpoint registers on 2440 only, so routing the
+    // person-paid case through it would silently drop who paid.
+    let inboxItem: { id: string; document_id: string | null } | null = null
+    if (body.inbox_item_id) {
+      if (!paidPrivately) {
+        return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+          requestId,
+          details: { reason: 'inbox_item_id is only accepted with paid_with_private_funds' },
+        })
+      }
+      const { data: item, error: itemError } = await supabase
+        .from('invoice_inbox_items')
+        .select('id, document_id, created_supplier_invoice_id, created_journal_entry_id')
+        .eq('id', body.inbox_item_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (itemError || !item) {
+        return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+          requestId,
+          details: { reason: 'inbox_item_id is missing or belongs to another company' },
+        })
+      }
+      if (item.created_supplier_invoice_id || item.created_journal_entry_id) {
+        return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+          requestId,
+          details: { reason: 'inbox item is already booked' },
+        })
+      }
+      inboxItem = { id: item.id as string, document_id: (item.document_id as string | null) ?? null }
+    }
+    const documentId = inboxItem ? inboxItem.document_id : body.document_id ?? null
+
+    if (documentId) {
       const { data: document, error: documentError } = await supabase
         .from('document_attachments')
         .select('id, journal_entry_id')
-        .eq('id', body.document_id)
+        .eq('id', documentId)
         .eq('company_id', companyId)
         .maybeSingle()
 
@@ -96,7 +135,7 @@ export const POST = withRouteContext(
         .from('supplier_invoices')
         .select('id')
         .eq('company_id', companyId)
-        .eq('document_id', body.document_id)
+        .eq('document_id', documentId)
         .limit(1)
         .maybeSingle()
 
@@ -226,6 +265,19 @@ export const POST = withRouteContext(
         })
       }
       entityType = company.entity_type as 'aktiebolag' | 'enskild_firma'
+      if (body.employee_id) {
+        // Checked before the arrival-number sequence is touched: a claim the
+        // service would refuse must not burn an ankomstnummer.
+        const { data: employee } = await supabase
+          .from('employees')
+          .select('id')
+          .eq('id', body.employee_id)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (!employee) {
+          return errorResponseFromCode('EMPLOYEE_NOT_FOUND', log, { requestId })
+        }
+      }
     }
 
     // Resolve the exchange rate BEFORE the arrival-number sequence is touched:
@@ -354,7 +406,7 @@ export const POST = withRouteContext(
         user_id: user.id,
         company_id: companyId,
         supplier_id: body.supplier_id,
-        document_id: body.document_id || null,
+        document_id: documentId,
         arrival_number: arrivalNum,
         supplier_invoice_number: body.supplier_invoice_number,
         invoice_date: body.invoice_date,
@@ -469,10 +521,12 @@ export const POST = withRouteContext(
     // silently understates leverantörsskuld (2440) and ingående moms (2641)
     // for the momsdeklaration. Roll back instead.
     //
-    // Privately-paid path bypasses both accrual and cash flows: a single
-    // verifikat books the expense + VAT against 2893 (AB) or 2018 (EF) at
-    // registration time, regardless of accounting_method. mark-paid is never
-    // invoked for these (status='paid' from the start).
+    // Privately-paid path bypasses both accrual and cash flows: the invoice is
+    // an utlägg, so one verifikat books the expense + VAT against the payer's
+    // liability account (2893 AB owner / 2018 EF owner / 2820 employee) at
+    // registration time, regardless of accounting_method, and an
+    // expense_claims row keeps the debt open. mark-paid is never invoked for
+    // these (status='paid' from the start).
     const { data: settings } = await supabase
       .from('company_settings')
       .select('accounting_method, defer_invoice_booking')
@@ -485,67 +539,133 @@ export const POST = withRouteContext(
     const booksOnRegistration = booksInvoicesOnIssue(settings)
     let registrationJournalEntryId: string | null = null
     let paymentJournalEntryId: string | null = null
+    let expenseClaim: { id: string; claimant_name: string; liability_account: string } | null = null
 
     if (paidPrivately && entityType) {
+      // The invoice IS an utlägg registration with the supplier invoice as its
+      // underlag: the same writer as the Underlag pane posts the verifikat and
+      // the expense_claims row, with the invoice's full kontering as the
+      // lines. The person then shows up under "Betala ut utlägg" on Hem and
+      // the bank matcher closes the debt when the transfer is booked.
+      const payer = body.employee_id ? 'employee' : 'owner'
+      const liabilityAccount = resolveExpenseLiabilityAccount(entityType, payer)
+      const claimDescription = buildSupplierDescription(
+        'Faktura',
+        invoice.supplier_invoice_number,
+        supplier.name,
+        `(ankomstnr ${invoice.arrival_number})`,
+      )
+      let claimResult: Awaited<ReturnType<typeof registerExpenseClaim>>
       try {
-        const journalEntry = await createSupplierInvoicePrivatelyPaidEntry(
-          supabase,
-          companyId!,
-          user.id,
-          invoice as SupplierInvoice,
-          items as SupplierInvoiceItem[],
-          entityType,
-          supplier.name,
-        )
-        if (journalEntry) {
-          paymentJournalEntryId = journalEntry.id
-          await supabase
-            .from('supplier_invoices')
-            .update({ payment_journal_entry_id: journalEntry.id })
-            .eq('id', invoice.id)
-          // Mirror the payment in supplier_invoice_payments so AR/AP and
-          // payment-history queries stay consistent with the mark-paid path.
-          await supabase.from('supplier_invoice_payments').insert({
-            user_id: user.id,
-            company_id: companyId,
-            supplier_invoice_id: invoice.id,
-            // For an eget utlägg the actual out-of-pocket date may differ from
-            // the invoice/receipt date: accept an explicit payment_date and
-            // fall back to invoice_date for the common kvitto case.
-            payment_date: body.payment_date ?? invoice.invoice_date,
-            amount: totalRounded,
-            currency: invoice.currency,
-            exchange_rate_difference: 0,
-            journal_entry_id: journalEntry.id,
-            notes: 'Eget utlägg, betalat privat',
-          })
-        } else {
-          // createSupplierInvoicePrivatelyPaidEntry returns null ONLY when no
-          // fiscal period covers invoice_date (every other failure throws and
-          // lands in the catch below). Without this branch the invoice would be
-          // saved as status='paid' with no verifikat: a silent orphan. Roll
-          // back and surface an actionable error, per the fatal-orphan note above.
-          await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
-          return errorResponseFromCode('SI_CREATE_NO_FISCAL_PERIOD', log, {
-            requestId,
-            details: { invoiceDate: invoice.invoice_date },
-          })
-        }
+        claimResult = await registerExpenseClaim(supabase, companyId, user.id, {
+          description: claimDescription,
+          expense_date: invoice.invoice_date,
+          amount: totalRounded,
+          vat_amount: roundOre(vatAmount),
+          currency: fx.rate.currency as Currency,
+          exchange_rate: fx.rate.exchangeRate ?? undefined,
+          expense_account: largestExpenseAccount(items as SupplierInvoiceItem[]),
+          employee_id: body.employee_id ?? undefined,
+          claimant_name: payer === 'owner' ? body.claimant_name?.trim() || OWNER_FALLBACK_NAME : undefined,
+          document_id: documentId ?? undefined,
+          inbox_item_id: inboxItem?.id,
+          lines: buildSupplierInvoicePrivatelyPaidLines(
+            invoice as SupplierInvoice,
+            items as SupplierInvoiceItem[],
+            liabilityAccount,
+            claimDescription,
+          ),
+        })
       } catch (err) {
+        // The service removes its own claim row before rethrowing; the invoice
+        // row is ours to roll back (same fatal-orphan rule as the registration
+        // path below).
         await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
         if (isBookkeepingError(err)) {
           return errorResponse(err, log, { requestId })
         }
-        log.error('failed to create privately-paid journal entry', err as Error, {
+        log.error('failed to book privately paid supplier invoice as utlägg', err as Error, {
           invoiceId: invoice.id,
         })
         return errorResponseFromCode('SI_CREATE_FAILED', log, {
           requestId,
           details: {
             reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown',
-            step: 'privately_paid_journal_entry',
+            step: 'expense_claim',
           },
         })
+      }
+
+      if (!claimResult.ok) {
+        if (claimResult.code === 'LINK_WRITE_FAILED') {
+          // The verifikat is posted and immutable: deleting the invoice now
+          // would orphan it. Keep both rows and surface the desync loudly.
+          log.error('expense claim posted but could not be linked', new Error(claimResult.detail ?? claimResult.code), {
+            invoiceId: invoice.id,
+          })
+          return errorResponseFromCode('SI_CREATE_FAILED', log, {
+            requestId,
+            details: { reason: claimResult.detail ?? claimResult.code, step: 'expense_claim_link' },
+          })
+        }
+        await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
+        if (claimResult.code === 'FISCAL_PERIOD_NOT_FOUND') {
+          return errorResponseFromCode('SI_CREATE_NO_FISCAL_PERIOD', log, {
+            requestId,
+            details: { invoiceDate: invoice.invoice_date },
+          })
+        }
+        if (claimResult.code === 'EMPLOYEE_NOT_FOUND') {
+          return errorResponseFromCode('EMPLOYEE_NOT_FOUND', log, { requestId })
+        }
+        if (claimResult.code === 'INVALID_LINES') {
+          return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+            requestId,
+            details: { reason: `expense claim lines: ${claimResult.detail ?? 'invalid'}` },
+          })
+        }
+        log.error('expense claim registration failed', new Error(claimResult.detail ?? claimResult.code), {
+          invoiceId: invoice.id,
+        })
+        return errorResponseFromCode('SI_CREATE_FAILED', log, {
+          requestId,
+          details: { reason: claimResult.code, step: 'expense_claim' },
+        })
+      }
+
+      const claim = claimResult.claim
+      expenseClaim = { id: claim.id, claimant_name: claim.claimant_name, liability_account: claim.liability_account }
+      if (claim.journal_entry_id) {
+        paymentJournalEntryId = claim.journal_entry_id
+        await supabase
+          .from('supplier_invoices')
+          .update({ payment_journal_entry_id: claim.journal_entry_id })
+          .eq('id', invoice.id)
+        // Mirror the payment in supplier_invoice_payments so AR/AP and
+        // payment-history queries stay consistent with the mark-paid path.
+        await supabase.from('supplier_invoice_payments').insert({
+          user_id: user.id,
+          company_id: companyId,
+          supplier_invoice_id: invoice.id,
+          // For an utlägg the actual out-of-pocket date may differ from the
+          // invoice/receipt date: accept an explicit payment_date and fall
+          // back to invoice_date for the common kvitto case.
+          payment_date: body.payment_date ?? invoice.invoice_date,
+          amount: totalRounded,
+          currency: invoice.currency,
+          exchange_rate_difference: 0,
+          journal_entry_id: claim.journal_entry_id,
+          notes: `Utlägg, betalat privat av ${claim.claimant_name}`,
+        })
+      }
+      if (inboxItem) {
+        // registerExpenseClaim stamped created_journal_entry_id (which marks
+        // the item processed); the invoice link is ours.
+        await supabase
+          .from('invoice_inbox_items')
+          .update({ created_supplier_invoice_id: invoice.id })
+          .eq('id', inboxItem.id)
+          .eq('company_id', companyId)
       }
     } else if (booksOnRegistration) {
       try {
@@ -627,18 +747,19 @@ export const POST = withRouteContext(
       }
     }
 
+    // The utlägg path links the document inside registerExpenseClaim.
     const primaryJournalEntryId = paymentJournalEntryId || registrationJournalEntryId
-    if (body.document_id && primaryJournalEntryId) {
+    if (documentId && primaryJournalEntryId && !paidPrivately) {
       try {
         await linkToJournalEntry(
           supabase,
           companyId,
-          body.document_id,
+          documentId,
           primaryJournalEntryId,
         )
       } catch (err) {
         log.warn('supplier invoice document could not be linked to journal entry', {
-          documentId: body.document_id,
+          documentId,
           journalEntryId: primaryJournalEntryId,
           error: err instanceof Error ? err.message : String(err),
         })
@@ -675,6 +796,7 @@ export const POST = withRouteContext(
         items: itemInserts,
         registration_journal_entry_id: registrationJournalEntryId,
         payment_journal_entry_id: paymentJournalEntryId,
+        expense_claim: expenseClaim,
       },
       ...(warnings.length > 0 ? { warnings } : {}),
     })

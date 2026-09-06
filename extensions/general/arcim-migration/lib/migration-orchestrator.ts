@@ -40,6 +40,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { suggestPartiesForCompany } from '@/lib/parties/suggest'
 import { createLogger } from '@/lib/logger'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
+import { completeInvoiceRows, type CompleteInvoiceRowsTrail } from '@/lib/invoices/complete-invoice-rows'
 import {
   linkMigratedRegistrationVouchers,
   type MigratedInvoiceLinkInput,
@@ -69,6 +70,14 @@ export interface MigrationOptions {
   companyId: string
   userId: string
   supabase: SupabaseClient
+  /**
+   * Service-role client for the behandlingshistorik rows the sales-invoice
+   * step writes (processing_history has no INSERT policy, and `supabase` is
+   * the user's session client). Resolved once, and only when there are rows
+   * to write, so a run that imports nothing invoice-shaped never builds it.
+   * See lib/invoices/complete-invoice-rows.ts.
+   */
+  createHistoryClient: () => Promise<Pick<SupabaseClient, 'from'>>
   importCompanyInfo?: boolean
   importCustomers?: boolean
   importSuppliers?: boolean
@@ -88,6 +97,8 @@ export interface MigrationOptions {
 const INSERT_CHUNK_SIZE = 500
 /** Sales-invoice row writes in flight at once (one complete_invoice_rows call per invoice). */
 const ITEM_RPC_CONCURRENCY = 8
+/** The writer named in the behandlingshistorik event for every invoice's rows. */
+export const MIGRATION_WIZARD_SOURCE = 'migration-wizard'
 const ENRICHMENT_CONCURRENCY = 10
 
 function emitProgress(options: MigrationOptions, progress: MigrationProgress) {
@@ -210,6 +221,9 @@ function logFxUnresolved(kind: string, invoiceNumber: string, fx: FxUnresolved):
 export async function executeMigration(options: MigrationOptions): Promise<MigrationResults> {
   const { consentId, companyId, userId, supabase } = options
   const results: MigrationResults = {}
+  // One id per run: every InvoiceRowsCompleted event this import writes
+  // shares it, so the import reads as one thread in the behandlingshistorik.
+  const runId = crypto.randomUUID()
   // What this run has proven about the grant, read by recordStepError: a 403
   // once a call has already succeeded is one closed register, not a dead token.
   const runState: ProviderRunState = { grantProven: false }
@@ -779,22 +793,36 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           // an invoice's rows are written at most once whichever writer gets
           // there first, and a bad row set rejects its own invoice rather than
           // the whole chunk. Small concurrent groups keep the round trips off
-          // the wizard's clock.
-          for (const group of chunk(rowsByInvoice, ITEM_RPC_CONCURRENCY)) {
-            await Promise.all(group.map(async ({ invoiceId, rows }) => {
-              const { data, error: itemErr } = await supabase.rpc('complete_invoice_rows', {
-                p_company_id: companyId,
-                p_invoice_id: invoiceId,
-                p_rows: rows,
-              })
-              const rpcOutcome = (data ?? null) as { ok?: boolean; code?: string } | null
-              if (itemErr || !rpcOutcome?.ok) {
-                console.error(
-                  `[migration] Sales invoice items insert failed for ${invoiceId}:`,
-                  itemErr?.message ?? rpcOutcome?.code ?? 'empty RPC response',
-                )
-              }
-            }))
+          // the wizard's clock. completeInvoiceRows also writes the
+          // InvoiceRowsCompleted event for every invoice the RPC filled, the
+          // same event the pass writes, so the two writers reconcile per
+          // invoice (BFNAR 2013:2 p. 9.16).
+          if (rowsByInvoice.length > 0) {
+            const historyClient = await options.createHistoryClient()
+            const trail: CompleteInvoiceRowsTrail = {
+              source: MIGRATION_WIZARD_SOURCE,
+              provider,
+              consentId,
+              correlationId: runId,
+              actor: { type: 'user', id: userId },
+            }
+            for (const group of chunk(rowsByInvoice, ITEM_RPC_CONCURRENCY)) {
+              await Promise.all(group.map(async ({ invoiceId, rows }) => {
+                const outcome = await completeInvoiceRows(supabase, {
+                  companyId,
+                  invoiceId,
+                  rows,
+                  trail,
+                  historyClient,
+                })
+                if (outcome.status === 'failed') {
+                  console.error(
+                    `[migration] Sales invoice items insert failed for ${invoiceId}:`,
+                    outcome.reason,
+                  )
+                }
+              }))
+            }
           }
         }
 

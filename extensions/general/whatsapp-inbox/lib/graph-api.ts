@@ -66,11 +66,26 @@ export interface SendTextArgs extends SendMessageBase {
   body: string
 }
 
+/**
+ * How a send failed. Two different worlds hide behind ok:false, and callers
+ * that resend on failure must tell them apart (#2062):
+ *  - http_rejected: Meta answered with a non-2xx status. No wamid was issued
+ *    and nothing reached the phone, so a different payload can safely be
+ *    tried (the numbered-text fallback for a rejected interactive message).
+ *  - transport_error: the request threw (timeout, connection reset). Meta may
+ *    have accepted the message before the failure surfaced, so a resend can
+ *    put a second copy on the phone. Callers treat this as "unknown", never
+ *    as "not delivered".
+ */
+export type SendFailureKind = 'http_rejected' | 'transport_error'
+
 export interface SendTextResult {
   ok: boolean
   wamid: string | null
   /** Why the send failed, for the outbound row (#1552). Null on success. */
   errorDetail: string | null
+  /** Typed twin of errorDetail for control flow. Null on success. */
+  failure: SendFailureKind | null
 }
 
 /** POST one message payload to the Graph API. Never throws. */
@@ -81,6 +96,7 @@ async function postToGraph(
   let wamid: string | null = null
   let ok = false
   let errorDetail: string | null = null
+  let failure: SendFailureKind | null = null
 
   try {
     const response = await fetchWithTimeout(
@@ -105,6 +121,7 @@ async function postToGraph(
     } else {
       const detail = await response.text().catch(() => '')
       errorDetail = `Send failed (HTTP ${response.status}): ${detail.slice(0, 250)}`
+      failure = 'http_rejected'
       log.warn('WhatsApp send failed', {
         status: response.status,
         template,
@@ -114,10 +131,11 @@ async function postToGraph(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     errorDetail = `Send errored: ${message.slice(0, 250)}`
+    failure = 'transport_error'
     log.warn('WhatsApp send errored', { template, error: message })
   }
 
-  return { ok, wamid, errorDetail }
+  return { ok, wamid, errorDetail, failure }
 }
 
 /** Persist the outbound message row. Never throws. */

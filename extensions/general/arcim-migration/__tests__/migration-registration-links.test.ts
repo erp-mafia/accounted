@@ -114,6 +114,7 @@ function baseOptions(overrides: Record<string, unknown> = {}) {
     companyId: 'company-1',
     userId: 'user-1',
     supabase: supabase as unknown as SupabaseClient,
+    createHistoryClient: async () => ({ from: vi.fn() }) as unknown as Pick<SupabaseClient, 'from'>,
     importCompanyInfo: false,
     importCustomers: false,
     importSuppliers: false,

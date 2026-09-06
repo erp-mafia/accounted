@@ -204,6 +204,24 @@ describe('linking', () => {
       expect(findCalls('whatsapp_link_codes', 'update')).toHaveLength(0)
     })
 
+    it('reports a failed lookup as transient, not as a bad code', async () => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ error: { message: 'connection reset' } })
+
+      const result = await consumeLinkCode(supabase as unknown as SupabaseClient, 'AC-7KP4QF')
+      expect(result).toBe('transient_error')
+      expect(findCalls('whatsapp_link_codes', 'update')).toHaveLength(0)
+    })
+
+    it('reports a failed claim as transient: the code stays claimable', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'code-1', user_id: 'user-1', expires_at: futureExpiry(), used_at: null } })
+      enqueue({ error: { message: 'canceling statement due to statement timeout' } })
+
+      const result = await consumeLinkCode(supabase as unknown as SupabaseClient, 'AC-7KP4QF')
+      expect(result).toBe('transient_error')
+    })
+
     it('short-circuits on non-code text without any DB call', async () => {
       const { supabase, calls } = createQueuedMockSupabase()
       const result = await consumeLinkCode(supabase as unknown as SupabaseClient, 'hej!')

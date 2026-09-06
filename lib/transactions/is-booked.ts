@@ -93,10 +93,12 @@ export function getPrimaryJournalEntryId(
  * split of issue #1553), so its presence means the row is booked and a
  * second booking (manualLink, categorize, link-journal-entry) must refuse.
  * Rows with role 'other' (a residual booking, lib/reconciliation/residual.ts)
- * or 'clearing' are supplementary anchors: after a storno of the main
- * verifikat nulls the pointer, that leftover row must not strand the
- * transaction with no way to re-book it. The list readers (fetchJunction-
- * LinkedTxIds, is_transaction_booked()) keep counting every role.
+ * or 'clearing' are supplementary anchors. Since #2061 the engine drops them
+ * together with the pointer when the main verifikat is reversed, so a row
+ * with only a supplementary anchor is a leftover from before that change;
+ * such a row must still not be stranded with no way to re-book it. The list
+ * readers (fetchJunctionLinkedTxIds, is_transaction_booked()) keep counting
+ * every role, and agree with the worklist because no released row keeps one.
  */
 export function hasBankLineJunctionRow(
   rows: Array<{ role?: string | null }> | null | undefined,

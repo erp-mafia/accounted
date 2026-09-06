@@ -3025,6 +3025,13 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'Leverantörsfakturan kan inte markeras som betald i nuvarande status.',
     message_en: 'Supplier invoice is not in a payable state.',
   },
+  SI_BANK_ENTERED_NOT_PAYABLE: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan kan bara markeras som inlagd i banken när den är godkänd och har något kvar att betala.',
+    message_en:
+      'The invoice can only be marked as entered at the bank while it is approved and has an outstanding amount.',
+  },
   SI_PAID_PERIOD_LOCKED: {
     httpStatus: 400,
     message_sv: 'Bokföringen är låst. Betalningen kan inte registreras.',

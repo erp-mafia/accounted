@@ -118,34 +118,47 @@ export async function mintLinkCode(
 }
 
 /**
- * Verify + consume a code from an inbound chat message. Returns the owning
- * user id, or null for unknown/expired/already-used codes. Single-use is
+ * Outcome of consuming a code:
+ *  - { userId }: verified and claimed, single-use.
+ *  - null: unknown, expired, already used, or lost the claim race. A verdict
+ *    about the CODE, so the caller may say "bad code" (M2).
+ *  - 'transient_error': the lookup or the claim could not be executed (DB
+ *    error, statement timeout). No verdict at all: the code is untouched and
+ *    still valid, so the caller must not answer M2 (#2062). Same tri-state
+ *    idiom as resolveCompanyTarget in process-inbound.ts.
+ */
+export type LinkCodeConsumption = { userId: string } | null | 'transient_error'
+
+/**
+ * Verify + consume a code from an inbound chat message. Single-use is
  * enforced by the guarded UPDATE (used_at IS NULL): a concurrent redelivery
  * loses the race and gets null.
  */
 export async function consumeLinkCode(
   serviceClient: SupabaseClient,
   rawText: string,
-): Promise<{ userId: string } | null> {
+): Promise<LinkCodeConsumption> {
   const code = normalizeLinkCode(rawText)
   if (!code) return null
 
-  const { data: row } = await serviceClient
+  const { data: row, error: lookupError } = await serviceClient
     .from('whatsapp_link_codes')
     .select('id, user_id, expires_at, used_at')
     .eq('code_hash', hashLinkCode(code))
     .maybeSingle()
+  if (lookupError) return 'transient_error'
 
   if (!row || row.used_at) return null
   if (new Date(row.expires_at).getTime() < Date.now()) return null
 
-  const { data: claimed } = await serviceClient
+  const { data: claimed, error: claimError } = await serviceClient
     .from('whatsapp_link_codes')
     .update({ used_at: new Date().toISOString() })
     .eq('id', row.id)
     .is('used_at', null)
     .select('id')
     .maybeSingle()
+  if (claimError) return 'transient_error'
 
   if (!claimed) return null
   return { userId: row.user_id }
