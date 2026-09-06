@@ -33,10 +33,15 @@ export function vatDeadlineLine(input: {
 /**
  * Display ordinals for the setup checklist steps. Books and bank are always
  * present; Skatteverket and the receipts/inbox step render only when their
- * extensions are enabled; the assistant step is always last. `count` drives
+ * extensions are enabled; the assistant (Claude) step renders only where the
+ * deployment can run the assistant and, when it does, is last. `count` drives
  * the "{count} steg så är bokföringen igång" title.
  */
-export function checklistNumbers(gates: { hasSkatteverket: boolean; hasInbox: boolean }): {
+export function checklistNumbers(gates: {
+  hasSkatteverket: boolean
+  hasInbox: boolean
+  hasAssistant: boolean
+}): {
   count: number
   skv: number
   receipts: number
@@ -45,7 +50,10 @@ export function checklistNumbers(gates: { hasSkatteverket: boolean; hasInbox: bo
   const skv = 3
   const receipts = 3 + (gates.hasSkatteverket ? 1 : 0)
   const assistant = receipts + (gates.hasInbox ? 1 : 0)
-  return { count: assistant, skv, receipts, assistant }
+  // Without the assistant step the thread ends one step earlier; the other
+  // ordinals do not move.
+  const count = gates.hasAssistant ? assistant : assistant - 1
+  return { count, skv, receipts, assistant }
 }
 
 /**

@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import ChatIntakeStarter from '@/components/agent/ChatIntakeStarter'
+import { getAiStatus } from '@/lib/ai'
 import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
 
 export const dynamic = 'force-dynamic'
@@ -18,6 +19,10 @@ export default async function ChatIntakePage() {
   ])
   if (!user) redirect('/login')
   if (!companyId) redirect('/onboarding')
+  // onboarding.intake runs on the tool-loop runtime; without it (#2204) the
+  // starter would fire an invoke that answers 503. The agent is built by now,
+  // so the general-help console on /chat is the working next step.
+  if (!getAiStatus().assistantAvailable) redirect('/chat')
 
   return <ChatIntakeStarter />
 }
