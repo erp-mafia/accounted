@@ -42,6 +42,17 @@ export function fiscalYearName(start: string, end: string): string {
 const periodName = fiscalYearName
 
 /**
+ * True when `name` has the shape fiscalYearName() produces ("Räkenskapsår
+ * 2025", "Räkenskapsår 2024/2025"), whatever the years say. The edit dialog
+ * lets such a name follow the dates the user types, so a seed name that never
+ * matched its dates (the "Räkenskapsår 2027" on a 2022/2023 year of #2286) is
+ * corrected together with them; a hand-written name is left alone.
+ */
+export function isDerivedFiscalYearName(name: string): boolean {
+  return /^Räkenskapsår \d{4}(\/\d{4})?$/.test(name.trim())
+}
+
+/**
  * Suggest a fiscal period for the create dialog, given the date the user is
  * trying to book and the company's existing periods. Three cases:
  *  - No periods yet → a calendar year around the entry date.
