@@ -24,8 +24,15 @@
 -- Column set: exactly what mapSalesInvoiceLine emits. An unknown key is
 -- refused (UNKNOWN_COLUMN) rather than dropped, so a mapper that starts
 -- emitting a column this function does not carry fails loudly instead of
--- silently losing it. Missing keys take the table defaults, as a plain insert
--- would.
+-- silently losing it. The facts a sales row must state (description,
+-- line_total, vat_rate, vat_amount; ML 17 kap 24 §) are required
+-- (MISSING_REQUIRED) rather than defaulted: the table's DEFAULT 25 on
+-- vat_rate would put a fabricated 25 % on a row whose source said nothing,
+-- and both writers always send all four, so a missing one is a bug to
+-- surface, not a gap to fill. Only sort_order, quantity, unit and line_type
+-- take their table defaults; none of them states a tax fact. The rate is
+-- not restricted to the Swedish set: 0 (omvänd skattskyldighet, export) and
+-- foreign rates (OSS, unionsordningen) are legitimate on a migrated row.
 --
 -- Actor resolution mirrors the sibling definer RPCs: service_role callers
 -- (the cron on createServiceClientNoCookies, auth.uid() NULL) are trusted,
@@ -51,6 +58,7 @@ DECLARE
   v_caller uuid;
   v_locked uuid;
   v_bad_key text;
+  v_missing text;
   v_inserted integer := 0;
   v_header_updated boolean := false;
 BEGIN
@@ -89,6 +97,17 @@ BEGIN
       'details', jsonb_build_object('column', v_bad_key));
   END IF;
 
+  -- Absent or JSON null: either would otherwise fall through to a default.
+  SELECT k INTO v_missing
+  FROM jsonb_array_elements(p_rows) AS e,
+       unnest(ARRAY['description', 'line_total', 'vat_rate', 'vat_amount']) AS k
+  WHERE NOT (e ? k) OR jsonb_typeof(e -> k) = 'null'
+  LIMIT 1;
+  IF v_missing IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'MISSING_REQUIRED',
+      'details', jsonb_build_object('column', v_missing));
+  END IF;
+
   IF p_header IS NOT NULL THEN
     -- All six or nothing: a partial header would null the columns it omits.
     IF jsonb_typeof(p_header) <> 'object' OR NOT (p_header ?& ARRAY[
@@ -123,9 +142,9 @@ BEGIN
     COALESCE(r.quantity, 1),
     COALESCE(r.unit, 'st'),
     COALESCE(r.unit_price, 0),
-    COALESCE(r.line_total, 0),
-    COALESCE(r.vat_rate, 25),
-    COALESCE(r.vat_amount, 0),
+    r.line_total,
+    r.vat_rate,
+    r.vat_amount,
     COALESCE(r.line_type, 'product')
   FROM jsonb_to_recordset(p_rows) AS r(
     sort_order integer,

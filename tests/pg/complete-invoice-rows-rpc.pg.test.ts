@@ -169,7 +169,11 @@ describe('complete_invoice_rows', () => {
     const again = await asUser(userId, (client) => callRpc(client, companyId, invoiceId, ROWS, HEADER))
     expect(again).toEqual({ ok: true, wrote: false, rows: 0, header_updated: false })
     const other = await asUser(userId, (client) =>
-      callRpc(client, companyId, invoiceId, [{ description: 'Annat', line_total: 5 }], { ...HEADER, subtotal: 5 }),
+      callRpc(
+        client, companyId, invoiceId,
+        [{ ...ROWS[0], description: 'Annat', line_total: 5, vat_amount: 1.25 }],
+        { ...HEADER, subtotal: 5 },
+      ),
     )
     expect(other).toEqual({ ok: true, wrote: false, rows: 0, header_updated: false })
 
@@ -177,12 +181,14 @@ describe('complete_invoice_rows', () => {
     expect(await storedHeader(invoiceId)).toEqual({ ...HEADER, total: 1250 })
   })
 
-  it('writes the rows without a header when none is given (the wizard path), taking table defaults for missing keys', async () => {
+  it('writes the rows without a header when none is given (the wizard path); only the non-tax columns take table defaults', async () => {
     const { userId, companyId } = await seedCompany()
     const invoiceId = await insertInvoice(companyId, userId)
     const before = await storedHeader(invoiceId)
 
-    const r = await asUser(userId, (client) => callRpc(client, companyId, invoiceId, [{ description: 'Bara text' }]))
+    const r = await asUser(userId, (client) =>
+      callRpc(client, companyId, invoiceId, [{ description: 'Bara text', line_total: 0, vat_rate: 0, vat_amount: 0 }]),
+    )
     expect(r).toEqual({ ok: true, wrote: true, rows: 1, header_updated: false })
 
     const rows = await storedRows(invoiceId)
@@ -190,8 +196,49 @@ describe('complete_invoice_rows', () => {
     expect(rows[0]).toMatchObject({ description: 'Bara text', sort_order: 0, unit: 'st', line_type: 'product' })
     expect(Number(rows[0].quantity)).toBe(1)
     expect(Number(rows[0].line_total)).toBe(0)
-    expect(Number(rows[0].vat_rate)).toBe(25)
+    expect(Number(rows[0].vat_rate)).toBe(0)
     expect(await storedHeader(invoiceId)).toEqual(before)
+  })
+
+  it('refuses a row that omits a tax fact instead of defaulting it (no fabricated 25 %)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(companyId, userId)
+
+    await withUserContext(userId, async (client) => {
+      for (const key of ['vat_rate', 'line_total', 'vat_amount', 'description'] as const) {
+        const { [key]: _omitted, ...without } = ROWS[0]
+        void _omitted
+        expect(await callRpc(client, companyId, invoiceId, [without])).toEqual({
+          ok: false, code: 'MISSING_REQUIRED', details: { column: key },
+        })
+        // JSON null is "absent" too: it must not fall through to a default.
+        expect(await callRpc(client, companyId, invoiceId, [{ ...ROWS[0], [key]: null }])).toEqual({
+          ok: false, code: 'MISSING_REQUIRED', details: { column: key },
+        })
+      }
+      // One bad row refuses the whole set: an invoice's rows land together.
+      expect(await callRpc(client, companyId, invoiceId, [ROWS[0], { ...ROWS[1], vat_rate: undefined }])).toEqual({
+        ok: false, code: 'MISSING_REQUIRED', details: { column: 'vat_rate' },
+      })
+    })
+
+    expect(await storedRows(invoiceId)).toHaveLength(0)
+  })
+
+  it('accepts a stated 0 % (omvänd skattskyldighet, export) and a foreign rate (OSS): the value is not restricted', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(companyId, userId)
+
+    const r = await asUser(userId, (client) =>
+      callRpc(client, companyId, invoiceId, [
+        { ...ROWS[0], description: 'Konsulttid DE (reverse charge)', vat_rate: 0, vat_amount: 0 },
+        { ...ROWS[1], description: 'Vara DE (OSS)', vat_rate: 19, vat_amount: 38 },
+      ]),
+    )
+    expect(r).toEqual({ ok: true, wrote: true, rows: 2, header_updated: false })
+
+    const rows = await storedRows(invoiceId)
+    expect(rows.map((row) => Number(row.vat_rate))).toEqual([0, 19])
   })
 
   it('rolls the rows back when the header update fails: header and rows land together or not at all', async () => {
@@ -223,8 +270,6 @@ describe('complete_invoice_rows', () => {
       expect(await callRpc(client, companyId, invoiceId, ROWS, { subtotal: 1000 })).toEqual({
         ok: false, code: 'INVALID_HEADER',
       })
-      // A row without a description is a NOT NULL violation, not a silent row.
-      await expect(callRpc(client, companyId, invoiceId, [{ line_total: 5 }])).rejects.toThrow(/description/)
     })
 
     expect(await storedRows(invoiceId)).toHaveLength(0)
@@ -281,7 +326,7 @@ describe('complete_invoice_rows', () => {
       expect(await callRpc(first, companyId, invoiceId, ROWS, HEADER)).toMatchObject({ ok: true, wrote: true, rows: 2 })
 
       let settled = false
-      const pending = callRpc(second, companyId, invoiceId, [{ description: 'Dubblett', line_total: 1 }]).then((r) => {
+      const pending = callRpc(second, companyId, invoiceId, [{ ...ROWS[0], description: 'Dubblett' }]).then((r) => {
         settled = true
         return r
       })
