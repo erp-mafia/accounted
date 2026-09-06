@@ -499,6 +499,33 @@ describe('scanner behaviour (the net catches, and does not over-catch)', () => {
     expect(phantoms(code)).toEqual(['journal_entries.nope'])
   })
 
+  it('does not accuse an embed-null filter, the anti-join on a to-many embed', () => {
+    // `invoice_items=is.null` (PostgREST: the parents whose embed is empty)
+    // names the embed the select declares, not a column of invoices. The
+    // grammar is proven on a real PostgREST by
+    // extensions/general/arcim-migration/lib/__tests__/complete-invoice-lines-count.tool.test.ts.
+    const code = [
+      "supabase.from('invoices')",
+      "  .select('id, invoice_items(id)', { count: 'exact', head: true })",
+      "  .eq('company_id', c)",
+      "  .is('invoice_items', null)",
+      "  .not('invoice_items', 'is', null)",
+      "  .filter('invoice_items', 'is', null)",
+    ].join('\n')
+    expect(phantoms(code)).toEqual([])
+  })
+
+  it('still accuses a bare embed name under any other operator, and an undeclared one under is', () => {
+    // Only `is.null` reaches an embed: `.eq('invoice_items', x)` is a phantom
+    // column PostgREST answers 42703 to, and so is `is` on a name the select
+    // never embedded.
+    const code = [
+      "supabase.from('invoices').select('id, invoice_items(id)').eq('invoice_items', 1)",
+      "supabase.from('invoices').select('id').is('invoice_items', null)",
+    ].join('\n')
+    expect(phantoms(code)).toEqual(['invoices.invoice_items', 'invoices.invoice_items'])
+  })
+
   it('does not accuse embedded resource names, aliases or casts', () => {
     const code = [
       "supabase.from('invoices')",
