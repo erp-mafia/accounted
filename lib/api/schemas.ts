@@ -1386,6 +1386,16 @@ export const MarkSupplierInvoicePaidSchema = z.object({
   })).min(2).optional(),
 })
 
+/**
+ * "Inlagd i banken" (#2220): a boolean mark, not a payment. `entered: true`
+ * records that the user typed the payment into the bank by hand; `false`
+ * takes the mark back. No amount, no date: the payment itself is still
+ * recorded by mark-paid or the bank match, which also clears the mark.
+ */
+export const SupplierInvoiceBankEnteredSchema = z.object({
+  entered: z.boolean(),
+})
+
 export const UpdateSupplierInvoiceSchema = z.object({
   supplier_invoice_number: z.string().min(1).optional(),
   invoice_date: isoDate.optional(),

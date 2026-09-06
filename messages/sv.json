@@ -827,7 +827,7 @@
     "status_picker_aria": "Filtrera på status",
     "search_placeholder": "Sök leverantörsfaktura …",
     "status_paid_date": "Betald {date}",
-    "help_body": "Godkännandet attesterar fakturan för betalning. Markera fakturor med kryssrutan och skapa en betalfil som laddas upp i internetbanken. Betalningar prickas av automatiskt när de matchas mot banken.",
+    "help_body": "Godkännandet attesterar fakturan för betalning. Markera fakturor med kryssrutan och skapa en betalfil som laddas upp i internetbanken, eller bocka i I banken på raden när du lagt in betalningen för hand. Betalningar prickas av automatiskt när de matchas mot banken, och bocken försvinner då av sig själv.",
     "bulkbar_selected": "{count, plural, one {faktura vald} other {fakturor valda}}",
     "bulk_create_file": "Skapa betalfil",
     "bulk_select_all": "Välj alla betalbara ({count})",
@@ -843,7 +843,10 @@
     "group_supplier": "Leverantör",
     "group_month": "Månad",
     "group_none": "Ingen gruppering",
-    "group_unknown": "Saknas"
+    "group_unknown": "Saknas",
+    "bank_entered_label": "I banken",
+    "bank_entered_aria": "Markera som inlagd i banken",
+    "bank_entered_failed_title": "Kunde inte spara markeringen"
   },
   "supplier_payment_files": {
     "dialog_title": "Skapa betalfil",
@@ -4917,7 +4920,11 @@
     "duplicate_payment_show_voucher": "Visa verifikation",
     "bank_transaction_fallback": "Banktransaktion",
     "go_to": "Gå till",
-    "create_voucher_anyway": "Skapa ny verifikation ändå"
+    "create_voucher_anyway": "Skapa ny verifikation ändå",
+    "bank_entered_label": "Inlagd i banken",
+    "bank_entered_aria": "Markera som inlagd i banken",
+    "bank_entered_meta": "Inlagd i banken {date}",
+    "bank_entered_failed_title": "Kunde inte spara markeringen"
   },
   "supplier_detail": {
     "back": "Tillbaka",

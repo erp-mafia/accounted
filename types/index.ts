@@ -1223,6 +1223,13 @@ export interface SupplierInvoice {
   // creation and mark-paid is rejected by the existing status guard.
   paid_with_private_funds: boolean
 
+  /**
+   * "Inlagd i banken" (#2220): the user entered this payment in the internet
+   * bank by hand; money not yet gone. A mellanlage between attesterad and
+   * betald, never a status. Cleared by a DB trigger when a payment lands.
+   */
+  bank_entered_at: string | null
+
   notes: string | null
 
   // Default dimensions bag ({sie_dim_no: code}, e.g. {"1":"KS01","6":"P001"})
