@@ -1490,6 +1490,7 @@ function openingBalanceSentence(ob: NonNullable<NonNullable<ImportResult['detail
  * errors keep strong color. Nothing folds away, nothing gets a box.
  */
 function FiscalYearLine({ result, index }: { result: ImportResult; index: number }) {
+  const t = useTranslations('extensions')
   const status = getFYStatus(result)
   const d = result.details
   const fyLabel = d?.fiscalYear
@@ -1503,7 +1504,16 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
     if (d.skippedVouchers.empty > 0) parts.push(`${d.skippedVouchers.empty} tomma`)
     if (d.skippedVouchers.unbalanced > 0) parts.push(`${d.skippedVouchers.unbalanced} obalanserade`)
     if (d.skippedVouchers.singleLine > 0) parts.push(`${d.skippedVouchers.singleLine} enradiga`)
-    if (d.skippedVouchers.unmapped > 0) parts.push(`${d.skippedVouchers.unmapped} med ej kopplade konton`)
+    if (d.skippedVouchers.unmapped > 0) {
+      // Name the accounts (issue #2212): a count alone sends the user to diff
+      // the general ledger against the source system by hand.
+      const perAccount = (d.skippedVouchers.unmappedAccounts ?? [])
+        .map((a) => `konto ${a.account}: ${a.vouchers}`)
+        .join(', ')
+      parts.push(
+        `${d.skippedVouchers.unmapped} med ej kopplade konton${perAccount ? ` (${perAccount})` : ''}`
+      )
+    }
     warningSentences.push(
       `${d.skippedVouchers.total} verifikationer hoppades över (${parts.join(', ')}): saldon har justerats automatiskt via omföringsverifikation.`
     )
@@ -1526,6 +1536,12 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
   )
 
   const infoLines: string[] = []
+  // Accounts the import inserted into the chart (self-mapped source accounts
+  // the company did not have). Said out loud so "did the import go right?"
+  // has an answer on screen instead of in a chart-of-accounts diff.
+  if (result.accountsCreated && result.accountsCreated > 0) {
+    infoLines.push(t('ext_arcim_accounts_created', { count: result.accountsCreated }))
+  }
   if (d?.openingBalance) infoLines.push(openingBalanceSentence(d.openingBalance))
   if (d?.migrationAdjustment?.created) {
     infoLines.push(

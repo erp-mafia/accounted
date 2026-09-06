@@ -1214,6 +1214,29 @@ export async function resyncNextPeriodOpeningBalance(
   }
 }
 
+
+/**
+ * Roll the per-voucher unmapped skips up per source account: which accounts
+ * had no mapping and how many vouchers each one excluded. Sorted by voucher
+ * count (most excluded first), then by account number, so the result step
+ * names the account that matters most first. Pure: exported for tests and
+ * for the result surface (ImportResultDetails.skippedVouchers.unmappedAccounts).
+ */
+export function summarizeUnmappedSkips(
+  skippedDetails: ReadonlyArray<{ reason: string; unmappedAccounts?: string[] }>,
+): Array<{ account: string; vouchers: number }> {
+  const perAccount = new Map<string, number>()
+  for (const detail of skippedDetails) {
+    if (detail.reason !== 'unmapped') continue
+    for (const account of new Set(detail.unmappedAccounts ?? [])) {
+      perAccount.set(account, (perAccount.get(account) ?? 0) + 1)
+    }
+  }
+  return [...perAccount]
+    .map(([account, vouchers]) => ({ account, vouchers }))
+    .sort((a, b) => b.vouchers - a.vouchers || a.account.localeCompare(b.account))
+}
+
 /**
  * Create journal entries from vouchers using batch insert for performance.
  *
@@ -2512,6 +2535,7 @@ export async function executeSIEImport(
     let voucherNumberMapping: Array<{ sourceId: string; series: string; targetNumber: number }> = []
     let voucherSeriesUsed: string[] = []
     let voucherRetryStats = { retriedBatches: 0, failedBatches: 0 }
+    let unmappedSkipSummary: Array<{ account: string; vouchers: number }> = []
     let voucherStats = {
       total: parsed.vouchers.length,
       imported: 0,
@@ -2904,12 +2928,17 @@ export async function executeSIEImport(
       }
 
       // Report skipped vouchers as warnings
+      unmappedSkipSummary = summarizeUnmappedSkips(voucherResults.skippedDetails)
       const totalSkipped = voucherResults.skippedEmpty + voucherResults.skippedSingleLine + voucherResults.skippedUnbalanced + voucherResults.skippedUnmapped
       if (totalSkipped > 0) {
         const parts: string[] = []
         if (voucherResults.skippedEmpty > 0) parts.push(`${voucherResults.skippedEmpty} ${voucherResults.skippedEmpty === 1 ? 'tom' : 'tomma'}`)
         if (voucherResults.skippedUnbalanced > 0) parts.push(`${voucherResults.skippedUnbalanced} obalanserade`)
-        if (voucherResults.skippedUnmapped > 0) parts.push(`${voucherResults.skippedUnmapped} med ej mappade konton`)
+        if (voucherResults.skippedUnmapped > 0) {
+          parts.push(
+            `${voucherResults.skippedUnmapped} med ej mappade konton (${unmappedSkipSummary.map((a) => a.account).join(', ')})`
+          )
+        }
         result.warnings.push(
           `${totalSkipped} ${totalSkipped === 1 ? 'verifikation' : 'verifikationer'} hoppades över (${totalSkipped === 1 ? 'ofullständig' : 'ofullständiga'} i källsystemet): ${parts.join(', ')}`
         )
@@ -3083,6 +3112,7 @@ export async function executeSIEImport(
         singleLine: voucherStats.skippedSingleLine,
         empty: voucherStats.skippedEmpty,
         total: totalSkippedForDetails,
+        ...(unmappedSkipSummary.length > 0 ? { unmappedAccounts: unmappedSkipSummary } : {}),
       } : undefined,
       openingBalance: ibRoundingAdjustment !== 0 ? {
         imbalance: ibRoundingAdjustment,

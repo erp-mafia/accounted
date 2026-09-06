@@ -47,8 +47,13 @@ export function isSystemAccount(accountNumber: string): boolean {
 /**
  * Check if an account number is in the valid BAS range (1000-8999).
  * Standard Swedish BAS accounts are 4-digit numbers in classes 1-8.
+ *
+ * This is the auto-create boundary: a source account in this range can
+ * always be carried into the chart under its own number (the importer derives
+ * class and type from the number), so it never needs a manual target. Outside
+ * it (class 9, 5-digit numbers) the user must pick a target.
  */
-function isValidBASRange(accountNumber: string): boolean {
+export function isValidBASRange(accountNumber: string): boolean {
   if (!/^\d{4}$/.test(accountNumber)) return false
   const num = parseInt(accountNumber, 10)
   return num >= 1000 && num <= 8999
@@ -109,8 +114,16 @@ function findBestMatch(
 
   // Fallback: if the account is a valid BAS-range number (1000-8999),
   // self-map it using the name from the SIE file. These are standard
-  // BAS sub-accounts not in our reference (e.g. 1241 Personbilar).
-  if (isValidBASRange(source.number) && source.name) {
+  // BAS sub-accounts not in our reference (e.g. 1241 Personbilar), or
+  // accounts a source system kept outside BAS (e.g. a Fortnox chart's 4599).
+  //
+  // A missing name is not a reason to refuse: an account referenced only by
+  // #TRANS/#IB (no #KONTO row) arrives nameless, and the parser has already
+  // told the user it will be created. The number alone determines class and
+  // type; the importer names it "Konto <nr>" when the file has no name.
+  // Leaving it unmapped offered no way forward except merging it into a
+  // different account, which is wrong for a ledger migration (issue #2212).
+  if (isValidBASRange(source.number)) {
     return {
       sourceAccount: source.number,
       sourceName: source.name,
