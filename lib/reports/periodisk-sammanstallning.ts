@@ -1,7 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
-import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
+import {
+  INVOICE_SOURCED_ENTRY_TYPES,
+  LINK_LOOKUP_CHUNK,
+  getInvoicesExplainingJournalEntries,
+} from '@/lib/core/bookkeeping/journal-entry-references'
 import { calculatePeriodDates, formatPeriodLabel } from './period-dates'
 import { calculateVatDeclaration } from './vat-declaration'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
@@ -22,9 +26,12 @@ import { normalizeCountryCode } from '@/lib/vat/country-codes'
  *     register keeps (the engine's source_id, invoices.journal_entry_id,
  *     invoice_payments.journal_entry_id), so a SIE-imported sale matched to
  *     its invoice afterwards and a kontantmetod inbetalning are filed too
- *     (#2298). A 3308/3108 posting no invoice points at is not filed (there
- *     is no customer to name); the momsdeklaration reconciliation (ruta
- *     35/38/39) is where such a gap shows.
+ *     (#2298). A storno or rättelse of such a posting is filed under the
+ *     same invoice by following reverses_id / correction_of_id (#2351), so a
+ *     makulerad sale nets to zero here exactly as it does in ruta 39. A
+ *     3308/3108 posting no invoice points at is not filed (there is no
+ *     customer to name); the momsdeklaration reconciliation (ruta 35/38/39)
+ *     is where such a gap shows.
  *   - Account 3305/3105 (non-EU export) are NOT in this report: they go to
  *     Ruta 36/40 only.
  *   - Trepartshandel (3107) is included so the report works if someone posts
@@ -117,17 +124,6 @@ const ACCOUNT_TO_BUCKET: Record<string, 'services' | 'goods' | 'triangulation'> 
 
 const PS_ACCOUNTS = Object.keys(ACCOUNT_TO_BUCKET)
 
-/**
- * Source types the invoice engine writes with `source_id` = the register
- * invoice id AND that can carry EU revenue lines: issuance
- * (faktureringsmetod), credit notes, and the kontantmetod inbetalning, which
- * is where a cash-method company books its revenue at all.
- */
-const INVOICE_SOURCED_ENTRY_TYPES = new Set(['invoice_created', 'credit_note', 'invoice_cash_payment'])
-
-/** Ids per PostgREST `.in()` filter (URL-length convention, lib/worklist/categories.ts). */
-const LINK_LOOKUP_CHUNK = 100
-
 interface RawEntryLine {
   account_number: string
   debit_amount: number | string
@@ -142,6 +138,10 @@ interface RawEntry {
   status: string
   source_type: string | null
   source_id: string | null
+  /** Storno: the entry this one cancels; its invoice explains this one too. */
+  reverses_id: string | null
+  /** Rättelse: the entry this one replaces; likewise. */
+  correction_of_id: string | null
   /** Only the PS-account lines: the embed is filtered on account_number. */
   journal_entry_lines: RawEntryLine[] | null
 }
@@ -251,7 +251,7 @@ export async function generatePeriodiskSammanstallning(
   const entries = await fetchAllRows<RawEntry>(({ from, to }) =>
     supabase
       .from('journal_entries')
-      .select('id, voucher_series, voucher_number, entry_date, status, source_type, source_id, journal_entry_lines!inner(account_number, debit_amount, credit_amount)')
+      .select('id, voucher_series, voucher_number, entry_date, status, source_type, source_id, reverses_id, correction_of_id, journal_entry_lines!inner(account_number, debit_amount, credit_amount)')
       .eq('company_id', companyId)
       .in('status', ['posted', 'reversed'])
       .gte('entry_date', start)
@@ -262,13 +262,18 @@ export async function generatePeriodiskSammanstallning(
       .range(from, to) as unknown as PromiseLike<{ data: RawEntry[] | null; error: { message: string } | null }>,
   )
 
-  // Which register invoice does each posting belong to? Three links; only
+  // Which register invoice does each posting belong to? Four links; only
   // the first lives on the entry itself:
   //   1. the engine's own entries: source_id IS the invoice id;
   //   2. invoices.journal_entry_id (registration booking, backfilled);
   //   3. invoice_payments.journal_entry_id: kontantmetod inbetalning,
   //      delbetalning, and "matcha mot befintligt verifikat", which is how a
-  //      SIE-imported sale gets its invoice after migration (#2298).
+  //      SIE-imported sale gets its invoice after migration (#2298);
+  //   4. reverses_id / correction_of_id: a storno or rättelse is explained by
+  //      whatever explains the entry it cancels or replaces (#2351). The
+  //      reversed original stays in the fetch (status 'reversed'), so its
+  //      storno must be filed under the same invoice or the makulerad sale
+  //      is over-reported while ruta 39 nets it to zero.
   // Following 1 alone (the old source_type filter) dropped every linked
   // import and every kontantmetod sale from the filing while the
   // account-based momsdeklaration kept showing them in ruta 39.
@@ -276,17 +281,7 @@ export async function generatePeriodiskSammanstallning(
   // (source_id); a linked entry may name several when one inbetalning settled
   // several invoices. All of them are loaded so the loop below can tell "two
   // invoices, one customer" from "two customers on one posting".
-  const invoiceIdsByEntry = new Map<string, string[]>()
-  for (const entry of entries) {
-    if (entry.source_id && INVOICE_SOURCED_ENTRY_TYPES.has(entry.source_type ?? '')) {
-      invoiceIdsByEntry.set(entry.id, [entry.source_id])
-    }
-  }
-  const unresolved = entries.filter((e) => !invoiceIdsByEntry.has(e.id)).map((e) => e.id)
-  for (const ids of chunk(unresolved, LINK_LOOKUP_CHUNK)) {
-    const refs = await getInvoiceReferencesForJournalEntries(supabase, companyId, ids)
-    for (const [entryId, invoiceIds] of refs) invoiceIdsByEntry.set(entryId, invoiceIds)
-  }
+  const invoiceIdsByEntry = await getInvoicesExplainingJournalEntries(supabase, companyId, entries)
 
   const allInvoiceIds = new Set<string>()
   for (const ids of invoiceIdsByEntry.values()) for (const id of ids) allInvoiceIds.add(id)
@@ -508,7 +503,7 @@ export async function generatePeriodiskSammanstallning(
           code: 'ZERO_NET_EXCLUDED',
           message:
             `Kund "${acc.customerName ?? acc.vatNumber}" nettar till 0 kr för perioden ` +
-            '(kreditfaktura tar ut original). Exkluderad från filen.',
+            '(kreditfaktura eller makulering tar ut originalet). Exkluderad från filen.',
           customerId: acc.customerId ?? undefined,
           customerName: acc.customerName ?? undefined,
         })

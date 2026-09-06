@@ -705,3 +705,188 @@ describe('one verifikat settling several invoices (#2298 review)', () => {
     expect(report.rows[0]).toMatchObject({ services: 5000 })
   })
 })
+
+// ============================================================
+// Storno and rättelse chains (#2351)
+// ============================================================
+
+describe('storno and rättelse chains (#2351)', () => {
+  /**
+   * What reverseEntry() / correctEntry() write for the storno: source_type
+   * 'storno' and reverses_id. reverseEntry() also copies the original's
+   * source_id; correctEntry() copies nothing. The resolver follows the link
+   * column either way, so the fixtures leave source_id null unless a test
+   * says otherwise.
+   */
+  function entryStorno(id: string, reversesId: string, lines: LineFx[], extra: Record<string, unknown> = {}) {
+    return {
+      id,
+      entry_date: '2025-05-25',
+      status: 'posted',
+      source_type: 'storno',
+      source_id: null as string | null,
+      reverses_id: reversesId,
+      correction_of_id: null,
+      journal_entry_lines: lines,
+      ...extra,
+    }
+  }
+
+  /** The correction correctEntry() writes: source_type 'correction', correction_of_id. */
+  function entryCorrection(id: string, correctionOfId: string, lines: LineFx[]) {
+    return {
+      id,
+      entry_date: '2025-05-25',
+      status: 'posted',
+      source_type: 'correction',
+      source_id: null as string | null,
+      reverses_id: null,
+      correction_of_id: correctionOfId,
+      journal_entry_lines: lines,
+    }
+  }
+
+  /** Table of every `.from()` call, in order: pins which lookups ran. */
+  const fromTables = () => (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0])
+
+  it('a reversed EU invoice voucher and its storno in the same period net to ZERO_NET_EXCLUDED', async () => {
+    // The reported case: the registration voucher was stornoed with
+    // reverseEntry(). status 'reversed' keeps the original in the fetch; the
+    // storno (source_id copied, reverses_id set) must be filed under the same
+    // invoice or the makulerad sale is over-reported while ruta 39 nets it.
+    results = [
+      {
+        data: [
+          { ...entryEU('inv-de', [lineEU('3308', 10000)]), status: 'reversed' },
+          entryStorno('je-storno', je('inv-de'), [lineCredit('3308', 10000)], { source_id: 'inv-de' }),
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // invoices by journal_entry_id: the storno
+      { data: [], error: null }, // invoice_payments: the storno
+      { data: [invDE()], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.rows).toEqual([])
+    expect(report.totals.grand).toBe(0)
+    expect(report.warnings.map((w) => w.code)).toEqual(['ZERO_NET_EXCLUDED'])
+    expect(report.warnings[0].message).toContain('makulering')
+    // The original is in the batch: no parent fetch.
+    expect(fromTables()).toEqual(['journal_entries', 'invoices', 'invoice_payments', 'invoices'])
+  })
+
+  it('a rättelse chain (original, storno, correction) is filed once, at the corrected amount', async () => {
+    // correctEntry() copies no source_id onto either new entry: only the
+    // link columns tie them to the invoice.
+    results = [
+      {
+        data: [
+          { ...entryEU('inv-de', [lineEU('3308', 10000)]), status: 'reversed' },
+          entryStorno('je-storno', je('inv-de'), [lineCredit('3308', 10000)]),
+          entryCorrection('je-correction', je('inv-de'), [lineEU('3308', 12000)]),
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [invDE()], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.warnings).toEqual([])
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0]).toMatchObject({ country: 'DE', vatNumber: '123456789', services: 12000 })
+  })
+
+  it('a storno booked in a later period is filed under the original\'s customer, like a later credit note', async () => {
+    // June holds only the storno; the May original is loaded by id so the
+    // PS for June nets the same way ruta 39 does for June.
+    results = [
+      {
+        data: [
+          entryStorno('je-storno', 'je-may', [lineCredit('3308', 10000)], { entry_date: '2025-06-03' }),
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // invoices by journal_entry_id
+      { data: [], error: null }, // invoice_payments
+      {
+        data: [{ id: 'je-may', source_type: 'invoice_created', source_id: 'inv-de', reverses_id: null, correction_of_id: null }],
+        error: null,
+      }, // journal_entries by id: the May original
+      { data: [invDE()], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 6)
+
+    expect(report.warnings).toEqual([])
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0]).toMatchObject({ country: 'DE', vatNumber: '123456789', services: -10000 })
+    expect(fromTables()).toEqual(['journal_entries', 'invoices', 'invoice_payments', 'journal_entries', 'invoices'])
+  })
+
+  it('mirror: a storno of a manual 3308 posting no invoice points at stays out of the filing, silently', async () => {
+    results = [
+      {
+        data: [
+          entryOther('je-man', 'manual', [lineEU('3308', 5000)]),
+          entryStorno('je-storno', 'je-man', [lineCredit('3308', 5000)]),
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // invoices by journal_entry_id: both
+      { data: [], error: null }, // invoice_payments: both
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.rows).toEqual([])
+    expect(report.warnings).toEqual([])
+    // The original is in the batch and unexplained: no parent fetch, no
+    // invoice load.
+    expect(fromTables()).toEqual(['journal_entries', 'invoices', 'invoice_payments'])
+  })
+
+  it('a storno of a linked import nets it: the link lives on the original', async () => {
+    results = [
+      {
+        data: [
+          entryOther('je-imp', 'import', [lineEU('3308', 12000)]),
+          entryStorno('je-storno', 'je-imp', [lineCredit('3308', 12000)]),
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+      { data: [{ id: 'pay-1', invoice_id: 'inv-de', journal_entry_id: 'je-imp' }], error: null },
+      { data: [invDE()], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.rows).toEqual([])
+    expect(report.warnings.map((w) => w.code)).toEqual(['ZERO_NET_EXCLUDED'])
+  })
+
+  it('a storno of an engine entry whose invoice is gone is reported, never silenced', async () => {
+    results = [
+      {
+        data: [
+          { ...entryEU('inv-gone', [lineEU('3308', 5000)]), status: 'reversed' },
+          entryStorno('je-storno', je('inv-gone'), [lineCredit('3308', 5000)]),
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [], error: null }, // invoices by id: nothing
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    // One blocking error per posting, the same verdict the original gets.
+    expect(report.warnings.filter((w) => w.code === 'CUSTOMER_NOT_FOUND' && w.level === 'error')).toHaveLength(2)
+  })
+})

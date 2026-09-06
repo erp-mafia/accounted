@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
 import { NON_ISSUED_INVOICE_STATUSES_FILTER } from '@/lib/invoices/matchable-statuses'
+import { MAX_CHAIN_WALK } from './correction-chain'
 
 /**
  * A followable reference from a verifikation back to its underlag: the customer
@@ -267,6 +269,155 @@ export async function getInvoiceReferencesForJournalEntries(
       .order('id', { ascending: true }).range(from, to),
   )
   for (const row of payments) add(row.journal_entry_id, row.invoice_id)
+
+  return result
+}
+
+/**
+ * Source types the invoice engine writes with `source_id` = the id of the
+ * register invoice (an `invoices` row; credit notes are rows there too) that
+ * the entry books: issuance and payment under faktureringsmetoden, the
+ * kontantmetod inbetalning, a credit note, and a reminder fee. For these the
+ * entry's own source columns are the link; no invoice-side row is needed.
+ * `rot_rut_payout` is deliberately absent: its source_id is the ROT/RUT
+ * request, not an invoice.
+ */
+export const INVOICE_SOURCED_ENTRY_TYPES: ReadonlySet<string> = new Set([
+  'invoice_created',
+  'invoice_paid',
+  'invoice_cash_payment',
+  'credit_note',
+  'reminder_fee',
+])
+
+/** Ids per PostgREST `.in()` filter (URL-length convention, lib/worklist/categories.ts). */
+export const LINK_LOOKUP_CHUNK = 100
+
+/** The columns {@link getInvoicesExplainingJournalEntries} reads off an entry. */
+export interface ExplainableJournalEntry {
+  id: string
+  source_type: string | null
+  source_id: string | null
+  /** Storno: the entry this one cancels (reverseEntry / correctEntry). */
+  reverses_id?: string | null
+  /** Rättelse: the entry this one replaces (correctEntry). */
+  correction_of_id?: string | null
+}
+
+/** Literal select for the parent rows the chain walk fetches. */
+const CHAIN_COLUMNS = 'id, source_type, source_id, reverses_id, correction_of_id'
+
+/**
+ * Which register invoices explain each of the given journal entries, through
+ * every link the register keeps:
+ *
+ *   1. the engine's own entries: source_id IS the invoice id
+ *      (INVOICE_SOURCED_ENTRY_TYPES);
+ *   2. the invoice side: invoices.journal_entry_id and
+ *      invoice_payments.journal_entry_id (getInvoiceReferencesForJournalEntries);
+ *   3. the rättelse chain: a storno or correction carries reverses_id /
+ *      correction_of_id and is explained by whatever explains the entry it
+ *      cancels or replaces. Neither writer leaves a usable link of its own on
+ *      the new entry (reverseEntry copies the original's polymorphic
+ *      source_id, correctEntry copies nothing, and the register never points
+ *      at a storno), so the chain is walked upwards until an attribution is
+ *      found: the same links correctionChainDepth trusts, under the same
+ *      MAX_CHAIN_WALK cap.
+ *
+ * A reader that followed only 1 and 2 kept a reversed original in its totals
+ * and dropped the storno that nets it (#2351): a makulerad EU sale stayed in
+ * the periodisk sammanställning while the account-based ruta 39 was zero.
+ *
+ * Values are invoice ids per entry id; an entry is present only when at least
+ * one invoice explains it. An engine entry is attributed by its source_id
+ * whether or not that invoice still exists (a missing one is a data defect
+ * for the caller to report, not a reason for silence), and a chain entry
+ * inherits its root's attribution the same way. An explicit link on the entry
+ * itself wins over an inherited one. Parents are fetched by id, company
+ * scoped and chunked, so the storno of a May invoice booked in June is
+ * resolved from June's entries alone.
+ */
+export async function getInvoicesExplainingJournalEntries(
+  supabase: SupabaseClient,
+  companyId: string,
+  entries: readonly ExplainableJournalEntry[],
+): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>()
+  if (entries.length === 0) return result
+
+  // Chain entries waiting for their parent's attribution, by parent id.
+  const waitingOn = new Map<string, string[]>()
+  // Links between an attributed entry and the root that explains it: 0 for
+  // an entry attributed by its own source_id or invoice-side link.
+  const depthOf = new Map<string, number>()
+  // Every id considered so far (the batch plus fetched parents): a cycle, or
+  // a parent shared by several children, is never fetched twice.
+  const seen = new Set<string>(entries.map((e) => e.id))
+
+  // Attribute an entry and every descendant waiting on it. Iterative, so a
+  // pathological in-batch chain cannot exhaust the stack, and with the depth
+  // carried along: a descendant more than MAX_CHAIN_WALK links below the root
+  // resolves to "no invoice", the cap the fetched walk below applies, so an
+  // in-batch chain and an out-of-batch chain of the same length agree.
+  const assign = (entryId: string, invoiceIds: string[], depth: number): void => {
+    const queue: [string, number][] = [[entryId, depth]]
+    for (let i = 0; i < queue.length; i++) {
+      const [id, d] = queue[i]
+      if (result.has(id)) continue
+      result.set(id, i === 0 ? invoiceIds : [...invoiceIds])
+      depthOf.set(id, d)
+      if (d >= MAX_CHAIN_WALK) continue
+      for (const child of waitingOn.get(id) ?? []) queue.push([child, d + 1])
+    }
+  }
+
+  let frontier: ExplainableJournalEntry[] = [...entries]
+  for (let hop = 0; frontier.length > 0; hop++) {
+    const unresolved: ExplainableJournalEntry[] = []
+    for (const entry of frontier) {
+      if (entry.source_id && INVOICE_SOURCED_ENTRY_TYPES.has(entry.source_type ?? '')) {
+        assign(entry.id, [entry.source_id], 0)
+      } else {
+        unresolved.push(entry)
+      }
+    }
+
+    for (const ids of chunk(unresolved.map((e) => e.id), LINK_LOOKUP_CHUNK)) {
+      const refs = await getInvoiceReferencesForJournalEntries(supabase, companyId, ids)
+      for (const [entryId, invoiceIds] of refs) assign(entryId, invoiceIds, 0)
+    }
+
+    const parentIds: string[] = []
+    for (const entry of unresolved) {
+      if (result.has(entry.id)) continue
+      const parentId = entry.correction_of_id ?? entry.reverses_id ?? null
+      if (!parentId) continue
+      const inherited = result.get(parentId)
+      if (inherited) {
+        const depth = (depthOf.get(parentId) ?? 0) + 1
+        if (depth <= MAX_CHAIN_WALK) assign(entry.id, [...inherited], depth)
+        continue
+      }
+      const waiting = waitingOn.get(parentId)
+      if (waiting) waiting.push(entry.id)
+      else waitingOn.set(parentId, [entry.id])
+      if (!seen.has(parentId)) {
+        seen.add(parentId)
+        parentIds.push(parentId)
+      }
+    }
+    if (parentIds.length === 0 || hop >= MAX_CHAIN_WALK) break
+
+    frontier = []
+    for (const ids of chunk(parentIds, LINK_LOOKUP_CHUNK)) {
+      const parents = await fetchAllRows<ExplainableJournalEntry>(({ from, to }) =>
+        supabase.from('journal_entries').select(CHAIN_COLUMNS)
+          .eq('company_id', companyId).in('id', ids)
+          .order('id', { ascending: true }).range(from, to),
+      )
+      frontier.push(...parents)
+    }
+  }
 
   return result
 }
