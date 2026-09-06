@@ -49,7 +49,7 @@ describe('graph-api', () => {
         senderPhoneHash: 'hash-1',
       })
 
-      expect(result).toEqual({ ok: true, wamid: 'wamid.OUT1', errorDetail: null })
+      expect(result).toEqual({ ok: true, wamid: 'wamid.OUT1', errorDetail: null, failure: null })
       const [row] = findCall('whatsapp_messages', 'insert') as [Record<string, unknown>]
       expect(row.direction).toBe('outbound')
       expect(row.wamid).toBe('wamid.OUT1')

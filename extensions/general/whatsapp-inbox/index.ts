@@ -226,6 +226,28 @@ async function handleUnknownSender(
 
   if (msg.type === 'text' && looksLikeLinkCode(msg.text)) {
     const consumed = await consumeLinkCode(supabase, msg.text ?? '')
+    if (consumed === 'transient_error') {
+      // No verdict about the code exists: the lookup itself failed. M2 here
+      // would tell a user holding a VALID code that it is wrong and send
+      // them to mint another (#2062). The code stays unconsumed, so the
+      // honest answer is a neutral "send it again in a moment". In degraded
+      // mode (quota RPC down too) it sits behind the same fail-closed
+      // throttle as M2, so a full outage stays silent rather than answering
+      // every inbound. Trace row first, same dedupe reason as the M2 path.
+      if (quotaUnavailable && (await badCodeThrottled(supabase, phoneHash))) return
+      log.warn('link code lookup failed; asking the sender to retry', { degraded: quotaUnavailable })
+      const traced = await recordUnknownSenderMessage(
+        supabase, msg, phoneHash, 'done', `Unknown sender: link code lookup failed, M21 sent${degraded}`,
+      )
+      if (traced === 'duplicate') return
+      await sendText(supabase, {
+        to: msg.from,
+        body: copy.m21CodeRetry(),
+        template: TEMPLATE.m21CodeRetry,
+        senderPhoneHash: phoneHash,
+      })
+      return
+    }
     // A bad code earns M2. Normally the pre-binding quota bounds M2; in
     // degraded mode it gets its own small fail-closed throttle instead
     // (badCodeThrottled: 1 per 10 min, 3 per day), so a sender greeted with
@@ -1020,18 +1042,29 @@ export const whatsappInboxExtension: Extension = {
           return NextResponse.json({ error: 'Ogiltig förfrågan.' }, { status: 400 })
         }
 
-        // The caller must be a member of the company receipts are routed to:
-        // otherwise a user could point their intake at someone else's books.
+        // The caller must be a LIVE member of the company receipts are routed
+        // to: otherwise a user could point their intake at someone else's
+        // books. Same filter shape as isMember in process-inbound.ts, which
+        // is what intake consults: a default pointing at an archived company
+        // used to save fine here and then be silently ignored there (#2062).
         if (parsedBody.companyId) {
-          const { data: membership } = await ctx.supabase
+          const { data: membership, error: membershipError } = await ctx.supabase
             .from('company_members')
-            .select('id')
+            .select('company_id, companies!inner(archived_at)')
             .eq('company_id', parsedBody.companyId)
             .eq('user_id', ctx.userId)
+            .is('companies.archived_at', null)
+            .limit(1)
             .maybeSingle()
+          if (membershipError) {
+            return NextResponse.json(
+              { error: 'Kunde inte kontrollera medlemskapet. Försök igen om en stund.' },
+              { status: 500 },
+            )
+          }
           if (!membership) {
             return NextResponse.json(
-              { error: 'Du är inte medlem i det företaget.' },
+              { error: 'Du är inte medlem i det företaget, eller så är det arkiverat.' },
               { status: 403 },
             )
           }

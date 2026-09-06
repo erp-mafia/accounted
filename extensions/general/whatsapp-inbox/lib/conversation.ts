@@ -83,9 +83,12 @@ const BAD_CODE_WINDOW_MS = 10 * 60 * 1000
 const BAD_CODE_DAY_MS = 24 * 60 * 60 * 1000
 const BAD_CODE_DAY_MAX = 3
 
-/** True when another M2 (bad code) reply to this phone hash would exceed the
- *  degraded-mode cap. Fails CLOSED: if the window cannot be read, no M2 goes
- *  out (the caller falls through to the throttled M1 path instead). */
+/** True when another code reply (M2 bad code, or M21 could-not-check) to this
+ *  phone hash would exceed the degraded-mode cap. Both templates share one
+ *  window: they answer the same inbound shape, and counting only M2 let a
+ *  code-shaped flood earn one M21 per message during a lookup outage.
+ *  Fails CLOSED: if the window cannot be read, nothing goes out (the caller
+ *  falls through to the throttled M1 path instead). */
 export async function badCodeThrottled(
   supabase: SupabaseClient,
   phoneHash: string,
@@ -96,7 +99,7 @@ export async function badCodeThrottled(
     .select('created_at')
     .eq('direction', 'outbound')
     .eq('sender_phone_hash', phoneHash)
-    .eq('raw_payload->>template', TEMPLATE.m2BadCode)
+    .in('raw_payload->>template', [TEMPLATE.m2BadCode, TEMPLATE.m21CodeRetry])
     .gte('created_at', since)
     .order('created_at', { ascending: false })
     .limit(BAD_CODE_DAY_MAX)
@@ -120,8 +123,16 @@ export const MAX_QUESTIONS_PER_DAY = 6
 /** error_message marker on whatsapp_messages rows parked while the company
  *  question is open. The answer handler re-opens exactly these. */
 export const STAGED_AWAITING_COMPANY = 'staged_awaiting_company'
-/** Marker after the 48h TTL expired: excluded from any later re-open. */
+/** Marker on a parked row whose media Meta no longer serves: excluded from
+ *  any later re-open. Stamped by the sweep's question-TTL pass and by both
+ *  drains (answer and single-company), all against the same cutoff. */
 export const COMPANY_CHOICE_EXPIRED = 'company_choice_expired'
+/** Staged receipts stay answerable while Meta still serves their media
+ *  (~30 days). Past that the marker is honest: nothing can recover them.
+ *  ONE definition, read by the sweep and by both drains (#2062): a drain that
+ *  re-opened a row older than this sent it through media download to the
+ *  MAX_ATTEMPTS error path and an M18 about a month-old receipt. */
+export const STAGED_MEDIA_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 /** Terminal marker when the company question could not be asked at all:
  *  the sender has fewer than 2 companies to choose between, so nothing will
  *  change until they fix the linking in the app. The rows are never retried;

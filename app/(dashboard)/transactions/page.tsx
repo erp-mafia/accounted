@@ -212,19 +212,25 @@ async function fetchExpensePayoutMatches(
 ): Promise<{ byTransaction: Map<string, ExpensePayoutDue>; people: ExpensePayoutDue[] }> {
   const out = new Map<string, ExpensePayoutDue>()
   if (!companyId || rows.length === 0) return { byTransaction: out, people: [] }
-  const { data, error } = await supabase
-    .from('expense_claims')
-    .select('id, employee_id, claimant_name, liability_account, amount_sek, expense_date')
-    .eq('company_id', companyId)
-    .eq('status', 'registered')
-    .order('expense_date', { ascending: true })
-  if (error) {
+  // Every registered claim, paged past the PostgREST row cap: a truncated set
+  // would understate a person's debt and suggest a payout for part of it.
+  let claimRows: Parameters<typeof groupExpenseClaimsByPerson>[0]
+  try {
+    claimRows = await fetchAllRows(({ from, to }) =>
+      supabase
+        .from('expense_claims')
+        .select('id, employee_id, claimant_name, liability_account, amount_sek, expense_date')
+        .eq('company_id', companyId)
+        .eq('status', 'registered')
+        .order('expense_date', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (error) {
     console.error('[fetchExpensePayoutMatches] expense_claims query failed', error)
     return { byTransaction: out, people: [] }
   }
-  const people = groupExpenseClaimsByPerson(
-    (data ?? []) as Parameters<typeof groupExpenseClaimsByPerson>[0],
-  )
+  const people = groupExpenseClaimsByPerson(claimRows)
   for (const [txId, m] of matchTransactionsToExpensePayouts(rows, people)) out.set(txId, m.person)
   return { byTransaction: out, people }
 }
@@ -1170,11 +1176,11 @@ export default function TransactionsPage() {
         fetchExpensePayoutMatches(supabase, companyId, allRows),
       ])
       const expensePayoutMap = expensePayouts.byTransaction
-      setHasOpenExpenseClaims(expensePayouts.people.length > 0)
 
       // Re-check after the second await: a scope change during the match
       // enrichment must also discard this response.
       if (fetchGenerationRef.current !== generation) return
+      setHasOpenExpenseClaims(expensePayouts.people.length > 0)
 
       const transactionsWithInvoices: TransactionWithInvoice[] = allRows.map((t) => ({
         ...t,
@@ -2329,6 +2335,12 @@ export default function TransactionsPage() {
       })
       setExpensePayoutDialogOpen(false)
       applyExpensePayoutBooked(selectedTransaction.id, result.journal_entry_id, person.key)
+    } catch (error) {
+      toast({
+        title: t('expense_payout_match_failed_title'),
+        description: getErrorMessage(error, { context: 'transaction' }),
+        variant: 'destructive',
+      })
     } finally {
       setIsConfirmingMatch(false)
     }
@@ -2339,6 +2351,7 @@ export default function TransactionsPage() {
   // same person drops its suggestion, since that person is now paid.
   function applyExpensePayoutBooked(transactionId: string, journalEntryId: string, personKey: string) {
     setExitingIds((prev) => new Set(prev).add(transactionId))
+    setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
     setTimeout(() => {
       setTransactions((prev) =>
         prev.map((tx) => {

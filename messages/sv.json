@@ -6729,7 +6729,7 @@
     "dismiss": "Dölj"
   },
   "dashboard": {
-    "suggested_kind_expense_payout": "Återbetalning utlägg",
+    "suggested_kind_expense_payout": "Återbetalning av utlägg",
     "band_betala": "Betala",
     "row_expense_payout": "Betala ut utlägg till {name}",
     "row_expense_payout_detail_one": "1 kvitto · {date}",

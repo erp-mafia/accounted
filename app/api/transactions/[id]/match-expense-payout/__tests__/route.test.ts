@@ -137,6 +137,7 @@ describe('POST /api/transactions/[id]/match-expense-payout', () => {
     expect(parsed.body.error.code).toBe('EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED')
 
     reset()
+    mockHasLiveLink.mockResolvedValue(false)
     enqueue({
       data: makeTxRow({
         transaction_voucher_links: [{ journal_entry_id: 'je-bulk', role: 'bank_line' }],

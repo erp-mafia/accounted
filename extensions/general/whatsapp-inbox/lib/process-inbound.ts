@@ -62,7 +62,12 @@ import {
   type QueuedQuestion,
   type QuestionType,
 } from './conversation'
-import { askCompanyQuestion, type CompanyChoiceVia } from './company-question'
+import {
+  askCompanyQuestion,
+  drainParkedRows,
+  notifyExpiredParkedRows,
+  type CompanyChoiceVia,
+} from './company-question'
 import { evaluateQuestion, QUESTION_PRIORITY } from './questions'
 import { interpretChatAnswer } from './interpret-answer'
 import { appendQuestionHistory, updateItemContext } from './item-context'
@@ -535,25 +540,28 @@ async function processMediaMessage(
       // answered now: the sender's other memberships are archived (or gone),
       // so that question will not be asked again, and the sole live company
       // is unambiguous by construction. Re-open them so they file here
-      // instead of expiring at Meta. Same guarded idiom as applyCompanyChoice;
-      // the re-run resolves them as 'single' on its own. default/pin
-      // resolution deliberately does not drain: those choices the user can
-      // still change, so the open question there is not dead.
-      const { data: parked } = await supabase
-        .from('whatsapp_messages')
-        .update({ processing_status: 'received', error_message: null })
-        .eq('conversation_id', conversation.id)
-        .eq('processing_status', 'skipped')
-        .eq('error_message', STAGED_AWAITING_COMPANY)
-        .select('id')
-      const parkedIds = ((parked ?? []) as { id: string }[]).map((r) => r.id)
-      if (parkedIds.length > 0) {
+      // instead of expiring at Meta. Same drain as applyCompanyChoice (one
+      // definition, including the media-age cutoff); the re-run resolves
+      // them as 'single' on its own. default/pin resolution deliberately
+      // does not drain: those choices the user can still change, so the
+      // open question there is not dead.
+      const drained = await drainParkedRows(supabase, conversation.id)
+      if (drained.reopenedIds.length > 0) {
         log.info('re-opened receipts parked behind an unaskable company question', {
           conversationId: conversation.id,
-          count: parkedIds.length,
+          count: drained.reopenedIds.length,
         })
-        kickInboundProcessing(parkedIds)
+        kickInboundProcessing(drained.reopenedIds)
       }
+      if (drained.failed) {
+        // Not a reason to keep the dead question: clearing it below is what
+        // turns the still-parked rows into orphans the sweep re-opens, and
+        // this path drains again on the sender's next receipt anyway.
+        log.error('single-company drain failed; rows stay parked for the sweep', null, {
+          conversationId: conversation.id,
+        })
+      }
+      await notifyExpiredParkedRows(supabase, { to, replyBase, expiredCount: drained.expiredCount })
       // The question itself is as dead as the rows behind it. Left in place,
       // state 'awaiting_company' turns every typed word into a company_retry
       // that re-offers the archived company, swallows 'byt', and keeps

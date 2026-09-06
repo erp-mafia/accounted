@@ -25,7 +25,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import { groupExpenseClaimsByPerson } from '@/lib/expenses/expense-payout-candidates'
+import { expenseClaimantKey, groupExpenseClaimsByPerson } from '@/lib/expenses/expense-payout-candidates'
 import type { ExpensePayoutDue } from '@/lib/worklist/types'
 import type { TransactionWithInvoice } from './transaction-types'
 
@@ -98,7 +98,7 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
   const personClaims = useMemo(
     () =>
       claims
-        .filter((c) => (c.employee_id ?? `owner:${c.claimant_name}`) === personKey)
+        .filter((c) => expenseClaimantKey(c) === personKey)
         .sort((a, b) => a.expense_date.localeCompare(b.expense_date)),
     [claims, personKey],
   )
@@ -136,6 +136,12 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
         return
       }
       onMatched(transaction.id, result.journal_entry_id, personKey)
+    } catch (error) {
+      toast({
+        title: t('failed_title'),
+        description: getErrorMessage(error, { context: 'transaction' }),
+        variant: 'destructive',
+      })
     } finally {
       setSubmitting(false)
     }
