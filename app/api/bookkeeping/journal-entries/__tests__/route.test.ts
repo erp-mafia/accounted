@@ -377,6 +377,8 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       enqueue({ data: [], error: null }) // no SI references
       enqueue({ data: [], error: null }) // no SI payment-row references
       enqueue({ data: [{ journal_entry_id: E3 }], error: null }) // E3 exempt
+      enqueue({ data: [], error: null }) // no invoices pointing at the entries
+      enqueue({ data: [], error: null }) // no invoice payment rows
       const fullRow = makeJournalEntry({ id: E2 })
       enqueue({ data: [fullRow], error: null }) // page rows
 
@@ -415,6 +417,8 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       enqueue({ data: [], error: null }) // no SI references
       enqueue({ data: [], error: null }) // no SI payment-row references
       enqueue({ data: [], error: null }) // no exemptions
+      enqueue({ data: [], error: null }) // no invoices pointing at the entries
+      enqueue({ data: [], error: null }) // no invoice payment rows
       enqueue({ data: [makeJournalEntry({ id: E2 })], error: null }) // page rows
 
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
@@ -450,6 +454,8 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       })
       enqueue({ data: [], error: null }) // no SI payment-row references
       enqueue({ data: [], error: null }) // no exemptions
+      enqueue({ data: [], error: null }) // no invoices pointing at the entries
+      enqueue({ data: [], error: null }) // no invoice payment rows
       enqueue({ data: [makeJournalEntry({ id: E2 })], error: null }) // page rows
 
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
@@ -457,6 +463,30 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       })
       const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
         await GET(request)
+      )
+
+      expect(status).toBe(200)
+      expect(body.data.map((e) => e.id)).toEqual([E2])
+      expect(body.count).toBe(1)
+    })
+
+    it('treats a customer invoice pointing at the entry as underlag (#2298)', async () => {
+      // E1: a SIE-imported voucher the user matched to an invoice created in
+      // Accounted (invoice_payments row). E2: nothing points at it.
+      enqueue({ data: [candidate(E1, 1), candidate(E2, 2)], error: null })
+      enqueue({ data: [], error: null }) // no direct documents
+      enqueue({ data: [], error: null }) // no SI references
+      enqueue({ data: [], error: null }) // no SI payment-row references
+      enqueue({ data: [], error: null }) // no exemptions
+      enqueue({ data: [], error: null }) // no direct invoice links
+      enqueue({ data: [{ id: 'pay-1', invoice_id: 'inv-1', journal_entry_id: E1 }], error: null })
+      enqueue({ data: [makeJournalEntry({ id: E2 })], error: null }) // page rows
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { missing_underlag: 'true', exclude_draft: 'true' },
+      })
+      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
+        await GET(request, { params: Promise.resolve({}) })
       )
 
       expect(status).toBe(200)
@@ -474,6 +504,8 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       enqueue({ data: [], error: null }) // no SI references
       enqueue({ data: [], error: null }) // no SI payment-row references
       enqueue({ data: [], error: null }) // no exemptions
+      enqueue({ data: [], error: null }) // no invoices pointing at the entries
+      enqueue({ data: [], error: null }) // no invoice payment rows
       enqueue({ data: [makeJournalEntry({ id: E1 })], error: null }) // page rows
 
       const request = createMockRequest('/api/bookkeeping/journal-entries', {

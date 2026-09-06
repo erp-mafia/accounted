@@ -44,6 +44,14 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
   }
 })
 
+// The soft-duplicate guard runs before the storno (issue #2294). Mocked clean
+// so it consumes no slot in the queued Supabase mock; its behaviour is pinned
+// by match-transaction-invoice-duplicate-guard.test.ts.
+vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
+  detectDuplicatePaymentVoucher: vi.fn(async () => null),
+  detectExplainingVoucherSetForTransaction: vi.fn(async () => null),
+}))
+
 import { commitPendingOperation } from '../commit'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {

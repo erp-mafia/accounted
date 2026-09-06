@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { getJournalEntryUnderlagReferences } from '../journal-entry-references'
+import {
+  getInvoiceReferencesForJournalEntries,
+  getJournalEntryUnderlagReferences,
+} from '../journal-entry-references'
 
 /**
  * The resolver issues its queries in a fixed `.from()` order, and the queued
@@ -154,6 +157,114 @@ describe('getJournalEntryUnderlagReferences', () => {
     expect(refs).toEqual([
       { type: 'invoice', id: 'inv-a', number: 'A1' },
       { type: 'supplier_invoice', id: 'si-2', number: 'LF-2' },
+    ])
+  })
+
+  it('asks only for ISSUED customer invoices: a draft or cancelled one is no underlag (#2298)', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: [] }, // 1. invoices direct
+      { data: [{ invoice_id: 'inv-x' }] }, // 2. invoice_payments
+      { data: [] }, // 3. invoices by id: the cancelled invoice is filtered out server-side
+      { data: [] }, // 4. supplier registration
+      { data: [] }, // 5. supplier payment
+      { data: [] }, // 6. supplier_invoice_payments
+    ])
+    const refs = await getJournalEntryUnderlagReferences(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      'je-1',
+    )
+    expect(refs).toEqual([])
+    const notCalls = mock.findCalls('invoices', 'not')
+    expect(notCalls).toHaveLength(2)
+    for (const call of notCalls) expect(call).toEqual(['status', 'in', '("draft","cancelled")'])
+  })
+})
+
+/**
+ * Batch resolver behind every TS mirror of the RPC's customer-invoice arm
+ * (#2298). Fixed `.from()` order: invoices (by journal_entry_id), then
+ * invoice_payments (by journal_entry_id).
+ */
+describe('getInvoiceReferencesForJournalEntries', () => {
+  const setup = (results: { data: unknown }[]) => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany(results)
+    return mock
+  }
+
+  it('returns nothing, without a round trip, for an empty id list', async () => {
+    const mock = setup([])
+    const refs = await getInvoiceReferencesForJournalEntries(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      [],
+    )
+    expect(refs.size).toBe(0)
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('maps the registration link and payment rows onto their entries, deduplicated', async () => {
+    const mock = setup([
+      { data: [{ id: 'inv-reg', journal_entry_id: 'je-1' }] },
+      {
+        data: [
+          // The reported case: a SIE-imported voucher matched to an invoice.
+          { id: 'pay-a', invoice_id: 'inv-imp', journal_entry_id: 'je-2' },
+          // Same invoice already reached through the direct link: once.
+          { id: 'pay-b', invoice_id: 'inv-reg', journal_entry_id: 'je-1' },
+          // One deposit settling two invoices: both are references.
+          { id: 'pay-c', invoice_id: 'inv-other', journal_entry_id: 'je-2' },
+          // Defensive: a row without an invoice id is not a reference.
+          { id: 'pay-d', invoice_id: null, journal_entry_id: 'je-3' },
+        ],
+      },
+    ])
+    const refs = await getInvoiceReferencesForJournalEntries(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      ['je-1', 'je-2', 'je-3'],
+    )
+    expect(Array.from(refs.entries())).toEqual([
+      ['je-1', ['inv-reg']],
+      ['je-2', ['inv-imp', 'inv-other']],
+    ])
+  })
+
+  it('scopes both lookups to the company and the given ids', async () => {
+    const mock = setup([{ data: [] }, { data: [] }])
+    await getInvoiceReferencesForJournalEntries(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      ['je-1', 'je-2'],
+    )
+    expect(mock.findCalls('invoices', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect(mock.findCalls('invoices', 'in')).toContainEqual(['journal_entry_id', ['je-1', 'je-2']])
+    expect(mock.findCalls('invoice_payments', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect(mock.findCalls('invoice_payments', 'in')).toContainEqual([
+      'journal_entry_id',
+      ['je-1', 'je-2'],
+    ])
+  })
+
+  it('asks only for ISSUED invoices on both links, mirroring the RPC status guard', async () => {
+    const mock = setup([{ data: [] }, { data: [] }])
+    await getInvoiceReferencesForJournalEntries(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      ['je-1'],
+    )
+    expect(mock.findCalls('invoices', 'not')).toContainEqual(['status', 'in', '("draft","cancelled")'])
+    // The payment query carries the invoice status as an inner embed and
+    // filters on it, so a non-issued invoice's payment row never comes back.
+    expect(mock.findCall('invoice_payments', 'select')).toEqual([
+      'id, invoice_id, journal_entry_id, invoices!inner(status)',
+    ])
+    expect(mock.findCalls('invoice_payments', 'not')).toContainEqual([
+      'invoices.status',
+      'in',
+      '("draft","cancelled")',
     ])
   })
 })

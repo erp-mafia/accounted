@@ -5,15 +5,17 @@ import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
 import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
 
 /**
  * Shared resolution of "posted verifikat that lack underlag", scoped by the
  * journal list's filters. Single TS mirror of the verifikat_without_documents
  * RPC predicate (posted + document-requiring source type, no current-version
  * document, no BFL 5 kap 7 § hänvisning via a supplier invoice whose retained
- * document is anchored to a journal entry, no journal_entry_no_doc_required
- * exemption). Used by the bulk "Inget underlag krävs" route and the journal
- * list's missing_underlag filter so the two can never disagree.
+ * document is anchored to a journal entry or via a customer invoice that
+ * points at the entry, no journal_entry_no_doc_required exemption). Used by
+ * the bulk "Inget underlag krävs" route and the journal list's
+ * missing_underlag filter so the two can never disagree.
  */
 
 export interface MissingUnderlagFilters {
@@ -233,6 +235,17 @@ export async function resolveMissingUnderlagEntries(
     for (const r of (exemptRes.data ?? []) as { journal_entry_id: string }[]) {
       exempt.add(r.journal_entry_id)
     }
+    // BFL 5 kap 7 § hänvisning, customer side (#2298): an entry a register
+    // invoice points at (registration link or invoice_payments row, e.g. a
+    // SIE-imported sale matched to its invoice afterwards) is backed by that
+    // invoice. Mirrors the verifikat_without_documents RPC's customer arm.
+    let invoiceRefs: Map<string, string[]>
+    try {
+      invoiceRefs = await getInvoiceReferencesForJournalEntries(supabase, companyId, chunk)
+    } catch (err) {
+      throw new MissingUnderlagQueryError(getUserErrorMessage(err))
+    }
+    for (const journalEntryId of invoiceRefs.keys()) withDoc.add(journalEntryId)
   }
 
   return candidates.filter((e) => !withDoc.has(e.id) && !exempt.has(e.id))

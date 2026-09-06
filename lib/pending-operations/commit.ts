@@ -95,6 +95,15 @@ import { linkInvoiceToVoucher, type LinkInvoiceToVoucherResult } from '@/lib/inv
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import {
+  alreadyExplainedDetails,
+  describeExplainingSet,
+  guardAlreadyExplained,
+  guardDuplicatePaymentVoucher,
+  recordDuplicateCandidateOverride,
+  recordExplainedOverride,
+  type ExplainedOverride,
+} from '@/lib/invoices/already-explained-guard'
+import {
   linkSupplierInvoiceToVoucher,
   type LinkSupplierInvoiceToVoucherResult,
 } from '@/lib/invoices/supplier-voucher-matching'
@@ -3306,6 +3315,45 @@ async function commitMatchTransactionInvoice(
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
 
+  // Soft-duplicate guard: parity with the dashboard and v1 match routes
+  // (MATCH_INVOICE_POSSIBLE_DUPLICATE), which this path bypassed. A manual
+  // verifikation that already books this receipt means the approved match
+  // would double-book it. Runs BEFORE the irreversible storno below, and
+  // re-binds force to the candidate detected NOW: an approval staged before
+  // the manual voucher was posted cannot slip through (issue #2294).
+  const duplicate = await guardDuplicatePaymentVoucher(
+    supabase,
+    companyId,
+    transaction,
+    {
+      force: params.force === true,
+      expected_journal_entry_id:
+        typeof params.expected_journal_entry_id === 'string' ? params.expected_journal_entry_id : undefined,
+    },
+    { onDetectError: (err) => log.warn('match_transaction_invoice: duplicate detection failed (continuing)', err) },
+  )
+  if (duplicate.status === 'blocked') {
+    const entry = getErrorEntry('MATCH_INVOICE_POSSIBLE_DUPLICATE')
+    return {
+      error: `${entry?.message_sv ?? 'Det finns redan en bokförd verifikation på samma belopp och datum.'} (verifikat ${duplicate.candidate.voucher_label}, ${duplicate.candidate.entry_date})`,
+      errorCode: 'MATCH_INVOICE_POSSIBLE_DUPLICATE',
+      status: 409,
+      data: { candidate: duplicate.candidate },
+    }
+  }
+  if (duplicate.status === 'mismatch') {
+    const entry = getErrorEntry('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH')
+    return {
+      error: entry?.message_sv ?? 'Verifikationen som dubblettkontrollen visade matchar inte längre.',
+      errorCode: 'MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH',
+      status: 409,
+      data: {
+        expected_journal_entry_id: duplicate.expected_journal_entry_id,
+        detected_journal_entry_id: duplicate.detected_journal_entry_id,
+      },
+    }
+  }
+
   // FX resolution: parity with the dashboard and v1 match routes. paidAmount
   // MUST be denominated in the INVOICE's currency (the unit of
   // invoices.paid_amount / remaining_amount and invoice_payments.amount).
@@ -3581,6 +3629,18 @@ async function commitMatchTransactionInvoice(
       companyId,
       error: recorded.error,
     })
+  }
+
+  // The override was acted on: durable behandlingshistorik record (BFNAR
+  // 2013:2 p. 9.16), same event the categorize guard writes.
+  if (duplicate.status === 'overridden') {
+    await recordDuplicateCandidateOverride(
+      companyId,
+      transactionId,
+      duplicate.candidate,
+      { actor: { type: 'user', id: userId }, via: 'pending_operation_force' },
+      (err) => log.warn('match_transaction_invoice: failed to record override behandlingshistorik', err),
+    )
   }
 
   // The invoice is now settled, so every OTHER transaction still carrying a
@@ -6638,6 +6698,47 @@ async function commitMatchBatchAllocate(
   if (!Array.isArray(allocations) || allocations.length === 0) {
     return { error: 'allocations is required (non-empty array)', status: 400 }
   }
+
+  // Already-explained guard: the RPC only knows the invoices in the request,
+  // so posted vouchers that already book this bank row (each invoice marked
+  // paid by hand, a Bankgirot aggregate) are invisible to it and the money
+  // gets booked a second time. Same detector + force binding as the
+  // dashboard route and the staging tool (lib/invoices/already-explained-
+  // guard.ts). Commit is the last gate: the binding is re-validated against
+  // the set detected NOW, so an approval staged before a voucher was posted
+  // cannot slip through (issue #2294). 409 auto-rejects the op with the
+  // vouchers in result_data.
+  const override: ExplainedOverride = {
+    force: params.force === true,
+    expected_journal_entry_ids: Array.isArray(params.expected_journal_entry_ids)
+      ? (params.expected_journal_entry_ids as unknown[]).filter((v): v is string => typeof v === 'string')
+      : undefined,
+  }
+  const explained = await guardAlreadyExplained(supabase, companyId, txId, override, {
+    onDetectError: (err) => log.warn('match_batch_allocate: explaining-voucher detection failed (continuing)', err),
+  })
+  if (explained.status === 'blocked') {
+    const entry = getErrorEntry('BATCH_TX_POSSIBLE_DUPLICATE')
+    return {
+      error: `${entry?.message_sv ?? 'Transaktionen ser redan ut att vara bokförd.'} (${describeExplainingSet(explained.set)})`,
+      errorCode: 'BATCH_TX_POSSIBLE_DUPLICATE',
+      status: 409,
+      data: alreadyExplainedDetails(explained) as unknown as Record<string, unknown>,
+    }
+  }
+  if (explained.status === 'unverifiable') {
+    // force=true but the check could not run at commit: the staged binding
+    // cannot be re-verified, so the op is refused (auto-rejected), never
+    // waved through on the strength of an earlier review.
+    const entry = getErrorEntry('BATCH_TX_EXPLAINED_CHECK_FAILED')
+    return {
+      error: entry?.message_sv ?? 'Dubblettkontrollen kunde inte köras, så "bokför ändå" avvisades.',
+      errorCode: 'BATCH_TX_EXPLAINED_CHECK_FAILED',
+      status: 409,
+      data: { reason: 'detector_failed', force_rejected: true },
+    }
+  }
+
   const { data, error } = await supabase.rpc('match_batch_allocate', {
     p_tx_id: txId,
     p_allocations: allocations,
@@ -6672,6 +6773,18 @@ async function commitMatchBatchAllocate(
   // them on the source tx. Same helper as the HTTP twin
   // (app/api/transactions/[id]/match-batch/route.ts) so the two cannot drift.
   await clearSettledBatchAllocationSuggestions(supabase, companyId, result.allocations ?? [], txId)
+
+  // The override was acted on: durable behandlingshistorik record (BFNAR
+  // 2013:2 p. 9.16), same event the categorize guard writes.
+  if (explained.status === 'overridden') {
+    await recordExplainedOverride(
+      companyId,
+      txId,
+      explained.set,
+      { actor: { type: 'user', id: userId }, via: 'pending_operation_force' },
+      (err) => log.warn('match_batch_allocate: failed to record override behandlingshistorik', err),
+    )
+  }
 
   // Structured audit-trail entry on success (compliance-swarm V16). Tx
   // count + JE id + the source tx id only: no amounts, no
