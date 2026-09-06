@@ -21,6 +21,8 @@
  *  5. Count outbound sends that failed in the last 24h, so the per-minute
  *     "whatsapp sweep complete" log line surfaces delivery problems nothing
  *     else reads (delivery_status is otherwise write-only).
+ *  6. Re-open parked receipts whose company question is closed but whose
+ *     drain never landed (a failed UPDATE), and process them.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -427,7 +429,7 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
       .lt('created_at', parkedBefore)
       .limit(BATCH * 4)
     const orphaned = new Set<string>()
-    for (const row of ((data ?? []) as Array<{
+    for (const row of ((data ?? []) as unknown as Array<{
       conversation_id: string | null
       conversation: { context: Record<string, unknown> | null } | null
     }>)) {
