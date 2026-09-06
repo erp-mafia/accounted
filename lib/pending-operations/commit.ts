@@ -6719,6 +6719,18 @@ async function commitMatchBatchAllocate(
       data: alreadyExplainedDetails(explained) as unknown as Record<string, unknown>,
     }
   }
+  if (explained.status === 'unverifiable') {
+    // force=true but the check could not run at commit: the staged binding
+    // cannot be re-verified, so the op is refused (auto-rejected), never
+    // waved through on the strength of an earlier review.
+    const entry = getErrorEntry('BATCH_TX_EXPLAINED_CHECK_FAILED')
+    return {
+      error: entry?.message_sv ?? 'Dubblettkontrollen kunde inte köras, så "bokför ändå" avvisades.',
+      errorCode: 'BATCH_TX_EXPLAINED_CHECK_FAILED',
+      status: 409,
+      data: { reason: 'detector_failed', force_rejected: true },
+    }
+  }
 
   const { data, error } = await supabase.rpc('match_batch_allocate', {
     p_tx_id: txId,

@@ -157,6 +157,22 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
+  it('rejects a malformed expected_journal_entry_ids at the boundary instead of silently filtering it', async () => {
+    // No host validates inputSchema at runtime: a string, an empty array, a
+    // non-string element and more than 10 ids are each a validation error,
+    // never a filtered list that then reads as a force mismatch.
+    for (const bad of [JE_A, [], [JE_A, 42], [JE_A, ''], Array.from({ length: 11 }, () => JE_A)]) {
+      const { supabase } = createQueuedMockSupabase()
+      const err = await run(supabase, { force: true, expected_journal_entry_ids: bad }).then(
+        () => null,
+        (e: Error & { code?: string }) => e,
+      )
+      expect(err?.code, JSON.stringify(bad)).toBe('VALIDATION_ERROR')
+      expect(err!.message).toContain('array of 1 to 10 journal_entry_id strings')
+      expect(supabase.from).not.toHaveBeenCalled()
+    }
+  })
+
   it('does not persist a binding on a plain stage', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueuePreGuard(enqueue)
@@ -170,13 +186,32 @@ describe('gnubok_match_batch_allocate: already-explained guard at stage time', (
     expect(inserted.params).not.toHaveProperty('expected_journal_entry_ids')
   })
 
-  it('fails open when the detector throws: the commit guard and the RPC still decide', async () => {
+  it('fails open when the detector throws without force, but the approval card says the check did not run', async () => {
     mockDetectSet.mockRejectedValue(new Error('ledger scan timed out'))
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueuePreGuard(enqueue)
     enqueueStage(enqueue)
 
-    const result = (await run(supabase)) as { staged: boolean }
+    const result = (await run(supabase)) as { staged: boolean; message: string; preview: Record<string, unknown> }
     expect(result.staged).toBe(true)
+    expect(result.preview.compliance_warning).toContain('Dubblettkontrollen kunde inte köras')
+    expect(result.message).toContain('WARNING')
+    // Persisted with the op, so /pending (GenericPreview) renders the same warning.
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { preview_data: Record<string, unknown> }
+    expect(inserted.preview_data.compliance_warning).toContain('Dubblettkontrollen kunde inte köras')
+  })
+
+  it('refuses force=true when the detector throws: an override that cannot be re-verified is never staged', async () => {
+    mockDetectSet.mockRejectedValue(new Error('ledger scan timed out'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueuePreGuard(enqueue)
+
+    const err = await run(supabase, { force: true, expected_journal_entry_ids: [JE_A, JE_B] }).then(
+      () => null,
+      (e: Error & { code?: string }) => e,
+    )
+    expect(err!.code).toBe('BATCH_TX_EXPLAINED_CHECK_FAILED')
+    const tables = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(tables).not.toContain('pending_operations')
   })
 })

@@ -130,6 +130,14 @@ export const POST = withRouteContext(
         details: alreadyExplainedDetails(explained),
       })
     }
+    if (explained.status === 'unverifiable') {
+      // force=true but the check could not run: the override cannot be
+      // re-verified, so it is refused rather than waved through.
+      return errorResponseFromCode('BATCH_TX_EXPLAINED_CHECK_FAILED', txLog, {
+        requestId,
+        details: { reason: 'detector_failed', force_rejected: true },
+      })
+    }
     if (explained.status === 'overridden') {
       txLog.warn('match-batch: already-explained guard bypassed', {
         reason: 'force=true',

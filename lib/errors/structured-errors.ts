@@ -3704,6 +3704,23 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_reconcile_match',
     },
   },
+  // force=true reached a door whose already-explained check could not run:
+  // an override that cannot be re-verified against the current voucher set
+  // is refused, never waved through. Transient by nature (a ledger scan that
+  // timed out), hence retryable; a staged operation refused this way is
+  // auto-rejected and has to be staged again.
+  BATCH_TX_EXPLAINED_CHECK_FAILED: {
+    httpStatus: 409,
+    message_sv:
+      'Dubblettkontrollen kunde inte köras, så "bokför ändå" avvisades: ett åsidosättande som inte kan verifieras igen bokförs aldrig. Försök igen.',
+    message_en:
+      'The already-explained check could not run, so force=true was refused: an override that cannot be re-verified against the current vouchers is never honoured. Retry the request.',
+    retryable: true,
+    remediation: {
+      description:
+        'Retry after a short backoff. A staged operation refused this way is auto-rejected: stage it again with the same force + expected_journal_entry_ids, or link the row to the vouchers with gnubok_reconcile_match instead.',
+    },
+  },
   BATCH_TX_ZERO_AMOUNT: {
     httpStatus: 400,
     message_sv: 'Transaktioner med beloppet 0 kan inte bokföras.',

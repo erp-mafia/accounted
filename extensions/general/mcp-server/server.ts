@@ -597,6 +597,16 @@ function alreadyExplainedRefusal(
 }
 
 /**
+ * Staged into preview.compliance_warning when a duplicate / already-explained
+ * check threw at stage time without force. The stage fails open (the commit
+ * executor re-runs the check as the hard gate), but the approver must see
+ * that the check did not run rather than approve as if it had.
+ */
+const DUPLICATE_CHECK_FAILED_NOTE =
+  'Dubblettkontrollen kunde inte köras vid stagingen: kontrollera manuellt att raden inte redan är bokförd ' +
+  '(verifikat utan bankkoppling på kontot) innan du godkänner. Kontrollen körs igen vid godkännandet.'
+
+/**
  * The soft-duplicate refusal for gnubok_match_transaction_to_invoice, coded
  * like the dashboard route: MATCH_INVOICE_POSSIBLE_DUPLICATE without force,
  * MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH when force names a stale or absent
@@ -10788,9 +10798,17 @@ export const tools: McpTool[] = [
       const transactionId = args.transaction_id as string
       const invoiceId = args.invoice_id as string
       if (!transactionId || !invoiceId) throw new Error('transaction_id and invoice_id are required')
+      // No host validates inputSchema at runtime: check the override shape
+      // here so a malformed binding is a validation error, never a silently
+      // dropped one that then reads as a force mismatch.
       const force = args.force === true
-      const expectedJournalEntryId =
-        typeof args.expected_journal_entry_id === 'string' ? (args.expected_journal_entry_id as string) : undefined
+      if (
+        args.expected_journal_entry_id !== undefined &&
+        (typeof args.expected_journal_entry_id !== 'string' || !args.expected_journal_entry_id)
+      ) {
+        throw codedError('VALIDATION_ERROR', 'expected_journal_entry_id must be a journal_entry_id string')
+      }
+      const expectedJournalEntryId = args.expected_journal_entry_id as string | undefined
       if (force && !expectedJournalEntryId) {
         throw codedError('VALIDATION_ERROR', 'expected_journal_entry_id is required when force=true')
       }
@@ -10831,12 +10849,22 @@ export const tools: McpTool[] = [
       // row to it instead of queuing a second voucher for approval. The
       // commit executor re-runs the same guard as the hard gate, re-binding
       // force to the candidate detected then (issue #2294).
+      // A detector failure without force fails open, but never silently:
+      // the approval card carries the warning (preview.compliance_warning)
+      // so the approver knows the check did not run. With force the guard
+      // returns a mismatch, refused below.
+      let duplicateCheckFailed = false
       const duplicate = await guardDuplicatePaymentVoucher(
         supabase,
         companyId,
         transaction,
         { force, expected_journal_entry_id: expectedJournalEntryId },
-        { onDetectError: (err) => log.warn('match_transaction_to_invoice: duplicate detection failed (continuing)', { error: err instanceof Error ? err.message : String(err) }) },
+        {
+          onDetectError: (err) => {
+            duplicateCheckFailed = true
+            log.warn('match_transaction_to_invoice: duplicate detection failed (continuing)', { error: err instanceof Error ? err.message : String(err) })
+          },
+        },
       )
       if (duplicate.status === 'blocked' || duplicate.status === 'mismatch') {
         throw duplicateCandidateRefusal(duplicate)
@@ -10874,13 +10902,16 @@ export const tools: McpTool[] = [
         },
         {
           dateForPeriodCheck: transaction.date,
-          // An honoured override is never silent: the approval card and the
-          // agent both see which voucher is being booked over.
+          // Never silent: an honoured override names the voucher it books
+          // over, and a check that could not run says so, on the approval
+          // card and to the agent alike.
           ...(duplicate.status === 'overridden'
             ? {
                 complianceNote: `Bokförs trots att verifikat ${duplicate.candidate.voucher_label} (${duplicate.candidate.entry_date}) redan ser ut att bokföra betalningen (force=true).`,
               }
-            : {}),
+            : duplicateCheckFailed
+              ? { complianceNote: DUPLICATE_CHECK_FAILED_NOTE }
+              : {}),
         },
       )
     },
@@ -10931,11 +10962,23 @@ export const tools: McpTool[] = [
       if (!Array.isArray(allocations) || allocations.length === 0) {
         throw new Error('allocations is required (non-empty array)')
       }
+      // No host validates inputSchema at runtime: check the override shape
+      // here (array, 1 to 10 strings, the schema's contract) so a malformed
+      // binding is a validation error, never a silently filtered one that
+      // then reads as a force mismatch.
       const force = args.force === true
-      const expectedJournalEntryIds = Array.isArray(args.expected_journal_entry_ids)
-        ? (args.expected_journal_entry_ids as unknown[]).filter((v): v is string => typeof v === 'string')
-        : undefined
-      if (force && !(expectedJournalEntryIds && expectedJournalEntryIds.length > 0)) {
+      const rawExpectedIds = args.expected_journal_entry_ids
+      if (
+        rawExpectedIds !== undefined &&
+        (!Array.isArray(rawExpectedIds) ||
+          rawExpectedIds.length === 0 ||
+          rawExpectedIds.length > 10 ||
+          rawExpectedIds.some((v) => typeof v !== 'string' || !v))
+      ) {
+        throw codedError('VALIDATION_ERROR', 'expected_journal_entry_ids must be an array of 1 to 10 journal_entry_id strings')
+      }
+      const expectedJournalEntryIds = rawExpectedIds as string[] | undefined
+      if (force && !expectedJournalEntryIds) {
         throw codedError('VALIDATION_ERROR', 'expected_journal_entry_ids is required when force=true')
       }
       // kind is the key every guard below branches on (direction, required
@@ -11075,15 +11118,28 @@ export const tools: McpTool[] = [
       // the row to them instead of asking the user to approve a second
       // booking. The commit executor re-runs the guard as the hard gate
       // (issue #2294).
+      // A detector failure without force fails open, but never silently:
+      // the approval card carries the warning (preview.compliance_warning,
+      // rendered by GenericPreview) so the approver knows the check did not
+      // run. With force the guard returns 'unverifiable', refused below.
+      let explainedCheckFailed = false
       const explained = await guardAlreadyExplained(
         supabase,
         companyId,
         transaction,
         { force, expected_journal_entry_ids: expectedJournalEntryIds },
-        { onDetectError: (err) => log.warn('match_batch_allocate: explaining-voucher detection failed (continuing)', { error: err instanceof Error ? err.message : String(err) }) },
+        {
+          onDetectError: (err) => {
+            explainedCheckFailed = true
+            log.warn('match_batch_allocate: explaining-voucher detection failed (continuing)', { error: err instanceof Error ? err.message : String(err) })
+          },
+        },
       )
       if (explained.status === 'blocked') {
         throw alreadyExplainedRefusal(explained, transactionId, transaction.cash_account_id ?? null)
+      }
+      if (explained.status === 'unverifiable') {
+        throw registryError('BATCH_TX_EXPLAINED_CHECK_FAILED')
       }
 
       const txDesc = transaction.merchant_name || transaction.description || transactionId
@@ -11124,13 +11180,16 @@ export const tools: McpTool[] = [
         },
         {
           dateForPeriodCheck: transaction.date,
-          // An honoured override is never silent: the approval card and the
-          // agent both see which vouchers are being booked over.
+          // Never silent: an honoured override names the vouchers it books
+          // over, and a check that could not run says so, on the approval
+          // card and to the agent alike.
           ...(explained.status === 'overridden'
             ? {
                 complianceNote: `Bokförs trots att ${describeExplainingSet(explained.set)} redan förklarar raden (force=true).`,
               }
-            : {}),
+            : explainedCheckFailed
+              ? { complianceNote: DUPLICATE_CHECK_FAILED_NOTE }
+              : {}),
         },
       )
     },

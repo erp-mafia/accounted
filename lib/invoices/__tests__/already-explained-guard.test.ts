@@ -149,13 +149,29 @@ describe('guardAlreadyExplained', () => {
     ).resolves.toMatchObject({ status: 'overridden' })
   })
 
-  it('fails open when the detector throws and reports the miss to the caller', async () => {
+  it('fails open when the detector throws without force, and reports the miss to the caller', async () => {
     const boom = new Error('ledger scan timed out')
     mockDetectSet.mockRejectedValue(boom)
     const onDetectError = vi.fn()
     await expect(guardAlreadyExplained(supabase, 'company-1', TX_ID, {}, { onDetectError })).resolves.toEqual({
       status: 'clear',
     })
+    expect(onDetectError).toHaveBeenCalledWith(boom)
+  })
+
+  it('refuses a forced override it cannot re-verify: a detector failure under force is never a pass', async () => {
+    const boom = new Error('ledger scan timed out')
+    mockDetectSet.mockRejectedValue(boom)
+    const onDetectError = vi.fn()
+    await expect(
+      guardAlreadyExplained(
+        supabase,
+        'company-1',
+        TX_ID,
+        { force: true, expected_journal_entry_ids: [JE_A, JE_B] },
+        { onDetectError },
+      ),
+    ).resolves.toEqual({ status: 'unverifiable', error: boom })
     expect(onDetectError).toHaveBeenCalledWith(boom)
   })
 })

@@ -413,4 +413,27 @@ describe('POST /api/transactions/[id]/match-batch: already-explained guard', () 
     const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
     expect(response.status).toBe(200)
   })
+
+  it('refuses force=true when the detector throws: an override that cannot be re-verified is never honoured', async () => {
+    mockDetectExplaining.mockRejectedValue(new Error('ledger scan timed out'))
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 88250 }],
+        force: true,
+        expected_journal_entry_ids: [JE_A, JE_B],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { reason: string; force_rejected: boolean } }
+    }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BATCH_TX_EXPLAINED_CHECK_FAILED')
+    expect(body.error.details).toEqual({ reason: 'detector_failed', force_rejected: true })
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
+  })
 })

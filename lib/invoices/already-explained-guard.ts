@@ -48,6 +48,13 @@ export type AlreadyExplainedOutcome =
   | { status: 'clear' }
   | { status: 'blocked'; set: ExplainingVoucherSet; force_rejected: boolean }
   | { status: 'overridden'; set: ExplainingVoucherSet }
+  /**
+   * force=true, but the detector failed, so the binding could not be
+   * re-verified. Never a pass: callers refuse it (BATCH_TX_EXPLAINED_CHECK_FAILED).
+   * Without force the same failure is 'clear' (fail-open; the caller logs and
+   * surfaces it).
+   */
+  | { status: 'unverifiable'; error: unknown }
 
 /** The details block every door hands back, so the dialog and the agent read one shape. */
 export interface AlreadyExplainedDetails {
@@ -109,7 +116,10 @@ export interface GuardOptions {
 /**
  * Detect the explaining set for a bank row and bind the caller's override to
  * it. Accepts the transaction id (one fetch) or a row the caller already
- * holds, exactly like the detector.
+ * holds, exactly like the detector. A detector failure fails open without
+ * force; with force it is 'unverifiable', because an override that cannot be
+ * re-verified against the current set must never be honoured (same rule as
+ * guardDuplicatePaymentVoucher below).
  */
 export async function guardAlreadyExplained(
   supabase: SupabaseClient,
@@ -123,6 +133,7 @@ export async function guardAlreadyExplained(
     set = await detectExplainingVoucherSetForTransaction(supabase, companyId, transaction)
   } catch (err) {
     options.onDetectError?.(err)
+    if (override.force === true) return { status: 'unverifiable', error: err }
   }
   return bindExplainedOverride(set, override)
 }

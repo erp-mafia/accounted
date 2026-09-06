@@ -1,6 +1,7 @@
 'use client'
 
 import { ArrowDown } from 'lucide-react'
+import { AttnLine } from '@/components/ui/attn-line'
 import { formatCurrency, formatDate } from '@/lib/utils'
 
 interface MatchTransactionInvoicePreviewProps {
@@ -22,6 +23,14 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
   const invoiceCurrency = (data.invoice_currency as string) || txCurrency
   const invoiceDate = data.invoice_date as string | undefined
   const customerName = data.customer_name as string | undefined
+  // Staged by the MCP tool when the duplicate check could not run, or when
+  // force=true books over a voucher that already looks like this payment
+  // (issue #2294). The server owns the wording; rendered verbatim so the
+  // /pending card and the agent read the same warning.
+  const complianceWarning =
+    typeof data.compliance_warning === 'string' && data.compliance_warning.trim()
+      ? data.compliance_warning
+      : null
 
   // BFL 5 kap 4§ requires bookings to be made "so soon as possible" relative
   // to the affärshändelse, so a transaction and invoice that diverge by more
@@ -35,6 +44,7 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
 
   return (
     <div className="space-y-3 text-sm">
+      {complianceWarning && <AttnLine>{complianceWarning}</AttnLine>}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <PreviewCard label="Transaktion">
           {txDate && <Row label="Datum" value={formatDate(txDate)} tabular />}

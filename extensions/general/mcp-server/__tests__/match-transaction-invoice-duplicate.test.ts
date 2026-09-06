@@ -159,6 +159,40 @@ describe('gnubok_match_transaction_to_invoice: soft-duplicate guard at stage tim
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
+  it('rejects a non-string expected_journal_entry_id at the boundary instead of silently dropping it', async () => {
+    for (const bad of [42, '', [JE_MANUAL]]) {
+      const { supabase } = createQueuedMockSupabase()
+      await expect(run(supabase, { expected_journal_entry_id: bad })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+      expect(supabase.from).not.toHaveBeenCalled()
+    }
+  })
+
+  it('fails open when the detector throws without force, but the approval card says the check did not run', async () => {
+    mockDetectCandidate.mockRejectedValue(new Error('scan failed'))
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueuePreGuard(enqueue)
+    enqueueStage(enqueue)
+
+    const result = (await run(supabase)) as { staged: boolean; preview: Record<string, unknown> }
+    expect(result.staged).toBe(true)
+    expect(result.preview.compliance_warning).toContain('Dubblettkontrollen kunde inte köras')
+    // Persisted with the op: MatchTransactionInvoicePreview renders it on /pending.
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { preview_data: Record<string, unknown> }
+    expect(inserted.preview_data.compliance_warning).toContain('Dubblettkontrollen kunde inte köras')
+  })
+
+  it('refuses force=true when the detector throws: an override that cannot be re-verified is never staged', async () => {
+    mockDetectCandidate.mockRejectedValue(new Error('scan failed'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueuePreGuard(enqueue)
+
+    await expect(run(supabase, { force: true, expected_journal_entry_id: JE_MANUAL })).rejects.toMatchObject({
+      code: 'MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH',
+    })
+    const tables = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(tables).not.toContain('pending_operations')
+  })
+
   it('stages a clean match without a binding or a warning', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueuePreGuard(enqueue)

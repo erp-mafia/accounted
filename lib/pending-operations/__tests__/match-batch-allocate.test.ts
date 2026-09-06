@@ -298,7 +298,24 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
   })
 
-  it('fails open when the detector throws: the RPC still decides', async () => {
+  it('auto-rejects a forced approval when the detector throws at commit: the binding cannot be re-verified', async () => {
+    mockDetectExplaining.mockRejectedValue(new Error('ledger scan timed out'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher rejection update
+
+    const op = makePendingOp({ transaction_id: TX_ID, allocations, force: true, expected_journal_entry_ids: [JE_A, JE_B] })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('BATCH_TX_EXPLAINED_CHECK_FAILED')
+    expect(result.data).toEqual({ reason: 'detector_failed', force_rejected: true })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
+  })
+
+  it('fails open when the detector throws without force: the RPC still decides', async () => {
     mockDetectExplaining.mockRejectedValue(new Error('ledger scan timed out'))
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
