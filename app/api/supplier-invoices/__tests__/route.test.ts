@@ -31,12 +31,24 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 }))
 
 const mockCreateSupplierInvoiceRegistrationEntry = vi.fn()
-const mockCreateSupplierInvoicePrivatelyPaidEntry = vi.fn()
-vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
-  createSupplierInvoiceRegistrationEntry: (...args: unknown[]) =>
-    mockCreateSupplierInvoiceRegistrationEntry(...args),
-  createSupplierInvoicePrivatelyPaidEntry: (...args: unknown[]) =>
-    mockCreateSupplierInvoicePrivatelyPaidEntry(...args),
+vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async () => {
+  // The privately-paid line builder is pure: keep the real one so the tests
+  // pin the kontering the route hands to the claims writer.
+  const actual = await vi.importActual<typeof import('@/lib/bookkeeping/supplier-invoice-entries')>(
+    '@/lib/bookkeeping/supplier-invoice-entries',
+  )
+  return {
+    ...actual,
+    createSupplierInvoiceRegistrationEntry: (...args: unknown[]) =>
+      mockCreateSupplierInvoiceRegistrationEntry(...args),
+  }
+})
+
+// A privately paid invoice is an utlägg: the route hands it to the same
+// claims writer as the Underlag pane instead of posting its own verifikat.
+const mockRegisterExpenseClaim = vi.fn()
+vi.mock('@/lib/expenses/expense-claims-service', () => ({
+  registerExpenseClaim: (...args: unknown[]) => mockRegisterExpenseClaim(...args),
 }))
 
 const mockLinkToJournalEntry = vi.fn()
@@ -684,105 +696,325 @@ describe('POST /api/supplier-invoices', () => {
     expect((body.error as unknown as { code: string }).code).toBe('SI_CREATE_FAILED')
   })
 
-  it('books privately-paid invoice via 2893 path for aktiebolag', async () => {
-    const supplier = makeSupplier({ id: VALID_UUID })
-    const createdInvoice = makeSupplierInvoice({ id: 'si-priv-1', status: 'paid' })
+  // ── Privately paid = utlägg ──────────────────────────────────────────────
+  // A person paid the supplier invoice: the route hands the invoice to the
+  // claims writer with the invoice's kontering as the lines, so the verifikat
+  // and the expense_claims row come from the same code as the Underlag pane
+  // and the person shows up under "Betala ut utlägg" on Hem.
 
-    // Fetch supplier
-    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
-    enqueue({ data: supplier, error: null })
-    // Fetch company.entity_type (paidPrivately branch)
-    enqueue({ data: { entity_type: 'aktiebolag' }, error: null })
-    // RPC get_next_arrival_number
-    enqueue({ data: 12 })
-    // Insert invoice
-    enqueue({ data: createdInvoice, error: null })
-    // Insert items
-    enqueue({ data: null, error: null })
-    // Fetch company settings
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+  const EMPLOYEE_UUID = '550e8400-e29b-41d4-a716-446655440003'
+  const INBOX_UUID = '550e8400-e29b-41d4-a716-446655440004'
 
-    mockCreateSupplierInvoicePrivatelyPaidEntry.mockResolvedValue({ id: 'je-priv-1' })
-    // Update invoice with payment_journal_entry_id
-    enqueue({ data: null, error: null })
-    // Insert supplier_invoice_payments row
-    enqueue({ data: null, error: null })
-
-    const request = createMockRequest('/api/supplier-invoices', {
-      method: 'POST',
-      body: {
-        supplier_id: VALID_UUID,
-        supplier_invoice_number: 'KVITTO-001',
-        invoice_date: '2024-06-01',
-        due_date: '2024-06-01',
-        paid_with_private_funds: true,
-        items: [
-          {
-            description: 'Kontorsmaterial',
-            quantity: 1,
-            unit_price: 400,
-            account_number: '6110',
-            vat_rate: 0.25,
-          },
-        ],
+  function claimOk(overrides: Record<string, unknown> = {}) {
+    return {
+      ok: true,
+      claim: {
+        id: 'claim-1',
+        journal_entry_id: 'je-priv-1',
+        claimant_name: 'Ägare',
+        liability_account: '2893',
+        ...overrides,
       },
+    }
+  }
+
+  function privatelyPaidBody(overrides: Record<string, unknown> = {}) {
+    return {
+      supplier_id: VALID_UUID,
+      supplier_invoice_number: 'KVITTO-001',
+      invoice_date: '2024-06-01',
+      due_date: '2024-06-01',
+      paid_with_private_funds: true,
+      items: [
+        { description: 'Kontorsmaterial', quantity: 1, unit_price: 400, account_number: '6110', vat_rate: 0.25 },
+      ],
+      ...overrides,
+    }
+  }
+
+  type ClaimInput = {
+    description: string
+    claimant_name?: string
+    employee_id?: string
+    document_id?: string
+    inbox_item_id?: string
+    lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+  }
+
+  function claimInput(): ClaimInput {
+    expect(mockRegisterExpenseClaim).toHaveBeenCalledTimes(1)
+    return mockRegisterExpenseClaim.mock.calls[0][3] as ClaimInput
+  }
+
+  function linesByAccount(input: ClaimInput) {
+    return Object.fromEntries(input.lines.map((l) => [l.account_number, l]))
+  }
+
+  it("books a privately paid invoice as the owner's utlägg through the claims writer (AB: 2893)", async () => {
+    const supplier = makeSupplier({ id: VALID_UUID, name: 'Pressbyrån' })
+    const createdInvoice = makeSupplierInvoice({
+      id: 'si-priv-1',
+      status: 'paid',
+      arrival_number: 12,
+      supplier_invoice_number: 'KVITTO-001',
     })
-    const response = await POST(request)
+
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
+    enqueue({ data: supplier, error: null }) // supplier
+    enqueue({ data: { entity_type: 'aktiebolag' }, error: null }) // company entity_type
+    enqueue({ data: 12 }) // rpc get_next_arrival_number
+    enqueue({ data: createdInvoice, error: null }) // insert invoice
+    enqueue({ data: null, error: null }) // insert items
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // settings
+    mockRegisterExpenseClaim.mockResolvedValue(claimOk())
+    enqueue({ data: null, error: null }) // update payment_journal_entry_id
+    enqueue({ data: null, error: null }) // insert supplier_invoice_payments
+
+    const request = createMockRequest('/api/supplier-invoices', { method: 'POST', body: privatelyPaidBody() })
+    const response = await POST(request, {} as never)
     const { status, body } = await parseJsonResponse<{
-      data: { payment_journal_entry_id: string; registration_journal_entry_id: null }
+      data: {
+        payment_journal_entry_id: string
+        registration_journal_entry_id: null
+        expense_claim: { id: string; claimant_name: string; liability_account: string }
+      }
     }>(response)
 
     expect(status).toBe(200)
     expect(body.data.payment_journal_entry_id).toBe('je-priv-1')
     expect(body.data.registration_journal_entry_id).toBeNull()
-    expect(mockCreateSupplierInvoicePrivatelyPaidEntry).toHaveBeenCalled()
+    expect(body.data.expense_claim).toEqual({ id: 'claim-1', claimant_name: 'Ägare', liability_account: '2893' })
     // The classic registration path must NOT be touched.
     expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
-    const call = mockCreateSupplierInvoicePrivatelyPaidEntry.mock.calls[0]
-    expect(call[5]).toBe('aktiebolag')
+
+    const [, companyArg, userArg] = mockRegisterExpenseClaim.mock.calls[0]
+    expect(companyArg).toBe('company-1')
+    expect(userArg).toBe('user-1')
+    const input = claimInput()
+    expect(input).toMatchObject({
+      expense_date: '2024-06-01',
+      amount: 500,
+      vat_amount: 100,
+      currency: 'SEK',
+      expense_account: '6110',
+      // No name given: the shared owner label, so Hem groups the owner as one person.
+      claimant_name: 'Ägare',
+    })
+    expect(input.employee_id).toBeUndefined()
+    expect(input.document_id).toBeUndefined()
+    expect(input.description).toContain('KVITTO-001')
+    expect(input.description).toContain('ankomstnr 12')
+    // The invoice's full kontering rides as the claim's lines: no 2440.
+    const byAccount = linesByAccount(input)
+    expect(byAccount['6110'].debit_amount).toBe(400)
+    expect(byAccount['2641'].debit_amount).toBe(100)
+    expect(byAccount['2893'].credit_amount).toBe(500)
+    expect(byAccount['2440']).toBeUndefined()
+
+    // The invoice row says paid from the start and mirrors the payment.
+    const insert = findCall('supplier_invoices', 'insert')?.[0] as Record<string, unknown>
+    expect(insert).toMatchObject({ status: 'paid', paid_with_private_funds: true, remaining_amount: 0 })
+    const payment = findCall('supplier_invoice_payments', 'insert')?.[0] as Record<string, unknown>
+    expect(payment).toMatchObject({ supplier_invoice_id: 'si-priv-1', journal_entry_id: 'je-priv-1', amount: 500 })
+    // The claims writer links the document on this path, never the route.
+    expect(mockLinkToJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('passes entity_type=enskild_firma so engine credits 2018', async () => {
+  it('enskild firma owner: the claim is an egen insättning on 2018 and the typed name travels', async () => {
     const supplier = makeSupplier({ id: VALID_UUID })
     const createdInvoice = makeSupplierInvoice({ id: 'si-priv-2', status: 'paid' })
 
-    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
+    enqueue({ data: { vat_registered: true }, error: null })
     enqueue({ data: supplier, error: null })
     enqueue({ data: { entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: 13 })
     enqueue({ data: createdInvoice, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: { accounting_method: 'cash' }, error: null })
-
-    mockCreateSupplierInvoicePrivatelyPaidEntry.mockResolvedValue({ id: 'je-priv-2' })
+    mockRegisterExpenseClaim.mockResolvedValue(claimOk({ liability_account: '2018', claimant_name: 'Anna Ek' }))
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
 
     const request = createMockRequest('/api/supplier-invoices', {
       method: 'POST',
-      body: {
-        supplier_id: VALID_UUID,
+      body: privatelyPaidBody({
         supplier_invoice_number: 'KVITTO-002',
-        invoice_date: '2024-06-01',
-        due_date: '2024-06-01',
-        paid_with_private_funds: true,
-        items: [
-          {
-            description: 'Lunch klient',
-            quantity: 1,
-            unit_price: 200,
-            account_number: '5810',
-            vat_rate: 0.12,
-          },
-        ],
-      },
+        claimant_name: '  Anna Ek  ',
+        items: [{ description: 'Lunch klient', quantity: 1, unit_price: 200, account_number: '5810', vat_rate: 0.12 }],
+      }),
     })
-    const response = await POST(request)
+    const response = await POST(request, {} as never)
+    const { status, body } = await parseJsonResponse<{ data: { expense_claim: { liability_account: string } } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.expense_claim.liability_account).toBe('2018')
+    const input = claimInput()
+    expect(input.claimant_name).toBe('Anna Ek')
+    const byAccount = linesByAccount(input)
+    expect(byAccount['2018'].credit_amount).toBe(224)
+    expect(byAccount['2893']).toBeUndefined()
+  })
+
+  it('an employee paid: verified before the arrival number is drawn, claim on 2820 with employee_id', async () => {
+    const supplier = makeSupplier({ id: VALID_UUID })
+    const createdInvoice = makeSupplierInvoice({ id: 'si-priv-3', status: 'paid' })
+
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: supplier, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: { id: EMPLOYEE_UUID }, error: null }) // employee belongs to the company
+    enqueue({ data: 14 })
+    enqueue({ data: createdInvoice, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockRegisterExpenseClaim.mockResolvedValue(claimOk({ liability_account: '2820', claimant_name: 'Erik Berg' }))
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: privatelyPaidBody({ employee_id: EMPLOYEE_UUID, claimant_name: 'never used for an employee' }),
+    })
+    const response = await POST(request, {} as never)
+    const { status, body } = await parseJsonResponse<{ data: { expense_claim: { claimant_name: string } } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.expense_claim.claimant_name).toBe('Erik Berg')
+    expect(findCall('employees', 'eq')).toEqual(['id', EMPLOYEE_UUID])
+    const input = claimInput()
+    expect(input.employee_id).toBe(EMPLOYEE_UUID)
+    expect(input.claimant_name).toBeUndefined()
+    const byAccount = linesByAccount(input)
+    expect(byAccount['2820'].credit_amount).toBe(500)
+    expect(byAccount['2893']).toBeUndefined()
+  })
+
+  it("returns 404 when the employee is not the company's, before any arrival number is drawn", async () => {
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null })
+    enqueue({ data: { entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: null, error: null }) // no such employee here
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: privatelyPaidBody({ employee_id: EMPLOYEE_UUID }),
+    })
+    const response = await POST(request, {} as never)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('EMPLOYEE_NOT_FOUND')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
+  })
+
+  it("privately paid inbox document: the item's document is the underlag and the item is stamped with the invoice", async () => {
+    const supplier = makeSupplier({ id: VALID_UUID })
+    const createdInvoice = makeSupplierInvoice({ id: 'si-priv-4', status: 'paid', document_id: DOCUMENT_UUID })
+
+    enqueue({
+      data: { id: INBOX_UUID, document_id: DOCUMENT_UUID, created_supplier_invoice_id: null, created_journal_entry_id: null },
+      error: null,
+    }) // inbox item
+    enqueue({ data: { id: DOCUMENT_UUID, journal_entry_id: null }, error: null }) // its document, unlinked
+    enqueue({ data: null, error: null }) // no supplier invoice uses the document yet
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: supplier, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: 15 })
+    enqueue({ data: createdInvoice, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockRegisterExpenseClaim.mockResolvedValue(claimOk())
+    enqueue({ data: null, error: null }) // update payment_journal_entry_id
+    enqueue({ data: null, error: null }) // insert supplier_invoice_payments
+    enqueue({ data: null, error: null }) // stamp the inbox item
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: privatelyPaidBody({ inbox_item_id: INBOX_UUID }),
+    })
+    const response = await POST(request, {} as never)
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
-    const call = mockCreateSupplierInvoicePrivatelyPaidEntry.mock.calls[0]
-    expect(call[5]).toBe('enskild_firma')
+    const input = claimInput()
+    expect(input.document_id).toBe(DOCUMENT_UUID)
+    expect(input.inbox_item_id).toBe(INBOX_UUID)
+    const insert = findCall('supplier_invoices', 'insert')?.[0] as Record<string, unknown>
+    expect(insert.document_id).toBe(DOCUMENT_UUID)
+    expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ created_supplier_invoice_id: 'si-priv-4' })
+    expect(mockLinkToJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses inbox_item_id unless a person paid: the convert endpoint owns the other answers', async () => {
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: privatelyPaidBody({ paid_with_private_funds: false, inbox_item_id: INBOX_UUID }),
+    })
+    const response = await POST(request, {} as never)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
+  })
+
+  it('refuses an inbox item that is already booked', async () => {
+    enqueue({
+      data: { id: INBOX_UUID, document_id: DOCUMENT_UUID, created_supplier_invoice_id: 'si-old', created_journal_entry_id: null },
+      error: null,
+    })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: privatelyPaidBody({ inbox_item_id: INBOX_UUID }),
+    })
+    const response = await POST(request, {} as never)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
+  })
+
+  it('a claims-writer refusal rolls the invoice back and maps the code', async () => {
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null })
+    enqueue({ data: { entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: 16 })
+    enqueue({ data: makeSupplierInvoice({ id: 'si-priv-5', status: 'paid' }), error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockRegisterExpenseClaim.mockResolvedValue({ ok: false, code: 'FISCAL_PERIOD_NOT_FOUND' })
+    enqueue({ data: null, error: null }) // rollback delete
+
+    const request = createMockRequest('/api/supplier-invoices', { method: 'POST', body: privatelyPaidBody() })
+    const response = await POST(request, {} as never)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_NO_FISCAL_PERIOD')
+    expect(findCall('supplier_invoices', 'delete')).toBeDefined()
+  })
+
+  it('a posted-but-unlinked claim is never rolled back: the verifikat is immutable', async () => {
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null })
+    enqueue({ data: { entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: 17 })
+    enqueue({ data: makeSupplierInvoice({ id: 'si-priv-6', status: 'paid' }), error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockRegisterExpenseClaim.mockResolvedValue({ ok: false, code: 'LINK_WRITE_FAILED', detail: 'claim x posted as entry y' })
+
+    const request = createMockRequest('/api/supplier-invoices', { method: 'POST', body: privatelyPaidBody() })
+    const response = await POST(request, {} as never)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('SI_CREATE_FAILED')
+    expect(findCall('supplier_invoices', 'delete')).toBeUndefined()
   })
 
   it('persists manual vat_amount override on items and forwards it to the engine', async () => {
@@ -903,7 +1135,7 @@ describe('POST /api/supplier-invoices', () => {
     expect(body.error.code).toBe('SI_CREATE_ACCRUAL_REVERSE_CHARGE')
     // The guard must fire before anything is persisted or booked.
     expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
-    expect(mockCreateSupplierInvoicePrivatelyPaidEntry).not.toHaveBeenCalled()
+    expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
   })
 
   it('rejects paid_with_private_funds combined with reverse_charge', async () => {
@@ -925,7 +1157,7 @@ describe('POST /api/supplier-invoices', () => {
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
     // Make sure we never touched the engine paths.
-    expect(mockCreateSupplierInvoicePrivatelyPaidEntry).not.toHaveBeenCalled()
+    expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
     expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
   })
 })

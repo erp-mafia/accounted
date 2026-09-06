@@ -4632,7 +4632,6 @@
     "forval_books_at_payment": "Posted at payment",
     "forval_toggle_open": "Change defaults",
     "forval_toggle_close": "Close",
-    "chip_paid_privately": "Paid privately",
     "chip_ore_rounding_off": "No öre rounding",
     "chip_delivery_date": "Delivery date {date}",
     "chip_notes": "Notes",
@@ -4676,9 +4675,6 @@
     "create_and_select": "Create & select",
     "section_accounting": "Accounting",
     "account_from_history": "Account {account} suggested from previous bookings of {counterparty}",
-    "paid_privately_label": "I paid this privately",
-    "paid_privately_help_ef": "Booked as a liability from the company to you (2018 Egen insättning). Refund manually later from the company account.",
-    "paid_privately_help_ab": "Booked as a liability from the company to you (2893 Skuld till ägare). Refund manually later from the company account.",
     "supplier_placeholder": "Select supplier",
     "no_suppliers_yet": "No suppliers yet",
     "add_new_supplier": "+ Add new supplier...",
@@ -4802,7 +4798,8 @@
     "debit_short": "D {amount}",
     "credit_short": "C {amount}",
     "debit_credit_short": "D {debit} / C {credit}",
-    "review_accrual_line_info": "Accrued {from} to {to}"
+    "review_accrual_line_info": "Accrued {from} to {to}",
+    "expense_registered_description": "The debt to {name} is now in To do. Arrival number: {number}"
   },
   "supplier_invoice_detail": {
     "title_invoice": "Supplier invoice {number}",

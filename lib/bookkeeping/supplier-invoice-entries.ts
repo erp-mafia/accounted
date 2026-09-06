@@ -18,6 +18,7 @@ import {
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ExpenseClaimLineInput } from '@/lib/expenses/expense-claims-service'
 import type {
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
@@ -557,69 +558,79 @@ export async function createSupplierInvoiceCashEntry(
 }
 
 /**
- * Create journal entry for an invoice paid with the owner's private funds
- * (eget utlägg). The AP leg is bypassed entirely: instead of crediting 2440
- * and later debiting it on mark-paid, the expense lines book straight against
- * the owner's payable/equity account:
+ * Kontering for a supplier invoice someone paid out of their own pocket
+ * (utlägg), as custom lines for registerExpenseClaim (lib/expenses). The AP
+ * leg is bypassed entirely: instead of crediting 2440 and later debiting it on
+ * mark-paid, the invoice's lines book straight against the person's liability
+ * account:
  *
- *   Debit  5xxx/6xxx (per item)      [line_total in SEK]
- *   Debit  2641 Ingående moms        [VAT per rate]
- *   Credit 2893 / 2018               [total incl VAT]
+ *   Debit  5xxx/6xxx (per account + dimensions)   [line_total]
+ *   Debit  2641 Ingående moms                     [VAT per rate]
+ *   Credit 2893 / 2018 / 2820                     [total incl VAT]
  *
- * Reverse charge is intentionally not supported here. RC invoices are
- * never "I paid this cash at a kiosk" cases: they're EU/byggtjänster from
- * registered businesses with formal invoices, which always go through AP.
- * The API route guards against this combo before calling us.
+ * Amounts stay in the invoice currency: the claims service converts every
+ * line at the claim rate and keeps the liability credit equal to the claim
+ * total to the öre, which is what the payout flow later reimburses. That is
+ * why this is a pure builder and not a second entry generator: the verifikat
+ * and the expense_claims row come from the same writer as the Underlag pane.
+ *
+ * Reverse charge is intentionally not supported here. RC invoices are never
+ * "I paid this at a kiosk" cases: they're EU/byggtjänster from registered
+ * businesses with formal invoices, which always go through AP. The route
+ * guards against this combo before calling us.
  */
-export async function createSupplierInvoicePrivatelyPaidEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  invoice: SupplierInvoice,
+export function buildSupplierInvoicePrivatelyPaidLines(
+  invoice: Pick<SupplierInvoice, 'default_dimensions'>,
   items: SupplierInvoiceItem[],
-  entityType: 'aktiebolag' | 'enskild_firma',
-  supplierName?: string
-): Promise<JournalEntry | null> {
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, invoice.invoice_date)
-  if (!fiscalPeriodId) {
-    log.warn('No open fiscal period found for invoice date:', invoice.invoice_date)
-    return null
-  }
-
-  const ownerAccount = entityType === 'aktiebolag' ? '2893' : '2018'
-  const desc = buildSupplierDescription('Eget utlägg', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
-  const lines: CreateJournalEntryLineInput[] = []
+  liabilityAccount: string,
+  description: string
+): ExpenseClaimLineInput[] {
+  const lines: ExpenseClaimLineInput[] = []
   // Dimensions PR7: this IS the utlägg path, billable-expense-to-project
   // tagging rides the same merge rules as the registration entry.
   const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
 
-  // Debit: Expense accounts (in SEK), aggregated per (account, dimensions)
+  // Debit: expense accounts, aggregated per (account, dimensions). A bucket
+  // that nets below zero (discount rows) becomes a credit so every line keeps
+  // exactly one side; an empty bucket is dropped.
   const expenseBuckets = groupExpenseBuckets(
     items,
     (item) => item.account_number,
-    (item) => toSekOrThrow(item.line_total, invoice.currency, invoice.exchange_rate),
+    (item) => item.line_total ?? 0,
     defaultDimensions
   )
   for (const bucket of expenseBuckets) {
+    const amount = roundOre(bucket.amount)
+    if (amount === 0) continue
     lines.push({
       account_number: bucket.account,
-      debit_amount: Math.round(bucket.amount * 100) / 100,
-      credit_amount: 0,
-      line_description: desc,
+      debit_amount: amount > 0 ? amount : 0,
+      credit_amount: amount < 0 ? -amount : 0,
+      line_description: description,
       dimensions: bucket.dimensions,
     })
   }
 
-  // Debit: Ingående moms per rate group (mixed-rate kvitto support)
+  // Debit: Ingående moms per rate group (mixed-rate kvitto support). Same
+  // per-item rule as groupVatByRate, without the SEK conversion: a stored
+  // override wins over the computed line_total x rate.
   if (itemsHaveVat(items)) {
-    const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
+    const vatByRate = new Map<number, number>()
+    for (const item of items) {
+      const rate = item.vat_rate ?? 0.25
+      const storedVat = item.vat_amount ?? 0
+      const computedVat = rate > 0 ? roundOre((item.line_total ?? 0) * rate) : 0
+      const vat = storedVat > 0 ? storedVat : computedVat
+      vatByRate.set(rate, (vatByRate.get(rate) || 0) + vat)
+    }
     for (const [rate, amount] of vatByRate) {
-      if (amount > 0) {
+      const vat = roundOre(amount)
+      if (vat > 0) {
         lines.push({
           account_number: '2641',
-          debit_amount: Math.round(amount * 100) / 100,
+          debit_amount: vat,
           credit_amount: 0,
-          line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
+          line_description: `Ingående moms ${Math.round(rate * 100)}% ${description}`,
           dimensions: defaultDimensions,
         })
       }
@@ -628,36 +639,55 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
 
   // Särskild löneskatt på pensionskostnader (SLP): same self-balancing
   // 7533 D / 2514 K pair as the registration entry. Nets to zero, so the
-  // owner account below still carries exactly the expense + VAT total.
-  const slpBase = slpBaseSek(items, invoice.currency, invoice.exchange_rate)
+  // liability account below still carries exactly the expense + VAT total.
+  // generateSlpLines is pure arithmetic, so the invoice-currency base is fine.
+  let slpBase = 0
+  for (const item of items) {
+    if (item.apply_slp === true && isSlpPensionAccount(item.account_number)) {
+      slpBase += item.line_total ?? 0
+    }
+  }
   if (slpBase > 0) {
-    const slpLines = generateSlpLines(slpBase)
-    lines.push(...slpLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
+    for (const l of generateSlpLines(slpBase)) {
+      lines.push({
+        account_number: l.account_number,
+        debit_amount: l.debit_amount,
+        credit_amount: l.credit_amount,
+        line_description: l.line_description,
+        dimensions: defaultDimensions,
+      })
+    }
   }
 
-  // Credit: Owner payable/equity, balance guarantee. Existing credits (the
-  // SLP 2514 leg) are subtracted so the pair never inflates what the owner
-  // is owed: same guarantee shape as the registration entry's 2440 line.
+  // Credit: the person's liability, balance guarantee. Existing credits (the
+  // SLP 2514 leg, a discount bucket) are subtracted so the pair never inflates
+  // what the person is owed: same guarantee shape as the registration entry's
+  // 2440 line.
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   lines.push({
-    account_number: ownerAccount,
+    account_number: liabilityAccount,
     debit_amount: 0,
-    credit_amount: Math.round((totalDebits - totalCredits) * 100) / 100,
-    line_description: desc,
+    credit_amount: roundOre(totalDebits - totalCredits),
+    line_description: description,
     dimensions: defaultDimensions,
   })
 
-  const input: CreateJournalEntryInput = {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: invoice.invoice_date,
-    description: desc,
-    source_type: 'supplier_invoice_privately_paid',
-    source_id: invoice.id,
-    lines,
-  }
+  return lines
+}
 
-  return createJournalEntry(supabase, companyId, userId, input)
+/**
+ * The account expense_claims.expense_account records for a supplier invoice
+ * paid privately: the largest cost line's. The column holds one account (the
+ * Underlag pane books one receipt to one account); the full breakdown lives
+ * on the verifikat lines. First line wins a tie.
+ */
+export function largestExpenseAccount(items: SupplierInvoiceItem[]): string {
+  let best: SupplierInvoiceItem | null = null
+  for (const item of items) {
+    if (!best || Math.abs(item.line_total ?? 0) > Math.abs(best.line_total ?? 0)) best = item
+  }
+  return best?.account_number ?? ''
 }
 
 /**
