@@ -120,7 +120,11 @@ export function FiscalYearEditDialog({
 
   const trimmedName = name.trim()
   const payload: { name?: string; period_start?: string; period_end?: string } = {}
-  if (trimmedName && trimmedName !== period.name) payload.name = trimmedName
+  // "Changed" compares the raw input with the stored name, so a stored name
+  // with stray whitespace does not read as dirty on open; the trimmed value
+  // is what gets sent once the user has actually edited it.
+  const nameChanged = name !== period.name
+  if (nameChanged && trimmedName) payload.name = trimmedName
   if (datesEditable) {
     if (periodStart && periodStart !== period.period_start) payload.period_start = periodStart
     if (periodEnd && periodEnd !== period.period_end) payload.period_end = periodEnd
