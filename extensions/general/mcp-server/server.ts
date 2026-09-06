@@ -20900,7 +20900,10 @@ export const tools: McpTool[] = [
           type: 'boolean',
           description: 'Default false: invoices are created as drafts for manual review. true emails every generated invoice to the customer with no further approval; requires the customer to have an email address.',
         },
-        start_date: { type: 'string', description: 'YYYY-MM-DD first run date. Omit to run on the next occurrence of day_of_month.' },
+        start_date: {
+          type: 'string',
+          description: 'YYYY-MM-DD first run date; fixes the month phase of a quarterly/yearly schedule (e.g. 2027-02-15 with interval_months 12 = every February). Must fall on day_of_month (clamped in shorter months) and not be in the past. Omit to run on the next occurrence of day_of_month.',
+        },
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
@@ -21054,7 +21057,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_update_recurring_schedule',
     keywords: ['återkommande faktura', 'stående faktura'],
     title: 'Update Recurring Invoice Schedule',
-    description: 'Stage an update to a recurring invoice schedule (schedule_id from gnubok_list_recurring_schedules). Pause/resume via status. items replace all lines; omit to keep them. day_of_month clamps to the last day in shorter months; send_hour is a whole hour in Europe/Stockholm.',
+    description: 'Stage an update to a recurring invoice schedule (schedule_id from gnubok_list_recurring_schedules). Pause/resume via status. items replace all lines; omit to keep them. day_of_month clamps to the last day in shorter months; send_hour is a whole hour in Europe/Stockholm; next_run_date re-phases the schedule (e.g. yearly in February).',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -21089,6 +21092,10 @@ export const tools: McpTool[] = [
           type: 'string',
           enum: ['active', 'paused'],
           description: 'paused stops generating invoices; active resumes. Reactivating from a stale date rolls next_run_date to the next future occurrence, never today.',
+        },
+        next_run_date: {
+          type: 'string',
+          description: 'YYYY-MM-DD explicit next run; re-phases the schedule (e.g. move a yearly invoice to February). Must fall on the effective day_of_month (clamped in shorter months) and be after today in Europe/Stockholm. Wins over the automatic recompute.',
         },
         default_dimensions: {
           type: 'object',
@@ -21160,6 +21167,7 @@ export const tools: McpTool[] = [
         'notes',
         'auto_send',
         'status',
+        'next_run_date',
       ]) {
         if (args[key] !== undefined) changes[key] = args[key]
       }

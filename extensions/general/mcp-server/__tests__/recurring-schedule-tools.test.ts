@@ -347,6 +347,40 @@ describe('gnubok_update_recurring_schedule: validation and staging', () => {
     expect(result.preview.current.recurring_schedule_id).toBe(SCHEDULE_ID)
   })
 
+  it('stages an explicit next_run_date so an agent can re-phase a yearly schedule', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: currentSchedule({ interval_months: 12 }) })
+    enqueue({ data: { id: 'op-recurring-5' } })
+
+    const result = (await updateTool().execute(
+      { schedule_id: SCHEDULE_ID, next_run_date: '2999-02-25' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      preview: { current: Record<string, unknown>; proposed: Record<string, unknown> }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.current.next_run_date).toBe('2999-01-25')
+    expect(result.preview.proposed.next_run_date).toBe('2999-02-25')
+  })
+
+  it('rejects a malformed next_run_date before querying the database', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      updateTool().execute(
+        { schedule_id: SCHEDULE_ID, next_run_date: 'februari', dry_run: true },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/next_run_date/i)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
   it('previews an item replace against the current lines', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: currentSchedule() })

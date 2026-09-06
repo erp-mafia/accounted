@@ -876,7 +876,9 @@ export const CreateRecurringScheduleSchema = z.object({
   // Copied onto invoices.default_dimensions for every generated invoice.
   default_dimensions: DimensionsBagSchema.optional(),
   // Optional: when to first run. Defaults to next occurrence of day_of_month
-  // (today if day_of_month === today, otherwise next month).
+  // (today if day_of_month === today, otherwise next month). Fixes the month
+  // phase of a quarterly/yearly schedule ("bill in February"); must be on the
+  // schedule grid (day = day_of_month clamped) and not in the past.
   start_date: isoDate.optional(),
   items: z.array(RecurringScheduleItemSchema).min(1, 'At least one item is required'),
 })
@@ -896,6 +898,11 @@ export const UpdateRecurringScheduleSchema = z.object({
   notes: z.string().nullable().optional(),
   auto_send: z.boolean().optional(),
   status: z.enum(['active', 'paused']).optional(),
+  // Explicit next run date: re-phases the schedule (e.g. move a yearly
+  // schedule from January to February). Must be on the schedule grid for
+  // the effective day_of_month and strictly after today in Stockholm; wins
+  // over the automatic recompute a day_of_month edit or reactivation does.
+  next_run_date: isoDate.optional(),
   // Replaces the whole bag if provided ({} clears all tags). Omit to keep.
   default_dimensions: DimensionsBagSchema.optional(),
   // Replace all items if provided. Omit to keep existing items unchanged.

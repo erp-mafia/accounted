@@ -30,11 +30,43 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { Plus, Trash2 } from 'lucide-react'
 import type { Customer, Currency, RecurringInvoiceSchedule } from '@/types'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { ISO_DATE_RE } from '@/lib/invariants'
+import {
+  alignRunDateToDay,
+  isoFromParts,
+  lastDayOfMonth,
+  parseIsoDate,
+  projectRunDates,
+  runDateMatchesDayOfMonth,
+} from '@/lib/invoices/recurring-run-date'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
+
+/** Today as yyyy-mm-dd in the browser's local calendar. */
+function localTodayIso(): string {
+  const now = new Date()
+  return isoFromParts(now.getFullYear(), now.getMonth(), now.getDate())
+}
+
+/**
+ * Client-side twin of computeInitialRunDate: this month's occurrence of
+ * day_of_month if it has not passed, otherwise next month's. Prefills the
+ * date field so the default is "no offset", exactly what the server would
+ * pick when start_date is omitted.
+ */
+function defaultRunDate(dayOfMonth: number): string {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = now.getMonth()
+  const thisMonthDay = Math.min(dayOfMonth, lastDayOfMonth(y, m))
+  if (now.getDate() <= thisMonthDay) return isoFromParts(y, m, thisMonthDay)
+  const ny = m === 11 ? y + 1 : y
+  const nm = (m + 1) % 12
+  return isoFromParts(ny, nm, Math.min(dayOfMonth, lastDayOfMonth(ny, nm)))
+}
 
 interface Props {
   open: boolean
@@ -108,21 +140,62 @@ function NewRecurringScheduleForm({
         .nullable()
         .optional(),
     })
-    return z.object({
-      customer_id: z.string().uuid(t('validation_customer_required')),
-      name: z.string().min(1, t('validation_name_required')),
-      day_of_month: z.number().int().min(1).max(31),
-      interval_months: z.number().int().min(1).max(12),
-      send_hour: z.number().int().min(0).max(23),
-      payment_terms_days: z.number().int().min(0).max(90),
-      currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
-      auto_send: z.boolean(),
-      your_reference: z.string().optional(),
-      our_reference: z.string().optional(),
-      notes: z.string().optional(),
-      items: z.array(itemSchema).min(1, t('validation_min_one_row')),
-    })
-  }, [t])
+    return z
+      .object({
+        customer_id: z.string().uuid(t('validation_customer_required')),
+        name: z.string().min(1, t('validation_name_required')),
+        day_of_month: z.number().int().min(1).max(31),
+        interval_months: z.number().int().min(1).max(12),
+        // First run (create) or next run (edit). The month is what the user
+        // is really choosing: it fixes the phase of a quarterly/yearly
+        // schedule ("bill in February"). Sent as start_date / next_run_date.
+        run_date: z.string().regex(ISO_DATE_RE, t('validation_run_date_required')),
+        send_hour: z.number().int().min(0).max(23),
+        payment_terms_days: z.number().int().min(0).max(90),
+        currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
+        auto_send: z.boolean(),
+        your_reference: z.string().optional(),
+        our_reference: z.string().optional(),
+        notes: z.string().optional(),
+        items: z.array(itemSchema).min(1, t('validation_min_one_row')),
+      })
+      .superRefine((data, ctx) => {
+        if (!ISO_DATE_RE.test(data.run_date)) return
+        // Mirrors the API: the date must sit on the schedule grid for the
+        // chosen day (the field syncs with day_of_month, so this only fires
+        // on a hand-typed mismatch), and it may not be in the past. An edit
+        // that keeps the stored date is not re-validated: a paused schedule
+        // with a stale date is reactivated by the server's roll-forward.
+        if (!runDateMatchesDayOfMonth(data.run_date, data.day_of_month)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['run_date'],
+            message: t('validation_run_date_grid', { day: data.day_of_month }),
+          })
+          return
+        }
+        const today = localTodayIso()
+        if (schedule) {
+          // The stored date, moved onto the grid for the (possibly edited)
+          // day, is the "unchanged" reference: a day-only edit keeps the
+          // server's own recompute and is not a re-phase.
+          const unchanged = alignRunDateToDay(schedule.next_run_date, data.day_of_month)
+          if (data.run_date !== unchanged && data.run_date <= today) {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['run_date'],
+              message: t('validation_run_date_not_future'),
+            })
+          }
+        } else if (data.run_date < today) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['run_date'],
+            message: t('validation_run_date_past'),
+          })
+        }
+      })
+  }, [t, schedule])
 
   type FormData = z.infer<typeof schema>
 
@@ -141,6 +214,7 @@ function NewRecurringScheduleForm({
           name: schedule.name,
           day_of_month: schedule.day_of_month,
           interval_months: schedule.interval_months ?? 1,
+          run_date: schedule.next_run_date,
           send_hour: schedule.send_hour ?? 8,
           payment_terms_days: schedule.payment_terms_days,
           currency: schedule.currency,
@@ -166,6 +240,7 @@ function NewRecurringScheduleForm({
           name: '',
           day_of_month: 15,
           interval_months: 1,
+          run_date: defaultRunDate(15),
           send_hour: 8,
           payment_terms_days: 30,
           currency: 'SEK',
@@ -190,12 +265,23 @@ function NewRecurringScheduleForm({
   async function onSubmit(data: FormData) {
     setIsSubmitting(true)
     try {
+      const { run_date, ...rest } = data
+      // Create: the chosen date is the first run. Edit: only send it when the
+      // user re-phased the schedule (a different month/year than the stored
+      // date aligned to the chosen day), so an unrelated edit, a day-only
+      // edit or a reactivation keeps the server's own recompute and never
+      // re-sends a stale date.
+      const rePhased =
+        !!schedule && run_date !== alignRunDateToDay(schedule.next_run_date, rest.day_of_month)
+      const body = schedule
+        ? { ...rest, ...(rePhased ? { next_run_date: run_date } : {}) }
+        : { ...rest, start_date: run_date }
       const res = await fetch(
         schedule ? `/api/invoices/recurring/${schedule.id}` : '/api/invoices/recurring',
         {
           method: schedule ? 'PATCH' : 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
+          body: JSON.stringify(body),
         },
       )
       if (!res.ok) {
@@ -237,6 +323,24 @@ function NewRecurringScheduleForm({
 
   const items = watch('items')
   const watchCurrency = watch('currency')
+  const watchDay = watch('day_of_month')
+  const watchInterval = watch('interval_months')
+  const watchRunDate = watch('run_date')
+  // Keep the date on the schedule grid when the day field changes: same
+  // month, day moved to the new day_of_month (clamped). The reverse sync
+  // (date -> day) lives in the date field's onChange.
+  useEffect(() => {
+    if (!Number.isInteger(watchDay) || watchDay < 1 || watchDay > 31) return
+    const aligned = alignRunDateToDay(watchRunDate, watchDay)
+    if (aligned !== watchRunDate) setValue('run_date', aligned, { shouldValidate: true })
+    // watchRunDate is deliberately not a dependency: the effect exists to
+    // react to the day, not to re-run on every date keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchDay, setValue])
+  const upcomingRuns =
+    Number.isInteger(watchDay) && watchInterval >= 1
+      ? projectRunDates(watchRunDate, watchDay, watchInterval, 4).slice(1)
+      : []
   // Automatic sending requires a customer email; without one the cron would
   // just produce a monthly draft + warning. Block it at the source.
   const watchCustomerId = watch('customer_id')
@@ -359,6 +463,44 @@ function NewRecurringScheduleForm({
               <p className="text-xs text-muted-foreground mt-1">
                 {t('day_hint')}
               </p>
+            </div>
+            <div>
+              <Label htmlFor="run_date">
+                {schedule ? t('run_date_edit_label') : t('run_date_label')}
+              </Label>
+              <Controller
+                control={control}
+                name="run_date"
+                render={({ field }) => (
+                  <Input
+                    id="run_date"
+                    type="date"
+                    className="tabular-nums"
+                    value={field.value}
+                    onBlur={field.onBlur}
+                    onChange={(e) => {
+                      const next = e.target.value
+                      field.onChange(next)
+                      // Picking a day that is not where day_of_month lands in
+                      // that month means the user changed the day too, so
+                      // follow it. Feb 28 with day 31 stays 31 (clamped hit).
+                      const parsed = parseIsoDate(next)
+                      if (parsed && !runDateMatchesDayOfMonth(next, watchDay)) {
+                        setValue('day_of_month', parsed.day, { shouldValidate: true })
+                      }
+                    }}
+                  />
+                )}
+              />
+              {errors.run_date ? (
+                <p className="text-sm text-destructive mt-1">{errors.run_date.message}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {upcomingRuns.length > 0
+                    ? t('upcoming_runs', { dates: upcomingRuns.map((d) => formatDate(d)).join(', ') })
+                    : t('run_date_hint')}
+                </p>
+              )}
             </div>
             <div>
               <Label htmlFor="send_hour">{t('send_hour_label')}</Label>

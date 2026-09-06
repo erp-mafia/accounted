@@ -56,6 +56,7 @@ import {
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { createLogger } from '@/lib/logger'
+import { lastDayOfMonth, isoFromParts } from '@/lib/invoices/recurring-run-date'
 import type {
   Invoice,
   InvoiceItem,
@@ -72,22 +73,6 @@ export interface ExecuteResult {
   invoiceNumber: string | null
   autoSent: boolean
   warning: string | null
-}
-
-/**
- * Last day of the month for the given year/month (1-indexed month).
- * Used to clamp day_of_month values >28 in shorter months.
- */
-function lastDayOfMonth(year: number, monthIndex0: number): number {
-  // Day 0 of next month = last day of this month.
-  return new Date(Date.UTC(year, monthIndex0 + 1, 0)).getUTCDate()
-}
-
-function isoFromParts(year: number, monthIndex0: number, day: number): string {
-  const yyyy = year.toString().padStart(4, '0')
-  const mm = (monthIndex0 + 1).toString().padStart(2, '0')
-  const dd = day.toString().padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
 }
 
 function assertValidCadence(dayOfMonth: number, intervalMonths: number): void {
