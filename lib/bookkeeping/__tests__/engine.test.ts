@@ -922,9 +922,16 @@ describe('reverseEntry: bank transaction unlink', () => {
    * the delete (a row anchored to some other verifikat too), as ids (one
    * bank_line row each, no amount) or as full rows. `txRows` is what the
    * partial-split read returns for the rows that still have anchors.
+   * `pointerRows` are the ids whose journal_entry_id column points at entry-1
+   * (the read that precedes the pointer reset).
    */
   function setup(
-    opts: { voucherLinks?: string[]; remainingLinks?: Array<string | RemainingRow>; txRows?: TxRow[] } = {},
+    opts: {
+      voucherLinks?: string[]
+      remainingLinks?: Array<string | RemainingRow>
+      txRows?: TxRow[]
+      pointerRows?: string[]
+    } = {},
   ) {
     let jeCall = 0
     const jeResults = [
@@ -968,6 +975,7 @@ describe('reverseEntry: bank transaction unlink', () => {
       b.eq = filter('eq')
       b.in = filter('in')
       b.is = filter('is')
+      b.neq = filter('neq')
       b.then = (resolve: (v: unknown) => void) => resolve(resolveWith(current))
       return b
     }
@@ -993,9 +1001,13 @@ describe('reverseEntry: bank transaction unlink', () => {
           return { insert: vi.fn().mockResolvedValue({ error: null }) }
         }
         if (table === 'transactions') {
-          return recorder(txWrites, (current) =>
-            current.op === 'select' ? { data: opts.txRows ?? [], error: null } : { error: null },
-          )
+          return recorder(txWrites, (current) => {
+            if (current.op !== 'select') return { error: null }
+            if (current.payload === 'id') {
+              return { data: (opts.pointerRows ?? []).map((id) => ({ id })), error: null }
+            }
+            return { data: opts.txRows ?? [], error: null }
+          })
         }
         if (table === 'transaction_voucher_links') {
           return recorder(linkOps, (current) => {
@@ -1022,15 +1034,24 @@ describe('reverseEntry: bank transaction unlink', () => {
     const result = await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(result.id).toBe('reversal-1')
-    expect(txWrites).toHaveLength(1)
-    expect(txWrites[0].payload).toEqual({
+    // [0] the read of the rows the reset is about to release, [1] the reset.
+    expect(txWrites).toHaveLength(2)
+    expect(txWrites[0]).toEqual({
+      op: 'select',
+      payload: 'id',
+      filters: [
+        ['eq', 'company_id', 'company-1'],
+        ['eq', 'journal_entry_id', 'entry-1'],
+      ],
+    })
+    expect(txWrites[1].payload).toEqual({
       journal_entry_id: null,
       is_business: null,
       category: null,
       reconciliation_method: null,
     })
     // Scoped to rows linked to the reversed entry only: never a company-wide reset.
-    expect(txWrites[0].filters).toEqual([
+    expect(txWrites[1].filters).toEqual([
       ['eq', 'company_id', 'company-1'],
       ['eq', 'journal_entry_id', 'entry-1'],
     ])
@@ -1086,10 +1107,10 @@ describe('reverseEntry: bank transaction unlink', () => {
       },
     ])
 
-    // [0] unlink, [1] the partial-split read for the row still anchored
-    // (tx-c), [2] the release of the rows with no anchor left.
-    expect(txWrites).toHaveLength(3)
-    expect(txWrites[1]).toEqual({
+    // [0] pointer read, [1] unlink, [2] the partial-split read for the row
+    // still anchored (tx-c), [3] the release of the rows with no anchor left.
+    expect(txWrites).toHaveLength(4)
+    expect(txWrites[2]).toEqual({
       op: 'select',
       payload: 'id, amount, journal_entry_id',
       filters: [
@@ -1097,10 +1118,10 @@ describe('reverseEntry: bank transaction unlink', () => {
         ['in', 'id', ['tx-c']],
       ],
     })
-    expect(txWrites[2].payload).toEqual({ is_business: null, category: null, reconciliation_method: null })
+    expect(txWrites[3].payload).toEqual({ is_business: null, category: null, reconciliation_method: null })
     // Only rows with no anchor left, and never a row whose journal_entry_id
     // still points at another verifikat (residual booking).
-    expect(txWrites[2].filters).toEqual([
+    expect(txWrites[3].filters).toEqual([
       ['eq', 'company_id', 'company-1'],
       ['in', 'id', ['tx-a', 'tx-b']],
       ['is', 'journal_entry_id', null],
@@ -1116,8 +1137,8 @@ describe('reverseEntry: bank transaction unlink', () => {
     await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(linkOps.map((o) => o.op)).toEqual(['select', 'delete', 'select'])
-    // The unlink plus the partial-split read; no release.
-    expect(txWrites.map((w) => w.op)).toEqual(['update', 'select'])
+    // The pointer read, the unlink, the partial-split read; no release.
+    expect(txWrites.map((w) => w.op)).toEqual(['select', 'update', 'select'])
   })
 
   it('releases a 1:N split whole when one of its verifikat is reversed (#1553): surviving slices dropped', async () => {
@@ -1149,9 +1170,10 @@ describe('reverseEntry: bank transaction unlink', () => {
 
   it('keeps a row whose surviving slices still sum to its amount, or that carries a non-bank_line anchor', async () => {
     // tx-full: a bulk-booked-style anchor on another verifikat covering the
-    // whole amount. tx-res: a residual booking's 'other' row (its main
-    // verifikat pointer is null here because the storno of THAT verifikat is
-    // what left it; the residual row is not a slice and is never judged).
+    // whole amount. tx-res: a residual booking's 'other' row whose main
+    // verifikat pointer is already null (a row left behind before the main
+    // storno started dropping such links, #2061); the residual row is not a
+    // slice and the partial-split judgement never touches it.
     const { supabase, txWrites, linkOps } = setup({
       voucherLinks: ['tx-full', 'tx-res'],
       remainingLinks: [
@@ -1167,7 +1189,48 @@ describe('reverseEntry: bank transaction unlink', () => {
     await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
 
     expect(linkOps.map((o) => o.op)).toEqual(['select', 'delete', 'select'])
-    expect(txWrites.map((w) => w.op)).toEqual(['update', 'select'])
+    expect(txWrites.map((w) => w.op)).toEqual(['select', 'update', 'select'])
+  })
+
+  it('drops the supplementary junction links of a row whose main verifikat is reversed (#2061)', async () => {
+    // Residual booking: tx-r points at entry-1 (the main verifikat) and one
+    // junction row of role 'other' anchors the small residual verifikat.
+    // Reversing entry-1 releases tx-r whole: the pointer reset takes the
+    // 'other' row with it, so no reader (unmatched list, bulk_book RPC,
+    // is_transaction_booked) keeps calling the row booked.
+    const { supabase, txWrites, linkOps } = setup({ pointerRows: ['tx-r'] })
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(txWrites.map((w) => w.op)).toEqual(['select', 'update'])
+    expect(linkOps).toEqual([
+      {
+        op: 'delete',
+        payload: undefined,
+        filters: [
+          ['eq', 'company_id', 'company-1'],
+          ['in', 'transaction_id', ['tx-r']],
+          // Links to the reversed entry itself belong to the junction cleanup.
+          ['neq', 'journal_entry_id', 'entry-1'],
+        ],
+      },
+      {
+        op: 'select',
+        payload: 'transaction_id',
+        filters: [
+          ['eq', 'company_id', 'company-1'],
+          ['eq', 'journal_entry_id', 'entry-1'],
+        ],
+      },
+    ])
+  })
+
+  it('does not touch the junction when no row pointed at the reversed entry', async () => {
+    const { supabase, linkOps } = setup({ pointerRows: [] })
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(linkOps.map((o) => o.op)).toEqual(['select'])
   })
 })
 
@@ -1255,8 +1318,8 @@ describe('reverseEntry: opening balance unlink', () => {
         }
         if (table === 'transactions') {
           const b: Record<string, unknown> = {}
-          for (const m of ['update', 'eq']) b[m] = vi.fn().mockReturnValue(b)
-          b.then = (resolve: (v: unknown) => void) => resolve({ error: null })
+          for (const m of ['select', 'update', 'eq']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) => resolve({ data: [], error: null })
           return b
         }
         return createMockChain()
