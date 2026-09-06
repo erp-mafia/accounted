@@ -1890,7 +1890,11 @@
     "related_chart_of_accounts": "Chart of accounts (BAS)",
     "periodisering_label": "Accruals",
     "periodisering_help": "The year-end wizard scans invoices for date ranges extending into the next fiscal year and suggests accruals. Nothing is booked without your review.",
-    "periodisering_open_wizard": "Open the accruals wizard"
+    "periodisering_open_wizard": "Open the accruals wizard",
+    "series_standard_set_button": "Use the standard set",
+    "series_standard_set_help": "Fills in the set new companies start with: customer invoices B, customer payments C, supplier invoices D, supplier payments E, accruals H, year-end I, salaries K, cash invoices L, VAT settlement M, everything else A. Review the rows and save. Preferably switch at the start of a fiscal year: vouchers already posted stay in their series, new ones land in the new series from the moment you save, and the change shows in the processing history.",
+    "series_row_accrual_only": "Applies to the invoice method (faktureringsmetoden), which this company does not use. The choice is saved and applies if the method changes.",
+    "series_row_cash_only": "Applies to the cash method (kontantmetoden), which this company does not use. The choice is saved and applies if the method changes."
   },
   "settings_tax": {},
   "settings_team": {},
