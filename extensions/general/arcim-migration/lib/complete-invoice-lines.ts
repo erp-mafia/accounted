@@ -29,13 +29,19 @@
  * momsdeklaration and every report read the ledger, not these columns, so
  * filling them changes what the invoice page shows and nothing that was
  * filed (see the 2026-08-22 verification in DECISIONS.md).
+ *
+ * Both are written by one call to the complete_invoice_rows RPC per invoice
+ * (migration 20260906135730), the write path the migration wizard shares: it
+ * locks the invoice, inserts the rows only when the invoice still has none
+ * and applies the header split in the same transaction, so an invoice's rows
+ * are written at most once whichever writer gets there first, and "rows
+ * landed, header did not" is not a reachable state.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 import { equalOre, roundOre } from '@/lib/money'
-import { chunk } from '@/lib/utils'
 import type { SalesInvoiceDto } from '@/lib/providers/dto'
 import type { ProviderName } from '@/lib/providers/types'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
@@ -108,9 +114,6 @@ interface CandidateRow {
   exchange_rate: number | null
   invoice_items: { id: string }[] | null
 }
-
-/** Invoices per statement. Small enough that a chunk's rows stay one request. */
-const WRITE_CHUNK_SIZE = 100
 
 /**
  * How far the rows may disagree with the header before the invoice is left
@@ -195,30 +198,33 @@ async function loadCandidates(supabase: SupabaseClient, companyId: string): Prom
   return rows.filter((row) => (row.invoice_items?.length ?? 0) === 0)
 }
 
-/** Ids among `ids` that gained rows since the candidates were loaded. */
-async function alreadyFilled(supabase: SupabaseClient, ids: string[]): Promise<Set<string>> {
-  const { data, error } = await supabase
-    .from('invoice_items')
-    .select('invoice_id')
-    .in('invoice_id', ids)
-  if (error) throw new Error(`invoice_items lookup failed: ${error.message}`)
-  return new Set(((data ?? []) as { invoice_id: string }[]).map((r) => r.invoice_id))
-}
-
-/** The header VAT split the detail form established, ready to write. */
+/**
+ * The header VAT split the detail form established, as the RPC's p_header:
+ * the six invoice columns it may rewrite, all present or none.
+ */
 interface HeaderFill {
   subtotal: number
-  subtotalSek: number | null
-  vatAmount: number
-  vatAmountSek: number | null
-  vatRate: number | null
-  vatTreatment: string
+  subtotal_sek: number | null
+  vat_amount: number
+  vat_amount_sek: number | null
+  vat_rate: number | null
+  vat_treatment: string
 }
 
 interface PlannedWrite {
   row: CandidateRow
+  /** The invoice_items columns per row; the RPC stamps invoice_id itself. */
   items: Record<string, unknown>[]
   header: HeaderFill | null
+}
+
+/** What complete_invoice_rows returns (migration 20260906135730). */
+interface CompleteRowsOutcome {
+  ok: boolean
+  code?: string
+  wrote?: boolean
+  rows?: number
+  header_updated?: boolean
 }
 
 export async function completeMigratedInvoiceLines(
@@ -333,19 +339,15 @@ export async function completeMigratedInvoiceLines(
       const vatAmount = mapped.invoice.vat_amount as number
       header = {
         subtotal,
-        subtotalSek: toRowSek(subtotal, row),
-        vatAmount,
-        vatAmountSek: toRowSek(vatAmount, row),
-        vatRate: mapped.invoice.vat_rate as number | null,
-        vatTreatment: mapped.invoice.vat_treatment as string,
+        subtotal_sek: toRowSek(subtotal, row),
+        vat_amount: vatAmount,
+        vat_amount_sek: toRowSek(vatAmount, row),
+        vat_rate: mapped.invoice.vat_rate as number | null,
+        vat_treatment: mapped.invoice.vat_treatment as string,
       }
     }
 
-    planned.push({
-      row,
-      items: mapped.items.map((item) => ({ ...item, invoice_id: row.id })),
-      header,
-    })
+    planned.push({ row, items: mapped.items, header })
   }
 
   if (dryRun) {
@@ -355,44 +357,36 @@ export async function completeMigratedInvoiceLines(
     return result
   }
 
-  for (const batch of chunk(planned, WRITE_CHUNK_SIZE)) {
-    // A concurrent run (the wizard and the cron, or two crons overlapping)
-    // may have filled some of these since the candidates were loaded. Rows
-    // are appended, never replaced, so a second write would double them.
-    const filled = await alreadyFilled(supabase, batch.map((p) => p.row.id))
-    const todo = batch.filter((p) => !filled.has(p.row.id))
-
-    const written = await insertRows(supabase, todo)
-    for (const plan of todo) {
-      if (!written.has(plan.row.id)) {
-        result.failed++
-        continue
-      }
-      result.completed++
-      if (!plan.header) continue
-      // Written as a literal so the schema guard checks these columns.
-      const { error } = await supabase
-        .from('invoices')
-        .update({
-          subtotal: plan.header.subtotal,
-          subtotal_sek: plan.header.subtotalSek,
-          vat_amount: plan.header.vatAmount,
-          vat_amount_sek: plan.header.vatAmountSek,
-          vat_rate: plan.header.vatRate,
-          vat_treatment: plan.header.vatTreatment,
-        })
-        .eq('id', plan.row.id)
-        .eq('company_id', companyId)
-      if (error) {
-        // The rows landed; only the header split is still the old shape. The
-        // next run will not revisit this invoice (it now has rows), so say so.
-        log.error('header VAT update failed after the rows were written', {
-          companyId, invoiceId: plan.row.id, reason: error.message,
-        })
-        continue
-      }
-      result.headersUpdated++
+  for (const plan of planned) {
+    // One call per invoice, so a bad row set rejects its own invoice and not
+    // the hundred beside it. A concurrent run (the wizard and the cron, or
+    // two crons overlapping) that filled this invoice since the candidates
+    // were loaded leaves this call with wrote = false: rows are appended,
+    // never replaced, and the RPC's invoice lock is what keeps a second
+    // writer from doubling them.
+    const { data, error } = await supabase.rpc('complete_invoice_rows', {
+      p_company_id: companyId,
+      p_invoice_id: plan.row.id,
+      p_rows: plan.items,
+      p_header: plan.header,
+    })
+    const outcome = (data ?? null) as CompleteRowsOutcome | null
+    if (error || !outcome?.ok) {
+      result.failed++
+      log.error('complete_invoice_rows failed', {
+        companyId, invoiceId: plan.row.id, invoiceNumber: plan.row.invoice_number,
+        reason: error?.message ?? outcome?.code ?? 'empty RPC response',
+      })
+      continue
     }
+    if (!outcome.wrote) {
+      log.info('invoice gained rows since the candidates were loaded; left as is', {
+        companyId, invoiceId: plan.row.id,
+      })
+      continue
+    }
+    result.completed++
+    if (outcome.header_updated) result.headersUpdated++
   }
 
   result.remaining = candidates.length - result.completed
@@ -410,34 +404,4 @@ export async function completeMigratedInvoiceLines(
     hydration: result.hydration,
   })
   return result
-}
-
-/**
- * Insert every plan's rows: one statement for the batch, and on failure one
- * statement per invoice so a single bad row rejects its own invoice, not the
- * hundred beside it. An invoice's rows never split across statements: it
- * either has all of them or none.
- */
-async function insertRows(supabase: SupabaseClient, plans: PlannedWrite[]): Promise<Set<string>> {
-  const written = new Set<string>()
-  if (plans.length === 0) return written
-
-  const bulk = await supabase.from('invoice_items').insert(plans.flatMap((p) => p.items))
-  if (!bulk.error) {
-    for (const plan of plans) written.add(plan.row.id)
-    return written
-  }
-
-  log.warn('bulk invoice_items insert failed; retrying per invoice', { reason: bulk.error.message })
-  for (const plan of plans) {
-    const { error } = await supabase.from('invoice_items').insert(plan.items)
-    if (error) {
-      log.error('invoice_items insert failed', {
-        invoiceId: plan.row.id, invoiceNumber: plan.row.invoice_number, reason: error.message,
-      })
-      continue
-    }
-    written.add(plan.row.id)
-  }
-  return written
 }
