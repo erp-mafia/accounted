@@ -7,7 +7,7 @@ import { Loader2, X } from 'lucide-react'
 import AgentAvatar from './AgentAvatar'
 import { collapsedStatusLabel } from './agent-status'
 import { routeToIntent } from '@/lib/agent/intents/route-mapping'
-import { useCapability } from '@/contexts/CompanyContext'
+import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 
 // Floating trigger sits above the page bottom-right, opens the AgentSheet when
@@ -48,6 +48,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   const pathname = usePathname()
   const router = useRouter()
   const hasAi = useCapability(CAPABILITY.ai)
+  const assistantAvailable = useAssistantAvailable()
 
   // Read the dismissal AFTER hydration (effect, not state initializer): the
   // server always renders the pill, so an initializer that reads
@@ -147,7 +148,10 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   if (!identity.isVerified) return null
 
   const name = identity.displayName?.trim() || 'min assistent'
-  const dispatch = routeToIntent(pathname)
+  // Without the tool-loop runtime (OpenAI-compatible or unconfigured AI, #2204)
+  // every route dispatches to general.help: the single-call console runs on
+  // any provider, so the pill stays but never opens a chat that would 503.
+  const dispatch = routeToIntent(pathname, { assistantAvailable })
   // AI assistant runs on a paid cloud service. Without the capability, opening
   // the sheet would land the user in a chat whose send is dead. Keep the FAB
   // visible (it's the conversion surface) but route it to billing instead.

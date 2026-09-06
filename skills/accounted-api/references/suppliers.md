@@ -514,6 +514,7 @@ Books the payment journal entry (Debit 2440 / Credit 1930 under accrual; or Debi
 - exchange_rate_difference (SEK delta vs the booked rate at registration) is required for foreign-currency SIs to book the FX gain/loss to 3960 / 7960. Omitting it on a non-SEK SI under accrual mis-books FX.
 - Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner: retry the call.
 - Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.
+- Duplicate-payment guard: on a full settlement, if a business bank transaction of the same amount around payment_date carries the supplier name (first distinctive token, so abbreviated bank text such as "HI3G" for Hi3G Access AB counts), returns 409 SI_PAID_LIKELY_DUPLICATE with candidate transactions. A candidate with match_reason `already_booked` is a bank row that is ALREADY a verifikat: do not pay the invoice, correct the double booking instead. Retry with `force: true` only after the user confirms, and with a fresh Idempotency-Key (the original is body-hash bound). Also evaluated under dry-run.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

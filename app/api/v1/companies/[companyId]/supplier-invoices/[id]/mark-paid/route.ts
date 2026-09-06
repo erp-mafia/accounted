@@ -31,6 +31,7 @@ import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { findDuplicatePaymentCandidatesForSupplierInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -68,6 +69,7 @@ registerEndpoint({
     'exchange_rate_difference (SEK delta vs the booked rate at registration) is required for foreign-currency SIs to book the FX gain/loss to 3960 / 7960. Omitting it on a non-SEK SI under accrual mis-books FX.',
     'Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner: retry the call.',
     'Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.',
+    'Duplicate-payment guard: on a full settlement, if a business bank transaction of the same amount around payment_date carries the supplier name (first distinctive token, so abbreviated bank text such as "HI3G" for Hi3G Access AB counts), returns 409 SI_PAID_LIKELY_DUPLICATE with candidate transactions. A candidate with match_reason `already_booked` is a bank row that is ALREADY a verifikat: do not pay the invoice, correct the double booking instead. Retry with `force: true` only after the user confirms, and with a fresh Idempotency-Key (the original is body-hash bound). Also evaluated under dry-run.',
   ],
   example: {
     request: { payment_date: '2026-05-13' },
@@ -122,6 +124,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     let bodyPaymentDate: string | undefined
     let exchangeRateDifference: number | undefined
     let bodyNotes: string | undefined
+    let force = false
     let customLines:
       | Array<{ account_number: string; debit_amount: number; credit_amount: number; line_description?: string }>
       | undefined
@@ -133,6 +136,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       exchangeRateDifference = parsed.data.exchange_rate_difference
       bodyNotes = parsed.data.notes
       customLines = parsed.data.lines
+      force = parsed.data.force === true
     }
 
     const today = new Date().toISOString().split('T')[0]
@@ -161,7 +165,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .from('supplier_invoices')
       .select(`
         id, supplier_id, status, currency, exchange_rate, total, paid_amount, remaining_amount,
-        supplier_invoice_number, arrival_number, invoice_date, vat_treatment, reverse_charge,
+        supplier_invoice_number, arrival_number, invoice_date, vat_treatment, reverse_charge, payment_reference,
         subtotal, subtotal_sek, vat_amount, vat_amount_sek, total_sek, due_date, received_date,
         is_credit_note, credited_invoice_id, payment_journal_entry_id, default_dimensions,
         supplier:suppliers(id, name, supplier_type),
@@ -327,6 +331,47 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    const pickSupplier = (s: SI['supplier']): SupplierObj | null => {
+      if (!s) return null
+      return Array.isArray(s) ? (s[0] ?? null) : s
+    }
+    const supplierRow = pickSupplier(typed.supplier)
+
+    // Duplicate-payment guard: parity with the dashboard mark-paid route and
+    // the v1 invoices twin, which this door lacked entirely. Runs before the
+    // dry-run preview so a successful preview cannot mask the warning, only on
+    // a full settlement (a partial is an explicit, deliberate action), and
+    // never on force=true. Same shared detector as the dashboard route.
+    if (!force && newStatus === 'paid') {
+      const candidates = await findDuplicatePaymentCandidatesForSupplierInvoice(ctx.supabase, {
+        companyId: ctx.companyId!,
+        invoice: {
+          supplier_invoice_number: typed.supplier_invoice_number ?? null,
+          payment_reference: (typed as { payment_reference?: string | null }).payment_reference ?? null,
+          supplier_name: supplierRow?.name,
+          currency: typed.currency ?? null,
+          total: typed.total ?? null,
+          total_sek: (typed as { total_sek?: number | null }).total_sek ?? null,
+          exchange_rate: (typed as { exchange_rate?: number | null }).exchange_rate ?? null,
+        },
+        paymentAmount,
+        paymentDate,
+      })
+      if (candidates.length > 0) {
+        return v1ErrorResponseFromCode('SI_PAID_LIKELY_DUPLICATE', ctx.log, {
+          requestId: ctx.requestId,
+          details: { candidates },
+        })
+      }
+    } else if (force) {
+      ctx.log.warn('duplicate-payment guard bypassed', {
+        reason: 'force=true',
+        invoiceId,
+        userId: ctx.userId,
+        paymentAmount,
+      })
+    }
+
     if (ctx.dryRun) {
       // Keep the preview aligned with the live date-only payment timestamp.
       return dryRunPreview(
@@ -343,12 +388,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
-
-    const pickSupplier = (s: SI['supplier']): SupplierObj | null => {
-      if (!s) return null
-      return Array.isArray(s) ? (s[0] ?? null) : s
-    }
-    const supplierRow = pickSupplier(typed.supplier)
 
     // Strict-mode: book the JE FIRST. Failure aborts before any SI mutation.
     let journalEntryId: string | null = null

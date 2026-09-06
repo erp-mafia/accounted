@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
 
 const uuidSchema = z.string().uuid()
 
@@ -12,8 +13,8 @@ const uuidSchema = z.string().uuid()
  * into a PostgREST .or() filter string, so validation doubles as injection
  * protection).
  *
- * Counts BOTH direct attachments (document_attachments.journal_entry_id) and
- * documents retained on a supplier invoice that references the entry
+ * `data` counts BOTH direct attachments (document_attachments.journal_entry_id)
+ * and documents retained on a supplier invoice that references the entry
  * (registration/payment FK or a supplier_invoice_payments row). BFL 5 kap 7 §
  * accepts underlag via hänvisning, and the expanded-row view
  * (JournalEntryAttachments) already lists referenced docs: counting only
@@ -23,6 +24,14 @@ const uuidSchema = z.string().uuid()
  * guards, so they must not silence the missing-underlag warning (mirrors the
  * verifikat_without_documents RPC). Documents are deduplicated per entry so a
  * doc that is both directly linked and referenced counts once.
+ *
+ * `invoice_references` counts, per requested entry, the customer invoices
+ * that point at it (invoices.journal_entry_id or an invoice_payments row):
+ * the customer-side hänvisning (#2298). Kept apart from `data` because a
+ * register invoice is not a document row: the list must not offer a
+ * paperclip with nothing behind it, but it must stop warning "Underlag
+ * saknas" for an entry the verifikat page already lists an invoice on.
+ * Same verdict as the RPC's customer arm and the verifikat detail page.
  */
 export const GET = withRouteContext('document.counts', async (request, ctx) => {
   const { supabase, companyId } = ctx
@@ -125,6 +134,13 @@ export const GET = withRouteContext('document.counts', async (request, ctx) => {
     add(row.journal_entry_id, row.supplier_invoice.document_id)
   }
 
+  let invoiceRefs: Map<string, string[]>
+  try {
+    invoiceRefs = await getInvoiceReferencesForJournalEntries(supabase, companyId, ids)
+  } catch (err) {
+    return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+  }
+
   // Referenced entries outside the requested set (an SI FK can point at an
   // entry the caller didn't ask about) must not leak into the response.
   const requested = new Set(ids)
@@ -132,6 +148,10 @@ export const GET = withRouteContext('document.counts', async (request, ctx) => {
   for (const [journalEntryId, docIds] of docsByEntry) {
     if (requested.has(journalEntryId)) counts[journalEntryId] = docIds.size
   }
+  const invoiceReferences: Record<string, number> = {}
+  for (const [journalEntryId, invoiceIds] of invoiceRefs) {
+    if (requested.has(journalEntryId)) invoiceReferences[journalEntryId] = invoiceIds.length
+  }
 
-  return NextResponse.json({ data: counts })
+  return NextResponse.json({ data: counts, invoice_references: invoiceReferences })
 })

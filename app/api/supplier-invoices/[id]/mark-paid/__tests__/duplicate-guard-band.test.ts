@@ -155,7 +155,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
     eventBus.clear()
   })
 
-  it('SEK invoice: one kronor-banded sweep, byte-identical to the pre-fix query', async () => {
+  it('SEK invoice: one kronor-banded sweep with the same band, probing both name columns', async () => {
     useSupabase({
       supplier_invoices: [
         {
@@ -188,7 +188,15 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
     expect(q.lte).toContainEqual(['amount', -12250])
     // Band is kronor, so the rows it is applied to must be kronor. NULL is
     // kronor too: transactions.currency is nullable with DEFAULT 'SEK'.
-    expect(q.or).toEqual([['currency.is.null,currency.eq.SEK']])
+    // Issue #2299: the needle is the first distinctive token of the supplier
+    // name, probed on merchant_name OR description (the old guard sent
+    // `%Leverantör AB%` against merchant_name only), and the currency clause
+    // is nested into the SAME single .or() so nothing rides on how PostgREST
+    // treats a repeated `or=` key.
+    expect(q.or).toEqual([[
+      'and(or(currency.is.null,currency.eq.SEK),or(merchant_name.ilike.*leverantör*,description.ilike.*leverantör*))',
+    ]])
+    expect(q.ilike).toBeUndefined()
     // The per-row re-check reads these columns; a narrow projection would make
     // it read `undefined` and silently default every row to SEK.
     expect(q.select?.[0][0]).toContain('currency')
@@ -229,12 +237,16 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
 
     expect(txQueries()).toHaveLength(2)
     const eur = txQueries()[0].calls
-    expect(eur.or).toEqual([['currency.eq.EUR']])
+    expect(eur.or).toEqual([[
+      'and(or(currency.eq.EUR),or(merchant_name.ilike.*leverantör*,description.ilike.*leverantör*))',
+    ]])
     expect(eur.gte).toContainEqual(['amount', -1020])
     expect(eur.lte).toContainEqual(['amount', -980])
 
     const sek = txQueries()[1].calls
-    expect(sek.or).toEqual([['currency.is.null,currency.eq.SEK']])
+    expect(sek.or).toEqual([[
+      'and(or(currency.is.null,currency.eq.SEK),or(merchant_name.ilike.*leverantör*,description.ilike.*leverantör*))',
+    ]])
     // 1 000 EUR x 11,50 = 11 500 kr, banded plus-minus 2 %. The pre-fix query
     // asked kronor rows for -1 020..-980 and matched nothing.
     expect(sek.gte).toContainEqual(['amount', -11730])
@@ -275,6 +287,8 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(txQueries()).toHaveLength(1)
-    expect(txQueries()[0].calls.or).toEqual([['currency.eq.EUR']])
+    expect(txQueries()[0].calls.or).toEqual([[
+      'and(or(currency.eq.EUR),or(merchant_name.ilike.*leverantör*,description.ilike.*leverantör*))',
+    ]])
   })
 })

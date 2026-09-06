@@ -20,6 +20,7 @@ import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider, type ByraTeamRef } from '@/contexts/CompanyContext'
 import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
+import { getAiStatus } from '@/lib/ai'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getBranding } from '@/lib/branding/service'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
@@ -76,6 +77,12 @@ export default async function DashboardLayout({
   if (!user) {
     redirect('/login')
   }
+
+  // Deployment-level: can the in-app assistant (the tool-loop runtime behind
+  // /api/agent/invoke) run here at all? Env reads only. Handed to every
+  // CompanyProvider below so the entry points that open that runtime can hide
+  // instead of leading the user into its 503 (#2204).
+  const assistantAvailable = getAiStatus().assistantAvailable
 
   // Resolve active company from user_preferences (authoritative). The
   // `gnubok-company-id` cookie is intentionally no longer consulted here:
@@ -196,6 +203,7 @@ export default async function DashboardLayout({
           foreignCompanies: [],
           isSandbox: false,
           capabilities: [],
+          assistantAvailable,
           trialEndsAt: null,
           entitlementState: 'none' as const,
           trialExpiredAt: null,
@@ -351,6 +359,7 @@ export default async function DashboardLayout({
       foreignCompanies: [],
       isSandbox: false,
       capabilities: [],
+      assistantAvailable,
       trialEndsAt: null,
       entitlementState: 'none' as const,
       trialExpiredAt: null,
@@ -518,6 +527,7 @@ export default async function DashboardLayout({
     foreignCompanies,
     isSandbox,
     capabilities: entitlements.capabilities,
+    assistantAvailable,
     trialEndsAt: entitlements.trialEndsAt,
     entitlementState: entitlements.entitlementState,
     trialExpiredAt: entitlements.trialExpiredAt,

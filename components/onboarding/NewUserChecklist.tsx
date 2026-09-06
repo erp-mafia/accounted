@@ -23,7 +23,7 @@ import {
   type VatDeadlineLine,
 } from '@/lib/onboarding/checklist'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import { useCapability } from '@/contexts/CompanyContext'
+import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { InitialSetupPath, InitialSetupState } from '@/types'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -97,6 +97,7 @@ export default function NewUserChecklist({
   const showError = useErrorToast()
   const { formatDateLong } = useFormat()
   const hasAi = useCapability(CAPABILITY.ai)
+  const assistantAvailable = useAssistantAvailable()
   const [state, setState] = useState(initialState)
   const [saving, setSaving] = useState<InitialSetupPath | 'dismiss' | 'complete' | null>(null)
   // The completion signature: 'verdict' shows the orb check-morph and the
@@ -121,6 +122,21 @@ export default function NewUserChecklist({
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket')
   const hasInbox = ENABLED_EXTENSION_IDS.has('invoice-inbox')
   const hasWhatsApp = ENABLED_EXTENSION_IDS.has('whatsapp-inbox')
+  // The Claude step is a pitch for running the books with Claude over the MCP
+  // server. It goes when either half is missing: no mcp-server extension (the
+  // connector URL would 404) or a deployment whose AI runs on another provider
+  // (getAiStatus().assistantAvailable false, #2204), where steering every new
+  // user to claude.ai contradicts the operator's own choice. Settings → API &
+  // MCP keeps the connector for anyone who wants it anyway.
+  const hasClaudeStep = assistantAvailable && ENABLED_EXTENSION_IDS.has('mcp-server')
+  // Which step closes the thread (carries no spine below it).
+  const lastStep = hasClaudeStep
+    ? 'assistant'
+    : hasInbox
+      ? 'receipts'
+      : hasSkatteverket
+        ? 'skv'
+        : 'bank'
 
   const persist = async (
     body: Record<string, unknown>,
@@ -150,10 +166,11 @@ export default function NewUserChecklist({
 
   const step1Done = hasBookkeepingImported || state.path === 'fresh'
   const step2Done = hasBankConnected
-  // Companies built without the skatteverket/inbox extensions skip those steps.
+  // Companies built without the skatteverket/inbox extensions skip those
+  // steps; so does the Claude step where it does not render.
   const step3Done = !hasSkatteverket || hasSkatteverketConnected
   const step4Done = !hasInbox || hasInboxItems
-  const step5Done = hasMcpKey
+  const step5Done = !hasClaudeStep || hasMcpKey
 
   useEffect(() => {
     // The block retires itself once every step is done; Dölj remains the
@@ -192,7 +209,7 @@ export default function NewUserChecklist({
     }
   }, [retiring])
 
-  const numbers = checklistNumbers({ hasSkatteverket, hasInbox })
+  const numbers = checklistNumbers({ hasSkatteverket, hasInbox, hasAssistant: hasClaudeStep })
   const stepCount = numbers.count
 
   if (state.dismissedAt) return null
@@ -346,6 +363,7 @@ export default function NewUserChecklist({
           done={step2Done}
           active={activeStep === 2}
           title={t('step_bank_title')}
+          last={lastStep === 'bank'}
           action={(variant) => (
             <Button
               size="sm"
@@ -387,6 +405,7 @@ export default function NewUserChecklist({
             done={step3Done}
             active={activeStep === 3}
             title={t('step_skv_title')}
+            last={lastStep === 'skv'}
             action={(variant) => (
               <Button size="sm" variant={variant} asChild>
                 {/* The authorize endpoint redirects off-site to Skatteverket. */}
@@ -430,6 +449,7 @@ export default function NewUserChecklist({
             done={step4Done}
             active={activeStep === 4}
             title={t('step_receipts_title')}
+            last={lastStep === 'receipts'}
             action={(variant) => (
               <Button size="sm" variant={variant} onClick={goReceipts}>
                 {t('step_receipts_action')}
@@ -445,6 +465,7 @@ export default function NewUserChecklist({
           </Step>
         )}
 
+        {hasClaudeStep && (
         <Step
           number={numbers.assistant}
           done={step5Done}
@@ -504,6 +525,7 @@ export default function NewUserChecklist({
         >
           {t('step_claude_description')}
         </Step>
+        )}
       </ol>
     </section>
   )

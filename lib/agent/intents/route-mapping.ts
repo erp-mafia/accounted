@@ -29,8 +29,23 @@ const GENERAL_HELP = (route: string | null): RouteIntent => ({
   labelSuffix: null,
 })
 
-export function routeToIntent(pathname: string | null | undefined): RouteIntent {
+export interface RouteIntentOptions {
+  /**
+   * Whether the deployment can run the tool-loop runtime (/api/agent/invoke,
+   * getAiStatus().assistantAvailable). Every specialized intent below runs on
+   * it; general.help runs on the single-call console, which any provider can
+   * serve. When false, every route dispatches to general.help so the trigger
+   * keeps working instead of opening a chat that 503s (#2204). Omitted = true.
+   */
+  assistantAvailable?: boolean
+}
+
+export function routeToIntent(
+  pathname: string | null | undefined,
+  options: RouteIntentOptions = {},
+): RouteIntent {
   if (!pathname) return GENERAL_HELP(null)
+  if (options.assistantAvailable === false) return GENERAL_HELP(pathname)
 
   const segments = pathname.split('/').filter(Boolean)
   const [first, second] = segments

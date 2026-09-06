@@ -1,10 +1,14 @@
 /**
  * Coverage for POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid.
  *
- * Scoped to the settled-suggestion cleanup (issue #1259): a supplier invoice
- * paid through the API must not leave bank transactions pointing at it as an
+ * The settled-suggestion cleanup (issue #1259): a supplier invoice paid
+ * through the API must not leave bank transactions pointing at it as an
  * import-time match suggestion, and a PARTIAL payment must leave those
  * suggestions alone because the invoice is still matchable.
+ *
+ * The duplicate-payment guard (issue #2299): this door had none, so an agent
+ * could book a payment the bank feed already carried. Same shared detector
+ * as the dashboard route.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -232,5 +236,96 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     const body = await res.json()
     expect(body.data.status).toBe('partially_paid')
     expect(mockClearSuggestions).not.toHaveBeenCalled()
+  })
+
+  const hi3gRow = {
+    id: 'tx-hi3g',
+    date: '2026-05-11',
+    amount: -1000,
+    description: 'HI3G',
+    merchant_name: null,
+    reference: null,
+    journal_entry_id: null,
+    currency: 'SEK',
+    amount_sek: null,
+    exchange_rate: null,
+  }
+  const hi3gSI = {
+    ...APPROVED_SI,
+    supplier: { ...APPROVED_SI.supplier, name: 'Hi3G Access AB' },
+  }
+
+  it('returns 409 SI_PAID_LIKELY_DUPLICATE when an outbound bank row carries the abbreviated supplier text (issue #2299)', async () => {
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: { data: hi3gSI, error: null },
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        transactions: { data: [hi3gRow], error: null },
+      }, calls),
+    )
+
+    const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }), detailParams())
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_PAID_LIKELY_DUPLICATE')
+    expect(body.error.details.candidates.map((c: { id: string; match_reason: string }) => [c.id, c.match_reason]))
+      .toEqual([['tx-hi3g', 'name_amount_fuzzy']])
+    // Nothing was booked and nothing was flipped.
+    expect(calls.some((c) => c.table === 'supplier_invoices' && c.method === 'update')).toBe(false)
+    expect(calls.some((c) => c.table === 'supplier_invoice_payments' && c.method === 'insert')).toBe(false)
+    // The probe is the first distinctive token on both name columns, nested
+    // with the currency clause into ONE .or(), outbound.
+    const sweep = calls.filter((c) => c.table === 'transactions')
+    expect(sweep.filter((c) => c.method === 'or').map((c) => c.args)).toEqual([[
+      'and(or(currency.is.null,currency.eq.SEK),or(merchant_name.ilike.*hi3g*,description.ilike.*hi3g*))',
+    ]])
+    expect(sweep.map((c) => c.args)).toContainEqual(['amount', 0])
+  })
+
+  it('force: true bypasses the guard and books the payment', async () => {
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: [
+          { data: hi3gSI, error: null },
+          { data: { ...hi3gSI, status: 'paid', paid_amount: 1000, remaining_amount: 0 }, error: null },
+        ],
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        transactions: { data: [hi3gRow], error: null },
+        supplier_invoice_payments: { data: null, error: null },
+      }, calls),
+    )
+
+    const res = await markPaid(makeRequest({ payment_date: '2026-05-12', force: true }), detailParams())
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.status).toBe('paid')
+    expect(calls.some((c) => c.table === 'transactions')).toBe(false)
+  })
+
+  it('a partial payment skips the guard: it is an explicit, deliberate action', async () => {
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: [
+          { data: hi3gSI, error: null },
+          { data: { ...hi3gSI, status: 'partially_paid', paid_amount: 400, remaining_amount: 600 }, error: null },
+        ],
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        transactions: { data: [hi3gRow], error: null },
+        supplier_invoice_payments: { data: null, error: null },
+      }, calls),
+    )
+
+    const res = await markPaid(makeRequest({ payment_date: '2026-05-12', amount: 400 }), detailParams())
+
+    expect(res.status).toBe(200)
+    expect(calls.some((c) => c.table === 'transactions')).toBe(false)
   })
 })

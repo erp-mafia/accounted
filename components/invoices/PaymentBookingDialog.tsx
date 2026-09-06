@@ -30,7 +30,12 @@ import type { EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 
-type DuplicateMatchReason = 'ocr_exact' | 'name_amount_fuzzy' | 'amount_only' | 'aggregate_exact'
+type DuplicateMatchReason =
+  | 'ocr_exact'
+  | 'name_amount_fuzzy'
+  | 'amount_only'
+  | 'aggregate_exact'
+  | 'already_booked'
 
 interface DuplicateCandidate {
   id: string
@@ -39,6 +44,8 @@ interface DuplicateCandidate {
   description: string | null
   merchant_name: string | null
   reference: string | null
+  /** already_booked: the verifikat the row is already booked on. */
+  journal_entry_id?: string | null
   match_reason: DuplicateMatchReason
   match_confidence: number
   /** aggregate_exact: the other open invoices the bank row also covers. */
@@ -70,6 +77,7 @@ export default function PaymentBookingDialog({
     name_amount_fuzzy: t('match_reason_name_amount_fuzzy'),
     amount_only: t('match_reason_amount_only'),
     aggregate_exact: t('match_reason_aggregate_exact'),
+    already_booked: t('match_reason_already_booked'),
   }
 
   // Session-cached reference data (lib/reference-data), seeded by the
@@ -365,14 +373,19 @@ export default function PaymentBookingDialog({
             </div>
             <ul className="space-y-2">
               {duplicateCandidates.map((c) => {
-                const reasonVariant: 'success' | 'secondary' | 'outline' =
-                  c.match_reason === 'ocr_exact' || c.match_reason === 'aggregate_exact'
-                    ? 'success'
-                    : c.match_reason === 'name_amount_fuzzy'
-                      ? 'secondary'
-                      : 'outline'
+                const reasonVariant: 'success' | 'secondary' | 'outline' | 'warning' =
+                  c.match_reason === 'already_booked'
+                    ? 'warning'
+                    : c.match_reason === 'ocr_exact' || c.match_reason === 'aggregate_exact'
+                      ? 'success'
+                      : c.match_reason === 'name_amount_fuzzy'
+                        ? 'secondary'
+                        : 'outline'
                 const isAggregate =
                   c.match_reason === 'aggregate_exact' && (c.aggregate_invoice_numbers?.length ?? 0) > 0
+                // Already a verifikat: linking would book the money twice, so
+                // the action is to open that voucher and correct, not to link.
+                const isAlreadyBooked = c.match_reason === 'already_booked' && !!c.journal_entry_id
                 return (
                   <li
                     key={c.id}
@@ -403,15 +416,26 @@ export default function PaymentBookingDialog({
                           })}
                         </p>
                       )}
+                      {isAlreadyBooked && (
+                        <p className="text-xs text-muted-foreground">{t('already_booked_hint')}</p>
+                      )}
                     </div>
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => handleLinkExisting(c.id)}
+                      onClick={() =>
+                        isAlreadyBooked
+                          ? router.push(`/bookkeeping/${c.journal_entry_id}`)
+                          : handleLinkExisting(c.id)
+                      }
                       className="shrink-0"
                     >
-                      {isAggregate ? t('allocate_transaction') : t('link_transaction')}
+                      {isAlreadyBooked
+                        ? t('show_voucher')
+                        : isAggregate
+                          ? t('allocate_transaction')
+                          : t('link_transaction')}
                     </Button>
                   </li>
                 )

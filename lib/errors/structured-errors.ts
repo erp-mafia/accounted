@@ -698,6 +698,12 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
       'Det finns redan en bokförd verifikation på samma belopp och datum. Har du redan bokfört denna betalning? Koppla bankhändelsen till befintlig verifikation, eller skapa ny verifikation ändå om de inte hör ihop.',
     message_en:
       'A posted journal entry already books the same amount on a nearby date. The user may have already booked this payment manually: link to the existing voucher or pass force=true to create a new one anyway.',
+    retryable: false,
+    remediation: {
+      description:
+        'Link the bank row to the existing voucher instead of booking a second one: gnubok_link_transaction_to_journal_entry (pass invoice_id to settle the kundfaktura at the same time) or gnubok_reconcile_match. Only if the row is a genuinely separate payment, call again with force=true and expected_journal_entry_id set to the id the refusal named.',
+      tool: 'gnubok_link_transaction_to_journal_entry',
+    },
   },
   MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH: {
     httpStatus: 409,
@@ -3032,12 +3038,12 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
   SI_PAID_LIKELY_DUPLICATE: {
     httpStatus: 409,
     message_sv:
-      'Det finns redan en obokförd banktransaktion som kan vara denna betalning. Länka den istället, eller markera som betald ändå om du är säker.',
+      'Det finns redan en banktransaktion som kan vara denna betalning. Länka den istället, eller markera som betald ändå om du är säker.',
     message_en:
-      'A likely-matching unlinked bank transaction was found for this supplier. Suggest linking it instead of creating a new payment entry.',
+      'A likely-matching bank transaction was found for this supplier. Suggest linking it instead of creating a new payment entry.',
     remediation: {
       description:
-        'Match the candidate transaction via POST /api/transactions/{id}/match-supplier-invoice, or resend mark-paid with force: true to create the payment entry anyway.',
+        'Inspect details.candidates[].match_reason. For an unlinked row, match it via POST /api/transactions/{id}/match-supplier-invoice. For `already_booked`, the row is already a posted verifikat (booked straight from the bank side): do NOT pay the invoice, correct the double booking instead (reverse one of the two vouchers with a storno entry and attach the underlag to the remaining one). Resend mark-paid with force: true only when the payment really is separate; on the v1 endpoint that retry needs a fresh Idempotency-Key.',
     },
   },
   SI_CREDIT_ALREADY_CREDITED: {
@@ -3696,6 +3702,29 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
       'Transaktionen ser redan ut att vara bokförd: en eller flera verifikationer utan bankkoppling summerar exakt till beloppet. Koppla transaktionen till dem i stället, eller bokför ändå om de inte hör ihop.',
     message_en:
       'The transaction already looks booked: one or more posted vouchers with no bank link add up exactly to its amount. Link the transaction to them instead, or pass force=true with expected_journal_entry_ids to book anyway.',
+    retryable: false,
+    remediation: {
+      description:
+        'Link the bank row to the vouchers the message names instead of booking it again: gnubok_reconcile_match with account_key "bank:<cash_account_id>" and one pair { external_ids: [transaction_id], journal_entry_ids: [...], allocations }. Only if the row is a genuinely separate affärshändelse, call again with force=true and expected_journal_entry_ids set to exactly the ids the refusal listed.',
+      tool: 'gnubok_reconcile_match',
+    },
+  },
+  // force=true reached a door whose already-explained check could not run:
+  // an override that cannot be re-verified against the current voucher set
+  // is refused, never waved through. Transient by nature (a ledger scan that
+  // timed out), hence retryable; a staged operation refused this way is
+  // auto-rejected and has to be staged again.
+  BATCH_TX_EXPLAINED_CHECK_FAILED: {
+    httpStatus: 409,
+    message_sv:
+      'Dubblettkontrollen kunde inte köras, så "bokför ändå" avvisades: ett åsidosättande som inte kan verifieras igen bokförs aldrig. Försök igen.',
+    message_en:
+      'The already-explained check could not run, so force=true was refused: an override that cannot be re-verified against the current vouchers is never honoured. Retry the request.',
+    retryable: true,
+    remediation: {
+      description:
+        'Retry after a short backoff. A staged operation refused this way is auto-rejected: stage it again with the same force + expected_journal_entry_ids, or link the row to the vouchers with gnubok_reconcile_match instead.',
+    },
   },
   BATCH_TX_ZERO_AMOUNT: {
     httpStatus: 400,

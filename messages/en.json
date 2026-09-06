@@ -122,6 +122,9 @@
     "cta_primary": "View subscription",
     "cta_secondary": "Continue without"
   },
+  "agent_chat": {
+    "assistant_unavailable": "The assistant cannot run on the AI provider configured for this installation."
+  },
   "agentKnowledge": {
     "load_error_title": "Couldn't load the knowledge profile",
     "load_error_description": "Something went wrong loading what your agent knows. Try reopening this tab.",
@@ -4549,6 +4552,9 @@
     "match_reason_name_amount_fuzzy": "Likely match",
     "match_reason_amount_only": "Possible match",
     "match_reason_aggregate_exact": "Aggregated payment",
+    "match_reason_already_booked": "Already booked",
+    "already_booked_hint": "This bank transaction is already booked as its own verifikat. Do not book the payment again: correct the bookkeeping instead.",
+    "show_voucher": "Show verifikat",
     "aggregate_covers": "The amount also covers {count, plural, =1 {invoice {numbers}} other {invoices {numbers}}} exactly. Split the payment under Transactions so it is booked once.",
     "allocate_transaction": "Split under Transactions",
     "duplicate_title": "Possible duplicate payment",
@@ -4906,6 +4912,9 @@
     "duplicate_payment_title": "Possible duplicate payment",
     "duplicate_payment_description_one": "We found a bank transaction that appears to match this payment. Link the existing transaction instead of creating a new verifikat.",
     "duplicate_payment_description_many": "We found bank transactions that appear to match this payment. Link the existing transaction instead of creating a new verifikat.",
+    "duplicate_payment_already_booked_description": "This bank transaction is already booked as its own verifikat. Registering the payment would book the money twice. Correct it instead: reverse one of the two vouchers with a storno entry and attach the underlag to the remaining one.",
+    "duplicate_payment_already_booked_hint": "Already booked on a verifikat",
+    "duplicate_payment_show_voucher": "Show verifikat",
     "bank_transaction_fallback": "Bank transaction",
     "go_to": "Go to",
     "create_voucher_anyway": "Create new verifikat anyway"

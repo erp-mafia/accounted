@@ -818,6 +818,48 @@ processing_activities:
       - company_name_header_injection_sanitized
       - cron_secret_authenticated_trigger
 
+  - id: bookkeeping.duplicate_dismissal_history
+    name: Behandlingshistorik för åsidosatt dubblettkontroll
+    purpose: >-
+      Bevara en oföränderlig post i behandlingshistoriken (processing_history,
+      händelsetyp BankTransactionDuplicateDismissed) när en användare eller en
+      API-nyckel bokför en banktransaktion trots att dubblettkontrollen visade
+      att bokförda verifikat redan förklarar den (force=true i dashboarden,
+      i MCP-verktyget eller vid godkännande av en väntande operation). Posten
+      gör beslutet rekonstruerbart för revisor och Skatteverket: vilka
+      verifikat som åsidosattes, belopp, konto, datum och vem som fattade
+      beslutet. Innehåller endast interna id:n, verifikationsnummer, belopp
+      och datum; aldrig motpartsnamn, transaktionsbeskrivningar eller
+      personnummer.
+    lawful_basis: art_6_1_c   # BFL 5 kap. 11 § + BFNAR 2013:2 p. 9.16 (behandlingshistorik)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - company_member          # the user (or API-key owner) who honoured the override
+    data_categories:
+      - user.activity_timestamp
+      - user.financial.transaction   # amount + settlement account of the bank row, no counterparty
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+    retention:
+      duration: through_seventh_calendar_year_after_fiscal_year_end
+      basis: bfl_7_kap_and_gdpr_storage_limitation
+      stored_in:
+        - processing_history
+    security_measures:
+      - rls_company_scoped
+      - service_role_insert_only_no_update_or_delete_triggers
+      - personnummer_pattern_rejected_at_append
+      - ids_labels_amounts_dates_only_never_descriptions_or_counterparties
+      - actor_recorded_as_pseudonymous_user_or_api_key_id
+      - written_only_after_the_booking_succeeded
+
   - id: documents.own_company_supplier_guard
     name: Egenbolagskontroll vid dokumentextraktion
     purpose: >-

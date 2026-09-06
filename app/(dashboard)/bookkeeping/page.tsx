@@ -5,6 +5,8 @@ import { useState, useEffect, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
+import { cn } from '@/lib/utils'
+import { useAssistantAvailable } from '@/contexts/CompanyContext'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -39,6 +41,7 @@ const TemplateBookDialog = dynamic(
 // SplitButton modes for "Nytt verifikat" (concept scene 9). The last-used
 // mode persists per user in ui_state.create_mode.bookkeeping.
 const CREATE_MODES = ['tomt', 'mall', 'assistent'] as const
+type CreateMode = (typeof CREATE_MODES)[number]
 
 interface NextVoucher {
   next: number
@@ -75,6 +78,16 @@ export default function BookkeepingPage() {
   const tStart = useTranslations('start_cards')
   const { openAgentSheet } = useAgentSheet()
   const { uiState, loaded: uiStateLoaded } = useUiState()
+  // The 'assistent' mode opens the tool-loop runtime (verifikation.draft via
+  // /api/agent/invoke), which an OpenAI-compatible or unconfigured deployment
+  // cannot run (#2204): drop it from the split button and the pristine cards
+  // rather than offer a door into a 503. One list feeds both surfaces, and a
+  // persisted last-used 'assistent' falls back to 'tomt' through
+  // resolveInitialMode's validity check.
+  const assistantAvailable = useAssistantAvailable()
+  const createModes: readonly CreateMode[] = assistantAvailable
+    ? CREATE_MODES
+    : CREATE_MODES.filter((mode) => mode !== 'assistent')
 
   // React to copy_from in URL: switch tab, fetch source entry, then clean URL.
   // useSearchParams keeps this reactive even when navigation happens within the
@@ -234,7 +247,7 @@ export default function BookkeepingPage() {
             // to the persisted last-used mode.
             key={uiStateLoaded ? 'loaded' : 'initial'}
             persistKey="bookkeeping"
-            initialModeKey={resolveInitialMode(uiState, 'bookkeeping', CREATE_MODES, 'tomt')}
+            initialModeKey={resolveInitialMode(uiState, 'bookkeeping', createModes, 'tomt')}
             options={[
               {
                 key: 'tomt',
@@ -267,7 +280,7 @@ export default function BookkeepingPage() {
                     contextRef: 'verifikation:new',
                   }),
               },
-            ]}
+            ].filter((option) => (createModes as readonly string[]).includes(option.key))}
           />
         }
       />
@@ -288,9 +301,9 @@ export default function BookkeepingPage() {
               primary={{ label: tStart('bookkeeping_primary'), href: '/import?mode=migration' }}
               secondary={{ label: tStart('bookkeeping_secondary'), href: '/import?mode=sie' }}
             />
-            {/* The split button's three create modes, laid out as cards so the
-                pristine page shows what the ledger can do instead of a bare table. */}
-            <div className="grid gap-4 sm:grid-cols-3">
+            {/* The split button's create modes, laid out as cards so the pristine
+                page shows what the ledger can do instead of a bare table. */}
+            <div className={cn('grid gap-4', createModes.length === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
               {(
                 [
                   ['mall', () => setShowTemplateDialog(true)],
@@ -307,7 +320,9 @@ export default function BookkeepingPage() {
                     },
                   ],
                 ] as const
-              ).map(([mode, onClick]) => (
+              )
+                .filter(([mode]) => createModes.includes(mode))
+                .map(([mode, onClick]) => (
                 <button
                   key={mode}
                   type="button"

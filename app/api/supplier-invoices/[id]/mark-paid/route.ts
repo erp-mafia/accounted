@@ -16,19 +16,7 @@ import { validateBody } from '@/lib/api/validate'
 import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import {
-  DUPLICATE_AMOUNT_TOLERANCE_PCT,
-  DUPLICATE_DATE_WINDOW_DAYS,
-  escapeLikePattern,
-} from '@/lib/invoices/duplicate-payment-guard'
-import {
-  invoiceAmountSek,
-  magnitudesWithinTolerance,
-  normalizeCurrencyCode,
-  planAmountSweeps,
-  type ComparableAmount,
-} from '@/lib/invoices/duplicate-guard-currency'
-import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
+import { findDuplicatePaymentCandidatesForSupplierInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -77,140 +65,42 @@ export const POST = withRouteContext(
       })
     }
 
-    // Duplicate-payment guard: if a likely-matching unlinked bank transaction
-    // exists for this supplier, surface it before booking a new payment entry.
-    // Caller can override with `force: true`. Skipped on partial payments:
-    // those are an explicit, deliberate action.
+    // Duplicate-payment guard: if a bank transaction already looks like this
+    // payment, surface it before booking a new payment entry. Caller can
+    // override with `force: true`. Skipped on partial payments: those are an
+    // explicit, deliberate action. The detector is the same one the customer
+    // side uses (lib/invoices/duplicate-payment-candidates.ts): first
+    // distinctive token of the supplier name against merchant_name OR
+    // description, per-currency amount band, JS ranking. A candidate with
+    // match_reason `already_booked` is a row that is already a verifikat
+    // (booked straight from the bank side): the remedy is a rättelse, not a
+    // link, and the UI words it that way.
     const paidRounded = Math.round(paymentAmount * 100) / 100
     const remainingRounded = Math.round(invoice.remaining_amount * 100) / 100
     if (!body.force && paidRounded >= remainingRounded) {
       const supplierName = (invoice as SupplierInvoice & { supplier?: { name?: string } })
         .supplier?.name
-      if (!supplierName) {
-        // An invoice without a resolved supplier name is arguably *higher* risk
-        // for duplicate booking, not lower (BFL 5 kap 7 §: motpart should be
-        // identifiable). Log the skip so the gap is visible in audit.
-        opLog.warn('duplicate-payment guard skipped', {
-          reason: 'missing_supplier_name',
-          supplierInvoiceId: id,
+      const candidates = await findDuplicatePaymentCandidatesForSupplierInvoice(supabase, {
+        companyId: companyId!,
+        invoice: {
+          supplier_invoice_number: invoice.supplier_invoice_number ?? null,
+          payment_reference: (invoice as { payment_reference?: string | null }).payment_reference ?? null,
+          supplier_name: supplierName,
+          currency: invoice.currency ?? null,
+          total: invoice.total ?? null,
+          total_sek: invoice.total_sek ?? null,
+          exchange_rate: invoice.exchange_rate ?? null,
+        },
+        // Denominated in the invoice's currency (that is what remaining_amount
+        // and body.amount are); the detector bands bank rows per currency.
+        paymentAmount,
+        paymentDate,
+      })
+      if (candidates.length > 0) {
+        return errorResponseFromCode('SI_PAID_LIKELY_DUPLICATE', opLog, {
+          requestId,
+          details: { candidates },
         })
-      }
-      if (supplierName) {
-        // Units: `paymentAmount` is denominated in the supplier invoice's
-        // currency (that is what `remaining_amount` and `body.amount` are),
-        // while `transactions.amount` is denominated in the bank row's own
-        // currency. The plus-minus tolerance band is therefore planned per
-        // currency and re-checked per row, so band and column always share a
-        // unit. A SEK invoice yields exactly one sweep with the band it had
-        // before, so a SEK-only company sees the identical single query.
-        const paymentCurrency = normalizeCurrencyCode(invoice.currency)
-        const reference: ComparableAmount = {
-          amount: paymentAmount,
-          currency: paymentCurrency,
-          sek: invoiceAmountSek({
-            amount: paymentAmount,
-            currency: paymentCurrency,
-            total: invoice.total,
-            totalSek: invoice.total_sek,
-            exchangeRate: invoice.exchange_rate,
-          }),
-        }
-        const { sweeps, crossCurrencyUnverifiable } = planAmountSweeps(
-          reference,
-          DUPLICATE_AMOUNT_TOLERANCE_PCT,
-        )
-        if (crossCurrencyUnverifiable) {
-          // A foreign invoice with no stored rate cannot be stated in kronor,
-          // so kronor bank rows can only be excluded, never compared raw
-          // (a raw compare reads 1 000 EUR as 1 000 kr). Same-currency rows are
-          // still swept. Logged so the blind spot is visible in audit rather
-          // than passing as a clean "no duplicate".
-          opLog.warn('duplicate-payment guard: cross-currency candidates not evaluated', {
-            reason: 'invoice_missing_sek_value',
-            currency: paymentCurrency,
-            supplierInvoiceId: id,
-          })
-        }
-
-        const dateMs = new Date(paymentDate).getTime()
-        const dateLow = new Date(dateMs - DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000).toISOString().split('T')[0]
-        const dateHigh = new Date(dateMs + DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000).toISOString().split('T')[0]
-        const escapedSupplierName = escapeLikePattern(supplierName)
-
-        type CandidateRow = {
-          id: string
-          date: string
-          amount: number
-          description: string | null
-          merchant_name: string | null
-          currency: string | null
-          amount_sek: number | null
-          exchange_rate: number | null
-        }
-
-        const sweepResults = await Promise.all(
-          sweeps.map((sweep) =>
-            supabase
-              .from('transactions')
-              .select(
-                'id, date, amount, description, merchant_name, currency, amount_sek, exchange_rate',
-              )
-              .eq('company_id', companyId!)
-              .eq('is_business', true)
-              .is('supplier_invoice_id', null)
-              .is('invoice_id', null)
-              .lt('amount', 0)
-              .or(sweep.currencyFilter)
-              .gte('amount', -sweep.high)
-              .lte('amount', -sweep.low)
-              .gte('date', dateLow)
-              .lte('date', dateHigh)
-              .ilike('merchant_name', `%${escapedSupplierName}%`)
-              .order('date', { ascending: false })
-              .limit(5),
-          ),
-        )
-
-        const byId = new Map<string, CandidateRow>()
-        for (const res of sweepResults) {
-          for (const row of (res.data ?? []) as CandidateRow[]) {
-            if (!byId.has(row.id)) byId.set(row.id, row)
-          }
-        }
-        const candidates = Array.from(byId.values())
-          .filter((c) =>
-            magnitudesWithinTolerance(
-              reference,
-              {
-                amount: Number(c.amount),
-                currency: normalizeCurrencyCode(c.currency),
-                sek: resolveTransactionAmountSek({
-                  amount: c.amount,
-                  currency: c.currency,
-                  amount_sek: c.amount_sek,
-                  exchange_rate: c.exchange_rate,
-                }),
-              },
-              DUPLICATE_AMOUNT_TOLERANCE_PCT,
-            ),
-          )
-          .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
-          .slice(0, 5)
-
-        if (candidates.length > 0) {
-          return errorResponseFromCode('SI_PAID_LIKELY_DUPLICATE', opLog, {
-            requestId,
-            details: {
-              candidates: candidates.map((c) => ({
-                id: c.id,
-                date: c.date,
-                amount: c.amount,
-                description: c.description,
-                merchant_name: c.merchant_name,
-              })),
-            },
-          })
-        }
       }
     }
 

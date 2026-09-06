@@ -13,6 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NotificationType } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
+import { NON_ISSUED_INVOICE_STATUSES_FILTER } from '@/lib/invoices/matchable-statuses'
 import { sendNotificationToUser, readNotificationSettings } from './notification-sender'
 import {
   createTaxDeadlinePayload,
@@ -330,6 +331,39 @@ export async function sendMissingUnderlagNotifications(
     if (sip.journal_entry_id && sip.supplier_invoice?.document?.journal_entry_id) {
       entriesWithDocs.add(sip.journal_entry_id)
     }
+  }
+
+  // BFL 5 kap 7 § hänvisning, customer side (#2298): an entry an ISSUED
+  // register invoice points at (registration link or an invoice_payments row,
+  // e.g. a SIE-imported sale matched to its invoice afterwards) is backed by
+  // that invoice; a draft or cancelled invoice is no document
+  // (NON_ISSUED_INVOICE_STATUSES). Global reads like the ones above: this
+  // cron spans every company. Mirrors the verifikat_without_documents RPC's
+  // customer arm.
+  const invoiceLinks = await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
+    supabase
+      .from('invoices')
+      .select('journal_entry_id')
+      .not('journal_entry_id', 'is', null)
+      .not('status', 'in', NON_ISSUED_INVOICE_STATUSES_FILTER)
+      .order('id')
+      .range(from, to)
+  )
+  for (const inv of invoiceLinks) {
+    if (inv.journal_entry_id) entriesWithDocs.add(inv.journal_entry_id)
+  }
+
+  const paymentLinks = await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
+    supabase
+      .from('invoice_payments')
+      .select('journal_entry_id, invoices!inner(status)')
+      .not('journal_entry_id', 'is', null)
+      .not('invoices.status', 'in', NON_ISSUED_INVOICE_STATUSES_FILTER)
+      .order('id')
+      .range(from, to)
+  )
+  for (const payment of paymentLinks) {
+    if (payment.journal_entry_id) entriesWithDocs.add(payment.journal_entry_id)
   }
 
   // Entries the user has explicitly flagged as "no underlag required" (bank
