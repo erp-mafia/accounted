@@ -10,6 +10,7 @@
  */
 
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
+import { isPersonPayer, type PayerChoice } from '@/lib/expenses/payer'
 import type { VatTreatment } from '@/types'
 
 export interface SupplierInvoiceLineItem {
@@ -46,7 +47,12 @@ export interface SupplierInvoiceFormData {
   reverse_charge: boolean
   payment_reference: string
   notes: string
-  paid_with_private_funds: boolean
+  /** Vem betalade? Decides the endpoint, the primary action and the credit account. */
+  payer: PayerChoice
+  /** The owner's name for payer 'owner'; empty means the shared fallback label. */
+  claimant_name: string
+  /** employees.id for payer 'employee'. */
+  employee_id: string
   items: SupplierInvoiceLineItem[]
 }
 
@@ -101,9 +107,10 @@ export function buildSupplierInvoicePayload(
 ) {
   const { inboxItemId, uploadedDocumentId, oreRounding, defaultDims, canUseAccrual } = opts
   const vatTreatment = inferVatTreatment(data.items, data.reverse_charge)
+  const paidByPerson = isPersonPayer(data.payer)
   // When paid privately, due_date is irrelevant: but the API still requires
   // a YYYY-MM-DD value. Default to invoice_date so the field passes validation.
-  const dueDate = data.paid_with_private_funds && !data.due_date
+  const dueDate = paidByPerson && !data.due_date
     ? data.invoice_date
     : data.due_date
   return {
@@ -119,7 +126,15 @@ export function buildSupplierInvoicePayload(
     reverse_charge: data.reverse_charge,
     payment_reference: data.payment_reference || undefined,
     notes: data.notes || undefined,
-    paid_with_private_funds: data.paid_with_private_funds,
+    paid_with_private_funds: paidByPerson,
+    // Who paid, for the utlägg path: the employee by id, or the owner by the
+    // typed name (omitted when blank: the route applies the shared fallback).
+    ...(data.payer === 'employee' && data.employee_id ? { employee_id: data.employee_id } : {}),
+    ...(data.payer === 'owner' && data.claimant_name.trim() ? { claimant_name: data.claimant_name.trim() } : {}),
+    // A privately paid inbox document goes to the core route, which takes the
+    // document from the item and settles it (the convert endpoint registers
+    // on 2440 only): see supplierInvoiceCreateUrl.
+    ...(paidByPerson && inboxItemId ? { inbox_item_id: inboxItemId } : {}),
     ore_rounding: oreRounding,
     // Invoice-level default dimensions (kostnadsställe/projekt): only sent
     // when the user actually picked something.
@@ -157,4 +172,16 @@ export function buildSupplierInvoicePayload(
         : {}),
     })),
   }
+}
+
+/**
+ * Where the editor posts: the inbox convert endpoint when the invoice came
+ * from an inbox item and the company pays or has paid; the core route when a
+ * person paid, because only it books an utlägg (the convert endpoint
+ * registers on 2440 regardless of who paid).
+ */
+export function supplierInvoiceCreateUrl(payer: PayerChoice, inboxItemId: string | null): string {
+  return inboxItemId && !isPersonPayer(payer)
+    ? `/api/extensions/ext/invoice-inbox/items/${inboxItemId}/convert`
+    : '/api/supplier-invoices'
 }

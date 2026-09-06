@@ -4636,7 +4636,6 @@
     "forval_books_at_payment": "Bokförs vid betalning",
     "forval_toggle_open": "Ändra förval",
     "forval_toggle_close": "Stäng",
-    "chip_paid_privately": "Betald privat",
     "chip_ore_rounding_off": "Utan öresavrundning",
     "chip_delivery_date": "Leveransdatum {date}",
     "chip_notes": "Anteckningar",
@@ -4680,9 +4679,6 @@
     "create_and_select": "Skapa & välj",
     "section_accounting": "Kontering",
     "account_from_history": "Konto {account} föreslaget från tidigare bokföringar av {counterparty}",
-    "paid_privately_label": "Jag har betalat detta privat",
-    "paid_privately_help_ef": "Bokförs som skuld från bolaget till dig (2018 Egen insättning). Återbetalas senare manuellt från företagskontot.",
-    "paid_privately_help_ab": "Bokförs som skuld från bolaget till dig (2893 Skuld till ägare). Återbetalas senare manuellt från företagskontot.",
     "supplier_placeholder": "Välj leverantör",
     "no_suppliers_yet": "Inga leverantörer än",
     "add_new_supplier": "+ Lägg till ny leverantör...",
@@ -4806,7 +4802,8 @@
     "debit_short": "D {amount}",
     "credit_short": "K {amount}",
     "debit_credit_short": "D {debit} / K {credit}",
-    "review_accrual_line_info": "Periodiseras {from} till {to}"
+    "review_accrual_line_info": "Periodiseras {from} till {to}",
+    "expense_registered_description": "Skulden till {name} finns nu i Att göra. Ankomstnummer: {number}"
   },
   "supplier_invoice_detail": {
     "title_invoice": "Leverantörsfaktura {number}",

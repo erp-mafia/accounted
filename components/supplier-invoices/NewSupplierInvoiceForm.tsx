@@ -56,7 +56,10 @@ import { VatRateCell, RcRateSelect, AmountCell } from '@/components/supplier-inv
 import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-supplier-invoice-data'
 import { useInboxPrefill, type InboxItemData } from '@/components/supplier-invoices/use-inbox-prefill'
 import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-supplier-invoice-submit'
-import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, Link2, CalendarClock, Tags, FileText } from 'lucide-react'
+import { PayerChoiceSelect } from '@/components/expenses/PayerChoiceSelect'
+import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
+import { isPersonPayer } from '@/lib/expenses/payer'
+import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, CalendarClock, Tags, FileText } from 'lucide-react'
 import type { Supplier, InvoiceExtractionResult } from '@/types'
 
 // The form's line/field shapes live in lib/supplier-invoices/form-payload.ts
@@ -270,7 +273,9 @@ export default function NewSupplierInvoiceForm({
       reverse_charge: false,
       payment_reference: '',
       notes: '',
-      paid_with_private_funds: false,
+      payer: 'unpaid',
+      claimant_name: '',
+      employee_id: '',
       // The table starts empty: the ghost entry row (never part of form
       // state) is the only way rows are born, so no silent prefilled expense
       // account can ever reach a verifikat unnoticed.
@@ -324,7 +329,12 @@ export default function NewSupplierInvoiceForm({
   const watchedSupplierId = watch('supplier_id')
   const watchedCurrency = watch('currency')
   const watchedExchangeRate = watch('exchange_rate')
-  const watchedPaidPrivately = watch('paid_with_private_funds')
+  const watchedPayer = watch('payer')
+  const watchedClaimantName = watch('claimant_name')
+  const watchedEmployeeId = watch('employee_id')
+  // A person paid: the invoice is an utlägg (cost + moms against that
+  // person's liability, an open claim on Hem) instead of a 2440 payable.
+  const watchedPaidPrivately = isPersonPayer(watchedPayer)
   const watchedReverseCharge = watch('reverse_charge')
   // Watched values used to decide whether the AI-filled indicator should
   // still be visible. Once the user edits a field, its value no longer
@@ -1369,7 +1379,6 @@ export default function NewSupplierInvoiceForm({
     showBankPicker,
     setShowBankPicker,
     setPendingTransactionId,
-    submitModeRef,
     conflict,
     setConflict,
     isResolvingConflict,
@@ -1393,6 +1402,8 @@ export default function NewSupplierInvoiceForm({
     showNoPeriodWarning,
     canUseAccrual,
     invoiceNumberInputRef,
+    // The Utlägg nav row is gated on existing claims in the server layout.
+    onExpenseRegistered: () => router.refresh(),
     onMissingField: focusMissingField,
   })
 
@@ -1464,7 +1475,6 @@ export default function NewSupplierInvoiceForm({
   const forvalChips: string[] = [
     willBookAtRegistration ? t('forval_books_at_registration') : t('forval_books_at_payment'),
   ]
-  if (watchedPaidPrivately) forvalChips.push(t('chip_paid_privately'))
   if (watchedReverseCharge) forvalChips.push(t('reverse_charge_label'))
   if ((watchedCurrency || 'SEK') !== 'SEK') {
     forvalChips.push(
@@ -1486,11 +1496,15 @@ export default function NewSupplierInvoiceForm({
         ? t('underlag_caption_attached')
         : t('underlag_caption_default')
 
+  // The primary action follows "Vem betalade?": a person -> book the utlägg,
+  // the company -> register and match the bank line, no one yet -> register.
   const primaryLabel = watchedPaidPrivately
     ? t('register_expense')
-    : isEF
-      ? t('register_invoice')
-      : t('review_and_register')
+    : watchedPayer === 'company'
+      ? t('register_and_mark_paid')
+      : isEF
+        ? t('register_invoice')
+        : t('review_and_register')
 
   // min-w-0 on the root: DialogContent is display:grid; without it this grid
   // item's min-width:auto lets the kontering table's min-w force the whole
@@ -1801,6 +1815,35 @@ export default function NewSupplierInvoiceForm({
                   {...register('invoice_date')}
                 />
               </div>
+              {/* Vem betalade? The same control as the Underlag pane: the
+                  answer decides the credit account (2440, the bank line or a
+                  person's liability) and the primary action in the footer. */}
+              <Controller
+                name="payer"
+                control={control}
+                render={({ field }) => (
+                  <PayerChoiceSelect
+                    id="si-payer"
+                    value={field.value}
+                    onChange={field.onChange}
+                    accountingMethod={accountingMethod}
+                    labelClassName="text-xs font-normal text-muted-foreground"
+                  />
+                )}
+              />
+              {isPersonPayer(watchedPayer) && (
+                <ExpenseClaimantFields
+                  payer={watchedPayer}
+                  ownerName={watchedClaimantName}
+                  onOwnerNameChange={(name) => setValue('claimant_name', name, { shouldDirty: true })}
+                  employeeId={watchedEmployeeId}
+                  onEmployeeChange={(id) => setValue('employee_id', id, { shouldDirty: true })}
+                  idPrefix="si"
+                  className="space-y-2"
+                  labelClassName="text-xs font-normal text-muted-foreground"
+                  inputClassName="h-9"
+                />
+              )}
               {!watchedPaidPrivately && (
                 <>
                   <div className="space-y-2">
@@ -2165,25 +2208,6 @@ export default function NewSupplierInvoiceForm({
             {forvalOpen && (
               <div className="mt-4 border-t border-border">
                 <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
-                  <label htmlFor="paid_with_private_funds" className="cursor-pointer">
-                    {t('paid_privately_label')}
-                    <span className="block text-xs text-muted-foreground">
-                      {isEF ? t('paid_privately_help_ef') : t('paid_privately_help_ab')}
-                    </span>
-                  </label>
-                  <Controller
-                    name="paid_with_private_funds"
-                    control={control}
-                    render={({ field }) => (
-                      <Switch
-                        id="paid_with_private_funds"
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    )}
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
                   <label htmlFor="reverse_charge" className="cursor-pointer">
                     {t('reverse_charge_label')}
                     <span className="block text-xs text-muted-foreground">
@@ -2434,18 +2458,6 @@ export default function NewSupplierInvoiceForm({
               >
                 {t('cancel')}
               </button>
-              {!watchedPaidPrivately && (
-                <Button
-                  type="submit"
-                  variant="outline"
-                  disabled={isSubmitting || !canWrite}
-                  onClick={() => { submitModeRef.current = 'register_and_match' }}
-                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-                >
-                  <Link2 className="mr-2 h-4 w-4" />
-                  {t('register_and_mark_paid')}
-                </Button>
-              )}
               {/* Always enabled pre-click for writable users: clicking with
                   something missing routes focus to the first missing field
                   (submit-time hard blocks stay in onSubmit). Viewers keep the
@@ -2453,7 +2465,6 @@ export default function NewSupplierInvoiceForm({
               <Button
                 type="submit"
                 disabled={isSubmitting || !canWrite}
-                onClick={() => { submitModeRef.current = 'register' }}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {isSubmitting ? (
@@ -2514,10 +2525,7 @@ export default function NewSupplierInvoiceForm({
         open={showBankPicker}
         onOpenChange={(open) => {
           setShowBankPicker(open)
-          if (!open) {
-            submitModeRef.current = 'register'
-            setPendingTransactionId(null)
-          }
+          if (!open) setPendingTransactionId(null)
         }}
         targetAmount={total}
         targetCurrency={watchedCurrency}

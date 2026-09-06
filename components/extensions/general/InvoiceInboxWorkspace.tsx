@@ -23,7 +23,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import {
   Inbox,
@@ -76,6 +75,7 @@ import {
 } from '@/lib/documents/inbox-kind'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
 import RegisterExpenseDialog, { type ExpensePayer } from '@/components/extensions/general/RegisterExpenseDialog'
+import { PayerChoiceSelect, type PayerChoice } from '@/components/expenses/PayerChoiceSelect'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
 // InboxCustomDomainDialog (egen domän) is built but gated off: see
@@ -3088,75 +3088,6 @@ function ProposedBooking({
           </div>
         </details>
       )}
-    </div>
-  )
-}
-
-// ── Vem betalade? ────────────────────────────────────────────
-
-/**
- * How an unmatched underlag gets booked, phrased as who paid for it.
- * 'company' → match the bank line; 'unpaid' → supplier invoice (2440);
- * 'owner' / 'employee' → utlägg against the person's liability account.
- */
-export type PayerChoice = 'company' | 'unpaid' | ExpensePayer
-
-const PAYER_ORDER: PayerChoice[] = ['company', 'owner', 'employee', 'unpaid']
-
-/**
- * The "Vem betalade?" control: a compact select so the rail keeps its
- * primary button above the fold, with the chosen answer's one-line
- * consequence under it. Each option in the list carries the same help so
- * the choice is made with the consequence visible, not after.
- */
-export function PayerChoiceSelect({
-  value,
-  onChange,
-  accountingMethod,
-}: {
-  value: PayerChoice
-  onChange: (next: PayerChoice) => void
-  accountingMethod: AccountingMethod
-}) {
-  const t = useTranslations('inbox_workspace')
-  // An enskild firma owner makes an egen insättning, not a loan to the
-  // company: no debt, nothing to pay out, so the help line says so.
-  const isEf = useCompanyOptional()?.company?.entity_type === 'enskild_firma'
-  // Företaget carries no help line: the button under it ("Matcha mot
-  // transaktion") already says what happens. The other answers name the
-  // liability the company takes on, which is the consequence worth reading.
-  const helpKey = (choice: PayerChoice): string | null =>
-    choice === 'company'
-      ? null
-      : choice === 'owner' && isEf
-        ? 'payer_help_owner_ef'
-        : choice === 'unpaid' && accountingMethod === 'cash'
-          ? 'payer_help_unpaid_cash'
-          : `payer_help_${choice}`
-  const selectedHelp = helpKey(value)
-  return (
-    <div className="space-y-1.5">
-      <p className="text-[13px] font-medium">{t('payer_question')}</p>
-      <Select value={value} onValueChange={(next) => onChange(next as PayerChoice)}>
-        <SelectTrigger aria-label={t('payer_question')} className="h-9 text-[13px]">
-          {/* Explicit children: the items render label + help, and the
-              trigger must show the label alone. */}
-          <SelectValue>{t(`payer_${value}`)}</SelectValue>
-        </SelectTrigger>
-        {/* Match the trigger width so the two-line options wrap inside the rail
-            instead of spilling over the document viewer. */}
-        <SelectContent align="start" className="w-[var(--radix-select-trigger-width)]">
-          {PAYER_ORDER.map((choice) => (
-            <SelectItem key={choice} value={choice} className="py-2">
-              <span className="block text-[13px]">{t(`payer_${choice}`)}</span>
-              {helpKey(choice) && (
-                <span className="block text-xs text-muted-foreground">{t(helpKey(choice)!)}</span>
-              )}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {selectedHelp && <p className="text-xs text-muted-foreground">{t(selectedHelp)}</p>}
     </div>
   )
 }

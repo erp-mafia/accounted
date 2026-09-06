@@ -86,6 +86,8 @@ export interface ExpenseClaimLineInput {
   debit_amount: number
   credit_amount: number
   line_description?: string | null
+  /** SIE dimension bag ({sie_dim_no: code}), carried onto the posted line. */
+  dimensions?: Record<string, string>
 }
 
 export type RegisterExpenseClaimResult =
@@ -253,6 +255,7 @@ export async function registerExpenseClaim(
             ? roundOre(l.credit_amount * rate)
             : 0,
       line_description: l.line_description?.trim() || desc,
+      dimensions: l.dimensions,
     }))
     const residual = roundOre(
       sumOre(converted.map((l) => l.debit_amount)) - sumOre(converted.map((l) => l.credit_amount)),
@@ -273,6 +276,7 @@ export async function registerExpenseClaim(
       debit_amount: l.debit_amount,
       credit_amount: l.credit_amount,
       line_description: l.line_description,
+      ...(l.dimensions ? { dimensions: l.dimensions } : {}),
       ...(input.currency !== 'SEK' && l.account_number === liability
         ? { currency: input.currency, amount_in_currency: roundOre(input.amount), exchange_rate: rate }
         : {}),

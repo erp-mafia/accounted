@@ -1343,6 +1343,17 @@ export const CreateSupplierInvoiceSchema = z.object({
   // Per-invoice öresavrundning toggle (display-only). Omitted → stored as null (off).
   ore_rounding: z.boolean().optional(),
   paid_with_private_funds: z.boolean().optional(),
+  // For paid_with_private_funds: who paid. An employee (2820) by id, or the
+  // owner by name (2893 in an AB, 2018 in an enskild firma); an omitted name
+  // falls back to the shared owner label so Hem groups the owner as one
+  // person. Both are ignored unless paid_with_private_funds is true.
+  employee_id: uuid.optional().nullable(),
+  claimant_name: z.string().trim().max(200).optional(),
+  // For paid_with_private_funds: the invoice-inbox item whose document is the
+  // underlag. The route takes the document from the item and settles the item
+  // itself, so a privately paid inbox document never goes through the
+  // extension's convert endpoint (which registers on 2440 only).
+  inbox_item_id: uuid.optional().nullable(),
   // For paid_with_private_funds: the date the owner paid out-of-pocket.
   // Defaults to invoice_date (common for kvitto where the two coincide).
   payment_date: isoDate.optional(),

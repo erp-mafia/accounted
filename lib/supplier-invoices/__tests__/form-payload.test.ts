@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildSupplierInvoicePayload,
+  supplierInvoiceCreateUrl,
   inferVatTreatment,
   vatRateFromAi,
   rateToPctString,
@@ -32,7 +33,9 @@ function makeFormData(overrides: Partial<SupplierInvoiceFormData> = {}): Supplie
     reverse_charge: false,
     payment_reference: '',
     notes: '',
-    paid_with_private_funds: false,
+    payer: 'unpaid',
+    claimant_name: '',
+    employee_id: '',
     items: [makeItem()],
     ...overrides,
   }
@@ -144,7 +147,7 @@ describe('buildSupplierInvoicePayload', () => {
 
   it('privately paid: empty due_date defaults to invoice_date', () => {
     const payload = buildSupplierInvoicePayload(
-      makeFormData({ paid_with_private_funds: true, due_date: '' }),
+      makeFormData({ payer: 'owner', due_date: '' }),
       makeOpts({ canUseAccrual: false }),
     )
     expect(payload.due_date).toBe('2026-08-01')
@@ -153,10 +156,62 @@ describe('buildSupplierInvoicePayload', () => {
 
   it('privately paid: an explicit due_date is kept', () => {
     const payload = buildSupplierInvoicePayload(
-      makeFormData({ paid_with_private_funds: true, due_date: '2026-09-15' }),
+      makeFormData({ payer: 'owner', due_date: '2026-09-15' }),
       makeOpts({ canUseAccrual: false }),
     )
     expect(payload.due_date).toBe('2026-09-15')
+  })
+
+  it('owner: the typed name travels trimmed, a blank name is omitted (route applies the fallback)', () => {
+    const named = buildSupplierInvoicePayload(
+      makeFormData({ payer: 'owner', claimant_name: '  Anna Ek  ' }),
+      makeOpts({ canUseAccrual: false }),
+    )
+    expect(named).toMatchObject({ paid_with_private_funds: true, claimant_name: 'Anna Ek' })
+    expect(named).not.toHaveProperty('employee_id')
+
+    const blank = buildSupplierInvoicePayload(
+      makeFormData({ payer: 'owner', claimant_name: '   ' }),
+      makeOpts({ canUseAccrual: false }),
+    )
+    expect(blank).not.toHaveProperty('claimant_name')
+  })
+
+  it('employee: employee_id travels and the owner name never does', () => {
+    const payload = buildSupplierInvoicePayload(
+      makeFormData({ payer: 'employee', employee_id: 'emp-1', claimant_name: 'stale' }),
+      makeOpts({ canUseAccrual: false }),
+    )
+    expect(payload).toMatchObject({ paid_with_private_funds: true, employee_id: 'emp-1' })
+    expect(payload).not.toHaveProperty('claimant_name')
+  })
+
+  it('company / unpaid: no payer fields, paid_with_private_funds false', () => {
+    for (const payer of ['company', 'unpaid'] as const) {
+      const payload = buildSupplierInvoicePayload(
+        makeFormData({ payer, employee_id: 'emp-1', claimant_name: 'Anna' }),
+        makeOpts(),
+      )
+      expect(payload.paid_with_private_funds).toBe(false)
+      expect(payload).not.toHaveProperty('employee_id')
+      expect(payload).not.toHaveProperty('claimant_name')
+      expect(payload).not.toHaveProperty('inbox_item_id')
+    }
+  })
+
+  it('privately paid inbox document: inbox_item_id travels, document_id does not', () => {
+    const payload = buildSupplierInvoicePayload(
+      makeFormData({ payer: 'employee', employee_id: 'emp-1' }),
+      makeOpts({ inboxItemId: 'item-1', uploadedDocumentId: 'doc-1', canUseAccrual: false }),
+    )
+    expect(payload).toHaveProperty('inbox_item_id', 'item-1')
+    expect(payload).not.toHaveProperty('document_id')
+
+    const company = buildSupplierInvoicePayload(
+      makeFormData({ payer: 'company' }),
+      makeOpts({ inboxItemId: 'item-1' }),
+    )
+    expect(company).not.toHaveProperty('inbox_item_id')
   })
 
   it('reverse charge: vat_rate forced to 0, reverse_charge_rate travels with 0.25 default', () => {
@@ -335,5 +390,22 @@ describe('buildSupplierInvoicePayload', () => {
   it('ore_rounding passes through both ways', () => {
     expect(buildSupplierInvoicePayload(makeFormData(), makeOpts({ oreRounding: true })).ore_rounding).toBe(true)
     expect(buildSupplierInvoicePayload(makeFormData(), makeOpts({ oreRounding: false })).ore_rounding).toBe(false)
+  })
+})
+
+describe('supplierInvoiceCreateUrl', () => {
+  it('converts through the inbox when the company pays or has paid', () => {
+    expect(supplierInvoiceCreateUrl('unpaid', 'item-1')).toBe(
+      '/api/extensions/ext/invoice-inbox/items/item-1/convert',
+    )
+    expect(supplierInvoiceCreateUrl('company', 'item-1')).toBe(
+      '/api/extensions/ext/invoice-inbox/items/item-1/convert',
+    )
+  })
+
+  it('books an utlägg through the core route even for an inbox item', () => {
+    expect(supplierInvoiceCreateUrl('owner', 'item-1')).toBe('/api/supplier-invoices')
+    expect(supplierInvoiceCreateUrl('employee', 'item-1')).toBe('/api/supplier-invoices')
+    expect(supplierInvoiceCreateUrl('unpaid', null)).toBe('/api/supplier-invoices')
   })
 })
