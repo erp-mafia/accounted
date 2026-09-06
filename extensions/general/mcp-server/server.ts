@@ -167,7 +167,8 @@ import {
   CreateRecurringScheduleParamsSchema,
   UpdateRecurringScheduleParamsSchema,
 } from '@/lib/pending-operations/schemas/recurring-schedule'
-import { computeInitialRunDate } from '@/lib/invoices/recurring-schedule-service'
+import { computeInitialRunDate, getStockholmDateHour } from '@/lib/invoices/recurring-schedule-service'
+import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
@@ -21009,6 +21010,21 @@ export const tools: McpTool[] = [
         throw new Error('Customer has no email address: auto_send requires one. Stage with auto_send=false or add an email first.')
       }
 
+      // Same rules the create route enforces, applied at staging so the
+      // preview the human approves is what the commit executor will write:
+      // an off-grid or past start_date must fail here, not after approval.
+      if (params.start_date !== undefined) {
+        if (!runDateMatchesDayOfMonth(params.start_date, params.day_of_month)) {
+          throw new Error(
+            `start_date ${params.start_date} does not fall on day_of_month ${params.day_of_month} (clamped to the last day in shorter months). Pick a date on that day or change day_of_month.`,
+          )
+        }
+        const { date: todayStockholm } = getStockholmDateHour(new Date())
+        if (params.start_date < todayStockholm) {
+          throw new Error(`start_date ${params.start_date} is in the past (today in Europe/Stockholm is ${todayStockholm}).`)
+        }
+      }
+
       const monthlyTotalExclVat =
         Math.round(params.items.reduce((sum, it) => sum + it.quantity * it.unit_price, 0) * 100) / 100
 
@@ -21057,7 +21073,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_update_recurring_schedule',
     keywords: ['återkommande faktura', 'stående faktura'],
     title: 'Update Recurring Invoice Schedule',
-    description: 'Stage an update to a recurring invoice schedule (schedule_id from gnubok_list_recurring_schedules). Pause/resume via status. items replace all lines; omit to keep them. day_of_month clamps to the last day in shorter months; send_hour is a whole hour in Europe/Stockholm; next_run_date re-phases the schedule (e.g. yearly in February).',
+    description: 'Stage an update to a recurring invoice schedule (schedule_id from gnubok_list_recurring_schedules). status pauses/resumes; items replace all lines; day_of_month clamps to the last day in shorter months; next_run_date re-phases (yearly in February); send_hour is Europe/Stockholm.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -21223,6 +21239,23 @@ export const tools: McpTool[] = [
         const currentCustomer = current.customer as { name?: string; email?: string | null } | null
         if (!currentCustomer?.email) {
           throw new Error('Customer has no email address: auto_send requires one. Add an email to the customer first.')
+        }
+      }
+
+      // Same rules the PATCH route enforces, applied at staging so the
+      // proposed next_run_date in the preview is exactly what gets written
+      // on approval (the executor only rolls a date that went stale while
+      // waiting for approval; it never silently moves a date staged today).
+      if (parsedChanges.next_run_date !== undefined) {
+        const effectiveDay = parsedChanges.day_of_month ?? (current.day_of_month as number)
+        if (!runDateMatchesDayOfMonth(parsedChanges.next_run_date, effectiveDay)) {
+          throw new Error(
+            `next_run_date ${parsedChanges.next_run_date} does not fall on day_of_month ${effectiveDay} (clamped to the last day in shorter months). Pick a date on that day or change day_of_month in the same call.`,
+          )
+        }
+        const { date: todayStockholm } = getStockholmDateHour(new Date())
+        if (parsedChanges.next_run_date <= todayStockholm) {
+          throw new Error(`next_run_date must be after today in Europe/Stockholm (${todayStockholm}).`)
         }
       }
 

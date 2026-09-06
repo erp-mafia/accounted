@@ -209,6 +209,37 @@ describe('gnubok_create_recurring_schedule: validation and staging', () => {
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
+  it('rejects a start_date off the day_of_month grid at staging, before writing anything', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
+
+    await expect(
+      createTool().execute(
+        { ...validArgs, day_of_month: 1, start_date: '2999-09-10' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/day_of_month/)
+    // Customer lookup only; no pending_operations insert.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a start_date in the past at staging', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
+
+    await expect(
+      createTool().execute(
+        { ...validArgs, day_of_month: 25, start_date: '2020-01-25' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/past/)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
   it('stages the schedule for approval at medium risk', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
@@ -365,6 +396,52 @@ describe('gnubok_update_recurring_schedule: validation and staging', () => {
     expect(result.staged).toBe(true)
     expect(result.preview.current.next_run_date).toBe('2999-01-25')
     expect(result.preview.proposed.next_run_date).toBe('2999-02-25')
+  })
+
+  it('rejects a next_run_date off the effective day_of_month grid at staging', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: currentSchedule({ day_of_month: 15 }) })
+
+    await expect(
+      updateTool().execute(
+        { schedule_id: SCHEDULE_ID, next_run_date: '2999-11-01' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/day_of_month 15/)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('validates next_run_date against a day_of_month changed in the same call', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: currentSchedule({ day_of_month: 15 }) })
+    enqueue({ data: { id: 'op-recurring-6' } })
+
+    const result = (await updateTool().execute(
+      { schedule_id: SCHEDULE_ID, day_of_month: 1, next_run_date: '2999-11-01' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: { proposed: Record<string, unknown> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.proposed).toMatchObject({ day_of_month: 1, next_run_date: '2999-11-01' })
+  })
+
+  it('rejects a next_run_date that is not after today at staging', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: currentSchedule() })
+
+    await expect(
+      updateTool().execute(
+        { schedule_id: SCHEDULE_ID, next_run_date: '2020-01-25' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/after today/)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
   it('rejects a malformed next_run_date before querying the database', async () => {

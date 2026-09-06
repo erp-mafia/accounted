@@ -35,6 +35,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { ISO_DATE_RE } from '@/lib/invariants'
 import {
   alignRunDateToDay,
+  getStockholmDateHour,
   isoFromParts,
   lastDayOfMonth,
   parseIsoDate,
@@ -45,24 +46,27 @@ import {
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
 
-/** Today as yyyy-mm-dd in the browser's local calendar. */
-function localTodayIso(): string {
-  const now = new Date()
-  return isoFromParts(now.getFullYear(), now.getMonth(), now.getDate())
+/**
+ * Today as yyyy-mm-dd in Europe/Stockholm: the calendar the server validates
+ * against. The browser's own zone must not leak in, or a user west of Sweden
+ * late in the evening would pass client validation and get a 400.
+ */
+function stockholmTodayIso(): string {
+  return getStockholmDateHour(new Date()).date
 }
 
 /**
- * Client-side twin of computeInitialRunDate: this month's occurrence of
- * day_of_month if it has not passed, otherwise next month's. Prefills the
- * date field so the default is "no offset", exactly what the server would
- * pick when start_date is omitted.
+ * Client-side twin of computeInitialRunDate on Stockholm's calendar: this
+ * month's occurrence of day_of_month if it has not passed, otherwise next
+ * month's. Prefills the date field so the default is "no offset", exactly
+ * what the server would pick when start_date is omitted.
  */
 function defaultRunDate(dayOfMonth: number): string {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = now.getMonth()
+  const today = parseIsoDate(stockholmTodayIso())
+  if (!today) return ''
+  const { year: y, month0: m, day: todayDay } = today
   const thisMonthDay = Math.min(dayOfMonth, lastDayOfMonth(y, m))
-  if (now.getDate() <= thisMonthDay) return isoFromParts(y, m, thisMonthDay)
+  if (todayDay <= thisMonthDay) return isoFromParts(y, m, thisMonthDay)
   const ny = m === 11 ? y + 1 : y
   const nm = (m + 1) % 12
   return isoFromParts(ny, nm, Math.min(dayOfMonth, lastDayOfMonth(ny, nm)))
@@ -174,7 +178,7 @@ function NewRecurringScheduleForm({
           })
           return
         }
-        const today = localTodayIso()
+        const today = stockholmTodayIso()
         if (schedule) {
           // The stored date, moved onto the grid for the (possibly edited)
           // day, is the "unchanged" reference: a day-only edit keeps the
