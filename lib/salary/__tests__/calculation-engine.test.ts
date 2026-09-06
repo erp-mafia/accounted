@@ -1557,3 +1557,96 @@ describe('recurring line flags through the engine', () => {
     expect(withDeduction.netSalary).toBe(base.netSalary - 300)
   })
 })
+
+// ============================================================
+// Kostnadsersättning (#2331): utlägg, skattefritt traktamente and skattefri
+// milersättning ride on the payout only (travel-expenses.md).
+// ============================================================
+
+describe('kostnadsersättning: tax-free reimbursements', () => {
+  const reimbursement = (itemType: string, amount: number) =>
+    lineItem({ itemType, amount, isTaxable: false, isAvgiftBasis: false, isVacationBasis: false })
+
+  it('adds an utlägg line to the net payout but not to gross, tax, avgifter or vacation', () => {
+    const base = calculateSalary(makeBasicInput({ lineItems: [baseLineItem(40000)] }), config2026, emptyTaxRates)
+    const r = calculateSalary(
+      makeBasicInput({ lineItems: [baseLineItem(40000), reimbursement('expense_reimbursement', 1234.5)] }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(r.grossSalary).toBe(base.grossSalary)
+    expect(r.taxableIncome).toBe(base.taxableIncome)
+    expect(r.taxWithheld).toBe(base.taxWithheld)
+    expect(r.avgifterBasis).toBe(base.avgifterBasis)
+    expect(r.avgifterAmount).toBe(base.avgifterAmount)
+    expect(r.vacationAccrual).toBe(base.vacationAccrual)
+    expect(r.totalEmployerCost).toBe(base.totalEmployerCost)
+    expect(r.taxFreeReimbursements).toBe(1234.5)
+    expect(r.netSalary).toBeCloseTo(base.netSalary + 1234.5, 2)
+    expect(r.steps.some((s) => s.label === 'Kostnadsersättning (skattefri)')).toBe(true)
+  })
+
+  it('treats skattefritt traktamente and skattefri milersättning the same way', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        lineItems: [baseLineItem(40000), reimbursement('traktamente_taxfree', 300), reimbursement('mileage_taxfree', 250)],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(r.grossSalary).toBe(40000)
+    expect(r.taxFreeReimbursements).toBe(550)
+    expect(r.netSalary).toBe(28550)
+  })
+
+  it('a payslip that only repays utlägg has gross 0, tax 0, avgifter 0 and a payout equal to the claims', () => {
+    const r = calculateSalary(
+      makeBasicInput({ monthlySalary: 0, lineItems: [reimbursement('expense_reimbursement', 800)] }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(r.grossSalary).toBe(0)
+    expect(r.taxWithheld).toBe(0)
+    expect(r.avgifterAmount).toBe(0)
+    expect(r.netSalary).toBe(800)
+  })
+
+  it('rounds the reimbursed payout up to whole kronor when öresavrundning is on', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        monthlySalary: 0,
+        roundNetToWholeKrona: true,
+        lineItems: [reimbursement('expense_reimbursement', 799.4)],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(r.netSalary).toBe(800)
+    expect(r.netRounding).toBe(0.6)
+  })
+
+  it('ignores a negative reimbursement line', () => {
+    const r = calculateSalary(
+      makeBasicInput({ lineItems: [baseLineItem(40000), reimbursement('expense_reimbursement', -100)] }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(r.taxFreeReimbursements).toBe(0)
+    expect(r.netSalary).toBe(28000)
+  })
+
+  it('invariant: netSalary + tax + netDeductions - reimbursements = grossSalary', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        lineItems: [
+          baseLineItem(40000),
+          reimbursement('expense_reimbursement', 1234.5),
+          lineItem({ itemType: 'net_deduction_union', amount: -300, isNetDeduction: true, isTaxable: false, isAvgiftBasis: false }),
+        ],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(r.netSalary + r.taxWithheld + r.netDeductions - r.taxFreeReimbursements).toBeCloseTo(r.grossSalary, 2)
+  })
+})

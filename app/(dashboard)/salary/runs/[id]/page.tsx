@@ -49,7 +49,16 @@ import {
   formatAgiPeriodCompact,
   formatAgiPeriodDashed,
 } from '@/lib/salary/agi/reporting-period'
+import { roundOre } from '@/lib/money'
+import { formatCurrency } from '@/lib/utils'
 import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
+
+/** The fields of GET /api/expense-claims?status=registered the run page reads. */
+interface OpenClaimRow {
+  id: string
+  employee_id: string | null
+  amount_sek: number | string
+}
 
 export default function SalaryRunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -62,6 +71,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
   const [run, setRun] = useState<RunDetail | null>(null)
   const [availableEmployees, setAvailableEmployees] = useState<EmployeeMasked[]>([])
+  // Registered utlägg (#2331): fetched only while the run is a draft, the
+  // one status in which they can be put on a payslip.
+  const [openClaims, setOpenClaims] = useState<OpenClaimRow[]>([])
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -102,6 +114,14 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     if (res.ok) {
       const { data } = await res.json()
       setRun(data)
+      if (data?.status === 'draft') {
+        void fetch('/api/expense-claims?status=registered')
+          .then(async (claimsRes) => (claimsRes.ok ? claimsRes.json() : null))
+          .then((json) => setOpenClaims((json?.data as OpenClaimRow[] | undefined) ?? []))
+          .catch(() => setOpenClaims([]))
+      } else {
+        setOpenClaims([])
+      }
       if (data?.period_year && data?.period_month) {
         const period = formatAgiPeriodDashed(agiReportingPeriod(data))
         setTaxPaymentLoading(true)
@@ -487,6 +507,43 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  // "Lägg till utlägg" (#2331): the server pulls the employee's registered
+  // claims onto the payslip as tax-free lines; the user then clicks Beräkna.
+  async function handleAddExpenseClaims(employeeId: string) {
+    setActionLoading(`expense-claims-${employeeId}`)
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/employees/${employeeId}/expense-claims`, {
+        method: 'POST',
+      })
+      const result = await res.json().catch(() => ({}))
+      if (res.ok) {
+        await loadRun()
+        const added = result?.data as { claim_count?: number; total_sek?: number } | undefined
+        toast({
+          title: t('toast_expense_claims_added'),
+          description: t('toast_expense_claims_added_detail', {
+            count: added?.claim_count ?? 0,
+            amount: formatCurrency(added?.total_sek ?? 0),
+          }),
+        })
+      } else {
+        toast({
+          title: t('toast_expense_claims_failed'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
+      }
+    } catch (err) {
+      toast({
+        title: t('toast_expense_claims_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
+        variant: 'destructive',
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   // Edit this month's monthly salary for one employee (draft only). The engine
   // reads this per-run value at calc time. Saved on blur; the user then clicks
   // Beräkna to refresh the outcome.
@@ -766,6 +823,24 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const periodLabel = periodLabelOf(run)
   const employees = (run.employees || []) as SalaryRunEmployee[]
 
+  // Open utlägg per employee that are not already on a payslip line of this
+  // run (#2331). The server re-checks against every run when adding.
+  const scheduledClaimIds = new Set(
+    employees.flatMap((sre) =>
+      (sre.line_items ?? [])
+        .map((li) => li.source_expense_claim_id)
+        .filter((claimId): claimId is string => Boolean(claimId)),
+    ),
+  )
+  const openExpenseClaims: Record<string, { count: number; total_sek: number }> = {}
+  for (const claim of openClaims) {
+    if (!claim.employee_id || scheduledClaimIds.has(claim.id)) continue
+    const bucket = openExpenseClaims[claim.employee_id] ?? { count: 0, total_sek: 0 }
+    bucket.count += 1
+    bucket.total_sek = roundOre(bucket.total_sek + (Number(claim.amount_sek) || 0))
+    openExpenseClaims[claim.employee_id] = bucket
+  }
+
   // calculation_params is frozen only when the run has been calculated, so it
   // distinguishes "not yet calculated" from "calculated to 0" (a nollkörning).
   const isCalculated = run.calculation_params != null
@@ -871,6 +946,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         onAddEmployee={handleAddEmployee}
         onRemoveEmployee={handleRemoveEmployee}
         onSalaryEdit={handleSalaryEdit}
+        openExpenseClaims={openExpenseClaims}
+        onAddExpenseClaims={handleAddExpenseClaims}
       />
 
       {/* Calculation detail and the journal preview read best side by side on

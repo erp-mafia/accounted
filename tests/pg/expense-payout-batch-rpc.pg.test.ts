@@ -377,4 +377,50 @@ describe('create_expense_payout_batch', () => {
       { account_number: '1930', d: 0, c: 640 },
     ])
   })
+
+  it('refuses a claim scheduled on a payslip line (ON_PAYSLIP, #2331) without touching the ledger', async () => {
+    const { userId, companyId } = await seedCompany()
+    await seedChart(companyId, userId)
+    const { rows: emp } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.employees
+         (company_id, user_id, first_name, last_name, personnummer, personnummer_last4,
+          employment_type, employment_start, employment_degree, salary_type)
+       VALUES ($1, $2, 'Anna', 'Anställd', '199001015678', '5678', 'employee', '2026-01-01', 100, 'monthly')
+       RETURNING id`,
+      [companyId, userId],
+    )
+    const claim = await insertClaim(companyId, userId, 300, { claimantName: 'Anna Anställd', liability: '2820' })
+    await getPool().query(`UPDATE public.expense_claims SET employee_id = $2 WHERE id = $1`, [claim, emp[0].id])
+    const runId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.salary_runs (id, company_id, user_id, period_year, period_month, payment_date, status)
+       VALUES ($1, $2, $3, 2026, 6, '2026-06-25', 'draft')`,
+      [runId, companyId, userId],
+    )
+    const { rows: sre } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.salary_run_employees
+         (salary_run_id, employee_id, company_id, employment_degree, monthly_salary, salary_type)
+       VALUES ($1, $2, $3, 100, 30000, 'monthly') RETURNING id`,
+      [runId, emp[0].id, companyId],
+    )
+    await getPool().query(
+      `INSERT INTO public.salary_line_items
+         (salary_run_employee_id, company_id, item_type, description, amount,
+          is_taxable, is_avgift_basis, is_vacation_basis, account_number, source_expense_claim_id)
+       VALUES ($1, $2, 'expense_reimbursement', 'Utlägg: Kvitto', 300, false, false, false, '2820', $3)`,
+      [sre[0].id, companyId, claim],
+    )
+
+    const r = await withUserContext(userId, (c) => callRpc(c, companyId, [claim]))
+    expect(r).toMatchObject({
+      ok: false,
+      code: 'ON_PAYSLIP',
+      details: { claim_id: claim, salary_run_id: runId, salary_run_status: 'draft', period: '2026-06' },
+    })
+    expect(await payoutState(companyId, [claim])).toMatchObject({
+      batches: 0,
+      postedPayouts: 0,
+      claims: [{ status: 'registered', payout_batch_id: null }],
+    })
+  })
 })

@@ -7151,7 +7151,13 @@
     "toast_payslips_downloaded_detail": "{count} stycken i zip-arkiv.",
     "toast_zip_failed": "Kunde inte skapa zip-fil",
     "toast_agi_failed": "AGI-fil kunde inte genereras",
-    "toast_agi_downloaded": "AGI-fil nedladdad"
+    "toast_agi_downloaded": "AGI-fil nedladdad",
+    "add_expense_claims": "Lägg till {count, plural, one {# utlägg} other {# utlägg}} · {amount}",
+    "add_expense_claims_aria": "Lägg till öppna utlägg för {name} på lönebeskedet",
+    "add_expense_claims_title": "Lägg till öppna utlägg på lönebeskedet: betalas ut skattefritt med lönen",
+    "toast_expense_claims_added": "Utlägg tillagda på lönebeskedet",
+    "toast_expense_claims_added_detail": "{count, plural, one {# utlägg} other {# utlägg}} · {amount}. Beräkna körningen för att uppdatera nettot.",
+    "toast_expense_claims_failed": "Kunde inte lägga till utlägg"
   },
   "salary_agi": {
     "title": "Arbetsgivardeklaration (AGI)",
@@ -7589,7 +7595,10 @@
     "th_type": "Typ",
     "th_description": "Beskrivning",
     "th_quantity": "Antal",
-    "th_amount": "Belopp"
+    "th_amount": "Belopp",
+    "th_actions": "Åtgärder",
+    "li_expense_reimbursement": "Utlägg (skattefritt)",
+    "remove_expense_claim_line_aria": "Ta bort utlägget från lönebeskedet"
   },
   "salary_tax_tables": {
     "checking": "Kontrollerar skattetabeller…",

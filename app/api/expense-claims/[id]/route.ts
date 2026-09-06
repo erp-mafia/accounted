@@ -13,6 +13,10 @@ const DELETE_ERROR_MESSAGES: Record<string, { message: string; status: number }>
     message: 'Utlägget är redan utbetalt och kan inte tas bort.',
     status: 409,
   },
+  ON_PAYSLIP: {
+    message: 'Utlägget ligger på ett lönebesked som är under behandling. Ta bort raden från lönebeskedet först.',
+    status: 409,
+  },
   UNLINKED: {
     message: 'Utlägget saknar koppling till sitt verifikat och kan inte tas bort automatiskt.',
     status: 409,

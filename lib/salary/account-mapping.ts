@@ -5,6 +5,23 @@ import type { SalaryLineItemType } from '@/types'
  * to BAS accounts per Swedish chart of accounts standards.
  */
 
+/**
+ * Kostnadsersättning (travel-expenses.md, "Utlägg vs kostnadsersättning"):
+ * paid out with the salary but outside bruttolön. No skatteavdrag, no
+ * arbetsgivaravgifter, no semesterunderlag, not in the AGI gross (FK011).
+ * The calculation engine adds these to the net payout only; the booking
+ * debits their mapped account on top of the gross reconciliation.
+ */
+export const TAX_FREE_REIMBURSEMENT_TYPES: readonly SalaryLineItemType[] = [
+  'expense_reimbursement',
+  'traktamente_taxfree',
+  'mileage_taxfree',
+]
+
+export function isTaxFreeReimbursementType(itemType: string): boolean {
+  return (TAX_FREE_REIMBURSEMENT_TYPES as readonly string[]).includes(itemType)
+}
+
 /** Default BAS account for each salary line item type */
 const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   // Salary components
@@ -45,6 +62,11 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   traktamente_taxable: '7322',
   mileage_taxfree: '7331',
   mileage_taxable: '7332',
+  // Utlägg repaid with the salary (#2331): the cost and moms were booked when
+  // the claim was registered against 2820, so the payslip line relieves that
+  // liability, never a 7xxx cost. The line normally carries the claim's own
+  // liability account in account_number; this is the fallback.
+  expense_reimbursement: '2820',
   // Net deductions (nettolöneavdrag): withheld from the payout and owed to a
   // third party, so the default account is the credit-side settlement account,
   // not a 7xxx salary expense. Advance repayments credit the receivable (1613),

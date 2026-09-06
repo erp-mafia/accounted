@@ -16,9 +16,18 @@ vi.mock('@/lib/salary/vacation-ledger', () => ({
 vi.mock('@/lib/salary/ytd', () => ({
   refreshRunYtd: vi.fn().mockResolvedValue({ ok: true, updated: 0 }),
 }))
+// The pre-booking claim check stays real (zero queries without linked lines,
+// one queued expense_claims read with them); only the settle RPC is mocked.
+vi.mock('@/lib/salary/expense-claim-lines', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/salary/expense-claim-lines')>(
+    '@/lib/salary/expense-claim-lines',
+  )
+  return { ...actual, settleExpenseClaimsForBookedRun: vi.fn() }
+})
 
 import { advanceAndBookSalaryRun, bookPaidSalaryRun } from '../book-run'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
+import { settleExpenseClaimsForBookedRun } from '@/lib/salary/expense-claim-lines'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 import { eventBus } from '@/lib/events'
@@ -211,5 +220,125 @@ describe('bookPaidSalaryRun', () => {
       'user-1',
       expect.objectContaining({ calculation_params: { slpRate: 0.2426 } }),
     )
+  })
+})
+
+describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
+  const claimLine = (claimId: string, amount: number) => ({
+    item_type: 'expense_reimbursement',
+    amount,
+    account_number: '2820',
+    is_net_deduction: false,
+    is_gross_deduction: false,
+    source_expense_claim_id: claimId,
+  })
+
+  beforeEach(() => {
+    vi.mocked(settleExpenseClaimsForBookedRun).mockResolvedValue({
+      ok: true,
+      data: { claim_count: 1, already_settled: 0, total_sek: 500, batches: [] },
+    })
+  })
+
+  it('refuses to post anything when a linked claim is no longer open', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid', total_net: 23500 }) },
+      { data: [makeSre({ net_salary: 23500, line_items: [claimLine('claim-1', 500)] })] },
+      { data: [{ id: 'claim-1', status: 'paid', employee_id: 'e1', amount_sek: 500 }] }, // paid by bank meanwhile
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('SALARY_RUN_EXPENSE_CLAIM_NOT_OPEN')
+      expect(result.details).toEqual({ claims: [{ claim_id: 'claim-1', reason: 'not_open' }] })
+    }
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+    expect(settleExpenseClaimsForBookedRun).not.toHaveBeenCalled()
+  })
+
+  it('posts the verifikat, books the run, then settles the claims against it', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid', total_net: 23500 }) },
+      { data: [makeSre({ net_salary: 23500, line_items: [claimLine('claim-1', 500)] })] },
+      { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: '500.00' }] },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
+    expect(settleExpenseClaimsForBookedRun).toHaveBeenCalledWith(expect.anything(), {
+      companyId: 'company-1',
+      userId: 'user-1',
+      salaryRunId: 'run-1',
+    })
+    expect(eventBus.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'salary_run.booked' }))
+  })
+
+  it('keeps the booking and logs loudly when the settle step fails after posting', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid', total_net: 23500 }) },
+      { data: [makeSre({ net_salary: 23500, line_items: [claimLine('claim-1', 500)] })] },
+      { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: 500 }] },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+    vi.mocked(settleExpenseClaimsForBookedRun).mockResolvedValue({ ok: false, code: 'SETTLE_FAILED', detail: 'boom' })
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    const logError = (log as unknown as { error: ReturnType<typeof vi.fn> }).error
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining('NOT settled'),
+      expect.any(Error),
+      expect.objectContaining({ salaryRunId: 'run-1', code: 'SETTLE_FAILED' }),
+    )
+  })
+
+  it('never touches the settle step for a run without linked lines', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre()] },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    expect(settleExpenseClaimsForBookedRun).not.toHaveBeenCalled()
+  })
+
+  it('posts a run that only repays utlägg (gross 0, net > 0) instead of treating it as a nollkörning', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid', total_gross: 0, total_tax: 0, total_net: 800, total_avgifter: 0 }) },
+      {
+        data: [
+          makeSre({
+            gross_salary: 0,
+            tax_withheld: 0,
+            net_salary: 800,
+            avgifter_amount: 0,
+            line_items: [claimLine('claim-1', 800)],
+          }),
+        ],
+      },
+      { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: 800 }] },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.nollkorning).toBe(false)
+    expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
+    expect(settleExpenseClaimsForBookedRun).toHaveBeenCalledTimes(1)
   })
 })

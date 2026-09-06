@@ -7,7 +7,7 @@ import {
 } from '@/lib/bookkeeping/dimension-resolver'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { SALARY_ACCOUNTS, getLineItemAccount } from './account-mapping'
+import { SALARY_ACCOUNTS, getLineItemAccount, isTaxFreeReimbursementType } from './account-mapping'
 import {
   computeDeclaredAvgifterWithOverrides,
   resolveDeclaredAvgifterParams,
@@ -188,6 +188,8 @@ export async function createSalaryRunEntries(
  * Entry 1: Salary booking.
  *
  * Debit:  7210/7220/7240 Löner (per employee by type)
+ * Debit:  7321/7331 skattefri kostnadsersättning, 2820 utlägg repaid with
+ *         the salary (outside gross, inside the net payout)
  * Credit: 2710 Personalskatt (total tax withheld)
  * Credit: 1930 Företagskonto (total net salary)
  */
@@ -225,7 +227,8 @@ async function createSalaryEntry(
   // co-payment), so each one books on its mapped settlement account instead of
   // a 7xxx expense. Skipping them entirely (the old behavior) left the entry
   // unbalanced by exactly the deducted amount. Like the 2710/1930 legs these
-  // stay aggregated and undimensioned.
+  // stay aggregated and undimensioned. The same map carries the 2820 relief
+  // of utlägg repaid with the salary (positive, so it books as a debit).
   const netDeductionBuckets = new Map<string, number>()
 
   for (const emp of run.employees) {
@@ -252,6 +255,22 @@ async function createSalaryEntry(
       if (li.is_net_deduction) {
         const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
         netDeductionBuckets.set(account, (netDeductionBuckets.get(account) ?? 0) + li.amount)
+        continue
+      }
+      // Kostnadsersättning (utlägg, skattefritt traktamente, skattefri
+      // milersättning): inside the 1930 net credit but outside gross, so like
+      // the öresavrundning it must stay out of lineItemTotal or the base
+      // salary debit would shrink by the same amount. Travel types are P&L
+      // costs and follow the employee bag; an utlägg repayment relieves the
+      // liability the registration credited (2820), a settlement leg that
+      // stays aggregated and undimensioned like 2710/1930.
+      if (isTaxFreeReimbursementType(li.item_type)) {
+        const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
+        if (li.item_type === 'expense_reimbursement') {
+          netDeductionBuckets.set(account, (netDeductionBuckets.get(account) ?? 0) + li.amount)
+        } else {
+          addExpense(account, dimensions, li.amount)
+        }
         continue
       }
       if (li.is_gross_deduction) continue
@@ -791,6 +810,7 @@ function accountLabel(account: string): string {
     '7331': 'Bilersättningar skattefria',
     '7332': 'Bilersättningar skattepliktiga',
     '7385': 'Kostnader för fri bil',
+    '2820': 'Kortfristiga skulder till anställda',
     '1613': 'Övriga förskott',
     '2794': 'Fackföreningsavgifter',
     '2799': 'Övriga löneavdrag',

@@ -3381,6 +3381,22 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Lönekörningen är kopplad till en verifikation och kan inte raderas (BFL 5 kap räkenskapsinformation).',
     message_en: 'Salary run is linked to a journal entry and cannot be deleted (BFL 5 kap räkenskapsinformation).',
   },
+  // Utlägg repaid with the salary (#2331).
+  SALARY_RUN_NO_OPEN_EXPENSE_CLAIMS: {
+    httpStatus: 404,
+    message_sv: 'Den anställda har inga öppna utlägg att lägga till.',
+    message_en: 'The employee has no open expense claims to add.',
+  },
+  EXPENSE_CLAIM_ALREADY_ON_PAYSLIP: {
+    httpStatus: 409,
+    message_sv: 'Utlägget ligger redan på ett lönebesked.',
+    message_en: 'The expense claim is already on a payslip.',
+  },
+  SALARY_RUN_EXPENSE_CLAIM_NOT_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Ett utlägg på lönebeskedet är inte längre öppet (utbetalt eller borttaget). Ta bort raden och beräkna om innan bokföring.',
+    message_en: 'An expense claim on the payslip is no longer open (paid or removed). Remove the line and recalculate before booking.',
+  },
   // Phase 5 PR-3: additional import error codes.
   SIE_IMPORT_DUPLICATE: {
     httpStatus: 409,

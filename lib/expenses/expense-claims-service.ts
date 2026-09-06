@@ -25,6 +25,7 @@ import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/typ
 import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import { roundOre, sumOre } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
@@ -433,7 +434,11 @@ export async function listExpenseClaims(
 
 export type DeleteExpenseClaimResult =
   | { ok: true; reversal_entry_id: string | null }
-  | { ok: false; code: 'NOT_FOUND' | 'ALREADY_PAID' | 'UNLINKED' | 'DELETE_FAILED'; detail?: string }
+  | {
+      ok: false
+      code: 'NOT_FOUND' | 'ALREADY_PAID' | 'ON_PAYSLIP' | 'UNLINKED' | 'DELETE_FAILED'
+      detail?: string
+    }
 
 /**
  * Remove a registered claim. The booked verifikat is never deleted: it is
@@ -456,6 +461,18 @@ export async function deleteExpenseClaim(
   if (error) return { ok: false, code: 'DELETE_FAILED', detail: error.message }
   if (!claim) return { ok: false, code: 'NOT_FOUND' }
   if (claim.status === 'paid') return { ok: false, code: 'ALREADY_PAID' }
+
+  // Scheduled on a payslip that has left draft (#2331): the run's stored
+  // totals include the line, and the FK cascade would drop it under a
+  // calculated run. On a draft run the cascade is the right outcome.
+  const payslip = await findPayslipLineForClaim(supabase, companyId, claimId)
+  if (payslip && payslip.run_status !== 'draft') {
+    return {
+      ok: false,
+      code: 'ON_PAYSLIP',
+      detail: `claim ${claimId} is on salary run ${payslip.salary_run_id} (${payslip.run_status})`,
+    }
+  }
 
   if (!claim.journal_entry_id) {
     // Registered claims always book a verifikat; a missing link means the
@@ -523,6 +540,7 @@ export type CreatePayoutBatchFailureCode =
   | 'TX_ALREADY_BOOKED'
   | 'TX_CURRENCY'
   | 'TX_AMOUNT_MISMATCH'
+  | 'ON_PAYSLIP'
   | 'BATCH_INSERT_FAILED'
 
 export type CreatePayoutBatchResult =
@@ -551,6 +569,7 @@ const PAYOUT_RPC_CODES: ReadonlySet<string> = new Set<CreatePayoutBatchFailureCo
   'TX_ALREADY_BOOKED',
   'TX_CURRENCY',
   'TX_AMOUNT_MISMATCH',
+  'ON_PAYSLIP',
 ])
 
 interface PayoutRpcRow {
