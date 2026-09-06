@@ -1299,7 +1299,9 @@
     "submit_save": "Spara kund",
     "submit_saving": "Sparar...",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
-    "personal_number_unreadable": "Det sparade personnumret kan inte läsas. Skriv in det igen för att ersätta det."
+    "personal_number_unreadable": "Det sparade personnumret kan inte läsas. Skriv in det igen för att ersätta det.",
+    "address_line2_label": "Adressrad 2",
+    "address_line2_placeholder": "c/o"
   },
   "form_supplier": {
     "name_label": "Namn *",
@@ -1345,7 +1347,9 @@
     "notes_placeholder": "Interna anteckningar om leverantören...",
     "submit_save": "Spara leverantör",
     "submit_saving": "Sparar...",
-    "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag"
+    "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
+    "address_line2_label": "Adressrad 2",
+    "address_line2_placeholder": "c/o"
   },
   "initial_setup": {
     "completed_verdict": "Bokföringen är igång.",
@@ -8823,8 +8827,16 @@
     "open_dossier": "Öppna {name}",
     "attn_create": "Skapa förslag",
     "auto_created_title": "{count} förslag skapade från bokföringen",
-    "auto_created_description": "Motparter som dina verifikat namnger men som inte finns i registret. Lägg upp dem, eller dölj de som inte hör hemma här."
-},
+    "auto_created_description": "Motparter som dina verifikat namnger men som inte finns i registret. Lägg upp dem, eller dölj de som inte hör hemma här.",
+    "autofill_looking": "Söker i SCB:s företagsregister…",
+    "autofill_filled": "{name} · {fields} från SCB. Ändra fritt.",
+    "autofill_found": "{name} enligt SCB:s register. Inget ändrat, fälten var redan ifyllda.",
+    "autofill_not_found": "Inget företag med org.nr {org} i SCB:s register.",
+    "autofill_field_name": "namn",
+    "autofill_field_email": "e-post",
+    "autofill_field_phone": "telefon",
+    "autofill_field_vat": "momsnummer"
+  },
   "tx_expense_payout_match": {
     "title": "Bokför återbetalning av utlägg",
     "description": "Överföringen bokförs mot personens skuldkonto, utläggen markeras som utbetalda och transaktionen kopplas till verifikatet.",

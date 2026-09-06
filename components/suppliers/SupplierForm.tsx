@@ -15,6 +15,9 @@ import { Loader2, Lock, X } from 'lucide-react'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getCountryOptions, normalizeCountryCode } from '@/lib/vat/country-codes'
+import { registryFormFill, type RegistryFormField } from '@/lib/parties/registry-form-fill'
+import { useRegistryAutofill } from '@/components/parties/use-registry-autofill'
+import { RegistryAutofillNote } from '@/components/parties/RegistryAutofillNote'
 import type { CreateSupplierInput } from '@/types'
 
 interface SupplierFormProps {
@@ -87,6 +90,8 @@ export default function SupplierForm({
     handleSubmit,
     control,
     watch,
+    getValues,
+    setValue,
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -96,6 +101,7 @@ export default function SupplierForm({
       email: initialData?.email || '',
       phone: initialData?.phone || '',
       address_line1: initialData?.address_line1 || '',
+      address_line2: initialData?.address_line2 || '',
       postal_code: initialData?.postal_code || '',
       city: initialData?.city || '',
       country: normalizeCountryCode(initialData?.country) ?? initialData?.country ?? 'SE',
@@ -112,6 +118,39 @@ export default function SupplierForm({
       default_payment_terms: initialData?.default_payment_terms ?? 30,
       default_currency: initialData?.default_currency || 'SEK',
       notes: initialData?.notes || '',
+    },
+  })
+
+  const supplierType = watch('supplier_type')
+  const orgNumber = watch('org_number')
+  // A complete org number of a Swedish company is looked up in SCB's
+  // register once, and the fields it knows are filled where nothing has
+  // been typed (issue #2218). Quiet when the environment has no SCB
+  // credentials. The VAT number is among the fields here: the form shows it.
+  const autofill = useRegistryAutofill({
+    orgNumber,
+    enabled: canWrite && supplierType === 'swedish_business',
+    initialOrgNumber: initialData?.org_number,
+    apply: (now, before) => {
+      const v = getValues()
+      const patch = registryFormFill(
+        {
+          name: v.name ?? '',
+          email: v.email ?? '',
+          phone: v.phone ?? '',
+          address_line1: v.address_line1 ?? '',
+          address_line2: v.address_line2 ?? '',
+          postal_code: v.postal_code ?? '',
+          city: v.city ?? '',
+          vat_number: v.vat_number ?? '',
+        },
+        now,
+        before,
+      )
+      for (const [field, value] of Object.entries(patch)) {
+        setValue(field as RegistryFormField, value ?? '', { shouldDirty: true, shouldValidate: true })
+      }
+      return Object.keys(patch)
     },
   })
 
@@ -151,6 +190,27 @@ export default function SupplierForm({
         />
       </div>
 
+      {/* Identification first: on a Swedish company's org number the register fills the rest */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="org_number">{t('org_number_label')}</Label>
+          <Input
+            id="org_number"
+            placeholder={t('org_number_placeholder')}
+            {...register('org_number')}
+          />
+          <RegistryAutofillNote state={autofill} />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="vat_number">{t('vat_label')}</Label>
+          <Input
+            id="vat_number"
+            placeholder={t('vat_placeholder_se')}
+            {...register('vat_number')}
+          />
+        </div>
+      </div>
+
       {/* Name */}
       <div className="space-y-2">
         <Label htmlFor="name">{t('name_label')}</Label>
@@ -188,29 +248,6 @@ export default function SupplierForm({
         </div>
       </div>
 
-      {/* Business info */}
-      <div className="space-y-4 pt-4 border-t">
-        <h3>{t('business_section')}</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="org_number">{t('org_number_label')}</Label>
-            <Input
-              id="org_number"
-              placeholder={t('org_number_placeholder')}
-              {...register('org_number')}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="vat_number">{t('vat_label')}</Label>
-            <Input
-              id="vat_number"
-              placeholder={t('vat_placeholder_se')}
-              {...register('vat_number')}
-            />
-          </div>
-        </div>
-      </div>
-
       {/* Address */}
       <div className="space-y-4 pt-4 border-t">
         <h3>{t('address_section')}</h3>
@@ -220,6 +257,14 @@ export default function SupplierForm({
             id="address_line1"
             placeholder="Storgatan 1"
             {...register('address_line1')}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="address_line2">{t('address_line2_label')}</Label>
+          <Input
+            id="address_line2"
+            placeholder={t('address_line2_placeholder')}
+            {...register('address_line2')}
           />
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
