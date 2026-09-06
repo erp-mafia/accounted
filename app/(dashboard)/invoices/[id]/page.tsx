@@ -28,6 +28,11 @@ import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
+import {
+  classifyPaymentHistoryGap,
+  fetchInvoicePaymentVouchers,
+  type PaymentVoucherRef,
+} from '@/lib/invoices/payment-history-gap'
 import { effectiveQuoteStatus, isQuoteExpired } from '@/lib/invoices/quote-status'
 import type { QuoteStatus } from '@/types'
 import {
@@ -184,13 +189,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     Array<{
       id: string
       payment_date: string
-      amount: number
+      // null for a voucher standing in for a missing sub-ledger row (#2019
+      // leftovers): the voucher's settlement amount needs its lines.
+      amount: number | null
       currency: string
       journal_entry_id: string | null
       voucher_series: string | null
       voucher_number: number | null
     }>
   >([])
+  // Posted payment vouchers keyed on this invoice, for the case where the
+  // header reads paid but no payment row exists (#2213): null when either
+  // lookup failed, so the row never asserts a provenance it cannot know.
+  const [paymentVouchers, setPaymentVouchers] = useState<PaymentVoucherRef[] | null>([])
   // ROT/RUT begäran rows this invoice is part of (fakturamodellen). Empty
   // for invoices without a deduction and for claimed invoices whose begäran
   // has not been generated yet; the Skattereduktion card reads it.
@@ -368,7 +379,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
     // Invoice, reminders, payments, and deliveries all key on the route id: one
     // parallel batch. Only the follow-ups below need the invoice row.
-    const [{ data, error }, { data: reminderData }, { data: paymentData }, deliveryData, { data: payoutData }] =
+    const [
+      { data, error },
+      { data: reminderData },
+      { data: paymentData, error: paymentError },
+      deliveryData,
+      { data: payoutData },
+      paymentVoucherData,
+    ] =
       await Promise.all([
         supabase
           .from('invoices')
@@ -404,6 +422,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             'id, requested_amount, decided_amount, request:rot_rut_payout_requests(status, name, created_at, submitted_at, decided_at)',
           )
           .eq('invoice_id', id),
+        // Payment vouchers keyed on the invoice: what the Betalningar row
+        // falls back to when the header reads paid but no row exists.
+        fetchInvoicePaymentVouchers(supabase, id),
       ])
 
     // A newer fetch owns the page now (pager step or later refresh): commit
@@ -454,6 +475,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         })),
       )
     }
+    // A failed rows query leaves `payments` at its previous value, so the
+    // count alone cannot say "no rows"; null here makes the gap unreadable.
+    setPaymentVouchers(paymentError ? null : paymentVoucherData)
 
     type PayoutRow = {
       id: string
@@ -1395,6 +1419,27 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const canConvertQuote = canDecideQuote && quoteStatus !== 'declined'
   // #1693: only a fully paid faktura has a betalningsbekräftelse to offer.
   const canSendPaymentConfirmation = isPaymentConfirmationEligible(invoice)
+  // Paid header but no payment row (#2213): the row must state where the
+  // payment lives instead of implying none happened. When vouchers settled
+  // the invoice here without a row, they stand in for the rows.
+  const paymentGap = classifyPaymentHistoryGap({
+    status: invoice.status,
+    paid_at: invoice.paid_at,
+    paymentRows: payments.length,
+    paymentVouchers,
+  })
+  const paymentHistory =
+    paymentGap.kind === 'vouchers_without_rows'
+      ? paymentGap.vouchers.map((v) => ({
+          id: v.id,
+          payment_date: v.entry_date,
+          amount: null,
+          currency: invoice.currency,
+          journal_entry_id: v.id,
+          voucher_series: v.voucher_series,
+          voucher_number: v.voucher_number,
+        }))
+      : payments
   const isCreditNote = !!invoice.credited_invoice_id
   const booksOnIssue = isCreditNote
     ? !!originalInvoice && creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
@@ -2347,11 +2392,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </span>
           </DefRow>
           <DefRow label={t('payment_status_payments_heading')} className="items-baseline">
-            {payments.length === 0 ? (
-              <span className="text-muted-foreground">{t('payment_status_empty')}</span>
+            {paymentGap.kind === 'settled_before_accounted' ? (
+              // Migrated in as paid: the payment is in the previous system's
+              // books, so there is nothing to register here. One dated line;
+              // "inga registrerade ännu" read as still unpaid under a paid
+              // header (#2213).
+              <span className="text-muted-foreground">
+                {!paymentGap.full
+                  ? t('payment_status_partial_before_migration')
+                  : paymentGap.paid_at
+                    ? t('payment_status_before_migration', { date: formatDate(paymentGap.paid_at) })
+                    : t('payment_status_before_migration_undated')}
+              </span>
+            ) : paymentGap.kind === 'unreadable' ? (
+              <span className="text-muted-foreground">{t('payment_status_unavailable')}</span>
             ) : (
               <ul className="divide-y divide-border">
-                {payments.map((p) => {
+                {paymentHistory.map((p) => {
                   const voucherLabel =
                     p.voucher_series && p.voucher_number != null
                       ? `${p.voucher_series}-${p.voucher_number}`
@@ -2359,7 +2416,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   return (
                     <li key={p.id} className="flex items-center gap-4 py-1.5 first:pt-0 last:pb-0">
                       <span className="tabular-nums text-muted-foreground">{formatDate(p.payment_date)}</span>
-                      <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
+                      {p.amount != null && (
+                        <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
+                      )}
                       {p.journal_entry_id && voucherLabel ? (
                         <Link
                           href={`/bookkeeping/${p.journal_entry_id}`}
