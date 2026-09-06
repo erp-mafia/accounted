@@ -11,8 +11,11 @@
 import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import {
+  groupExpenseClaimsByPerson,
+  matchTransactionsToExpensePayouts,
+} from '@/lib/expenses/expense-payout-candidates'
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
@@ -498,6 +501,15 @@ export async function listSuggestedMatches(
     // Hint pointing at a deleted, foreign or already-settled candidate → drop
     // the row rather than render an unconfirmable suggestion.
   }
+  // Transfers that repay one person's registered utlägg. No hint column: the
+  // pairing is recomputed from the open claims (cheap, and empty for the
+  // companies without any). Confirm endpoint:
+  //   kind 'expense_payout'    → POST /api/transactions/{id}/match-expense-payout
+  const expenseMatches = await listExpensePayoutSuggestions(supabase, companyId, limit)
+  const seen = new Set(matches.map((m) => m.transaction_id))
+  for (const m of expenseMatches) {
+    if (!seen.has(m.transaction_id)) matches.push(m)
+  }
   return matches
 }
 
@@ -576,7 +588,7 @@ export async function listExpensePayoutsDue(
   companyId: string,
 ): Promise<ExpensePayoutDue[]> {
   type ClaimRow = {
-    id?: string
+    id: string
     employee_id: string | null
     claimant_name: string
     liability_account: string
@@ -601,33 +613,7 @@ export async function listExpensePayoutsDue(
     logAndZero('expense_payout', companyId, err as { message?: string })
     return []
   }
-  const byPerson = new Map<string, ExpensePayoutDue>()
-  for (const row of rows) {
-    const key = row.employee_id ?? `owner:${row.claimant_name}`
-    const amount = Number(row.amount_sek) || 0
-    const existing = byPerson.get(key)
-    if (existing) {
-      existing.claim_count += 1
-      existing.total_sek = roundOre(existing.total_sek + amount)
-      if (row.expense_date < existing.oldest_expense_date) {
-        existing.oldest_expense_date = row.expense_date
-      }
-    } else {
-      byPerson.set(key, {
-        key,
-        employee_id: row.employee_id,
-        claimant_name: row.claimant_name,
-        liability_account: row.liability_account,
-        claim_count: 1,
-        total_sek: roundOre(amount),
-        oldest_expense_date: row.expense_date,
-      })
-    }
-  }
-  // Oldest debt first: the person who has waited longest tops the list.
-  return [...byPerson.values()].sort((a, b) =>
-    a.oldest_expense_date < b.oldest_expense_date ? -1 : a.oldest_expense_date > b.oldest_expense_date ? 1 : 0,
-  )
+  return groupExpenseClaimsByPerson(rows)
 }
 
 /** Number of people owed for unpaid utlägg (see listExpensePayoutsDue). */
@@ -636,4 +622,64 @@ export async function countExpensePayoutsDue(
   companyId: string,
 ): Promise<number> {
   return (await listExpensePayoutsDue(supabase, companyId)).length
+}
+
+/**
+ * Unbooked SEK outflows whose amount equals one person's outstanding utlägg
+ * to the öre. Read-time pairing over the open claims: the candidate pool is
+ * empty for most companies, so this costs one head-count-sized query and
+ * nothing else there. See lib/expenses/expense-payout-candidates.ts for the
+ * matching rule.
+ */
+export async function listExpensePayoutSuggestions(
+  supabase: SupabaseClient,
+  companyId: string,
+  limit = 20,
+): Promise<SuggestedMatch[]> {
+  const people = await listExpensePayoutsDue(supabase, companyId)
+  if (people.length === 0) return []
+  const amounts = [...new Set(people.map((p) => -p.total_sek))]
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('id, date, description, amount, currency, is_business, journal_entry_id')
+    .eq('company_id', companyId)
+    .is('is_business', null)
+    .eq('is_ignored', false)
+    .in('amount', amounts)
+    .order('date', { ascending: false })
+    .limit(limit)
+  if (error) {
+    log.error('worklist listExpensePayoutSuggestions failed', { companyId, reason: error.message })
+    return []
+  }
+  type TxRow = {
+    id: string
+    date: string
+    description: string | null
+    amount: number
+    currency: string | null
+    is_business: boolean | null
+    journal_entry_id: string | null
+  }
+  const txs = (data ?? []) as TxRow[]
+  const paired = matchTransactionsToExpensePayouts(txs, people)
+  const out: SuggestedMatch[] = []
+  for (const tx of txs) {
+    const m = paired.get(tx.id)
+    if (!m) continue
+    out.push({
+      transaction_id: tx.id,
+      transaction_date: tx.date,
+      transaction_description: tx.description ?? '',
+      transaction_amount: tx.amount,
+      transaction_currency: tx.currency ?? 'SEK',
+      kind: 'expense_payout',
+      candidate_id: m.person.key,
+      candidate_number: null,
+      counterparty_name: m.person.claimant_name,
+      candidate_total: m.person.total_sek,
+      claim_ids: m.person.claim_ids,
+    })
+  }
+  return out
 }

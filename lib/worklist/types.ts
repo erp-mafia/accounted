@@ -133,6 +133,8 @@ export interface ExpensePayoutDue {
   /** 2893 (AB owner), 2018 (EF owner) or 2820 (employee). */
   liability_account: string
   claim_count: number
+  /** The registered claims behind the total, in expense_date order. */
+  claim_ids: string[]
   total_sek: number
   /** ISO date of the oldest unpaid claim. */
   oldest_expense_date: string
@@ -156,14 +158,18 @@ export interface SuggestedMatch {
   transaction_currency: string
   /**
    * Which match endpoint confirms it: match-invoice, match-supplier-invoice,
-   * or match-rot-rut-payout (Skatteverkets utbetalning for an open begäran;
-   * candidate_number is then the request name).
+   * match-rot-rut-payout (Skatteverkets utbetalning for an open begäran;
+   * candidate_number is then the request name), or match-expense-payout (a
+   * transfer repaying one person's registered utlägg; candidate_id is the
+   * person key and claim_ids carries the claims the transfer covers).
    */
-  kind: 'invoice' | 'supplier_invoice' | 'rot_rut_payout'
+  kind: 'invoice' | 'supplier_invoice' | 'rot_rut_payout' | 'expense_payout'
   candidate_id: string
   candidate_number: string | null
   counterparty_name: string | null
   candidate_total: number | null
+  /** expense_payout only: the registered claims this transfer pays. */
+  claim_ids?: string[]
 }
 
 /**
