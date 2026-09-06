@@ -200,7 +200,9 @@ describe('getAiStatus', () => {
   })
 
   it('is configured and assistant-capable on a direct Anthropic key', () => {
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-api03-example'
+    // Presence is all the config reads (no format check), so the placeholder
+    // deliberately cannot match a real key's shape and trip secret scanners.
+    process.env.ANTHROPIC_API_KEY = 'test-not-a-real-key'
     const s = getAiStatus()
     expect(s.provider).toBe('anthropic')
     expect(s.configured).toBe(true)
