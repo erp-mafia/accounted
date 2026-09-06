@@ -108,6 +108,20 @@ describe('suggestMappings', () => {
     expect(result[0].matchType).toBe('bas_range')
   })
 
+  // Issue #2212: an account referenced only by #TRANS/#IB arrives without a
+  // #KONTO name. Refusing the self-map left it unmapped with no self-target to
+  // pick, while the parser had already promised it would be created.
+  it('self-maps a nameless in-range account (referenced without #KONTO)', () => {
+    const source = [makeSIEAccount('4599', '')]
+    const result = suggestMappings(source, basAccounts)
+
+    expect(result).toHaveLength(1)
+    expect(result[0].targetAccount).toBe('4599')
+    expect(result[0].targetName).toBe('')
+    expect(result[0].matchType).toBe('bas_range')
+    expect(result[0].confidence).toBe(0.7)
+  })
+
   it('does not self-map accounts outside BAS range (9000+)', () => {
     const source = [makeSIEAccount('9100', 'Internt konto')]
     const result = suggestMappings(source, basAccounts)

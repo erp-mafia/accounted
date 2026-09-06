@@ -6,6 +6,7 @@ import {
   ensureFiscalPeriod,
   precheckFiscalPeriod,
   importVouchers,
+  summarizeUnmappedSkips,
   computeVoucherNumberRanges,
   linkOpeningBalanceEntryToPeriod,
   companyHasPriorActivity,
@@ -1843,5 +1844,27 @@ describe('precheckFiscalPeriod', () => {
     await expect(
       ensureFiscalPeriod(again.supabase as unknown as Supabase, 'company-id', '2025-03-01', '2026-02-28'),
     ).rejects.toThrow(precheck.verdict === 'conflict' ? precheck.message : 'unreachable')
+  })
+})
+
+describe('summarizeUnmappedSkips', () => {
+  // Issue #2212: the result step must name WHICH accounts excluded vouchers,
+  // not just how many vouchers were excluded.
+  it('counts vouchers per unmapped account, most excluded first', () => {
+    const summary = summarizeUnmappedSkips([
+      { reason: 'unmapped', unmappedAccounts: ['0099'] },
+      { reason: 'unmapped', unmappedAccounts: ['0099', '9100'] },
+      { reason: 'unmapped', unmappedAccounts: ['9100', '9100'] },
+      { reason: 'unbalanced' },
+      { reason: 'single_line', unmappedAccounts: ['0099'] },
+    ])
+    expect(summary).toEqual([
+      { account: '0099', vouchers: 2 },
+      { account: '9100', vouchers: 2 },
+    ])
+  })
+
+  it('is empty when nothing was skipped for a missing mapping', () => {
+    expect(summarizeUnmappedSkips([{ reason: 'empty' }])).toEqual([])
   })
 })
