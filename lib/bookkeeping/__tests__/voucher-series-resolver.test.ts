@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   applyDefaultSeriesToMap,
+  buildVoucherSeriesOptions,
   formatVoucher,
   parseVoucher,
   resolveDefaultSeriesForSource,
@@ -231,5 +232,55 @@ describe('voucherSeriesLabel', () => {
     expect(voucherSeriesLabel('N')).toBe('')
     expect(voucherSeriesLabel('Z')).toBe('')
     expect(voucherSeriesLabel('')).toBe('')
+  })
+
+  it('lets the company name beat the preset, in place', () => {
+    // A byrå that runs löner on L (not the preset K) must see its own word.
+    expect(voucherSeriesLabel('L', { L: 'Lön' })).toBe('Lön')
+    expect(voucherSeriesLabel('L', { L: ' Lön ' })).toBe('Lön')
+  })
+
+  it('names a letter with no preset when the company has named it', () => {
+    expect(voucherSeriesLabel('N', { N: 'Utlägg' })).toBe('Utlägg')
+  })
+
+  it('falls back to the preset when the company name is empty or missing', () => {
+    expect(voucherSeriesLabel('K', { K: '' })).toBe('Lön')
+    expect(voucherSeriesLabel('K', { K: '   ' })).toBe('Lön')
+    expect(voucherSeriesLabel('K', {})).toBe('Lön')
+    expect(voucherSeriesLabel('K', null)).toBe('Lön')
+    expect(voucherSeriesLabel('N', { K: 'x' })).toBe('')
+  })
+})
+
+describe('buildVoucherSeriesOptions', () => {
+  it('offers the presets first, in their fixed order, with preset labels', () => {
+    const options = buildVoucherSeriesOptions(null, [])
+    expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLM')
+    expect(options[0]).toEqual({ letter: 'A', label: 'Redovisning' })
+  })
+
+  it('appends extra letters once, sorted, after the presets', () => {
+    const options = buildVoucherSeriesOptions(null, ['Z', 'N', 'N', 'A'])
+    expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLMNZ')
+    expect(options.find((o) => o.letter === 'N')).toEqual({ letter: 'N', label: '' })
+  })
+
+  it('drops anything that is not a single uppercase letter', () => {
+    const options = buildVoucherSeriesOptions(null, ['', null, undefined, 'ab', 'n', 7, ' '])
+    expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLM')
+  })
+
+  it('applies company names to presets in place and lists named non-preset letters', () => {
+    const options = buildVoucherSeriesOptions({ L: 'Lön', N: 'Utlägg' }, [])
+    expect(options.find((o) => o.letter === 'L')).toEqual({ letter: 'L', label: 'Lön' })
+    expect(options.find((o) => o.letter === 'K')).toEqual({ letter: 'K', label: 'Lön' })
+    expect(options.find((o) => o.letter === 'N')).toEqual({ letter: 'N', label: 'Utlägg' })
+    expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLMN')
+  })
+
+  it('ignores malformed keys in the label map', () => {
+    const options = buildVoucherSeriesOptions({ ab: 'x', n: 'y', '': 'z' }, [])
+    expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLM')
   })
 })

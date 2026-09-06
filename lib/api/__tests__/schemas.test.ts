@@ -1956,6 +1956,48 @@ describe('UpdateSettingsSchema', () => {
       expect(result.success).toBe(false)
     })
   })
+
+  describe('voucher_series_labels', () => {
+    it('accepts a map of letters to names and trims the names', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        voucher_series_labels: { L: '  Lön ', N: 'Utlägg' },
+      })
+      expect(result.success).toBe(true)
+      expect(result.data?.voucher_series_labels).toEqual({ L: 'Lön', N: 'Utlägg' })
+    })
+
+    it('strips empty names so a cleared field removes the name', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        voucher_series_labels: { L: 'Lön', K: '', M: '   ' },
+      })
+      expect(result.success).toBe(true)
+      expect(result.data?.voucher_series_labels).toEqual({ L: 'Lön' })
+    })
+
+    it('accepts an empty map', () => {
+      const result = UpdateSettingsSchema.safeParse({ voucher_series_labels: {} })
+      expect(result.success).toBe(true)
+      expect(result.data?.voucher_series_labels).toEqual({})
+    })
+
+    it('rejects keys that are not a single uppercase letter', () => {
+      expect(UpdateSettingsSchema.safeParse({ voucher_series_labels: { l: 'Lön' } }).success).toBe(false)
+      expect(UpdateSettingsSchema.safeParse({ voucher_series_labels: { AB: 'Lön' } }).success).toBe(false)
+      expect(UpdateSettingsSchema.safeParse({ voucher_series_labels: { '': 'Lön' } }).success).toBe(false)
+    })
+
+    it('rejects a name longer than 40 characters', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        voucher_series_labels: { L: 'x'.repeat(41) },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects a non-string name', () => {
+      const result = UpdateSettingsSchema.safeParse({ voucher_series_labels: { L: 7 } })
+      expect(result.success).toBe(false)
+    })
+  })
 })
 
 // ============================================================

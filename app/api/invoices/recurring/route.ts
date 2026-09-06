@@ -3,7 +3,11 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { CreateRecurringScheduleSchema } from '@/lib/api/schemas'
-import { computeInitialRunDate } from '@/lib/invoices/recurring-schedule-service'
+import {
+  computeInitialRunDate,
+  getStockholmDateHour,
+} from '@/lib/invoices/recurring-schedule-service'
+import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
 
 ensureInitialized()
 
@@ -87,6 +91,30 @@ export const POST = withRouteContext(
         },
         { status: 400 },
       )
+    }
+
+    // An explicit first run date fixes the month phase (yearly in February,
+    // quarterly Feb/May/Aug/Nov). It must sit on the schedule grid, or the
+    // cron would drift back to day_of_month after the first run, and it
+    // cannot be in the past: the dialog prefills the next occurrence, so a
+    // past date is a stale form, not an intent to backfill.
+    if (input.start_date !== undefined) {
+      if (!runDateMatchesDayOfMonth(input.start_date, input.day_of_month)) {
+        return NextResponse.json(
+          {
+            error: 'start_date must fall on day_of_month (clamped to the last day in shorter months)',
+            type: 'validation_error',
+          },
+          { status: 400 },
+        )
+      }
+      const { date: todayStockholm } = getStockholmDateHour(new Date())
+      if (input.start_date < todayStockholm) {
+        return NextResponse.json(
+          { error: 'start_date cannot be in the past', type: 'validation_error' },
+          { status: 400 },
+        )
+      }
     }
 
     const nextRunDate = computeInitialRunDate(

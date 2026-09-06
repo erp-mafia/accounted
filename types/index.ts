@@ -488,6 +488,14 @@ export interface CompanySettings {
    * settings UI.
    */
   default_voucher_series_per_source_type: Partial<Record<JournalEntrySourceType, string>>
+  /**
+   * Company-defined display names per series letter ({"L": "Lön"}). Keys are
+   * single uppercase letters A-Z, values 1 to 40 characters. Resolved by
+   * `voucherSeriesLabel()` in `lib/bookkeeping/voucher-series-resolver.ts`,
+   * which falls back to the Swedish presets. Display only: the booking
+   * engine never reads it.
+   */
+  voucher_series_labels: Partial<Record<string, string>>
 
   // Most recently picked BAS account for supplier invoice payments: used to
   // default the mark-paid dialog so repeat payments don't force re-picking.

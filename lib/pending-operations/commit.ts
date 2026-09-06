@@ -191,6 +191,7 @@ import {
   rollNextRunDateForward,
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
+import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
 import {
   buildInvoiceWriteData,
@@ -793,6 +794,19 @@ async function commitCreateRecurringSchedule(
     }
   }
 
+  // Same grid rule as the create route. A start_date that turned stale
+  // between staging and approval is NOT rejected: the cron rolls a missed
+  // date forward on the grid, so the phase the user chose still holds.
+  if (
+    validated.start_date !== undefined &&
+    !runDateMatchesDayOfMonth(validated.start_date, validated.day_of_month)
+  ) {
+    return {
+      error: 'start_date must fall on day_of_month (clamped to the last day in shorter months)',
+      status: 400,
+    }
+  }
+
   const nextRunDate = computeInitialRunDate(
     new Date(),
     validated.day_of_month,
@@ -936,7 +950,11 @@ async function commitUpdateRecurringSchedule(
   // next STRICTLY-future occurrence, never today, so an approval cannot
   // trigger a same-hour surprise send. Editing other fields leaves
   // next_run_date alone so an unrelated edit never skips an imminent send.
-  if (changes.status === 'active' || changes.day_of_month !== undefined) {
+  if (
+    changes.status === 'active' ||
+    changes.day_of_month !== undefined ||
+    changes.next_run_date !== undefined
+  ) {
     const reactivating = changes.status === 'active'
     const dayChanged =
       changes.day_of_month !== undefined && changes.day_of_month !== existing.day_of_month
@@ -945,8 +963,31 @@ async function commitUpdateRecurringSchedule(
     const { date: todayStockholm } = getStockholmDateHour(new Date())
     const stockholmToday = new Date(`${todayStockholm}T00:00:00Z`)
 
+    // An explicit next_run_date re-phases the schedule and wins over the
+    // recompute. Grid mismatch is rejected like the PATCH route; a date that
+    // went stale while the operation waited for approval is rolled forward
+    // on its own grid (strictly future) instead of auto-rejecting, so the
+    // approved phase survives a slow approval.
+    if (changes.next_run_date !== undefined) {
+      if (!runDateMatchesDayOfMonth(changes.next_run_date, effectiveDay)) {
+        return {
+          error: 'next_run_date must fall on day_of_month (clamped to the last day in shorter months)',
+          status: 400,
+        }
+      }
+      updateRow.next_run_date =
+        changes.next_run_date <= todayStockholm
+          ? rollNextRunDateForward(
+              changes.next_run_date,
+              stockholmToday,
+              effectiveDay,
+              effectiveInterval,
+            )
+          : changes.next_run_date
+    }
+
     const staleOnReactivate = reactivating && existing.next_run_date <= todayStockholm
-    if (staleOnReactivate || dayChanged) {
+    if (changes.next_run_date === undefined && (staleOnReactivate || dayChanged)) {
       if (effectiveInterval === 1) {
         // Monthly keeps its long-standing today-anchored semantics.
         const rolled = computeInitialRunDate(stockholmToday, effectiveDay)

@@ -10,6 +10,7 @@ import {
   rollNextRunDateForward,
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
+import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
 
 ensureInitialized()
 
@@ -117,8 +118,13 @@ export const PATCH = withRouteContext(
     }
 
     // Recompute next_run_date when either the schedule is being reactivated
-    // (from a stale date) or its day-of-month actually changed via an edit.
-    if (input.status === 'active' || input.day_of_month !== undefined) {
+    // (from a stale date) or its day-of-month actually changed via an edit,
+    // unless the caller re-phases the schedule with an explicit date.
+    if (
+      input.status === 'active' ||
+      input.day_of_month !== undefined ||
+      input.next_run_date !== undefined
+    ) {
       const { data: existing } = await supabase
         .from('recurring_invoice_schedules')
         .select('next_run_date, day_of_month, interval_months')
@@ -141,6 +147,28 @@ export const PATCH = withRouteContext(
       const { date: todayStockholm } = getStockholmDateHour(new Date())
       const stockholmToday = new Date(`${todayStockholm}T00:00:00Z`)
 
+      // An explicit next_run_date is the user re-phasing the schedule (move a
+      // yearly invoice from January to February). It must be on the grid for
+      // the effective day and strictly in the future (same no-surprise-send
+      // rule as the recompute below), and it wins over that recompute.
+      if (input.next_run_date !== undefined) {
+        if (!runDateMatchesDayOfMonth(input.next_run_date, effectiveDay)) {
+          return NextResponse.json(
+            {
+              error: 'next_run_date must fall on day_of_month (clamped to the last day in shorter months)',
+              type: 'validation_error',
+            },
+            { status: 400 },
+          )
+        }
+        if (input.next_run_date <= todayStockholm) {
+          return NextResponse.json(
+            { error: 'next_run_date must be after today', type: 'validation_error' },
+            { status: 400 },
+          )
+        }
+      }
+
       // Recompute to the next STRICTLY-future occurrence (never today, so an
       // edit or reactivation can't trigger a same-hour surprise send; today's
       // invoice is the explicit run-now action instead) when either:
@@ -151,7 +179,7 @@ export const PATCH = withRouteContext(
       // next_run_date alone, so an unrelated edit never skips an imminent
       // send; a changed interval applies from the next run onward.
       const staleOnReactivate = reactivating && existing.next_run_date <= todayStockholm
-      if (staleOnReactivate || dayChanged) {
+      if (input.next_run_date === undefined && (staleOnReactivate || dayChanged)) {
         if (effectiveInterval === 1) {
           // Monthly keeps its long-standing semantics: re-anchor on today so
           // a day edit lands on the new day's nearest future occurrence.
