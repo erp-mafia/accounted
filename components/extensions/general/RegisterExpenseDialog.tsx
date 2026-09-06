@@ -132,7 +132,9 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
   }, [open, payer, employeesLoaded])
 
   const amount = parseAmount(amountInput)
-  const vatAmount = parseAmount(vatInput)
+  // Foreign VAT is never deductible here: the field is locked and 0 is what
+  // gets submitted, whatever the extraction said.
+  const vatAmount = isForeign ? 0 : parseAmount(vatInput)
   const net = roundOre(amount - vatAmount)
   const employee = employees.find((e) => e.id === employeeId) ?? null
   const claimantName =
@@ -302,9 +304,9 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
               <Input
                 id="re-vat"
                 inputMode="decimal"
-                value={vatInput}
+                value={isForeign ? '0' : vatInput}
                 onChange={(e) => setVatInput(e.target.value)}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isForeign}
                 className="tabular-nums"
               />
             </div>

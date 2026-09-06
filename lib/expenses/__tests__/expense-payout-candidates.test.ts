@@ -18,6 +18,15 @@ describe('groupExpenseClaimsByPerson', () => {
     expect(out[0].claim_ids).toEqual(['a', 'b'])
   })
 
+  it('treats "Jakob" and "jakob " as one owner, the way the payout RPC does', () => {
+    const out = groupExpenseClaimsByPerson([
+      { id: 'a', employee_id: null, claimant_name: 'Jakob', liability_account: '2893', amount_sek: 100, expense_date: '2026-09-01' },
+      { id: 'b', employee_id: null, claimant_name: 'jakob ', liability_account: '2893', amount_sek: 50, expense_date: '2026-09-02' },
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ key: 'owner:jakob', claimant_name: 'Jakob', total_sek: 150, claim_ids: ['a', 'b'] })
+  })
+
   it('leaves an enskild firma owner out: egen insättning is not a debt', () => {
     const out = groupExpenseClaimsByPerson([
       { id: 'a', employee_id: null, claimant_name: 'Sara', liability_account: '2018', amount_sek: 500, expense_date: '2026-09-01' },

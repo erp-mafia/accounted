@@ -568,7 +568,7 @@ describe('listExpensePayoutsDue', () => {
         oldest_expense_date: '2026-09-02',
       },
       {
-        key: 'owner:Jakob',
+        key: 'owner:jakob',
         employee_id: null,
         claimant_name: 'Jakob',
         liability_account: '2893',

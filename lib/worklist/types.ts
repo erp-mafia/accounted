@@ -126,7 +126,7 @@ export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
  * (or claimant_name for the owner, who has no employee row).
  */
 export interface ExpensePayoutDue {
-  /** employee_id, or `owner:<claimant_name>` for claims without one. */
+  /** employee_id, or `owner:<claimant_name trimmed and lower-cased>` for claims without one. */
   key: string
   employee_id: string | null
   claimant_name: string
