@@ -72,6 +72,10 @@ interface TransactionInboxCardProps {
   /** Open the existing-verifikat matcher: link the bank tx to an already-booked
    *  voucher (salary, Fortnox import, manual entry) with no new bokföring. */
   onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
+  /** Open the utlägg picker: book this outflow as the repayment of chosen
+   *  registered claims (sum must equal the row). Passed only while the company
+   *  has open claims, so the item never shows for the companies without any. */
+  onOpenMatchExpense?: (transaction: TransactionWithInvoice) => void
   /** Open the attach-underlag dialog: pin an inbox document or a fresh upload
    *  to the transaction (the tx→doc mirror of the Documents view's matcher). */
   onOpenAttachDocument?: (transaction: TransactionWithInvoice) => void
@@ -116,6 +120,7 @@ export default function TransactionInboxCard({
   onOpenMatchInvoicePicker,
   onOpenSplitMatch,
   onOpenMatchVoucher,
+  onOpenMatchExpense,
   onOpenAttachDocument,
   onDetachDocument,
   onOpenCategoryDialog,
@@ -243,6 +248,7 @@ export default function TransactionInboxCard({
   // invoice match was auto-detected: the user may want to point the bank line at
   // an existing salary/Fortnox/manual voucher instead of confirming a payment.
   const showMatchVoucherItem = isUnbooked && !!onOpenMatchVoucher
+  const showMatchExpenseItem = isUnbooked && !isIncome && !!onOpenMatchExpense && !hasExpensePayoutMatch
   // "Matcha mot underlag": pin an inbox doc / fresh upload to the tx. The
   // tx→doc mirror of the Documents view's "Matcha mot transaktion".
   const showAttachDocumentItem = isUnbooked && canWrite && !!onOpenAttachDocument
@@ -265,7 +271,7 @@ export default function TransactionInboxCard({
   const showIgnoreItem = isUnbooked && isImportedTransaction(transaction) && !!onIgnore
   const showDeleteItem = canDelete && !!onDelete
   const showOverflowMenu =
-    showInvoiceMatchButton || showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem
+    showInvoiceMatchButton || showMatchVoucherItem || showMatchExpenseItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem
 
   // Pre-migration history row (ISO dates compare lexically): most likely
   // corresponds to an already-imported verifikat, so it carries a quiet
@@ -447,6 +453,17 @@ export default function TransactionInboxCard({
                     >
                       <FileSearch className="h-4 w-4" />
                       {t('match_voucher_btn')}
+                    </DropdownMenuItem>
+                  )}
+                  {showMatchExpenseItem && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenMatchExpense!(transaction)
+                      }}
+                    >
+                      <FileSearch className="h-4 w-4" />
+                      {t('match_expense_btn')}
                     </DropdownMenuItem>
                   )}
                   {showAttachDocumentItem && (

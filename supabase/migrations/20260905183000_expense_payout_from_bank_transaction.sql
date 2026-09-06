@@ -8,6 +8,11 @@
 -- the payout can then never be booked twice: once by "Betala ut", once by
 -- categorising the bank row.
 --
+-- Enskild firma: a claim on 2018 (egen insättning) is not a debt, so a payout
+-- for it is the owner's eget uttag and debits 2013, never 2018 (the closing
+-- references net 2011/2013/2017/2018 into 2010 at year start; the sub-account
+-- must say what happened).
+--
 -- Postgres overloads by signature, so the old 6-parameter function is dropped
 -- first: leaving it in place would make a 6-argument call ambiguous against
 -- the new signature with its defaulted 7th parameter.
@@ -50,6 +55,7 @@ DECLARE
   v_marked integer;
   v_tx record;
   v_tx_updated integer;
+  v_debit text;
 BEGIN
   IF auth.role() = 'service_role' THEN
     v_caller := COALESCE(p_user_id, auth.uid());
@@ -169,14 +175,15 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'code', 'ACCOUNT_NOT_IN_CHART',
       'details', jsonb_build_object('account', p_cash_account));
   END IF;
+  v_debit := CASE WHEN v_liability = '2018' THEN '2013' ELSE v_liability END;
   IF NOT EXISTS (
     SELECT 1 FROM public.chart_of_accounts a
     WHERE a.company_id = p_company_id
-      AND a.account_number = v_liability
+      AND a.account_number = v_debit
       AND COALESCE(a.is_active, true)
   ) THEN
     RETURN jsonb_build_object('ok', false, 'code', 'ACCOUNT_NOT_IN_CHART',
-      'details', jsonb_build_object('account', v_liability));
+      'details', jsonb_build_object('account', v_debit));
   END IF;
 
   -- Voucher series: the per-source-type default from company_settings, 'A'
@@ -208,7 +215,7 @@ BEGIN
   INSERT INTO public.journal_entry_lines
     (journal_entry_id, account_number, debit_amount, credit_amount, currency, sort_order, line_description)
   VALUES
-    (v_je_id, v_liability, v_total, 0, 'SEK', 0, v_desc),
+    (v_je_id, v_debit, v_total, 0, 'SEK', 0, v_desc),
     (v_je_id, p_cash_account, 0, v_total, 'SEK', 1, v_desc);
 
   SELECT voucher_number INTO v_voucher_number

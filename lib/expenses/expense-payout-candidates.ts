@@ -22,10 +22,18 @@ export interface ExpenseClaimRowForGrouping {
   expense_date: string
 }
 
-/** Group registered claims into one item per person, oldest debt first. */
+/**
+ * Group registered claims into one item per person, oldest debt first.
+ *
+ * Claims on 2018 (an enskild firma owner's egen insättning) are skipped: the
+ * firm owes its owner nothing, a later withdrawal is eget uttag booked from
+ * the bank line like any other, so there is no Betala row and no transfer
+ * to pair. Only 2893 (AB owner) and 2820 (employee) are debts.
+ */
 export function groupExpenseClaimsByPerson(rows: ExpenseClaimRowForGrouping[]): ExpensePayoutDue[] {
   const byPerson = new Map<string, ExpensePayoutDue>()
   for (const row of rows) {
+    if (row.liability_account === '2018') continue
     const key = row.employee_id ?? `owner:${row.claimant_name}`
     const amount = Number(row.amount_sek) || 0
     const existing = byPerson.get(key)

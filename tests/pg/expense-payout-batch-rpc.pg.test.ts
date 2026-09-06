@@ -37,14 +37,14 @@ async function insertClaim(
   companyId: string,
   userId: string,
   amountSek: number,
-  overrides: Partial<{ claimantName: string; status: string }> = {},
+  overrides: Partial<{ claimantName: string; status: string; liability: string }> = {},
 ): Promise<string> {
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.expense_claims
        (id, company_id, user_id, claimant_name, description, expense_date, amount_sek, vat_sek, expense_account, liability_account, status)
-     VALUES ($1, $2, $3, $4, 'Kvitto', '2026-08-25', $5, 0, '5410', '2893', $6)`,
-    [id, companyId, userId, overrides.claimantName ?? 'Ägare', amountSek, overrides.status ?? 'registered'],
+     VALUES ($1, $2, $3, $4, 'Kvitto', '2026-08-25', $5, 0, '5410', $7, $6)`,
+    [id, companyId, userId, overrides.claimantName ?? 'Ägare', amountSek, overrides.status ?? 'registered', overrides.liability ?? '2893'],
   )
   return id
 }
@@ -352,5 +352,29 @@ describe('create_expense_payout_batch', () => {
     expect(rows[0].n).toBe(1)
     const { rows: c2rows } = await getPool().query(`SELECT status FROM public.expense_claims WHERE id = $1`, [c2])
     expect(c2rows[0].status).toBe('registered')
+  })
+
+  it('books an enskild firma owner payout as eget uttag on 2013, never 2018', async () => {
+    const { companyId, userId } = await seedCompany()
+    await seedChart(companyId, userId)
+    await getPool().query(
+      `INSERT INTO public.chart_of_accounts
+         (user_id, company_id, account_number, account_name, account_class, account_type, normal_balance, is_active)
+       VALUES ($1, $2, '2018', 'Övriga egna insättningar', 2, 'equity', 'credit', true),
+              ($1, $2, '2013', 'Övriga egna uttag', 2, 'equity', 'debit', true)`,
+      [userId, companyId],
+    )
+    const c1 = await insertClaim(companyId, userId, 640, { liability: '2018' })
+    const result = await asUser(userId, (c) => callRpc(c, companyId, [c1]))
+    expect(result.ok).toBe(true)
+    const { rows } = await getPool().query(
+      `SELECT account_number, debit_amount::float AS d, credit_amount::float AS c
+       FROM public.journal_entry_lines WHERE journal_entry_id = $1 ORDER BY sort_order`,
+      [result.journal_entry_id],
+    )
+    expect(rows).toEqual([
+      { account_number: '2013', d: 640, c: 0 },
+      { account_number: '1930', d: 0, c: 640 },
+    ])
   })
 })

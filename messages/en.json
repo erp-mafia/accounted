@@ -2908,6 +2908,7 @@
     "invoices_help": "Invoice due dates"
   },
   "tx_inbox_card": {
+    "match_expense_btn": "Match to expense claims",
     "match_expense_payout_btn": "Book expense reimbursement to {name}",
     "skv_counterpart_label": "Possible 1930↔1630 transfer.",
     "skv_counterpart_body": "There is a skattekonto event on {date} that matches: post this voucher first, then link the skattekonto row to the same voucher instead of posting it twice.",
@@ -3303,6 +3304,9 @@
     "mixed_currency_note": "Documents in different currencies cannot be summed into a single amount. Each document is still booked separately, against its matched bank transaction and the amount the bank actually settled in SEK."
   },
   "inbox_workspace": {
+    "payer_help_owner_ef": "Booked as an owner contribution (2018). Nothing to pay out.",
+    "expense_dialog_help_owner_ef": "Cost and VAT are booked now as an owner contribution on account 2018. The firm owes you nothing: taking money out later is an owner withdrawal.",
+    "expense_outcome_ef": "No row in To do: an owner contribution is not something to pay out.",
     "payer_question": "Who paid?",
     "payer_company": "The company",
     "payer_owner": "Me, privately",
@@ -3327,7 +3331,7 @@
     "expense_vat": "VAT",
     "expense_account": "Expense account",
     "expense_outcome_att_gora": "Lands in To do: Pay out expenses to {name}.",
-    "expense_fx_note": "Booked in SEK at the Riksbank rate for the date.",
+    "expense_fx_note": "Foreign receipt: the VAT is not deducted, the whole amount is booked as cost in SEK at the Riksbank rate for the date.",
     "expense_cancel": "Cancel",
     "expense_confirm": "Book",
     "expense_booked_title": "Expense booked",
@@ -8782,5 +8786,17 @@
     "outcome": "The debt to the person becomes 0 kr and the row leaves To do.",
     "cancel": "Cancel",
     "confirm": "Book the reimbursement"
+  },
+  "tx_expense_claim_picker": {
+    "title": "Match to expense claims",
+    "description": "Pick the claims this transfer covers. The sum must equal the amount on the row exactly.",
+    "person_label": "Person",
+    "no_claims": "No open expense claims to match.",
+    "selected_sum": "Selected claims: {amount}",
+    "transfer_sum": "Transfer: {amount}",
+    "diff": "Difference: {amount}",
+    "cancel": "Cancel",
+    "confirm": "Book the reimbursement",
+    "failed_title": "Could not book the reimbursement"
   }
 }

@@ -17,6 +17,14 @@ describe('groupExpenseClaimsByPerson', () => {
     expect(out[0].total_sek).toBe(0.3)
     expect(out[0].claim_ids).toEqual(['a', 'b'])
   })
+
+  it('leaves an enskild firma owner out: egen insättning is not a debt', () => {
+    const out = groupExpenseClaimsByPerson([
+      { id: 'a', employee_id: null, claimant_name: 'Sara', liability_account: '2018', amount_sek: 500, expense_date: '2026-09-01' },
+      { id: 'b', employee_id: 'emp-1', claimant_name: 'Anna Berg', liability_account: '2820', amount_sek: 200, expense_date: '2026-09-02' },
+    ])
+    expect(out.map((p) => p.key)).toEqual(['emp-1'])
+  })
 })
 
 describe('matchTransactionsToExpensePayouts', () => {

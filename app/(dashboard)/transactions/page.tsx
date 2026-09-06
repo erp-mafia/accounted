@@ -107,6 +107,7 @@ const BatchCategorySelector = dynamic(() => import('@/components/transactions/Ba
 const InvoiceMatchDialog = dynamic(() => import('@/components/transactions/InvoiceMatchDialog'), { loading: DialogLoadingSkeleton })
 const RotRutPayoutMatchDialog = dynamic(() => import('@/components/transactions/RotRutPayoutMatchDialog'), { loading: DialogLoadingSkeleton })
 const ExpensePayoutMatchDialog = dynamic(() => import('@/components/transactions/ExpensePayoutMatchDialog'), { loading: DialogLoadingSkeleton })
+const ExpenseClaimPickerDialog = dynamic(() => import('@/components/transactions/ExpenseClaimPickerDialog'), { loading: DialogLoadingSkeleton })
 const MatchVoucherDialog = dynamic(
   () => import('@/components/transactions/MatchVoucherDialog').then((module) => module.MatchVoucherDialog),
   { loading: DialogLoadingSkeleton },
@@ -207,9 +208,9 @@ async function fetchExpensePayoutMatches(
   supabase: SupabaseClient,
   companyId: string | null,
   rows: { id: string; amount: number; currency: string | null; is_business: boolean | null; journal_entry_id: string | null }[],
-): Promise<Map<string, ExpensePayoutDue>> {
+): Promise<{ byTransaction: Map<string, ExpensePayoutDue>; people: ExpensePayoutDue[] }> {
   const out = new Map<string, ExpensePayoutDue>()
-  if (!companyId || rows.length === 0) return out
+  if (!companyId || rows.length === 0) return { byTransaction: out, people: [] }
   const { data, error } = await supabase
     .from('expense_claims')
     .select('id, employee_id, claimant_name, liability_account, amount_sek, expense_date')
@@ -218,13 +219,13 @@ async function fetchExpensePayoutMatches(
     .order('expense_date', { ascending: true })
   if (error) {
     console.error('[fetchExpensePayoutMatches] expense_claims query failed', error)
-    return out
+    return { byTransaction: out, people: [] }
   }
   const people = groupExpenseClaimsByPerson(
     (data ?? []) as Parameters<typeof groupExpenseClaimsByPerson>[0],
   )
   for (const [txId, m] of matchTransactionsToExpensePayouts(rows, people)) out.set(txId, m.person)
-  return out
+  return { byTransaction: out, people }
 }
 
 // Fetch the potential invoice/supplier-invoice matches referenced by a page
@@ -438,6 +439,10 @@ export default function TransactionsPage() {
   // Utlägg repayment confirm (a transfer covering one person's registered
   // claims): own dialog, same selectedTransaction / isConfirmingMatch plumbing.
   const [expensePayoutDialogOpen, setExpensePayoutDialogOpen] = useState(false)
+  // Manual "Matcha mot utlägg" for an outflow the exact-amount pairing missed.
+  // Offered only while the company has open claims (set by the list fetch).
+  const [matchExpenseTx, setMatchExpenseTx] = useState<TransactionWithInvoice | null>(null)
+  const [hasOpenExpenseClaims, setHasOpenExpenseClaims] = useState(false)
 
   // Booking dialog (journal entry form)
   const [bookingDialogOpen, setBookingDialogOpen] = useState(false)
@@ -1159,10 +1164,12 @@ export default function TransactionsPage() {
       const windowIds = new Set(rows.map((r) => r.id))
       const olderPending = (pendingRows ?? []).filter((r) => !windowIds.has(r.id))
       const allRows = [...rows, ...olderPending].sort((a, b) => b.date.localeCompare(a.date))
-      const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap }, expensePayoutMap] = await Promise.all([
+      const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap }, expensePayouts] = await Promise.all([
         fetchPotentialMatches(supabase, allRows),
         fetchExpensePayoutMatches(supabase, companyId, allRows),
       ])
+      const expensePayoutMap = expensePayouts.byTransaction
+      setHasOpenExpenseClaims(expensePayouts.people.length > 0)
 
       // Re-check after the second await: a scope change during the match
       // enrichment must also discard this response.
@@ -1251,10 +1258,11 @@ export default function TransactionsPage() {
     setPagedThroughDate(txData.length >= PAGE_SIZE ? txData[txData.length - 1].date : null)
     setHasMore(txData.length >= PAGE_SIZE)
 
-    const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap }, expensePayoutMap] = await Promise.all([
+    const [{ invoiceMap, supplierInvoiceMap, voucherMap, rotRutMap }, expensePayouts] = await Promise.all([
       fetchPotentialMatches(supabase, txData),
       fetchExpensePayoutMatches(supabase, companyId, txData),
     ])
+    const expensePayoutMap = expensePayouts.byTransaction
 
     // Same staleness rule after the enrichment await: the offsets above were
     // written under this generation, but a newer fetch has already reset them.
@@ -2305,37 +2313,54 @@ export default function TransactionsPage() {
         description: t('expense_payout_matched_description', { name: person.claimant_name }),
       })
       setExpensePayoutDialogOpen(false)
-
-      setExitingIds((prev) => new Set(prev).add(selectedTransaction.id))
-      setTimeout(() => {
-        setTransactions((prev) =>
-          prev.map((tx) => {
-            if (tx.id === selectedTransaction.id) {
-              return {
-                ...tx,
-                potential_expense_payout: undefined,
-                is_business: true,
-                category: 'expense_other' as TransactionCategory,
-                journal_entry_id: result.journal_entry_id,
-              }
-            }
-            // The person is paid: any other row that suggested them is stale.
-            if (tx.potential_expense_payout?.key === person.key) {
-              return { ...tx, potential_expense_payout: undefined }
-            }
-            return tx
-          }),
-        )
-        setExitingIds((prev) => {
-          const next = new Set(prev)
-          next.delete(selectedTransaction.id)
-          return next
-        })
-        setSelectedTransaction(null)
-      }, 350)
+      applyExpensePayoutBooked(selectedTransaction.id, result.journal_entry_id, person.key)
     } finally {
       setIsConfirmingMatch(false)
     }
+  }
+
+  // After a transfer booked one person's utlägg (one-click or via the
+  // picker): the row leaves the inbox and every other row that suggested the
+  // same person drops its suggestion, since that person is now paid.
+  function applyExpensePayoutBooked(transactionId: string, journalEntryId: string, personKey: string) {
+    setExitingIds((prev) => new Set(prev).add(transactionId))
+    setTimeout(() => {
+      setTransactions((prev) =>
+        prev.map((tx) => {
+          if (tx.id === transactionId) {
+            return {
+              ...tx,
+              potential_expense_payout: undefined,
+              is_business: true,
+              category: 'expense_other' as TransactionCategory,
+              journal_entry_id: journalEntryId,
+            }
+          }
+          if (tx.potential_expense_payout?.key === personKey) {
+            return { ...tx, potential_expense_payout: undefined }
+          }
+          return tx
+        }),
+      )
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(transactionId)
+        return next
+      })
+      setSelectedTransaction(null)
+    }, 350)
+  }
+
+  function handleExpenseClaimsPicked(transactionId: string, journalEntryId: string, personKey: string) {
+    const person = matchExpenseTx?.potential_expense_payout
+    toast({
+      title: t('expense_payout_matched_title'),
+      description: person
+        ? t('expense_payout_matched_description', { name: person.claimant_name })
+        : undefined,
+    })
+    setMatchExpenseTx(null)
+    applyExpensePayoutBooked(transactionId, journalEntryId, personKey)
   }
 
   async function handleConfirmRotRutPayoutMatch() {
@@ -4231,6 +4256,7 @@ export default function TransactionsPage() {
                         onOpenMatchInvoicePicker={openInvoiceMatchPicker}
                         onOpenSplitMatch={openSplitMatchDialog}
                         onOpenMatchVoucher={openMatchVoucherDialog}
+                        onOpenMatchExpense={hasOpenExpenseClaims ? setMatchExpenseTx : undefined}
                         onOpenAttachDocument={openAttachDocumentDialog}
                         onDetachDocument={handleDetachDocument}
                         onOpenCategoryDialog={openCategoryDialog}
@@ -4372,6 +4398,15 @@ export default function TransactionsPage() {
           transaction={selectedTransaction}
           isConfirming={isConfirmingMatch}
           onConfirm={handleConfirmExpensePayoutMatch}
+        />
+      )}
+
+      {matchExpenseTx && (
+        <ExpenseClaimPickerDialog
+          open
+          onOpenChange={(o) => { if (!o) setMatchExpenseTx(null) }}
+          transaction={matchExpenseTx}
+          onMatched={handleExpenseClaimsPicked}
         />
       )}
 
