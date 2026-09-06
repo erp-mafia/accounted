@@ -13,6 +13,10 @@ vi.mock('../bank-reconciliation', () => ({
   fetchJunctionLinkedTxIds: (...args: unknown[]) => junctionMock(...args),
   scopeTransactionsToAccount: (q: unknown) => q,
 }))
+const coveringSetsMock = vi.fn()
+vi.mock('../covering-set-candidate', () => ({
+  proposeCoveringSets: (...args: unknown[]) => coveringSetsMock(...args),
+}))
 
 import { listAccountItems } from '../items'
 
@@ -30,6 +34,8 @@ describe('listAccountItems', () => {
     fetchUnlinkedMock.mockReset()
     junctionMock.mockReset()
     junctionMock.mockResolvedValue(new Set())
+    coveringSetsMock.mockReset()
+    coveringSetsMock.mockResolvedValue(new Map())
   })
 
   it('returns null for an invalid key', async () => {
@@ -95,6 +101,67 @@ describe('listAccountItems', () => {
     // Work order: proposed, unmatched external, unmatched ledger, ignored, upcoming, matched
     expect(result?.items.map((i) => i.bucket)).toEqual(['proposed', 'unmatched_external', 'unmatched_ledger', 'ignored', 'matched', 'matched'])
     expect(result?.total_count).toBe(6)
+    // Only the rows nothing explains yet are searched for a covering set: not
+    // the ignored, linked, junction-anchored or already-proposed ones.
+    expect(coveringSetsMock).toHaveBeenCalledTimes(1)
+    expect(coveringSetsMock.mock.calls[0][2]).toMatchObject({ ledger_account: '1930', currency: 'SEK' })
+    expect((coveringSetsMock.mock.calls[0][3] as Array<{ id: string }>).map((r) => r.id)).toEqual(['t-open'])
+  })
+
+  it('moves a bank row a covering set explains into proposed, with every voucher on the proposal (#2293)', async () => {
+    const openRow = (id: string, date: string, amount: number) => ({
+      id, date, description: 'BGGIRERING 03447786', merchant_name: null, amount, currency: 'SEK', journal_entry_id: null,
+      potential_journal_entry_id: null, potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: null,
+    })
+    const setProposal = {
+      journal_entry_id: 'e-57',
+      voucher_number: 57,
+      voucher_series: 'A',
+      entry_date: '2026-07-31',
+      description: 'Inbetalning 063 + Inbetalning 064',
+      entry_status: 'posted' as const,
+      confidence: 0.95,
+      reasons: ['exact_sum_same_date'],
+      vouchers: [
+        { journal_entry_id: 'e-57', voucher_number: 57, voucher_series: 'A', entry_date: '2026-07-31', description: 'Inbetalning 063', amount: 62500 },
+        { journal_entry_id: 'e-58', voucher_number: 58, voucher_series: 'A', entry_date: '2026-07-31', description: 'Inbetalning 064', amount: 25750 },
+      ],
+    }
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+    enqueue({ data: [openRow('t-bg', '2026-07-31', 88250), openRow('t-lonely', '2026-07-30', -999)] })
+    fetchUnlinkedMock.mockResolvedValue([])
+    coveringSetsMock.mockResolvedValue(new Map([['t-bg', setProposal]]))
+
+    const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { limit: 50 })
+    const byId = Object.fromEntries((result?.items ?? []).map((i) => [i.item_id, i]))
+
+    expect(byId['t-bg']).toMatchObject({ bucket: 'proposed', proposal: setProposal, actions: ['match', 'book', 'ignore'] })
+    expect(byId['t-lonely']).toMatchObject({ bucket: 'unmatched_external', proposal: null })
+    expect(result?.items.map((i) => i.item_id)).toEqual(['t-bg', 't-lonely'])
+  })
+
+  it('keeps a set-explained row out of unmatched_external and skips the search when neither open bucket is wanted', async () => {
+    const openRow = {
+      id: 't-bg', date: '2026-07-31', description: 'BGGIRERING', merchant_name: null, amount: 88250, currency: 'SEK', journal_entry_id: null,
+      potential_journal_entry_id: null, potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: null,
+    }
+    const proposal = { journal_entry_id: 'e-57', voucher_number: 57, voucher_series: 'A', entry_date: '2026-07-31', description: '', entry_status: 'posted' as const, confidence: 0.95, reasons: ['exact_sum_same_date'], vouchers: [] }
+    coveringSetsMock.mockResolvedValue(new Map([['t-bg', proposal]]))
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+    enqueue({ data: [openRow] })
+    const unmatched = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'unmatched_external' })
+    expect(unmatched?.items).toEqual([])
+    expect(coveringSetsMock).toHaveBeenCalledTimes(1)
+
+    const other = createQueuedMockSupabase()
+    other.enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+    other.enqueue({ data: [openRow] })
+    const matched = await listAccountItems(other.supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'matched' })
+    expect(matched?.items).toEqual([])
+    expect(coveringSetsMock).toHaveBeenCalledTimes(1)
   })
 
   it('returns null for an unknown cash account', async () => {

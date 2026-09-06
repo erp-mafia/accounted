@@ -182,6 +182,16 @@ export const ReconciliationItemActionSchema = z.enum([
   'review',
 ])
 
+/** One verifikat of a set proposal: its bank leg in the row's direction, positive, in the account currency. */
+export const ReconciliationProposalVoucherSchema = z.object({
+  journal_entry_id: z.string(),
+  voucher_number: z.number().int().nullable(),
+  voucher_series: z.string().nullable(),
+  entry_date: z.string(),
+  description: z.string(),
+  amount: z.number(),
+})
+
 export const ReconciliationProposalSchema = z.object({
   journal_entry_id: z.string(),
   voucher_number: z.number().int().nullable(),
@@ -191,6 +201,16 @@ export const ReconciliationProposalSchema = z.object({
   entry_status: z.enum(['draft', 'posted', 'reversed']),
   confidence: z.number().min(0).max(1),
   reasons: z.array(z.string()),
+  /**
+   * Present when the proposal is an explaining SET of unlinked verifikat whose
+   * bank legs sum exactly to the row (#2293, computed at read time): the row
+   * is linked to all of them (1:N) and journal_entry_id is the first. Length 1
+   * is one voucher of the exact amount the 1:1 matcher missed (dated 4 to 7
+   * days off). Absent on persisted 1:1 proposals. Apply with explicit pairs
+   * (journal_entry_ids = every voucher); use_proposals reads the persisted
+   * column only.
+   */
+  vouchers: z.array(ReconciliationProposalVoucherSchema).min(1).optional(),
 })
 export type ReconciliationProposal = z.infer<typeof ReconciliationProposalSchema>
 

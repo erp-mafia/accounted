@@ -39,8 +39,8 @@ const TX_ID = '11111111-1111-4111-8111-111111111111'
 
 const set = {
   vouchers: [
-    { journal_entry_id: JE_A, voucher_label: 'A57', entry_date: '2026-07-31', description: 'Inbetalning kundfaktura 063', source_type: 'invoice_paid', amount: 62500, bank_account_number: '1930' },
-    { journal_entry_id: JE_B, voucher_label: 'A58', entry_date: '2026-07-31', description: 'Inbetalning kundfaktura 064', source_type: 'invoice_paid', amount: 25750, bank_account_number: '1930' },
+    { journal_entry_id: JE_A, voucher_label: 'A57', voucher_series: 'A', voucher_number: 57, entry_date: '2026-07-31', description: 'Inbetalning kundfaktura 063', source_type: 'invoice_paid', amount: 62500, bank_account_number: '1930' },
+    { journal_entry_id: JE_B, voucher_label: 'A58', voucher_series: 'A', voucher_number: 58, entry_date: '2026-07-31', description: 'Inbetalning kundfaktura 064', source_type: 'invoice_paid', amount: 25750, bank_account_number: '1930' },
   ],
   total: 88250,
   bank_account_number: '1930',
