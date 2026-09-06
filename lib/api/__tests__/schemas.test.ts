@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { HouseworkTypeSchema } from '../schemas'
+import { STANDARD_VOUCHER_SERIES_MAP } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   // Enums
   EntityTypeSchema,
@@ -1954,6 +1955,14 @@ describe('UpdateSettingsSchema', () => {
         default_voucher_series_per_source_type: { not_a_source_type: 'A' },
       })
       expect(result.success).toBe(false)
+    })
+
+    it('accepts the full standard set, which the settings action sends with every source type', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        default_voucher_series_per_source_type: { ...STANDARD_VOUCHER_SERIES_MAP },
+      })
+      expect(result.success).toBe(true)
+      expect(result.data?.default_voucher_series_per_source_type).toEqual(STANDARD_VOUCHER_SERIES_MAP)
     })
   })
 

@@ -1883,7 +1883,11 @@
     "related_chart_of_accounts": "Kontoplan (BAS)",
     "periodisering_label": "Periodisering",
     "periodisering_help": "I bokslut-wizarden skannas fakturor efter datumintervall som sträcker sig in i nästa räkenskapsår och periodiseringar föreslås. Inget bokförs utan din granskning.",
-    "periodisering_open_wizard": "Öppna periodiserings-wizarden"
+    "periodisering_open_wizard": "Öppna periodiserings-wizarden",
+    "series_standard_set_button": "Använd standarduppsättningen",
+    "series_standard_set_help": "Fyller i uppsättningen som nya företag får: kundfakturor B, inbetalningar C, leverantörsfakturor D, utbetalningar E, periodiseringar H, bokslut I, lön K, kontantfakturor L, momsredovisning M, övrigt A. Granska raderna och spara. Byt helst vid ett räkenskapsårs början: redan bokförda verifikationer ligger kvar i sina serier, nya hamnar i de nya serierna från och med att du sparar, och bytet syns i behandlingshistoriken.",
+    "series_row_accrual_only": "Gäller faktureringsmetoden, som företaget inte använder. Valet sparas och gäller om metoden byts.",
+    "series_row_cash_only": "Gäller kontantmetoden, som företaget inte använder. Valet sparas och gäller om metoden byts."
   },
   "settings_tax": {},
   "settings_team": {},

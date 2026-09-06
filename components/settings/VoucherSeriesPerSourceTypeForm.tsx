@@ -13,7 +13,12 @@ import {
 } from '@/components/settings/SettingsRows'
 import { cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { buildVoucherSeriesOptions } from '@/lib/bookkeeping/voucher-series-resolver'
+import { HelpPopover } from '@/components/ui/help-popover'
+import {
+  buildVoucherSeriesOptions,
+  isStandardVoucherSeriesMap,
+  STANDARD_VOUCHER_SERIES_MAP,
+} from '@/lib/bookkeeping/voucher-series-resolver'
 import type { CompanySettings, JournalEntrySourceType } from '@/types'
 
 // Subset of source_types presented to the user. The DB column accepts every
@@ -42,6 +47,18 @@ const VISIBLE_SOURCE_TYPES: Array<{ key: JournalEntrySourceType; labelKey: strin
 // The everyday types stay visible; the long tail folds behind "Visa alla".
 // Keeps the map's iteration order intact: we only split it, never reorder.
 const ALWAYS_VISIBLE_COUNT = 3
+
+// The payment types that belong to one bokföringsmetod. Under the other
+// method their rows are dimmed, never hidden (#2184): the choice stays visible
+// and editable, so a company that switches method finds it already made and
+// nothing in the map goes stale out of sight. Only the payment rows are
+// bound to a method; registering an invoice happens under both.
+const METHOD_BOUND: Partial<Record<JournalEntrySourceType, 'accrual' | 'cash'>> = {
+  invoice_paid: 'accrual',
+  supplier_invoice_paid: 'accrual',
+  invoice_cash_payment: 'cash',
+  supplier_invoice_cash_payment: 'cash',
+}
 
 // Swedish labels. Kept inline so this component is self-contained: these
 // labels are bookkeeping-domain terms that intentionally stay Swedish across
@@ -73,6 +90,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   // Generic fold labels ("Visa alla (n)" / "Visa färre") shared with the
   // dashboard widgets; the domain labels themselves stay hardcoded Swedish.
   const tCommon = useTranslations('dashboard')
+  const t = useTranslations('settings_bookkeeping')
   const { toast } = useToast()
   const initialMap = settings.default_voucher_series_per_source_type || {}
   const [draft, setDraft] = useState<Partial<Record<JournalEntrySourceType, string>>>(
@@ -80,6 +98,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   )
   const [isSaving, setIsSaving] = useState(false)
   const [showAll, setShowAll] = useState(false)
+  const method: 'accrual' | 'cash' = settings.accounting_method === 'cash' ? 'cash' : 'accrual'
 
   // Same closed list as the manual verifikat form and the per-bankkonto
   // picker: the fixed Swedish presets, then any letter already configured in
@@ -110,6 +129,15 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
 
   const hasChanges =
     JSON.stringify(draft) !== JSON.stringify(initialMap)
+
+  // Fill the form with the set a new company starts with. Fills, never
+  // saves: a series switch mid-year is a deliberate act, so the fold opens to
+  // show every row it changes and the user commits with Spara serier.
+  const onStandardSet = isStandardVoucherSeriesMap(draft)
+  const handleUseStandardSet = () => {
+    setDraft({ ...STANDARD_VOUCHER_SERIES_MAP })
+    setShowAll(true)
+  }
 
   const handleSave = async () => {
     setIsSaving(true)
@@ -151,27 +179,35 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   const renderRow = (
     { key, labelKey }: (typeof VISIBLE_SOURCE_TYPES)[number],
     borderless = false,
-  ) => (
-    <SettingsRow
-      key={key}
-      label={SV_LABELS[labelKey] ?? key}
-      htmlFor={`series-${key}`}
-      borderless={borderless}
-    >
-      <SettingsSelect
-        id={`series-${key}`}
-        value={(draft[key] as string | undefined) || 'A'}
-        onChange={(e) => handleChange(key, e.target.value)}
-        className="font-mono"
+  ) => {
+    const boundTo = METHOD_BOUND[key]
+    const dimmed = boundTo !== undefined && boundTo !== method
+    return (
+      <SettingsRow
+        key={key}
+        label={SV_LABELS[labelKey] ?? key}
+        htmlFor={`series-${key}`}
+        help={
+          dimmed ? t(boundTo === 'cash' ? 'series_row_cash_only' : 'series_row_accrual_only') : undefined
+        }
+        borderless={borderless}
+        className={dimmed ? 'opacity-60' : undefined}
       >
-        {seriesOptions.map((option) => (
-          <option key={option.letter} value={option.letter}>
-            {option.label ? `${option.letter}  ${option.label}` : option.letter}
-          </option>
-        ))}
-      </SettingsSelect>
-    </SettingsRow>
-  )
+        <SettingsSelect
+          id={`series-${key}`}
+          value={(draft[key] as string | undefined) || 'A'}
+          onChange={(e) => handleChange(key, e.target.value)}
+          className="font-mono"
+        >
+          {seriesOptions.map((option) => (
+            <option key={option.letter} value={option.letter}>
+              {option.label ? `${option.letter}  ${option.label}` : option.letter}
+            </option>
+          ))}
+        </SettingsSelect>
+      </SettingsRow>
+    )
+  }
 
   const alwaysVisible = VISIBLE_SOURCE_TYPES.slice(0, ALWAYS_VISIBLE_COUNT)
   const folded = VISIBLE_SOURCE_TYPES.slice(ALWAYS_VISIBLE_COUNT)
@@ -204,7 +240,19 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
         {folded.map((entry, i) => renderRow(entry, i === folded.length - 1))}
       </SettingsReveal>
 
-      <div className="flex justify-end px-1 pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-1 pt-4">
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={handleUseStandardSet}
+            disabled={onStandardSet || isSaving}
+          >
+            {t('series_standard_set_button')}
+          </Button>
+          <HelpPopover className="shrink-0">{t('series_standard_set_help')}</HelpPopover>
+        </div>
         <Button
           type="button"
           size="sm"

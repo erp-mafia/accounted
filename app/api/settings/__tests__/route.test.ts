@@ -42,6 +42,7 @@ vi.mock('@/lib/tax/deadline-generator', async (importOriginal) => {
 
 import { PUT } from '../route'
 import { regenerateTaxDeadlinesForUser } from '@/lib/tax/deadline-generator'
+import { STANDARD_VOUCHER_SERIES_MAP } from '@/lib/bookkeeping/voucher-series-resolver'
 
 describe('PUT /api/settings', () => {
   beforeEach(() => {
@@ -121,6 +122,31 @@ describe('PUT /api/settings', () => {
     expect(body.data.voucher_series_labels).toEqual({ L: 'Lön' })
     // The row receives the normalized map: the cleared letters never reach the DB.
     expect(findCall('company_settings', 'update')?.[0]).toEqual({ voucher_series_labels: { L: 'Lön' } })
+  })
+
+  it('stores the standard voucher series set as sent (Använd standarduppsättningen)', async () => {
+    const standard = { ...STANDARD_VOUCHER_SERIES_MAP }
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },              // fetch oldSettings
+      { data: { id: 's1', default_voucher_series_per_source_type: standard } },        // update ... returning
+      { data: null, count: 5 },                                                        // deadlines count
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { default_voucher_series_per_source_type: standard },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      data: { default_voucher_series_per_source_type: Record<string, string> }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.default_voucher_series_per_source_type).toEqual(standard)
+    // Every source type, storno and correction included, reaches the row unchanged.
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({
+      default_voucher_series_per_source_type: standard,
+    })
   })
 
   it('rejects a voucher_series_labels key that is not a single uppercase letter', async () => {

@@ -37,8 +37,8 @@ const SERIES_LETTER_RE = /^[A-Z]$/
  * the incumbents disagree with each other: Björn Lundén uses F for
  * kundfakturor, L for leverantörsfakturor and N for löner. The one point
  * they agree on is that A is the general series you post manual entries into,
- * which also matches this codebase: every source_type in
- * company_settings.default_voucher_series_per_source_type ships as 'A'.
+ * which is where STANDARD_VOUCHER_SERIES_MAP below keeps everything that is
+ * not a reskontra, lön, moms, periodisering or bokslut flow.
  *
  * The labels are bookkeeping-domain terms that stay Swedish in both locales,
  * same convention as VoucherSeriesPerSourceTypeForm.
@@ -113,6 +113,83 @@ export function buildVoucherSeriesOptions(
       .sort()
       .map((letter) => ({ letter, label: voucherSeriesLabel(letter, labels) })),
   ]
+}
+
+/**
+ * The series layout a new company starts with, and what "Använd
+ * standarduppsättningen" under Inställningar > Bokföring fills in for an
+ * existing one. The DB column default (migration 20260906210500) is this map
+ * verbatim; tests/pg/voucher-series-standard-default.pg.test.ts holds the two
+ * equal.
+ *
+ * The letters are the presets above, so every series in the set already has
+ * a name in the pickers and a ledger imported from Fortnox continues its
+ * kundfakturor in B, leverantörsfakturor in D and löner in K instead of
+ * starting parallel series next to them. The principle: the flows a reader
+ * of the verifikationslista wants to see apart (kundfakturor, inbetalningar,
+ * leverantörsfakturor, utbetalningar, periodisering, bokslut, lön, moms) get
+ * their own series; everything else stays in A, the general series.
+ *
+ * Exhaustive over JournalEntrySourceType on purpose. Before this map the
+ * column default was "everything on A" and the resolver's 'A' fallback let
+ * every source type added since (webshop_order, vat_settlement,
+ * expense_payout, ...) join that series without anyone deciding; a new
+ * source type now fails to compile until it has a letter here.
+ *
+ * resolveDefaultSeriesForSource never reads this map. A company whose row
+ * predates it keeps 'A' for every type until it applies the set itself:
+ * remapping a live ledger by migration would move, say, the next kundfaktura
+ * from A341 into a fresh B1 mid-year with nothing in the behandlingshistorik
+ * saying who decided it. BFNAR 2013:2 p. 9.16 records changes to the
+ * behandlingsregler with date and actor; the settings save gives that, a
+ * migration cannot.
+ */
+export const STANDARD_VOUCHER_SERIES_MAP: Readonly<Record<JournalEntrySourceType, string>> = {
+  manual: 'A',
+  bank_transaction: 'A',
+  invoice_created: 'B',
+  credit_note: 'B',
+  reminder_fee: 'B',
+  invoice_paid: 'C',
+  invoice_cash_payment: 'C',
+  rot_rut_payout: 'C',
+  supplier_invoice_registered: 'D',
+  supplier_credit_note: 'D',
+  supplier_invoice_privately_paid: 'D',
+  supplier_invoice_paid: 'E',
+  supplier_invoice_cash_payment: 'E',
+  accrual: 'H',
+  year_end: 'I',
+  result_appropriation: 'I',
+  salary_payment: 'K',
+  webshop_order: 'L',
+  vat_settlement: 'M',
+  opening_balance: 'A',
+  currency_revaluation: 'A',
+  inbox_item: 'A',
+  import: 'A',
+  system: 'A',
+  storno: 'A',
+  correction: 'A',
+  stripe_payout: 'A',
+  expense_claim: 'A',
+  expense_payout: 'A',
+}
+
+/**
+ * True when `map` assigns every source type exactly the standard letter.
+ * The settings form uses it to disable "Använd standarduppsättningen" once
+ * the draft already is the standard set. Extra keys are ignored: a map that
+ * carries a letter for a source type this build does not know is still
+ * "on the standard set" for every type it can book.
+ */
+export function isStandardVoucherSeriesMap(
+  map: VoucherSeriesMap | null | undefined,
+): boolean {
+  if (!map || typeof map !== 'object') return false
+  return (Object.keys(STANDARD_VOUCHER_SERIES_MAP) as JournalEntrySourceType[]).every(
+    (sourceType) => map[sourceType] === STANDARD_VOUCHER_SERIES_MAP[sourceType],
+  )
 }
 
 /**
