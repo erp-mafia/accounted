@@ -120,8 +120,16 @@ export const MAX_QUESTIONS_PER_DAY = 6
 /** error_message marker on whatsapp_messages rows parked while the company
  *  question is open. The answer handler re-opens exactly these. */
 export const STAGED_AWAITING_COMPANY = 'staged_awaiting_company'
-/** Marker after the 48h TTL expired: excluded from any later re-open. */
+/** Marker on a parked row whose media Meta no longer serves: excluded from
+ *  any later re-open. Stamped by the sweep's question-TTL pass and by both
+ *  drains (answer and single-company), all against the same cutoff. */
 export const COMPANY_CHOICE_EXPIRED = 'company_choice_expired'
+/** Staged receipts stay answerable while Meta still serves their media
+ *  (~30 days). Past that the marker is honest: nothing can recover them.
+ *  ONE definition, read by the sweep and by both drains (#2062): a drain that
+ *  re-opened a row older than this sent it through media download to the
+ *  MAX_ATTEMPTS error path and an M18 about a month-old receipt. */
+export const STAGED_MEDIA_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 /** Terminal marker when the company question could not be asked at all:
  *  the sender has fewer than 2 companies to choose between, so nothing will
  *  change until they fix the linking in the app. The rows are never retried;

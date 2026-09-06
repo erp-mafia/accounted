@@ -30,6 +30,7 @@ import {
   COMPANY_CHOICE_EXPIRED,
   QUESTION_TTL_MS,
   STAGED_AWAITING_COMPANY,
+  STAGED_MEDIA_MAX_AGE_MS,
   getContext,
   resolveRecipient,
   updateConversation,
@@ -56,9 +57,6 @@ const ACK_STALE_MS = 60 * 1000
 const UNACKED_REARM_MS = 120 * 1000
 const MAX_ATTEMPTS = 3
 const BATCH = 25
-/** Staged receipts stay answerable while Meta still serves their media
- *  (~30 days). Past that the marker is honest: nothing can recover them. */
-const STAGED_MEDIA_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
 export interface SweepSummary {
   reclaimedReceived: number

@@ -25,9 +25,11 @@ import {
 } from './graph-api'
 import { botCopy, TEMPLATE } from './messages'
 import {
+  COMPANY_CHOICE_EXPIRED,
   COMPANY_PIN_TTL_MS,
   NO_COMPANY_OPTIONS,
   STAGED_AWAITING_COMPANY,
+  STAGED_MEDIA_MAX_AGE_MS,
   getContext,
   updateConversation,
   type ConversationContext,
@@ -224,11 +226,17 @@ export async function askCompanyQuestion(
     sent = await sendText(supabase, { ...base, body: numberedBody })
   }
 
-  if (!sent.ok && interactive) {
+  if (!sent.ok && interactive && sent.failure === 'http_rejected') {
     // Meta rejected the interactive payload at send time (no wamid was ever
     // issued, so nothing reached the phone): ask the same question as plain
     // numbered text instead of going silent. Same template id, same open
     // question; only the answer mechanism changes (digit instead of tap).
+    // ONLY on an HTTP rejection: a transport error (timeout, reset) means
+    // Meta may have accepted the interactive message before the failure
+    // surfaced, and a text resend would put a second question on the phone
+    // (#2062). That case falls through to the rollback below: the next
+    // receipt re-asks, and a tap on a question that did arrive is at worst
+    // ignored, which beats two open questions.
     log.warn('company question interactive send rejected; falling back to numbered text', {
       conversationId: args.conversation.id,
       errorDetail: sent.errorDetail,
@@ -253,10 +261,77 @@ export async function askCompanyQuestion(
     })
     log.warn('company question send failed; question rolled back', {
       conversationId: args.conversation.id,
+      failure: sent.failure,
     })
     return 'not_asked'
   }
   return 'asked'
+}
+
+export interface DrainedParkedRows {
+  /** Parked rows re-opened for processing (run through the kick). */
+  reopenedIds: string[]
+  /** Parked rows older than Meta's media retention, stamped expired instead. */
+  expiredCount: number
+}
+
+/**
+ * Re-open the receipts parked behind a company question, in the ONE shape
+ * both drains share (the answer path and the single-live-company path).
+ *
+ * Rows older than STAGED_MEDIA_MAX_AGE_MS are stamped company_choice_expired
+ * rather than re-opened: Meta no longer serves their media, so re-opening
+ * them only ran each one through the MAX_ATTEMPTS error path and an M18
+ * about a receipt sent a month ago (#2062). The sweep stamps the same cutoff
+ * for conversations still in awaiting_company; this covers the idle ones
+ * (question TTL passed, options kept) that only a drain ever touches again.
+ * The stamp is guarded on the staged marker, so a second drain finds nothing
+ * new to expire and the notice goes out once.
+ */
+export async function drainParkedRows(
+  supabase: SupabaseClient,
+  conversationId: string,
+): Promise<DrainedParkedRows> {
+  const staleCutoff = new Date(Date.now() - STAGED_MEDIA_MAX_AGE_MS).toISOString()
+  const { data: expired } = await supabase
+    .from('whatsapp_messages')
+    .update({ error_message: COMPANY_CHOICE_EXPIRED })
+    .eq('conversation_id', conversationId)
+    .eq('processing_status', 'skipped')
+    .eq('error_message', STAGED_AWAITING_COMPANY)
+    .lt('created_at', staleCutoff)
+    .select('id')
+  const { data: reopened } = await supabase
+    .from('whatsapp_messages')
+    .update({ processing_status: 'received', error_message: null })
+    .eq('conversation_id', conversationId)
+    .eq('processing_status', 'skipped')
+    .eq('error_message', STAGED_AWAITING_COMPANY)
+    .gte('created_at', staleCutoff)
+    .select('id')
+  return {
+    reopenedIds: ((reopened ?? []) as { id: string }[]).map((r) => r.id),
+    expiredCount: Array.isArray(expired) ? expired.length : 0,
+  }
+}
+
+/**
+ * Tell the sender which parked receipts could not be recovered. Sent at the
+ * drain, never from the sweep: the drain runs on an inbound message, so the
+ * 24h service window is open; thirty days after the last receipt it is not,
+ * and a free-form send would fail. No-op for a count of zero.
+ */
+export async function notifyExpiredParkedRows(
+  supabase: SupabaseClient,
+  args: { to: string; replyBase: ReplyBase; expiredCount: number },
+): Promise<void> {
+  if (args.expiredCount <= 0) return
+  await sendText(supabase, {
+    to: args.to,
+    body: botCopy('sv').m20ReceiptsExpired({ count: args.expiredCount }),
+    template: TEMPLATE.m20ReceiptsExpired,
+    ...args.replyBase,
+  })
 }
 
 export interface AppliedCompanyChoice {
@@ -385,18 +460,17 @@ export async function applyCompanyChoice(
     ...args.replyBase,
   })
 
-  const { data: reopened } = await supabase
-    .from('whatsapp_messages')
-    .update({ processing_status: 'received', error_message: null })
-    .eq('conversation_id', args.conversation.id)
-    .eq('processing_status', 'skipped')
-    .eq('error_message', STAGED_AWAITING_COMPANY)
-    .select('id')
+  const drained = await drainParkedRows(supabase, args.conversation.id)
+  await notifyExpiredParkedRows(supabase, {
+    to: args.to,
+    replyBase: args.replyBase,
+    expiredCount: drained.expiredCount,
+  })
 
   return {
     ok: true,
     companyId,
     companyName,
-    stagedMessageIds: ((reopened ?? []) as { id: string }[]).map((r) => r.id),
+    stagedMessageIds: drained.reopenedIds,
   }
 }

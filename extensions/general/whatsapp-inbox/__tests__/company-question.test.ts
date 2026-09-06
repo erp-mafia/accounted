@@ -8,9 +8,9 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
-    sendReplyButtons: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
-    sendList: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null }),
+    sendReplyButtons: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null }),
+    sendList: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null }),
   }
 })
 
@@ -24,10 +24,13 @@ import {
 import {
   askCompanyQuestion,
   applyCompanyChoice,
+  drainParkedRows,
 } from '@/extensions/general/whatsapp-inbox/lib/company-question'
 import {
+  COMPANY_CHOICE_EXPIRED,
   NO_COMPANY_OPTIONS,
   STAGED_AWAITING_COMPANY,
+  STAGED_MEDIA_MAX_AGE_MS,
 } from '@/extensions/general/whatsapp-inbox/lib/conversation'
 import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 
@@ -141,6 +144,7 @@ describe('askCompanyQuestion', () => {
       wamid: null,
       errorDetail:
         'Send failed (HTTP 400): {"error":{"message":"(#131009) Parameter value is not valid","error_data":{"details":"Duplicate button title"}}}',
+      failure: 'http_rejected',
     })
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: memberships(3) })
@@ -169,7 +173,7 @@ describe('askCompanyQuestion', () => {
   })
 
   it('falls back to the numbered text question when the list send is rejected', async () => {
-    sendListMock.mockResolvedValueOnce({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 400)' })
+    sendListMock.mockResolvedValueOnce({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 400)', failure: 'http_rejected' })
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: memberships(5) })
     enqueue({ data: companies(5) })
@@ -193,8 +197,8 @@ describe('askCompanyQuestion', () => {
   })
 
   it('rolls back only when the numbered fallback also fails', async () => {
-    sendButtonsMock.mockResolvedValueOnce({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 400)' })
-    sendTextMock.mockResolvedValueOnce({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 500)' })
+    sendButtonsMock.mockResolvedValueOnce({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 400)', failure: 'http_rejected' })
+    sendTextMock.mockResolvedValueOnce({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 500)', failure: 'http_rejected' })
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: memberships(3) })
     enqueue({ data: companies(3) })
@@ -228,6 +232,47 @@ describe('askCompanyQuestion', () => {
     expect(updates[1].state).toBe('idle')
     expect(updates[1].context?.company_options).toBeUndefined()
     expect(updates[1].context?.pending_question).toBeUndefined()
+  })
+
+  it('does NOT resend on a transport error: Meta may have delivered the interactive question', async () => {
+    // #2062 residual 2: a timeout is not a rejection. The interactive message
+    // may already be on the phone, so a numbered-text resend risks two open
+    // questions. Roll back instead; the next receipt re-asks.
+    sendButtonsMock.mockResolvedValueOnce({
+      ok: false,
+      wamid: null,
+      errorDetail: 'Send errored: WhatsApp send timed out after 10000ms',
+      failure: 'transport_error',
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: memberships(3) })
+    enqueue({ data: companies(3) })
+    enqueue({ data: [{ id: 'conv-1' }] }) // guarded transition won
+    enqueue({
+      data: [
+        {
+          ...(makeConversation() as Record<string, unknown>),
+          state: 'awaiting_company',
+          context: { company_options: [{ id: 'company-1', name: 'Bolag A AB' }] },
+        },
+      ],
+    }) // rollback echo
+
+    const asked = await askCompanyQuestion(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation(),
+      link: makeLink(),
+      to: '46701234567',
+      replyBase,
+      stagedCount: 1,
+    })
+
+    expect(asked).toBe('not_asked')
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock).not.toHaveBeenCalled()
+    const updates = findCalls('whatsapp_conversations', 'update').map(
+      (args) => args[0] as { state?: string },
+    )
+    expect(updates.map((u) => u.state)).toEqual(['awaiting_company', 'idle'])
   })
 
   it('uses a list message for 4-10 companies', async () => {
@@ -388,6 +433,7 @@ describe('applyCompanyChoice', () => {
     enqueue({ data: { company_id: 'company-2' } }) // membership check
     enqueue({ data: null }) // conversation update
     enqueue({ data: null }) // link last_company_id update
+    enqueue({ data: [] }) // expiry stamp: nothing past the media window
     enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // staged reopen
 
     const before = Date.now()
@@ -434,7 +480,7 @@ describe('applyCompanyChoice', () => {
     expect(confirm.body).toContain('byt')
 
     // Reopen targeted exactly the staged marker.
-    const reopenPatch = findCalls('whatsapp_messages', 'update')[0][0] as Record<string, unknown>
+    const reopenPatch = findCalls('whatsapp_messages', 'update')[1][0] as Record<string, unknown>
     expect(reopenPatch.processing_status).toBe('received')
     const { calls } = { calls: findCalls('whatsapp_messages', 'eq') }
     expect(calls.some((args) => args[0] === 'error_message' && args[1] === STAGED_AWAITING_COMPANY)).toBe(true)
@@ -528,6 +574,72 @@ describe('applyCompanyChoice', () => {
     expect(applied).toEqual({ ok: false, reason: 'already_applied' })
     expect(sendTextMock).not.toHaveBeenCalled()
     expect(findCalls('whatsapp_conversations', 'update')).toHaveLength(0)
+  })
+})
+
+describe('drainParkedRows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('stamps rows past the media window expired and re-opens only the rest', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'old-1' }, { id: 'old-2' }] }) // expiry stamp
+    enqueue({ data: [{ id: 'stg-1' }] }) // reopen
+
+    const before = Date.now()
+    const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
+    expect(drained).toEqual({ reopenedIds: ['stg-1'], expiredCount: 2 })
+
+    const updates = calls.filter((c) => c.table === 'whatsapp_messages' && c.method === 'update')
+    expect(updates[0].args[0]).toEqual({ error_message: COMPANY_CHOICE_EXPIRED })
+    expect(updates[1].args[0]).toEqual({ processing_status: 'received', error_message: null })
+    // Both writes are guarded on the staged marker and split on ONE cutoff.
+    const staged = calls.filter(
+      (c) => c.method === 'eq' && c.args[0] === 'error_message' && c.args[1] === STAGED_AWAITING_COMPANY,
+    )
+    expect(staged).toHaveLength(2)
+    const lt = calls.find((c) => c.method === 'lt' && c.args[0] === 'created_at')
+    const gte = calls.find((c) => c.method === 'gte' && c.args[0] === 'created_at')
+    expect(lt?.args[1]).toBe(gte?.args[1])
+    const cutoffAge = before - new Date(lt!.args[1] as string).getTime()
+    expect(Math.abs(cutoffAge - STAGED_MEDIA_MAX_AGE_MS)).toBeLessThan(5_000)
+  })
+
+  it('applyCompanyChoice tells the sender once about receipts that could not be recovered', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { company_id: 'company-2' } }) // membership check
+    enqueue({ data: null }) // conversation update
+    enqueue({ data: null }) // link last_company_id update
+    enqueue({ data: [{ id: 'old-1' }, { id: 'old-2' }, { id: 'old-3' }] }) // expiry stamp
+    enqueue({ data: [{ id: 'stg-1' }] }) // reopen
+
+    const applied = await applyCompanyChoice(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation({
+        state: 'idle',
+        context: {
+          company_options: [
+            { id: 'company-1', name: 'Bolag A AB' },
+            { id: 'company-2', name: 'Bolag B AB' },
+          ],
+        },
+      }),
+      link: makeLink(),
+      choice: { digit: 2 },
+      via: 'numbered',
+      to: '46701234567',
+      replyBase,
+    })
+
+    expect(applied.ok).toBe(true)
+    if (!applied.ok) throw new Error('expected the choice to apply')
+    expect(applied.stagedMessageIds).toEqual(['stg-1'])
+    expect(sendTextMock).toHaveBeenCalledTimes(2)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6CompanyConfirm)
+    const notice = sendTextMock.mock.calls[1][1]
+    expect(notice.template).toBe(TEMPLATE.m20ReceiptsExpired)
+    expect(notice.body).toContain('3')
+    expect(notice.body).toContain('30 dagar')
   })
 })
 
