@@ -37,6 +37,7 @@ import {
   type ConversationContext,
 } from './conversation'
 import { finalizeBurst, processInboundMessage, sendErrorNoticeOnce } from './process-inbound'
+import { drainParkedRows } from './company-question'
 import { appendQuestionHistory, updateItemContext } from './item-context'
 
 const log = createLogger('whatsapp-inbox/sweep')
@@ -57,6 +58,9 @@ const ACK_STALE_MS = 60 * 1000
 const UNACKED_REARM_MS = 120 * 1000
 const MAX_ATTEMPTS = 3
 const BATCH = 25
+/** A parked row younger than this may simply be waiting for its question to
+ *  be armed (park, then guarded transition): not an orphan yet. */
+const ORPHAN_PARKED_MIN_AGE_MS = 2 * 60 * 1000
 
 export interface SweepSummary {
   reclaimedReceived: number
@@ -69,6 +73,9 @@ export interface SweepSummary {
    *  (Graph send failure or a Meta 'failed' status callback). Observability
    *  only: the sweep log line is the consumer. */
   outboundFailed24h: number
+  /** Parked rows with no open company question left to re-open them,
+   *  re-opened and processed by pass 6. */
+  reopenedOrphans: number
 }
 
 interface StuckRow {
@@ -139,6 +146,7 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
     expiredQuestions: 0,
     clearedPins: 0,
     outboundFailed24h: 0,
+    reopenedOrphans: 0,
   }
   const finalizeConversations = new Set<string>()
   const now = Date.now()
@@ -398,6 +406,50 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
     summary.outboundFailed24h = count ?? 0
   } catch (err) {
     log.error('sweep: outbound failure count failed', err)
+  }
+
+  // ── 6. Orphaned parked rows ────────────────────────────────
+  // A row parked behind the company question whose conversation no longer
+  // holds an open question (company_options gone) has nobody left to
+  // re-open it: the drain that should have done so errored (#2062), or the
+  // answer landed and its re-open UPDATE failed. Run the same drain the
+  // answer path uses and process what comes back; the re-run resolves each
+  // row against the fresh pin, the default, or the sole live company, or
+  // re-asks the question properly. The age guard keeps a row that was parked
+  // milliseconds before its question was armed out of this pass.
+  try {
+    const parkedBefore = new Date(now - ORPHAN_PARKED_MIN_AGE_MS).toISOString()
+    const { data } = await supabase
+      .from('whatsapp_messages')
+      .select('conversation_id, conversation:whatsapp_conversations!inner(context)')
+      .eq('processing_status', 'skipped')
+      .eq('error_message', STAGED_AWAITING_COMPANY)
+      .lt('created_at', parkedBefore)
+      .limit(BATCH * 4)
+    const orphaned = new Set<string>()
+    for (const row of ((data ?? []) as Array<{
+      conversation_id: string | null
+      conversation: { context: Record<string, unknown> | null } | null
+    }>)) {
+      if (!row.conversation_id) continue
+      const options = (row.conversation?.context as ConversationContext | null)?.company_options
+      if (options && options.length > 0) continue // question still open: not an orphan
+      orphaned.add(row.conversation_id)
+    }
+    for (const conversationId of orphaned) {
+      const drained = await drainParkedRows(supabase, conversationId)
+      if (drained.reopenedIds.length === 0) continue
+      log.info('sweep: re-opened orphaned parked receipts', {
+        conversationId,
+        count: drained.reopenedIds.length,
+      })
+      for (const id of drained.reopenedIds) {
+        await processInboundMessage(supabase, id)
+        summary.reopenedOrphans++
+      }
+    }
+  } catch (err) {
+    log.error('sweep: orphaned parked rows pass failed', err)
   }
 
   return summary

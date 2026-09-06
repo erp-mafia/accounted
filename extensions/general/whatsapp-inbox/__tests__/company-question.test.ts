@@ -589,7 +589,7 @@ describe('drainParkedRows', () => {
 
     const before = Date.now()
     const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
-    expect(drained).toEqual({ reopenedIds: ['stg-1'], expiredCount: 2 })
+    expect(drained).toEqual({ reopenedIds: ['stg-1'], expiredCount: 2, failed: false })
 
     const updates = calls.filter((c) => c.table === 'whatsapp_messages' && c.method === 'update')
     expect(updates[0].args[0]).toEqual({ error_message: COMPANY_CHOICE_EXPIRED })
@@ -604,6 +604,59 @@ describe('drainParkedRows', () => {
     expect(lt?.args[1]).toBe(gte?.args[1])
     const cutoffAge = before - new Date(lt!.args[1] as string).getTime()
     expect(Math.abs(cutoffAge - STAGED_MEDIA_MAX_AGE_MS)).toBeLessThan(5_000)
+  })
+
+  it('a failed expiry stamp still re-opens the recoverable rows and reports failed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ error: { message: 'canceling statement due to statement timeout' } }) // expiry stamp
+    enqueue({ data: [{ id: 'stg-1' }] }) // reopen
+
+    const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
+    expect(drained).toEqual({ reopenedIds: ['stg-1'], expiredCount: 0, failed: true })
+  })
+
+  it('a failed re-open reports failed with nothing re-opened', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // expiry stamp
+    enqueue({ error: { message: 'connection reset' } }) // reopen
+
+    const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
+    expect(drained).toEqual({ reopenedIds: [], expiredCount: 0, failed: true })
+  })
+
+  it('applyCompanyChoice keeps the answer applied when the drain fails (sweep retries the rows)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { company_id: 'company-2' } }) // membership check
+    enqueue({ data: null }) // conversation update
+    enqueue({ data: null }) // link last_company_id update
+    enqueue({ data: [] }) // expiry stamp
+    enqueue({ error: { message: 'connection reset' } }) // reopen failed
+
+    const applied = await applyCompanyChoice(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation({
+        state: 'awaiting_company',
+        context: {
+          company_options: [
+            { id: 'company-1', name: 'Bolag A AB' },
+            { id: 'company-2', name: 'Bolag B AB' },
+          ],
+        },
+      }),
+      link: makeLink(),
+      choice: { digit: 2 },
+      via: 'numbered',
+      to: '46701234567',
+      replyBase,
+    })
+
+    expect(applied.ok).toBe(true)
+    if (!applied.ok) throw new Error('expected the choice to apply')
+    expect(applied.stagedMessageIds).toEqual([])
+    // The pin write stands: the answer is not undone by a failed re-open.
+    const pin = findCalls('whatsapp_conversations', 'update')[0][0] as { company_id: string }
+    expect(pin.company_id).toBe('company-2')
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6CompanyConfirm)
   })
 
   it('applyCompanyChoice tells the sender once about receipts that could not be recovered', async () => {

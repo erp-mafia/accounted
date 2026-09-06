@@ -273,6 +273,11 @@ export interface DrainedParkedRows {
   reopenedIds: string[]
   /** Parked rows older than Meta's media retention, stamped expired instead. */
   expiredCount: number
+  /** One of the two updates errored. The rows it should have touched are
+   *  still parked; the sweep's orphan pass re-opens them once the company
+   *  question is closed, so callers log and carry on rather than undoing
+   *  the answer that was already applied. */
+  failed: boolean
 }
 
 /**
@@ -293,7 +298,7 @@ export async function drainParkedRows(
   conversationId: string,
 ): Promise<DrainedParkedRows> {
   const staleCutoff = new Date(Date.now() - STAGED_MEDIA_MAX_AGE_MS).toISOString()
-  const { data: expired } = await supabase
+  const { data: expired, error: expireError } = await supabase
     .from('whatsapp_messages')
     .update({ error_message: COMPANY_CHOICE_EXPIRED })
     .eq('conversation_id', conversationId)
@@ -301,7 +306,14 @@ export async function drainParkedRows(
     .eq('error_message', STAGED_AWAITING_COMPANY)
     .lt('created_at', staleCutoff)
     .select('id')
-  const { data: reopened } = await supabase
+  if (expireError) {
+    log.error('drain: expiry stamp failed; stale rows stay parked for the next drain', expireError, {
+      conversationId,
+    })
+  }
+  // Independent of the stamp: a failed stamp must not also withhold the rows
+  // that ARE recoverable.
+  const { data: reopened, error: reopenError } = await supabase
     .from('whatsapp_messages')
     .update({ processing_status: 'received', error_message: null })
     .eq('conversation_id', conversationId)
@@ -309,9 +321,15 @@ export async function drainParkedRows(
     .eq('error_message', STAGED_AWAITING_COMPANY)
     .gte('created_at', staleCutoff)
     .select('id')
+  if (reopenError) {
+    log.error('drain: re-open failed; the sweep orphan pass retries it', reopenError, {
+      conversationId,
+    })
+  }
   return {
     reopenedIds: ((reopened ?? []) as { id: string }[]).map((r) => r.id),
     expiredCount: Array.isArray(expired) ? expired.length : 0,
+    failed: Boolean(expireError || reopenError),
   }
 }
 
@@ -320,18 +338,30 @@ export async function drainParkedRows(
  * drain, never from the sweep: the drain runs on an inbound message, so the
  * 24h service window is open; thirty days after the last receipt it is not,
  * and a free-form send would fail. No-op for a count of zero.
+ *
+ * Best-effort like every other notice in this channel (M17, M18, M19): a
+ * failed send is recorded as a failed outbound row by sendText and logged
+ * here; there is no durable outbound retry in the extension, and the rows
+ * the notice describes are already terminal.
  */
 export async function notifyExpiredParkedRows(
   supabase: SupabaseClient,
   args: { to: string; replyBase: ReplyBase; expiredCount: number },
 ): Promise<void> {
   if (args.expiredCount <= 0) return
-  await sendText(supabase, {
+  const sent = await sendText(supabase, {
     to: args.to,
     body: botCopy('sv').m20ReceiptsExpired({ count: args.expiredCount }),
     template: TEMPLATE.m20ReceiptsExpired,
     ...args.replyBase,
   })
+  if (!sent.ok) {
+    log.warn('expired-receipts notice not delivered', {
+      conversationId: args.replyBase.conversationId ?? null,
+      expiredCount: args.expiredCount,
+      failure: sent.failure,
+    })
+  }
 }
 
 export interface AppliedCompanyChoice {
@@ -461,6 +491,14 @@ export async function applyCompanyChoice(
   })
 
   const drained = await drainParkedRows(supabase, args.conversation.id)
+  if (drained.failed) {
+    // The answer is applied (pin set, options claimed) and stays applied:
+    // the rows still parked are now orphans (no open question), which the
+    // sweep re-opens within minutes and resolves against the fresh pin.
+    log.error('company choice applied but the drain failed; sweep will retry', null, {
+      conversationId: args.conversation.id,
+    })
+  }
   await notifyExpiredParkedRows(supabase, {
     to: args.to,
     replyBase: args.replyBase,

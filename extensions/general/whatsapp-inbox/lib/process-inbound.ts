@@ -553,6 +553,14 @@ async function processMediaMessage(
         })
         kickInboundProcessing(drained.reopenedIds)
       }
+      if (drained.failed) {
+        // Not a reason to keep the dead question: clearing it below is what
+        // turns the still-parked rows into orphans the sweep re-opens, and
+        // this path drains again on the sender's next receipt anyway.
+        log.error('single-company drain failed; rows stay parked for the sweep', null, {
+          conversationId: conversation.id,
+        })
+      }
       await notifyExpiredParkedRows(supabase, { to, replyBase, expiredCount: drained.expiredCount })
       // The question itself is as dead as the rows behind it. Left in place,
       // state 'awaiting_company' turns every typed word into a company_retry

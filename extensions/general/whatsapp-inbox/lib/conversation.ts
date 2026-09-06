@@ -83,9 +83,12 @@ const BAD_CODE_WINDOW_MS = 10 * 60 * 1000
 const BAD_CODE_DAY_MS = 24 * 60 * 60 * 1000
 const BAD_CODE_DAY_MAX = 3
 
-/** True when another M2 (bad code) reply to this phone hash would exceed the
- *  degraded-mode cap. Fails CLOSED: if the window cannot be read, no M2 goes
- *  out (the caller falls through to the throttled M1 path instead). */
+/** True when another code reply (M2 bad code, or M21 could-not-check) to this
+ *  phone hash would exceed the degraded-mode cap. Both templates share one
+ *  window: they answer the same inbound shape, and counting only M2 let a
+ *  code-shaped flood earn one M21 per message during a lookup outage.
+ *  Fails CLOSED: if the window cannot be read, nothing goes out (the caller
+ *  falls through to the throttled M1 path instead). */
 export async function badCodeThrottled(
   supabase: SupabaseClient,
   phoneHash: string,
@@ -96,7 +99,7 @@ export async function badCodeThrottled(
     .select('created_at')
     .eq('direction', 'outbound')
     .eq('sender_phone_hash', phoneHash)
-    .eq('raw_payload->>template', TEMPLATE.m2BadCode)
+    .in('raw_payload->>template', [TEMPLATE.m2BadCode, TEMPLATE.m21CodeRetry])
     .gte('created_at', since)
     .order('created_at', { ascending: false })
     .limit(BAD_CODE_DAY_MAX)
