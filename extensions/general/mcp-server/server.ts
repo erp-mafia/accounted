@@ -271,6 +271,13 @@ import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { buildDuplicateBookingClaim } from '@/lib/transactions/categorize-core'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
+import {
+  describeExplainingSet,
+  guardAlreadyExplained,
+  guardDuplicatePaymentVoucher,
+  type AlreadyExplainedOutcome,
+  type DuplicateCandidateOutcome,
+} from '@/lib/invoices/already-explained-guard'
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
@@ -555,6 +562,69 @@ const ANNOTATIONS_WRITE_OPEN_WORLD = {
  */
 function registryError(code: string): Error {
   return Object.assign(new Error(getErrorEntry(code)?.message_sv ?? code), { code })
+}
+
+/**
+ * The already-explained refusal for gnubok_match_batch_allocate, coded
+ * BATCH_TX_POSSIBLE_DUPLICATE (same code the dashboard route answers with).
+ * The MCP error envelope carries no `details`, so the vouchers, the link
+ * call that resolves the row and the exact force binding are all in the
+ * message: that is what the agent reads. One voucher is also linkable
+ * through gnubok_link_transaction_to_journal_entry (which can settle a
+ * kundfaktura at the same time); several need the bank 1:N pair on
+ * gnubok_reconcile_match.
+ */
+function alreadyExplainedRefusal(
+  outcome: Extract<AlreadyExplainedOutcome, { status: 'blocked' }>,
+  transactionId: string,
+  cashAccountId: string | null,
+): Error {
+  const { set } = outcome
+  const ids = set.vouchers.map((v) => v.journal_entry_id)
+  const accountKey = `bank:${cashAccountId ?? '<cash_account_id>'}`
+  const link =
+    ids.length === 1
+      ? `gnubok_link_transaction_to_journal_entry (transaction_id="${transactionId}", journal_entry_id="${ids[0]}", invoice_id om en kundfaktura ska markeras betald samtidigt) ` +
+        `eller gnubok_reconcile_match (account_key "${accountKey}", pairs [{ external_ids: ["${transactionId}"], journal_entry_ids: ["${ids[0]}"] }])`
+      : `gnubok_reconcile_match (account_key "${accountKey}", pairs [{ external_ids: ["${transactionId}"], journal_entry_ids: ${JSON.stringify(ids)}, allocations: [{ journal_entry_id, amount }] per verifikat, summan = radens belopp })`
+  const message = outcome.force_rejected
+    ? `force=true avvisad: expected_journal_entry_ids är inte exakt de verifikat som förklarar raden just nu (${describeExplainingSet(set)}). ` +
+      `Koppla raden till dem i stället: ${link}. Om raden verkligen är en separat affärshändelse: anropa igen med force=true och expected_journal_entry_ids=${JSON.stringify(ids)}.`
+    : `Transaktionen ser redan ut att vara bokförd som ${describeExplainingSet(set)}: bokförda verifikat utan bankkoppling på kontot summerar exakt till beloppet. ` +
+      `Bokför inte igen; koppla raden till dem: ${link}. Endast om raden verkligen är en separat affärshändelse: anropa igen med force=true och expected_journal_entry_ids=${JSON.stringify(ids)}.`
+  return Object.assign(new Error(message), { code: 'BATCH_TX_POSSIBLE_DUPLICATE' })
+}
+
+/**
+ * The soft-duplicate refusal for gnubok_match_transaction_to_invoice, coded
+ * like the dashboard route: MATCH_INVOICE_POSSIBLE_DUPLICATE without force,
+ * MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH when force names a stale or absent
+ * candidate.
+ */
+function duplicateCandidateRefusal(
+  outcome: Extract<DuplicateCandidateOutcome, { status: 'blocked' | 'mismatch' }>,
+): Error {
+  if (outcome.status === 'mismatch') {
+    return Object.assign(
+      new Error(
+        `force=true avvisad: expected_journal_entry_id ${outcome.expected_journal_entry_id ?? '(saknas)'} är inte den verifikation dubblettkontrollen hittar just nu ` +
+          `(${outcome.detected_journal_entry_id ?? 'ingen dubblett hittad: anropa igen utan force'}).`,
+      ),
+      { code: 'MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH' },
+    )
+  }
+  const c = outcome.candidate
+  const amount = c.amount_verified
+    ? `${c.amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kr`
+    : 'belopp ej verifierat: raden saknar SEK-värde'
+  return Object.assign(
+    new Error(
+      `Möjlig dubblettbokföring: verifikat ${c.voucher_label} (${c.entry_date}, konto ${c.bank_account_number}, ${amount}) ser redan ut att bokföra den här betalningen. ` +
+        `Koppla transaktionen till den i stället: gnubok_link_transaction_to_journal_entry (journal_entry_id="${c.journal_entry_id}", invoice_id för att markera fakturan betald samtidigt). ` +
+        `Endast om det verkligen är en separat betalning: anropa igen med force=true och expected_journal_entry_id="${c.journal_entry_id}".`,
+    ),
+    { code: 'MATCH_INVOICE_POSSIBLE_DUPLICATE' },
+  )
 }
 
 interface McpTool {
@@ -10699,13 +10769,15 @@ export const tools: McpTool[] = [
     name: 'gnubok_match_transaction_to_invoice',
     keywords: ['matcha betalning', 'kundfaktura', 'inbetalning'],
     title: 'Match Transaction to Invoice',
-    description: 'Match a bank transaction (income, amount>0) to a customer invoice. Confirm tx date/amount and invoice number/customer before staging. Supports partial payments and auto-storno of prior categorization.',
+    description: 'Match 1 bank tx (income, amount>0) to a customer invoice. Confirm tx date/amount and invoice number first. Partial payments and auto-storno of a prior categorization supported. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        transaction_id: { type: 'string', description: 'UUID of the bank transaction' },
-        invoice_id: { type: 'string', description: 'UUID of the invoice to match' },
+        transaction_id: { type: 'string' },
+        invoice_id: { type: 'string' },
+        force: { type: 'boolean', description: 'Override a MATCH_INVOICE_POSSIBLE_DUPLICATE refusal.' },
+        expected_journal_entry_id: { type: 'string', description: 'With force: the id the refusal named.' },
       },
       required: ['transaction_id', 'invoice_id'],
     },
@@ -10715,11 +10787,18 @@ export const tools: McpTool[] = [
       const transactionId = args.transaction_id as string
       const invoiceId = args.invoice_id as string
       if (!transactionId || !invoiceId) throw new Error('transaction_id and invoice_id are required')
+      const force = args.force === true
+      const expectedJournalEntryId =
+        typeof args.expected_journal_entry_id === 'string' ? (args.expected_journal_entry_id as string) : undefined
+      if (force && !expectedJournalEntryId) {
+        throw codedError('VALIDATION_ERROR', 'expected_journal_entry_id is required when force=true')
+      }
 
-      // Validate both exist and are matchable
+      // Validate both exist and are matchable. amount_sek / exchange_rate feed
+      // the duplicate guard: it compares this bank line against SEK ledger legs.
       const { data: transaction, error: txError } = await supabase
         .from('transactions')
-        .select('id, description, merchant_name, amount, currency, date, invoice_id')
+        .select('id, description, merchant_name, amount, currency, amount_sek, exchange_rate, date, invoice_id')
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .single()
@@ -10745,11 +10824,34 @@ export const tools: McpTool[] = [
         throw new Error('Invoice is not in a matchable state (must be sent, overdue, or partially_paid)')
       }
 
+      // Soft-duplicate guard at stage time (parity with the dashboard match
+      // route's MATCH_INVOICE_POSSIBLE_DUPLICATE): a manual verifikation that
+      // already books this receipt is surfaced NOW, so the agent links the
+      // row to it instead of queuing a second voucher for approval. The
+      // commit executor re-runs the same guard as the hard gate, re-binding
+      // force to the candidate detected then (issue #2294).
+      const duplicate = await guardDuplicatePaymentVoucher(
+        supabase,
+        companyId,
+        transaction,
+        { force, expected_journal_entry_id: expectedJournalEntryId },
+        { onDetectError: (err) => log.warn('match_transaction_to_invoice: duplicate detection failed (continuing)', { error: err instanceof Error ? err.message : String(err) }) },
+      )
+      if (duplicate.status === 'blocked' || duplicate.status === 'mismatch') {
+        throw duplicateCandidateRefusal(duplicate)
+      }
+
       const txDesc = transaction.merchant_name || transaction.description || transactionId
 
       return stagePendingOperation(supabase, companyId, userId, 'match_transaction_invoice',
         `Matcha: ${txDesc} → ${invoice.invoice_number}`,
-        { transaction_id: transactionId, invoice_id: invoiceId },
+        {
+          transaction_id: transactionId,
+          invoice_id: invoiceId,
+          // The binding travels with the op so the commit executor can
+          // re-validate it against the candidate detected at commit time.
+          ...(force ? { force: true, expected_journal_entry_id: expectedJournalEntryId } : {}),
+        },
         {
           transaction_description: txDesc,
           transaction_amount: transaction.amount,
@@ -10768,7 +10870,17 @@ export const tools: McpTool[] = [
         {
           description: 'After approval the transaction is linked and the invoice is marked paid. Use gnubok_get_ar_ledger to verify the customer balance.',
           tool: 'gnubok_get_ar_ledger',
-        }
+        },
+        {
+          dateForPeriodCheck: transaction.date,
+          // An honoured override is never silent: the approval card and the
+          // agent both see which voucher is being booked over.
+          ...(duplicate.status === 'overridden'
+            ? {
+                complianceNote: `Bokförs trots att verifikat ${duplicate.candidate.voucher_label} (${duplicate.candidate.entry_date}) redan ser ut att bokföra betalningen (force=true).`,
+              }
+            : {}),
+        },
       )
     },
   },
@@ -10777,7 +10889,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_match_batch_allocate',
     keywords: ['klumpbetalning', 'fördela betalning', 'matcha betalningar'],
     title: 'Batch-Allocate Payment',
-    description: 'Allocate 1 bank tx across N customer OR N supplier invoices (samlingsbetalning, BFL 5 kap 6§). Use when one receipt covers many invoices or one transfer pays many bills. Stages.',
+    description: 'Allocate 1 bank tx across N customer OR N supplier invoices: one receipt covering many invoices, one transfer paying many bills (samlingsbetalning, BFL 5 kap 6§). Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -10799,6 +10911,8 @@ export const tools: McpTool[] = [
             required: ['kind', 'amount'],
           },
         },
+        force: { type: 'boolean', description: 'Override a BATCH_TX_POSSIBLE_DUPLICATE refusal.' },
+        expected_journal_entry_ids: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'With force: exactly the ids the refusal named.' },
       },
       required: ['transaction_id', 'allocations'],
     },
@@ -10816,6 +10930,13 @@ export const tools: McpTool[] = [
       if (!Array.isArray(allocations) || allocations.length === 0) {
         throw new Error('allocations is required (non-empty array)')
       }
+      const force = args.force === true
+      const expectedJournalEntryIds = Array.isArray(args.expected_journal_entry_ids)
+        ? (args.expected_journal_entry_ids as unknown[]).filter((v): v is string => typeof v === 'string')
+        : undefined
+      if (force && !(expectedJournalEntryIds && expectedJournalEntryIds.length > 0)) {
+        throw codedError('VALIDATION_ERROR', 'expected_journal_entry_ids is required when force=true')
+      }
       // kind is the key every guard below branches on (direction, required
       // id, tenant pre-check). With kind absent, none of them fired: an
       // incoming +50 359 SEK payment against three kundfakturor staged as
@@ -10832,9 +10953,11 @@ export const tools: McpTool[] = [
         }
       }
 
+      // amount_sek / exchange_rate / cash_account_id feed the already-explained
+      // guard below: it sums SEK legs on the row's own settlement account.
       const { data: transaction, error: txError } = await supabase
         .from('transactions')
-        .select('id, description, merchant_name, amount, currency, date, journal_entry_id')
+        .select('id, description, merchant_name, amount, currency, amount_sek, exchange_rate, cash_account_id, date, journal_entry_id')
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .single()
@@ -10944,6 +11067,24 @@ export const tools: McpTool[] = [
         )
       }
 
+      // Already-explained guard at stage time: the same detector + force
+      // binding the dashboard route runs (lib/invoices/already-explained-
+      // guard.ts). A Bankgirot aggregate whose invoices were each marked paid
+      // by hand is refused HERE, with the vouchers named, so the agent links
+      // the row to them instead of asking the user to approve a second
+      // booking. The commit executor re-runs the guard as the hard gate
+      // (issue #2294).
+      const explained = await guardAlreadyExplained(
+        supabase,
+        companyId,
+        transaction,
+        { force, expected_journal_entry_ids: expectedJournalEntryIds },
+        { onDetectError: (err) => log.warn('match_batch_allocate: explaining-voucher detection failed (continuing)', { error: err instanceof Error ? err.message : String(err) }) },
+      )
+      if (explained.status === 'blocked') {
+        throw alreadyExplainedRefusal(explained, transactionId, transaction.cash_account_id ?? null)
+      }
+
       const txDesc = transaction.merchant_name || transaction.description || transactionId
       // Swedish plurals: kundfaktura → kundfakturor (not kundfakturaor).
       // Same for leverantörsfaktura → leverantörsfakturor.
@@ -10952,7 +11093,13 @@ export const tools: McpTool[] = [
 
       return stagePendingOperation(supabase, companyId, userId, 'match_batch_allocate',
         `Fördela: ${txDesc} → ${summary}`,
-        { transaction_id: transactionId, allocations },
+        {
+          transaction_id: transactionId,
+          allocations,
+          // The binding travels with the op so the commit executor can
+          // re-validate it against the set detected at commit time.
+          ...(force ? { force: true, expected_journal_entry_ids: expectedJournalEntryIds } : {}),
+        },
         // GDPR Art.25: transaction_description is included in preview_data
         // so the user can recognise the tx at approval time (merchant_name
         // or fallback to bank description). Same trade-off documented on
@@ -10974,7 +11121,16 @@ export const tools: McpTool[] = [
           description: 'After approval the combined verifikat is created and each invoice is advanced. Verify with gnubok_get_ar_ledger (customer) or gnubok_get_supplier_ledger.',
           tool: hasCustomer ? 'gnubok_get_ar_ledger' : 'gnubok_get_supplier_ledger',
         },
-        { dateForPeriodCheck: transaction.date }
+        {
+          dateForPeriodCheck: transaction.date,
+          // An honoured override is never silent: the approval card and the
+          // agent both see which vouchers are being booked over.
+          ...(explained.status === 'overridden'
+            ? {
+                complianceNote: `Bokförs trots att ${describeExplainingSet(explained.set)} redan förklarar raden (force=true).`,
+              }
+            : {}),
+        },
       )
     },
   },

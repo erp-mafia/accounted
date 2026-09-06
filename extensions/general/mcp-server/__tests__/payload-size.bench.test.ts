@@ -390,6 +390,20 @@ describe('tools/list payload size guard', () => {
     //     description, no example; the lookup itself now goes through the
     //     shared resolver with the cache, so the case is also rarer.
     //
+    //   * Held at 60K with the force binding on the two match tools
+    //     (2026-09-06, #2294): force + expected_journal_entry_ids on
+    //     gnubok_match_batch_allocate and force + expected_journal_entry_id on
+    //     gnubok_match_transaction_to_invoice, the override an agent needs
+    //     once the already-explained guard refuses at stage time (the refusal
+    //     message carries the exact ids to echo, so the property descriptions
+    //     are one clause each). ~100 tokens against 93 of headroom, paid for
+    //     inside the same two tools: the two "UUID of ..." property
+    //     descriptions on the single tool dropped (names are the contract, as
+    //     on the batch tool), and the batch tool's "Use when ..." sentence
+    //     folded into its first sentence. Measured 59 988 on the accounted
+    //     projection after the trims; headroom is 12, so the next addition
+    //     demotes a read first.
+    //
     // Long-term answer to growth is no longer a ceiling bump. gnubok_call_tool
     // makes `catalogVisibility: 'search'` usable for READ tools on hosts that
     // can only invoke what tools/list showed them, which is the constraint that

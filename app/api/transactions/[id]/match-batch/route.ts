@@ -5,7 +5,11 @@ import { MatchBatchSchema } from '@/lib/api/schemas'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { eventBus } from '@/lib/events/bus'
 import { clearSettledBatchAllocationSuggestions } from '@/lib/invoices/clear-settled-batch-allocations'
-import { detectExplainingVoucherSetForTransaction } from '@/lib/invoices/duplicate-payment-detection'
+import {
+  alreadyExplainedDetails,
+  guardAlreadyExplained,
+  recordExplainedOverride,
+} from '@/lib/invoices/already-explained-guard'
 import { ensureInitialized } from '@/lib/init'
 import type { Invoice, SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -112,37 +116,24 @@ export const POST = withRouteContext(
     // ones, in the case that prompted this). The vouchers that explain the
     // row are on the ledger, so refuse here and hand them back; the dialog
     // links the row to them (1:N, /api/reconciliation/bank/link) instead of
-    // creating a new voucher. Fail-open on a detection error: the guard is
-    // advisory, the RPC remains the atomicity boundary.
-    let explaining: Awaited<ReturnType<typeof detectExplainingVoucherSetForTransaction>> = null
-    try {
-      explaining = await detectExplainingVoucherSetForTransaction(supabase, companyId!, transactionId)
-    } catch (err) {
-      txLog.warn('match-batch: explaining-voucher detection failed', err as Error)
+    // creating a new voucher. The detect + force-binding decision is the
+    // shared helper the MCP staging tool and the pending-operation commit
+    // run too (issue #2294), so the doors cannot drift. Fail-open on a
+    // detection error: the guard is advisory, the RPC remains the atomicity
+    // boundary.
+    const explained = await guardAlreadyExplained(supabase, companyId!, transactionId, validation.data, {
+      onDetectError: (err) => txLog.warn('match-batch: explaining-voucher detection failed', err as Error),
+    })
+    if (explained.status === 'blocked') {
+      return errorResponseFromCode('BATCH_TX_POSSIBLE_DUPLICATE', txLog, {
+        requestId,
+        details: alreadyExplainedDetails(explained),
+      })
     }
-    if (explaining) {
-      const detectedIds = explaining.vouchers.map((v) => v.journal_entry_id).sort()
-      const expectedIds = [...(validation.data.expected_journal_entry_ids ?? [])].sort()
-      const acknowledged =
-        validation.data.force === true &&
-        detectedIds.length === expectedIds.length &&
-        detectedIds.every((id, i) => id === expectedIds[i])
-      if (!acknowledged) {
-        return errorResponseFromCode('BATCH_TX_POSSIBLE_DUPLICATE', txLog, {
-          requestId,
-          details: {
-            vouchers: explaining.vouchers,
-            total: explaining.total,
-            bank_account_number: explaining.bank_account_number,
-            same_date: explaining.same_date,
-            // force=true with a stale or missing set: the caller must re-read.
-            force_rejected: validation.data.force === true,
-          },
-        })
-      }
+    if (explained.status === 'overridden') {
       txLog.warn('match-batch: already-explained guard bypassed', {
         reason: 'force=true',
-        journalEntryIds: detectedIds,
+        journalEntryIds: explained.set.vouchers.map((v) => v.journal_entry_id),
         userId: user.id,
       })
     }
@@ -234,6 +225,18 @@ export const POST = withRouteContext(
       result.allocations,
       transactionId,
     )
+
+    // The override was acted on: leave the durable behandlingshistorik
+    // record (same event the categorize guard writes), never just a log line.
+    if (explained.status === 'overridden') {
+      await recordExplainedOverride(
+        companyId!,
+        transactionId,
+        explained.set,
+        { actor: { type: 'user', id: user.id }, via: 'dashboard_force' },
+        (err) => txLog.warn('match-batch: failed to record override behandlingshistorik', err as Error),
+      )
+    }
 
     return NextResponse.json({
       data: {

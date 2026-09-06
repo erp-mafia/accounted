@@ -37,6 +37,13 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectExplainingVoucherSetForTransaction: mockDetectExplaining,
 }))
 
+// An honoured force override is written to behandlingshistorik after the RPC
+// succeeds (issue #2294). Mocked so it never touches a service client here.
+const { mockAppendProcessingHistory } = vi.hoisted(() => ({ mockAppendProcessingHistory: vi.fn() }))
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: mockAppendProcessingHistory,
+}))
+
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
@@ -350,6 +357,17 @@ describe('POST /api/transactions/[id]/match-batch: already-explained guard', () 
     const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
     expect(response.status).toBe(200)
     expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
+    // Never silent: the honoured override leaves a behandlingshistorik
+    // record naming the vouchers it booked over (issue #2294).
+    expect(mockAppendProcessingHistory).toHaveBeenCalledTimes(1)
+    expect(mockAppendProcessingHistory.mock.calls[0][0]).toMatchObject({
+      companyId: 'company-1',
+      aggregateType: 'BankTransaction',
+      aggregateId: TX_UUID,
+      eventType: 'BankTransactionDuplicateDismissed',
+      actor: { type: 'user', id: 'user-1' },
+      payload: { dismissed_journal_entry_ids: [JE_A, JE_B], via: 'dashboard_force' },
+    })
   })
 
   it('refuses force=true whose ids do not match the set it re-detects', async () => {
