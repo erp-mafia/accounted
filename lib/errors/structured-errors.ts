@@ -888,6 +888,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ett angivet bokföringskonto finns inte eller är inte ett aktivt balans- eller intäktskonto (klass 1-3).',
     message_en: 'A supplied posting account does not exist or is not an active balance-sheet or revenue account (class 1-3).',
   },
+  INVOICE_CREATE_ARTICLE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'En angiven artikel finns inte i företaget.',
+    message_en: 'A supplied article does not exist in this company.',
+  },
   INVOICE_CREATE_POSTING_ACCOUNT_VAT_CONFLICT: {
     httpStatus: 400,
     message_sv: 'Ett balanskonto (klass 1-2) kan bara användas på rader utan moms. Använd ett intäktskonto (3xxx) för momspliktiga rader.',

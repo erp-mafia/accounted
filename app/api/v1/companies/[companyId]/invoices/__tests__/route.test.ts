@@ -957,9 +957,11 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
                     ? SWEDISH_BUSINESS_CUSTOMER
                     : table === 'chart_of_accounts'
                       ? [{ account_number: '3041' }]
-                      : table === 'invoices'
-                        ? createdInvoice
-                        : null
+                      : table === 'articles'
+                        ? [{ id: ARTICLE_ID }]
+                        : table === 'invoices'
+                          ? createdInvoice
+                          : null
               return (r: (v: unknown) => void) => r({ data, error: null })
             }
             return () => new Proxy({}, handler)
@@ -1099,6 +1101,39 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('INVOICE_CREATE_REVENUE_ACCOUNT_INVALID')
+  })
+
+  it('rejects an article_id that belongs to another company (issue #2059)', async () => {
+    // v1 runs on the service-role client with no RLS: the FK on
+    // invoice_items.article_id proves existence only, so the scoped select in
+    // the builder is the only tenancy guard for article linkage.
+    withInvoiceWriteScope()
+    const FOREIGN_ARTICLE = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SWEDISH_BUSINESS_CUSTOMER, error: null },
+        articles: { data: [], error: null },
+      }),
+    )
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        items: [
+          { description: 'x', quantity: 1, unit: 'st', unit_price: 100, article_id: FOREIGN_ARTICLE },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CREATE_ARTICLE_INVALID')
+    expect(body.error.details).toEqual({ invalidArticleIds: [FOREIGN_ARTICLE] })
   })
 })
 

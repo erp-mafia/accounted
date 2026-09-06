@@ -4,10 +4,11 @@ import {
   createMockRouteParams,
   parseJsonResponse,
   createQueuedMockSupabase,
+  makeCustomer,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -224,5 +225,60 @@ describe('PATCH /api/invoices/[id]', () => {
 
     expect(status).toBe(409)
     expect(body.error.code).toBe('INVOICE_UPDATE_NOT_DRAFT')
+  })
+
+  it('refuses an article id that belongs to another company before writing anything (issue #2059)', async () => {
+    // The FK on invoice_items.article_id proves the article exists, not that
+    // it is this company's; the cookie route relies on the builder's scoped
+    // select for that (RLS never sees FK validation).
+    const FOREIGN_ARTICLE = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+    enqueue({
+      data: {
+        id: 'inv-1',
+        status: 'draft',
+        invoice_number: null,
+        journal_entry_id: null,
+        is_self_billed: false,
+        credited_invoice_id: null,
+        document_type: 'invoice',
+        quote_status: null,
+        deduction_personnummer_encrypted: null,
+        deduction_personnummer_last4: null,
+      },
+      error: null,
+    }) // invoices: the draft being edited
+    enqueue({ data: makeCustomer({ id: '22222222-2222-4222-8222-222222222222', customer_type: 'swedish_business' }), error: null }) // customers
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings (builder VAT gate)
+    enqueue({ data: [], error: null }) // articles: no company-scoped hit
+
+    const response = await PATCH(
+      createMockRequest('/api/invoices/inv-1', {
+        method: 'PATCH',
+        body: {
+          customer_id: '22222222-2222-4222-8222-222222222222',
+          invoice_date: '2026-07-14',
+          due_date: '2026-08-13',
+          currency: 'SEK',
+          items: [
+            {
+              description: 'Konsult',
+              quantity: 1,
+              unit: 'tim',
+              unit_price: 1000,
+              vat_rate: 25,
+              article_id: FOREIGN_ARTICLE,
+            },
+          ],
+        },
+      }),
+      createMockRouteParams({ id: 'inv-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details?: { invalidArticleIds?: string[] } } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_CREATE_ARTICLE_INVALID')
+    expect(findCall('articles', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(findCall('invoices', 'update')).toBeUndefined()
+    expect(findCall('invoice_items', 'insert')).toBeUndefined()
   })
 })

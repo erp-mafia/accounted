@@ -318,6 +318,40 @@ export async function buildInvoiceWriteData(params: {
     }
   }
 
+  // Article linkage is a tenancy invariant: the FK on invoice_items.article_id
+  // proves the article EXISTS, not that it belongs to THIS company. FK
+  // validation is internal to Postgres and ignores RLS, and the v1 routes run
+  // on the service-role client with no RLS at all, so a body carrying another
+  // company's article UUID would otherwise persist a cross-tenant reference.
+  // Every invoice write path converges here (cookie POST/PATCH, v1 POST/PATCH,
+  // webshop, sales-order conversion, MCP update), so one scoped select covers
+  // them all. The MCP executors keep their own pre-check as the tamper gate
+  // for staged rows. Text rows never persist an article (mapped to null below).
+  const articleIds = Array.from(
+    new Set(
+      items
+        .filter((item) => item.line_type !== 'text')
+        .map((item) => item.article_id)
+        .filter((a): a is string => !!a),
+    ),
+  )
+  if (articleIds.length > 0) {
+    const { data: articleRows, error: articlesError } = await supabase
+      .from('articles')
+      .select('id')
+      .eq('company_id', companyId)
+      .in('id', articleIds)
+
+    if (articlesError) {
+      return { ok: false, dbError: articlesError }
+    }
+    const foundArticleIds = new Set((articleRows ?? []).map((a) => a.id))
+    const invalidArticleIds = articleIds.filter((a) => !foundArticleIds.has(a))
+    if (invalidArticleIds.length > 0) {
+      return { ok: false, code: 'INVOICE_CREATE_ARTICLE_INVALID', details: { invalidArticleIds } }
+    }
+  }
+
   // ROT/RUT-avdrag: validate prerequisites and compute the per-item +
   // invoice-level deduction. Computed server-side (never trusted from the
   // client) so a tampered request can't expand the 1513 receivable. Skipped
