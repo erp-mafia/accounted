@@ -1,5 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
 import { PAYMENT_VOUCHER_SOURCE_TYPES } from '@/lib/invoices/backfill-invoice-payment-rows'
+
+const log = createLogger('invoices/payment-history-gap')
 
 /**
  * What the Betalningar row on a customer invoice should say when the invoice
@@ -83,6 +86,15 @@ export async function fetchInvoicePaymentVouchers(
     .in('source_type', [...PAYMENT_VOUCHER_SOURCE_TYPES])
     .eq('status', 'posted')
     .order('entry_date', { ascending: true })
-  if (error) return null
+  if (error) {
+    // The row then reads "kunde inte hämtas" instead of a provenance; the
+    // failure itself must not stay invisible (ids and codes only, no PII).
+    log.warn('payment voucher lookup failed', {
+      invoiceId,
+      code: error.code,
+      message: error.message,
+    })
+    return null
+  }
   return (data ?? []) as PaymentVoucherRef[]
 }

@@ -1,6 +1,17 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+const { mockLoggerWarn } = vi.hoisted(() => ({ mockLoggerWarn: vi.fn() }))
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: mockLoggerWarn,
+    error: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  }),
+}))
+
 import {
   classifyPaymentHistoryGap,
   fetchInvoicePaymentVouchers,
@@ -90,6 +101,7 @@ describe('fetchInvoicePaymentVouchers', () => {
 
   beforeEach(() => {
     reset()
+    vi.clearAllMocks()
   })
 
   it('looks up posted payment vouchers keyed on the invoice, oldest first', async () => {
@@ -116,8 +128,21 @@ describe('fetchInvoicePaymentVouchers', () => {
     await expect(fetchInvoicePaymentVouchers(client, 'inv-1')).resolves.toEqual([])
   })
 
-  it('returns null, not an empty list, when the lookup fails', async () => {
-    enqueue({ data: null, error: { message: 'boom' } })
+  it('returns null, not an empty list, when the lookup fails, and logs it', async () => {
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
     await expect(fetchInvoicePaymentVouchers(client, 'inv-1')).resolves.toBeNull()
+    // The failure must not be invisible: id and code, no invoice content.
+    expect(mockLoggerWarn).toHaveBeenCalledTimes(1)
+    expect(mockLoggerWarn).toHaveBeenCalledWith('payment voucher lookup failed', {
+      invoiceId: 'inv-1',
+      code: '57014',
+      message: 'canceling statement due to statement timeout',
+    })
+  })
+
+  it('does not log when the lookup merely finds nothing', async () => {
+    enqueue({ data: [], error: null })
+    await fetchInvoicePaymentVouchers(client, 'inv-1')
+    expect(mockLoggerWarn).not.toHaveBeenCalled()
   })
 })
