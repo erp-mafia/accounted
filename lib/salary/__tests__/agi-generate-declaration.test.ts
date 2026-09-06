@@ -486,3 +486,50 @@ describe('generateAgiDeclaration: whole-krona amounts (öretal bortfaller)', () 
     )
   })
 })
+
+describe('generateAgiDeclaration: utlägg repaid with the salary (#2331)', () => {
+  // FK011 KontantErsattningUlagAG comes from sre.gross_salary, which the
+  // engine computes WITHOUT tax-free reimbursements; the only line types the
+  // builder reads are the benefit_* ones. An expense_reimbursement line must
+  // therefore leave FK011, FK001 and FK487 untouched, and never surface as a
+  // benefit field.
+  it('excludes an expense_reimbursement line from FK011 and every other IU field', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    const withUtlagg = {
+      ...REGULAR_ROW,
+      line_items: [
+        {
+          item_type: 'monthly_salary',
+          amount: 40000,
+          is_taxable: true,
+          is_avgift_basis: true,
+        },
+        {
+          item_type: 'expense_reimbursement',
+          amount: 1234.5,
+          is_taxable: false,
+          is_avgift_basis: false,
+          source_expense_claim_id: 'claim-1',
+        },
+      ],
+    }
+    enqueueHappyPath(enqueueMany, [withUtlagg])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    const iu = iuBlockFor(result.xml, '199001011234')
+    expect(iu).toContain('<gem:KontantErsattningUlagAG faltkod="011">40000</gem:KontantErsattningUlagAG>')
+    expect(iu).toContain('<gem:AvdrPrelSkatt faltkod="001">12000</gem:AvdrPrelSkatt>')
+    expect(iu).not.toContain('41234')
+    expect(iu).not.toContain('41235')
+    // No benefit field is derived from the line (FK012/FK013/FK015/FK018).
+    for (const code of ['012', '013', '015', '018']) {
+      expect(iu).not.toContain(`faltkod="${code}"`)
+    }
+    // The employer's FK487 underlag is the same as without the line.
+    expect(result.xml).toContain('faltkod="487">12568<')
+  })
+})

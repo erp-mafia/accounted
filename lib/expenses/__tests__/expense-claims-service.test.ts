@@ -529,10 +529,11 @@ describe('deleteExpenseClaim', () => {
     expect(findCall('expense_claims', 'delete')).toBeUndefined()
   })
 
-  it('lets a claim on a draft payslip go (the FK cascade takes the line with it)', async () => {
+  it('on a draft payslip removes the line first (the FK is RESTRICT), then the storno, then the claim', async () => {
     enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    enqueue({ data: null }) // salary_line_items delete
     enqueue({ data: { status: 'posted', reversed_by_id: null } })
-    enqueue({ data: null }) // delete
+    enqueue({ data: null }) // expense_claims delete
     findPayslipLineForClaimMock.mockResolvedValue({
       line_id: 'li-1',
       salary_run_id: 'run-1',
@@ -543,6 +544,27 @@ describe('deleteExpenseClaim', () => {
 
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
     expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno' })
+    expect(findCall('salary_line_items', 'delete')).toBeTruthy()
+    expect(findCall('salary_line_items', 'eq')).toEqual(['id', 'li-1'])
+    expect(findCall('expense_claims', 'delete')).toBeTruthy()
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1')
+  })
+
+  it('stops before the storno when the draft line cannot be removed', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    enqueue({ data: null, error: { message: 'permission denied' } }) // salary_line_items delete
+    findPayslipLineForClaimMock.mockResolvedValue({
+      line_id: 'li-1',
+      salary_run_id: 'run-1',
+      run_status: 'draft',
+      period_year: 2026,
+      period_month: 6,
+    })
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toEqual({ ok: false, code: 'DELETE_FAILED', detail: 'permission denied' })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+    expect(findCall('expense_claims', 'delete')).toBeUndefined()
   })
 
   it('reverses the verifikat and removes the row', async () => {

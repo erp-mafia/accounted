@@ -6,8 +6,9 @@ import { seedCompany, insertAuthUser, insertCompanyMember, insertPostedJournalEn
 
 // pg-real coverage for 20260906210300_utlagg_via_lon (+ 20260906210301):
 //   - the expense_reimbursement item type on salary_line_items
-//   - salary_line_items.source_expense_claim_id: tenant-scoped FK, cascade on
-//     claim delete, one payslip line per claim
+//   - salary_line_items.source_expense_claim_id: tenant-scoped FK, ON DELETE
+//     RESTRICT (a referenced claim cannot be deleted by any path), one
+//     payslip line per claim
 //   - settle_expense_claims_via_salary_run: the payroll-side twin of
 //     create_expense_payout_batch (same batch table, same status flip, no
 //     verifikat of its own), idempotent, refuses anything not open
@@ -198,7 +199,25 @@ describe('salary_line_items.source_expense_claim_id', () => {
     })
   })
 
-  it('drops the payslip line when its claim is deleted (cascade)', async () => {
+  it('refuses to delete a claim that a booked run\'s payslip line references (RESTRICT, 23503)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const employeeId = await insertEmployee(companyId, userId)
+    const claimId = await insertClaim(companyId, userId, employeeId, 100)
+    const runId = await insertRun(companyId, userId, 'paid')
+    const sreId = await insertSre(runId, employeeId, companyId)
+    const lineId = await insertLine(sreId, companyId, { claimId, amount: 100 })
+    await bookRun({ runId, companyId, userId, fiscalPeriodId, amount: 100 })
+
+    // Superuser over the pool: no RLS, no service in front. The FK alone
+    // must hold, or a script could pull the line from under the verifikat.
+    await expect(
+      getPool().query(`DELETE FROM public.expense_claims WHERE id = $1`, [claimId]),
+    ).rejects.toMatchObject({ code: '23503' })
+    const { rows } = await getPool().query(`SELECT id FROM public.salary_line_items WHERE id = $1`, [lineId])
+    expect(rows).toHaveLength(1)
+  })
+
+  it('refuses the delete on a draft run too; the app path removes the line first, then the claim', async () => {
     const { userId, companyId } = await seedCompany()
     const employeeId = await insertEmployee(companyId, userId)
     const claimId = await insertClaim(companyId, userId, employeeId, 100)
@@ -206,8 +225,14 @@ describe('salary_line_items.source_expense_claim_id', () => {
     const sreId = await insertSre(runId, employeeId, companyId)
     const lineId = await insertLine(sreId, companyId, { claimId, amount: 100 })
 
+    await expect(
+      getPool().query(`DELETE FROM public.expense_claims WHERE id = $1`, [claimId]),
+    ).rejects.toMatchObject({ code: '23503' })
+
+    // deleteExpenseClaim's draft order: line, then (storno, then) claim.
+    await getPool().query(`DELETE FROM public.salary_line_items WHERE id = $1 AND company_id = $2`, [lineId, companyId])
     await getPool().query(`DELETE FROM public.expense_claims WHERE id = $1`, [claimId])
-    const { rows } = await getPool().query(`SELECT id FROM public.salary_line_items WHERE id = $1`, [lineId])
+    const { rows } = await getPool().query(`SELECT id FROM public.expense_claims WHERE id = $1`, [claimId])
     expect(rows).toHaveLength(0)
   })
 })

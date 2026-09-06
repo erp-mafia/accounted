@@ -462,9 +462,12 @@ export async function deleteExpenseClaim(
   if (!claim) return { ok: false, code: 'NOT_FOUND' }
   if (claim.status === 'paid') return { ok: false, code: 'ALREADY_PAID' }
 
-  // Scheduled on a payslip that has left draft (#2331): the run's stored
-  // totals include the line, and the FK cascade would drop it under a
-  // calculated run. On a draft run the cascade is the right outcome.
+  // Scheduled on a payslip (#2331). The FK is ON DELETE RESTRICT, so the
+  // database refuses the delete while a line references the claim. Once the
+  // run has left draft its stored totals include the line: refuse. On a draft
+  // run the line is removed first (before the storno, so a failure here
+  // leaves nothing half-done); the claim goes back to Att göra and can be
+  // re-added.
   const payslip = await findPayslipLineForClaim(supabase, companyId, claimId)
   if (payslip && payslip.run_status !== 'draft') {
     return {
@@ -472,6 +475,14 @@ export async function deleteExpenseClaim(
       code: 'ON_PAYSLIP',
       detail: `claim ${claimId} is on salary run ${payslip.salary_run_id} (${payslip.run_status})`,
     }
+  }
+  if (payslip) {
+    const { error: lineError } = await supabase
+      .from('salary_line_items')
+      .delete()
+      .eq('id', payslip.line_id)
+      .eq('company_id', companyId)
+    if (lineError) return { ok: false, code: 'DELETE_FAILED', detail: lineError.message }
   }
 
   if (!claim.journal_entry_id) {

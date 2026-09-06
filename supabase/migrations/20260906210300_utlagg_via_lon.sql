@@ -7,10 +7,13 @@
 --    moms were booked when the claim was registered, so the salary verifikat
 --    only relieves the liability, never a 7xxx cost.
 -- 2. salary_line_items.source_expense_claim_id links a payslip line to the
---    claim it repays, so the booking flips exactly those claims. Cascade: a
---    claim stornoed while its line sits on a draft payslip takes the line with
---    it (the service refuses the storno once the run has left draft). The
---    partial unique index keeps a claim on at most one payslip line at a time.
+--    claim it repays, so the booking flips exactly those claims. ON DELETE
+--    RESTRICT: a claim that a payslip line still references cannot be deleted
+--    by anyone (PostgREST, a script, a future service), so a booked run's line
+--    can never vanish from under its posted verifikat. The app path
+--    (deleteExpenseClaim) removes the line first on a draft run and refuses
+--    once the run has left draft. The partial unique index keeps a claim on
+--    at most one payslip line at a time.
 -- 3. settle_expense_claims_via_salary_run is the payroll-side twin of
 --    create_expense_payout_batch: same batch table, same status flip, same
 --    row locking, but no verifikat of its own. The batch points at the booked
@@ -76,7 +79,7 @@ ALTER TABLE public.salary_line_items
 ALTER TABLE public.salary_line_items
   ADD CONSTRAINT salary_line_items_source_expense_claim_fkey
   FOREIGN KEY (source_expense_claim_id, company_id)
-  REFERENCES public.expense_claims(id, company_id) ON DELETE CASCADE;
+  REFERENCES public.expense_claims(id, company_id) ON DELETE RESTRICT;
 
 CREATE UNIQUE INDEX salary_line_items_source_expense_claim_uniq
   ON public.salary_line_items (source_expense_claim_id)
