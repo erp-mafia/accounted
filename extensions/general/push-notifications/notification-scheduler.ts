@@ -332,6 +332,35 @@ export async function sendMissingUnderlagNotifications(
     }
   }
 
+  // BFL 5 kap 7 § hänvisning, customer side (#2298): an entry a register
+  // invoice points at (registration link or an invoice_payments row, e.g. a
+  // SIE-imported sale matched to its invoice afterwards) is backed by that
+  // invoice. Global reads like the ones above: this cron spans every company.
+  // Mirrors the verifikat_without_documents RPC's customer arm.
+  const invoiceLinks = await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
+    supabase
+      .from('invoices')
+      .select('journal_entry_id')
+      .not('journal_entry_id', 'is', null)
+      .order('id')
+      .range(from, to)
+  )
+  for (const inv of invoiceLinks) {
+    if (inv.journal_entry_id) entriesWithDocs.add(inv.journal_entry_id)
+  }
+
+  const paymentLinks = await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
+    supabase
+      .from('invoice_payments')
+      .select('journal_entry_id')
+      .not('journal_entry_id', 'is', null)
+      .order('id')
+      .range(from, to)
+  )
+  for (const payment of paymentLinks) {
+    if (payment.journal_entry_id) entriesWithDocs.add(payment.journal_entry_id)
+  }
+
   // Entries the user has explicitly flagged as "no underlag required" (bank
   // fees, interest, internal transfers, salary, tax payments). Treated as
   // satisfied so we don't nag the user about them.

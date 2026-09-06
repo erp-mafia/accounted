@@ -33,9 +33,11 @@ beforeEach(() => {
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
 })
 
-// Queue order mirrors the route's Promise.all: direct docs, supplier_invoices
-// references, supplier_invoice_payments references. The `document` embed
-// carries the anchor state (journal_entry_id) of the SI's retained doc.
+// Queue order mirrors the route: the Promise.all (direct docs, supplier_invoices
+// references, supplier_invoice_payments references), then the customer-invoice
+// resolver (invoices by journal_entry_id, invoice_payments by journal_entry_id).
+// The `document` embed carries the anchor state (journal_entry_id) of the SI's
+// retained doc.
 function enqueueAll(opts: {
   direct?: Array<{ id: string; journal_entry_id: string }>
   si?: Array<{
@@ -51,10 +53,14 @@ function enqueueAll(opts: {
       document: { journal_entry_id: string | null } | null
     } | null
   }>
+  invoices?: Array<{ id: string; journal_entry_id: string | null }>
+  payments?: Array<{ id: string; invoice_id: string | null; journal_entry_id: string | null }>
 }) {
   enqueue({ data: opts.direct ?? [], error: null })
   enqueue({ data: opts.si ?? [], error: null })
   enqueue({ data: opts.sip ?? [], error: null })
+  enqueue({ data: opts.invoices ?? [], error: null })
+  enqueue({ data: opts.payments ?? [], error: null })
 }
 
 describe('GET /api/documents/counts', () => {
@@ -188,6 +194,47 @@ describe('GET /api/documents/counts', () => {
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
     const res = await GET(makeReq([JE_A]))
+    expect((await parseJsonResponse(res)).status).toBe(500)
+  })
+
+  it('reports customer invoices pointing at an entry apart from document counts (#2298)', async () => {
+    // JE_A: the invoice register links it directly AND a payment row points
+    // at it (one invoice counted once, plus a second invoice via payment).
+    // JE_B: only a payment row (a SIE-imported voucher matched to an invoice).
+    // JE_C: nothing. No document anywhere: `data` stays empty.
+    enqueueAll({
+      invoices: [{ id: 'inv-1', journal_entry_id: JE_A }],
+      payments: [
+        { id: 'pay-1', invoice_id: 'inv-1', journal_entry_id: JE_A },
+        { id: 'pay-2', invoice_id: 'inv-2', journal_entry_id: JE_A },
+        { id: 'pay-3', invoice_id: 'inv-3', journal_entry_id: JE_B },
+      ],
+    })
+    const res = await GET(makeReq([JE_A, JE_B, JE_C]), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      data: Record<string, number>
+      invoice_references: Record<string, number>
+    }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual({})
+    expect(body.invoice_references).toEqual({ [JE_A]: 2, [JE_B]: 1 })
+  })
+
+  it('never returns invoice references for entries the caller did not ask about', async () => {
+    enqueueAll({
+      payments: [{ id: 'pay-1', invoice_id: 'inv-1', journal_entry_id: JE_C }],
+    })
+    const res = await GET(makeReq([JE_A]), { params: Promise.resolve({}) })
+    const { body } = await parseJsonResponse<{ invoice_references: Record<string, number> }>(res)
+    expect(body.invoice_references).toEqual({})
+  })
+
+  it('returns 500 when the invoice-reference lookup fails', async () => {
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: null, error: { message: 'boom' } }) // invoices by journal_entry_id
+    const res = await GET(makeReq([JE_A]), { params: Promise.resolve({}) })
     expect((await parseJsonResponse(res)).status).toBe(500)
   })
 })

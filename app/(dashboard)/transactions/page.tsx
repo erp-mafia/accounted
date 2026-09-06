@@ -84,6 +84,7 @@ import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
+import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
 import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
 import type { FiscalPeriod } from '@/types'
 
@@ -1248,7 +1249,8 @@ export default function TransactionsPage() {
   // current-version document, which are covered by a supplier invoice's
   // retained document (BFL 5 kap 7 § hänvisning: registration/payment FK or a
   // supplier_invoice_payments row: mirrors the verifikat_without_documents
-  // RPC), and which are exempted via journal_entry_no_doc_required.
+  // RPC), and which are exempted via journal_entry_no_doc_required; then the
+  // customer-invoice hänvisning (getInvoiceReferencesForJournalEntries, #2298).
   // Incremental: only fetches JE ids not yet requested, so
   // loadMoreTransactions pages are covered without refetching.
   // Soft-fails to "no badges" on error.
@@ -1342,6 +1344,15 @@ export default function TransactionsPage() {
             jeIdsWithDocs.add(sip.journal_entry_id)
           }
         }
+        // Customer invoices pointing at the JE (registration link or payment
+        // row) back it under BFL 5 kap 7 §: same soft-fail as the reads above.
+        let invoiceRefs: Map<string, string[]>
+        try {
+          invoiceRefs = await getInvoiceReferencesForJournalEntries(supabase, companyId, chunk)
+        } catch {
+          break
+        }
+        for (const journalEntryId of invoiceRefs.keys()) jeIdsWithDocs.add(journalEntryId)
         const exemptIds = new Set(
           (exemptRes.data ?? []).map((e) => e.journal_entry_id as string),
         )

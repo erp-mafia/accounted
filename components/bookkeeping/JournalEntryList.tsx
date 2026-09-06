@@ -246,6 +246,11 @@ export default function JournalEntryList({
   const [count, setCount] = useState(0)
   const [page, setPage] = useState(0)
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
+  // Entries a customer invoice points at (registration link or payment row):
+  // backed by that invoice under BFL 5 kap 7 § (hänvisning), the same verdict
+  // the dashboard badge (verifikat_without_documents) and the verifikat page
+  // reach. Not a document, so no paperclip; but no "Underlag saknas" either.
+  const [invoiceReferenced, setInvoiceReferenced] = useState<Set<string>>(new Set())
   // Counts arrive in a second request, after the rows are already painted.
   // Until they land, every row looks like it has no underlag, so rendering the
   // chip eagerly flashes a false "Saknar underlag" compliance warning on every
@@ -353,6 +358,7 @@ export default function JournalEntryList({
   const fetchAttachmentCounts = useCallback(async (entryIds: string[], isCurrent: () => boolean = () => true) => {
     if (entryIds.length === 0) {
       setAttachmentCounts({})
+      setInvoiceReferenced(new Set())
       setAttachmentCountsLoaded(true)
       return
     }
@@ -370,18 +376,23 @@ export default function JournalEntryList({
       batches.push(entryIds.slice(i, i + COUNTS_BATCH_SIZE))
     }
     try {
+      const empty = { counts: {} as Record<string, number>, referenced: [] as string[] }
       const results = await Promise.all(
         batches.map(async (batch) => {
           const res = await fetch(
             `/api/documents/counts?journal_entry_ids=${batch.join(',')}`
           )
-          if (!res.ok) return {} as Record<string, number>
-          const { data } = await res.json()
-          return (data || {}) as Record<string, number>
+          if (!res.ok) return empty
+          const { data, invoice_references } = await res.json()
+          return {
+            counts: (data || {}) as Record<string, number>,
+            referenced: Object.keys((invoice_references || {}) as Record<string, number>),
+          }
         })
       )
       if (!isCurrent()) return
-      setAttachmentCounts(Object.assign({}, ...results))
+      setAttachmentCounts(Object.assign({}, ...results.map((r) => r.counts)))
+      setInvoiceReferenced(new Set(results.flatMap((r) => r.referenced)))
     } catch {
       // Non-critical: silently ignore
     } finally {
@@ -810,8 +821,9 @@ export default function JournalEntryList({
       entry.status === 'posted' &&
       NEEDS_ATTACHMENT.has(entry.source_type) &&
       !attachmentCounts[entry.id] &&
+      !invoiceReferenced.has(entry.id) &&
       !noDocRequired.has(entry.id),
-    [attachmentCounts, noDocRequired],
+    [attachmentCounts, invoiceReferenced, noDocRequired],
   )
 
   const handleBatchExempt = async () => {
@@ -1631,7 +1643,7 @@ export default function JournalEntryList({
                               <span className="text-xs tabular-nums">{attachmentCounts[entry.id]}</span>
                             </button>
                           ) : (
-                            attachmentCountsLoaded && NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
+                            attachmentCountsLoaded && NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && !invoiceReferenced.has(entry.id) && (
                               noDocRequired.has(entry.id) ? (
                                 <span title={t('no_doc_required_indicator_tooltip')}>
                                   <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />

@@ -5,8 +5,9 @@ import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
  *
  * - 'has'    : the verifikation has at least one current-version document,
  *               or is referenced by a supplier invoice whose source document
- *               is retained (BFL 5 kap 7 §: hänvisning till underlag);
- *               callers merge both kinds of ids into jeIdsWithDocs
+ *               is retained, or a customer invoice points at it (BFL 5 kap
+ *               7 §: hänvisning till underlag); callers merge all three kinds
+ *               of ids into jeIdsWithDocs
  * - 'missing': the verifikation's source type requires underlag (BFL 5 kap
  *               7§), has none, and is not exempted via journal_entry_no_doc_required
  * - 'none'   : no statement either way (system-generated source types,

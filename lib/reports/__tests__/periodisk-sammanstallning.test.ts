@@ -99,55 +99,69 @@ interface InvoiceFx {
   } | null
 }
 
+interface LineFx {
+  account_number: string
+  debit_amount: number
+  credit_amount: number
+}
+
 // Recent validation so VIES_UNVALIDATED warnings don't fire by default.
 const RECENT = new Date().toISOString()
 
-// The generator fetches lines via the two-step entry-lines helper
-// (lib/bookkeeping/entry-lines.ts): journal_entries first, then
-// journal_entry_lines by entry id with the parent reattached under
-// `journal_entries`. Each fixture invoice gets one entry (je-<sourceId>).
+// The generator fetches the period's entries with their PS-account lines
+// embedded (journal_entries + journal_entry_lines!inner, one page here), then
+// resolves each entry's invoice: the engine's own entries by source_id,
+// everything else through getInvoiceReferencesForJournalEntries (invoices by
+// journal_entry_id, then invoice_payments), and finally loads the invoices
+// with their customer. Queue order per test:
+//   1. journal_entries page (with embedded lines)
+//   2. invoices by journal_entry_id   only when a non-engine entry exists
+//   3. invoice_payments               only when a non-engine entry exists
+//   4. invoices by id                 only when some invoice id resolved
 function je(sourceId: string) {
   return `je-${sourceId}`
 }
 
-function entryEU(sourceId: string) {
+function entryEU(sourceId: string, lines: LineFx[] = []) {
   return {
     id: je(sourceId),
-    company_id: 'c1',
     entry_date: '2025-05-15',
     status: 'posted',
     source_type: 'invoice_created',
     source_id: sourceId,
+    journal_entry_lines: lines,
   }
 }
 
-function entryCredit(sourceId: string) {
+function entryCredit(sourceId: string, lines: LineFx[] = []) {
   return {
     id: je(sourceId),
-    company_id: 'c1',
     entry_date: '2025-05-20',
     status: 'posted',
     source_type: 'credit_note',
     source_id: sourceId,
+    journal_entry_lines: lines,
   }
 }
 
-function lineEU(account: string, credit: number, sourceId: string) {
+/** A verifikat that did not come from the invoice engine (SIE import, manual). */
+function entryOther(id: string, sourceType: string, lines: LineFx[] = []) {
   return {
-    account_number: account,
-    debit_amount: 0,
-    credit_amount: credit,
-    journal_entry_id: je(sourceId),
+    id,
+    entry_date: '2025-05-15',
+    status: 'posted',
+    source_type: sourceType,
+    source_id: null as string | null,
+    journal_entry_lines: lines,
   }
 }
 
-function lineCredit(account: string, debit: number, sourceId: string) {
-  return {
-    account_number: account,
-    debit_amount: debit,
-    credit_amount: 0,
-    journal_entry_id: je(sourceId),
-  }
+function lineEU(account: string, credit: number): LineFx {
+  return { account_number: account, debit_amount: 0, credit_amount: credit }
+}
+
+function lineCredit(account: string, debit: number): LineFx {
+  return { account_number: account, debit_amount: debit, credit_amount: 0 }
 }
 
 function invDE(id = 'inv-de', customer = 'cust-de', name = 'DE Customer', vat = 'DE123456789'): InvoiceFx {
@@ -166,7 +180,7 @@ function invDE(id = 'inv-de', customer = 'cust-de', name = 'DE Customer', vat = 
 
 describe('generatePeriodiskSammanstallning', () => {
   it('empty period returns zero rows and zero warnings', async () => {
-    // journal_entries: none match → the line fetch is skipped entirely.
+    // journal_entries: none match → every lookup is skipped.
     results = [{ data: [], error: null }]
 
     const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
@@ -176,13 +190,12 @@ describe('generatePeriodiskSammanstallning', () => {
     expect(report.totals.rowCount).toBe(0)
     expect(report.totals.grand).toBe(0)
     expect(report.period.label).toBe('Maj 2025')
+    expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
   it('single EU service sale → 1 row, type 3 only', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv-de')], error: null },
-      { data: [lineEU('3308', 10000, 'inv-de')], error: null },
+      { data: [entryEU('inv-de', [lineEU('3308', 10000)])], error: null },
       { data: [invDE()], error: null },
     ]
 
@@ -198,17 +211,17 @@ describe('generatePeriodiskSammanstallning', () => {
     })
     expect(report.totals).toMatchObject({ services: 10000, goods: 0, triangulation: 0, grand: 10000, rowCount: 1 })
     expect(report.warnings).toEqual([])
+    // Engine entries resolve by source_id: no invoice-link round trips.
+    expect(supabase.from).toHaveBeenCalledTimes(2)
   })
 
   it('aggregates multiple invoices to same customer', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv1'), entryEU('inv2'), entryEU('inv3')], error: null },
       {
         data: [
-          lineEU('3308', 4000, 'inv1'),
-          lineEU('3308', 3500, 'inv2'),
-          lineEU('3308', 2500, 'inv3'),
+          entryEU('inv1', [lineEU('3308', 4000)]),
+          entryEU('inv2', [lineEU('3308', 3500)]),
+          entryEU('inv3', [lineEU('3308', 2500)]),
         ],
         error: null,
       },
@@ -230,12 +243,10 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('one customer with both services and goods → 1 row with both filled', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv1'), entryEU('inv2')], error: null },
       {
         data: [
-          lineEU('3308', 7000, 'inv1'),
-          lineEU('3108', 5000, 'inv2'),
+          entryEU('inv1', [lineEU('3308', 7000)]),
+          entryEU('inv2', [lineEU('3108', 5000)]),
         ],
         error: null,
       },
@@ -253,12 +264,10 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('credit invoice nets against original in same period', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv1'), entryCredit('cn1')], error: null },
       {
         data: [
-          lineEU('3308', 10000, 'inv1'),
-          lineCredit('3308', 3000, 'cn1'),
+          entryEU('inv1', [lineEU('3308', 10000)]),
+          entryCredit('cn1', [lineCredit('3308', 3000)]),
         ],
         error: null,
       },
@@ -276,12 +285,10 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('credit fully cancels → row excluded with ZERO_NET_EXCLUDED warning', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv1'), entryCredit('cn1')], error: null },
       {
         data: [
-          lineEU('3308', 10000, 'inv1'),
-          lineCredit('3308', 10000, 'cn1'),
+          entryEU('inv1', [lineEU('3308', 10000)]),
+          entryCredit('cn1', [lineCredit('3308', 10000)]),
         ],
         error: null,
       },
@@ -296,9 +303,7 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('customer missing country → MISSING_COUNTRY error and row blocked', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv1')], error: null },
-      { data: [lineEU('3308', 5000, 'inv1')], error: null },
+      { data: [entryEU('inv1', [lineEU('3308', 5000)])], error: null },
       {
         data: [{
           id: 'inv1',
@@ -316,9 +321,7 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('customer missing vat_number → MISSING_VAT_NUMBER error', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv1')], error: null },
-      { data: [lineEU('3308', 5000, 'inv1')], error: null },
+      { data: [entryEU('inv1', [lineEU('3308', 5000)])], error: null },
       {
         data: [{
           id: 'inv1',
@@ -336,9 +339,7 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('VAT prefix mismatch surfaces COUNTRY_PREFIX_MISMATCH warning', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv1')], error: null },
-      { data: [lineEU('3308', 5000, 'inv1')], error: null },
+      { data: [entryEU('inv1', [lineEU('3308', 5000)])], error: null },
       {
         data: [{
           id: 'inv1',
@@ -356,9 +357,7 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('non-EU country on EU account → NON_EU_COUNTRY_ON_EU_ACCOUNT and excluded from CSV', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv1')], error: null },
-      { data: [lineEU('3308', 5000, 'inv1')], error: null },
+      { data: [entryEU('inv1', [lineEU('3308', 5000)])], error: null },
       {
         data: [{
           id: 'inv1',
@@ -376,9 +375,7 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('Greek customer → country code emitted as EL', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv1')], error: null },
-      { data: [lineEU('3308', 4200, 'inv1')], error: null },
+      { data: [entryEU('inv1', [lineEU('3308', 4200)])], error: null },
       {
         data: [{
           id: 'inv1',
@@ -395,9 +392,7 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('goods sold in quarterly period → GOODS_SOLD_WITH_QUARTERLY_PERIOD warning', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv1')], error: null },
-      { data: [lineEU('3108', 9000, 'inv1')], error: null },
+      { data: [entryEU('inv1', [lineEU('3108', 9000)])], error: null },
       { data: [{ ...invDE('inv1') }], error: null },
     ]
 
@@ -408,13 +403,11 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('sorts rows by country then vat_number', async () => {
     results = [
-      // journal_entries page for the two-step entry-lines fetch
-      { data: [entryEU('inv-fr'), entryEU('inv-de'), entryEU('inv-at')], error: null },
       {
         data: [
-          lineEU('3308', 1000, 'inv-fr'),
-          lineEU('3308', 2000, 'inv-de'),
-          lineEU('3308', 3000, 'inv-at'),
+          entryEU('inv-fr', [lineEU('3308', 1000)]),
+          entryEU('inv-de', [lineEU('3308', 2000)]),
+          entryEU('inv-at', [lineEU('3308', 3000)]),
         ],
         error: null,
       },
@@ -433,10 +426,136 @@ describe('generatePeriodiskSammanstallning', () => {
     expect(report.rows.map(r => r.country)).toEqual(['AT', 'DE', 'FR'])
   })
 
+  it('an engine entry whose invoice is gone → CUSTOMER_NOT_FOUND error (a data defect, never silence)', async () => {
+    results = [
+      { data: [entryEU('inv-gone', [lineEU('3308', 5000)])], error: null },
+      { data: [], error: null }, // invoices by id: nothing
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.warnings.some(w => w.code === 'CUSTOMER_NOT_FOUND' && w.level === 'error')).toBe(true)
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0].hasBlockingIssue).toBe(true)
+  })
+
   it('rejects yearly period type', async () => {
     await expect(
       generatePeriodiskSammanstallning(supabase, 'c1', 'yearly' as 'monthly', 2025, 1),
     ).rejects.toThrow()
+  })
+})
+
+// ============================================================
+// Invoice links beyond the engine's own source columns (#2298)
+// ============================================================
+
+describe('invoice links beyond the engine source columns (#2298)', () => {
+  it('files a SIE-imported sale matched to its invoice through invoice_payments', async () => {
+    // The reported case: the importer wrote debit 1930 / credit 3308 with
+    // source_type 'import', the user created the invoice in Accounted and
+    // matched it to the imported verifikat (link_invoice_to_voucher). The link
+    // lives on invoice_payments only; the entry keeps its source columns.
+    results = [
+      { data: [entryOther('je-imp', 'import', [lineEU('3308', 12000)])], error: null },
+      { data: [], error: null }, // invoices by journal_entry_id: none
+      { data: [{ id: 'pay-1', invoice_id: 'inv-de', journal_entry_id: 'je-imp' }], error: null },
+      { data: [invDE()], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.warnings).toEqual([])
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0]).toMatchObject({ country: 'DE', vatNumber: '123456789', services: 12000 })
+    expect(report.totals.services).toBe(12000)
+  })
+
+  it('files a manual verifikat the invoice register points at through invoices.journal_entry_id', async () => {
+    results = [
+      { data: [entryOther('je-man', 'manual', [lineEU('3308', 8000)])], error: null },
+      { data: [{ id: 'inv-de', journal_entry_id: 'je-man' }], error: null },
+      { data: [], error: null }, // invoice_payments: none
+      { data: [invDE()], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.warnings).toEqual([])
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0]).toMatchObject({ country: 'DE', services: 8000 })
+  })
+
+  it('files a kontantmetod inbetalning (invoice_cash_payment) by its source_id', async () => {
+    // Cash-method companies book revenue at payment, so this is the only
+    // entry that ever carries their 3308 postings.
+    const entry = { ...entryOther('je-cash', 'invoice_cash_payment', [lineEU('3308', 6000)]), source_id: 'inv-de' }
+    results = [
+      { data: [entry], error: null },
+      { data: [invDE()], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.warnings).toEqual([])
+    expect(report.rows[0]).toMatchObject({ country: 'DE', services: 6000 })
+    expect(supabase.from).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves an imported 3308 posting no invoice points at out of the filing, silently and without an invoice lookup', async () => {
+    results = [
+      { data: [entryOther('je-loose', 'import', [lineEU('3308', 9000)])], error: null },
+      { data: [], error: null }, // invoices by journal_entry_id: none
+      { data: [], error: null }, // invoice_payments: none
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.rows).toEqual([])
+    expect(report.warnings).toEqual([])
+    // No invoice ids resolved → the invoices-by-id lookup is skipped.
+    expect(supabase.from).toHaveBeenCalledTimes(3)
+  })
+
+  it('aggregates an engine invoice and a linked import to the same customer into one row', async () => {
+    results = [
+      {
+        data: [
+          entryEU('inv-a', [lineEU('3308', 4000)]),
+          entryOther('je-imp', 'import', [lineEU('3308', 6000)]),
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // invoices by journal_entry_id
+      { data: [{ id: 'pay-1', invoice_id: 'inv-b', journal_entry_id: 'je-imp' }], error: null },
+      { data: [invDE('inv-a'), invDE('inv-b')], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0].services).toBe(10000)
+    expect(report.warnings).toEqual([])
+  })
+
+  it('does not double count an entry the engine tagged AND a payment row points at', async () => {
+    // invoice_cash_payment entries carry source_id = invoice AND an
+    // invoice_payments row: one posting, one attribution.
+    const entry = { ...entryOther('je-cash', 'invoice_cash_payment', [lineEU('3308', 6000)]), source_id: 'inv-de' }
+    results = [
+      { data: [entry, entryOther('je-imp', 'import', [lineEU('3308', 1000)])], error: null },
+      { data: [], error: null },
+      { data: [
+        { id: 'pay-1', invoice_id: 'inv-de', journal_entry_id: 'je-cash' },
+        { id: 'pay-2', invoice_id: 'inv-de', journal_entry_id: 'je-imp' },
+      ], error: null },
+      { data: [invDE()], error: null },
+    ]
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0].services).toBe(7000)
   })
 })
 
@@ -459,8 +578,7 @@ describe('legacy country names on customers (#2028)', () => {
     const legacy = invDE()
     legacy.customer!.country = 'Germany'
     results = [
-      { data: [entryEU('inv-de')], error: null },
-      { data: [lineEU('3308', 15000, 'inv-de')], error: null },
+      { data: [entryEU('inv-de', [lineEU('3308', 15000)])], error: null },
       { data: [legacy], error: null },
     ]
 
@@ -475,8 +593,7 @@ describe('legacy country names on customers (#2028)', () => {
     const legacy = invDE()
     legacy.customer!.country = 'Atlantis'
     results = [
-      { data: [entryEU('inv-de')], error: null },
-      { data: [lineEU('3308', 15000, 'inv-de')], error: null },
+      { data: [entryEU('inv-de', [lineEU('3308', 15000)])], error: null },
       { data: [legacy], error: null },
     ]
 
