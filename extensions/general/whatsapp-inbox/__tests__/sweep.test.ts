@@ -243,3 +243,78 @@ describe('runSweep', () => {
     expect(patch.context.pin_source).toBeUndefined()
   })
 })
+
+describe('runSweep: orphaned parked rows (#2062)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    processMock.mockResolvedValue({ kind: 'media_processed', conversationId: 'conv-1' })
+    finalizeMock.mockResolvedValue(undefined)
+  })
+
+  function enqueuePassesOneToFive(enqueue: (r: { data?: unknown; count?: number | null }) => void) {
+    enqueue({ data: [] }) // stuck received
+    enqueue({ data: [] }) // stuck processing
+    enqueue({ data: [] }) // stale pending_ack
+    enqueue({ data: [] }) // unacked re-arm
+    enqueue({ data: [] }) // TTL scan
+    enqueue({ data: [] }) // pin scan
+    enqueue({ count: 0 }) // outbound failures
+  }
+
+  it('re-opens parked rows whose conversation has no open company question and processes them', async () => {
+    const { supabase, enqueue, findCalls, calls } = createQueuedMockSupabase()
+    enqueuePassesOneToFive(enqueue)
+    enqueue({
+      data: [
+        { conversation_id: 'conv-orphan', conversation: { context: {} } }, // options gone: orphan
+        { conversation_id: 'conv-orphan', conversation: { context: {} } },
+        {
+          conversation_id: 'conv-open',
+          conversation: { context: { company_options: [{ id: 'company-1', name: 'A AB' }] } },
+        }, // question still open: leave it
+      ],
+    }) // orphan scan
+    enqueue({ data: [] }) // drain conv-orphan: expiry stamp
+    enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // drain conv-orphan: reopen
+
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+
+    expect(summary.reopenedOrphans).toBe(2)
+    expect(processMock).toHaveBeenCalledWith(supabase, 'stg-1')
+    expect(processMock).toHaveBeenCalledWith(supabase, 'stg-2')
+    // Only the orphaned conversation was drained.
+    const drainedConversations = findCalls('whatsapp_messages', 'eq')
+      .filter((args) => args[0] === 'conversation_id')
+      .map((args) => args[1])
+    expect(drainedConversations).toEqual(['conv-orphan', 'conv-orphan'])
+    // The scan keys on the staged marker and an age guard.
+    expect(
+      calls.some(
+        (c) =>
+          c.table === 'whatsapp_messages' &&
+          c.method === 'eq' &&
+          c.args[0] === 'error_message' &&
+          c.args[1] === STAGED_AWAITING_COMPANY,
+      ),
+    ).toBe(true)
+    expect(calls.some((c) => c.method === 'lt' && c.args[0] === 'created_at')).toBe(true)
+  })
+
+  it('is a no-op when every parked row still has its question open', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePassesOneToFive(enqueue)
+    enqueue({
+      data: [
+        {
+          conversation_id: 'conv-open',
+          conversation: { context: { company_options: [{ id: 'company-1', name: 'A AB' }] } },
+        },
+      ],
+    })
+
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+    expect(summary.reopenedOrphans).toBe(0)
+    expect(processMock).not.toHaveBeenCalled()
+    expect(findCalls('whatsapp_messages', 'update')).toHaveLength(0)
+  })
+})
