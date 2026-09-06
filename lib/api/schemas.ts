@@ -4248,6 +4248,16 @@ export const PartySearchRegistryQuerySchema = z.object({
   q: z.string().max(120).optional(),
 })
 
+/**
+ * GET /api/parties/registry: the org number a customer or supplier form is
+ * being filled for. Shape, check digit and the legal-person rule are one
+ * function (registryLookupKey in lib/parties/registry-form-fill), so the
+ * form and the route cannot disagree about what may be looked up.
+ */
+export const PartyRegistryLookupQuerySchema = z.object({
+  org_number: z.string().trim().min(1).max(20),
+})
+
 export const PartyUndoMergeSchema = z.object({
   decisionId: uuid,
 })

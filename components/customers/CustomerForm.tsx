@@ -26,6 +26,9 @@ import {
   isMaskedPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
 import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import { registryFormFill, type RegistryFormField } from '@/lib/parties/registry-form-fill'
+import { useRegistryAutofill } from '@/components/parties/use-registry-autofill'
+import { RegistryAutofillNote } from '@/components/parties/RegistryAutofillNote'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
   checkCountryConsistency,
@@ -33,6 +36,14 @@ import {
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
 import type { CreateCustomerInput } from '@/types'
+
+/**
+ * What the register may fill on a Swedish company's org number. No VAT
+ * number: the form shows no VAT field for a Swedish customer, and nothing
+ * lands in a field the person cannot see (the row gets it from "Hämta
+ * uppgifter" on the customer page, with provenance).
+ */
+const REGISTRY_FIELDS: readonly RegistryFormField[] = ['name', 'email', 'phone', 'address_line1', 'address_line2', 'postal_code', 'city']
 
 interface CustomerFormProps {
   onSubmit: (data: CreateCustomerInput) => Promise<void>
@@ -157,6 +168,8 @@ export default function CustomerForm({
     handleSubmit,
     watch,
     control,
+    getValues,
+    setValue,
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -170,6 +183,7 @@ export default function CustomerForm({
       invoice_email_cc_addresses: initialData?.invoice_email_cc_addresses?.join('\n') ?? '',
       invoice_email_bcc_addresses: initialData?.invoice_email_bcc_addresses?.join('\n') ?? '',
       address_line1: initialData?.address_line1 || '',
+      address_line2: initialData?.address_line2 || '',
       postal_code: initialData?.postal_code || '',
       city: initialData?.city || '',
       country: normalizeCountryCode(initialData?.country) ?? initialData?.country ?? 'SE',
@@ -185,6 +199,38 @@ export default function CustomerForm({
 
   const customerType = watch('customer_type')
   const vatNumber = watch('vat_number')
+  const orgNumber = watch('org_number')
+  // A complete org number of a Swedish company is looked up in SCB's
+  // register once, and the fields it knows are filled where nothing has
+  // been typed (issue #2218). Never for a privatperson's personnummer, and
+  // quiet when the environment has no SCB credentials.
+  const autofill = useRegistryAutofill({
+    orgNumber,
+    enabled: canWrite && customerType === 'swedish_business',
+    initialOrgNumber: initialData?.org_number,
+    apply: (now, before) => {
+      const v = getValues()
+      const patch = registryFormFill(
+        {
+          name: v.name ?? '',
+          email: v.email ?? '',
+          phone: v.phone ?? '',
+          address_line1: v.address_line1 ?? '',
+          address_line2: v.address_line2 ?? '',
+          postal_code: v.postal_code ?? '',
+          city: v.city ?? '',
+          vat_number: v.vat_number ?? '',
+        },
+        now,
+        before,
+        REGISTRY_FIELDS,
+      )
+      for (const [field, value] of Object.entries(patch)) {
+        setValue(field as RegistryFormField, value ?? '', { shouldDirty: true, shouldValidate: true })
+      }
+      return Object.keys(patch)
+    },
+  })
   const countryValue = watch('country')
   // A stored value the picker does not list (an unmapped legacy name, or a
   // code outside the curated list) still has to be visible, or the field
@@ -307,6 +353,76 @@ export default function CustomerForm({
         </p>
       </div>
 
+      {/* Identification first: on a Swedish company's org number the register fills the rest */}
+      {customerType === 'individual' ? (
+        <div className="space-y-2">
+          <Label htmlFor="personal_number">{t('personal_number_label')}</Label>
+          <Input
+            id="personal_number"
+            placeholder={t('personal_number_placeholder')}
+            {...register('personal_number')}
+          />
+          {errors.personal_number ? (
+            <p className="text-sm text-destructive">{errors.personal_number.message}</p>
+          ) : personalNumberUnreadable ? (
+            <AttnLine>{t('personal_number_unreadable')}</AttnLine>
+          ) : null}
+        </div>
+      ) : (
+        <>
+          <div className="space-y-2">
+            <Label htmlFor="org_number">{t('org_number_label')}</Label>
+            <Input
+              id="org_number"
+              placeholder={t('org_number_placeholder')}
+              {...register('org_number')}
+            />
+            {errors.org_number ? (
+              <p className="text-sm text-destructive">{errors.org_number.message}</p>
+            ) : (
+              <RegistryAutofillNote state={autofill} />
+            )}
+          </div>
+
+          {(customerType === 'eu_business' || customerType === 'non_eu_business') && (
+            <div className="space-y-2">
+              <Label htmlFor="vat_number">{t('vat_label')}</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="vat_number"
+                  placeholder={customerType === 'eu_business' ? t('vat_placeholder_eu') : t('vat_placeholder_se')}
+                  {...register('vat_number')}
+                  className="flex-1"
+                />
+                {customerType === 'eu_business' && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleValidateVat}
+                    disabled={!vatNumber || isValidatingVat}
+                  >
+                    {isValidatingVat ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : vatValidationResult?.valid ? (
+                      <CheckCircle className="h-4 w-4 text-success" />
+                    ) : vatValidationResult?.valid === false ? (
+                      <XCircle className="h-4 w-4 text-destructive" />
+                    ) : (
+                      t('vat_verify')
+                    )}
+                  </Button>
+                )}
+              </div>
+              {customerType === 'eu_business' && (
+                <p className="text-xs text-muted-foreground">
+                  {t('vat_hint_eu')}
+                </p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
       {/* Name */}
       <div className="space-y-2">
         <Label htmlFor="name">{t('name_label')}</Label>
@@ -415,6 +531,14 @@ export default function CustomerForm({
             {...register('address_line1')}
           />
         </div>
+        <div className="space-y-2">
+          <Label htmlFor="address_line2">{t('address_line2_label')}</Label>
+          <Input
+            id="address_line2"
+            placeholder={t('address_line2_placeholder')}
+            {...register('address_line2')}
+          />
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="space-y-2">
             <Label htmlFor="postal_code">{t('postal_label')}</Label>
@@ -465,80 +589,6 @@ export default function CustomerForm({
           </div>
         </div>
       </div>
-
-      {/* Identification: depends on customer type */}
-      {customerType === 'individual' ? (
-        <div className="space-y-4 pt-4 border-t">
-          <h3>{t('individual_section')}</h3>
-
-          <div className="space-y-2">
-            <Label htmlFor="personal_number">{t('personal_number_label')}</Label>
-            <Input
-              id="personal_number"
-              placeholder={t('personal_number_placeholder')}
-              {...register('personal_number')}
-            />
-            {errors.personal_number ? (
-              <p className="text-sm text-destructive">{errors.personal_number.message}</p>
-            ) : personalNumberUnreadable ? (
-              <AttnLine>{t('personal_number_unreadable')}</AttnLine>
-            ) : null}
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-4 pt-4 border-t">
-          <h3>{t('business_section')}</h3>
-
-          <div className="space-y-2">
-            <Label htmlFor="org_number">{t('org_number_label')}</Label>
-            <Input
-              id="org_number"
-              placeholder={t('org_number_placeholder')}
-              {...register('org_number')}
-            />
-            {errors.org_number && (
-              <p className="text-sm text-destructive">{errors.org_number.message}</p>
-            )}
-          </div>
-
-          {(customerType === 'eu_business' || customerType === 'non_eu_business') && (
-            <div className="space-y-2">
-              <Label htmlFor="vat_number">{t('vat_label')}</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="vat_number"
-                  placeholder={customerType === 'eu_business' ? t('vat_placeholder_eu') : t('vat_placeholder_se')}
-                  {...register('vat_number')}
-                  className="flex-1"
-                />
-                {customerType === 'eu_business' && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleValidateVat}
-                    disabled={!vatNumber || isValidatingVat}
-                  >
-                    {isValidatingVat ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : vatValidationResult?.valid ? (
-                      <CheckCircle className="h-4 w-4 text-success" />
-                    ) : vatValidationResult?.valid === false ? (
-                      <XCircle className="h-4 w-4 text-destructive" />
-                    ) : (
-                      t('vat_verify')
-                    )}
-                  </Button>
-                )}
-              </div>
-              {customerType === 'eu_business' && (
-                <p className="text-xs text-muted-foreground">
-                  {t('vat_hint_eu')}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Payment terms */}
       <div className="space-y-2">

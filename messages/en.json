@@ -1299,7 +1299,9 @@
     "submit_save": "Save customer",
     "submit_saving": "Saving...",
     "viewer_disabled_tooltip": "You only have viewer access in this company",
-    "personal_number_unreadable": "The stored personal number cannot be read. Enter it again to replace it."
+    "personal_number_unreadable": "The stored personal number cannot be read. Enter it again to replace it.",
+    "address_line2_label": "Address line 2",
+    "address_line2_placeholder": "c/o"
   },
   "form_supplier": {
     "name_label": "Name *",
@@ -1345,7 +1347,9 @@
     "notes_placeholder": "Internal notes about the supplier...",
     "submit_save": "Save supplier",
     "submit_saving": "Saving...",
-    "viewer_disabled_tooltip": "You only have viewer access in this company"
+    "viewer_disabled_tooltip": "You only have viewer access in this company",
+    "address_line2_label": "Address line 2",
+    "address_line2_placeholder": "c/o"
   },
   "initial_setup": {
     "completed_verdict": "Your bookkeeping is up and running.",
@@ -8823,8 +8827,16 @@
     "open_dossier": "Open {name}",
     "attn_create": "Create suggestions",
     "auto_created_title": "{count} suggestions created from the books",
-    "auto_created_description": "Counterparts your vouchers name that are not in the register. Add them, or hide the ones that do not belong here."
-},
+    "auto_created_description": "Counterparts your vouchers name that are not in the register. Add them, or hide the ones that do not belong here.",
+    "autofill_looking": "Searching the SCB business register…",
+    "autofill_filled": "{name} · {fields} from SCB. Edit freely.",
+    "autofill_found": "{name} according to the SCB register. Nothing changed, the fields were already filled in.",
+    "autofill_not_found": "No company with org. no. {org} in the SCB register.",
+    "autofill_field_name": "name",
+    "autofill_field_email": "email",
+    "autofill_field_phone": "phone",
+    "autofill_field_vat": "VAT number"
+  },
   "tx_expense_payout_match": {
     "title": "Book expense reimbursement",
     "description": "The transfer is booked against the person's liability account, the claims are marked as paid and the transaction is linked to the voucher.",
