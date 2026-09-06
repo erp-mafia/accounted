@@ -428,6 +428,7 @@ export function makeSupplierInvoice(
     transaction_id: null,
     document_id: null,
     paid_with_private_funds: false,
+    bank_entered_at: null,
     notes: null,
     created_at: '2024-06-02T00:00:00Z',
     updated_at: '2024-06-02T00:00:00Z',

@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -35,7 +36,10 @@ import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import {
+  canApproveSupplierInvoice,
+  canMarkSupplierInvoiceBankEntered,
+} from '@/lib/supplier-invoices/lifecycle'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
@@ -117,7 +121,7 @@ export default function SupplierInvoiceDetailPage() {
   // shows the spinner while the others only disable. A single boolean put
   // identical pending feedback (none) on every button at once.
   const [processingAction, setProcessingAction] = useState<
-    'approve' | 'book' | 'mark_paid' | 'credit' | 'uncredit' | 'delete' | null
+    'approve' | 'book' | 'mark_paid' | 'bank_entered' | 'credit' | 'uncredit' | 'delete' | null
   >(null)
   const isProcessing = processingAction !== null
   const [duplicateCandidates, setDuplicateCandidates] = useState<
@@ -330,6 +334,35 @@ export default function SupplierInvoiceDetailPage() {
       }
     } catch (err) {
       toast({ title: t('approve_failed_title'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
+    } finally {
+      setProcessingAction(null)
+    }
+  }
+
+  // "Inlagd i banken" (#2220): the payment was typed into the bank by hand.
+  // A mark, not a payment: nothing is booked, so no refetch is needed; the
+  // server's timestamp is the only thing that changed.
+  async function handleBankEntered(entered: boolean) {
+    setProcessingAction('bank_entered')
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}/bank-entered`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entered }),
+      })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({ title: t('bank_entered_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+        // A refusal usually means the row moved (paid meanwhile): re-read.
+        await fetchInvoice()
+      } else {
+        const updated = result?.data as { bank_entered_at?: string | null } | undefined
+        setInvoice((prev) =>
+          prev ? { ...prev, bank_entered_at: updated?.bank_entered_at ?? null } : prev,
+        )
+      }
+    } catch (err) {
+      toast({ title: t('bank_entered_failed_title'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
     } finally {
       setProcessingAction(null)
     }
@@ -578,6 +611,10 @@ export default function SupplierInvoiceDetailPage() {
     invoice.supplier?.name ?? null,
     docNumber ? t('arrival_header', { number: invoice.arrival_number }) : null,
     t('created_at', { date: formatDate(invoice.created_at) }),
+    // The mellanlage (#2220) reads as a dated fact here, next to the bock.
+    invoice.bank_entered_at
+      ? t('bank_entered_meta', { date: formatDate(invoice.bank_entered_at) })
+      : null,
   ].filter(Boolean)
 
   // Attest keys off approved_at, not the status: the overdue cron flips
@@ -585,6 +622,10 @@ export default function SupplierInvoiceDetailPage() {
   // alone left them with no way through attest (#1206).
   const canApprove = canApproveSupplierInvoice(invoice) && !invoice.is_credit_note
   const canMarkPaid = ['approved', 'overdue', 'partially_paid'].includes(invoice.status)
+  // "Inlagd i banken" (#2220) sits on the same rows as Markera som betald:
+  // it is the step right before it. Viewers see the bock only when it is set.
+  const showBankEntered =
+    canMarkSupplierInvoiceBankEntered(invoice) && (canWrite || !!invoice.bank_entered_at)
   const canCredit = canMarkPaid && invoice.status !== 'partially_paid'
   const canUncredit = invoice.status === 'credited' && !invoice.is_credit_note
   // Delete is allowed while nothing would be orphaned: no booking, no
@@ -686,6 +727,28 @@ export default function SupplierInvoiceDetailPage() {
               )}
               {t('approve')}
             </Button>
+          )}
+          {/* The bock (#2220): "I have entered this payment in the bank".
+              A labelled checkbox rather than a button, because it is a fact
+              the user records, not an action that posts anything. */}
+          {showBankEntered && (
+            <label
+              className={cn(
+                'inline-flex h-9 select-none items-center gap-2 px-2 text-[13px]',
+                canWrite && !isProcessing ? 'cursor-pointer' : 'cursor-default',
+                processingAction === 'bank_entered' && 'opacity-50',
+              )}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              <Checkbox
+                checked={!!invoice.bank_entered_at}
+                disabled={isProcessing || !canWrite}
+                onCheckedChange={(value) => void handleBankEntered(value === true)}
+                aria-label={t('bank_entered_aria')}
+                className="border-foreground"
+              />
+              {t('bank_entered_label')}
+            </label>
           )}
           {/* Attest gates payment: while attest is still pending, Markera
               betald steps back to a secondary so the header keeps one next

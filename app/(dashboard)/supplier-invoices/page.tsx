@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -24,7 +24,10 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import {
+  canApproveSupplierInvoice,
+  canMarkSupplierInvoiceBankEntered,
+} from '@/lib/supplier-invoices/lifecycle'
 import {
   sortSupplierInvoiceList,
   type SupplierInvoiceListSort,
@@ -189,6 +192,9 @@ export default function SupplierInvoicesPage() {
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
   const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
   const [approvingId, setApprovingId] = useState<string | null>(null)
+  // "Inlagd i banken" (#2220) in flight for one row: the bock disables while
+  // the server confirms, so a double click cannot flip it twice.
+  const [bankEnteringId, setBankEnteringId] = useState<string | null>(null)
   // Payment-file bulk selection + the "already in an active betalfil" chip map.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   // Radix' onCheckedChange carries no mouse event: the preceding click records
@@ -470,6 +476,39 @@ export default function SupplierInvoicesPage() {
     }
   }
 
+  // "Inlagd i banken" (#2220): the payment was typed into the bank by hand.
+  // A mark, not a payment: the server writes one timestamp and the DB clears
+  // it when the payment lands, so the row patch here is the whole story.
+  async function handleBankEntered(id: string, entered: boolean) {
+    setBankEnteringId(id)
+    try {
+      const res = await fetch(`/api/supplier-invoices/${id}/bank-entered`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entered }),
+      })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({ title: t('bank_entered_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+        // The refusal usually means the row moved (paid meanwhile): re-read
+        // rather than leave a bock the server does not agree with.
+        fetchInvoices()
+        return
+      }
+      const updated = result?.data as { bank_entered_at?: string | null } | undefined
+      setInvoices((prev) =>
+        prev.map((inv) =>
+          inv.id === id ? { ...inv, bank_entered_at: updated?.bank_entered_at ?? null } : inv,
+        ),
+      )
+    } catch {
+      toast({ title: t('bank_entered_failed_title'), description: getErrorMessage(null, { context: 'supplier_invoice' }), variant: 'destructive' })
+      fetchInvoices()
+    } finally {
+      setBankEnteringId(null)
+    }
+  }
+
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 21): title + help + primary action.
@@ -620,7 +659,10 @@ export default function SupplierInvoicesPage() {
            the wrapper scrolls sideways, Leverantör collapses to its header
            width and Status is cut at the edge. That is why the list carries
            one date (förfaller: the payer's date and the default order) and a
-           short Kvar header; fakturadatum lives in the detail view. */
+           short Kvar header; fakturadatum lives in the detail view. The
+           trailing column is one slot for the row's next step: Godkänn while
+           attest is pending, the I banken bock (#2220) once attested; it is
+           sized for the bock plus its label, the wider of the two. */
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
@@ -675,7 +717,7 @@ export default function SupplierInvoicesPage() {
                   sort={sort}
                   onSort={updateSort}
                 />
-                <th className={cn(TH_CLASS, 'w-[96px]')} aria-hidden="true"></th>
+                <th className={cn(TH_CLASS, 'w-[108px]')} aria-hidden="true"></th>
               </tr>
             </thead>
             <tbody className="stagger-enter">
@@ -692,6 +734,14 @@ export default function SupplierInvoicesPage() {
                 const canApprove =
                   canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
                 const selectable = canWrite && isBatchSelectable(inv)
+                // "Inlagd i banken" (#2220) shares the trailing slot with
+                // Godkänn, so it appears once attest is done. Viewers see the
+                // bock only when it is set (state, not a control).
+                const bankEntered = !!inv.bank_entered_at
+                const showBankEntered =
+                  !canApprove &&
+                  canMarkSupplierInvoiceBankEntered(inv) &&
+                  (canWrite || bankEntered)
                 // Same shape as the customer list: the section header is a
                 // sibling row decided from the previous row's key.
                 const groupKey = rowGroupKeys.get(inv.id) ?? null
@@ -807,6 +857,28 @@ export default function SupplierInvoicesPage() {
                         >
                           {t('approve')}
                         </button>
+                      )}
+                      {/* The bock (#2220): hover-revealed until set, then it
+                          stays, because a set bock is the state the payer
+                          scans for. */}
+                      {showBankEntered && (
+                        <label
+                          className={cn(
+                            'inline-flex select-none items-center gap-2 text-[12.5px] text-muted-foreground',
+                            canWrite ? 'cursor-pointer' : 'cursor-default',
+                            bankEntered ? 'opacity-100' : HOVER_REVEAL_CLASS,
+                            bankEnteringId === inv.id && 'pointer-events-none opacity-50',
+                          )}
+                        >
+                          <Checkbox
+                            checked={bankEntered}
+                            disabled={!canWrite}
+                            onCheckedChange={(value) => handleBankEntered(inv.id, value === true)}
+                            aria-label={t('bank_entered_aria')}
+                            className="border-foreground duration-150"
+                          />
+                          {t('bank_entered_label')}
+                        </label>
                       )}
                     </td>
                   </tr>

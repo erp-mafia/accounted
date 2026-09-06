@@ -827,7 +827,7 @@
     "status_picker_aria": "Filter by status",
     "search_placeholder": "Search supplier invoices …",
     "status_paid_date": "Paid {date}",
-    "help_body": "Approval attests the invoice for payment. Select invoices with the checkbox and create a payment file to upload in your internet bank. Payments are reconciled automatically when they are matched against the bank.",
+    "help_body": "Approval attests the invoice for payment. Select invoices with the checkbox and create a payment file to upload in your internet bank, or tick In bank on the row once you have entered the payment by hand. Payments are reconciled automatically when they are matched against the bank, and the tick then clears itself.",
     "bulkbar_selected": "{count, plural, one {invoice selected} other {invoices selected}}",
     "bulk_create_file": "Create payment file",
     "bulk_select_all": "Select all payable ({count})",
@@ -843,7 +843,10 @@
     "group_supplier": "Supplier",
     "group_month": "Month",
     "group_none": "No grouping",
-    "group_unknown": "Missing"
+    "group_unknown": "Missing",
+    "bank_entered_label": "In bank",
+    "bank_entered_aria": "Mark as entered at the bank",
+    "bank_entered_failed_title": "Could not save the mark"
   },
   "supplier_payment_files": {
     "dialog_title": "Create payment file",
@@ -4918,7 +4921,11 @@
     "duplicate_payment_show_voucher": "Show verifikat",
     "bank_transaction_fallback": "Bank transaction",
     "go_to": "Go to",
-    "create_voucher_anyway": "Create new verifikat anyway"
+    "create_voucher_anyway": "Create new verifikat anyway",
+    "bank_entered_label": "Entered at bank",
+    "bank_entered_aria": "Mark as entered at the bank",
+    "bank_entered_meta": "Entered at bank {date}",
+    "bank_entered_failed_title": "Could not save the mark"
   },
   "supplier_detail": {
     "back": "Back",
