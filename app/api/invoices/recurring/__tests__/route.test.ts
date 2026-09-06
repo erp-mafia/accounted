@@ -6,7 +6,7 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
@@ -213,6 +213,83 @@ describe('POST /api/invoices/recurring', () => {
     >
     expect(itemRows[0].dimensions).toEqual({ '6': 'P002' })
     expect(itemRows[1].dimensions).toEqual({})
+  })
+
+  it('rejects a start_date that is not on the day_of_month grid', async () => {
+    enqueue({ data: { id: '550e8400-e29b-41d4-a716-446655440000' }, error: null })
+
+    const request = createMockRequest('/api/invoices/recurring', {
+      method: 'POST',
+      body: {
+        customer_id: '550e8400-e29b-41d4-a716-446655440000',
+        name: 'Årsavgift',
+        day_of_month: 15,
+        interval_months: 12,
+        start_date: '2999-02-14',
+        items: [{ description: 'Licens', quantity: 1, unit: 'st', unit_price: 12000 }],
+      },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ type: string; error: string }>(response)
+    expect(status).toBe(400)
+    expect(body.type).toBe('validation_error')
+    expect(body.error).toMatch(/day_of_month/)
+    expect(findCall('recurring_invoice_schedules', 'insert')).toBeUndefined()
+  })
+
+  it('rejects a start_date in the past', async () => {
+    enqueue({ data: { id: '550e8400-e29b-41d4-a716-446655440000' }, error: null })
+
+    const request = createMockRequest('/api/invoices/recurring', {
+      method: 'POST',
+      body: {
+        customer_id: '550e8400-e29b-41d4-a716-446655440000',
+        name: 'Årsavgift',
+        day_of_month: 15,
+        interval_months: 12,
+        start_date: '2020-02-15',
+        items: [{ description: 'Licens', quantity: 1, unit: 'st', unit_price: 12000 }],
+      },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ type: string; error: string }>(response)
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/past/)
+    expect(findCall('recurring_invoice_schedules', 'insert')).toBeUndefined()
+  })
+
+  it('uses an explicit start_date as the first run so a yearly schedule keeps its month', async () => {
+    const createdSchedule = {
+      id: 's-2',
+      company_id: 'company-1',
+      customer_id: '550e8400-e29b-41d4-a716-446655440000',
+      name: 'Årsavgift',
+      day_of_month: 15,
+      interval_months: 12,
+      next_run_date: '2999-02-15',
+      status: 'active',
+    }
+    enqueue({ data: { id: '550e8400-e29b-41d4-a716-446655440000' }, error: null })
+    enqueue({ data: createdSchedule, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { ...createdSchedule, items: [] }, error: null })
+
+    const request = createMockRequest('/api/invoices/recurring', {
+      method: 'POST',
+      body: {
+        customer_id: '550e8400-e29b-41d4-a716-446655440000',
+        name: 'Årsavgift',
+        day_of_month: 15,
+        interval_months: 12,
+        start_date: '2999-02-15',
+        items: [{ description: 'Licens', quantity: 1, unit: 'st', unit_price: 12000 }],
+      },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse<{ data: { id: string } }>(response)
+    expect(status).toBe(201)
+    const insertArgs = findCall('recurring_invoice_schedules', 'insert')
+    expect(insertArgs?.[0]).toMatchObject({ next_run_date: '2999-02-15', interval_months: 12 })
   })
 
   it('creates a schedule on the happy path', async () => {
