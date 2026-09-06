@@ -122,6 +122,9 @@
     "cta_primary": "Se abonnemang",
     "cta_secondary": "Fortsätt utan"
   },
+  "agent_chat": {
+    "assistant_unavailable": "Assistenten kan inte köras med den AI-leverantör som är konfigurerad på den här installationen."
+  },
   "agentKnowledge": {
     "load_error_title": "Kunde inte läsa in kunskapsprofilen",
     "load_error_description": "Något gick fel när det din agent vet skulle läsas in. Försök öppna fliken igen.",

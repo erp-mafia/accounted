@@ -61,7 +61,7 @@ import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt
 import { createClient } from '@/lib/supabase/client'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
-import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
+import { useAssistantAvailable, useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
@@ -440,6 +440,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // Its own input: sharing the header's would upload without the purchase.
   const purchaseFileInputRef = useRef<HTMLInputElement | null>(null)
   const { openAgentSheet, identity } = useAgentSheet()
+  // Both "Fråga assistenten" doors below open the tool-loop runtime
+  // (/api/agent/invoke); hide them where the deployment cannot run it (#2204).
+  const assistantAvailable = useAssistantAvailable()
 
   const [items, setItems] = useState<InboxItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -1869,7 +1872,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               </Button>
               {/* Secondary actions: outlined, so they read as buttons */}
               <div className="flex items-center gap-2">
-                {identity.isVerified && (
+                {identity.isVerified && assistantAvailable && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -2197,7 +2200,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 await Promise.all([fetchItems(), handleSelect(targetId)])
               }}
               onAskAssistant={
-                identity.isVerified
+                identity.isVerified && assistantAvailable
                   ? (transactionId) => {
                       openAgentSheet({
                         intentId: 'transaction.categorization',
