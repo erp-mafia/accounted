@@ -89,6 +89,7 @@ import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
+import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/journal-entry-references'
 import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
 import type { FiscalPeriod } from '@/types'
 
@@ -1301,7 +1302,8 @@ export default function TransactionsPage() {
   // current-version document, which are covered by a supplier invoice's
   // retained document (BFL 5 kap 7 § hänvisning: registration/payment FK or a
   // supplier_invoice_payments row: mirrors the verifikat_without_documents
-  // RPC), and which are exempted via journal_entry_no_doc_required.
+  // RPC), and which are exempted via journal_entry_no_doc_required; then the
+  // customer-invoice hänvisning (getInvoiceReferencesForJournalEntries, #2298).
   // Incremental: only fetches JE ids not yet requested, so
   // loadMoreTransactions pages are covered without refetching.
   // Soft-fails to "no badges" on error.
@@ -1395,6 +1397,19 @@ export default function TransactionsPage() {
             jeIdsWithDocs.add(sip.journal_entry_id)
           }
         }
+        // Customer invoices pointing at the JE (registration link or payment
+        // row) back it under BFL 5 kap 7 §. On a failed lookup this chunk's
+        // verdict is UNKNOWN: without the references, 'missing' would be a
+        // false warning and 'has' a false pass, so the chunk gets no badges
+        // (the same degrade the reads above use) while the remaining chunks
+        // still get theirs.
+        let invoiceRefs: Map<string, string[]>
+        try {
+          invoiceRefs = await getInvoiceReferencesForJournalEntries(supabase, companyId, chunk)
+        } catch {
+          continue
+        }
+        for (const journalEntryId of invoiceRefs.keys()) jeIdsWithDocs.add(journalEntryId)
         const exemptIds = new Set(
           (exemptRes.data ?? []).map((e) => e.journal_entry_id as string),
         )
