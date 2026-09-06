@@ -427,7 +427,8 @@ export type FiscalYearPrecheck =
       replacesEmptyPeriodId: string | null
     }
   | {
-      // An overlapping period carries real content; the import will refuse.
+      // An overlapping period carries real content, or the containing period
+      // is closed or locked; the import will refuse.
       verdict: 'conflict'
       existingPeriod: { id: string; name: string; periodStart: string; periodEnd: string }
       // The Swedish refusal text the import raises, verbatim.

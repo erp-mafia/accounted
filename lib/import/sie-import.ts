@@ -463,13 +463,65 @@ async function cleanupStaleImportRecords(
     .lt('created_at', fiveMinutesAgo)
 }
 
+interface ClosedPeriodState {
+  name: string
+  period_start: string
+  period_end: string
+  is_closed: boolean | null
+  locked_at: string | null
+  closed_externally?: boolean | null
+  closing_entry_id?: string | null
+}
+
+/**
+ * Why a closed or locked fiscal year cannot take imported vouchers, with the
+ * way out spelled out per state, or null when the year is open. Three states
+ * map to three different remedies:
+ *
+ *   - klarmarkerad (closed_externally, no closing entry): "Öppna igen" in
+ *     Inställningar > Bokföring > Räkenskapsår undoes it, so say so.
+ *   - closed by a year-end run (closing entry): nothing self-serve reopens it.
+ *   - locked only: "Lås upp" in the same settings section.
+ */
+export function closedPeriodRefusal(period: ClosedPeriodState): string | null {
+  const label = `Räkenskapsåret ${period.name} (${period.period_start} till ${period.period_end})`
+  if (period.is_closed) {
+    if (period.closed_externally && !period.closing_entry_id) {
+      return (
+        `${label} är markerat som avslutat i ett tidigare program och tar inte emot verifikationer. ` +
+        `Öppna det igen under Inställningar > Bokföring > Räkenskapsår (knappen Öppna igen), ` +
+        `importera filen på nytt och klarmarkera året igen efteråt.`
+      )
+    }
+    if (period.closing_entry_id) {
+      return (
+        `${label} är stängt med ett årsbokslut i Accounted och tar inte emot fler verifikationer. ` +
+        `Bokför rättelser i det öppna räkenskapsåret i stället.`
+      )
+    }
+    return (
+      `${label} är stängt och tar inte emot fler verifikationer. ` +
+      `Öppna räkenskapsåret under Inställningar > Bokföring > Räkenskapsår och importera sedan filen på nytt.`
+    )
+  }
+  if (period.locked_at) {
+    return (
+      `${label} är låst. Lås upp det under Inställningar > Bokföring > Räkenskapsår ` +
+      `och importera sedan filen på nytt.`
+    )
+  }
+  return null
+}
+
 /**
  * Read-only verdict on how the SIE file's räkenskapsår relates to the
  * company's existing fiscal periods. Shared by the parse preview and by
  * ensureFiscalPeriod, so what the wizard says before import is exactly what
  * the import will do:
  *
- *   - match: a period already contains the file's date range; it is reused.
+ *   - match: an open period already contains the file's date range; it is
+ *     reused. A closed or locked containing period is a conflict instead,
+ *     with the remedy (Öppna igen / Lås upp) in the message.
  *   - create: no period covers the range; one is created. If an overlapping
  *     period is empty (onboarding-seeded with the default calendar year but
  *     never used) it is replaced: the user has a förlängt räkenskapsår per
@@ -493,13 +545,31 @@ export async function precheckFiscalPeriod(
   // Check for an existing period that contains the SIE date range
   const { data: containing } = await supabase
     .from('fiscal_periods')
-    .select('id')
+    .select('id, name, period_start, period_end, is_closed, locked_at, closed_externally, closing_entry_id')
     .eq('company_id', companyId)
     .lte('period_start', startDate)
     .gte('period_end', endDate)
     .single()
 
   if (containing) {
+    // A closed or locked year would only fail later, inside the atomic
+    // voucher RPC, with the DB trigger's own text and no way forward. Refuse
+    // here so the preview says what to do (observed 2026-09-04: an owner
+    // klarmarkerade an empty prior year, then could not import its one
+    // voucher and never found "Öppna igen").
+    const refusal = closedPeriodRefusal(containing as ClosedPeriodState)
+    if (refusal) {
+      return {
+        verdict: 'conflict',
+        existingPeriod: {
+          id: containing.id as string,
+          name: containing.name as string,
+          periodStart: containing.period_start as string,
+          periodEnd: containing.period_end as string,
+        },
+        message: refusal,
+      }
+    }
     return { verdict: 'match', periodId: containing.id }
   }
 
@@ -2412,7 +2482,7 @@ export async function executeSIEImport(
       // Find existing fiscal period
       const { data: existing } = await supabase
         .from('fiscal_periods')
-        .select('id')
+        .select('id, name, period_start, period_end, is_closed, locked_at, closed_externally, closing_entry_id')
         .eq('company_id', companyId)
         .lte('period_start', fiscalYearStart)
         .gte('period_end', fiscalYearEnd)
@@ -2420,6 +2490,15 @@ export async function executeSIEImport(
 
       if (!existing) {
         result.errors.push('No matching fiscal period found. Enable "Create fiscal period" option.')
+        return result
+      }
+
+      // Same refusal as precheckFiscalPeriod: a closed or locked year must
+      // fail here with the remedy, not inside the voucher RPC with the
+      // trigger's text.
+      const refusal = closedPeriodRefusal(existing as ClosedPeriodState)
+      if (refusal) {
+        result.errors.push(refusal)
         return result
       }
 
