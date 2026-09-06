@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 
-const { supabase, enqueue, enqueueMany, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, enqueueMany, reset, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 // The payee write-through is its own unit (lib/cash-accounts/__tests__/invoice-payee.test.ts);
@@ -101,6 +101,35 @@ describe('PUT /api/settings', () => {
     expect(status).toBe(200)
     expect(body.data.company_name).toBe('New Name')
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
+  it('stores voucher_series_labels with trimmed names and cleared letters stripped', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },      // fetch oldSettings
+      { data: { id: 's1', voucher_series_labels: { L: 'Lön' } } },            // update ... returning
+      { data: null, count: 5 },                                                // deadlines count
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { voucher_series_labels: { L: ' Lön ', K: '', M: '   ' } },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { voucher_series_labels: Record<string, string> } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.voucher_series_labels).toEqual({ L: 'Lön' })
+    // The row receives the normalized map: the cleared letters never reach the DB.
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ voucher_series_labels: { L: 'Lön' } })
+  })
+
+  it('rejects a voucher_series_labels key that is not a single uppercase letter', async () => {
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { voucher_series_labels: { lön: 'Lön' } },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    expect(response.status).toBe(400)
   })
 
   it('accepts the mileage_enabled visibility toggle', async () => {

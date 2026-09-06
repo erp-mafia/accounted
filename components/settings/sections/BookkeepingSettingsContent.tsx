@@ -173,7 +173,7 @@ export function BookkeepingSettingsContent() {
 
       <VoucherSeriesPerCashAccountForm settings={settings} />
 
-      <VoucherSeriesManager defaultSeries={settings.default_voucher_series || 'A'} />
+      <VoucherSeriesManager settings={settings} onSettingsUpdated={updateSettings} />
 
       <SettingsGroup label={t('group_automation')}>
         {/* Periodisering is a review-gated wizard step, not an automation

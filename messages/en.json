@@ -2378,7 +2378,14 @@
     "per_account_saved_title": "Voucher series saved",
     "per_account_saved_set": "New vouchers from {account} land in series {series}.",
     "per_account_saved_cleared": "{account} now follows the default bank-transaction series.",
-    "per_account_save_failed": "Could not save"
+    "per_account_save_failed": "Could not save",
+    "name_column": "Name",
+    "name_placeholder": "Name (optional)",
+    "name_help": "The name is shown next to the letter wherever you pick a series, for example in the voucher form. Leave it empty to show the default description.",
+    "no_vouchers_yet": "No vouchers yet",
+    "save_names": "Save names",
+    "names_saved_title": "Series names saved",
+    "names_saved_description": "The names now appear in the series pickers."
   },
   "settings_team_panel": {
     "role_owner": "Owner",
