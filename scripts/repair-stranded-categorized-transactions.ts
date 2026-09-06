@@ -22,7 +22,7 @@
  * A write needs ONE company, the actor to record, and a typed confirmation
  * that repeats the row count of a fresh dry run:
  *
- *   npx tsx scripts/repair-stranded-categorized-transactions.ts --company <uuid> --actor-user-id <uuid> --execute [--skip-locked]
+ *   npx tsx scripts/repair-stranded-categorized-transactions.ts --company <uuid> --actor-user-id <uuid> --execute [--include-locked]
  *
  * Flags:
  *   --env <file>         env file to load (default .env.local; the banner
@@ -30,8 +30,10 @@
  *   --company <uuid>     restrict to one company (required with --execute)
  *   --actor-user-id <id> the person running the repair, recorded as the actor
  *   --execute            write; without it nothing is changed
- *   --skip-locked        leave rows whose date falls in a locked or closed
- *                        period, or behind the company lock date, untouched
+ *   --include-locked     also reset rows whose date falls in a locked or
+ *                        closed period, or behind the company lock date; by
+ *                        default those are listed and left alone (they could
+ *                        not be booked in place anyway, BFL 5 kap 5 §)
  *   --include-sandbox    allow a sandbox company (is_sandbox = true); those are
  *                        normally left to cleanup_sandbox_user
  *   --verbose            print every row in the dry run
@@ -58,7 +60,7 @@ config({ path: ENV_FILE })
 const COMPANY_ID = arg('company') ?? null
 const ACTOR_USER_ID = arg('actor-user-id') ?? null
 const EXECUTE = flag('execute')
-const SKIP_LOCKED = flag('skip-locked')
+const INCLUDE_LOCKED = flag('include-locked')
 const INCLUDE_SANDBOX = flag('include-sandbox')
 const VERBOSE = flag('verbose')
 
@@ -116,7 +118,7 @@ async function callRepair(params: {
       .rpc('repair_stranded_transactions', {
         p_company_id: params.companyId,
         p_dry_run: params.dryRun,
-        p_skip_locked: SKIP_LOCKED,
+        p_skip_locked: !INCLUDE_LOCKED,
         p_actor: params.actor ?? null,
         p_correlation_id: params.correlationId ?? null,
       })
@@ -216,21 +218,24 @@ async function main() {
   console.log('Env file    :', ENV_FILE)
   console.log('Supabase URL:', supabaseUrl)
   console.log('Company     :', COMPANY_ID ?? '(all)')
-  console.log('Skip locked :', SKIP_LOCKED ? 'yes' : 'no')
+  console.log('Locked rows :', INCLUDE_LOCKED ? 'INCLUDED' : 'listed, left alone')
   console.log('Mode        :', EXECUTE ? 'EXECUTE (writes)' : 'DRY RUN (no writes)')
   console.log('---------------------------------------------------------')
 
   const dry = await callRepair({ companyId: COMPANY_ID, dryRun: true })
-  const inScope = SKIP_LOCKED ? dry.filter((r) => r.lock_state === 'open') : dry
+  const inScope = INCLUDE_LOCKED ? dry : dry.filter((r) => r.lock_state === 'open')
   const real = summarize(inScope.filter((r) => !r.is_sandbox))
   const sandbox = summarize(inScope.filter((r) => r.is_sandbox))
   const names = await companyNames([...real, ...sandbox].map((s) => s.companyId))
 
   printBreakdown('Non-sandbox companies', real, names)
   printBreakdown('Sandbox companies (left to cleanup_sandbox_user)', sandbox, names)
-  if (SKIP_LOCKED) {
+  if (!INCLUDE_LOCKED) {
     const skipped = dry.length - inScope.length
-    console.log(`\n--skip-locked leaves ${skipped} rows in locked/closed periods untouched.`)
+    if (skipped > 0) {
+      console.log(`
+${skipped} rows sit in locked/closed periods or behind the company lock date and are left alone (pass --include-locked to reset them too).`)
+    }
   }
   if (VERBOSE) {
     console.log('\nRows:')
@@ -271,14 +276,14 @@ async function main() {
     correlationId,
   })
   const repaired = written.filter((r) => r.repaired)
-  const skippedByRace = written.filter((r) => !r.repaired && (!SKIP_LOCKED || r.lock_state === 'open'))
+  const skippedByRace = written.filter((r) => !r.repaired && (INCLUDE_LOCKED || r.lock_state === 'open'))
   console.log(`\nRepaired ${repaired.length} rows (correlation ${correlationId}).`)
   if (skippedByRace.length > 0) {
     console.log(`${skippedByRace.length} rows were booked or changed between the dry run and the write and were left alone.`)
   }
 
   const after = await callRepair({ companyId: COMPANY_ID, dryRun: true })
-  const remaining = SKIP_LOCKED ? after.filter((r) => r.lock_state === 'open') : after
+  const remaining = INCLUDE_LOCKED ? after : after.filter((r) => r.lock_state === 'open')
   console.log(`Remaining stranded rows for this company: ${remaining.length}`)
 }
 

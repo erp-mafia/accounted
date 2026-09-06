@@ -18,8 +18,10 @@ import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
  * untriaged rows, ignored rows and private rows are left alone. The write
  * resets the storno triple (is_business, category, reconciliation_method),
  * keeps is_ignored, logs one BankTransactionStrandedRepaired event per row,
- * and is idempotent. Dry run is the default and writes nothing. A write needs
- * a company id and an actor. Only service_role may execute it.
+ * and is idempotent. Dry run is the default and writes nothing. Rows in a
+ * locked or closed period are listed but skipped unless p_skip_locked is
+ * false. A write needs a company id and an actor. Only service_role may
+ * execute it.
  */
 
 interface PgError extends Error {
@@ -83,7 +85,7 @@ async function callRepair(
     [
       params.companyId,
       params.dryRun,
-      params.skipLocked ?? false,
+      params.skipLocked ?? true,
       params.actor === undefined ? ACTOR : params.actor,
     ],
   )
@@ -176,7 +178,7 @@ describe('repair_stranded_transactions (issue #2057)', () => {
     expect(again).toHaveLength(0)
   })
 
-  it('names the lock state and can leave locked rows alone', async () => {
+  it('names the lock state, skips locked rows by default and resets them only on request', async () => {
     const { userId, companyId } = await seedCompany()
     await insertFiscalPeriod({
       userId,
@@ -196,13 +198,22 @@ describe('repair_stranded_transactions (issue #2057)', () => {
     expect(byId.get(inOpen)).toBe('open')
     expect(byId.get(noPeriod)).toBe('no_period')
 
-    const written = await runAsServiceRole((c) =>
-      callRepair(c, { companyId, dryRun: false, skipLocked: true }),
-    )
+    // Default write: only the open row moves; closed and no-period rows stay.
+    const written = await runAsServiceRole((c) => callRepair(c, { companyId, dryRun: false }))
     expect(written.filter((r) => r.repaired).map((r) => r.transaction_id)).toEqual([inOpen])
     expect((await txState(inClosed)).is_business).toBe(true)
     expect((await txState(noPeriod)).is_business).toBe(true)
     expect((await txState(inOpen)).is_business).toBeNull()
+
+    // Explicit p_skip_locked = false resets the rest as well.
+    const forced = await runAsServiceRole((c) =>
+      callRepair(c, { companyId, dryRun: false, skipLocked: false }),
+    )
+    expect(forced.filter((r) => r.repaired).map((r) => r.transaction_id).sort()).toEqual(
+      [inClosed, noPeriod].sort(),
+    )
+    expect((await txState(inClosed)).is_business).toBeNull()
+    expect((await txState(noPeriod)).is_business).toBeNull()
   })
 
   it('scopes a write to one company and flags sandbox companies', async () => {

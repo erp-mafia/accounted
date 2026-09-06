@@ -25,6 +25,11 @@
 -- scripts/repair-stranded-categorized-transactions.ts, never by a user
 -- session, an API key or a loop. Dry run by default; a write requires a
 -- single company id and an actor, so no call can reset the whole database.
+-- Rows dated in a locked or closed period, or behind the company lock date,
+-- are listed but left alone unless p_skip_locked is passed as false: a row
+-- returned to Att bokfora there cannot be booked in place (BFL 5 kap 5 §
+-- keeps closed periods on the rattelse track), so reopening it for triage
+-- is an explicit operator choice, not the default.
 
 INSERT INTO public.processing_event_types (event_type) VALUES
   ('BankTransactionStrandedRepaired')
@@ -33,7 +38,7 @@ ON CONFLICT (event_type) DO NOTHING;
 CREATE OR REPLACE FUNCTION public.repair_stranded_transactions(
   p_company_id uuid DEFAULT NULL,
   p_dry_run boolean DEFAULT true,
-  p_skip_locked boolean DEFAULT false,
+  p_skip_locked boolean DEFAULT true,
   p_actor jsonb DEFAULT NULL,
   p_correlation_id uuid DEFAULT NULL
 )
@@ -174,7 +179,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.repair_stranded_transactions(uuid, boolean, boolean, jsonb, uuid) IS
-  'Issue #2057. Lists (dry run, default) or repairs, per company, bank rows stranded as is_business = true with no verifikat anchor, resetting is_business/category/reconciliation_method to NULL so they return to Att bokfora, and logs one BankTransactionStrandedRepaired event per row. service_role only; a write requires p_company_id and p_actor.';
+  'Issue #2057. Lists (dry run, default) or repairs, per company, bank rows stranded as is_business = true with no verifikat anchor, resetting is_business/category/reconciliation_method to NULL so they return to Att bokfora, and logs one BankTransactionStrandedRepaired event per row. Rows in locked or closed periods are skipped unless p_skip_locked = false. service_role only; a write requires p_company_id and p_actor.';
 
 REVOKE ALL ON FUNCTION public.repair_stranded_transactions(uuid, boolean, boolean, jsonb, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.repair_stranded_transactions(uuid, boolean, boolean, jsonb, uuid) TO service_role;
