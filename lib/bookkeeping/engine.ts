@@ -1252,18 +1252,38 @@ export async function reverseEntry(
   // (is_business, category, journal_entry_id), plus reconciliation_method:
   // it describes how the link was made, and the link is gone (the koppla-bort
   // path in lib/reconciliation/bank-reconciliation.ts resets it the same way).
-  const { error: unlinkError } = await supabase
-    .from('transactions')
-    .update({
-      journal_entry_id: null,
-      is_business: null,
-      category: null,
-      reconciliation_method: null,
-    })
-    .eq('company_id', companyId)
-    .eq('journal_entry_id', entryId)
+  //
+  // A released row must have no anchor left. A residual booking
+  // (lib/reconciliation/residual.ts) keeps the main verifikat in the pointer
+  // column and anchors the small residual verifikat through a junction row of
+  // role 'other'. With the pointer gone that row would be the only thing left,
+  // and it explains a few kronor of fee, not the bank amount: every reader
+  // that counts junction rows (fetchJunctionLinkedTxIds, the bulk_book RPC,
+  // is_transaction_booked()) would go on calling the row booked while the
+  // worklist shows it as att bokföra (#2061). The release_reversed_entry_
+  // transactions RPC therefore resets the pointer AND drops the released
+  // rows' links to other verifikat in one statement (one snapshot, the
+  // UPDATE's row locks): no read-then-write window in which a failed read or
+  // a concurrent booking leaves the half-anchored row behind. That mirrors
+  // what koppla-bort removes and what the 1:N partial-split path below drops;
+  // the residual verifikat stays posted and surfaces as unmatched again,
+  // which is honest: its main sibling is gone. Links to the reversed entry
+  // itself are left to the junction cleanup below, which owns them.
+  const { data: releaseData, error: unlinkError } = await supabase.rpc(
+    'release_reversed_entry_transactions',
+    { p_company_id: companyId, p_entry_id: entryId },
+  )
   if (unlinkError) {
     log.error('failed to unlink transactions from reversed entry', unlinkError, { entryId })
+  } else {
+    const counts = (releaseData ?? {}) as { released?: number; dropped?: number }
+    if ((counts.dropped ?? 0) > 0) {
+      log.info('dropped supplementary voucher links of released transactions', {
+        entryId,
+        released: counts.released ?? 0,
+        dropped: counts.dropped,
+      })
+    }
   }
 
   // Same promise, second anchor. Bulk-booked rows (bulk_book_transactions RPC)
