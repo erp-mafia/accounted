@@ -8120,7 +8120,9 @@
     "manual_spec_hint": "Specifikationen kommer från systemet: {label}. Differensen ska vara noll innan du signerar, annars signerar du med en notering.",
     "signoff_external_balance": "Saldo enligt underlag",
     "signoff_external_balance_help": "Samma tecken som i bokföringen, skulder anges med minus. Bokfört: {amount}.",
-    "signoff_external_balance_optional": "Lämna tomt om du bara vill signera med en notering."
+    "signoff_external_balance_optional": "Lämna tomt om du bara vill signera med en notering.",
+    "proposal_set_title": "{count} verifikat som tillsammans ger beloppet",
+    "proposal_set_same_day": "samma dag"
   },
   "skattekonto": {
     "help_text": "Saldot och händelserna hämtas från Skatteverket och synkas automatiskt varje natt. Genomförda händelser bokförs mot 1630 Skattekonto, oftast automatiskt; det som inte kan matchas flaggas i listan. Betala in via bankgiro 5050-1055 med ditt OCR-nummer.",

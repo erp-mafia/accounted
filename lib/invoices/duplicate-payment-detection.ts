@@ -287,9 +287,16 @@ const SET_DATE_WINDOW_DAYS = 7
 /** Largest set of vouchers offered as the explanation of one bank row. */
 export const EXPLAINING_SET_MAX_VOUCHERS = 4
 
+const DAY_MS = 24 * 3600 * 1000
+
+/** Max journal_entry ids per link-anchor `.in()` filter: keeps the request URL short. */
+const LINK_LOOKUP_CHUNK = 100
+
 export interface ExplainingVoucher {
   journal_entry_id: string
   voucher_label: string
+  voucher_series: string | null
+  voucher_number: number | null
   entry_date: string
   description: string | null
   source_type: string | null
@@ -318,42 +325,63 @@ export interface DetectSetArgs extends DetectArgs {
   bankAccountNumber?: string | null
 }
 
+/** A bank leg with its parent entry, as {@link fetchBankLegs} returns it. */
+interface BankLegRow {
+  account_number: string
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+  journal_entry: {
+    id: string
+    entry_date: string
+    description: string | null
+    voucher_series: string | null
+    voucher_number: number | null
+    status: string
+    source_type: string | null
+  }
+}
+
+type SetCandidate = ExplainingVoucher & { dateDistanceDays: number; id: string }
+
+type PaymentLinkRow = { journal_entry_id: string | null; transaction_id: string | null }
+
+/** The row's SEK target, direction and ±window; null when it cannot take part. */
+interface SetTarget {
+  targetSek: number
+  /** Money in: the voucher DEBITS the bank account. Money out: it CREDITS it. */
+  inbound: boolean
+  dateMs: number
+  lowDate: string
+  highDate: string
+}
+
+function isoDateOffset(dateMs: number, days: number): string {
+  return new Date(dateMs + days * DAY_MS).toISOString().split('T')[0]
+}
+
 /**
- * Find the vouchers that already book this bank row, allowing the row to be
- * explained by SEVERAL of them.
- *
- * The 1:1 detector above answers "is there one voucher of this amount?". A
- * bank feed regularly delivers one row for several affärshändelser (a
- * Bankgirot daily aggregate: two customers' invoices, one "BGGIRERING" row
- * with no payer and no reference), and each of those may already be booked on
- * its own: "Markera som betald" per invoice, one salary voucher per employee.
- * Nothing on the account then equals the row, the 1:1 check passes, and the
- * next door (a batch allocation, a fresh categorisation) books the same
- * money a second time. That is exactly the double booking this catches.
- *
- * Deterministic on purpose: the only signal is an exact öre sum of unlinked
- * bank legs in the row's direction, on the row's account, within ±7 days.
- * No counterparty text is consulted: the bank rows this exists for carry
- * none. A voucher counts as linked (and drops out) when a transaction points
- * at it, a payment row with a bank transaction references it, or a
- * transaction_voucher_links row anchors it: the same three storage
- * locations isTransactionBooked reads, seen from the voucher side. A payment
- * row WITHOUT a bank transaction is a manual settlement (#2019) and keeps the
- * voucher in play: its bank line is precisely what has not been matched yet.
- *
+ * Reversals, corrections and opening balances are bookkeeping scaffolding,
+ * never the payment itself (the reconciliation RPCs drop the same three).
+ */
+function isScaffoldingEntry(sourceType: string | null): boolean {
+  return sourceType === 'storno' || sourceType === 'correction' || sourceType === 'opening_balance'
+}
+
+/**
  * Returns null when the row cannot be stated in SEK (a foreign row with no
  * stored rate): a set cannot be summed in an unknown unit, and the 1:1
  * detector's `amount_verified: false` path already surfaces that case.
  */
-export async function detectExplainingVoucherSet(
-  supabase: SupabaseClient,
-  args: DetectSetArgs,
-): Promise<ExplainingVoucherSet | null> {
-  const { companyId, transactionId, transactionDate, transactionAmount } = args
-  if (Math.round(Math.abs(transactionAmount) * 100) === 0) return null
-
+function prepareSetTarget(args: {
+  transactionDate: string
+  transactionAmount: number
+  transactionCurrency: string | null
+  transactionAmountSek?: number | null
+  transactionExchangeRate?: number | null
+}): SetTarget | null {
+  if (Math.round(Math.abs(args.transactionAmount) * 100) === 0) return null
   const signedSek = resolveTransactionAmountSek({
-    amount: transactionAmount,
+    amount: args.transactionAmount,
     currency: args.transactionCurrency,
     amount_sek: args.transactionAmountSek,
     exchange_rate: args.transactionExchangeRate,
@@ -361,83 +389,73 @@ export async function detectExplainingVoucherSet(
   if (signedSek === null) return null
   const targetSek = roundOre(Math.abs(signedSek))
   if (targetSek === 0) return null
-
-  const dateMs = new Date(transactionDate).getTime()
+  const dateMs = new Date(args.transactionDate).getTime()
   if (Number.isNaN(dateMs)) return null
-  const lowDate = new Date(dateMs - SET_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
-    .toISOString()
-    .split('T')[0]
-  const highDate = new Date(dateMs + SET_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
-    .toISOString()
-    .split('T')[0]
+  return {
+    targetSek,
+    inbound: args.transactionAmount > 0,
+    dateMs,
+    lowDate: isoDateOffset(dateMs, -SET_DATE_WINDOW_DAYS),
+    highDate: isoDateOffset(dateMs, SET_DATE_WINDOW_DAYS),
+  }
+}
 
-  // Money in: the voucher DEBITS the bank account. Money out: it CREDITS it.
-  const inbound = transactionAmount > 0
+/**
+ * Posted legs on the settlement account (or the whole 19xx range) dated
+ * within [lowDate, highDate]. `inbound` true fetches debits, false credits,
+ * null both (the batch path filters direction per row in memory). Throws
+ * when the read fails; callers fail open.
+ */
+async function fetchBankLegs(
+  supabase: SupabaseClient,
+  args: {
+    companyId: string
+    lowDate: string
+    highDate: string
+    bankAccountNumber: string | null
+    inbound: boolean | null
+  },
+): Promise<BankLegRow[]> {
   const account = args.bankAccountNumber?.trim() || null
+  return fetchEntryLines<BankLegRow>({
+    supabase,
+    entryColumns:
+      'id, entry_date, description, voucher_series, voucher_number, status, source_type, company_id',
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', args.companyId)
+        .eq('status', 'posted')
+        .gte('entry_date', args.lowDate)
+        .lte('entry_date', args.highDate),
+    filterLines: (q: EntryLinesQuery) => {
+      const scoped = account
+        ? q.eq('account_number', account)
+        : q.gte('account_number', String(BANK_ACCOUNT_LOW)).lte('account_number', String(BANK_ACCOUNT_HIGH))
+      if (args.inbound === null) return scoped
+      return args.inbound ? scoped.gt('debit_amount', 0) : scoped.gt('credit_amount', 0)
+    },
+    attachEntriesAs: 'journal_entry',
+  })
+}
 
-  type SetLineRow = {
-    account_number: string
-    debit_amount: number | string | null
-    credit_amount: number | string | null
-    journal_entry: {
-      id: string
-      entry_date: string
-      description: string | null
-      voucher_series: string | null
-      voucher_number: number | null
-      status: string
-      source_type: string | null
-    }
-  }
-
-  let lines: SetLineRow[]
-  try {
-    lines = await fetchEntryLines<SetLineRow>({
-      supabase,
-      entryColumns:
-        'id, entry_date, description, voucher_series, voucher_number, status, source_type, company_id',
-      lineColumns: 'account_number, debit_amount, credit_amount',
-      filterEntries: (q: EntryLinesQuery) =>
-        q
-          .eq('company_id', companyId)
-          .eq('status', 'posted')
-          .gte('entry_date', lowDate)
-          .lte('entry_date', highDate),
-      filterLines: (q: EntryLinesQuery) => {
-        const scoped = account
-          ? q.eq('account_number', account)
-          : q.gte('account_number', String(BANK_ACCOUNT_LOW)).lte('account_number', String(BANK_ACCOUNT_HIGH))
-        return inbound ? scoped.gt('debit_amount', 0) : scoped.gt('credit_amount', 0)
-      },
-      attachEntriesAs: 'journal_entry',
-    })
-  } catch {
-    // Fail-open like the 1:1 detector: a detection failure must not block a
-    // booking. Callers log the miss.
-    return null
-  }
-  if (lines.length === 0) return null
-
-  // Reversals, corrections and opening balances are bookkeeping scaffolding,
-  // never the payment itself (the reconciliation RPCs drop the same three).
-  const legs = lines.filter(
-    (l) =>
-      l.journal_entry.source_type !== 'storno' &&
-      l.journal_entry.source_type !== 'correction' &&
-      l.journal_entry.source_type !== 'opening_balance',
-  )
-  if (legs.length === 0) return null
-
-  // One candidate per voucher and account: a voucher with two legs on the
-  // same account (a split payment line) is summed, a voucher touching two
-  // bank accounts (a transfer) keeps its largest leg so it can appear once.
-  type Candidate = ExplainingVoucher & { dateDistanceDays: number; id: string }
-  const byEntry = new Map<string, Candidate>()
+/**
+ * Pure: the candidates for ONE bank row from legs already fetched. One
+ * candidate per voucher and account: a voucher with two legs on the same
+ * account (a split payment line) is summed, a voucher touching two bank
+ * accounts (a transfer) keeps its largest leg so it can appear once. Legs
+ * outside the row's window, in the wrong direction, or on scaffolding
+ * entries never take part.
+ */
+function collectSetCandidates(legs: BankLegRow[], target: SetTarget): Map<string, SetCandidate> {
+  const byEntry = new Map<string, SetCandidate>()
   for (const leg of legs) {
-    const raw = inbound ? leg.debit_amount : leg.credit_amount
+    const entry = leg.journal_entry
+    if (isScaffoldingEntry(entry.source_type)) continue
+    if (entry.entry_date < target.lowDate || entry.entry_date > target.highDate) continue
+    const raw = target.inbound ? leg.debit_amount : leg.credit_amount
     const amount = roundOre(Number(raw))
     if (!(amount > 0)) continue
-    const entry = leg.journal_entry
     const existing = byEntry.get(entry.id)
     if (existing && existing.bank_account_number === leg.account_number) {
       existing.amount = roundOre(existing.amount + amount)
@@ -449,6 +467,8 @@ export async function detectExplainingVoucherSet(
       id: entry.id,
       journal_entry_id: entry.id,
       voucher_label: `${entry.voucher_series ?? 'A'}${entry.voucher_number ?? ''}`,
+      voucher_series: entry.voucher_series,
+      voucher_number: entry.voucher_number,
       entry_date: entry.entry_date,
       description: entry.description,
       source_type: entry.source_type,
@@ -456,66 +476,91 @@ export async function detectExplainingVoucherSet(
       bank_account_number: leg.account_number,
       dateDistanceDays: Number.isNaN(entryMs)
         ? SET_DATE_WINDOW_DAYS
-        : Math.round(Math.abs(entryMs - dateMs) / (24 * 3600 * 1000)),
+        : Math.round(Math.abs(entryMs - target.dateMs) / DAY_MS),
     })
   }
-  if (byEntry.size === 0) return null
+  return byEntry
+}
 
-  // Drop vouchers a bank transaction already explains, through any of the
-  // three anchors. All four lookups are company-scoped (defense in depth).
-  const entryIds = Array.from(byEntry.keys())
-  const [paymentLinksRes, supplierPaymentLinksRes, txLinksRes, junctionLinksRes] =
-    await Promise.all([
-      supabase
-        .from('invoice_payments')
-        .select('journal_entry_id, transaction_id')
-        .eq('company_id', companyId)
-        .in('journal_entry_id', entryIds),
-      supabase
-        .from('supplier_invoice_payments')
-        .select('journal_entry_id, transaction_id')
-        .eq('company_id', companyId)
-        .in('journal_entry_id', entryIds),
-      supabase
-        .from('transactions')
-        .select('id, journal_entry_id')
-        .eq('company_id', companyId)
-        .in('journal_entry_id', entryIds),
-      supabase
-        .from('transaction_voucher_links')
-        .select('journal_entry_id')
-        .eq('company_id', companyId)
-        .in('journal_entry_id', entryIds),
-    ])
-  // A PostgREST failure resolves with { data: null, error } rather than
-  // throwing. Reading that as "no links" would offer a voucher a bank row
-  // already settles, so a failed lookup fails open (null) like a thrown one:
-  // the guard stays advisory and the booking RPC keeps the last word.
-  if (paymentLinksRes.error || supplierPaymentLinksRes.error || txLinksRes.error || junctionLinksRes.error) {
-    return null
-  }
-  const paymentLinks = paymentLinksRes.data
-  const supplierPaymentLinks = supplierPaymentLinksRes.data
-  const txLinks = txLinksRes.data
-  const junctionLinks = junctionLinksRes.data
-
+/**
+ * Voucher ids a bank transaction already explains, through any of the three
+ * anchors isTransactionBooked reads (transactions.journal_entry_id, a payment
+ * row carrying a bank transaction, a transaction_voucher_links row). A payment
+ * row WITHOUT a bank transaction is a manual settlement (#2019) and keeps the
+ * voucher in play: its bank line is precisely what has not been matched yet.
+ * Rows in `ownTransactionIds` never count as links: the guard runs before the
+ * caller's row is linked, and the batch path passes the very rows it is
+ * explaining. Every lookup is company-scoped (defense in depth) and chunked
+ * so a wide window never pushes the .in() past URL limits.
+ *
+ * Returns null when a lookup resolves with an error: a PostgREST failure
+ * resolves with { data: null, error } rather than throwing, and reading that
+ * as "no links" would offer a voucher a bank row already settles. Null fails
+ * open like a thrown scan: the guard stays advisory and the booking RPC
+ * keeps the last word.
+ */
+async function fetchExplainedVoucherIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  entryIds: string[],
+  ownTransactionIds: ReadonlySet<string>,
+): Promise<Set<string> | null> {
   const linkedIds = new Set<string>()
-  for (const row of [...((paymentLinks ?? []) as PaymentLinkRow[]), ...((supplierPaymentLinks ?? []) as PaymentLinkRow[])]) {
-    if (row.journal_entry_id && row.transaction_id) linkedIds.add(row.journal_entry_id)
+  for (let i = 0; i < entryIds.length; i += LINK_LOOKUP_CHUNK) {
+    const chunk = entryIds.slice(i, i + LINK_LOOKUP_CHUNK)
+    const [paymentLinksRes, supplierPaymentLinksRes, txLinksRes, junctionLinksRes] =
+      await Promise.all([
+        supabase
+          .from('invoice_payments')
+          .select('journal_entry_id, transaction_id')
+          .eq('company_id', companyId)
+          .in('journal_entry_id', chunk),
+        supabase
+          .from('supplier_invoice_payments')
+          .select('journal_entry_id, transaction_id')
+          .eq('company_id', companyId)
+          .in('journal_entry_id', chunk),
+        supabase
+          .from('transactions')
+          .select('id, journal_entry_id')
+          .eq('company_id', companyId)
+          .in('journal_entry_id', chunk),
+        supabase
+          .from('transaction_voucher_links')
+          .select('journal_entry_id')
+          .eq('company_id', companyId)
+          .in('journal_entry_id', chunk),
+      ])
+    if (paymentLinksRes.error || supplierPaymentLinksRes.error || txLinksRes.error || junctionLinksRes.error) {
+      return null
+    }
+    for (const row of [
+      ...((paymentLinksRes.data ?? []) as PaymentLinkRow[]),
+      ...((supplierPaymentLinksRes.data ?? []) as PaymentLinkRow[]),
+    ]) {
+      if (row.journal_entry_id && row.transaction_id) linkedIds.add(row.journal_entry_id)
+    }
+    for (const row of (txLinksRes.data ?? []) as { id: string; journal_entry_id: string | null }[]) {
+      if (row.journal_entry_id && !ownTransactionIds.has(row.id)) linkedIds.add(row.journal_entry_id)
+    }
+    for (const row of (junctionLinksRes.data ?? []) as { journal_entry_id: string | null }[]) {
+      if (row.journal_entry_id) linkedIds.add(row.journal_entry_id)
+    }
   }
-  for (const row of (txLinks ?? []) as { id: string; journal_entry_id: string | null }[]) {
-    // The caller's own row is never a link: the guard runs before it is linked.
-    if (row.journal_entry_id && row.id !== transactionId) linkedIds.add(row.journal_entry_id)
-  }
-  for (const row of (junctionLinks ?? []) as { journal_entry_id: string | null }[]) {
-    if (row.journal_entry_id) linkedIds.add(row.journal_entry_id)
-  }
+  return linkedIds
+}
 
-  const pool = Array.from(byEntry.values()).filter((c) => !linkedIds.has(c.journal_entry_id))
-  if (pool.length === 0) return null
-
-  // Sets never mix accounts: the link that resolves the warning is made on
-  // one settlement account. Search per account, closest account first.
+/**
+ * Pure: the best set on one settlement account. Sets never mix accounts: the
+ * link that resolves the warning is made on one account. Closest account
+ * first, then findExactCoveringSet's order (smallest set, then closest in
+ * date).
+ */
+function pickExplainingSet(
+  pool: SetCandidate[],
+  targetSek: number,
+  transactionDate: string,
+): ExplainingVoucherSet | null {
   const accounts = Array.from(new Set(pool.map((c) => c.bank_account_number))).sort()
   for (const accountNumber of accounts) {
     const set = findExactCoveringSet(
@@ -537,7 +582,181 @@ export async function detectExplainingVoucherSet(
   return null
 }
 
-type PaymentLinkRow = { journal_entry_id: string | null; transaction_id: string | null }
+/**
+ * Find the vouchers that already book this bank row, allowing the row to be
+ * explained by SEVERAL of them.
+ *
+ * The 1:1 detector above answers "is there one voucher of this amount?". A
+ * bank feed regularly delivers one row for several affärshändelser (a
+ * Bankgirot daily aggregate: two customers' invoices, one "BGGIRERING" row
+ * with no payer and no reference), and each of those may already be booked on
+ * its own: "Markera som betald" per invoice, one salary voucher per employee.
+ * Nothing on the account then equals the row, the 1:1 check passes, and the
+ * next door (a batch allocation, a fresh categorisation) books the same
+ * money a second time. That is exactly the double booking this catches.
+ *
+ * Deterministic on purpose: the only signal is an exact öre sum of unlinked
+ * bank legs in the row's direction, on the row's account, within ±7 days.
+ * No counterparty text is consulted: the bank rows this exists for carry
+ * none. A voucher counts as linked (and drops out) when a transaction points
+ * at it, a payment row with a bank transaction references it, or a
+ * transaction_voucher_links row anchors it: the same three storage
+ * locations isTransactionBooked reads, seen from the voucher side
+ * (fetchExplainedVoucherIds).
+ *
+ * Composed of the same steps the batch form (detectExplainingVoucherSets)
+ * runs per row, so the booking doors and the reconciliation view share one
+ * definition of "explained by the ledger".
+ */
+export async function detectExplainingVoucherSet(
+  supabase: SupabaseClient,
+  args: DetectSetArgs,
+): Promise<ExplainingVoucherSet | null> {
+  const target = prepareSetTarget(args)
+  if (!target) return null
+
+  let legs: BankLegRow[]
+  try {
+    legs = await fetchBankLegs(supabase, {
+      companyId: args.companyId,
+      lowDate: target.lowDate,
+      highDate: target.highDate,
+      bankAccountNumber: args.bankAccountNumber ?? null,
+      inbound: target.inbound,
+    })
+  } catch {
+    // Fail-open like the 1:1 detector: a detection failure must not block a
+    // booking. Callers log the miss.
+    return null
+  }
+  if (legs.length === 0) return null
+
+  const candidates = collectSetCandidates(legs, target)
+  if (candidates.size === 0) return null
+
+  const linkedIds = await fetchExplainedVoucherIds(
+    supabase,
+    args.companyId,
+    Array.from(candidates.keys()),
+    new Set([args.transactionId]),
+  )
+  if (!linkedIds) return null
+
+  const pool = Array.from(candidates.values()).filter((c) => !linkedIds.has(c.journal_entry_id))
+  if (pool.length === 0) return null
+  return pickExplainingSet(pool, target.targetSek, args.transactionDate)
+}
+
+/** The transaction columns the batch detector needs. */
+export interface ExplainingSetBatchRow {
+  id: string
+  date: string
+  amount: number
+  currency: string | null
+  amount_sek?: number | null
+  exchange_rate?: number | null
+}
+
+/**
+ * The set detector over MANY rows of one settlement account with one ledger
+ * scan: the read path's form (#2293). The bridge table asks "is any open row
+ * explained by the ledger?" for every row it lists; running the single
+ * detector per row would cost five queries a row. This fetches the account's
+ * legs once over the union of the rows' windows and the link anchors once,
+ * then evaluates each row exactly as detectExplainingVoucherSet does (same
+ * candidates, same anchors, same search).
+ *
+ * A voucher explains at most ONE row per call. The 1:N link that confirms a
+ * proposal does not refuse a voucher another row already settles (manualLink
+ * documents why N:1 is allowed), so two rows proposing the same voucher would
+ * both confirm cleanly and settle it twice. Rows are assigned greedily:
+ * same-date sets first, then smaller sets, then older rows; a row whose set
+ * was partly consumed is searched again against what is left.
+ *
+ * Rows that cannot be stated in SEK or carry no amount are skipped. Fails
+ * open (empty map) when the scan or a link lookup fails, like the single
+ * detector; callers log the miss.
+ */
+export async function detectExplainingVoucherSets(
+  supabase: SupabaseClient,
+  args: { companyId: string; bankAccountNumber: string | null; transactions: ExplainingSetBatchRow[] },
+): Promise<Map<string, ExplainingVoucherSet>> {
+  const result = new Map<string, ExplainingVoucherSet>()
+
+  const prepared: Array<{ row: ExplainingSetBatchRow; target: SetTarget }> = []
+  for (const row of args.transactions) {
+    const target = prepareSetTarget({
+      transactionDate: row.date,
+      transactionAmount: Number(row.amount),
+      transactionCurrency: row.currency,
+      transactionAmountSek: row.amount_sek ?? null,
+      transactionExchangeRate: row.exchange_rate ?? null,
+    })
+    if (target) prepared.push({ row, target })
+  }
+  if (prepared.length === 0) return result
+
+  let lowDate = prepared[0].target.lowDate
+  let highDate = prepared[0].target.highDate
+  for (const { target } of prepared) {
+    if (target.lowDate < lowDate) lowDate = target.lowDate
+    if (target.highDate > highDate) highDate = target.highDate
+  }
+
+  let legs: BankLegRow[]
+  try {
+    legs = await fetchBankLegs(supabase, {
+      companyId: args.companyId,
+      lowDate,
+      highDate,
+      bankAccountNumber: args.bankAccountNumber,
+      inbound: null,
+    })
+  } catch {
+    return result
+  }
+  const entryIds = Array.from(
+    new Set(legs.filter((l) => !isScaffoldingEntry(l.journal_entry.source_type)).map((l) => l.journal_entry.id)),
+  )
+  if (entryIds.length === 0) return result
+
+  const linkedIds = await fetchExplainedVoucherIds(
+    supabase,
+    args.companyId,
+    entryIds,
+    new Set(prepared.map((p) => p.row.id)),
+  )
+  if (!linkedIds) return result
+
+  const consumed = new Set<string>()
+  const search = ({ row, target }: { row: ExplainingSetBatchRow; target: SetTarget }) => {
+    const pool = Array.from(collectSetCandidates(legs, target).values()).filter(
+      (c) => !linkedIds.has(c.journal_entry_id) && !consumed.has(c.journal_entry_id),
+    )
+    return pool.length === 0 ? null : pickExplainingSet(pool, target.targetSek, row.date)
+  }
+
+  // Every row against the whole pool first, then the strongest claims settle first.
+  const claims: Array<{ row: ExplainingSetBatchRow; target: SetTarget; set: ExplainingVoucherSet }> = []
+  for (const p of prepared) {
+    const set = search(p)
+    if (set) claims.push({ ...p, set })
+  }
+  claims.sort(
+    (a, b) =>
+      Number(b.set.same_date) - Number(a.set.same_date) ||
+      a.set.vouchers.length - b.set.vouchers.length ||
+      a.row.date.localeCompare(b.row.date) ||
+      a.row.id.localeCompare(b.row.id),
+  )
+  for (const claim of claims) {
+    const set = claim.set.vouchers.some((v) => consumed.has(v.journal_entry_id)) ? search(claim) : claim.set
+    if (!set) continue
+    result.set(claim.row.id, set)
+    for (const v of set.vouchers) consumed.add(v.journal_entry_id)
+  }
+  return result
+}
 
 /** The transaction columns the set detector needs; a caller that already holds the row passes it. */
 export interface TransactionForExplaining {

@@ -8120,7 +8120,9 @@
     "manual_spec_hint": "The specification comes from the system: {label}. The difference should be zero before you sign; otherwise sign with a note.",
     "signoff_external_balance": "Balance per supporting documents",
     "signoff_external_balance_help": "Same sign as in the books, liabilities with a minus. Booked: {amount}.",
-    "signoff_external_balance_optional": "Leave empty to sign with a note only."
+    "signoff_external_balance_optional": "Leave empty to sign with a note only.",
+    "proposal_set_title": "{count} vouchers that together make up the amount",
+    "proposal_set_same_day": "same day"
   },
   "skattekonto": {
     "help_text": "The balance and events are fetched from Skatteverket and synced automatically every night. Completed events are booked against 1630 Skattekonto, usually automatically; anything that cannot be matched is flagged in the list. Pay in via bankgiro 5050-1055 with your OCR number.",
