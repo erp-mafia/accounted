@@ -59,6 +59,7 @@ export const PROCESSING_EVENT_TYPES = [
   'InvoiceDuplicatePaymentDismissed',
   'InvoiceJournalEntrySkipped',
   'InvoicePaymentRowBackfilled',
+  'InvoiceRowsCompleted',
   'OAuthClientRevoked',
   'PendingOperationApproved',
   'PendingOperationRejected',

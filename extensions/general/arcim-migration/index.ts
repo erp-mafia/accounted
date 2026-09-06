@@ -1479,6 +1479,11 @@ export const arcimMigrationExtension: Extension = {
             companyId,
             userId: user.id,
             supabase,
+            // The behandlingshistorik rows the sales-invoice step writes need
+            // the service role (processing_history has no INSERT policy);
+            // built only when that step has rows to write.
+            createHistoryClient: async () =>
+              (await import('@/lib/supabase/server')).createServiceClient(),
             importCompanyInfo,
             importCustomers,
             importSuppliers,
