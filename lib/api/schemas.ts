@@ -2401,6 +2401,20 @@ export const UpdateSettingsSchema = z.object({
       z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z'),
     )
     .optional(),
+  // Company-defined display names per series letter ({"L": "Lön"}). Keys are
+  // single uppercase letters; values are trimmed to at most 40 characters. An
+  // empty value means "clear this name": it is stripped here so the stored
+  // map only ever holds real names and the resolver can treat a missing key
+  // as "use the preset". Display only; the engine never reads this column.
+  voucher_series_labels: z
+    .record(
+      z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z'),
+      z.string().trim().max(40, 'Serienamn får vara högst 40 tecken'),
+    )
+    .transform((labels) =>
+      Object.fromEntries(Object.entries(labels).filter(([, name]) => name.length > 0)),
+    )
+    .optional(),
   // Invoice PDF settings
   ore_rounding: z.boolean().optional(),
   invoice_show_ocr: z.boolean().optional(),

@@ -2378,7 +2378,14 @@
     "per_account_saved_title": "Verifikationsserie sparad",
     "per_account_saved_set": "Nya verifikat från {account} hamnar i serie {series}.",
     "per_account_saved_cleared": "{account} följer nu standardserien för banktransaktioner.",
-    "per_account_save_failed": "Kunde inte spara"
+    "per_account_save_failed": "Kunde inte spara",
+    "name_column": "Namn",
+    "name_placeholder": "Namn (valfritt)",
+    "name_help": "Namnet visas bredvid bokstaven överallt där du väljer serie, till exempel i verifikatfönstret. Tomt fält visar standardbeskrivningen.",
+    "no_vouchers_yet": "Inga verifikat ännu",
+    "save_names": "Spara namn",
+    "names_saved_title": "Serienamn sparade",
+    "names_saved_description": "Namnen visas nu i serieväljarna."
   },
   "settings_team_panel": {
     "role_owner": "Ägare",
