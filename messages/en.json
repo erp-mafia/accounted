@@ -2381,7 +2381,14 @@
     "per_account_saved_title": "Voucher series saved",
     "per_account_saved_set": "New vouchers from {account} land in series {series}.",
     "per_account_saved_cleared": "{account} now follows the default bank-transaction series.",
-    "per_account_save_failed": "Could not save"
+    "per_account_save_failed": "Could not save",
+    "name_column": "Name",
+    "name_placeholder": "Name (optional)",
+    "name_help": "The name is shown next to the letter wherever you pick a series, for example in the voucher form. Leave it empty to show the default description.",
+    "no_vouchers_yet": "No vouchers yet",
+    "save_names": "Save names",
+    "names_saved_title": "Series names saved",
+    "names_saved_description": "The names now appear in the series pickers."
   },
   "settings_team_panel": {
     "role_owner": "Owner",
@@ -2911,6 +2918,8 @@
     "invoices_help": "Invoice due dates"
   },
   "tx_inbox_card": {
+    "match_expense_btn": "Match to expense claims",
+    "match_expense_payout_btn": "Book expense reimbursement to {name}",
     "skv_counterpart_label": "Possible 1930↔1630 transfer.",
     "skv_counterpart_body": "There is a skattekonto event on {date} that matches: post this voucher first, then link the skattekonto row to the same voucher instead of posting it twice.",
     "match_invoice_btn": "Match invoice {number}",
@@ -3305,6 +3314,9 @@
     "mixed_currency_note": "Documents in different currencies cannot be summed into a single amount. Each document is still booked separately, against its matched bank transaction and the amount the bank actually settled in SEK."
   },
   "inbox_workspace": {
+    "payer_help_owner_ef": "Booked as an owner contribution (2018). Nothing to pay out.",
+    "expense_dialog_help_owner_ef": "Cost and VAT are booked now as an owner contribution on account 2018. The firm owes you nothing: taking money out later is an owner withdrawal.",
+    "expense_outcome_ef": "No row in To do: an owner contribution is not something to pay out.",
     "payer_question": "Who paid?",
     "payer_company": "The company",
     "payer_owner": "Me, privately",
@@ -3329,7 +3341,7 @@
     "expense_vat": "VAT",
     "expense_account": "Expense account",
     "expense_outcome_att_gora": "Lands in To do: Pay out expenses to {name}.",
-    "expense_fx_note": "Booked in SEK at the Riksbank rate for the date.",
+    "expense_fx_note": "Foreign receipt: the VAT is not deducted, the whole amount is booked as cost in SEK at the Riksbank rate for the date.",
     "expense_cancel": "Cancel",
     "expense_confirm": "Book",
     "expense_booked_title": "Expense booked",
@@ -4393,6 +4405,14 @@
     "customer_placeholder": "Select customer",
     "day_label": "Day of month",
     "day_hint": "29-31 run on the last day in shorter months.",
+    "run_date_label": "First invoice date",
+    "run_date_edit_label": "Next invoice date",
+    "run_date_hint": "Sets which month the invoice is created in, e.g. February every year.",
+    "upcoming_runs": "Then: {dates}",
+    "validation_run_date_required": "Enter a date",
+    "validation_run_date_past": "The date cannot be in the past",
+    "validation_run_date_not_future": "The date must be after today",
+    "validation_run_date_grid": "The date must fall on day {day} of the month",
     "interval_label": "Interval",
     "interval_monthly": "Every month",
     "interval_quarterly": "Every quarter",
@@ -6001,6 +6021,9 @@
     "load_failed": "Could not load the brand. Try reloading the page."
   },
   "transactions": {
+    "expense_payout_matched_title": "Expense reimbursement booked",
+    "expense_payout_matched_description": "The transfer to {name} was booked and the claims marked as paid.",
+    "expense_payout_match_failed_title": "Could not book the reimbursement",
     "counterparty_suggestion_gone_title": "That counterparty is no longer available",
     "counterparty_suggestion_gone_description": "The suggestion was refreshed. Close the dialog, open it again and pick the counterparty once more.",
     "page_title": "Transactions",
@@ -6677,6 +6700,7 @@
     "dismiss": "Hide"
   },
   "dashboard": {
+    "suggested_kind_expense_payout": "Expense reimbursement",
     "band_betala": "Pay",
     "row_expense_payout": "Pay out expenses to {name}",
     "row_expense_payout_detail_one": "1 receipt · {date}",
@@ -8771,5 +8795,26 @@
     "attn_create": "Create suggestions",
     "auto_created_title": "{count} suggestions created from the books",
     "auto_created_description": "Counterparts your vouchers name that are not in the register. Add them, or hide the ones that do not belong here."
-}
+},
+  "tx_expense_payout_match": {
+    "title": "Book expense reimbursement",
+    "description": "The transfer is booked against the person's liability account, the claims are marked as paid and the transaction is linked to the voucher.",
+    "claims_one": "1 receipt · {date}",
+    "claims_other": "{count} receipts · oldest {date}",
+    "outcome": "The debt to the person becomes 0 kr and the row leaves To do.",
+    "cancel": "Cancel",
+    "confirm": "Book the reimbursement"
+  },
+  "tx_expense_claim_picker": {
+    "title": "Match to expense claims",
+    "description": "Pick the claims this transfer covers. The sum must equal the amount on the row exactly.",
+    "person_label": "Person",
+    "no_claims": "No open expense claims to match.",
+    "selected_sum": "Selected claims: {amount}",
+    "transfer_sum": "Transfer: {amount}",
+    "diff": "Difference: {amount}",
+    "cancel": "Cancel",
+    "confirm": "Book the reimbursement",
+    "failed_title": "Could not book the reimbursement"
+  }
 }

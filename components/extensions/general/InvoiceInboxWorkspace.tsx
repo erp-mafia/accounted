@@ -3119,15 +3119,20 @@ export function PayerChoiceSelect({
   accountingMethod: AccountingMethod
 }) {
   const t = useTranslations('inbox_workspace')
+  // An enskild firma owner makes an egen insättning, not a loan to the
+  // company: no debt, nothing to pay out, so the help line says so.
+  const isEf = useCompanyOptional()?.company?.entity_type === 'enskild_firma'
   // Företaget carries no help line: the button under it ("Matcha mot
   // transaktion") already says what happens. The other answers name the
   // liability the company takes on, which is the consequence worth reading.
   const helpKey = (choice: PayerChoice): string | null =>
     choice === 'company'
       ? null
-      : choice === 'unpaid' && accountingMethod === 'cash'
-        ? 'payer_help_unpaid_cash'
-        : `payer_help_${choice}`
+      : choice === 'owner' && isEf
+        ? 'payer_help_owner_ef'
+        : choice === 'unpaid' && accountingMethod === 'cash'
+          ? 'payer_help_unpaid_cash'
+          : `payer_help_${choice}`
   const selectedHelp = helpKey(value)
   return (
     <div className="space-y-1.5">

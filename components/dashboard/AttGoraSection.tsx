@@ -166,13 +166,17 @@ export default function AttGoraSection({
           ? `/api/transactions/${match.transaction_id}/match-invoice`
           : match.kind === 'rot_rut_payout'
             ? `/api/transactions/${match.transaction_id}/match-rot-rut-payout`
-            : `/api/transactions/${match.transaction_id}/match-supplier-invoice`
+            : match.kind === 'expense_payout'
+              ? `/api/transactions/${match.transaction_id}/match-expense-payout`
+              : `/api/transactions/${match.transaction_id}/match-supplier-invoice`
       const body =
         match.kind === 'invoice'
           ? { invoice_id: match.candidate_id }
           : match.kind === 'rot_rut_payout'
             ? { request_id: match.candidate_id }
-            : { supplier_invoice_id: match.candidate_id }
+            : match.kind === 'expense_payout'
+              ? { claim_ids: match.claim_ids ?? [] }
+              : { supplier_invoice_id: match.candidate_id }
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -335,7 +339,9 @@ export default function AttGoraSection({
                                       ? t('suggested_kind_invoice')
                                       : match.kind === 'rot_rut_payout'
                                         ? t('suggested_kind_rot_rut_payout')
-                                        : t('suggested_kind_supplier_invoice')}
+                                        : match.kind === 'expense_payout'
+                                          ? t('suggested_kind_expense_payout')
+                                          : t('suggested_kind_supplier_invoice')}
                                     {match.candidate_number ? ` ${match.candidate_number}` : ''}
                                     {match.counterparty_name ? ` · ${match.counterparty_name}` : ''}
                                     {' · '}

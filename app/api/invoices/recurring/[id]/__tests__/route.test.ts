@@ -147,6 +147,72 @@ describe('PATCH /api/invoices/recurring/[id] reactivation', () => {
     expect(updatePayloads[0]).toEqual({ interval_months: 3 })
   })
 
+  it('writes an explicit future next_run_date verbatim (re-phasing a yearly schedule)', async () => {
+    scheduleRow = { next_run_date: '2027-01-15', day_of_month: 15, interval_months: 12 }
+
+    await PATCH(patchReq({ next_run_date: '2027-02-15' }), params)
+    expect(updatePayloads[0]).toMatchObject({ next_run_date: '2027-02-15' })
+    expect(updatePayloads[0]).not.toHaveProperty('last_run_warning')
+  })
+
+  it('an explicit next_run_date wins over the day_of_month recompute', async () => {
+    scheduleRow = { next_run_date: '2027-01-15', day_of_month: 15, interval_months: 12 }
+
+    await PATCH(patchReq({ day_of_month: 20, next_run_date: '2027-02-20' }), params)
+    expect(updatePayloads[0]).toMatchObject({ day_of_month: 20, next_run_date: '2027-02-20' })
+  })
+
+  it('an explicit next_run_date on reactivation replaces the roll-forward and clears the warning', async () => {
+    scheduleRow = { next_run_date: '2026-01-05', day_of_month: 5, interval_months: 12 }
+
+    await PATCH(patchReq({ status: 'active', next_run_date: '2026-09-05' }), params)
+    expect(updatePayloads[0]).toMatchObject({
+      status: 'active',
+      next_run_date: '2026-09-05',
+      last_run_warning: null,
+    })
+  })
+
+  it('rejects a next_run_date that is not after today in Stockholm', async () => {
+    scheduleRow = { next_run_date: '2026-08-06', day_of_month: 6, interval_months: 1 }
+
+    // Today is 2026-07-06 in Sweden: same day is refused, so an edit can never
+    // trigger a same-hour send.
+    const res = await PATCH(patchReq({ next_run_date: '2026-07-06' }), params)
+    const { status, body } = await parseJsonResponse<{ type: string; error: string }>(res)
+    expect(status).toBe(400)
+    expect(body.type).toBe('validation_error')
+    expect(body.error).toMatch(/after today/)
+    expect(updatePayloads).toHaveLength(0)
+  })
+
+  it('rejects a next_run_date off the day_of_month grid', async () => {
+    scheduleRow = { next_run_date: '2027-01-15', day_of_month: 15, interval_months: 12 }
+
+    const res = await PATCH(patchReq({ next_run_date: '2027-02-14' }), params)
+    const { status, body } = await parseJsonResponse<{ type: string; error: string }>(res)
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/day_of_month/)
+    expect(updatePayloads).toHaveLength(0)
+  })
+
+  it('validates next_run_date against the edited day_of_month, not the stored one', async () => {
+    scheduleRow = { next_run_date: '2027-01-15', day_of_month: 15, interval_months: 12 }
+
+    const res = await PATCH(patchReq({ day_of_month: 20, next_run_date: '2027-02-15' }), params)
+    const { status } = await parseJsonResponse<{ type: string }>(res)
+    expect(status).toBe(400)
+    expect(updatePayloads).toHaveLength(0)
+  })
+
+  it('returns 404 for next_run_date on a schedule that does not exist', async () => {
+    scheduleRow = null
+
+    const res = await PATCH(patchReq({ next_run_date: '2027-02-15' }), params)
+    const { status } = await parseJsonResponse<{ type: string }>(res)
+    expect(status).toBe(404)
+  })
+
   it('does not touch next_run_date or warning when pausing', async () => {
     scheduleRow = { next_run_date: '2026-07-05', day_of_month: 5 }
 

@@ -59,10 +59,60 @@ export const VOUCHER_SERIES_PRESETS: ReadonlyArray<{ letter: string; label: stri
   { letter: 'M', label: 'Momsrapport' },
 ]
 
-/** Swedish description for a preset series letter; empty for unknown letters. */
-export function voucherSeriesLabel(letter: string): string {
+/**
+ * Company-defined series names, company_settings.voucher_series_labels:
+ * {"L": "Lön"}. Keys are single uppercase letters, values non-empty names.
+ */
+export type VoucherSeriesLabels = Partial<Record<string, string>>
+
+/**
+ * Display name for a series letter: the company's own name first, the Swedish
+ * preset second, empty when neither exists. The ONLY place that decides what a
+ * letter is called; every picker and list goes through it so a company that
+ * lays its series out differently from the presets (L for löner instead of K)
+ * sees its own words everywhere, not Fortnox's.
+ */
+export function voucherSeriesLabel(
+  letter: string,
+  labels?: VoucherSeriesLabels | null,
+): string {
+  const custom = labels?.[letter]
+  if (typeof custom === 'string' && custom.trim().length > 0) return custom.trim()
   const match = VOUCHER_SERIES_PRESETS.find((p) => p.letter === letter)
   return match ? match.label : ''
+}
+
+/**
+ * The closed list every series picker offers: the presets in their fixed
+ * order, then every other letter the company already uses or has named,
+ * deduplicated and sorted. Each entry carries the display name resolved by
+ * voucherSeriesLabel, so a custom name overrides a preset in place.
+ *
+ * `extraLetters` may hold anything (settings values, draft state, account
+ * rows); only single uppercase letters survive, so an empty string, null or a
+ * typo never becomes an option. A free A-Z list would let a slip start an
+ * undocumented series (BFNAR 2013:2 p. 9.2-9.15 wants the series in use
+ * enumerated in the systemdokumentation).
+ */
+export function buildVoucherSeriesOptions(
+  labels: VoucherSeriesLabels | null | undefined,
+  extraLetters: Iterable<unknown>,
+): Array<{ letter: string; label: string }> {
+  const seen = new Set(VOUCHER_SERIES_PRESETS.map((p) => p.letter))
+  const extras = new Set<string>()
+  const consider = (value: unknown) => {
+    if (typeof value === 'string' && SERIES_LETTER_RE.test(value) && !seen.has(value)) {
+      extras.add(value)
+    }
+  }
+  for (const value of extraLetters) consider(value)
+  for (const key of Object.keys(labels ?? {})) consider(key)
+  return [
+    ...VOUCHER_SERIES_PRESETS.map((p) => ({ letter: p.letter, label: voucherSeriesLabel(p.letter, labels) })),
+    ...Array.from(extras)
+      .sort()
+      .map((letter) => ({ letter, label: voucherSeriesLabel(letter, labels) })),
+  ]
 }
 
 /**

@@ -522,6 +522,7 @@ export function makeCompanySettings(
       storno: 'A',
       correction: 'A',
     },
+    voucher_series_labels: {},
     last_supplier_payment_account: null,
     ore_rounding: true,
     invoice_show_ocr: true,

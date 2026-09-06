@@ -37,6 +37,7 @@ import {
 } from '@/lib/import/opening-balance-defaults'
 import type { ImportPreview, AccountMapping } from '@/lib/import/types'
 import type { TheaterModel } from '@/lib/import/theater-model'
+import { voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
 
 const SERIES_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -75,6 +76,8 @@ export default function ImportReviewStep({
   const { company } = useCompany()
   const { settings: companySettings } = useCompanySettings()
   const companyDefaultVoucherSeries = companySettings?.default_voucher_series || null
+  // Company-defined series names (presets as fallback) for the two pickers.
+  const seriesLabels = companySettings?.voucher_series_labels ?? null
   const t = useTranslations('import')
   const [options, setOptions] = useState<ImportExecuteOptions>({
     createFiscalPeriod: true,
@@ -394,9 +397,10 @@ export default function ImportReviewStep({
                         : isExisting
                           ? ', används redan'
                           : ''
+                    const name = voucherSeriesLabel(letter, seriesLabels)
                     return (
                       <SelectItem key={letter} value={letter}>
-                        {`Serie ${letter}${suffix}`}
+                        {`Serie ${letter}${name ? ` ${name}` : ''}${suffix}`}
                       </SelectItem>
                     )
                   })}
@@ -472,9 +476,10 @@ export default function ImportReviewStep({
                       : isExisting
                         ? ', används redan'
                         : ''
+                    const name = voucherSeriesLabel(letter, seriesLabels)
                     return (
                       <SelectItem key={letter} value={letter}>
-                        {`Serie ${letter}${suffix}`}
+                        {`Serie ${letter}${name ? ` ${name}` : ''}${suffix}`}
                       </SelectItem>
                     )
                   })}

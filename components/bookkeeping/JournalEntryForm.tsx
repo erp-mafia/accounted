@@ -45,7 +45,7 @@ import {
 } from '@/lib/documents/link-documents'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import { formatVoucher, resolveDefaultSeriesForSource, VOUCHER_SERIES_PRESETS } from '@/lib/bookkeeping/voucher-series-resolver'
+import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -298,15 +298,13 @@ export default function JournalEntryForm({
 
   // The series picker: the fixed Swedish presets first, then any letter this
   // company already uses (settings map, global default, or the series a draft
-  // was saved with) so no existing value falls out of the list.
-  const seriesOptions = useMemo(() => {
-    const options = VOUCHER_SERIES_PRESETS.map((p) => ({ letter: p.letter, label: p.label }))
-    const seen = new Set(options.map((o) => o.letter))
-    const extras = [...configuredSeries, voucherSeries]
-      .filter((letter) => /^[A-Z]$/.test(letter) && !seen.has(letter) && seen.add(letter))
-      .sort()
-    return [...options, ...extras.map((letter) => ({ letter, label: '' }))]
-  }, [configuredSeries, voucherSeries])
+  // was saved with) so no existing value falls out of the list. Names come
+  // from the company's own voucher_series_labels, preset text as fallback.
+  const seriesLabels = companySettings?.voucher_series_labels ?? null
+  const seriesOptions = useMemo(
+    () => buildVoucherSeriesOptions(seriesLabels, [...configuredSeries, voucherSeries]),
+    [seriesLabels, configuredSeries, voucherSeries],
+  )
 
   useEffect(() => {
     loadBasCatalog().then(setCatalog).catch(() => {/* search degrades to the active chart */})
