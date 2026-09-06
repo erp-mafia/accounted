@@ -43,6 +43,7 @@ import {
   type InvoiceListSort,
   type InvoiceListSortColumn,
 } from '@/lib/invoices/invoice-list-sort'
+import { invoiceRowTone, type InvoiceRowTone } from '@/lib/invoices/invoice-list-row-tone'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import {
   ArrowDown,
@@ -155,6 +156,21 @@ function statusGroupOf(invoice: Invoice): StatusGroup {
   if (matchesListTab(invoice, 'draft')) return 'drafts'
   if (matchesListTab(invoice, 'unpaid')) return 'awaiting'
   return 'settled'
+}
+
+// Row tone (#2215): the list must read without the status column. Settled
+// rows recede to muted text, open rows keep the foreground, and the overdue
+// chip stays the one marker on its row (one status indicator per element;
+// semantic colours stay data-only, convention 12). This Record is the swap
+// surface if the founder prefers colour: a row tint is
+// 'bg-success/[0.04]' / 'bg-warning/[0.05]' / 'bg-destructive/[0.05]'; a
+// left-edge bar is '[&>td:first-child]:border-l-2 [&>td:first-child]:border-l-success'
+// and its warning/destructive siblings. Nothing else in the row changes.
+const ROW_TONE_CLASS: Record<InvoiceRowTone, string> = {
+  settled: 'text-muted-foreground',
+  open: '',
+  overdue: '',
+  none: '',
 }
 
 const TAB_LABEL_KEYS: Record<ListTab, string> = {
@@ -1004,6 +1020,7 @@ export default function InvoicesPage() {
                   <tr
                     className={cn(
                       'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
+                      ROW_TONE_CLASS[invoiceRowTone(invoice)],
                       selectedIds.has(invoice.id) && 'bg-secondary/40',
                     )}
                     onClick={() => {
