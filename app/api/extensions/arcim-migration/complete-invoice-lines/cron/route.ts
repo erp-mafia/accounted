@@ -5,6 +5,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
   completeMigratedInvoiceLines,
+  countRowlessInvoices,
   type CompleteInvoiceLinesResult,
 } from '@/extensions/general/arcim-migration/lib/complete-invoice-lines'
 
@@ -15,14 +16,27 @@ import {
  *
  * The migration hydrates the provider's detail form inside a fixed budget
  * and reports the shortfall; this is what picks the shortfall up. Every run
- * walks the accepted consents whose credentials can still be used, newest
- * first, and for each company completes as many of its row-less invoices as
- * its share of the run allows. A company with nothing left costs one query
- * and no provider call (the pass checks our side before it touches the
- * consent), so walking every live consent is cheap and no company waits
- * behind a fixed page of newer ones. Scheduled hourly in vercel.json (and
- * the Docker crontabs); a company the size of Clearstoq (1 125 invoices) is
- * done after two or three runs.
+ * walks the accepted consents whose credentials can still be used, in two
+ * phases. First it sizes each register on our side: one indexed count of the
+ * invoices still without rows per consent, no provider call. Then it hands
+ * the registers with anything left to the pass smallest first, each within
+ * its share of the run. Shortest job first: a register that fits its share
+ * is finished this run whatever was accepted after it, and a register that
+ * needs several runs takes what is left of each instead of pushing every
+ * older company back by an hour per run (on 2026-09-05 a 1 125-invoice
+ * register on the newest consent used two runs in a row while a 384-invoice
+ * register three consents older, about 100 s of work, was skipped for budget
+ * both times). Nothing is stored between runs: the counts are taken fresh
+ * every hour, so a register the wizard or an earlier run finished simply
+ * stops appearing.
+ *
+ * What a run does not reach is, by construction, its largest registers. They
+ * are reported as deferred with their counts in the run summary and in the
+ * response, so a register that is deferred hour after hour (possible only
+ * while smaller registers keep arriving faster than the run clears them) is
+ * visible rather than silent. Scheduled hourly in vercel.json (and the
+ * Docker crontabs); a company the size of Clearstoq (1 125 invoices) is done
+ * after two or three runs.
  *
  * "Can still be used" is read off the token row, not the consent's age:
  * Fortnox issues a new refresh token on every refresh and each one lives 45
@@ -40,7 +54,7 @@ export const maxDuration = 300
 const RUN_BUDGET_MS = 240_000
 /** One company's share of provider detail fetches per run. */
 const PER_COMPANY_BUDGET_MS = 120_000
-/** Below this the remaining companies wait for the next run. */
+/** Below this the registers still in line (the largest ones) wait for the next run. */
 const MIN_COMPANY_BUDGET_MS = 20_000
 /**
  * A token pair not refreshed for this long cannot be refreshed any more
@@ -56,6 +70,12 @@ interface ConsentRow {
   provider: string | null
   created_at: string
   provider_consent_tokens: { token_expires_at: string | null } | { token_expires_at: string | null }[] | null
+}
+
+/** A usable consent whose company still has invoices without rows, sized by that count. */
+interface Register {
+  consent: ConsentRow
+  candidates: number
 }
 
 /** The consent's token row, whichever cardinality PostgREST rendered it with. */
@@ -96,6 +116,8 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
     .select('id, company_id, provider, created_at, provider_consent_tokens(token_expires_at)')
     .eq('status', 1)
     .not('provider', 'is', null)
+    // A stable scan order under the cap, and the tiebreak between registers
+    // of equal size (the sort below is stable): the newer consent goes first.
     .order('created_at', { ascending: false })
     .limit(MAX_CONSENTS_SCANNED)
 
@@ -105,9 +127,28 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
 
   const now = Date.now()
   const scanned = (data ?? []) as ConsentRow[]
-  const consents = scanned.filter((consent) => consentIsUsable(consent, now))
+  const usable = scanned.filter((consent) => consentIsUsable(consent, now))
   const deadline = now + RUN_BUDGET_MS
-  let skippedForBudget = 0
+
+  // Phase 1: size every register on our side. No consent is touched here, so
+  // a company with nothing left costs one count and no token refresh.
+  const registers: Register[] = []
+  const sizing = await ctx.forEach('consent', usable, async (consent) => {
+    const candidates = await countRowlessInvoices(supabase, consent.company_id)
+    if (candidates > 0) registers.push({ consent, candidates })
+  })
+  registers.sort((a, b) => a.candidates - b.candidates)
+
+  if (registers.length > 0) {
+    ctx.log.info('registers with row-less invoices, smallest first', {
+      registers: registers.map((r) => ({
+        companyId: r.consent.company_id, provider: r.consent.provider, candidates: r.candidates,
+      })),
+    })
+  }
+
+  // Phase 2: complete them smallest first, each within its share of the run.
+  const deferred: { companyId: string; candidates: number }[] = []
   const totals = {
     companies: 0,
     candidates: 0,
@@ -120,10 +161,10 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
     failed: 0,
   }
 
-  const summary = await ctx.forEach('consent', consents, async (consent, itemCtx) => {
+  const completing = await ctx.forEach('register', registers, async ({ consent, candidates }, itemCtx) => {
     const budgetMs = Math.min(PER_COMPANY_BUDGET_MS, deadline - Date.now())
     if (budgetMs < MIN_COMPANY_BUDGET_MS) {
-      skippedForBudget++
+      deferred.push({ companyId: consent.company_id, candidates })
       return
     }
 
@@ -134,42 +175,46 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
       budgetMs,
     })
 
-    if (result.candidates > 0) {
-      totals.companies++
-      totals.candidates += result.candidates
-      totals.completed += result.completed
-      totals.headersUpdated += result.headersUpdated
-      totals.remaining += result.remaining
-      totals.notHydrated += result.notHydrated
-      totals.totalMismatch += result.totalMismatch
-      totals.rowsMismatch += result.rowsMismatch
-      totals.failed += result.failed
-      itemCtx.log.info('migrated invoice rows completed for company', {
-        companyId: consent.company_id,
-        provider: consent.provider,
-        candidates: result.candidates,
-        matched: result.matched,
-        completed: result.completed,
-        remaining: result.remaining,
-        notHydrated: result.notHydrated,
-        totalMismatch: result.totalMismatch,
-        rowsMismatch: result.rowsMismatch,
-        hydration: result.hydration,
-      })
-    }
+    // The pass re-reads our side before it touches the consent; a register
+    // the wizard finished between the count and now is neither worked on nor
+    // counted as a company.
+    if (result.candidates === 0) return
+    totals.companies++
+    totals.candidates += result.candidates
+    totals.completed += result.completed
+    totals.headersUpdated += result.headersUpdated
+    totals.remaining += result.remaining
+    totals.notHydrated += result.notHydrated
+    totals.totalMismatch += result.totalMismatch
+    totals.rowsMismatch += result.rowsMismatch
+    totals.failed += result.failed
+    itemCtx.log.info('migrated invoice rows completed for company', {
+      companyId: consent.company_id,
+      provider: consent.provider,
+      candidates: result.candidates,
+      matched: result.matched,
+      completed: result.completed,
+      remaining: result.remaining,
+      notHydrated: result.notHydrated,
+      totalMismatch: result.totalMismatch,
+      rowsMismatch: result.rowsMismatch,
+      hydration: result.hydration,
+    })
   })
 
-  ctx.log.info('complete-invoice-lines run finished', {
-    ...totals, skippedForBudget, consents: summary.total, consentsStale: scanned.length - consents.length,
-  })
+  if (deferred.length > 0) {
+    ctx.log.warn('run deadline reached; the largest registers wait for the next run', { deferred })
+  }
 
-  return NextResponse.json({
-    data: {
-      consents: summary.total,
-      consentsStale: scanned.length - consents.length,
-      consentsFailed: summary.failed,
-      skippedForBudget,
-      ...totals,
-    },
-  })
+  const summary = {
+    consents: usable.length,
+    consentsStale: scanned.length - usable.length,
+    consentsFailed: sizing.failed + completing.failed,
+    skippedForBudget: deferred.length,
+    deferred,
+    ...totals,
+  }
+  ctx.log.info('complete-invoice-lines run finished', summary)
+
+  return NextResponse.json({ data: summary })
 })
