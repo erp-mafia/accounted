@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, it, expect } from 'vitest'
 import type { PoolClient } from 'pg'
 import { getPool, getClient, withUserContext } from './setup'
-import { seedCompany, insertAuthUser, insertCompanyMember } from './fixtures'
+import { seedCompany, insertAuthUser, insertCompanyMember, insertCashAccount, insertTransaction } from './fixtures'
 
 // pg-real coverage for 20260904171000_expense_payout_batch_rpc:
 // create_expense_payout_batch books one payout verifikat, links the batch
@@ -12,6 +12,7 @@ import { seedCompany, insertAuthUser, insertCompanyMember } from './fixtures'
 type RpcResult = {
   ok: boolean
   code?: string
+  transaction_id?: string | null
   batch_id?: string
   journal_entry_id?: string
   voucher_number?: number
@@ -36,14 +37,14 @@ async function insertClaim(
   companyId: string,
   userId: string,
   amountSek: number,
-  overrides: Partial<{ claimantName: string; status: string }> = {},
+  overrides: Partial<{ claimantName: string; status: string; liability: string }> = {},
 ): Promise<string> {
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.expense_claims
        (id, company_id, user_id, claimant_name, description, expense_date, amount_sek, vat_sek, expense_account, liability_account, status)
-     VALUES ($1, $2, $3, $4, 'Kvitto', '2026-08-25', $5, 0, '5410', '2893', $6)`,
-    [id, companyId, userId, overrides.claimantName ?? 'Ägare', amountSek, overrides.status ?? 'registered'],
+     VALUES ($1, $2, $3, $4, 'Kvitto', '2026-08-25', $5, 0, '5410', $7, $6)`,
+    [id, companyId, userId, overrides.claimantName ?? 'Ägare', amountSek, overrides.status ?? 'registered', overrides.liability ?? '2893'],
   )
   return id
 }
@@ -52,11 +53,11 @@ async function callRpc(
   client: PoolClient,
   companyId: string,
   claimIds: string[],
-  opts: Partial<{ date: string; cash: string }> = {},
+  opts: Partial<{ date: string; cash: string; transactionId: string }> = {},
 ): Promise<RpcResult> {
   const { rows } = await client.query<{ r: RpcResult }>(
-    `SELECT public.create_expense_payout_batch($1, $2::uuid[], $3::date, $4) AS r`,
-    [companyId, claimIds, opts.date ?? '2026-08-31', opts.cash ?? '1930'],
+    `SELECT public.create_expense_payout_batch($1, $2::uuid[], $3::date, $4, NULL, NULL, $5::uuid) AS r`,
+    [companyId, claimIds, opts.date ?? '2026-08-31', opts.cash ?? '1930', opts.transactionId ?? null],
   )
   return rows[0].r
 }
@@ -281,5 +282,99 @@ describe('create_expense_payout_batch', () => {
     })
 
     expect(await payoutState(companyId, [owner, other])).toMatchObject({ batches: 0, postedPayouts: 0 })
+  })
+
+  it('books the payout FROM an unbooked bank outflow and links the row in the same transaction', async () => {
+    const { companyId, userId } = await seedCompany()
+    await seedChart(companyId, userId)
+    const c1 = await insertClaim(companyId, userId, 1196)
+    const c2 = await insertClaim(companyId, userId, 400)
+    const cashAccountId = await insertCashAccount({ companyId, ledgerAccount: '1930' })
+    const txId = await insertTransaction({
+      companyId,
+      userId,
+      amount: -1596,
+      date: '2026-08-31',
+      description: 'Överföring Ägare',
+      cashAccountId,
+    })
+
+    const result = await asUser(userId, (c) => callRpc(c, companyId, [c1, c2], { transactionId: txId }))
+    expect(result.ok).toBe(true)
+    expect(result.transaction_id).toBe(txId)
+
+    const { rows: tx } = await getPool().query(
+      `SELECT journal_entry_id, is_business, reconciliation_method FROM public.transactions WHERE id = $1`,
+      [txId],
+    )
+    expect(tx[0]).toEqual({
+      journal_entry_id: result.journal_entry_id,
+      is_business: true,
+      reconciliation_method: 'manual',
+    })
+    const { rows: claims } = await getPool().query(
+      `SELECT status FROM public.expense_claims WHERE id = ANY($1::uuid[])`,
+      [[c1, c2]],
+    )
+    expect(claims.map((r) => r.status)).toEqual(['paid', 'paid'])
+    const { rows: booked } = await getPool().query(`SELECT public.is_transaction_booked($1) AS b`, [txId])
+    expect(booked[0].b).toBe(true)
+  })
+
+  it('refuses a bank row whose amount differs from the claims, or that is already booked, without touching anything', async () => {
+    const { companyId, userId } = await seedCompany()
+    await seedChart(companyId, userId)
+    const c1 = await insertClaim(companyId, userId, 1240)
+    const cashAccountId = await insertCashAccount({ companyId, ledgerAccount: '1930' })
+    const wrongAmount = await insertTransaction({ companyId, userId, amount: -1200, cashAccountId })
+
+    const mismatch = await asUser(userId, (c) => callRpc(c, companyId, [c1], { transactionId: wrongAmount }))
+    expect(mismatch).toMatchObject({ ok: false, code: 'TX_AMOUNT_MISMATCH' })
+
+    const inflow = await insertTransaction({ companyId, userId, amount: 1240, cashAccountId })
+    const notOutflow = await asUser(userId, (c) => callRpc(c, companyId, [c1], { transactionId: inflow }))
+    expect(notOutflow).toMatchObject({ ok: false, code: 'TX_AMOUNT_MISMATCH' })
+
+    // Book the right row once, then try to book it again: the second call must
+    // see it as booked (the claims are already paid too, but the row check
+    // runs first for a fresh set of claims).
+    const right = await insertTransaction({ companyId, userId, amount: -1240, cashAccountId })
+    const first = await asUser(userId, (c) => callRpc(c, companyId, [c1], { transactionId: right }))
+    expect(first.ok).toBe(true)
+    const c2 = await insertClaim(companyId, userId, 1240)
+    const again = await asUser(userId, (c) => callRpc(c, companyId, [c2], { transactionId: right }))
+    expect(again).toMatchObject({ ok: false, code: 'TX_ALREADY_BOOKED' })
+
+    const { rows } = await getPool().query(
+      `SELECT count(*)::int AS n FROM public.journal_entries WHERE company_id = $1 AND source_type = 'expense_payout'`,
+      [companyId],
+    )
+    expect(rows[0].n).toBe(1)
+    const { rows: c2rows } = await getPool().query(`SELECT status FROM public.expense_claims WHERE id = $1`, [c2])
+    expect(c2rows[0].status).toBe('registered')
+  })
+
+  it('books an enskild firma owner payout as eget uttag on 2013, never 2018', async () => {
+    const { companyId, userId } = await seedCompany()
+    await seedChart(companyId, userId)
+    await getPool().query(
+      `INSERT INTO public.chart_of_accounts
+         (user_id, company_id, account_number, account_name, account_class, account_type, normal_balance, is_active)
+       VALUES ($1, $2, '2018', 'Övriga egna insättningar', 2, 'equity', 'credit', true),
+              ($1, $2, '2013', 'Övriga egna uttag', 2, 'equity', 'debit', true)`,
+      [userId, companyId],
+    )
+    const c1 = await insertClaim(companyId, userId, 640, { liability: '2018' })
+    const result = await asUser(userId, (c) => callRpc(c, companyId, [c1]))
+    expect(result.ok).toBe(true)
+    const { rows } = await getPool().query(
+      `SELECT account_number, debit_amount::float AS d, credit_amount::float AS c
+       FROM public.journal_entry_lines WHERE journal_entry_id = $1 ORDER BY sort_order`,
+      [result.journal_entry_id],
+    )
+    expect(rows).toEqual([
+      { account_number: '2013', d: 640, c: 0 },
+      { account_number: '1930', d: 0, c: 640 },
+    ])
   })
 })

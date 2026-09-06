@@ -1001,6 +1001,26 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The payout was booked but the transaction could not be linked to the voucher. Link it via "Match against existing voucher".',
   },
+  EXPENSE_PAYOUT_MATCH_NOT_EXPENSE: {
+    httpStatus: 400,
+    message_sv: 'Endast utbetalningar kan matchas mot utlägg.',
+    message_en: 'Only outgoing transactions can be matched to expense claims.',
+  },
+  EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED: {
+    httpStatus: 400,
+    message_sv: 'Transaktionen är redan bokförd eller kopplad till en verifikation.',
+    message_en: 'The transaction is already booked or linked to a journal entry.',
+  },
+  EXPENSE_PAYOUT_MATCH_CURRENCY: {
+    httpStatus: 400,
+    message_sv: 'Utlägg betalas ut i SEK och transaktionen har en annan valuta.',
+    message_en: 'Expense claims are reimbursed in SEK; the transaction is in another currency.',
+  },
+  EXPENSE_PAYOUT_MATCH_AMOUNT: {
+    httpStatus: 400,
+    message_sv: 'Beloppet stämmer inte med de valda utläggen. Välj de utlägg som överföringen täcker.',
+    message_en: 'The amount does not match the selected expense claims. Pick the claims this transfer covers.',
+  },
   ROT_RUT_FILE_CREATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Filen kunde inte skapas.',

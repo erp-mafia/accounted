@@ -423,10 +423,45 @@ describe('createPayoutBatch', () => {
       p_cash_account: '1935',
       p_notes: 'Septemberutlägg',
       p_user_id: USER,
+      p_transaction_id: null,
     })
     // No journal write happens outside the RPC.
     expect(createJournalEntryMock).not.toHaveBeenCalled()
     expect(reverseEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('forwards the bank transaction so the RPC links it in the same transaction', async () => {
+    enqueue({
+      data: { ok: true, batch_id: 'batch-2', journal_entry_id: 'je-3', voucher_number: 8, total_sek: 1596, claim_count: 2 },
+    })
+    const result = await createPayoutBatch(sb, COMPANY, USER, {
+      claim_ids: ['c2', 'c3'],
+      payout_date: '2026-09-10',
+      cash_account: '1930',
+      transaction_id: 'tx-1',
+    })
+    expect(result).toMatchObject({ ok: true, batch_id: 'batch-2', journal_entry_id: 'je-3' })
+    expect(rpcCalls()[0][1]).toMatchObject({ p_transaction_id: 'tx-1', p_payout_date: '2026-09-10' })
+  })
+
+  it('echoes the bank-line refusals (amount mismatch, already booked) as typed codes', async () => {
+    enqueue({ data: { ok: false, code: 'TX_AMOUNT_MISMATCH', details: { transaction_amount: -1500, claims_total: 1596 } } })
+    const mismatch = await createPayoutBatch(sb, COMPANY, USER, {
+      claim_ids: ['c2'],
+      payout_date: '2026-09-10',
+      cash_account: '1930',
+      transaction_id: 'tx-1',
+    })
+    expect(mismatch).toMatchObject({ ok: false, code: 'TX_AMOUNT_MISMATCH' })
+
+    enqueue({ data: { ok: false, code: 'TX_ALREADY_BOOKED' } })
+    const booked = await createPayoutBatch(sb, COMPANY, USER, {
+      claim_ids: ['c2'],
+      payout_date: '2026-09-10',
+      cash_account: '1930',
+      transaction_id: 'tx-1',
+    })
+    expect(booked).toMatchObject({ ok: false, code: 'TX_ALREADY_BOOKED' })
   })
 
   it('echoes a refusal code from the RPC (claims already paid by a concurrent request)', async () => {
