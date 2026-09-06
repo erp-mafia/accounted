@@ -28,8 +28,10 @@ vi.mock('@/lib/init', () => ({
 }))
 
 const mockSettle = vi.fn()
+const mockSettleSet = vi.fn()
 vi.mock('@/lib/invoices/rot-rut-settle', () => ({
   settleRotRutPayoutRequest: (...args: unknown[]) => mockSettle(...args),
+  settleRotRutPayoutRequestSet: (...args: unknown[]) => mockSettleSet(...args),
 }))
 
 const mockResolveSettlementAccount = vi.fn()
@@ -217,5 +219,81 @@ describe('POST /api/transactions/[id]/match-rot-rut-payout', () => {
     })
     const conflict = await POST(makeReq(), routeParams)
     expect(conflict.status).toBe(409)
+  })
+
+  // Several begäran paid in ONE transfer (#2239): request_ids.
+  const REQUEST_ID_2 = '33333333-3333-4333-8333-333333333333'
+
+  it('returns 400 when neither or both of request_id and request_ids are given', async () => {
+    let response = await POST(makeReq({}), routeParams)
+    expect(response.status).toBe(400)
+    response = await POST(
+      makeReq({ request_id: REQUEST_ID, request_ids: [REQUEST_ID, REQUEST_ID_2] }),
+      routeParams,
+    )
+    expect(response.status).toBe(400)
+    expect(mockSettle).not.toHaveBeenCalled()
+    expect(mockSettleSet).not.toHaveBeenCalled()
+  })
+
+  it('settles a bundle through the set writer with the row amount, date and cash account', async () => {
+    enqueue({ data: makeTxRow({ amount: 5250 }) })
+    mockSettleSet.mockResolvedValue({
+      ok: true,
+      journalEntryId: 'je-set',
+      amount: 5250,
+      requests: [
+        { id: REQUEST_ID, name: 'ROT 2026-07', status: 'paid' },
+        { id: REQUEST_ID_2, name: 'RUT 2026-07', status: 'paid' },
+      ],
+    })
+
+    const response = await POST(makeReq({ request_ids: [REQUEST_ID, REQUEST_ID_2] }), routeParams)
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      journal_entry_id: string
+      requests: Array<{ id: string }>
+      category: string
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ success: true, journal_entry_id: 'je-set', category: 'income_other' })
+    expect(body.requests.map((r) => r.id)).toEqual([REQUEST_ID, REQUEST_ID_2])
+    expect(mockSettleSet).toHaveBeenCalledWith(expect.anything(), 'user-1', 'company-1', {
+      requestIds: [REQUEST_ID, REQUEST_ID_2],
+      paymentDate: '2026-07-10',
+      amount: 5250,
+      bankAccount: '1930',
+      transactionId: TX_ID,
+      previousJournalEntryId: null,
+    })
+    expect(mockSettle).not.toHaveBeenCalled()
+  })
+
+  it('routes a one-element (or duplicated) request_ids through the single writer', async () => {
+    enqueue({ data: makeTxRow() })
+    const response = await POST(makeReq({ request_ids: [REQUEST_ID, REQUEST_ID] }), routeParams)
+    expect(response.status).toBe(200)
+    expect(mockSettle).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-1',
+      'company-1',
+      expect.objectContaining({ requestId: REQUEST_ID }),
+    )
+    expect(mockSettleSet).not.toHaveBeenCalled()
+  })
+
+  it('maps the set writer\x27s amount refusal onto the canonical envelope', async () => {
+    enqueue({ data: makeTxRow({ amount: 5000 }) })
+    mockSettleSet.mockResolvedValue({
+      ok: false,
+      kind: 'code',
+      code: 'ROT_RUT_SETTLE_SET_AMOUNT',
+      details: { amount: 5000, expected_total: 5250, request_ids: [REQUEST_ID, REQUEST_ID_2] },
+    })
+    const response = await POST(makeReq({ request_ids: [REQUEST_ID, REQUEST_ID_2] }), routeParams)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ROT_RUT_SETTLE_SET_AMOUNT')
   })
 })

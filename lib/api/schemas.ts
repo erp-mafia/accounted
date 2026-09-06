@@ -2158,13 +2158,21 @@ export const CreateTransactionFromDocumentSchema = z.object({
 })
 
 /**
- * POST /api/transactions/[id]/match-rot-rut-payout: settle a ROT/RUT begäran
- * with the bank row that carried Skatteverkets utbetalning. Amount, date and
- * bank account all come from the transaction, so the body is just the target.
+ * POST /api/transactions/[id]/match-rot-rut-payout: settle one or several
+ * ROT/RUT begäran with the bank row that carried Skatteverkets utbetalning.
+ * Amount, date and bank account all come from the transaction, so the body
+ * is just the target(s): `request_id` for one begäran, `request_ids` when
+ * Skatteverket paid several beslut in one transfer (#2239). Exactly one of
+ * the two.
  */
-export const MatchRotRutPayoutSchema = z.object({
-  request_id: uuid,
-})
+export const MatchRotRutPayoutSchema = z
+  .object({
+    request_id: uuid.optional(),
+    request_ids: z.array(uuid).min(1).max(10).optional(),
+  })
+  .refine((body) => (body.request_id ? 1 : 0) + (body.request_ids ? 1 : 0) === 1, {
+    message: 'Ange antingen request_id eller request_ids',
+  })
 
 /** Bank outflow → the registered utlägg it repays (one person). */
 export const MatchExpensePayoutSchema = z.object({

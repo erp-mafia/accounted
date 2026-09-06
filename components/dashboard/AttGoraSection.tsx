@@ -173,7 +173,7 @@ export default function AttGoraSection({
         match.kind === 'invoice'
           ? { invoice_id: match.candidate_id }
           : match.kind === 'rot_rut_payout'
-            ? { request_id: match.candidate_id }
+            ? { request_ids: match.request_ids ?? [match.candidate_id] }
             : match.kind === 'expense_payout'
               ? { claim_ids: match.claim_ids ?? [] }
               : { supplier_invoice_id: match.candidate_id }

@@ -4,7 +4,10 @@ import { validateBody } from '@/lib/api/validate'
 import { MatchRotRutPayoutSchema } from '@/lib/api/schemas'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { settleRotRutPayoutRequest } from '@/lib/invoices/rot-rut-settle'
+import {
+  settleRotRutPayoutRequest,
+  settleRotRutPayoutRequestSet,
+} from '@/lib/invoices/rot-rut-settle'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { ensureInitialized } from '@/lib/init'
@@ -23,6 +26,11 @@ ensureInitialized()
  * date and bank account come from the bank row and the row is linked to the
  * voucher in the same call, so the payout can never be booked twice (once by
  * settle, once by categorising the bank row).
+ *
+ * Skatteverket bundles the beslut it pays that day into one transfer, so the
+ * body may name several begäran (`request_ids`, #2239): then ONE voucher
+ * carries one 1513 credit per begäran and the row is linked to it, provided
+ * the expected payouts sum to the row exactly.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.match_rot_rut_payout',
@@ -35,9 +43,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       operation: 'transaction.match_rot_rut_payout',
     })
     if (!validation.success) return validation.response
-    const { request_id: payoutRequestId } = validation.data
+    const payoutRequestIds = [
+      ...new Set(validation.data.request_ids ?? [validation.data.request_id!]),
+    ]
 
-    const txLog = log.child({ transactionId, payoutRequestId })
+    const txLog = log.child({ transactionId, payoutRequestIds })
 
     // transaction_voucher_links rides along: a row bulk-booked into a
     // samlingsverifikat carries journal_entry_id = NULL and must still refuse.
@@ -99,16 +109,27 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       txLog,
     )
 
-    const outcome = await settleRotRutPayoutRequest(supabase, user.id, companyId!, {
-      requestId: payoutRequestId,
+    // Shared by both shapes: amount, date and account come from the bank row;
+    // the link CAS locks on the pointer read above (null for a free row, or
+    // the stale pointer of a reversed entry the guard let through).
+    const settleParams = {
       paymentDate: transaction.date,
       amount: transaction.amount,
       bankAccount,
       transactionId,
-      // Null for a free row, or the stale pointer of a reversed entry the
-      // guard above let through: the link CAS locks on exactly this value.
       previousJournalEntryId: transaction.journal_entry_id,
-    })
+    }
+
+    const outcome =
+      payoutRequestIds.length === 1
+        ? await settleRotRutPayoutRequest(supabase, user.id, companyId!, {
+            requestId: payoutRequestIds[0],
+            ...settleParams,
+          })
+        : await settleRotRutPayoutRequestSet(supabase, user.id, companyId!, {
+            requestIds: payoutRequestIds,
+            ...settleParams,
+          })
 
     if (!outcome.ok) {
       if (outcome.kind === 'code') {
@@ -124,13 +145,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       userId: user.id,
       journalEntryId: outcome.journalEntryId,
       amount: outcome.amount,
-      fullyPaid: outcome.fullyPaid,
+      fullyPaid: 'fullyPaid' in outcome ? outcome.fullyPaid : true,
     })
 
     return NextResponse.json({
       success: true,
       journal_entry_id: outcome.journalEntryId,
-      request: outcome.request,
+      ...('request' in outcome ? { request: outcome.request } : { requests: outcome.requests }),
       category: 'income_other',
     })
   },

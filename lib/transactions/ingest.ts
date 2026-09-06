@@ -9,6 +9,7 @@ import {
   type RotRutPayoutRequestCandidate,
 } from '@/lib/invoices/rot-rut-payout-matching'
 import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/rot-rut-payout-candidates'
+import { findRotRutPayoutSetMatch } from '@/lib/invoices/rot-rut-payout-set-matching'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -1123,6 +1124,29 @@ export async function ingestTransactions(
           )
           result.auto_matched_invoices++
           continue
+        }
+
+        // 3d. No single begäran equals the row: Skatteverket bundles the
+        // beslut it pays that day into one transfer, so try the exact
+        // covering set (#2239). A set has no hint column (the inbox and the
+        // worklist recompute it from the open pool), but the row must still
+        // skip the mapping engine and drain the pool exactly like a 1:1 hint.
+        if (!match) {
+          const set = findRotRutPayoutSetMatch(newTransaction as Transaction, openRotRutPayoutRequests)
+          if (set && set.requests.length > 1) {
+            const requestIds = set.requests.map((req) => req.id)
+            logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
+              matchConfidence: set.confidence,
+              matchMethod: set.matchMethod,
+              newState: { rot_rut_payout_request_ids: requestIds },
+            })
+            for (const id of requestIds) matchedRotRutRequestIds.add(id)
+            openRotRutPayoutRequests = openRotRutPayoutRequests.filter(
+              (req) => !requestIds.includes(req.id),
+            )
+            result.auto_matched_invoices++
+            continue
+          }
         }
       } catch {
         // Non-critical: continue processing

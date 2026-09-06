@@ -8,9 +8,16 @@
  * down the dashboard layout or the home page.
  */
 
-import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
+import {
+  OPEN_ROT_RUT_PAYOUT_STATUSES,
+  expectedRotRutPayoutAmount,
+  isMatchableRotRutPayoutRequest,
+} from '@/lib/invoices/rot-rut-payout-matching'
+import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/rot-rut-payout-candidates'
+import { matchTransactionsToRotRutPayoutSets } from '@/lib/invoices/rot-rut-payout-set-matching'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   groupExpenseClaimsByPerson,
@@ -510,7 +517,99 @@ export async function listSuggestedMatches(
   for (const m of expenseMatches) {
     if (!seen.has(m.transaction_id)) matches.push(m)
   }
+  // Skatteverket's bundled ROT/RUT payout (several begäran in one transfer):
+  // no hint column either, recomputed from the open begäran. Confirm endpoint
+  // is the same match-rot-rut-payout route, with request_ids.
+  const setMatches = await listRotRutPayoutSetSuggestions(supabase, companyId, limit)
+  for (const m of setMatches) {
+    if (!seen.has(m.transaction_id)) {
+      matches.push(m)
+      seen.add(m.transaction_id)
+    }
+  }
   return matches
+}
+
+/** Newest unbooked income rows scanned for a bundled ROT/RUT payout. */
+const ROT_RUT_SET_SCAN_LIMIT = 200
+
+/**
+ * Unbooked SEK income rows that equal the SUM of several open begäran:
+ * Skatteverket bundles the beslut it pays that day into one transfer
+ * (#2239). Read-time pairing over the open pool, like the expense payouts:
+ * no hint column, and nothing at all for a company without two open
+ * begäran. The rule lives in lib/invoices/rot-rut-payout-set-matching.ts;
+ * a single-begäran hit is the persisted 1:1 hint's job and is not repeated
+ * here.
+ */
+export async function listRotRutPayoutSetSuggestions(
+  supabase: SupabaseClient,
+  companyId: string,
+  limit = 20,
+): Promise<SuggestedMatch[]> {
+  const pool = (await loadOpenRotRutPayoutRequests(supabase, companyId)).filter((request) =>
+    isMatchableRotRutPayoutRequest(request),
+  )
+  if (pool.length < 2) return []
+  const expected = pool.map((request) => expectedRotRutPayoutAmount(request))
+  const minExpected = Math.min(...expected)
+  const maxTotal = roundOre(expected.reduce((sum, amount) => sum + amount, 0))
+
+  // An invoice hint wins over a begäran (same precedence as the hint path),
+  // so rows carrying one are not candidates. Rows with a 1:1 begäran hint
+  // ARE fetched: the matcher skips them but takes their begäran out of the
+  // pool, so a set never offers a request another row is about to settle.
+  const { data, error } = await supabase
+    .from('transactions')
+    .select(
+      'id, date, description, merchant_name, amount, currency, is_business, journal_entry_id, potential_rot_rut_payout_request_id',
+    )
+    .eq('company_id', companyId)
+    .is('is_business', null)
+    .eq('is_ignored', false)
+    .is('journal_entry_id', null)
+    .is('potential_invoice_id', null)
+    .gte('amount', minExpected)
+    .lte('amount', maxTotal)
+    .order('date', { ascending: false })
+    .limit(ROT_RUT_SET_SCAN_LIMIT)
+  if (error) {
+    log.error('worklist listRotRutPayoutSetSuggestions failed', { companyId, reason: error.message })
+    return []
+  }
+  type TxRow = {
+    id: string
+    date: string
+    description: string | null
+    merchant_name: string | null
+    amount: number
+    currency: string | null
+    is_business: boolean | null
+    journal_entry_id: string | null
+    potential_rot_rut_payout_request_id: string | null
+  }
+  const txs = (data ?? []) as TxRow[]
+  const paired = matchTransactionsToRotRutPayoutSets(txs, pool)
+  const out: SuggestedMatch[] = []
+  for (const tx of txs) {
+    const m = paired.get(tx.id)
+    if (!m || m.requests.length < 2) continue
+    out.push({
+      transaction_id: tx.id,
+      transaction_date: tx.date,
+      transaction_description: tx.description ?? '',
+      transaction_amount: tx.amount,
+      transaction_currency: tx.currency ?? 'SEK',
+      kind: 'rot_rut_payout',
+      candidate_id: m.requests[0].id,
+      candidate_number: m.requests.map((request) => request.name).join(' + '),
+      counterparty_name: 'Skatteverket',
+      candidate_total: m.total,
+      request_ids: m.requests.map((request) => request.id),
+    })
+    if (out.length >= limit) break
+  }
+  return out
 }
 
 /**

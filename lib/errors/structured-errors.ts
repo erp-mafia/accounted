@@ -977,6 +977,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The amount cannot be booked against the request: it exceeds the requested or decided amount. Book the transaction another way.',
   },
+  ROT_RUT_SETTLE_SET_AMOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppet stämmer inte med summan av de valda begäran. Skatteverket betalar ut exakt beslutade belopp, så flera begäran kan bara bokföras tillsammans när transaktionen motsvarar summan till öret.',
+    message_en:
+      'The amount does not equal the sum of the selected requests. Skatteverket pays exactly the decided amounts, so several requests can only be booked together when the transaction equals their sum to the öre.',
+  },
   ROT_RUT_SETTLE_RACE: {
     httpStatus: 409,
     message_sv:

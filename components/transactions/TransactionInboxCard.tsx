@@ -186,9 +186,10 @@ export default function TransactionInboxCard({
   const hasInvoiceMatch = !!transaction.potential_invoice && !transaction.invoice_id
   const hasSupplierInvoiceMatch =
     !!transaction.potential_supplier_invoice && !transaction.supplier_invoice_id
-  // Skatteverkets ROT/RUT-utbetalning for an open begäran: same 1-click
-  // shortcut as an invoice match, confirmed in its own dialog.
-  const hasRotRutPayoutMatch = !!transaction.potential_rot_rut_payout && !transaction.journal_entry_id
+  // Skatteverkets ROT/RUT-utbetalning for one or several open begäran: same
+  // 1-click shortcut as an invoice match, confirmed in its own dialog.
+  const rotRutRequests = transaction.potential_rot_rut_payout?.requests ?? []
+  const hasRotRutPayoutMatch = rotRutRequests.length > 0 && !transaction.journal_entry_id
   // A transfer that repays one person's registered utlägg to the öre: same
   // 1-click shortcut, confirmed in its own dialog.
   const hasExpensePayoutMatch = !!transaction.potential_expense_payout && !transaction.journal_entry_id
@@ -214,7 +215,9 @@ export default function TransactionInboxCard({
           number: transaction.potential_supplier_invoice!.supplier_invoice_number ?? '',
         })
       : hasRotRutPayoutMatch
-        ? t('match_rot_rut_payout_btn', { name: transaction.potential_rot_rut_payout!.name })
+        ? rotRutRequests.length === 1
+          ? t('match_rot_rut_payout_btn', { name: rotRutRequests[0].name })
+          : t('match_rot_rut_payout_set_btn', { count: rotRutRequests.length })
         : hasExpensePayoutMatch
           ? t('match_expense_payout_btn', { name: transaction.potential_expense_payout!.claimant_name })
           : null

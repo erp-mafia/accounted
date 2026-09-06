@@ -168,6 +168,13 @@ export interface SuggestedMatch {
   candidate_number: string | null
   counterparty_name: string | null
   candidate_total: number | null
+  /**
+   * rot_rut_payout only: every begäran the transfer settles. Absent for a
+   * persisted 1:1 hint (candidate_id is the request); several when
+   * Skatteverket paid a bundle of beslut in one transfer (#2239), in which
+   * case candidate_number joins their names.
+   */
+  request_ids?: string[]
   /** expense_payout only: the registered claims this transfer pays. */
   claim_ids?: string[]
 }
