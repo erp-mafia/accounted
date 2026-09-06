@@ -7168,7 +7168,13 @@
     "toast_payslips_downloaded_detail": "{count} files in a zip archive.",
     "toast_zip_failed": "Could not create zip file",
     "toast_agi_failed": "AGI file could not be generated",
-    "toast_agi_downloaded": "AGI file downloaded"
+    "toast_agi_downloaded": "AGI file downloaded",
+    "add_expense_claims": "Add {count, plural, one {# expense claim} other {# expense claims}} · {amount}",
+    "add_expense_claims_aria": "Add {name}'s open expense claims to the payslip",
+    "add_expense_claims_title": "Add open expense claims to the payslip: paid out tax-free with the salary",
+    "toast_expense_claims_added": "Expense claims added to the payslip",
+    "toast_expense_claims_added_detail": "{count, plural, one {# expense claim} other {# expense claims}} · {amount}. Calculate the run to update the net.",
+    "toast_expense_claims_failed": "Could not add expense claims"
   },
   "salary_agi": {
     "title": "Arbetsgivardeklaration (AGI)",
@@ -7606,7 +7612,10 @@
     "th_type": "Type",
     "th_description": "Description",
     "th_quantity": "Quantity",
-    "th_amount": "Amount"
+    "th_amount": "Amount",
+    "th_actions": "Actions",
+    "li_expense_reimbursement": "Expense reimbursement (tax-free)",
+    "remove_expense_claim_line_aria": "Remove the expense claim from the payslip"
   },
   "salary_tax_tables": {
     "checking": "Checking tax tables…",

@@ -20,6 +20,13 @@ vi.mock('@/lib/currency/riksbanken', () => ({
   fetchExchangeRate: (...args: unknown[]) => fetchExchangeRateMock(...args),
 }))
 
+// Utlägg on a payslip (#2331): the delete guard's lookup is mocked so the
+// queued Supabase mock keeps its existing call order.
+const findPayslipLineForClaimMock = vi.fn()
+vi.mock('@/lib/salary/expense-claim-lines', () => ({
+  findPayslipLineForClaim: (...args: unknown[]) => findPayslipLineForClaimMock(...args),
+}))
+
 import { registerExpenseClaim, createPayoutBatch, deleteExpenseClaim } from '../expense-claims-service'
 
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
@@ -503,6 +510,61 @@ describe('deleteExpenseClaim', () => {
     vi.clearAllMocks()
     reset()
     reverseEntryMock.mockResolvedValue({ id: 'je-storno' })
+    findPayslipLineForClaimMock.mockResolvedValue(null)
+  })
+
+  it('refuses a claim scheduled on a payslip that has left draft, before any storno', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    findPayslipLineForClaimMock.mockResolvedValue({
+      line_id: 'li-1',
+      salary_run_id: 'run-1',
+      run_status: 'review',
+      period_year: 2026,
+      period_month: 6,
+    })
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toMatchObject({ ok: false, code: 'ON_PAYSLIP' })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+    expect(findCall('expense_claims', 'delete')).toBeUndefined()
+  })
+
+  it('on a draft payslip removes the line first (the FK is RESTRICT), then the storno, then the claim', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    enqueue({ data: null }) // salary_line_items delete
+    enqueue({ data: { status: 'posted', reversed_by_id: null } })
+    enqueue({ data: null }) // expense_claims delete
+    findPayslipLineForClaimMock.mockResolvedValue({
+      line_id: 'li-1',
+      salary_run_id: 'run-1',
+      run_status: 'draft',
+      period_year: 2026,
+      period_month: 6,
+    })
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno' })
+    expect(findCall('salary_line_items', 'delete')).toBeTruthy()
+    expect(findCall('salary_line_items', 'eq')).toEqual(['id', 'li-1'])
+    expect(findCall('expense_claims', 'delete')).toBeTruthy()
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1')
+  })
+
+  it('stops before the storno when the draft line cannot be removed', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    enqueue({ data: null, error: { message: 'permission denied' } }) // salary_line_items delete
+    findPayslipLineForClaimMock.mockResolvedValue({
+      line_id: 'li-1',
+      salary_run_id: 'run-1',
+      run_status: 'draft',
+      period_year: 2026,
+      period_month: 6,
+    })
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toEqual({ ok: false, code: 'DELETE_FAILED', detail: 'permission denied' })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+    expect(findCall('expense_claims', 'delete')).toBeUndefined()
   })
 
   it('reverses the verifikat and removes the row', async () => {
@@ -539,6 +601,30 @@ describe('deleteExpenseClaim', () => {
     enqueue({ data: null })
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c-x')
     expect(result).toEqual({ ok: false, code: 'NOT_FOUND' })
+  })
+})
+
+describe('createPayoutBatch: claim scheduled on a payslip (#2331)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  it('echoes ON_PAYSLIP as a typed refusal instead of BATCH_INSERT_FAILED', async () => {
+    enqueue({
+      data: { ok: false, code: 'ON_PAYSLIP', details: { claim_id: 'c1', salary_run_id: 'run-1', period: '2026-06' } },
+    })
+
+    const result = await createPayoutBatch(sb, COMPANY, USER, {
+      claim_ids: ['c1'],
+      payout_date: '2026-06-30',
+      cash_account: '1930',
+    })
+    expect(result).toEqual({
+      ok: false,
+      code: 'ON_PAYSLIP',
+      detail: '{"claim_id":"c1","salary_run_id":"run-1","period":"2026-06"}',
+    })
   })
 })
 

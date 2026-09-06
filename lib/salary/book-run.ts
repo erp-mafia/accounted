@@ -26,6 +26,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
+import {
+  assertLinkedExpenseClaimsOpen,
+  rosterHasLinkedExpenseClaims,
+  settleExpenseClaimsForBookedRun,
+} from '@/lib/salary/expense-claim-lines'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { refreshRunYtd } from '@/lib/salary/ytd'
@@ -101,14 +106,26 @@ async function bookLoadedRun(
     log.warn('YTD refresh failed before booking', { salaryRunId, message: ytdRefresh.message })
   }
 
+  // Utlägg repaid with this salary (#2331): every linked claim must still be
+  // open BEFORE anything is posted. A refusal here costs nothing; a refusal
+  // from the settle step afterwards would leave a posted 2820 debit with no
+  // claim behind it.
+  const claimsCheck = await assertLinkedExpenseClaimsOpen(supabase, companyId, roster)
+  if (!claimsCheck.ok) {
+    return { ok: false, code: claimsCheck.code, details: claimsCheck.details }
+  }
+
   // Nollkörning: a run with no monetary effect (employees set to 0 kr, or no
   // roster at all) has nothing to post. The bookkeeping engine forbids
   // zero-amount vouchers (every entry must balance with debit & credit > 0),
   // so we skip journal-entry creation entirely and just advance to 'booked'.
-  // The AGI nolldeklaration is then the only artefact for the period.
+  // The AGI nolldeklaration is then the only artefact for the period. The net
+  // is part of the test: a run that only repays utlägg has gross 0 but a
+  // payout, and its 2820 D / 1930 K must be posted.
   const nothingToBook =
     Math.round(((run.total_gross as number) ?? 0) * 100) === 0 &&
     Math.round(((run.total_tax as number) ?? 0) * 100) === 0 &&
+    Math.round(((run.total_net as number) ?? 0) * 100) === 0 &&
     Math.round(((run.total_avgifter as number) ?? 0) * 100) === 0 &&
     Math.round(((run.total_vacation_accrual as number) ?? 0) * 100) === 0
 
@@ -216,7 +233,7 @@ async function bookLoadedRun(
     },
   )
 
-  const entryIds = [salaryEntry.id, avgifterEntry.id]
+  const entryIds: string[] = [salaryEntry.id, avgifterEntry.id]
   const updates: Record<string, unknown> = {
     status: 'booked',
     salary_entry_id: salaryEntry.id,
@@ -242,6 +259,30 @@ async function bookLoadedRun(
 
   if (updateError) {
     return { ok: false, code: 'SALARY_RUN_BOOK_FAILED', dbError: updateError }
+  }
+
+  // Utlägg repaid with this salary: mark the claims paid with a payout batch
+  // that points at the salary verifikat (same batch mechanism as the bank
+  // path, no second verifikat). The verifikat is posted and the run is
+  // booked at this point, so a failure cannot roll anything back: it is
+  // logged loudly and the idempotent RPC can be re-run by an operator. The
+  // pre-check above makes the RPC's refusal codes unreachable in practice.
+  if (rosterHasLinkedExpenseClaims(roster)) {
+    const settled = await settleExpenseClaimsForBookedRun(supabase, { companyId, userId, salaryRunId })
+    if (settled.ok) {
+      log.info('expense claims settled via salary run', {
+        salaryRunId,
+        claimCount: settled.data.claim_count,
+        alreadySettled: settled.data.already_settled,
+        totalSek: settled.data.total_sek,
+      })
+    } else {
+      log.error(
+        'expense claims NOT settled after salary booking: run is booked with a 2820 debit but the claims are still open; re-run settle_expense_claims_via_salary_run',
+        new Error(settled.detail ?? settled.code),
+        { salaryRunId, companyId, code: settled.code },
+      )
+    }
   }
 
   await eventBus.emit({

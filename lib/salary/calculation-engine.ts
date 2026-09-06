@@ -2,6 +2,7 @@ import type { PayrollConfig } from './payroll-config'
 import type { TaxTableRate } from './tax-tables'
 import { lookupTaxAmount, calculateJamkningTax, calculateSidoinkomstTax } from './tax-tables'
 import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
+import { TAX_FREE_REIMBURSEMENT_TYPES } from './account-mapping'
 import type { SalaryLineItemType } from '@/types'
 
 // ============================================================
@@ -96,6 +97,12 @@ export interface SalaryCalculationResult {
   taxableIncome: number
   taxWithheld: number
   netDeductions: number
+  /**
+   * Kostnadsersättning paid out with the salary (utlägg, skattefritt
+   * traktamente, skattefri milersättning). Inside netSalary, outside
+   * grossSalary, taxableIncome and avgifterBasis.
+   */
+  taxFreeReimbursements: number
   netSalary: number
   /** Öre added to reach a whole-krona net payout (0 when rounding is off or the net is already whole). */
   netRounding: number
@@ -484,6 +491,26 @@ export function calculateSalary(
     output: netSalary,
   })
 
+  // ─── Step 7a: Kostnadsersättning (skattefri) ───
+  // Utlägg, skattefritt traktamente and skattefri milersättning are paid out
+  // with the salary but are not lön: no skatteavdrag, no arbetsgivaravgifter,
+  // no semesterunderlag, not in the AGI gross (travel-expenses.md). They ride
+  // on the payout only, after tax and net deductions and before the
+  // öresavrundning of the final amount.
+  const reimbursementItems = input.lineItems.filter(
+    li => TAX_FREE_REIMBURSEMENT_TYPES.includes(li.itemType) && li.amount > 0
+  )
+  const taxFreeReimbursements = r(reimbursementItems.reduce((sum, li) => sum + li.amount, 0))
+  if (taxFreeReimbursements > 0) {
+    netSalary = r(netSalary + taxFreeReimbursements)
+    steps.push({
+      label: 'Kostnadsersättning (skattefri)',
+      formula: 'nettolön + skattefria ersättningar (utlägg, traktamente, milersättning)',
+      input: { count: reimbursementItems.length, reimbursements: taxFreeReimbursements },
+      output: netSalary,
+    })
+  }
+
   // ─── Step 7b: Öresavrundning (optional, uppåt till hel krona) ───
   // Integer öre arithmetic: netSalary is already r()-rounded so netOre is
   // exact; ceil-by-remainder avoids float noise. Only positive payouts round:
@@ -642,6 +669,7 @@ export function calculateSalary(
     taxableIncome,
     taxWithheld,
     netDeductions: totalNetDeductions,
+    taxFreeReimbursements,
     netSalary,
     netRounding,
     avgifterRate: avgifterCalc.rate,

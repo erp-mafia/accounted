@@ -3076,6 +3076,7 @@ export const SalaryLineItemTypeSchema = z.enum([
   'vab', 'parental_leave', 'vacation', 'semesterersattning',
   'traktamente_taxfree', 'traktamente_taxable',
   'mileage_taxfree', 'mileage_taxable',
+  'expense_reimbursement',
   'net_deduction_advance', 'net_deduction_union', 'net_deduction_benefit_payment',
   'net_deduction_other',
   'oresavrundning',

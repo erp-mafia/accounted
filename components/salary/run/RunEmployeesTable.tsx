@@ -16,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { FileDown, Loader2, Trash2 } from 'lucide-react'
+import { FileDown, Loader2, Receipt, Trash2 } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
@@ -45,6 +45,12 @@ interface RunEmployeesTableProps {
   onAddEmployee: (employeeId: string) => void
   onRemoveEmployee: (employeeId: string, name: string) => void
   onSalaryEdit: (employeeId: string, raw: string, previous: number) => void
+  /**
+   * Registered utlägg per employee that are not yet on any payslip (#2331):
+   * drives the per-row "Lägg till utlägg" control in a draft.
+   */
+  openExpenseClaims?: Record<string, { count: number; total_sek: number }>
+  onAddExpenseClaims?: (employeeId: string, name: string) => void
 }
 
 export function RunEmployeesTable({
@@ -59,6 +65,8 @@ export function RunEmployeesTable({
   onAddEmployee,
   onRemoveEmployee,
   onSalaryEdit,
+  openExpenseClaims,
+  onAddExpenseClaims,
 }: RunEmployeesTableProps) {
   const t = useTranslations('salary_run')
   const router = useRouter()
@@ -184,6 +192,10 @@ export function RunEmployeesTable({
                   </span>
                 ) : null
                 const removing = actionLoading === `remove-${sre.employee_id}`
+                const openClaims = openExpenseClaims?.[sre.employee_id]
+                const addingClaims = actionLoading === `expense-claims-${sre.employee_id}`
+                const showAddClaims =
+                  isDraft && canWrite && onAddExpenseClaims != null && openClaims != null && openClaims.count > 0
 
                 return (
                   <tr
@@ -236,6 +248,34 @@ export function RunEmployeesTable({
                     )}
                     <td className={cn(TD_CLASS, 'pr-0 text-right')}>
                       <span className="-my-1 inline-flex items-center justify-end gap-1">
+                        {/* Utlägg repaid with this salary: pulls the employee's
+                            registered claims onto the payslip (#2331). */}
+                        {showAddClaims && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-3 text-xs text-muted-foreground hover:text-foreground"
+                            onClick={e => {
+                              e.stopPropagation()
+                              onAddExpenseClaims(sre.employee_id, name)
+                            }}
+                            disabled={addingClaims}
+                            title={t('add_expense_claims_title')}
+                            aria-label={t('add_expense_claims_aria', { name })}
+                          >
+                            {addingClaims ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                              <Receipt className="mr-2 h-4 w-4" />
+                            )}
+                            <span className="tabular-nums">
+                              {t('add_expense_claims', {
+                                count: openClaims.count,
+                                amount: formatCurrency(openClaims.total_sek),
+                              })}
+                            </span>
+                          </Button>
+                        )}
                         {/* Payslip PDF */}
                         <a
                           href={`/api/salary/runs/${runId}/payslips/${sre.employee_id}/pdf`}

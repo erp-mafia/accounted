@@ -4078,6 +4078,7 @@ export type SalaryLineItemType =
   | 'vab' | 'parental_leave' | 'unpaid_leave' | 'vacation' | 'semesterersattning'
   | 'traktamente_taxfree' | 'traktamente_taxable'
   | 'mileage_taxfree' | 'mileage_taxable'
+  | 'expense_reimbursement'
   | 'net_deduction_advance' | 'net_deduction_union' | 'net_deduction_benefit_payment'
   | 'net_deduction_other'
   | 'oresavrundning'
@@ -4273,6 +4274,8 @@ export interface SalaryLineItem {
   is_net_deduction: boolean
   account_number: string | null
   sort_order: number
+  /** The registered utlägg an expense_reimbursement line repays (#2331). */
+  source_expense_claim_id?: string | null
   created_at: string
   updated_at: string
 }

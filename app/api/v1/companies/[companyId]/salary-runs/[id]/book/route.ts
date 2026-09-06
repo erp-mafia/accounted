@@ -34,6 +34,11 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
+import {
+  assertLinkedExpenseClaimsOpen,
+  rosterHasLinkedExpenseClaims,
+  settleExpenseClaimsForBookedRun,
+} from '@/lib/salary/expense-claim-lines'
 import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -166,6 +171,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!employees || employees.length === 0) {
       return v1ErrorResponseFromCode('SALARY_RUN_NO_EMPLOYEES', ctx.log, {
         requestId: ctx.requestId,
+      })
+    }
+
+    // Utlägg repaid with this salary (#2331): every linked claim must still
+    // be open BEFORE anything is posted (mirrors lib/salary/book-run.ts).
+    const claimsCheck = await assertLinkedExpenseClaimsOpen(
+      ctx.supabase,
+      ctx.companyId!,
+      employees as Array<{ employee_id: string; line_items: Array<Record<string, unknown>> | null }>,
+    )
+    if (!claimsCheck.ok) {
+      return v1ErrorResponseFromCode(claimsCheck.code, ctx.log, {
+        requestId: ctx.requestId,
+        details: claimsCheck.details,
       })
     }
 
@@ -369,6 +388,28 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
         details: { reason: 'row missing after engine commit', entry_ids: entryIds },
       })
+    }
+
+    // Utlägg repaid with this salary: mark the claims paid with a payout
+    // batch pointing at the salary verifikat (mirrors lib/salary/book-run.ts;
+    // the verifikat is posted, so a failure is logged, never rolled back).
+    if (
+      rosterHasLinkedExpenseClaims(
+        employees as Array<{ employee_id: string; line_items: Array<Record<string, unknown>> | null }>,
+      )
+    ) {
+      const settled = await settleExpenseClaimsForBookedRun(ctx.supabase, {
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        salaryRunId,
+      })
+      if (!settled.ok) {
+        ctx.log.error(
+          'expense claims NOT settled after salary booking: run is booked with a 2820 debit but the claims are still open; re-run settle_expense_claims_via_salary_run',
+          new Error(settled.detail ?? settled.code),
+          { salaryRunId, companyId: ctx.companyId, code: settled.code },
+        )
+      }
     }
 
     // Final refresh of the payslip's "Ackumulerat" snapshot, mirroring

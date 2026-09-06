@@ -3,12 +3,12 @@
 import { use, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft, Calculator, Loader2 } from 'lucide-react'
+import { ArrowLeft, Calculator, Loader2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
 import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -48,6 +48,7 @@ const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
   traktamente_taxable: 'li_traktamente_taxable',
   mileage_taxfree: 'li_mileage_taxfree',
   mileage_taxable: 'li_mileage_taxable',
+  expense_reimbursement: 'li_expense_reimbursement',
   net_deduction_advance: 'li_net_deduction_advance',
   net_deduction_union: 'li_net_deduction_union',
   net_deduction_benefit_payment: 'li_net_deduction_benefit_payment',
@@ -85,6 +86,7 @@ export default function SalaryRunEmployeeDetailPage({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [calculating, setCalculating] = useState(false)
+  const [removingLineId, setRemovingLineId] = useState<string | null>(null)
   // Live counts pushed from the calendar: overrides the stale snapshot from
   // the last calculation so badges update immediately on absence save.
   const [liveCounts, setLiveCounts] = useState<{ sick: number; vab: number; parental: number } | null>(null)
@@ -145,6 +147,27 @@ export default function SalaryRunEmployeeDetailPage({
     }
   }
 
+  // Utlägg lines (#2331) are the only lines this page lets the user remove:
+  // they were added from the run page with one click and must be just as
+  // easy to take off again. The claim goes back to Att göra.
+  const handleRemoveLine = async (lineId: string) => {
+    setRemovingLineId(lineId)
+    setError(null)
+    try {
+      const res = await fetch(`/api/salary/runs/${runId}/lines/${lineId}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const json = await res.json().catch(() => null)
+        setError(getUserErrorMessage(json, { statusCode: res.status }))
+        return
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
+    } finally {
+      setRemovingLineId(null)
+    }
+  }
+
   const periodStart = useMemo(() => {
     if (!data) return ''
     const y = data.run.period_year
@@ -188,6 +211,9 @@ export default function SalaryRunEmployeeDetailPage({
   const lineItems = runEmployee.line_items ?? []
   const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
   const readOnly = run.status !== 'draft' && run.status !== 'review'
+  // Utlägg lines can be taken off the payslip only while the run is a draft
+  // (the line commands' gate); the column exists only then.
+  const canRemoveClaimLines = run.status === 'draft'
   const statusLabel = tSalary(`status_${run.status}`)
 
   const taxValue = runEmployee.tax_withheld_override ?? runEmployee.tax_withheld
@@ -338,18 +364,46 @@ export default function SalaryRunEmployeeDetailPage({
                   <th className={cn(TH_CLASS, 'pl-0')}>{t('th_type')}</th>
                   <th className={TH_CLASS}>{t('th_description')}</th>
                   <th className={cn(TH_CLASS, 'text-right')}>{t('th_quantity')}</th>
-                  <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('th_amount')}</th>
+                  <th className={cn(TH_CLASS, 'text-right', !canRemoveClaimLines && 'pr-0')}>{t('th_amount')}</th>
+                  {canRemoveClaimLines && (
+                    <th className={cn(TH_CLASS, 'pr-0 text-right')}>
+                      <span className="sr-only">{t('th_actions')}</span>
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {lineItems.map(li => (
-                  <tr key={li.id}>
+                  <tr key={li.id} className={cn(canRemoveClaimLines && 'group')}>
                     <td className={cn(TD_CLASS, 'pl-0 text-muted-foreground')}>
                       {LINE_ITEM_TYPE_KEYS[li.item_type] ? t(LINE_ITEM_TYPE_KEYS[li.item_type]) : li.item_type}
                     </td>
                     <td className={TD_CLASS}>{li.description}</td>
                     <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{li.quantity ?? '-'}</td>
-                    <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>{formatCurrency(li.amount)}</td>
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums', !canRemoveClaimLines && 'pr-0')}>
+                      {formatCurrency(li.amount)}
+                    </td>
+                    {canRemoveClaimLines && (
+                      <td className={cn(TD_CLASS, 'pr-0 text-right')}>
+                        {li.source_expense_claim_id && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className={cn('-my-1 h-8 w-8 text-muted-foreground hover:text-foreground', HOVER_REVEAL_CLASS)}
+                            onClick={() => handleRemoveLine(li.id)}
+                            disabled={removingLineId === li.id}
+                            aria-label={t('remove_expense_claim_line_aria')}
+                            title={t('remove_expense_claim_line_aria')}
+                          >
+                            {removingLineId === li.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <X className="h-4 w-4" />
+                            )}
+                          </Button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
