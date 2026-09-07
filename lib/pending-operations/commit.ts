@@ -115,6 +115,7 @@ import {
   type BatchAllocationResult,
 } from '@/lib/invoices/clear-settled-batch-allocations'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
+import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
 import {
   completeInboxItemsForBookedTransaction,
   resolveVoucherLinkedEntryIds,
@@ -378,6 +379,78 @@ type ExecutorResult = {
   // the dispatcher then lands the op in 'failed_partial' instead of
   // 'rejected' and persists these ids in result_data.posted_ids (issue #842).
   partialPostedIds?: Record<string, string>
+}
+
+/**
+ * settle_rot_rut_payout (gnubok_settle_rot_rut_payout): book Skatteverkets
+ * ROT/RUT utbetalning from the bank row against its begäran (one or several,
+ * #2239) through the same writer as the dashboard match route. The stage
+ * already checked income/SEK/unlinked/sum; the writer re-checks everything
+ * under its own CAS guards, so a race between approval and a manual match
+ * ends in a coded refusal, never a second 1513 credit.
+ */
+async function commitSettleRotRutPayout(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const transactionId = params.transaction_id as string | undefined
+  const requestIds = Array.isArray(params.request_ids)
+    ? (params.request_ids as unknown[]).filter((id): id is string => typeof id === 'string')
+    : []
+  if (!transactionId || requestIds.length === 0) {
+    return { error: 'transaction_id and request_ids are required', status: 400 }
+  }
+
+  const outcome = await matchTransactionToRotRutPayout(
+    supabase,
+    userId,
+    companyId,
+    { transactionId, requestIds },
+    log,
+  )
+
+  if (!outcome.ok) {
+    if (outcome.kind === 'code') {
+      const entry = getErrorEntry(outcome.code)
+      // A race or a failed row link happens AFTER the voucher posted: the op
+      // lands in failed_partial with the voucher id so nobody books it twice.
+      const postedId =
+        outcome.details && typeof outcome.details.journal_entry_id === 'string'
+          ? (outcome.details.journal_entry_id as string)
+          : null
+      return {
+        error: entry?.message_en ?? outcome.code,
+        errorCode: outcome.code,
+        status: entry?.httpStatus ?? 500,
+        data: outcome.details as Record<string, unknown> | undefined,
+        ...(postedId ? { partialPostedIds: { journal_entry_id: postedId } } : {}),
+      }
+    }
+    const message = outcome.error instanceof Error ? outcome.error.message : 'rot/rut payout settle failed'
+    return { error: `${message} (stage: ${outcome.stage})`, status: 500 }
+  }
+
+  // Audit-trail entry (ids only, no amounts or counterparty PII), same shape
+  // as commitMatchBatchAllocate.
+  log.info('settle_rot_rut_payout committed', {
+    companyId,
+    operationType: 'settle_rot_rut_payout',
+    transactionId,
+    journalEntryId: outcome.journalEntryId,
+    requestCount: outcome.requests.length,
+  })
+
+  return {
+    data: {
+      transaction_id: transactionId,
+      journal_entry_id: outcome.journalEntryId,
+      amount: outcome.amount,
+      request_ids: outcome.requests.map((request) => request.id),
+      request_statuses: outcome.requests.map((request) => request.status),
+    },
+  }
 }
 
 async function commitCategorizeTransaction(
@@ -7354,6 +7427,9 @@ async function commitPendingOperationInner(
         break
       case 'match_transaction_invoice':
         result = await commitMatchTransactionInvoice(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'settle_rot_rut_payout':
+        result = await commitSettleRotRutPayout(supabase, userId, companyId, pendingOp.params)
         break
       case 'link_invoice_voucher':
         result = await commitLinkInvoiceVoucher(supabase, userId, companyId, pendingOp.params)

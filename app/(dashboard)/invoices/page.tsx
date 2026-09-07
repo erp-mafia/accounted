@@ -355,8 +355,6 @@ export default function InvoicesPage() {
     )
   const closeRotRutPayout = () =>
     router.replace(invoicesUrl((p) => p.delete('rot-rut')), { scroll: false })
-  const openRotRutPayout = () =>
-    router.push(invoicesUrl((p) => p.set('rot-rut', '1')), { scroll: false })
 
   // Begäran om utbetalning (Lag 2009:194 8 §) only concerns companies selling
   // ROT/RUT-eligible work to consumers, so the action stays out of the header
@@ -771,12 +769,13 @@ export default function InvoicesPage() {
         <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <div className="flex flex-wrap items-center gap-2">
           {showRotRutAction && (
+            // The ROT/RUT overview (begäran, beslut, utbetalning, nekat
+            // belopp) has its own page; the file dialog still opens from
+            // ?rot-rut=1 here for existing links and the Att göra rows.
             <Button
               type="button"
               variant="outline"
-              onClick={openRotRutPayout}
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              onClick={() => router.push('/invoices/rot-rut')}
             >
               <FileDown className="mr-2 h-4 w-4" />
               {t('rot_rut_payout_action')}
