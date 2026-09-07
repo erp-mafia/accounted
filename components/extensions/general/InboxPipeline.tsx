@@ -5,16 +5,17 @@ import { cn } from '@/lib/utils'
 
 /**
  * Underlag as a flow (UI v2 PR 7): Saknas → Inkommet → Tolkat → Matchat →
- * Bokfört → Arkiverat, one flat bar with the number of documents at each
- * step. It is the page's only status picker: each cell is one of the
- * workspace's filters (missing / all / todo / linked / booked). Saknas is
- * the step before arrival, a purchase with no document yet. Inkommet and
- * Tolkat happen without the user; Arkiverat follows booking (BFL 7 kap.).
+ * Bokfört, one flat bar with the number of documents at each step. It is
+ * the page's only status picker: each cell is one of the workspace's
+ * filters (missing / all / todo / linked / booked). Saknas is the step
+ * before arrival, a purchase with no document yet. Inkommet and Tolkat
+ * happen without the user. Archiving is what booking does (BFL 7 kap.),
+ * not a step of its own, so there is no Arkiverat cell.
  */
-export const INBOX_PIPE_STAGES = ['missing', 'incoming', 'parsed', 'matched', 'booked', 'archived'] as const
+export const INBOX_PIPE_STAGES = ['missing', 'incoming', 'parsed', 'matched', 'booked'] as const
 export type InboxPipeStage = (typeof INBOX_PIPE_STAGES)[number]
 
-const AUTO: ReadonlySet<InboxPipeStage> = new Set(['incoming', 'parsed', 'archived'])
+const AUTO: ReadonlySet<InboxPipeStage> = new Set(['incoming', 'parsed'])
 
 export function InboxPipeline({
   counts,
