@@ -86,6 +86,28 @@ describe('requireFlowInitiator', () => {
     )
   })
 
+  it('sends an anonymous browser to the recorded brand origin when the caller passes one', async () => {
+    // Provider redirect URIs are pinned to the canonical host while sessions
+    // are per host: a white-label user reaches the callback signed out and
+    // must be sent to THEIR brand login, where the session already exists.
+    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'books.partner.example')
+    sessionWith(null)
+
+    const result = await requireFlowInitiator(new Request(CALLBACK_URL), 'user-1', {
+      returnOrigin: 'https://books.partner.example',
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('unreachable')
+    expect(result.reason).toBe('no_session')
+    const location = new URL(result.response.headers.get('location') ?? '')
+    expect(location.origin).toBe('https://books.partner.example')
+    expect(location.pathname).toBe('/login')
+    expect(location.searchParams.get('next')).toBe(
+      '/api/extensions/stripe/callback?code=ac_123&state=state-1',
+    )
+  })
+
   it('treats a getUser error as no session (fail closed)', async () => {
     sessionWith(null, { message: 'invalid JWT' })
 
@@ -132,6 +154,41 @@ describe('buildLoginRedirect', () => {
       'http://localhost:3000/login?next=' +
         encodeURIComponent('/api/extensions/woocommerce/return?success=1&user_id=abc'),
     )
+  })
+
+  it('uses a recorded origin only when it is the canonical host or a registered white-label host', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.example.se')
+    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'books.partner.example')
+    const request = new Request('https://app.example.se/api/extensions/stripe/callback?code=1&state=2')
+
+    const brand = buildLoginRedirect(request, 'https://books.partner.example')
+    expect(new URL(brand.headers.get('location') ?? '').origin).toBe('https://books.partner.example')
+
+    // A stored value that is no longer (or never was) registered must not
+    // become a redirect target: the allowlist is the only authority.
+    const unknown = buildLoginRedirect(request, 'https://evil.example')
+    expect(new URL(unknown.headers.get('location') ?? '').origin).toBe('https://app.example.se')
+
+    const canonical = buildLoginRedirect(request, 'https://app.example.se')
+    expect(new URL(canonical.headers.get('location') ?? '').origin).toBe('https://app.example.se')
+  })
+
+  it('keeps a callback that arrived on a registered brand host on that host', () => {
+    // NEXT_PUBLIC_APP_URL used to win over the request origin here, dragging
+    // a brand-domain callback to the canonical login. The allowlisted request
+    // host is the fallback now; an unregistered host still collapses.
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.example.se')
+    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'books.partner.example')
+
+    const onBrand = buildLoginRedirect(
+      new Request('https://books.partner.example/api/extensions/stripe/callback?code=1&state=2'),
+    )
+    expect(new URL(onBrand.headers.get('location') ?? '').origin).toBe('https://books.partner.example')
+
+    const onUnknown = buildLoginRedirect(
+      new Request('https://evil.example/api/extensions/stripe/callback?code=1&state=2'),
+    )
+    expect(new URL(onUnknown.headers.get('location') ?? '').origin).toBe('https://app.example.se')
   })
 })
 

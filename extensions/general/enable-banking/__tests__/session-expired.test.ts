@@ -28,6 +28,7 @@ import {
 } from '../lib/api-client'
 import { enableBankingExtension } from '../index'
 import { syncAccountTransactions } from '../lib/sync'
+import { getCanonicalAppOrigin } from '@/lib/domains/trusted-app-origin'
 
 const CLOSED_SESSION_BODY = JSON.stringify({
   code: 401,
@@ -264,6 +265,9 @@ describe('POST /connect (enable-banking): reconnect in place', () => {
     const firstUpdate = updateSpy.mock.calls[0][0]
     expect(firstUpdate).toMatchObject({
       oauth_state: expect.any(String),
+      // The host the renewal was started from, so the callback can return
+      // there (a white-label user's session exists only on their brand host).
+      oauth_origin: getCanonicalAppOrigin(),
       status: 'expired',
       error_message: null,
     })
@@ -387,6 +391,50 @@ describe('POST /connect (enable-banking): psu_type persistence', () => {
     expect(res.status).toBe(200)
     expect(insertSpy).toHaveBeenCalledTimes(1)
     expect(insertSpy.mock.calls[0][0]).toMatchObject({ psu_type: 'personal' })
+  })
+
+  it('records the initiating brand origin on a fresh connect so the callback can return there', async () => {
+    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'books.partner.example')
+    stubAuth()
+    const insertSpy = vi.fn()
+    const ctx = makeContext({ id: 'conn-new', entity_type: 'aktiebolag' }, vi.fn(), insertSpy)
+
+    const req = new Request('https://books.partner.example/api/extensions/ext/enable-banking/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ aspsp_name: 'Handelsbanken', aspsp_country: 'SE' }),
+    })
+
+    const res = await connectRoute.handler(req, ctx)
+    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', '')
+    expect(res.status).toBe(200)
+    expect(insertSpy.mock.calls[0][0]).toMatchObject({
+      oauth_origin: 'https://books.partner.example',
+    })
+    // The provider-facing redirect URI is untouched: Enable Banking keeps
+    // sending the browser to the one registered canonical callback.
+    const authCall = (globalThis.fetch as Mock).mock.calls.find(
+      ([url]) => typeof url === 'string' && url.endsWith('/auth'),
+    )
+    expect(authCall).toBeDefined()
+    const authBody = JSON.parse((authCall as unknown as [string, { body: string }])[1].body)
+    expect(authBody.redirect_url).toBe(`${process.env.NEXT_PUBLIC_APP_URL}/api/extensions/enable-banking/callback`)
+  })
+
+  it('never records an unregistered request host: it collapses to the canonical origin', async () => {
+    stubAuth()
+    const insertSpy = vi.fn()
+    const ctx = makeContext({ id: 'conn-new', entity_type: 'aktiebolag' }, vi.fn(), insertSpy)
+
+    const req = new Request('https://evil.example/api/extensions/ext/enable-banking/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ aspsp_name: 'Handelsbanken', aspsp_country: 'SE' }),
+    })
+
+    const res = await connectRoute.handler(req, ctx)
+    expect(res.status).toBe(200)
+    expect(insertSpy.mock.calls[0][0]).toMatchObject({ oauth_origin: getCanonicalAppOrigin() })
   })
 })
 
