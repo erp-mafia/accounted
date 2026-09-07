@@ -346,11 +346,11 @@ export const POST = withRouteContext(
         try {
           mappingResult = applyVatAmountOverride(mappingResult, transaction as Transaction, template.vat_treatment, body.vat_amount)
         } catch (err) {
-          const message = err instanceof Error ? err.message : 'vat_amount kunde inte användas'
-          return NextResponse.json(
-            { error: { code: 'TX_CATEGORIZE_INVALID_VAT_AMOUNT', message, message_en: message, requestId } },
-            { status: 400 },
-          )
+          txLog.warn('vat_amount rejected for template booking', err as Error)
+          return errorResponseFromCode('TX_CATEGORIZE_INVALID_VAT_AMOUNT', txLog, {
+            requestId,
+            details: { vat_amount: body.vat_amount, vat_treatment: template.vat_treatment ?? null },
+          })
         }
       }
     } else {
@@ -365,11 +365,11 @@ export const POST = withRouteContext(
         )
       } catch (err) {
         if (body.vat_amount == null) throw err
-        const message = err instanceof Error ? err.message : 'vat_amount kunde inte användas'
-        return NextResponse.json(
-          { error: { code: 'TX_CATEGORIZE_INVALID_VAT_AMOUNT', message, message_en: message, requestId } },
-          { status: 400 },
-        )
+        txLog.warn('vat_amount rejected for category booking', err as Error)
+        return errorResponseFromCode('TX_CATEGORIZE_INVALID_VAT_AMOUNT', txLog, {
+          requestId,
+          details: { vat_amount: body.vat_amount, vat_treatment: body.vat_treatment ?? null },
+        })
       }
     }
 
