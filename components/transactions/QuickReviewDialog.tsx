@@ -286,7 +286,7 @@ export default function QuickReviewDialog({
   // guarantees the user edits exactly the lines they were shown, and every
   // branch mirrors the engine path that books the proposal (see
   // lib/bookkeeping/proposal-lines.ts).
-  const proposalInput: ProposalLinesInput = {
+  const baseProposalInput: ProposalLinesInput = {
     amount: tx.amount,
     amountSek: sekAmount,
     ...(hasCounterpartyPattern
@@ -335,10 +335,6 @@ export default function QuickReviewDialog({
     ),
   }
 
-  // Computed once per render: gates the affordance (no lines, no link) and is
-  // the exact payload the link hands over.
-  const proposalLines = onEditLines ? computeProposalLines(proposalInput) : []
-
   // The document's moms against the proposal's. The VAT leg of the lines the
   // preview shows (ingående 264x on a purchase, utgående 261x-263x on a sale)
   // is SEK; the document's figure is in the row's currency, so the proposal
@@ -347,7 +343,7 @@ export default function QuickReviewDialog({
   // carries its own lines, which the override does not touch.
   const currentTreatment = isTemplateBooking ? (template?.vat_treatment ?? null) : vatTreatment
   const rateBased = currentTreatment === 'standard_25' || currentTreatment === 'reduced_12' || currentTreatment === 'reduced_6'
-  const proposedVatSek = computeProposalLines(proposalInput)
+  const proposedVatSek = computeProposalLines(baseProposalInput)
     .filter((l) =>
       tx.amount < 0
         ? l.side === 'debet' && l.account.startsWith('264') && l.account !== '2645'
@@ -368,9 +364,19 @@ export default function QuickReviewDialog({
   const proposedVatInTxCurrency =
     sekAmount && Math.abs(sekAmount) > 0 ? proposedVatSek * (Math.abs(tx.amount) / Math.abs(sekAmount)) : proposedVatSek
   const docVatDiffers = docVatUsable && vatDisagrees(docVat, proposedVatInTxCurrency)
+  const bookDocVat = docVatUsable && docVatDiffers && useDocVat && docVat != null
+  // What the preview shows and "Ändra rader" hands over is what gets booked:
+  // the document's moms folded in, scaled to SEK the way the server does it.
+  const proposalInput: ProposalLinesInput = bookDocVat
+    ? { ...baseProposalInput, vatAmountSek: docVat * (Math.abs(sekAmount) / Math.abs(tx.amount)) }
+    : baseProposalInput
   // A purchase worth asking about and nothing to show for it: the review
   // says so and the button says what booking now means.
   const bookingWithoutUnderlag = !documentId && attachedCount === 0 && !!underlag && needsUnderlagPrompt(sekAmount)
+
+  // Computed once per render: gates the affordance (no lines, no link) and is
+  // the exact payload the link hands over.
+  const proposalLines = onEditLines ? computeProposalLines(proposalInput) : []
 
   function handleEditLines() {
     if (!onEditLines || proposalLines.length === 0) return
@@ -407,7 +413,7 @@ export default function QuickReviewDialog({
         override,
         templateId,
         Object.keys(cleanedDims).length > 0 ? cleanedDims : undefined,
-        docVatUsable && docVatDiffers && useDocVat && docVat != null ? docVat : undefined,
+        bookDocVat ? docVat : undefined,
       )
 
       // Calibration telemetry: what the model proposed vs what was actually
