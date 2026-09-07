@@ -85,7 +85,7 @@ describe('consumeOAuthState', () => {
   it('consumes the state row with one conditional UPDATE, not a read then a write', async () => {
     const { calls } = useResults([
       { data: { consent_id: 'consent-1', user_id: 'user-1' } },
-      { data: { provider: 'fortnox' } },
+      { data: { provider: 'fortnox', company_id: 'company-1' } },
     ])
 
     await consumeOAuthState('state-token')
@@ -106,11 +106,12 @@ describe('consumeOAuthState', () => {
   })
 
   it('returns the consent and the provider read from the server-side rows', async () => {
-    useResults([{ data: { consent_id: 'consent-1', user_id: 'user-1' } }, { data: { provider: 'visma' } }])
+    useResults([{ data: { consent_id: 'consent-1', user_id: 'user-1' } }, { data: { provider: 'visma', company_id: 'company-1' } }])
 
     await expect(consumeOAuthState('state-token')).resolves.toEqual({
       consentId: 'consent-1',
       provider: 'visma',
+      companyId: 'company-1',
       userId: 'user-1',
       origin: null,
     })
@@ -119,7 +120,7 @@ describe('consumeOAuthState', () => {
   it('reads the provider from provider_consents, never from the caller', async () => {
     const { calls } = useResults([
       { data: { consent_id: 'consent-1', user_id: 'user-1' } },
-      { data: { provider: 'fortnox' } },
+      { data: { provider: 'fortnox', company_id: 'company-1' } },
     ])
 
     await consumeOAuthState('state-token')
@@ -143,10 +144,11 @@ describe('consumeOAuthState', () => {
   })
 
   it('returns null on replay: the second consume of the same token loses', async () => {
-    useResults([{ data: { consent_id: 'consent-1', user_id: 'user-1' } }, { data: { provider: 'fortnox' } }])
+    useResults([{ data: { consent_id: 'consent-1', user_id: 'user-1' } }, { data: { provider: 'fortnox', company_id: 'company-1' } }])
     await expect(consumeOAuthState('one-time-token')).resolves.toEqual({
       consentId: 'consent-1',
       provider: 'fortnox',
+      companyId: 'company-1',
       userId: 'user-1',
       origin: null,
     })
@@ -159,11 +161,12 @@ describe('consumeOAuthState', () => {
   it('returns userId null for a row minted before the initiator column existed', async () => {
     // The callback refuses these (nobody to bind the completion to); this
     // function only has to report the absence honestly, never invent a user.
-    useResults([{ data: { consent_id: 'consent-1', user_id: null } }, { data: { provider: 'fortnox' } }])
+    useResults([{ data: { consent_id: 'consent-1', user_id: null } }, { data: { provider: 'fortnox', company_id: 'company-1' } }])
 
     await expect(consumeOAuthState('state-token')).resolves.toEqual({
       consentId: 'consent-1',
       provider: 'fortnox',
+      companyId: 'company-1',
       userId: null,
       origin: null,
     })
@@ -240,7 +243,7 @@ describe('OAuth handoff storage', () => {
         provider_error: result.providerError ? expect.stringMatching(/^v1:/) : null,
       })
       expect(JSON.stringify(inserted)).not.toContain(result.providerCode ?? result.providerError)
-      useResults([{ data: inserted }, { data: { provider: 'fortnox' } }])
+      useResults([{ data: inserted }, { data: { provider: 'fortnox', company_id: 'company-1' } }])
       await expect(consumeHandoff(first.code, origin)).resolves.toMatchObject({
         providerCode: result.providerCode ?? null, providerError: result.providerError ?? null,
       })
@@ -253,10 +256,10 @@ describe('OAuth handoff storage', () => {
         consent_id: 'consent-1', user_id: 'user-1', origin, provider_error: null,
         provider_code: encryptHandoffValue('stored-code', JSON.stringify(['handoff-token', 'consent-1', 'user-1', origin, 'provider_code'])),
       } },
-      { data: { provider: 'visma' } },
+      { data: { provider: 'visma', company_id: 'company-1' } },
     ])
     await expect(consumeHandoff('handoff-token', origin)).resolves.toEqual({
-      consentId: 'consent-1', userId: 'user-1', origin, provider: 'visma',
+      consentId: 'consent-1', userId: 'user-1', origin, provider: 'visma', companyId: 'company-1',
       providerCode: 'stored-code', providerError: null,
     })
     expect(calls[0].ops[0][0]).toBe('delete')
@@ -291,7 +294,7 @@ describe('OAuth handoff storage', () => {
   it('rejects unencrypted or corrupted handoff credentials after deleting the row', async () => {
     const { calls } = useResults([
       { data: { consent_id: 'consent-1', user_id: 'user-1', origin, provider_code: 'plaintext-code', provider_error: null } },
-      { data: { provider: 'fortnox' } },
+      { data: { provider: 'fortnox', company_id: 'company-1' } },
     ])
     await expect(consumeHandoff('token', origin)).resolves.toBeNull()
     expect(calls[0].ops[0][0]).toBe('delete')

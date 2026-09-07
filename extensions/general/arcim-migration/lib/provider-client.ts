@@ -302,7 +302,14 @@ export async function generateOtc(
  */
 export async function consumeOAuthState(
   state: string,
-): Promise<{ consentId: string; provider: ProviderName; userId: string | null; origin: string | null } | null> {
+): Promise<{
+  consentId: string
+  provider: ProviderName
+  /** The Accounted company that owns the consent (read server-side, never from the callback). */
+  companyId: string
+  userId: string | null
+  origin: string | null
+} | null> {
   const supabase = createServiceClient()
   const now = new Date().toISOString()
 
@@ -323,17 +330,18 @@ export async function consumeOAuthState(
 
   const { data: consent } = await supabase
     .from('provider_consents')
-    .select('provider')
+    .select('provider, company_id')
     .eq('id', consumed.consent_id)
     .maybeSingle()
 
-  if (!consent?.provider) {
+  if (!consent?.provider || !consent.company_id) {
     return null
   }
 
   return {
     consentId: consumed.consent_id as string,
     provider: consent.provider as ProviderName,
+    companyId: consent.company_id as string,
     userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
     origin: typeof consumed.origin === 'string' ? consumed.origin : null,
   }
@@ -371,6 +379,8 @@ export async function mintHandoff(
 export async function consumeHandoff(code: string, origin: string): Promise<{
   consentId: string
   provider: ProviderName
+  /** The Accounted company that owns the consent (read server-side, never from the callback). */
+  companyId: string
   userId: string | null
   origin: string
   providerCode: string | null
@@ -391,10 +401,10 @@ export async function consumeHandoff(code: string, origin: string): Promise<{
 
   const { data: consent } = await supabase
     .from('provider_consents')
-    .select('provider')
+    .select('provider, company_id')
     .eq('id', consumed.consent_id)
     .maybeSingle()
-  if (!consent?.provider) return null
+  if (!consent?.provider || !consent.company_id) return null
 
   try {
     const decrypt = (column: 'provider_code' | 'provider_error') => consumed[column] === null
@@ -405,6 +415,7 @@ export async function consumeHandoff(code: string, origin: string): Promise<{
     return {
       consentId: consumed.consent_id as string,
       provider: consent.provider as ProviderName,
+      companyId: consent.company_id as string,
       userId: typeof consumed.user_id === 'string' ? consumed.user_id : null,
       origin: consumed.origin as string,
       providerCode: decrypt('provider_code'),
