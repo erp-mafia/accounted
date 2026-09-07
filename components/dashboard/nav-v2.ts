@@ -81,9 +81,10 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/transactions',
     labelKey: 'transactions',
     icon: ArrowLeftRight,
+    // Regler stays off the nav until there is a rules engine worth a page
+    // (founder call 2026-09-07); the route exists for the ones who need it.
     sub: [
       { href: '/parties', labelKey: 'v2_parties' },
-      { href: '/rules', labelKey: 'v2_rules' },
     ],
   },
   {
@@ -91,8 +92,8 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     labelKey: 'v2_invoicing',
     icon: ReceiptText,
     sub: [
+      // Återkommande opens from Ny faktura; it is a way to make invoices, not a place.
       { href: '/invoices', labelKey: 'invoices' },
-      { href: '/invoices/recurring', labelKey: 'v2_recurring' },
       { href: '/sales-orders', labelKey: 'sales_orders', requiresSalesOrders: true },
       { href: '/orders', labelKey: 'webshop_orders', requiresWebshop: true, betaBadge: true },
       { href: '/customers', labelKey: 'customers' },
