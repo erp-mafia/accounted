@@ -486,10 +486,11 @@ export default async function DashboardLayout({
   // flip the data attribute client-side and persist via /api/user/ui-state.
   const uiState = (userPrefs?.ui_state ?? {}) as import('@/types').UserUiState
   const navCollapsed = uiState.nav_collapsed === true
-  // Shell v2 is a per-user opt-in (Inställningar → Konto → Layout) until it
-  // becomes the default. Rendered as data-shell on the panel so the CSS in
-  // globals.css can restyle PageHeader without touching page code.
-  const shell: DashboardShell = uiState.shell === 'v2' ? 'v2' : 'v1'
+  // Shell v2 is the default (UI v2 PR 9a, cutover step one). Standard (v1)
+  // stays selectable under Inställningar → Konto → Layout until v1 is removed.
+  // Rendered as data-shell on the panel so the CSS in globals.css can restyle
+  // PageHeader without touching page code.
+  const shell: DashboardShell = uiState.shell === 'v1' ? 'v1' : 'v2'
 
   const allCompanyEntries = (allMemberships || [])
     .filter((m) => m.companies)

@@ -100,6 +100,8 @@ Shipped scope (PR 8a): every list page that drew its own title (Kundfakturor, Le
 
 Shell v2 becomes the default, v1 is removed, design.md conventions 1, 2 and 9 lose their addenda and state v2 plainly.
 
+Split in two. PR 9a (this): the default flips to v2; a user who prefers Standard keeps it through Inställningar → Konto → Layout. Merge last, after the preview walk-through of PRs 1 to 8. PR 9b (later, after a few weeks of v2 as default): remove the v1 branches (`MainContainer` v1, the v1 sidebar with its collapse rail and folds, the v1 Hem with `DashboardContent`/`AttGoraSection`/`ResumePane`, the status pickers the pipeline bars replaced), drop the flag and the `data-shell` CSS scoping, and rewrite design.md conventions 1, 2 and 9 without addenda.
+
 ## What the prototype fakes and the product must do for real
 
 - Assistant answers (canned in the prototype): task-scoped opening message from worklist data, questions to the existing assistant.

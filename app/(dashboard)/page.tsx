@@ -167,7 +167,7 @@ export default async function DashboardPage() {
   // Shell v2 (dev_docs/ui_v2_build_plan.md, PR 3): Hem IS the queue. The
   // top bar carries the title; the three panes fill the panel.
   const shell: DashboardShell =
-    (userPrefs?.ui_state as { shell?: DashboardShell } | null)?.shell === 'v2' ? 'v2' : 'v1'
+    (userPrefs?.ui_state as { shell?: DashboardShell } | null)?.shell === 'v1' ? 'v1' : 'v2'
   if (shell === 'v2') {
     const tV2 = await getTranslations('att_gora_v2')
     return (

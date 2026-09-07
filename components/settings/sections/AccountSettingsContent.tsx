@@ -45,7 +45,7 @@ export function AccountSettingsContent() {
   // write or the page would come back in the old shell.
   const { uiState } = useUiState()
   const [shellSaving, setShellSaving] = useState(false)
-  const shell: DashboardShell = uiState?.shell === 'v2' ? 'v2' : 'v1'
+  const shell: DashboardShell = uiState?.shell === 'v1' ? 'v1' : 'v2'
   async function changeShell(next: DashboardShell) {
     if (next === shell) return
     setShellSaving(true)
