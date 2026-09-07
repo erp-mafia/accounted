@@ -105,7 +105,7 @@ export default function SkattekontoInboxCard({
       {/* Always-visible selection checkbox (concept .cb) */}
       {/* Zero-width cell: the checkbox hangs in the left page margin so
           the date column can sit flush with the page edge. */}
-      <td className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}>
+      <td className={cn(TD_CLASS, 'select-none', columns ? 'w-7 !pl-0 !pr-2' : 'relative w-0 !p-0')}>
         {selectable && (
           <Checkbox
             checked={isSelected}
@@ -115,7 +115,8 @@ export default function SkattekontoInboxCard({
             onCheckedChange={() => onToggleSelect?.(row.id, shiftHeld.current)}
             aria-label={t('select_row')}
             className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
+              'border-foreground duration-150',
+              columns ? 'block' : 'absolute -left-5 top-1/2 -translate-y-1/2 md:-left-6',
               isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
             )}
           />
