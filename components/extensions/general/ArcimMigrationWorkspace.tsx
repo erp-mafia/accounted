@@ -690,6 +690,7 @@ function ConnectStep({
   isLoading,
   error,
   authUrl,
+  activationUrl,
   consentId,
   onTokenSubmit,
   onBack,
@@ -699,6 +700,8 @@ function ConnectStep({
   isLoading: boolean
   error: string | null
   authUrl: string | null
+  /** Björn Lundén only: Lundify's activation redirect, when BL issued us a key. */
+  activationUrl: string | null
   consentId: string | null
   onTokenSubmit: (apiToken: string, companyId: string) => void
   onBack: () => void
@@ -707,9 +710,33 @@ function ConnectStep({
   const providerName = ARCIM_PROVIDERS.find(p => p.id === provider)?.name ?? provider
   const [apiToken, setApiToken] = useState('')
   const [companyId, setCompanyId] = useState('')
+  // With the Lundify redirect on offer, the User-Key field is the fallback for
+  // a customer who activated inside Lundify already, so it starts folded.
+  const [showManualKey, setShowManualKey] = useState(false)
 
   // BL uses server-side client credentials: only needs company ID, no API key
   const isClientCredentials = provider === 'bjornlunden'
+  const hasLundifyActivation = isClientCredentials && !!activationUrl
+  const manualKeyVisible = !hasLundifyActivation || showManualKey
+
+  const openProviderWindow = (url: string) => {
+    const w = 600
+    const h = 700
+    const left = window.screenX + (window.outerWidth - w) / 2
+    const top = window.screenY + (window.outerHeight - h) / 2
+    const popup = window.open(url, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+    if (!popup) {
+      // Popup blocked: with the return value discarded, a blocked
+      // popup looked exactly like a successful one (nothing opens,
+      // nothing is said, the user clicks again). Fall back to the
+      // full-page flow instead. The callback already supports it:
+      // with no window.opener it redirects to
+      // /import?migration=connected&consentId=..., which
+      // handleOAuthReturn consumes and resumes the wizard at the
+      // preview step. Same treatment as SkatteverketConnectPanel.
+      window.location.href = url
+    }
+  }
   // WINT has no API keys: the "token" is the user's WINT login (e-post +
   // lösenord), exchanged server-side for ett tokenpar; lösenordet sparas aldrig.
   const isWintLogin = provider === 'wint'
@@ -727,7 +754,9 @@ function ConnectStep({
           ? t('ext_arcim_bokio_company_id_label')
           : 'Företags-ID'
 
-  const tokenDescription = isClientCredentials
+  const tokenDescription = hasLundifyActivation
+    ? t('ext_arcim_bl_activate_description', { appName: branding.appName })
+    : isClientCredentials
     ? t('ext_arcim_bl_token_description', { appName: branding.appName })
     : isWintLogin
       ? `Logga in med dina WINT-uppgifter för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata. Lösenordet används en gång för att skapa anslutningen och sparas aldrig.`
@@ -786,35 +815,36 @@ function ConnectStep({
             Klicka nedan för att logga in i {providerName}.
             Fönstret stängs automatiskt när du är klar.
           </p>
-          <Button
-            className="min-h-11"
-            onClick={() => {
-              const w = 600
-              const h = 700
-              const left = window.screenX + (window.outerWidth - w) / 2
-              const top = window.screenY + (window.outerHeight - h) / 2
-              const popup = window.open(authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
-              if (!popup) {
-                // Popup blocked: with the return value discarded, a blocked
-                // popup looked exactly like a successful one (nothing opens,
-                // nothing is said, the user clicks again). Fall back to the
-                // full-page flow instead. The callback already supports it:
-                // with no window.opener it redirects to
-                // /import?migration=connected&consentId=..., which
-                // handleOAuthReturn consumes and resumes the wizard at the
-                // preview step. Same treatment as SkatteverketConnectPanel.
-                window.location.href = authUrl
-              }
-            }}
-          >
+          <Button className="min-h-11" onClick={() => openProviderWindow(authUrl)}>
             Logga in i {providerName}
             <ExternalLink className="ml-2 h-4 w-4" />
           </Button>
         </div>
       )}
 
+      {/* Björn Lundén: Lundify's activation redirect returns the User-Key
+          itself. The popup posts arcim-oauth-success like the OAuth
+          providers, so the same listener resumes the wizard. */}
+      {authType === 'token' && consentId && !isLoading && hasLundifyActivation && activationUrl && (
+        <div className="space-y-4">
+          <Button className="min-h-11" onClick={() => openProviderWindow(activationUrl)}>
+            {t('ext_arcim_bl_activate_button')}
+            <ExternalLink className="ml-2 h-4 w-4" />
+          </Button>
+          {!showManualKey && (
+            <Button
+              variant="link"
+              className="h-auto px-0 text-sm text-muted-foreground"
+              onClick={() => setShowManualKey(true)}
+            >
+              {t('ext_arcim_bl_manual_key_toggle')}
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Token-based flow */}
-      {authType === 'token' && consentId && !isLoading && (
+      {authType === 'token' && consentId && !isLoading && manualKeyVisible && (
         <div className="max-w-md space-y-4">
           <p className="text-sm text-muted-foreground">
             {tokenHelpText}
@@ -2278,6 +2308,9 @@ export default function ArcimMigrationWorkspace({
   const [selectedProvider, setSelectedProvider] = useState<ArcimProvider | null>(null)
   const [consentId, setConsentId] = useState<string | null>(null)
   const [authUrl, setAuthUrl] = useState<string | null>(null)
+  // Björn Lundén: Lundify activation URL from /connect (null when BL has not
+  // issued an activation key, in which case only the User-Key field shows).
+  const [activationUrl, setActivationUrl] = useState<string | null>(null)
   const [authType, setAuthType] = useState<'oauth' | 'token' | null>(null)
 
   // Preview state
@@ -2428,6 +2461,7 @@ export default function ArcimMigrationWorkspace({
       const data = await res.json()
       setConsentId(data.consentId)
       setAuthType(data.authType)
+      setActivationUrl(typeof data.activationUrl === 'string' ? data.activationUrl : null)
 
       if (data.alreadyConnected) {
         // Existing connection: skip auth, go straight to preview
@@ -2556,6 +2590,7 @@ export default function ArcimMigrationWorkspace({
         popup?.close()
         if (data.authType === 'token') {
           // Re-enter credentials for token-based providers
+          setActivationUrl(typeof data.activationUrl === 'string' ? data.activationUrl : null)
           setStep('connect')
         }
       }
@@ -3203,6 +3238,7 @@ export default function ArcimMigrationWorkspace({
           isLoading={isLoading}
           error={error}
           authUrl={authUrl}
+          activationUrl={activationUrl}
           consentId={consentId}
           onTokenSubmit={handleTokenSubmit}
           onBack={() => {
