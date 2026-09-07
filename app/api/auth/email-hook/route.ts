@@ -3,12 +3,13 @@ import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { getEmailService } from '@/lib/email/service'
 import { getBranding } from '@/lib/branding/service'
-import { resolveBrandByHost } from '@/lib/branding/resolve'
+import { resolveBrandResultByHost } from '@/lib/branding/resolve'
 import { getSenderForBrand } from '@/lib/email/brand-sender'
 import { buildAuthEmail } from '@/lib/email/auth-templates'
 import { verifyStandardWebhookSignature } from '@/lib/email/standard-webhook'
 import {
   BrandLookupFailedError,
+  getCanonicalAppOrigin,
   resolveTrustedAppOrigin,
 } from '@/lib/domains/trusted-app-origin'
 
@@ -26,7 +27,7 @@ const log = createLogger('auth-email-hook')
  * sending auth mail itself and this endpoint sends every auth mail (signup
  * confirmation, recovery, magic link, invite, email change, reauthentication)
  * through the platform email service, branded per the requesting host: the
- * brand is resolved from the redirect_to origin via resolveBrandByHost, so a
+ * brand is resolved from the trusted redirect_to origin, so a
  * reset requested on app.partner.se is sent in the partner's brand and links
  * back to app.partner.se. Unknown hosts get canonical platform mail.
  *
@@ -186,7 +187,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Origin lookup failed' }, { status: 500 })
   }
   const { origin, redirectUrl } = resolved
-  const brand = await resolveBrandByHost(new URL(origin).hostname)
+  // A brand host whose row cannot be read right now (a second registry read
+  // can fail after the first succeeded) must not get platform-branded mail
+  // carrying a brand link: 500, Supabase retries. On the canonical origin a
+  // failed read is the platform sender either way, so it does not block.
+  const brandResult = await resolveBrandResultByHost(new URL(origin).hostname)
+  if (brandResult.lookupFailed && origin !== getCanonicalAppOrigin()) {
+    log.error('brand lookup failed for the resolved origin', undefined, { origin })
+    return NextResponse.json({ error: 'Origin lookup failed' }, { status: 500 })
+  }
+  const brand = brandResult.brand
   const sender = getSenderForBrand(brand)
   const appName = brand?.appName ?? getBranding().appName
 

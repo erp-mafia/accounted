@@ -27,9 +27,10 @@ import { getEmailService } from '@/lib/email/service'
 import { buildAuthEmail } from '@/lib/email/auth-templates'
 import { getSenderForBrand } from '@/lib/email/brand-sender'
 import { getBranding } from '@/lib/branding/service'
-import { resolveBrandByHost } from '@/lib/branding/resolve'
+import { resolveBrandResultByHost } from '@/lib/branding/resolve'
 import {
   BrandLookupFailedError,
+  getCanonicalAppOrigin,
   resolveTrustedAppOrigin,
 } from '@/lib/domains/trusted-app-origin'
 import { createLogger } from '@/lib/logger'
@@ -77,6 +78,17 @@ export async function sendBankIdSignupConfirmation(
     return { ok: false, step: 'resolve_origin', message: err.message }
   }
 
+  // Sender identity from the RESOLVED host, read before the link is minted:
+  // a brand host whose brand row cannot be read right now must not get
+  // platform-branded mail carrying a brand link (a second registry read can
+  // fail after the first succeeded). On the canonical origin a failed read
+  // is the platform sender either way, so it does not block the mail.
+  const brandResult = await resolveBrandResultByHost(new URL(origin).hostname)
+  if (brandResult.lookupFailed && origin !== getCanonicalAppOrigin()) {
+    return { ok: false, step: 'resolve_origin', message: `brand lookup failed for ${origin}` }
+  }
+  const brand = brandResult.brand
+
   const { data: link, error: linkError } = await input.supabase.auth.admin.generateLink({
     type: 'magiclink',
     email: input.email,
@@ -89,10 +101,6 @@ export async function sendBankIdSignupConfirmation(
     return { ok: false, step: 'generate_link', message: linkError?.message }
   }
 
-  // Brand from the RESOLVED host, so the sender identity always matches the
-  // host the link lands on: a rejected host gets canonical mail with a
-  // canonical link, never brand mail pointing at the platform domain.
-  const brand = await resolveBrandByHost(new URL(origin).hostname)
   const sender = getSenderForBrand(brand)
   const appName = brand?.appName ?? getBranding().appName
 

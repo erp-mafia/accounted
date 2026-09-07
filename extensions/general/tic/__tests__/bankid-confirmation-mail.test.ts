@@ -6,11 +6,11 @@ vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({ sendEmail: sendEmailMock, isConfigured: () => true }),
 }))
 
-const resolveBrandByHostMock = vi.hoisted(() => vi.fn())
 const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/branding/resolve', () => ({
-  resolveBrandByHost: resolveBrandByHostMock,
-  // The trusted-origin resolver classifies the request host through this.
+  resolveBrandByHost: vi.fn(),
+  // The one registry read: the trusted-origin resolver classifies the
+  // request host through it, and the helper reads the sender brand from it.
   resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
   // Imported by lib/email/brand-sender (not called on this path).
   resolveBrandForCompany: vi.fn(),
@@ -53,12 +53,9 @@ beforeEach(() => {
   // Registry: only the test brand host is registered; everything else is
   // unknown. Both resolvers read the same table.
   resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
-    brand: host === BRAND_HOST ? { domain: BRAND_HOST } : null,
+    brand: host === BRAND_HOST ? TESTBRAND : null,
     lookupFailed: false,
   }))
-  resolveBrandByHostMock.mockImplementation(async (host: string) =>
-    host === BRAND_HOST ? TESTBRAND : null,
-  )
   sendEmailMock.mockResolvedValue({ success: true, messageId: 'm-1' })
 })
 
@@ -109,7 +106,7 @@ describe('sendBankIdSignupConfirmation', () => {
       host: BRAND_HOST,
     })
 
-    expect(resolveBrandByHostMock).toHaveBeenCalledWith(BRAND_HOST)
+    expect(resolveBrandResultByHostMock).toHaveBeenCalledWith(BRAND_HOST)
     const mail = sendEmailMock.mock.calls[0][0]
     expect(mail.fromName).toBe('Testbrand')
     expect(mail.fromAddress).toBe('noreply@post.testbrand.example')
@@ -160,6 +157,41 @@ describe('sendBankIdSignupConfirmation', () => {
     expect(result).toMatchObject({ ok: false, step: 'resolve_origin' })
     expect(generateLink).not.toHaveBeenCalled()
     expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses before minting a link when the brand read fails after the origin resolved', async () => {
+    // First read (origin classification) succeeds, second (sender) fails:
+    // never platform-branded mail carrying a brand link, and no token minted.
+    resolveBrandResultByHostMock
+      .mockResolvedValueOnce({ brand: TESTBRAND, lookupFailed: false })
+      .mockResolvedValueOnce({ brand: null, lookupFailed: true })
+    const { supabase, generateLink } = serviceClient(LINK_OK)
+
+    const result = await sendBankIdSignupConfirmation({
+      supabase,
+      email: 'fresh@example.com',
+      host: BRAND_HOST,
+    })
+
+    expect(result).toMatchObject({ ok: false, step: 'resolve_origin' })
+    expect(generateLink).not.toHaveBeenCalled()
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('still sends canonical mail when the brand read fails on the canonical origin', async () => {
+    resolveBrandResultByHostMock.mockResolvedValue({ brand: null, lookupFailed: true })
+    const { supabase } = serviceClient(LINK_OK)
+
+    const result = await sendBankIdSignupConfirmation({
+      supabase,
+      email: 'fresh@example.com',
+      host: 'app.gnubok.se',
+    })
+
+    expect(result).toEqual({ ok: true })
+    const mail = sendEmailMock.mock.calls[0][0]
+    expect(mail.text).toContain('https://app.gnubok.se/auth/callback?token_hash=hashed-123')
+    expect(mail.fromName).toBeUndefined()
   })
 
   it('reports a generateLink failure without sending anything', async () => {
