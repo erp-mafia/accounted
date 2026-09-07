@@ -26,6 +26,7 @@ import { RegistryReviewDialog } from '@/components/parties/RegistryReviewDialog'
 import { hasHardKey } from '@/components/parties/format'
 import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import type { PartyRole, Register, RegisterPeriod, RegisterRow, RegisterView } from '@/lib/parties/register'
 
 const VIEWS: RegisterView[] = ['suggested', 'observed']
@@ -61,6 +62,7 @@ function SuggestionsPage() {
   const tCommon = useTranslations('common')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const shell = useShell()
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -379,6 +381,7 @@ function SuggestionsPage() {
     if (rows.length === 0) return empty()
     return (
       <SuggestionQueue
+        dense={shell === 'v2'}
         rows={rows}
         selected={selected}
         roles={rolesFor}
