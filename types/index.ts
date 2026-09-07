@@ -261,6 +261,7 @@ export type VatTreatment =
   | 'reduced_12'        // 12% reduced rate
   | 'reduced_6'         // 6% reduced rate
   | 'reverse_charge'    // EU reverse charge (0%)
+  | 'reverse_charge_domestic' // Domestic reverse charge, byggtjanster (0%)
   | 'export'            // Non-EU export (0%)
   | 'exempt'            // VAT exempt
 
@@ -906,6 +907,15 @@ export interface Customer {
   vat_number_validated: boolean
   vat_number_validated_at: string | null
   personal_number: string | null
+
+  /**
+   * The buyer accounts for the VAT on construction services (ML 16 kap. 13 §).
+   * Unlike the EU rule this cannot be derived: it turns on the buyer being a
+   * taxable person who supplies construction services other than temporarily,
+   * which only the seller can assert. Honoured for customer_type
+   * 'swedish_business' only; see isDomesticConstructionReverseCharge().
+   */
+  construction_reverse_charge: boolean
 
   // Language for customer-facing invoice PDF and email
   language: 'sv' | 'en'
@@ -1721,6 +1731,7 @@ export interface CreateCustomerInput {
   country?: string
   org_number?: string
   vat_number?: string
+  construction_reverse_charge?: boolean
   personal_number?: string | null
   language?: 'sv' | 'en'
   default_payment_terms?: number

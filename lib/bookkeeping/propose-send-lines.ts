@@ -191,7 +191,9 @@ function buildSendLines(
       }
 
       for (const [rate, group] of rateGroups) {
-        const treatment = rate === 0 && (invoice.vat_treatment === 'reverse_charge' || invoice.vat_treatment === 'export')
+        const treatment = rate === 0 && (invoice.vat_treatment === 'reverse_charge'
+          || invoice.vat_treatment === 'reverse_charge_domestic'
+          || invoice.vat_treatment === 'export')
           ? invoice.vat_treatment
           : getVatTreatmentForRate(rate)
         const revenueAccount = getRevenueAccount(treatment, entityType)

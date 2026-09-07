@@ -202,10 +202,13 @@ function resolveRevenueTarget(
 ): { account: string; special: boolean } {
   const rate = item.vat_rate ?? 0
   const treatment =
-    rate === 0 && (invoiceTreatment === 'reverse_charge' || invoiceTreatment === 'export')
+    rate === 0 && (invoiceTreatment === 'reverse_charge'
+      || invoiceTreatment === 'reverse_charge_domestic'
+      || invoiceTreatment === 'export')
       ? invoiceTreatment
       : getVatTreatmentForRate(rate)
-  const special = treatment === 'reverse_charge' || treatment === 'export'
+  const special =
+    treatment === 'reverse_charge' || treatment === 'reverse_charge_domestic' || treatment === 'export'
   const account =
     !special && item.revenue_account
       ? item.revenue_account

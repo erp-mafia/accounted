@@ -186,7 +186,12 @@ export async function buildInvoiceWriteData(params: {
   const { supabase, companyId, customer, documentType, input, existingPersonnummer } = params
   const items = input.items
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
+  const vatRules = getVatRules(
+    customer.customer_type,
+    customer.vat_number_validated,
+    customer.country,
+    customer.construction_reverse_charge ?? false,
+  )
   // Gate on the PERMITTED set, not the picker default. Under huvudregeln
   // (ML 6 kap. 34 §) a service to a foreign business is taxed where the buyer
   // is established, so 0% is the default; but the ML 6 kap. exceptions taxed
@@ -225,7 +230,11 @@ export async function buildInvoiceWriteData(params: {
     if (documentType !== 'invoice') {
       return { ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVALID', details: { reason: 'document_type', documentType } }
     }
-    if (vatRules.treatment === 'reverse_charge' || vatRules.treatment === 'export') {
+    if (
+      vatRules.treatment === 'reverse_charge'
+      || vatRules.treatment === 'reverse_charge_domestic'
+      || vatRules.treatment === 'export'
+    ) {
       return { ok: false, code: 'INVOICE_CREATE_ACCRUAL_INVALID', details: { reason: 'vat_treatment', vatTreatment: vatRules.treatment } }
     }
     const { data: methodSettings } = await supabase
@@ -491,7 +500,9 @@ export async function buildInvoiceWriteData(params: {
   // invoice-level treatment to rate-0 lines), so 3308 and 3002/2621 both land
   // in the right ruta.
   const isSpecialTreatment =
-    vatRules.treatment === 'reverse_charge' || vatRules.treatment === 'export'
+    vatRules.treatment === 'reverse_charge'
+    || vatRules.treatment === 'reverse_charge_domestic'
+    || vatRules.treatment === 'export'
   // No priced lines at all (text-only document) charges nothing either way:
   // keep the customer's treatment rather than restamping it as domestic.
   const hasZeroRatedLine = uniqueRates.size === 0 || uniqueRates.has(0)

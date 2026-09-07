@@ -35,6 +35,11 @@ export interface VatRateCustomer {
   vat_number_validated?: boolean | null
   /** ISO 3166-1 alpha-2; gates reverse charge together with the two above. */
   country?: string | null
+  /**
+   * Seller-asserted: this buyer accounts for the VAT on construction services
+   * (ML 16 kap. 13 §). Locks the default to 0% for a Swedish business.
+   */
+  construction_reverse_charge?: boolean | null
 }
 
 /** One invoice line as the editor's form holds it. */
@@ -75,8 +80,9 @@ export function resolveLineVatRates(
     }
   }
   const validated = customer.vat_number_validated ?? false
-  const defaultRates = getAvailableVatRates(customer.customer_type, validated, customer.country)
-  const options = getPermittedVatRates(customer.customer_type, validated, customer.country)
+  const constructionRc = customer.construction_reverse_charge ?? false
+  const defaultRates = getAvailableVatRates(customer.customer_type, validated, customer.country, constructionRc)
+  const options = getPermittedVatRates(customer.customer_type, validated, customer.country, constructionRc)
   return {
     options,
     defaultRates,

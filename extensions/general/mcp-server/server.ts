@@ -7055,13 +7055,21 @@ export const tools: McpTool[] = [
       }
 
       // VAT rules from customer type (same logic as web UI)
-      const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
+      const vatRules = getVatRules(
+        customer.customer_type,
+        customer.vat_number_validated,
+        customer.country,
+        customer.construction_reverse_charge ?? false,
+      )
       // The DEFAULT set governs article-rate adoption (web parity: the picker
       // only adopts a rate the customer could have picked themselves); a
       // customer locked to a single rate (foreign business 0%) adopts nothing.
       // Gating below stays on the PERMITTED set: adoption and validation are
       // deliberately different sets.
-      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
+      const adoptableVatRates = getArticleVatRateAdoptionSet(
+        customer.customer_type, customer.vat_number_validated, customer.country,
+        customer.construction_reverse_charge ?? false,
+      )
 
       // Article prefill (web line picker parity): the line's own values win,
       // the referenced article fills whatever the agent left out.
@@ -7132,7 +7140,10 @@ export const tools: McpTool[] = [
       // The default is still 0% (vatRules.rate is the fallback below), so a
       // Swedish rate only reaches the staged operation when the agent set it on
       // that line explicitly.
-      const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
+      const permittedRates = getPermittedVatRates(
+        customer.customer_type, customer.vat_number_validated, customer.country,
+        customer.construction_reverse_charge ?? false,
+      )
       const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
       // Calculate per-item VAT (line totals net of any per-line discount)
@@ -7450,7 +7461,10 @@ export const tools: McpTool[] = [
       // Article prefill with the same rules as gnubok_create_invoice: the
       // line's own values win, the article fills the rest, and its VAT rate
       // is adopted only inside the customer's default rate set.
-      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
+      const adoptableVatRates = getArticleVatRateAdoptionSet(
+        customer.customer_type, customer.vat_number_validated, customer.country,
+        customer.construction_reverse_charge ?? false,
+      )
       const articleIds = Array.from(new Set(rawItems.map((i) => i.article_id).filter((a): a is string => !!a)))
       const articlesById = new Map<string, InvoiceLineArticle>()
       if (articleIds.length > 0) {
@@ -18590,7 +18604,7 @@ export const tools: McpTool[] = [
         // for individuals); never decrypted, staged, or returned here.
         const { data: customer, error: custError } = await supabase
           .from('customers')
-          .select('customer_type, vat_number_validated, country, personal_number')
+          .select('customer_type, vat_number_validated, country, personal_number, construction_reverse_charge')
           .eq('id', invoice.customer_id)
           .eq('company_id', companyId)
           .single()
@@ -18598,9 +18612,17 @@ export const tools: McpTool[] = [
           throw new Error('Customer not found: they may have been deleted. The draft cannot be edited without its customer.')
         }
 
-        const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
+        const vatRules = getVatRules(
+          customer.customer_type,
+          customer.vat_number_validated,
+          customer.country,
+          customer.construction_reverse_charge ?? false,
+        )
         defaultVatRate = vatRules.rate
-        const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
+        const adoptableVatRates = getArticleVatRateAdoptionSet(
+        customer.customer_type, customer.vat_number_validated, customer.country,
+        customer.construction_reverse_charge ?? false,
+      )
 
         const articleIds = Array.from(new Set(rawItems.map((i) => i.article_id).filter((a): a is string => !!a)))
         const articlesById = new Map<string, InvoiceLineArticle>()
@@ -18628,7 +18650,10 @@ export const tools: McpTool[] = [
         // carry Swedish VAT even to a foreign business); the default stays
         // vatRules.rate, so a Swedish rate only lands here when set on the
         // line or adopted from an article within the default set.
-        const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
+        const permittedRates = getPermittedVatRates(
+        customer.customer_type, customer.vat_number_validated, customer.country,
+        customer.construction_reverse_charge ?? false,
+      )
         const allowedRates = new Set(permittedRates.map((r) => r.rate))
         for (const item of items) {
           // Text rows carry no amounts and never book: exclude them from the

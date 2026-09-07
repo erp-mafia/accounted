@@ -2895,6 +2895,13 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Landet stämmer inte med kundtypen eller VAT-numrets landsprefix.',
     message_en: 'The country does not agree with the customer type or the VAT number\'s country prefix.',
   },
+  CUSTOMER_CONSTRUCTION_RC_VAT_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Omvänd betalningsskyldighet för byggtjänster kräver köparens momsregistreringsnummer på fakturan (ML 17 kap. 24 §). Fyll i VAT-numret först.',
+    message_en:
+      "Construction reverse charge requires the buyer's VAT number on the invoice (ML 17 kap. 24 §). Add the VAT number first.",
+  },
   CUSTOMER_PERSONAL_NUMBER_CONFLICT: {
     httpStatus: 400,
     message_sv:

@@ -343,6 +343,7 @@ export function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     vat_number: 'SE556677889901',
     vat_number_validated: true,
     vat_number_validated_at: '2024-01-01T00:00:00Z',
+    construction_reverse_charge: false,
     personal_number: null,
     contact_person: null,
     invoice_email_cc_addresses: null,

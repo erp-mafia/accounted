@@ -654,6 +654,43 @@ describe('CreateCustomerSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  // ML 16 kap. 13 § applies to a Swedish business buyer, and ML 17 kap. 24 §
+  // p.4 requires that buyer's VAT number on the reverse-charge invoice.
+  it('accepts construction reverse charge on a Swedish business with a VAT number', () => {
+    const result = CreateCustomerSchema.safeParse(validCustomer({
+      construction_reverse_charge: true,
+      vat_number: 'SE556123456701',
+    }))
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects construction reverse charge without a VAT number', () => {
+    const result = CreateCustomerSchema.safeParse(validCustomer({
+      construction_reverse_charge: true,
+    }))
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects construction reverse charge on a blank VAT number', () => {
+    const result = CreateCustomerSchema.safeParse(validCustomer({
+      construction_reverse_charge: true,
+      vat_number: '   ',
+    }))
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects construction reverse charge for a customer type that cannot be liable', () => {
+    for (const customer_type of ['individual', 'eu_business', 'non_eu_business'] as const) {
+      const result = CreateCustomerSchema.safeParse(validCustomer({
+        customer_type,
+        country: customer_type === 'individual' ? 'SE' : 'DE',
+        construction_reverse_charge: true,
+        vat_number: customer_type === 'individual' ? 'SE556123456701' : 'DE123456789',
+      }))
+      expect(result.success).toBe(false)
+    }
+  })
+
   it('accepts customer with all optional fields', () => {
     const result = CreateCustomerSchema.safeParse(validCustomer({
       email: 'billing@acme.se',

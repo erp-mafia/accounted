@@ -22,7 +22,7 @@ import { getAmountToPay } from '@/lib/invoices/rounding'
 import { isTextLikeLine } from '@/lib/invoices/display'
 import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
 import { getCountryName } from '@/lib/vat/country-codes'
-import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
+import { DOMESTIC_CONSTRUCTION_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
 import { unitLabel } from '@/lib/invoices/unit-labels'
 import { HELVETICA_WIDTHS } from '@/lib/invoices/pdf-glyph-widths'
 
@@ -218,6 +218,7 @@ const LABELS = {
     quoteNotice: 'Detta är en offert och utgör ingen faktura eller betalningsanmodan.',
     exemptNotice: 'Undantag från skatteplikt, ML 3 kap.',
     exportNotice: EXPORT_NOTICE_SV,
+    domesticConstructionReverseChargeNotice: DOMESTIC_CONSTRUCTION_REVERSE_CHARGE_NOTICE,
     notVatRegisteredNotice: 'Företaget är inte momsregistrerat. Mervärdesskatt redovisas ej.',
     // Payment
     paymentHeading: 'Betalningsinformation',
@@ -306,6 +307,8 @@ const LABELS = {
     quoteNotice: 'This is a quote and is not an invoice or a request for payment.',
     exemptNotice: 'Exempt from VAT (ML 3 kap., Swedish VAT Act).',
     exportNotice: 'Sale outside the EU, exempt from Swedish VAT (ML 10 kap., Swedish VAT Act).',
+    domesticConstructionReverseChargeNotice:
+      'Reverse charge for construction services: the buyer accounts for the VAT (ML 16 kap. 13 §, Swedish VAT Act).',
     notVatRegisteredNotice: 'The seller is not VAT-registered. No VAT is charged on this invoice.',
     paymentHeading: 'Payment information',
     bank: 'Bank:',
@@ -354,6 +357,9 @@ export const SHOW_SWISH_ON_INVOICE = true
  */
 export function localizeVatNotice(text: string, lang: PdfLang): string {
   if (text === EXPORT_NOTICE_SV) return LABELS[lang].exportNotice
+  if (text === DOMESTIC_CONSTRUCTION_REVERSE_CHARGE_NOTICE) {
+    return LABELS[lang].domesticConstructionReverseChargeNotice
+  }
   return text
 }
 

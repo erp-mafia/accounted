@@ -177,6 +177,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
       company_id: 'preview-company',
       name: 'Exempel AB',
       customer_type: 'swedish_business',
+      construction_reverse_charge: false,
       customer_number: null,
       email: 'kund@exempel.se',
       phone: null,
@@ -217,7 +218,12 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
   }
 
   // VAT rules are customer-type-driven and only know the customer side.
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
+  const vatRules = getVatRules(
+    customer.customer_type,
+    customer.vat_number_validated,
+    customer.country,
+    customer.construction_reverse_charge ?? false,
+  )
 
   const isDeliveryNote = docType === 'delivery_note'
 

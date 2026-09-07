@@ -27,6 +27,25 @@ export function isReverseChargeCustomer(
 }
 
 /**
+ * Domestic reverse charge for construction services (ML 16 kap. 13 §).
+ *
+ * Unlike the EU rule this cannot be derived from the invoice: it turns on the
+ * BUYER being a taxable person who supplies construction services other than
+ * temporarily. Nothing in a customer row proves that, so the seller asserts it
+ * per customer (customers.construction_reverse_charge).
+ *
+ * Honoured for a Swedish business only. A private person, an EU business or a
+ * non-EU business is never liable under 16 kap. 13 §, so a flag left behind on
+ * a customer whose type later changed cannot zero-rate an invoice by accident.
+ */
+export function isDomesticConstructionReverseCharge(
+  customerType: CustomerType,
+  constructionReverseCharge: boolean = false,
+): boolean {
+  return constructionReverseCharge && customerType === 'swedish_business'
+}
+
+/**
  * Get the DEFAULT VAT rates offered for invoice line items, per customer type.
  *
  * Swedish/EU-unvalidated customers can choose between 25%, 12%, 6%, and 0% (exempt).
@@ -55,7 +74,14 @@ export function getAvailableVatRates(
   customerType: CustomerType,
   vatNumberValidated: boolean = false,
   country?: string | null,
+  constructionReverseCharge: boolean = false,
 ): VatRateOption[] {
+  // Swedish buyer who accounts for the VAT on construction services → 0%,
+  // same lock as the EU rule (ML 16 kap. 13 §)
+  if (isDomesticConstructionReverseCharge(customerType, constructionReverseCharge)) {
+    return [{ rate: 0, label: '0% (omvänd betalningsskyldighet)', treatment: 'reverse_charge_domestic' }]
+  }
+
   // EU business with validated VAT → reverse charge, locked to 0%
   if (isReverseChargeCustomer(customerType, vatNumberValidated, country)) {
     return [{ rate: 0, label: '0% (omvänd skattskyldighet)', treatment: 'reverse_charge' }]
@@ -89,8 +115,9 @@ export function getArticleVatRateAdoptionSet(
   customerType: CustomerType,
   vatNumberValidated: boolean = false,
   country?: string | null,
+  constructionReverseCharge: boolean = false,
 ): ReadonlySet<number> {
-  const offered = getAvailableVatRates(customerType, vatNumberValidated, country)
+  const offered = getAvailableVatRates(customerType, vatNumberValidated, country, constructionReverseCharge)
   return new Set(offered.length > 1 ? offered.map((r) => r.rate) : [])
 }
 
@@ -126,18 +153,26 @@ export function getArticleVatRateAdoptionSet(
  * 0% via getAvailableVatRates() and getVatRules().rate, which is also the
  * fallback when a line omits vat_rate. A Swedish rate therefore lands on such an
  * invoice only when it was set explicitly on that line.
+ *
+ * The domestic construction rule widens the same way and for the same reason:
+ * ML 16 kap. 13 § covers construction services, not everything the seller
+ * invoices that buyer. Selling material off the shelf or hiring out a machine
+ * without an operator to the same byggföretag is an ordinary supply carrying
+ * 25%, so the non-zero rates stay permitted and only the default is 0%.
  */
 export function getPermittedVatRates(
   customerType: CustomerType,
   vatNumberValidated: boolean = false,
   country?: string | null,
+  constructionReverseCharge: boolean = false,
 ): VatRateOption[] {
-  const offered = getAvailableVatRates(customerType, vatNumberValidated, country)
+  const offered = getAvailableVatRates(customerType, vatNumberValidated, country, constructionReverseCharge)
 
-  const isForeignBusiness =
+  const lockedToZero =
     customerType === 'non_eu_business' ||
-    isReverseChargeCustomer(customerType, vatNumberValidated, country)
-  if (!isForeignBusiness) {
+    isReverseChargeCustomer(customerType, vatNumberValidated, country) ||
+    isDomesticConstructionReverseCharge(customerType, constructionReverseCharge)
+  if (!lockedToZero) {
     return offered
   }
 
@@ -185,12 +220,16 @@ export interface VatRule {
 export const EU_REVERSE_CHARGE_NOTICE =
   'Omvänd skattskyldighet / Reverse charge - VAT to be accounted for by the recipient as per Article 196, Council Directive 2006/112/EC'
 export const EXPORT_NOTICE_SV = 'Omsättning utanför EU, ML 10 kap.'
+export const DOMESTIC_CONSTRUCTION_REVERSE_CHARGE_NOTICE =
+  'Omvänd betalningsskyldighet för byggtjänster, ML 16 kap. 13 §'
 
 /**
  * Determine VAT treatment based on customer type and VAT validation status.
  *
  * Rules:
  * - Swedish customers: 25% VAT, moms ruta 05
+ * - Swedish business the seller has flagged for construction reverse charge:
+ *   0%, moms ruta 41 (ML 16 kap. 13 §; the buyer declares the VAT in ruta 24/30)
  * - EU business with validated VAT and a country other than SE: 0% reverse charge, moms ruta 39
  * - EU business without validated VAT, or with country SE: 25% VAT, moms ruta 05
  * - Non-EU business: 0% export, moms ruta 40
@@ -203,10 +242,19 @@ export function getVatRules(
   customerType: CustomerType,
   vatNumberValidated: boolean = false,
   country?: string | null,
+  constructionReverseCharge: boolean = false,
 ): VatRule {
   switch (customerType) {
     case 'individual':
     case 'swedish_business':
+      if (isDomesticConstructionReverseCharge(customerType, constructionReverseCharge)) {
+        return {
+          treatment: 'reverse_charge_domestic',
+          rate: 0,
+          momsRuta: '41',
+          reverseChargeText: DOMESTIC_CONSTRUCTION_REVERSE_CHARGE_NOTICE,
+        }
+      }
       return {
         treatment: 'standard_25',
         rate: 25,
@@ -280,6 +328,7 @@ export function getVatTreatmentLabel(treatment: VatTreatment): string {
     reduced_12: '12% moms',
     reduced_6: '6% moms',
     reverse_charge: 'Omvänd skattskyldighet (0%)',
+    reverse_charge_domestic: 'Omvänd betalningsskyldighet, byggtjänster (0%)',
     export: 'Export (0%)',
     exempt: 'Momsfritt',
   }
@@ -326,6 +375,7 @@ export function getMomsRutaDescription(ruta: string): string {
     '07': 'Utgående moms 6%',
     '39': 'Försäljning av tjänster till annat EU-land',
     '40': 'Export utanför EU',
+    '41': 'Försäljning när köparen är betalningsskyldig i Sverige',
   }
   return descriptions[ruta] || ruta
 }

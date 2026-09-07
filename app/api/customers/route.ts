@@ -90,6 +90,7 @@ export const POST = withRouteContext(
         country: body.country ?? 'SE',
         org_number: body.org_number,
         vat_number: body.vat_number,
+        construction_reverse_charge: body.construction_reverse_charge ?? false,
         personal_number: encryptCustomerPersonalNumber(body.personal_number),
         language: body.language || 'sv',
         default_payment_terms: defaultPaymentTerms,

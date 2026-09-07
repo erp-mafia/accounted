@@ -210,13 +210,17 @@ function generatePerRateLines(
 
   for (const item of items) {
     const rate = item.vat_rate ?? 0
-    const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
+    const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge'
+      || invoiceVatTreatment === 'reverse_charge_domestic'
+      || invoiceVatTreatment === 'export')
       ? invoiceVatTreatment
       : getVatTreatmentForRate(rate)
-    // reverse_charge / export force the statutory revenue account (3308/3305);
+    // reverse_charge / reverse_charge_domestic / export force the statutory
+    // revenue account (3308/3231/3305);
     // a per-line override only applies to ordinary domestic rates so EU/export
     // sales keep landing in the right VAT-declaration ruta.
-    const isSpecialTreatment = treatment === 'reverse_charge' || treatment === 'export'
+    const isSpecialTreatment =
+      treatment === 'reverse_charge' || treatment === 'reverse_charge_domestic' || treatment === 'export'
     const plAccount = !isSpecialTreatment && item.revenue_account
       ? item.revenue_account
       : getRevenueAccount(treatment, entityType)
@@ -241,7 +245,9 @@ function generatePerRateLines(
 
   // Generate revenue + VAT lines per rate group.
   for (const [rate, group] of rateGroups) {
-    const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
+    const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge'
+      || invoiceVatTreatment === 'reverse_charge_domestic'
+      || invoiceVatTreatment === 'export')
       ? invoiceVatTreatment
       : getVatTreatmentForRate(rate)
 
