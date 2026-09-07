@@ -69,10 +69,11 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/transactions',
     labelKey: 'transactions',
     icon: ArrowLeftRight,
+    // Regler stays off the nav until there is a rules engine worth a page
+    // (founder call 2026-09-07); the route exists for the ones who need it.
     sub: [
       { href: '/reconciliation', labelKey: 'reconciliation' },
       { href: '/parties', labelKey: 'v2_parties' },
-      { href: '/rules', labelKey: 'v2_rules' },
     ],
   },
   {
