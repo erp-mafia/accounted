@@ -3628,6 +3628,9 @@
     "invoiced_after_payment_badge": "Fakturerad {date}, efter betalningen"
   },
   "tx_skattekonto_card": {
+    "category_pick": "Välj kategori",
+    "more_actions_aria": "Fler åtgärder",
+    "account_label": "Skatteverket {account}",
     "skv_badge": "Skatteverket",
     "duplicate_title_with_voucher": "Möjlig dublett av verifikat {label}",
     "duplicate_title_draft": "Möjlig dublett av verifikat (utkast)",
