@@ -15,9 +15,8 @@
 import { describe, expect, it } from 'vitest'
 import type { ReactElement, ReactNode } from 'react'
 import { renderToBuffer } from '@react-pdf/renderer'
-import { pdf } from '@react-pdf/renderer'
+import { Font, pdf } from '@react-pdf/renderer'
 import layoutDocument from '@react-pdf/layout'
-import FontStore from '@react-pdf/font'
 import {
   HEADING_MIN_PRESENCE_AHEAD,
   InvoicePDF,
@@ -140,9 +139,11 @@ interface LaidOutNode {
 async function layOut(element: ReactElement): Promise<LaidOutNode[]> {
   const instance = pdf(element as Parameters<typeof pdf>[0]) as unknown as { container: { document: unknown } }
   // The layout package types its default export as one argument; at runtime
-  // it takes the document and a FontStore (this is how the renderer calls it).
+  // it takes the document and the font store (this is how the renderer calls
+  // it). `Font` is the renderer's own store, so fonts registered through
+  // prepareInvoiceFont() are visible here.
   const layout = layoutDocument as unknown as (document: unknown, fontStore: unknown) => Promise<LaidOutNode>
-  const root = await layout(instance.container.document, new FontStore())
+  const root = await layout(instance.container.document, Font)
   return root.children ?? []
 }
 
@@ -159,7 +160,7 @@ function textOf(node: LaidOutNode): string {
   return out
 }
 
-/** Every TEXT node on the page, with the page's own height for bounds checks. */
+/** Every TEXT node on the page. */
 function textNodes(page: LaidOutNode): LaidOutNode[] {
   const out: LaidOutNode[] = []
   walk(page, (n) => {
@@ -168,11 +169,26 @@ function textNodes(page: LaidOutNode): LaidOutNode[] {
   return out
 }
 
+/**
+ * Bottom edge of every TEXT node in page coordinates. `box.top` is relative
+ * to the parent, so the ancestors' tops are summed on the way down.
+ */
+function absoluteTextBottoms(page: LaidOutNode): Array<{ text: string; bottom: number }> {
+  const out: Array<{ text: string; bottom: number }> = []
+  const visit = (node: LaidOutNode, offset: number) => {
+    const top = offset + (node.box?.top ?? 0)
+    if (node.type === 'TEXT' && node.box) out.push({ text: textOf(node), bottom: top + node.box.height })
+    for (const child of node.children ?? []) visit(child, top)
+  }
+  for (const child of page.children ?? []) visit(child, 0)
+  return out
+}
+
 function expectNothingPastThePageEdge(pages: LaidOutNode[]) {
   for (const page of pages) {
     const pageHeight = page.box!.height
-    for (const node of textNodes(page)) {
-      expect(node.box!.top + node.box!.height).toBeLessThanOrEqual(pageHeight + 0.5)
+    for (const { text, bottom } of absoluteTextBottoms(page)) {
+      expect(bottom, `"${text.slice(0, 40)}" ends past the page edge`).toBeLessThanOrEqual(pageHeight + 0.5)
     }
   }
 }
@@ -252,8 +268,33 @@ describe('oversize free text', () => {
   it('estimates whether a block fits on one page', () => {
     expect(fitsOnOnePage('Konsultation', 35)).toBe(true)
     expect(fitsOnOnePage(null, 35)).toBe(true)
-    expect(fitsOnOnePage(Array.from({ length: MAX_KEEP_TOGETHER_LINES + 1 }, () => 'x').join('\n'), 35)).toBe(false)
-    expect(fitsOnOnePage('x'.repeat(35 * (MAX_KEEP_TOGETHER_LINES + 1)), 35)).toBe(false)
+    expect(fitsOnOnePage(Array.from({ length: MAX_KEEP_TOGETHER_LINES }, () => 'Rad').join('\n'), 35)).toBe(true)
+    expect(fitsOnOnePage(Array.from({ length: MAX_KEEP_TOGETHER_LINES + 1 }, () => 'Rad').join('\n'), 35)).toBe(false)
+    expect(fitsOnOnePage(Array.from({ length: 35 * (MAX_KEEP_TOGETHER_LINES + 1) / 4 }, () => 'ord').join(' '), 35)).toBe(false)
+  })
+
+  it('counts the chunks a long token is broken into, not the source line', () => {
+    // 35 W per line is one source line but three rendered chunk lines.
+    const wide = Array.from({ length: 5 }, () => 'W'.repeat(35)).join('\n')
+    expect(fitsOnOnePage(wide, 35)).toBe(false)
+  })
+
+  it('keeps the kept-together budget under a third of the page for any font', () => {
+    // Worst case: every line at 20pt (an uploaded font), plus row padding.
+    expect(MAX_KEEP_TOGETHER_LINES * 20 + 12).toBeLessThan(762 / 3)
+  })
+
+  it('a wide-glyph description in the bundled serif font is split instead of clipped', async () => {
+    const { prepareInvoiceFont } = await import('@/lib/invoices/pdf-fonts')
+    const branding = await prepareInvoiceFont(company, { fontFamily: 'Source Serif 4' } as never)
+    const description = 'Leverans\n' + Array.from({ length: 19 }, () => 'W'.repeat(35)).join('\n')
+    const items = [
+      makeItem({ description, discount_percent: 10 }),
+      makeItem({ sort_order: 1, id: 'item-1', description: 'Efterföljande rad', vat_rate: 12 }),
+    ]
+    const pages = await layOut(InvoicePDF({ invoice: sentInvoice(), customer, items, company, branding }))
+    expectNothingPastThePageEdge(pages)
+    expect(pages.map(textOf).join('')).toContain('Efterföljande rad')
   })
 
   it('an 80-line description is split across pages instead of clipped', async () => {

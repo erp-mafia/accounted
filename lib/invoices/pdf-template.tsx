@@ -58,26 +58,41 @@ export const wrapWholeWords = (word: string): string[] => {
  * places a non-splittable block that is taller than a page anyway and
  * everything past the page edge is lost. Blocks that could plausibly be that
  * tall (line descriptions and notes, both multi-line) are only kept together
- * when a rough line estimate says they fit comfortably; past that they are
- * allowed to split, which is the lesser evil.
+ * when a line estimate says they fit comfortably; past that they are allowed
+ * to split, which is the lesser evil.
+ *
+ * The estimate counts rendered lines, not source lines: a token longer than
+ * MAX_UNBROKEN_CHARS is chunked by wrapWholeWords and each chunk can take a
+ * line of its own. The cap is small enough that even the tallest font a
+ * company can pick (bundled Source Serif 4 at about 13.7pt per line, or an
+ * uploaded font at 20pt) keeps 12 lines under 250pt, a third of the usable
+ * page height, so a kept-together block can never be taller than a page.
  */
-export const MAX_KEEP_TOGETHER_LINES = 20
+export const MAX_KEEP_TOGETHER_LINES = 12
 
 export function fitsOnOnePage(text: string | null | undefined, charsPerLine: number): boolean {
   if (!text) return true
   let lines = 0
   for (const line of text.split('\n')) {
-    lines += Math.max(1, Math.ceil(line.length / charsPerLine))
+    let chunkLines = 0
+    let flowingChars = 0
+    for (const word of line.split(/\s+/)) {
+      if (word.length > MAX_UNBROKEN_CHARS) chunkLines += Math.ceil(word.length / MAX_UNBROKEN_CHARS)
+      else if (word.length > 0) flowingChars += word.length + 1
+    }
+    const flowingLines = Math.ceil(flowingChars / charsPerLine)
+    lines += chunkLines + Math.max(chunkLines === 0 ? 1 : 0, flowingLines)
     if (lines > MAX_KEEP_TOGETHER_LINES) return false
   }
   return true
 }
 
 // Conservative characters-per-line for the two free-text widths: the
-// description column (about 212pt at 10pt) and a full-width notice box
-// (about 490pt at 9pt). Under-estimating lets a block split a little early,
-// never the other way round.
-const DESCRIPTION_CHARS_PER_LINE = 35
+// description column (about 172pt at its narrowest, with discount and VAT
+// columns shown, at 10pt) and a full-width notice box (about 490pt at 9pt).
+// Under-estimating lets a block split a little early, never the other way
+// round.
+const DESCRIPTION_CHARS_PER_LINE = 30
 const NOTICE_CHARS_PER_LINE = 80
 
 /**
