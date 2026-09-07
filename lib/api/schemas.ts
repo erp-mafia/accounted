@@ -294,6 +294,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'webshop_order',
   'expense_claim',
   'expense_payout',
+  'rot_rut_reclaim',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
@@ -710,6 +711,15 @@ export const RotRutSettleSchema = z.object({
     .string()
     .regex(/^19\d{2}$/, 'Bankkontot måste vara ett BAS 19xx-konto')
     .optional(),
+})
+
+/**
+ * POST /api/rot-rut/payout-requests/[id]/reclaim: book the share Skatteverket
+ * refused back onto the customer(s). The amounts come from the recorded
+ * beslut, never from the body; only the booking date is the caller's.
+ */
+export const RotRutReclaimSchema = z.object({
+  booking_date: isoDate,
 })
 
 // The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst

@@ -2333,9 +2333,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 <span className="text-muted-foreground">{t('deduction_row', { kind: deductionKindLabel })}</span>
                 <span>{formatCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency)}</span>
               </div>
+              {/* Skatteverket refused (part of) the deduction and the reclaim
+                  voucher moved it back onto the customer: the printed
+                  deduction stands, the refused share is the customer's again. */}
+              {(invoice.deduction_reclaimed_total ?? 0) > 0 && (
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">{t('deduction_reclaimed_row')}</span>
+                  <span>{formatCurrency(Math.abs(invoice.deduction_reclaimed_total ?? 0), invoice.currency)}</span>
+                </div>
+              )}
               <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2">
                 <span>{t('amount_to_pay')}</span>
-                <span className="font-display text-xl">{formatCurrency(amountToPay.toPay, invoice.currency)}</span>
+                <span className="font-display text-xl">
+                  {formatCurrency(
+                    Math.round((amountToPay.toPay + Math.abs(invoice.deduction_reclaimed_total ?? 0)) * 100) / 100,
+                    invoice.currency,
+                  )}
+                </span>
               </div>
             </>
           ) : (
