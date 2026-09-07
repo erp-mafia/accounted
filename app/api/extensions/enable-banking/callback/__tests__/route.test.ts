@@ -104,6 +104,20 @@ vi.mock('@/lib/cash-accounts/service', () => ({
 
 vi.stubEnv('NEXT_PUBLIC_APP_URL', 'http://localhost:3000')
 
+// The trusted-origin resolver reads the brands table; books.partner.example
+// is the one registered brand host in these tests.
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+function registerBrandHost(host: string | null) {
+  resolveBrandResultByHostMock.mockImplementation(async (candidate: string) => ({
+    brand: host !== null && candidate === host ? { domain: host } : null,
+    lookupFailed: false,
+  }))
+}
+registerBrandHost('books.partner.example')
+
 import { GET } from '../route'
 import { eventBus } from '@/lib/events/bus'
 
@@ -231,6 +245,95 @@ describe('GET /api/extensions/enable-banking/callback', () => {
       expect(mockCreateSession).not.toHaveBeenCalled()
       expect(chain.update).not.toHaveBeenCalled()
       expect(chain.delete).not.toHaveBeenCalled()
+    })
+
+    // White-label: Enable Banking only ever redirects to the canonical
+    // callback, but the initiator's session lives on the brand host they
+    // started from. The row records that origin and every redirect from the
+    // callback goes back there; the brand host's /login forwards straight into
+    // the callback again because the session already exists.
+    describe('initiating origin (white-label)', () => {
+      const BRAND_ROW = { ...PENDING_ROW, oauth_origin: 'https://books.partner.example' }
+
+      beforeEach(() => {
+      })
+
+      afterEach(() => {
+        registerBrandHost('books.partner.example')
+      })
+
+      it('sends an anonymous white-label user to their own brand login, not the canonical one', async () => {
+        const chain = mockChain({ data: BRAND_ROW, error: null })
+        mockFrom.mockReturnValue(chain)
+        mockGetUser.mockResolvedValue({ data: { user: null }, error: null })
+
+        const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+        expect(response.status).toBe(307)
+        const location = new URL(response.headers.get('location') || '')
+        expect(location.origin).toBe('https://books.partner.example')
+        expect(location.pathname).toBe('/login')
+        expect(location.searchParams.get('next')).toBe(
+          '/api/extensions/enable-banking/callback?code=auth-code&state=valid-state',
+        )
+        // Nothing consumed: the replay on the brand host completes the flow.
+        expect(mockCreateSession).not.toHaveBeenCalled()
+        expect(chain.update).not.toHaveBeenCalled()
+        expect(chain.delete).not.toHaveBeenCalled()
+      })
+
+      it('finalizes on the brand host: the finalize page redirects to the recorded origin', async () => {
+        mockConnectionFlow(BRAND_ROW)
+        mockGetUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+        mockCreateSession.mockResolvedValue({
+          session_id: 'sess-1',
+          accounts: [],
+          access: { valid_until: '2027-12-31T00:00:00Z' },
+          aspsp: { name: 'TestBank', country: 'SE' },
+        })
+
+        const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+        expect(response.status).toBe(200)
+        expect(await response.text()).toContain(
+          'https://books.partner.example/settings/banking?select_accounts=conn-1',
+        )
+      })
+
+      it('returns an initiator mismatch to the brand host', async () => {
+        mockFrom.mockReturnValue(mockChain({ data: BRAND_ROW, error: null }))
+        mockGetUser.mockResolvedValue({ data: { user: { id: 'user-2' } }, error: null })
+
+        const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+        const location = new URL(response.headers.get('location') || '')
+        expect(location.origin).toBe('https://books.partner.example')
+        expect(location.pathname).toBe('/settings/banking')
+        expect(location.searchParams.get('bank_error')).toContain('annat användarkonto')
+      })
+
+      it('collapses a recorded origin that is not a registered host to the canonical one', async () => {
+        registerBrandHost(null)
+        const chain = mockChain({ data: BRAND_ROW, error: null })
+        mockFrom.mockReturnValue(chain)
+        mockGetUser.mockResolvedValue({ data: { user: null }, error: null })
+
+        const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+        const location = new URL(response.headers.get('location') || '')
+        expect(location.origin).toBe('http://localhost:3000')
+        expect(location.pathname).toBe('/login')
+      })
+
+      it('keeps a row without a recorded origin on the canonical host (pre-existing rows, direct domain)', async () => {
+        const chain = mockChain({ data: { ...PENDING_ROW, oauth_origin: null }, error: null })
+        mockFrom.mockReturnValue(chain)
+        mockGetUser.mockResolvedValue({ data: { user: null }, error: null })
+
+        const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+        expect(new URL(response.headers.get('location') || '').origin).toBe('http://localhost:3000')
+      })
     })
 
     it('finalizes as before when the session belongs to the initiator', async () => {
@@ -1703,6 +1806,31 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     // corporate fullmakt guidance off this exact combination.
     expect(location).toContain('bank_error_code=server_error')
     expect(location).toContain('psu_type=business')
+  })
+
+  it('returns a bank denial to the recorded brand origin so the banner is seen where the session is', async () => {
+    mockFrom.mockImplementation(() =>
+      mockChain({
+        data: {
+          id: 'conn-1',
+          user_id: 'user-1',
+          bank_name: 'Handelsbanken',
+          psu_type: 'business',
+          status: 'pending',
+          oauth_origin: 'https://books.partner.example',
+        },
+        error: null,
+      })
+    )
+
+    const response = await GET(makeRequest({ error: 'access_denied', state: 'pending-state' }))
+
+    expect(response.status).toBe(307)
+    const location = new URL(response.headers.get('location') || '')
+    expect(location.origin).toBe('https://books.partner.example')
+    expect(location.pathname).toBe('/settings/banking')
+    expect(location.searchParams.get('bank_error_code')).toBe('access_denied')
+    expect(location.searchParams.get('bank_name')).toBe('Handelsbanken')
   })
 
   it('redirects with error when code or state is missing', async () => {

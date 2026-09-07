@@ -92,6 +92,10 @@ describe('trusted application origins', () => {
     })
     // The canonical host never consults the registry, so it is unaffected.
     expect(await resolveTrustedAppOrigin('app.accounted.test')).toBe('https://app.accounted.test')
+    // Redirect-only callers opt into the canonical fallback explicitly.
+    expect(
+      await resolveTrustedAppOrigin('https://portal.brand.test', { onLookupFailure: 'canonical' }),
+    ).toBe('https://app.accounted.test')
   })
 
   it('lets a local canonical trust other local hosts and ports on the same scheme', async () => {

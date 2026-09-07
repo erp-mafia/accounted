@@ -144,9 +144,18 @@ export function getCanonicalAppOrigin(): string {
  *
  * Throws BrandLookupFailedError when the brands table cannot be read, so
  * the caller refuses (503, retry) rather than sending a wrong-brand link.
+ * Callers that only pick a browser redirect target (no token travels in
+ * the URL: OAuth return hops, login bounces) pass
+ * `onLookupFailure: 'canonical'` and degrade to the canonical host instead;
+ * a 500 in the middle of a provider callback would strand the user.
  */
+export interface ResolveOriginOptions {
+  onLookupFailure?: 'throw' | 'canonical'
+}
+
 export async function resolveTrustedAppOrigin(
   candidate: string | null | undefined,
+  options: ResolveOriginOptions = {},
 ): Promise<string> {
   const canonicalOrigin = getCanonicalAppOrigin()
   const canonical = new URL(canonicalOrigin)
@@ -177,6 +186,12 @@ export async function resolveTrustedAppOrigin(
 
   const { brand, lookupFailed } = await resolveBrandResultByHost(parsed.hostname)
   if (lookupFailed) {
+    if (options.onLookupFailure === 'canonical') {
+      log.warn('brand lookup failed; redirect falls back to the canonical origin', {
+        host: parsed.hostname,
+      })
+      return canonicalOrigin
+    }
     log.warn('brand lookup failed; refusing to build an auth link for this host', {
       host: parsed.hostname,
     })
@@ -202,8 +217,11 @@ export function requestHost(request: Request): string | null {
 }
 
 /** Resolve an API request to a trusted application origin. */
-export async function resolveRequestAppOrigin(request: Request): Promise<string> {
-  return resolveTrustedAppOrigin(requestHost(request))
+export async function resolveRequestAppOrigin(
+  request: Request,
+  options: ResolveOriginOptions = {},
+): Promise<string> {
+  return resolveTrustedAppOrigin(requestHost(request), options)
 }
 
 /**
