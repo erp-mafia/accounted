@@ -97,44 +97,59 @@ function rowToFlow(row: FlowRow): OAuthFlow {
   }
 }
 
+function normalizeHost(host: string): string {
+  return host.trim().toLowerCase().replace(/\.$/, '').replace(/\.(?=:\d+$)/, '')
+}
+
 /**
- * The origin the request was made to, from the Host header (what the browser
- * typed) rather than the URL Next.js reconstructed. Anything that is not a
- * bare host (a path, a query, a malformed header) falls back to the URL.
+ * The host the browser addressed, from the Host header (what the browser
+ * typed) rather than the URL Next.js reconstructed. Only the host: the
+ * scheme of request.url comes from x-forwarded-proto, which a self-hoster's
+ * reverse proxy may not send, and must never decide whether two hops are on
+ * the same origin. Anything that is not a bare host falls back to the URL.
  */
-export function requestOrigin(request: Request): string {
+export function requestHost(request: Request): string {
   const url = new URL(request.url)
   const host = request.headers.get('host') ?? url.host
   try {
-    const candidate = new URL(`${url.protocol}//${host}`)
+    const candidate = new URL(`https://${host}`)
     if (
       candidate.host !== host.toLowerCase() ||
       candidate.pathname !== '/' ||
       candidate.search ||
       candidate.hash
     ) {
-      return url.origin
+      return normalizeHost(url.host)
     }
-    return candidate.origin
+    return normalizeHost(candidate.host)
   } catch {
-    return url.origin
+    return normalizeHost(url.host)
   }
 }
 
+/** Whether the request was addressed to the host of `origin`. */
+export function requestMatchesOrigin(request: Request, origin: string): boolean {
+  return requestHost(request) === normalizeHost(new URL(origin).host)
+}
+
 /**
- * The origin a flow started on, validated: the canonical app origin, or an
- * HTTPS brand domain that resolves in the brands table. Anything else (an
- * unknown host, HTTP, a non-default port) is treated as the app origin, so a
- * forged Host header can never make the callback hand a code to a stranger.
+ * The origin a flow started on (or, on hop 2, arrived on), validated: the
+ * canonical app origin, or an HTTPS brand domain that resolves in the brands
+ * table. Decided by host alone with the scheme taken from configuration, so
+ * a proxy that forwards Host without x-forwarded-proto still resolves to the
+ * same origin on every hop. Anything else (an unknown host, a non-default
+ * port) is treated as the app origin, so a forged Host header can never make
+ * the callback hand a code to a stranger.
  */
 export async function resolveOAuthOrigin(request: Request): Promise<string> {
-  const origin = requestOrigin(request)
   const appOrigin = new URL(process.env.NEXT_PUBLIC_APP_URL || request.url).origin
-  if (origin === appOrigin) return appOrigin
-  const url = new URL(origin)
-  if (url.protocol !== 'https:' || url.port) return appOrigin
-  const brand = await resolveBrandByHost(url.host)
-  return brand && new URL(`https://${brand.domain}`).origin === origin ? origin : appOrigin
+  const host = requestHost(request)
+  if (host === normalizeHost(new URL(appOrigin).host)) return appOrigin
+  if (host.includes(':')) return appOrigin
+  const brand = await resolveBrandByHost(host)
+  return brand && normalizeHost(new URL(`https://${brand.domain}`).host) === host
+    ? `https://${host}`
+    : appOrigin
 }
 
 export interface CreateOAuthFlowInput {

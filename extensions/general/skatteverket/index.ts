@@ -26,7 +26,7 @@ import {
   mintOAuthFlowHandoff,
   newOAuthFlowId,
   purgeExpiredOAuthFlows,
-  requestOrigin,
+  requestMatchesOrigin,
   resolveOAuthOrigin,
   type OAuthFlow,
 } from '@/lib/auth/oauth-flows'
@@ -449,7 +449,6 @@ export const skatteverketExtension: Extension = {
         const state = url.searchParams.get('state')
         const error = url.searchParams.get('error')
         const handoffId = url.searchParams.get('handoff')
-        const currentOrigin = requestOrigin(request)
         // Where the opener tab lives. The canonical app origin until the flow
         // row says otherwise; never derived from the request itself.
         let responseOrigin = new URL(appUrl).origin
@@ -519,13 +518,18 @@ export const skatteverketExtension: Extension = {
           })
         }
 
-        // The tab deliberately stays open on error: a postMessage is dropped
-        // whenever the tab's origin differs from the opener's, and closing
-        // anyway turns any such drift into an invisible failure the user can
-        // only describe as "nothing happens". Leaving the reason on screen
-        // keeps every error diagnosable; the panel also shows it when the
-        // message does arrive.
-        const respondWithError = (reason: string, fallbackPath: string) => {
+        // Once the flow row is known the message goes to the opener's own
+        // origin and is guaranteed to arrive, so the tab stays open on error:
+        // the reason stays on screen and cannot become an invisible "nothing
+        // happens". Before the row is known (unknown, expired or replayed
+        // state or handoff) the target is a guess, and a brand opener would
+        // never hear it: then the tab closes so the panels' closed-tab
+        // watcher resets them instead of leaving Connect disabled forever.
+        const respondWithError = (
+          reason: string,
+          fallbackPath: string,
+          options: { closeTab?: boolean } = {},
+        ) => {
           const nonce = crypto.randomUUID()
           const escapedReason = reason
             .replace(/&/g, '&amp;')
@@ -534,6 +538,7 @@ export const skatteverketExtension: Extension = {
           const html = `<!DOCTYPE html><html><body><script nonce="${nonce}">
             if (window.opener) {
               window.opener.postMessage({ type: 'skatteverket-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(responseOrigin)});
+              ${options.closeTab ? 'window.close();' : ''}
             } else {
               window.location.replace(${jsLiteral(`${responseOrigin}${fallbackPath}`)});
             }
@@ -548,23 +553,28 @@ export const skatteverketExtension: Extension = {
           `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(msg)}`
 
         if (!handoffId && ((!code && !error) || !state)) {
-          return respondWithError('Saknar auktoriseringskod', defaultErrorPath('Saknar auktoriseringskod'))
+          return respondWithError('Saknar auktoriseringskod', defaultErrorPath('Saknar auktoriseringskod'), { closeTab: true })
         }
 
         const { createServiceClient } = await import('@/lib/supabase/server')
         const db = createServiceClient()
 
-        // Resolve the flow. Hop 2 (or the only hop, when the callback host is
-        // the app host) arrives with a handoff id; hop 1 with the provider's
-        // state. Both consumes are atomic and single-use, and every failure
-        // (unknown, forged, expired, replayed, wrong origin) is the same
-        // answer: this route is unauthenticated and must not be an oracle.
+        // Resolve the flow. Hop 2 arrives with a handoff id; hop 1 (or the
+        // only hop, when the callback host is the app host) with the
+        // provider's state. Both consumes are atomic and single-use, and
+        // every failure (unknown, forged, expired, replayed, wrong origin) is
+        // the same answer: this route is unauthenticated and must not be an
+        // oracle. The handoff is claimed for the validated origin this
+        // request arrived on: decided by host with the scheme from
+        // configuration, so a proxy that drops x-forwarded-proto cannot make
+        // hop 2 disagree with what /authorize recorded.
         let flow: OAuthFlow
         let providerError: string | null = null
         if (handoffId) {
-          const handoff = await consumeOAuthFlowHandoff(db, handoffId, currentOrigin, 'skatteverket')
+          const arrivedOn = await resolveOAuthOrigin(request)
+          const handoff = await consumeOAuthFlowHandoff(db, handoffId, arrivedOn, 'skatteverket')
           if (!handoff) {
-            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE))
+            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
           }
           flow = handoff
           code = handoff.providerCode
@@ -572,7 +582,7 @@ export const skatteverketExtension: Extension = {
         } else {
           const consumed = await consumeOAuthFlowState(db, state as string, 'skatteverket')
           if (!consumed) {
-            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE))
+            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
           }
           flow = consumed
           if (error) providerError = url.searchParams.get('error_description') || 'Okänt fel'
@@ -591,8 +601,8 @@ export const skatteverketExtension: Extension = {
         // initiating origin can exist here. Stash the provider's result on
         // the row (encrypted, under a separate handoff id) and send the
         // browser to the origin the flow started on. Provider credentials
-        // never enter this URL.
-        if (!handoffId && flow.origin !== currentOrigin) {
+        // never enter this URL. Compared by host only: see requestHost.
+        if (!handoffId && !requestMatchesOrigin(request, flow.origin)) {
           const nextHandoff = await mintOAuthFlowHandoff(
             db,
             flow,

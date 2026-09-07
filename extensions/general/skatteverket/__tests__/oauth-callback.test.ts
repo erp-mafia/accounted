@@ -38,12 +38,16 @@ vi.mock('@/lib/supabase/server', () => ({
 
 // The flow store is exercised in lib/auth/__tests__/oauth-flows.test.ts and
 // tests/pg/oauth-flows.pg.test.ts; here it is a seam so these tests pin the
-// callback's routing, binding and delivery only. requestOrigin stays real.
-const { mockConsumeState, mockConsumeHandoff, mockMintHandoff } = vi.hoisted(() => ({
+// callback's routing, binding and delivery only. Host and origin resolution
+// stay real (with the brands table mocked) because the hop decision is the
+// thing under test.
+const { mockConsumeState, mockConsumeHandoff, mockMintHandoff, mockResolveBrandByHost } = vi.hoisted(() => ({
   mockConsumeState: vi.fn(),
   mockConsumeHandoff: vi.fn(),
   mockMintHandoff: vi.fn(),
+  mockResolveBrandByHost: vi.fn(),
 }))
+vi.mock('@/lib/branding/resolve', () => ({ resolveBrandByHost: mockResolveBrandByHost }))
 vi.mock('@/lib/auth/oauth-flows', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/oauth-flows')>()
   return {
@@ -53,7 +57,6 @@ vi.mock('@/lib/auth/oauth-flows', async (importOriginal) => {
     mintOAuthFlowHandoff: mockMintHandoff,
     createOAuthFlow: vi.fn(),
     purgeExpiredOAuthFlows: vi.fn(),
-    resolveOAuthOrigin: vi.fn(),
   }
 })
 
@@ -125,12 +128,20 @@ function callbackRequest(origin: string, params: string) {
   return new Request(`${origin}/api/extensions/ext/skatteverket/callback?${params}`)
 }
 
-async function expectErrorPage(response: Response, containing?: string) {
+async function expectErrorPage(
+  response: Response,
+  containing?: string,
+  options: { closesTab?: boolean } = {},
+) {
   expect(response.status).toBe(200)
   const html = await response.text()
   expect(html).toContain('skatteverket-oauth-error')
-  // Errors keep the tab open: a dropped postMessage must stay diagnosable.
-  expect(html).not.toContain('window.close()')
+  // Once the flow is known the message reaches the opener for certain, so
+  // the tab stays open and the reason stays diagnosable. Before the flow is
+  // known the target is a guess: the tab closes so a brand opener that never
+  // hears the message is still reset by its closed-tab watcher.
+  if (options.closesTab) expect(html).toContain('window.close()')
+  else expect(html).not.toContain('window.close()')
   if (containing) expect(html).toContain(containing)
   return html
 }
@@ -147,6 +158,9 @@ describe('skatteverket OAuth callback', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     mockCreateServiceClient.mockReturnValue(makeServiceSupabase() as any)
     mockCreateClient.mockResolvedValue(makeCookieClient('user-1') as any)
+    mockResolveBrandByHost.mockImplementation(async (host: string) =>
+      host === 'brand.example' ? { domain: 'brand.example' } : null,
+    )
     mockConsumeState.mockResolvedValue(null)
     mockConsumeHandoff.mockResolvedValue(null)
     mockMintHandoff.mockResolvedValue('handoff-minted')
@@ -221,7 +235,7 @@ describe('skatteverket OAuth callback', () => {
         callbackRequest(OAUTH_HOST, 'code=abc&state=wrong-state'),
       )
 
-      const html = await expectErrorPage(response, 'ogiltig eller förbrukad state')
+      const html = await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
       // Nothing better than the canonical app origin is known for a rejected
       // state; the request's own host is never trusted.
       expect(html).toContain(JSON.stringify(APP))
@@ -231,7 +245,7 @@ describe('skatteverket OAuth callback', () => {
 
     it('answers the error page when neither code nor error nor state is present', async () => {
       const response = await callbackRoute().handler(callbackRequest(OAUTH_HOST, 'state=only'))
-      await expectErrorPage(response, 'Saknar auktoriseringskod')
+      await expectErrorPage(response, 'Saknar auktoriseringskod', { closesTab: true })
       expect(mockConsumeState).not.toHaveBeenCalled()
     })
   })
@@ -303,7 +317,7 @@ describe('skatteverket OAuth callback', () => {
     it('rejects an unknown, expired, replayed or wrong-origin handoff', async () => {
       const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
 
-      await expectErrorPage(response, 'ogiltig eller förbrukad state')
+      await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
       expect(mockCreateClient).not.toHaveBeenCalled()
       expect(mockExchange).not.toHaveBeenCalled()
     })
@@ -389,6 +403,31 @@ describe('skatteverket OAuth callback', () => {
       await expectErrorPage(response, 'Avbrutet')
       expect(mockMintHandoff).not.toHaveBeenCalled()
       expect(mockExchange).not.toHaveBeenCalled()
+    })
+
+    it('finishes behind a proxy that rewrites Host and drops x-forwarded-proto', async () => {
+      // nginx defaults: Next sees http://127.0.0.1:3000 on every hop while
+      // /authorize recorded the configured https app origin. Hop 1 compares
+      // hosts (mismatch, so it hands off to the public origin) and hop 2
+      // resolves the internal host back to the app origin for the claim.
+      mockConsumeState.mockResolvedValue(flowOn(APP))
+      const hop1 = await callbackRoute().handler(callbackRequest('http://127.0.0.1:3000', `code=abc&state=${STATE}`))
+      expect(hop1.status).toBe(302)
+      expect(new URL(hop1.headers.get('location') as string).origin).toBe(APP)
+
+      mockConsumeHandoff.mockResolvedValue(handoffOn(APP))
+      const hop2 = await callbackRoute().handler(callbackRequest('http://127.0.0.1:3000', `handoff=${HANDOFF}`))
+      expect(hop2.status).toBe(200)
+      expect(await hop2.text()).toContain('skatteverket-oauth-success')
+      expect(mockConsumeHandoff).toHaveBeenCalledWith(expect.anything(), HANDOFF, APP, 'skatteverket')
+    })
+
+    it('treats a proxy-reported http scheme on the app host as the same hop', async () => {
+      mockConsumeState.mockResolvedValue(flowOn(APP))
+      const response = await callbackRoute().handler(callbackRequest('http://app.example', `code=abc&state=${STATE}`))
+      expect(response.status).toBe(200)
+      expect(await response.text()).toContain('skatteverket-oauth-success')
+      expect(mockMintHandoff).not.toHaveBeenCalled()
     })
 
     it('refuses a session-less completion here too: no host is exempt any more', async () => {

@@ -11,7 +11,8 @@ import {
   mintOAuthFlowHandoff,
   newOAuthFlowId,
   purgeExpiredOAuthFlows,
-  requestOrigin,
+  requestHost,
+  requestMatchesOrigin,
   resolveOAuthOrigin,
   type OAuthFlow,
 } from '../oauth-flows'
@@ -103,22 +104,37 @@ describe('oauth-flow-crypto', () => {
   })
 })
 
-describe('requestOrigin', () => {
-  it('prefers the Host header over the reconstructed URL', () => {
-    const req = new Request('https://internal.example/cb', { headers: { host: 'brand.example' } })
-    expect(requestOrigin(req)).toBe('https://brand.example')
+describe('requestHost', () => {
+  it('prefers the Host header over the reconstructed URL and normalises it', () => {
+    const req = new Request('https://internal.example/cb', { headers: { host: 'Brand.Example.' } })
+    expect(requestHost(req)).toBe('brand.example')
   })
 
-  it('falls back to the URL origin for a malformed host', () => {
+  it('falls back to the URL host for a malformed Host header', () => {
     const req = new Request('https://app.example/cb', { headers: { host: 'evil.example/path' } })
-    expect(requestOrigin(req)).toBe('https://app.example')
+    expect(requestHost(req)).toBe('app.example')
+  })
+
+  it('matches an origin by host regardless of the scheme the proxy reported', () => {
+    // A TLS-terminating proxy that drops x-forwarded-proto makes Next
+    // reconstruct request.url as http://; the host is what identifies the hop.
+    const req = new Request('http://app.example/cb')
+    expect(requestMatchesOrigin(req, 'https://app.example')).toBe(true)
+    expect(requestMatchesOrigin(req, 'https://oauth.example')).toBe(false)
   })
 })
 
 describe('resolveOAuthOrigin', () => {
-  it('returns the app origin for the app host without a brand lookup', async () => {
-    const origin = await resolveOAuthOrigin(new Request('https://app.example/x'))
-    expect(origin).toBe('https://app.example')
+  it('returns the app origin for the app host without a brand lookup, whatever scheme the proxy reported', async () => {
+    expect(await resolveOAuthOrigin(new Request('https://app.example/x'))).toBe('https://app.example')
+    expect(await resolveOAuthOrigin(new Request('http://app.example/x'))).toBe('https://app.example')
+    expect(await resolveOAuthOrigin(new Request('http://APP.example./x'))).toBe('https://app.example')
+    expect(mockResolveBrandByHost).not.toHaveBeenCalled()
+  })
+
+  it('treats an internal proxy upstream host as the app origin', async () => {
+    // nginx defaults: Host rewritten to the upstream address, no proto header.
+    expect(await resolveOAuthOrigin(new Request('http://127.0.0.1:3000/x'))).toBe('https://app.example')
     expect(mockResolveBrandByHost).not.toHaveBeenCalled()
   })
 
@@ -133,9 +149,9 @@ describe('resolveOAuthOrigin', () => {
     expect(await resolveOAuthOrigin(new Request('https://stranger.example/x'))).toBe('https://app.example')
   })
 
-  it('never authorises HTTP or a non-default port, even for a known brand', async () => {
+  it('always answers a known brand as HTTPS and never a non-default port', async () => {
     mockResolveBrandByHost.mockResolvedValue({ domain: 'brand.example' })
-    expect(await resolveOAuthOrigin(new Request('http://brand.example/x'))).toBe('https://app.example')
+    expect(await resolveOAuthOrigin(new Request('http://brand.example/x'))).toBe('https://brand.example')
     expect(await resolveOAuthOrigin(new Request('https://brand.example:8443/x'))).toBe('https://app.example')
   })
 })
