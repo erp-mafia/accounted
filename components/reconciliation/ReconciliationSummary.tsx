@@ -44,7 +44,15 @@ export function ReconciliationSummary({
     (l) => !MAIN_EXTERNAL.has(l.key) && !MAIN_LEDGER.has(l.key) && !LEDGER_DETAIL.has(l.key),
   )
   const unexplained = status.unexplained_difference
-  const settled = unexplained != null && Math.abs(unexplained) < 0.005
+  // Green only when reconciled: a zero with open rows is not settled yet.
+  const tone =
+    unexplained == null
+      ? 'text-muted-foreground'
+      : status.is_reconciled
+        ? 'text-success'
+        : Math.abs(unexplained) >= 0.005
+          ? 'text-warning'
+          : ''
 
   const externalHead =
     kind === 'bank'
@@ -114,10 +122,7 @@ export function ReconciliationSummary({
             <td className="py-1.5">{t('v2_row_unexplained')}</td>
             <td className={NUM} />
             <td className={NUM} />
-            <td
-              className={cn(NUM, unexplained == null ? 'text-muted-foreground' : settled ? 'text-success' : 'text-warning')}
-              data-ph-mask
-            >
+            <td className={cn(NUM, tone)} data-ph-mask>
               {money(unexplained)}
             </td>
           </tr>

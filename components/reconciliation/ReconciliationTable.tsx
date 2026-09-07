@@ -38,7 +38,16 @@ export function ReconciliationTable({ accounts, onSelect, footer }: Reconciliati
   const renderRow = (a: ReconciliationAccount) => {
     const open = openRows(a)
     const unexplained = a.status?.unexplained_difference ?? null
-    const settled = unexplained != null && Math.abs(unexplained) < 0.005
+    // Green only when the account is reconciled: a zero with open rows is
+    // not settled, just not yet explained.
+    const tone =
+      unexplained == null
+        ? 'text-muted-foreground'
+        : a.status?.state === 'reconciled'
+          ? 'text-success'
+          : Math.abs(unexplained) >= 0.005
+            ? 'text-warning'
+            : ''
     const synced = a.kind === 'manual' ? null : a.source.synced_at
     return (
       <tr
@@ -80,11 +89,7 @@ export function ReconciliationTable({ accounts, onSelect, footer }: Reconciliati
           )}
         </td>
         <td
-          className={cn(
-            TD_CLASS,
-            'whitespace-nowrap text-right tabular-nums',
-            unexplained == null ? 'text-muted-foreground' : settled ? 'text-success' : 'text-warning',
-          )}
+          className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums', tone)}
           data-ph-mask
         >
           {unexplained == null ? '–' : formatCurrency(unexplained, a.currency)}
