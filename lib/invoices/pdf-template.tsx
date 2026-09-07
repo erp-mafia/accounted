@@ -23,6 +23,21 @@ import { isTextLikeLine } from '@/lib/invoices/display'
 import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
+import { unitLabel } from '@/lib/invoices/unit-labels'
+
+/**
+ * react-pdf hyphenates long words with English patterns by default, which
+ * split Swedish words at English syllable boundaries ("Septem-ber"). Passing
+ * this callback to a Text node makes every word wrap whole instead.
+ */
+export const keepWordsWhole = (word: string): string[] => [word]
+
+/**
+ * How much content (in pt) must fit below a heading on the same page before
+ * react-pdf may leave the heading there; otherwise the heading moves to the
+ * next page together with what follows it. Roughly two table rows.
+ */
+export const HEADING_MIN_PRESENCE_AHEAD = 40
 
 type PdfLang = 'sv' | 'en'
 
@@ -529,23 +544,31 @@ function createStyles(branding?: InvoiceBranding) {
     creditNoteTitle: {
       color: '#721c24',
     },
+    // Draft stamp: lives in the page's top margin (page padding is 40pt, the
+    // stamp is under 30pt tall) and is taken out of the flow, so a draft
+    // previews exactly as the final invoice will print. `fixed` repeats it on
+    // every page. It used to be a full-size banner in the flow, which pushed
+    // the whole document down and made the preview lie about page breaks.
     draftBanner: {
-      marginBottom: 16,
-      padding: 10,
+      position: 'absolute',
+      top: 8,
+      left: 40,
+      right: 40,
+      paddingVertical: 3,
+      paddingHorizontal: 8,
       backgroundColor: '#fff3cd',
-      borderWidth: 2,
+      borderWidth: 1,
       borderColor: '#856404',
-      borderRadius: 4,
+      borderRadius: 3,
     },
     draftBannerTitle: {
-      fontSize: 14,
+      fontSize: 9,
       fontWeight: 'bold',
       color: '#856404',
       textAlign: 'center',
-      marginBottom: 2,
     },
     draftBannerText: {
-      fontSize: 9,
+      fontSize: 7,
       color: '#856404',
       textAlign: 'center',
     },
@@ -883,9 +906,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             </Text>
           </View>
         ) : isPreview ? null : (invoice.status === 'draft' || !invoice.invoice_number) ? (
-          <View style={styles.draftBanner}>
+          <View style={styles.draftBanner} fixed>
             <Text style={styles.draftBannerTitle}>{isQuote ? L.draftTitleQuote : L.draftTitle}</Text>
-            <Text style={styles.draftBannerText}>
+            <Text style={styles.draftBannerText} hyphenationCallback={keepWordsWhole}>
               {isQuote
                 ? L.draftTextQuote
                 : invoice.invoice_number
@@ -958,7 +981,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         <View style={styles.twoColumn}>
           {/* Invoice details */}
           <View style={styles.column}>
-            <Text style={styles.sectionTitle}>{isQuote ? L.quoteInfoHeading : L.invoiceInfoHeading}</Text>
+            <Text style={styles.sectionTitle} minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>{isQuote ? L.quoteInfoHeading : L.invoiceInfoHeading}</Text>
             <View style={styles.row}>
               <Text style={styles.label}>{isQuote ? L.quoteDate : L.invoiceDate}</Text>
               <Text style={styles.value}>{formatDate(invoice.invoice_date)}</Text>
@@ -1015,7 +1038,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
           {/* Customer */}
           <View style={styles.column}>
-            <Text style={styles.sectionTitle}>{L.billedToHeading}</Text>
+            <Text style={styles.sectionTitle} minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>{L.billedToHeading}</Text>
             <View style={styles.customerBox}>
               <Text style={styles.customerName}>{customer.name}</Text>
               {customer.address_line1 && <Text>{customer.address_line1}</Text>}
@@ -1054,10 +1077,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Items table */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{L.itemsHeading}</Text>
+          <Text style={styles.sectionTitle} minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>{L.itemsHeading}</Text>
           <View style={styles.table}>
             {/* Table header */}
-            <View style={styles.tableHeader}>
+            <View style={styles.tableHeader} minPresenceAhead={HEADING_MIN_PRESENCE_AHEAD}>
               <Text style={[styles.colDescription, styles.tableHeaderText]}>{L.colDescription}</Text>
               <Text style={[styles.colQty, styles.tableHeaderText]}>{L.colQty}</Text>
               <Text style={[styles.colUnit, styles.tableHeaderText]}>{L.colUnit}</Text>
@@ -1080,16 +1103,16 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               isTextLikeLine(item) ? (
                 // Free-text / blank row: description spans the full width, no
                 // numeric columns. An empty description renders as a spacer.
-                <View key={index} style={styles.tableRow}>
-                  <Text style={[styles.colDescription, { width: '100%' }]}>
+                <View key={index} style={styles.tableRow} wrap={false}>
+                  <Text style={[styles.colDescription, { width: '100%' }]} hyphenationCallback={keepWordsWhole}>
                     {item.description || ' '}
                   </Text>
                 </View>
               ) : (
-                <View key={index} style={styles.tableRow}>
-                  <Text style={styles.colDescription}>{item.description}</Text>
+                <View key={index} style={styles.tableRow} wrap={false}>
+                  <Text style={styles.colDescription} hyphenationCallback={keepWordsWhole}>{item.description}</Text>
                   <Text style={styles.colQty}>{item.quantity}</Text>
-                  <Text style={styles.colUnit}>{item.unit}</Text>
+                  <Text style={styles.colUnit}>{unitLabel(item.unit, lang)}</Text>
                   {!isDeliveryNote && (
                     <Text style={styles.colPrice}>{formatPdfCurrency(item.unit_price, invoice.currency, lang)}</Text>
                   )}
@@ -1112,7 +1135,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Totals - hidden for delivery notes */}
         {!isDeliveryNote && (
-          <View style={styles.totalsSection}>
+          <View style={styles.totalsSection} wrap={false}>
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>{L.subtotal}</Text>
               <Text style={styles.totalValue}>{formatPdfCurrency(invoice.subtotal, invoice.currency, lang)}</Text>
@@ -1270,8 +1293,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Proforma notice */}
         {isProforma && (
-          <View style={styles.noticeBox}>
-            <Text style={styles.noticeText}>
+          <View style={styles.noticeBox} wrap={false}>
+            <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>
               {L.proformaNotice}
             </Text>
           </View>
@@ -1279,8 +1302,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Quote notice */}
         {isQuote && (
-          <View style={styles.noticeBox}>
-            <Text style={styles.noticeText}>
+          <View style={styles.noticeBox} wrap={false}>
+            <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>
               {L.quoteNotice}
             </Text>
           </View>
@@ -1288,7 +1311,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Payment information - not shown for credit notes, proformas, quotes, or delivery notes */}
         {!isCreditNote && !isProforma && !isQuote && !isDeliveryNote && (
-          <View style={styles.paymentSection}>
+          <View style={styles.paymentSection} wrap={false}>
             <Text style={styles.paymentTitle}>{L.paymentHeading}</Text>
             {invoice.payment_link_url && (
               <View style={styles.paymentRow}>
@@ -1404,19 +1427,19 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             since the "ej momsregistrerad" line would contradict the VAT
             shown in the totals block. */}
         {company.vat_registered === false && invoice.vat_amount === 0 ? (
-          <View style={styles.noticeBox}>
-            <Text style={styles.noticeText}>{L.notVatRegisteredNotice}</Text>
+          <View style={styles.noticeBox} wrap={false}>
+            <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>{L.notVatRegisteredNotice}</Text>
           </View>
         ) : (
           <>
             {invoice.reverse_charge_text && (
-              <View style={styles.noticeBox}>
-                <Text style={styles.noticeText}>{localizeVatNotice(invoice.reverse_charge_text, lang)}</Text>
+              <View style={styles.noticeBox} wrap={false}>
+                <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>{localizeVatNotice(invoice.reverse_charge_text, lang)}</Text>
               </View>
             )}
             {invoice.vat_treatment === 'exempt' && !invoice.reverse_charge_text && (
-              <View style={styles.noticeBox}>
-                <Text style={styles.noticeText}>{L.exemptNotice}</Text>
+              <View style={styles.noticeBox} wrap={false}>
+                <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>{L.exemptNotice}</Text>
               </View>
             )}
           </>
@@ -1424,14 +1447,14 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Notes */}
         {invoice.notes && (
-          <View style={styles.noticeBox}>
-            <Text style={styles.noticeText}>{invoice.notes}</Text>
+          <View style={styles.noticeBox} wrap={false}>
+            <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>{invoice.notes}</Text>
           </View>
         )}
 
         {/* Late fee & credit terms: payment terms, so never on a quote */}
         {!isQuote && (company.invoice_late_fee_text || company.invoice_credit_terms_text) && (
-          <View style={{ marginTop: 10, marginBottom: 10 }}>
+          <View style={{ marginTop: 10, marginBottom: 10 }} wrap={false}>
             {company.invoice_late_fee_text && (
               <Text style={{ fontSize: 8, color: '#666', marginBottom: 2 }}>{company.invoice_late_fee_text}</Text>
             )}
@@ -1447,9 +1470,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             in its own Text node, not inside the join). */}
         <View style={styles.footer}>
           {footerText && (
-            <Text style={styles.brandingFooterText}>{footerText}</Text>
+            <Text style={styles.brandingFooterText} hyphenationCallback={keepWordsWhole}>{footerText}</Text>
           )}
-          <Text style={styles.footerText}>
+          <Text style={styles.footerText} hyphenationCallback={keepWordsWhole}>
             {[
               (company.invoice_show_company_name ?? true) &&
               (company.invoice_company_name_position ?? 'header') === 'footer'

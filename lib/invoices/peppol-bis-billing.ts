@@ -586,7 +586,9 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     `    <cbc:LineExtensionAmount currencyID="SEK">${formatMoney(item.line_total)}</cbc:LineExtensionAmount>`,
     ...allowance,
     '    <cac:Item>',
-    `      <cbc:Name>${escapeXml(item.description.trim())}</cbc:Name>`,
+    // Descriptions may carry line breaks (the editor allows them for the
+    // PDF); the UBL item name is a single-line field, so collapse whitespace.
+    `      <cbc:Name>${escapeXml(item.description.replace(/\s+/g, ' ').trim())}</cbc:Name>`,
     '      <cac:ClassifiedTaxCategory>',
     '        <cbc:ID>S</cbc:ID>',
     `        <cbc:Percent>${formatDecimal(item.vat_rate)}</cbc:Percent>`,
