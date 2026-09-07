@@ -4871,6 +4871,8 @@
     "expense_registered_description": "Skulden till {name} finns nu i Att göra. Ankomstnummer: {number}"
   },
   "supplier_invoice_detail": {
+    "strip_registered_unbooked": "{date} · skuld inte bokförd än",
+    "strip_skipped": "–",
     "strip_incoming": "{date}",
     "strip_registered": "{date} · skuld bokförd",
     "strip_approved": "{date}",
