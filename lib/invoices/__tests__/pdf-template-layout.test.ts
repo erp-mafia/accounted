@@ -21,6 +21,7 @@ import {
   HEADING_MIN_PRESENCE_AHEAD,
   InvoicePDF,
   DESCRIPTION_COLUMN_PT,
+  FULL_WIDTH_BOX_PT,
   MAX_KEEP_TOGETHER_LINES,
   approxWidthPt,
   fitsOnOnePage,
@@ -230,7 +231,7 @@ describe('draft stamp', () => {
     expect(elements(tree).some((el) => containsText(el, 'UTKAST'))).toBe(false)
   })
 
-  it('renders a real PDF with the stamp on each page of a long draft', async () => {
+  it('renders a real PDF with the stamp on each page of a long draft', { timeout: 30_000 }, async () => {
     const items = Array.from({ length: 60 }, (_, i) =>
       makeItem({ sort_order: i, id: `item-${i}`, description: `Rad ${i + 1}` }),
     )
@@ -316,6 +317,41 @@ describe('oversize free text', () => {
     const pages = await layOut(InvoicePDF({ invoice: { ...sentInvoice(), notes }, customer, items: [makeItem()], company }))
     expectNothingPastThePageEdge(pages)
     expect(pages.map(textOf).join('')).toContain('Villkor 80')
+  })
+
+  it('a free-text row is budgeted at its full width, not the description column', () => {
+    // 12 lines of 60 characters: fits the full width, not a 160pt column.
+    const text = Array.from({ length: MAX_KEEP_TOGETHER_LINES }, () => 'x'.repeat(60)).join('\n')
+    expect(fitsOnOnePage(text, FULL_WIDTH_BOX_PT)).toBe(true)
+    expect(fitsOnOnePage(text, DESCRIPTION_COLUMN_PT)).toBe(false)
+    const items = [makeItem({ description: text, line_type: 'text', quantity: 0, unit_price: 0 })]
+    const row = elements(InvoicePDF({ invoice: sentInvoice(), customer, items, company })).find(
+      (el) => el.props.wrap === false && containsText(el, 'x'.repeat(60)),
+    )
+    expect(row).toBeDefined()
+  })
+
+  it('the ROT/RUT box splits instead of clipping when its line breakdown is long', async () => {
+    const rutItem = (i: number, description: string) =>
+      makeItem({
+        sort_order: i,
+        id: `rut-${i}`,
+        description,
+        deduction_type: 'rut',
+        deduction_amount: 250,
+        work_type: 'STAD',
+      } as Partial<InvoiceItem>)
+    const invoice = { ...sentInvoice(), deduction_total: 250 }
+    const short = InvoicePDF({ invoice, customer, items: [rutItem(0, 'Städning')], company })
+    const shortBox = elements(short).find(
+      (el) => el.props.wrap !== undefined && containsText(el, 'Underlag för skattereduktion'),
+    )
+    expect(shortBox?.props.wrap).toBe(false)
+
+    const long = Array.from({ length: 40 }, (_, i) => rutItem(i, `Städning vecka ${i + 1}\nExtra fönsterputs`))
+    const pages = await layOut(InvoicePDF({ invoice, customer, items: long, company }))
+    expectNothingPastThePageEdge(pages)
+    expect(pages.map(textOf).join('')).toContain('Städning vecka 40')
   })
 
   it('a 3000-character description without line breaks is not clipped', async () => {

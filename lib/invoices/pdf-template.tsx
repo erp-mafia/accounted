@@ -1206,7 +1206,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <View
                   key={index}
                   style={styles.tableRow}
-                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_COLUMN_PT)}
+                  wrap={!fitsOnOnePage(item.description, FULL_WIDTH_BOX_PT)}
                 >
                   <Text style={[styles.colDescription, { width: '100%' }]} hyphenationCallback={wrapFullWidthWords}>
                     {item.description || ' '}
@@ -1347,7 +1347,21 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             about fakturamodellen. Suppressed on delivery notes (no payment
             info at all). */}
         {!isDeliveryNote && !isCreditNote && (invoice.deduction_total ?? 0) > 0 && (
-          <View style={styles.deductionBox} wrap={false}>
+          // Kept on one page while the per-line breakdown (which carries the
+          // line descriptions, possibly multi-line) is short enough; past
+          // that it may split rather than be clipped.
+          <View
+            style={styles.deductionBox}
+            wrap={
+              !fitsOnOnePage(
+                items
+                  .filter((i) => i.deduction_type)
+                  .map((i) => i.description)
+                  .join('\n'),
+                FULL_WIDTH_BOX_PT,
+              )
+            }
+          >
             <Text style={styles.deductionTitle}>{L.deductionInfoHeading}</Text>
             {deductionPersonnummerMasked && (
               <View style={styles.deductionRow}>
@@ -1390,7 +1404,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 const kind = i.deduction_type === 'rot' ? 'ROT' : 'RUT'
                 const work = i.work_type ? `, ${i.work_type}` : ''
                 return (
-                  <Text key={idx} style={styles.deductionLineItem}>
+                  <Text key={idx} style={styles.deductionLineItem} hyphenationCallback={wrapFullWidthWords}>
                     {`${kind}${work}: ${i.description}, ${formatPdfCurrency(i.deduction_amount ?? 0, invoice.currency, lang)}`}
                   </Text>
                 )

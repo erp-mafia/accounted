@@ -265,6 +265,23 @@ describe('parseSIEFile', () => {
       expect(v1.description).toBe('Faktura 1001')
     })
 
+    it('unescapes \\" and \\\\ in quoted text, as the export writes them', () => {
+      const content = [
+        '#FLAGGA 0',
+        '#SIETYP 4',
+        '#FORMAT PC8',
+        '#FNAMN "Test AB"',
+        '#RAR 0 20240101 20241231',
+        '#VER A 1 20240115 "Sökväg C:\\\\temp\\\\\\"fil\\""',
+        '{',
+        '#TRANS 1930 {} 100.00',
+        '#TRANS 3001 {} -100.00',
+        '}',
+      ].join('\n')
+      const result = parseSIEFile(content)
+      expect(result.vouchers[0].description).toBe('Sökväg C:\\temp\\"fil"')
+    })
+
     it('parses #TRANS lines within a voucher', () => {
       const result = parseSIEFile(SIE_WITH_VOUCHERS)
       const v1 = result.vouchers[0]
