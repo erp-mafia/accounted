@@ -49,7 +49,9 @@ interface SendInvoiceDialogProps {
   invoice: InvoiceWithRelations
   /** 'email' sends via email, 'manual' marks as sent without email */
   mode: 'email' | 'manual'
-  onSuccess: () => void
+  /** `partial`: the document is sent but a follow-up step (PDF archive,
+   *  periodisering, delivery history) failed and the toast says so. */
+  onSuccess: (result?: { partial: boolean }) => void
   /**
    * Follow-up offered on the manual mark-sent toast (#2399): the user who
    * marks an invoice as sent by hand usually wants the issued PDF next, to
@@ -394,7 +396,7 @@ export default function SendInvoiceDialog({
       }
       const data = await response.json()
 
-      onSuccess()
+      onSuccess({ partial: !!data.partial })
 
       if (mode === 'email') {
         onOpenChange(false)

@@ -8,13 +8,20 @@ describe('draftDownloadDecision', () => {
     expect(draftDownloadDecision({ status: 'overdue', invoice_number: 'F-1' })).toBe('download')
   })
 
-  it('offers to issue a numbered draft: faktura, kreditfaktura and offert alike', () => {
+  it('offers to issue any numbered draft: the renderer stamps every draft kind', () => {
     expect(draftDownloadDecision({ status: 'draft', invoice_number: 'F-1' })).toBe('offer_issue')
     expect(
       draftDownloadDecision({ status: 'draft', invoice_number: 'O-1', document_type: 'quote' }),
     ).toBe('offer_issue')
     expect(
       draftDownloadDecision({ status: 'draft', invoice_number: 'P-1', document_type: 'proforma' }),
+    ).toBe('offer_issue')
+    expect(
+      draftDownloadDecision({
+        status: 'draft',
+        invoice_number: 'FS-1',
+        document_type: 'delivery_note',
+      }),
     ).toBe('offer_issue')
   })
 
@@ -23,16 +30,9 @@ describe('draftDownloadDecision', () => {
     expect(draftDownloadDecision({ status: 'draft', invoice_number: '' })).toBe('confirm_draft')
   })
 
-  it('leaves self-billed invoices and följesedlar alone', () => {
+  it('leaves self-billed invoices alone: there is no own PDF to issue', () => {
     expect(
       draftDownloadDecision({ status: 'draft', invoice_number: null, is_self_billed: true }),
-    ).toBe('download')
-    expect(
-      draftDownloadDecision({
-        status: 'draft',
-        invoice_number: 'FS-1',
-        document_type: 'delivery_note',
-      }),
     ).toBe('download')
   })
 })

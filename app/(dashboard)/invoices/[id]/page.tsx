@@ -251,13 +251,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Set when the user picked "... och ladda ner" in that prompt: the manual
   // send dialog's success then queues the download of the issued document.
   const [downloadAfterSend, setDownloadAfterSend] = useState(false)
-  const [downloadQueued, setDownloadQueued] = useState(false)
+  // The id of the invoice whose issued PDF is wanted, not a flag: the detail
+  // pager keeps this component mounted across ArrowLeft/ArrowRight, so a
+  // queue bound to "whatever is mounted" would download the neighbour.
+  const [downloadQueued, setDownloadQueued] = useState<string | null>(null)
   // The issued document is downloaded once the refetch after mark-sent has
   // landed: only then does the source resolver see the new status and the
   // archived copy, and the toast names the real document, not the draft.
   useEffect(() => {
-    if (!downloadQueued || !invoice || invoice.status === 'draft') return
-    setDownloadQueued(false)
+    if (!downloadQueued || !invoice) return
+    if (invoice.id !== downloadQueued) {
+      // Paged away before the download ran: drop it rather than hand over
+      // another invoice's file.
+      setDownloadQueued(null)
+      return
+    }
+    if (invoice.status === 'draft') return
+    setDownloadQueued(null)
     void downloadPDF()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadQueued, invoice])
@@ -690,12 +700,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       // Awaited: the acting button keeps its pending state until the page
       // reflects the new status (the refetch runs behind the mounted content).
       await fetchInvoice()
+      return true
     } catch (error) {
       toast({
         title: t('status_update_failed_title'),
         description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
         variant: 'destructive',
       })
+      return false
     }
 
     setIsUpdating(false)
@@ -1475,6 +1487,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const booksOnIssue = isCreditNote
     ? !!originalInvoice && creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
     : accountingMethod === 'accrual' && !deferInvoiceBooking
+  // Only a faktura (or kreditfaktura) books at issue. Proformas, offerter and
+  // följesedlar are marked sent without a verifikat in every accounting
+  // method (issue-and-book-invoice: isRealInvoice), so their labels must not
+  // promise one.
+  const issuesByBooking = booksOnIssue && isRealInvoice
   // #967: sent under deferred booking; ekonomi books the revenue verifikat
   // from here afterwards.
   const canBookAfterwards =
@@ -1839,7 +1856,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Mail className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t(booksOnIssue && !isQuote ? 'send_via_email_and_book' : 'send_via_email')}
+                {t(issuesByBooking ? 'send_via_email_and_book' : 'send_via_email')}
               </Button>
             ) : (
               <Button
@@ -1848,7 +1865,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Send className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t(booksOnIssue && !isQuote ? 'mark_sent_and_book' : 'mark_as_sent')}
+                {t(issuesByBooking ? 'mark_sent_and_book' : 'mark_as_sent')}
               </Button>
             )
           )}
@@ -2726,12 +2743,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <DialogTitle>
               {draftDownloadPrompt === 'confirm_draft'
                 ? t('draft_download_unnumbered_title')
-                : t(booksOnIssue && !isQuote ? 'draft_download_book_title' : 'draft_download_send_title')}
+                : t(issuesByBooking ? 'draft_download_book_title' : 'draft_download_send_title')}
             </DialogTitle>
             <DialogDescription>
               {draftDownloadPrompt === 'confirm_draft'
                 ? t('draft_download_unnumbered_desc')
-                : t(booksOnIssue && !isQuote ? 'draft_download_book_desc' : 'draft_download_send_desc')}
+                : t(issuesByBooking ? 'draft_download_book_desc' : 'draft_download_send_desc')}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -2749,13 +2766,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
             {draftDownloadPrompt === 'offer_issue' && canWrite && (
               <Button
-                onClick={() => {
+                disabled={isUpdating}
+                onClick={async () => {
                   setDraftDownloadPrompt(null)
+                  if (isDeliveryNote) {
+                    // Följesedel: no send dialog, the primary button is a
+                    // plain status flip. Queue only once it succeeded.
+                    const invoiceId = invoice.id
+                    if (await updateStatus('sent')) setDownloadQueued(invoiceId)
+                    return
+                  }
                   setDownloadAfterSend(true)
                   openSendDialog('manual')
                 }}
               >
-                {t(booksOnIssue && !isQuote ? 'draft_download_book_action' : 'draft_download_send_action')}
+                {t(issuesByBooking ? 'draft_download_book_action' : 'draft_download_send_action')}
               </Button>
             )}
           </DialogFooter>
@@ -2827,19 +2852,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           }}
           invoice={invoice}
           mode={sendDialogMode}
-          onSuccess={() => {
+          onSuccess={(result) => {
             if (downloadAfterSend) {
               setDownloadAfterSend(false)
-              setDownloadQueued(true)
+              // A partial success (archive or periodisering failed) shows a
+              // warning to act on; a download toast would evict it (one toast
+              // at a time), so the chained download is dropped there.
+              if (!result?.partial) setDownloadQueued(invoice.id)
             }
             fetchInvoice()
           }}
           // The toast's "Ladda ner PDF" queues the download rather than
-          // starting it: the invoice in this closure is still the draft.
+          // starting it: the invoice in this closure is still the draft, and
+          // the id pins it to this invoice if the user pages on meanwhile.
           manualSuccessAction={
             downloadAfterSend || invoice.is_self_billed
               ? undefined
-              : { label: t('download_pdf'), onClick: () => setDownloadQueued(true) }
+              : { label: t('download_pdf'), onClick: () => setDownloadQueued(invoice.id) }
           }
         />
       )}

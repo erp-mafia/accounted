@@ -26,7 +26,8 @@ export function draftDownloadDecision(invoice: DecisionInvoice): DraftDownloadDe
   if (invoice.status !== 'draft') return 'download'
   // Self-billed: the counterparty's document, no own PDF to issue.
   if (invoice.is_self_billed) return 'download'
-  // Följesedel is marked sent with a plain status flip, not the send dialog.
-  if ((invoice.document_type || 'invoice') === 'delivery_note') return 'download'
+  // Every other kind (faktura, kreditfaktura, offert, proforma, följesedel)
+  // is stamped while status is draft; the page picks the issue action per
+  // kind (send dialog, or the plain status flip for följesedlar).
   return invoice.invoice_number ? 'offer_issue' : 'confirm_draft'
 }
