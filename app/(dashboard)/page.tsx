@@ -16,6 +16,11 @@ import {
   getResolvedDashboardAgentProfile,
 } from './request-context'
 import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-sections'
+import { HemV2Section } from './hem-v2'
+import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { getTranslations } from 'next-intl/server'
+import type { DashboardShell } from '@/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -89,6 +94,7 @@ export default async function DashboardPage() {
     agentProfile,
     { count: skatteverketTokenCount },
     { count: oauthKeyCount, error: oauthKeyError },
+    { data: userPrefs },
   ] =
     await Promise.all([
       getDashboardSettings(),
@@ -110,6 +116,9 @@ export default async function DashboardPage() {
         .eq('user_id', user.id)
         .eq('name', OAUTH_MCP_KEY_NAME)
         .is('revoked_at', null),
+      // Shell v2 opt-in (ui_state.shell): picks the three-pane Att göra over
+      // the v1 Hem. Same row the layout reads for the sidebar.
+      supabase.from('user_preferences').select('ui_state').eq('user_id', user.id).maybeSingle(),
     ])
 
   // A FAILED settings read must not masquerade as "onboarding not done":
@@ -154,6 +163,47 @@ export default async function DashboardPage() {
     dismissedAt: settings.initial_setup_dismissed_at ?? null,
   }
   const setupOpen = !settings.initial_setup_completed_at && !settings.initial_setup_dismissed_at
+
+  // Shell v2 (dev_docs/ui_v2_build_plan.md, PR 3): Hem IS the queue. The
+  // top bar carries the title; the three panes fill the panel.
+  const shell: DashboardShell =
+    (userPrefs?.ui_state as { shell?: DashboardShell } | null)?.shell === 'v2' ? 'v2' : 'v1'
+  if (shell === 'v2') {
+    const tV2 = await getTranslations('att_gora_v2')
+    return (
+      <>
+        <PageHeader title={tV2('title')} help={<HelpPopover>{tV2('help')}</HelpPopover>} />
+        <Suspense fallback={<PanesSkeleton />}>
+          <HemV2Section
+            companyId={companyId}
+            userId={user.id}
+            now={now}
+            setupOpen={setupOpen}
+            hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
+            hasMcpKey={hasMcpKey}
+            notices={
+              <Suspense fallback={null}>
+                <HemNoticesSection companyId={companyId} userId={user.id} now={now} />
+              </Suspense>
+            }
+            checklist={
+              <Suspense fallback={<ChecklistSkeleton />}>
+                <HemChecklistSection
+                  companyId={companyId}
+                  userId={user.id}
+                  now={now}
+                  initialSetup={initialSetup}
+                  hasMcpKey={hasMcpKey}
+                  vatRegistered={settings.vat_registered}
+                  momsPeriod={settings.moms_period ?? null}
+                />
+              </Suspense>
+            }
+          />
+        </Suspense>
+      </>
+    )
+  }
 
   return (
     <DashboardContent

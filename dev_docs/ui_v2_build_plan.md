@@ -39,6 +39,8 @@ Done when: any page renders in both shells, the toggle persists, lint and tests 
 - Dependencies come from the worklist's done conditions, not from new state.
 - Requires propose-at-ingest: the categorisation pipeline writes a proposal on arrival instead of on open.
 
+Shipped scope (PR 3a): the three panes on the real worklist (`lib/worklist/tasks-v2.ts` builds the tree from the counts; groups Kom igång / Löpande / Bevaka / Skatt). Middle-pane lists with actions: suggested matches (Bekräfta), supplier invoices (Attestera, Attestera alla), agent proposals (Godkänn / Avvisa). Lists that show rows and open their page: transactions, inbox documents, expense payouts, overdue invoices, deadlines, bank consent. Link-only for now: skattekonto rows, verifikat without documents, accounts to reconcile. Row-centric transaction review with approve-in-place lands with PR 4's table (PR 3b embeds it here). The right pane reads deadline, lagrum and dependencies from the model and shows a task-scoped assistant line with "Fråga assistenten" (opens the agent sheet with general.help). Not a chat thread yet.
+
 ### PR 4: Transaktioner table
 
 - Columns: checkbox, Datum, Beskrivning, Kategori (icon), Klass, Konto (institution mark), Belopp, Enhet, Åtgärd. Column settings (order, pin, hide) and saved views in `ui_state`.
