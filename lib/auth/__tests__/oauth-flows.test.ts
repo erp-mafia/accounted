@@ -308,9 +308,10 @@ describe('mintOAuthFlowHandoff / consumeOAuthFlowHandoff', () => {
 
 describe('peekOAuthFlowState / peekOAuthFlowHandoff', () => {
   it('reads a live state identity without writing, with the same liveness predicate as the consume', async () => {
-    const { db, calls } = makeDb({ data: { user_id: 'user-1', origin: 'https://brand.example' }, error: null })
+    const { db, calls } = makeDb({ data: { user_id: 'user-1', company_id: 'company-1', origin: 'https://brand.example' }, error: null })
     expect(await peekOAuthFlowState(db, 'state-1', 'skatteverket')).toEqual({
       userId: 'user-1',
+      companyId: 'company-1',
       origin: 'https://brand.example',
     })
     expect(calls[0]?.[0]).toBe('select')
@@ -327,9 +328,10 @@ describe('peekOAuthFlowState / peekOAuthFlowHandoff', () => {
   })
 
   it('reads a live handoff identity bound to the origin, without writing', async () => {
-    const { db, calls } = makeDb({ data: { user_id: 'user-1', origin: 'https://brand.example' }, error: null })
+    const { db, calls } = makeDb({ data: { user_id: 'user-1', company_id: 'company-1', origin: 'https://brand.example' }, error: null })
     expect(await peekOAuthFlowHandoff(db, 'handoff-1', 'https://brand.example', 'skatteverket')).toEqual({
       userId: 'user-1',
+      companyId: 'company-1',
       origin: 'https://brand.example',
     })
     expect(calls[0]?.[0]).toBe('select')

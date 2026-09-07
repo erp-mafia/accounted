@@ -117,13 +117,13 @@ function handoffOn(origin: string, overrides: Partial<OAuthFlowHandoff> = {}): O
 
 /** A live state row: peek sees its identity, consume returns the flow. */
 function stateIs(flow: OAuthFlow) {
-  mockPeekState.mockResolvedValue({ userId: flow.userId, origin: flow.origin })
+  mockPeekState.mockResolvedValue({ userId: flow.userId, companyId: flow.companyId, origin: flow.origin })
   mockConsumeState.mockResolvedValue(flow)
 }
 
 /** A live handoff row: peek sees its identity, consume returns the result. */
 function handoffIs(handoff: OAuthFlowHandoff) {
-  mockPeekHandoff.mockResolvedValue({ userId: handoff.userId, origin: handoff.origin })
+  mockPeekHandoff.mockResolvedValue({ userId: handoff.userId, companyId: handoff.companyId, origin: handoff.origin })
   mockConsumeHandoff.mockResolvedValue(handoff)
 }
 
@@ -260,6 +260,21 @@ describe('skatteverket OAuth callback', () => {
       expect(response.status).toBe(302)
       expect(new URL(response.headers.get('location') as string).origin).toBe(BRAND)
       expect(mockMintHandoff).toHaveBeenCalledWith(expect.anything(), flowOn(BRAND), { providerError: 'Avbrutet' })
+      expect(mockExchange).not.toHaveBeenCalled()
+    })
+
+    it('answers the callback page, not a framework error, when the handoff cannot be minted', async () => {
+      stateIs(flowOn(BRAND))
+      mockMintHandoff.mockRejectedValueOnce(new Error('Failed to mint OAuth handoff: boom'))
+
+      const response = await callbackRoute().handler(
+        callbackRequest(OAUTH_HOST, `code=abc&state=${STATE}`),
+      )
+
+      // The flow is known by now, so the page targets the initiating origin
+      // and stays open with the reason on screen.
+      const html = await expectErrorPage(response, 'tekniskt fel')
+      expect(html).toContain(JSON.stringify(BRAND))
       expect(mockExchange).not.toHaveBeenCalled()
     })
 
@@ -401,7 +416,7 @@ describe('skatteverket OAuth callback', () => {
     })
 
     it('answers the error page when the handoff is claimed by a concurrent delivery after the identity check', async () => {
-      mockPeekHandoff.mockResolvedValue({ userId: 'user-1', origin: BRAND })
+      mockPeekHandoff.mockResolvedValue({ userId: 'user-1', companyId: 'company-1', origin: BRAND })
       mockConsumeHandoff.mockResolvedValue(null)
 
       const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
@@ -410,14 +425,16 @@ describe('skatteverket OAuth callback', () => {
       expect(mockExchange).not.toHaveBeenCalled()
     })
 
-    it('rejects the flow when the initiator is no longer a member of the company', async () => {
+    it('rejects a revoked member before the handoff is spent', async () => {
       handoffIs(handoffOn(BRAND))
       mockCreateServiceClient.mockReturnValue(makeServiceSupabase({ isMember: false }) as any)
 
       const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
 
       await expectErrorPage(response, 'Behörighet saknas')
-      // Rejected before the exchange so the one-shot code is not burned. (#1091)
+      // Rejected before the consume and the exchange: neither the handoff
+      // nor the one-shot code is burned. (#1091)
+      expect(mockConsumeHandoff).not.toHaveBeenCalled()
       expect(mockExchange).not.toHaveBeenCalled()
       expect(mockStoreTokens).not.toHaveBeenCalled()
     })

@@ -582,21 +582,44 @@ export const skatteverketExtension: Extension = {
         // approving a consent someone else started thus never has their
         // BankID-authorised access stored under that someone, and nobody
         // can burn a live flow by merely reaching its URL signed out.
-        const bindInitiator = async (identity: { userId: string; origin: string }) => {
+        //
+        // Membership is checked here as well, before the consume: the
+        // service-role token write below has no RLS backstop, membership
+        // can be revoked between /authorize and this callback (#1091), and
+        // a revoked initiator must not burn the one-shot provider code on
+        // the way to being refused.
+        const bindInitiator = async (identity: { userId: string; companyId: string; origin: string }) => {
           responseOrigin = identity.origin
           const initiator = await requireFlowInitiator(request, identity.userId, {
             flow: 'skatteverket.callback',
             returnOrigin: identity.origin,
           })
-          if (initiator.ok) return { userId: initiator.userId, response: null }
-          if (initiator.reason === 'no_session') return { userId: null, response: initiator.response }
-          return {
-            userId: null,
-            response: respondWithError(
-              FLOW_INITIATOR_MISMATCH_MESSAGE,
-              defaultErrorPath(FLOW_INITIATOR_MISMATCH_MESSAGE),
-            ),
+          if (!initiator.ok) {
+            if (initiator.reason === 'no_session') return { userId: null, response: initiator.response }
+            return {
+              userId: null,
+              response: respondWithError(
+                FLOW_INITIATOR_MISMATCH_MESSAGE,
+                defaultErrorPath(FLOW_INITIATOR_MISMATCH_MESSAGE),
+              ),
+            }
           }
+          const { data: membership } = await db
+            .from('company_members')
+            .select('user_id')
+            .eq('company_id', identity.companyId)
+            .eq('user_id', initiator.userId)
+            .maybeSingle()
+          if (!membership) {
+            return {
+              userId: null,
+              response: respondWithError(
+                'Behörighet saknas för företaget',
+                defaultErrorPath('Behörighet saknas för företaget'),
+              ),
+            }
+          }
+          return { userId: initiator.userId, response: null }
         }
 
         let flow: OAuthFlow
@@ -653,11 +676,22 @@ export const skatteverketExtension: Extension = {
         // browser to the origin the flow started on. Provider credentials
         // never enter this URL. Compared by host only: see requestHost.
         if (!handoffId && !requestMatchesOrigin(request, flow.origin)) {
-          const nextHandoff = await mintOAuthFlowHandoff(
-            db,
-            flow,
-            providerError !== null ? { providerError } : { providerCode: code as string },
-          )
+          let nextHandoff: string
+          try {
+            nextHandoff = await mintOAuthFlowHandoff(
+              db,
+              flow,
+              providerError !== null ? { providerError } : { providerCode: code as string },
+            )
+          } catch (err) {
+            // The state is spent; the user restarts. The response must still
+            // be the callback page, so the opener hears it and resets.
+            log.error('oauth handoff mint failed', err as Error, { companyId: flow.companyId })
+            return respondWithError(
+              'Ett tekniskt fel uppstod. Försök igen.',
+              errorPath('Ett tekniskt fel uppstod'),
+            )
+          }
           const target = new URL('/api/extensions/ext/skatteverket/callback', flow.origin)
           target.searchParams.set('handoff', nextHandoff)
           return new Response(null, {
@@ -687,25 +721,6 @@ export const skatteverketExtension: Extension = {
         }
         if (!code) {
           return respondWithError(SKV_STATE_REJECTED_MESSAGE, errorPath(SKV_STATE_REJECTED_MESSAGE))
-        }
-
-        // Defense in depth for the service-role write below: the stored
-        // user must still be a member of the company that initiated the
-        // flow (membership can be revoked between /authorize and this
-        // callback, and RLS no longer backstops the write). Checked before
-        // the exchange so a rejected flow does not burn the one-shot
-        // authorization code. (#1091)
-        const { data: membership } = await db
-          .from('company_members')
-          .select('user_id')
-          .eq('company_id', companyId)
-          .eq('user_id', userId)
-          .maybeSingle()
-        if (!membership) {
-          return respondWithError(
-            'Behörighet saknas för företaget',
-            errorPath('Behörighet saknas för företaget'),
-          )
         }
 
         try {

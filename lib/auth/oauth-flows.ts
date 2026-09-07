@@ -193,6 +193,7 @@ export async function createOAuthFlow(db: SupabaseClient, input: CreateOAuthFlow
 /** Who a flow belongs to and where it must finish, without consuming it. */
 export interface OAuthFlowIdentity {
   userId: string
+  companyId: string
   origin: string
 }
 
@@ -210,14 +211,18 @@ export async function peekOAuthFlowState(
 ): Promise<OAuthFlowIdentity | null> {
   const { data, error } = await db
     .from('oauth_flows')
-    .select('user_id, origin')
+    .select('user_id, company_id, origin')
     .eq('id', state)
     .eq('kind', kind)
     .is('used_at', null)
     .gt('expires_at', new Date().toISOString())
     .maybeSingle()
   if (error || !data) return null
-  return { userId: data.user_id as string, origin: data.origin as string }
+  return {
+    userId: data.user_id as string,
+    companyId: data.company_id as string,
+    origin: data.origin as string,
+  }
 }
 
 /** Same as peekOAuthFlowState, for a live handoff bound to `origin`. */
@@ -229,14 +234,18 @@ export async function peekOAuthFlowHandoff(
 ): Promise<OAuthFlowIdentity | null> {
   const { data, error } = await db
     .from('oauth_flows')
-    .select('user_id, origin')
+    .select('user_id, company_id, origin')
     .eq('handoff_id', handoffId)
     .eq('origin', origin)
     .eq('kind', kind)
     .gt('handoff_expires_at', new Date().toISOString())
     .maybeSingle()
   if (error || !data) return null
-  return { userId: data.user_id as string, origin: data.origin as string }
+  return {
+    userId: data.user_id as string,
+    companyId: data.company_id as string,
+    origin: data.origin as string,
+  }
 }
 
 /**
