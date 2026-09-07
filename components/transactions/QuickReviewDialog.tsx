@@ -64,6 +64,11 @@ interface QuickReviewDialogProps {
   ) => Promise<string | null>
   onChangeTemplate?: () => void
   /**
+   * Shell v2 with a template already chosen: the list proposed it, so a
+   * second "assistenten föreslår" line here read as a contradiction.
+   */
+  hideAiProposal?: boolean
+  /**
    * "Andra rader": hand the COMPUTED proposal lines (exactly what the
    * verifikation preview shows) to the parent, which routes them into
    * TransactionBookingDialog as an editable prefill. The transaction passed
@@ -89,6 +94,7 @@ export default function QuickReviewDialog({
   counterpartyDefaultDimensions,
   onConfirm,
   onChangeTemplate,
+  hideAiProposal = false,
   onEditLines,
 }: QuickReviewDialogProps) {
   const t = useTranslations('tx_quick_review')
@@ -527,7 +533,7 @@ export default function QuickReviewDialog({
 
         {/* AI booking proposal: pre-fills account + VAT and explains why.
             Falls back silently to the deterministic defaults on error. */}
-        {tx.id && (
+        {tx.id && !hideAiProposal && (
           <AiCategorizeProposal
             key={tx.id}
             transactionId={tx.id}

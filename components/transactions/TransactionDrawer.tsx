@@ -29,6 +29,7 @@ export interface DrawerAction {
 interface TransactionDrawerProps {
   transaction: TransactionWithInvoice
   accountLabel: string | null
+  accountLogo?: string | null
   categoryLabel: string | null
   primaryLabel: string
   onPrimary: (anchor: HTMLElement) => void
@@ -48,6 +49,7 @@ interface TransactionDrawerProps {
 export function TransactionDrawer({
   transaction,
   accountLabel,
+  accountLogo = null,
   categoryLabel,
   primaryLabel,
   onPrimary,
@@ -159,7 +161,18 @@ export function TransactionDrawer({
         <div className="px-5 py-3">
           <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_details')}</p>
           <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
-            {fact(t('drawer_account'), accountLabel)}
+            {fact(
+              t('drawer_account'),
+              accountLabel ? (
+                <span className="inline-flex items-center gap-1.5">
+                  {accountLogo && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={accountLogo} alt="" className="h-4 w-4 rounded-sm object-contain" />
+                  )}
+                  {accountLabel}
+                </span>
+              ) : null,
+            )}
             {fact(t('drawer_bank_text'), originalName ?? transaction.original_description ?? null)}
             {fact(t('drawer_method'), methodLabel)}
             {transaction.currency !== 'SEK' && transaction.amount_sek != null
