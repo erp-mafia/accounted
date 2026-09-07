@@ -1795,6 +1795,14 @@ export function stripBankNoise(lowerText: string): string {
  * Multi-signal matching against a transaction.
  * Returns top matches sorted by confidence descending.
  */
+/** Keywords up to this length are matched as whole words; longer ones may sit inside a word ("fjärruppvärmning"). */
+const WHOLE_WORD_KEYWORD_MAX = 3
+
+function keywordMatches(searchText: string, searchWords: ReadonlySet<string>, keyword: string): boolean {
+  if (keyword.length <= WHOLE_WORD_KEYWORD_MAX) return searchWords.has(keyword)
+  return searchText.includes(keyword)
+}
+
 export function findMatchingTemplates(
   transaction: Transaction,
   entityType?: EntityType
@@ -1809,6 +1817,7 @@ export function findMatchingTemplates(
   // Strip bank-method noise so e.g. "Överföring via internet" doesn't make
   // the matcher believe the merchant is "Internet" (→ 6230 telecom).
   const searchText = stripBankNoise(rawSearchText)
+  const searchWords = new Set(searchText.split(/[^\p{L}\p{N}]+/u).filter(Boolean))
 
   for (const t of BOOKING_TEMPLATES) {
     // Filter entity applicability
@@ -1828,11 +1837,13 @@ export function findMatchingTemplates(
       score += 0.4
     }
 
-    // Keyword matches in description + merchant: +0.3 (proportional)
+    // Keyword matches in description + merchant: +0.3 (proportional).
+    // Short keywords match whole words only: "el" inside "vercel" or
+    // "hotel" made El & Uppvärmning the top proposal for a hosting bill.
     if (t.keywords.length > 0) {
       let matchedKeywords = 0
       for (const kw of t.keywords) {
-        if (searchText.includes(kw.toLowerCase())) {
+        if (keywordMatches(searchText, searchWords, kw.toLowerCase())) {
           matchedKeywords++
         }
       }

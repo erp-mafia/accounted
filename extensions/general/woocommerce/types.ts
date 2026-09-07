@@ -11,6 +11,12 @@ export interface WooCommerceConnection {
   key_permissions: string | null
   status: 'pending' | 'active' | 'revoked' | 'error'
   oauth_state: string | null
+  /**
+   * Set by the session-bound leg (wc-auth return, or manual key entry).
+   * Together with stored credentials it is required for status 'active'
+   * (DB CHECK, migration 20260907143000).
+   */
+  browser_confirmed_at: string | null
   currency: string | null
   prices_include_tax: boolean | null
   wc_version: string | null

@@ -1228,6 +1228,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   mcp_tasks: 'MCP task handles: transient tool-call state with a 1-hour TTL',
   metered_events: 'billing telemetry',
   notice_dismissals: 'per-user UI notice dismissal state, not räkenskapsinformation',
+  oauth_flows:
+    'in-flight browser OAuth flow state (migration 20260907120000): state, origin, encrypted PKCE verifier and handoff; consumed by the callback, not räkenskapsinformation',
   notification_log: 'notification dedup log',
   operations: 'staged-operation workflow state',
   payment_match_log: 'derived matching log',
