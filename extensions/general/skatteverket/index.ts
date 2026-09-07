@@ -19,6 +19,17 @@ import {
   requireFlowInitiator,
   FLOW_INITIATOR_MISMATCH_MESSAGE,
 } from '@/lib/auth/oauth-flow-binding'
+import {
+  consumeOAuthFlowHandoff,
+  consumeOAuthFlowState,
+  createOAuthFlow,
+  mintOAuthFlowHandoff,
+  newOAuthFlowId,
+  purgeExpiredOAuthFlows,
+  requestOrigin,
+  resolveOAuthOrigin,
+  type OAuthFlow,
+} from '@/lib/auth/oauth-flows'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
 import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
 import { writeSkatteverketAudit } from './lib/audit'
@@ -83,6 +94,17 @@ import type { VatPeriodType } from '@/types'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('skatteverket')
+
+// Every state or handoff failure on the unauthenticated callback gets this
+// one message: unknown, forged, expired, replayed, wrong origin. Telling the
+// caller which one would make the route an oracle for live flows.
+const SKV_STATE_REJECTED_MESSAGE =
+  'Anslutningen kunde inte verifieras (ogiltig eller förbrukad state). Stäng fliken och försök ansluta igen.'
+
+// The flow is spent once the callback reads it, so a completion without a
+// session cannot be resumed by signing in; the user restarts the connect.
+const SKV_SESSION_MISSING_MESSAGE =
+  'Sessionen har gått ut. Stäng fliken, logga in och försök ansluta igen.'
 
 // Body for POST /skattekonto/transaktioner/bokfor-batch. Capped at 200 ids:
 // a full year of skattekonto events fits comfortably, and the sequential
@@ -312,7 +334,9 @@ export const skatteverketExtension: Extension = {
   apiRoutes: [
     // ── OAuth: Start authorization ──────────────────────────────────
     // Builds the Skatteverket OAuth2 authorize URL and redirects the user
-    // to BankID login. Stores state token in extension settings for CSRF validation.
+    // to BankID login. The flow is recorded as one oauth_flows row keyed by
+    // the state (lib/auth/oauth-flows.ts): who started it, on which origin,
+    // and what the token exchange must repeat.
     {
       method: 'GET',
       path: '/authorize',
@@ -323,7 +347,7 @@ export const skatteverketExtension: Extension = {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
 
-        const state = crypto.randomUUID()
+        const state = newOAuthFlowId()
         let redirectUri = `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
 
         // Optional: where to send the user after the BankID round-trip.
@@ -334,6 +358,11 @@ export const skatteverketExtension: Extension = {
           requestedReturn && requestedReturn.startsWith('/') && !requestedReturn.startsWith('//')
             ? requestedReturn
             : null
+
+        // The origin the user is on (app or a validated white-label brand
+        // domain). The callback finishes the flow there: that is where the
+        // opener tab lives and where the session cookies are.
+        const origin = await resolveOAuthOrigin(request)
 
         // Generate PKCE pair: verifier persisted server-side, challenge sent
         // to SKV. Some SKV per-flow client configurations issue revoked-on-use
@@ -378,18 +407,26 @@ export const skatteverketExtension: Extension = {
           })
         }
 
-        // Store state for CSRF validation in callback. The user id is stored
-        // alongside it because the callback runs on the OAuth host (see
-        // getSkvOauthBaseUrl), where the browser carries no session cookies
-        // once the user-facing app lives on its own domain.
-        await ctx.settings.set('oauth_state', state)
-        await ctx.settings.set('oauth_user_id', ctx.userId)
-        await ctx.settings.set('oauth_redirect_uri', redirectUri)
-        await ctx.settings.set('oauth_code_verifier', pkce.verifier)
-        if (connectorState) await ctx.settings.set('oauth_connector_state', connectorState)
-        else await ctx.settings.clear('oauth_connector_state')
-        if (returnTo) await ctx.settings.set('oauth_return_to', returnTo)
-        else await ctx.settings.clear('oauth_return_to')
+        const { createServiceClient } = await import('@/lib/supabase/server')
+        const db = createServiceClient()
+        // Expired rows go here rather than in a cron: the set is tiny and
+        // every connect attempt is a fine moment to sweep it. Best-effort.
+        try {
+          await purgeExpiredOAuthFlows(db)
+        } catch (err) {
+          log.warn('oauth flow purge failed', { error: (err as Error).message })
+        }
+        await createOAuthFlow(db, {
+          id: state,
+          kind: 'skatteverket',
+          companyId: ctx.companyId,
+          userId: ctx.userId,
+          origin,
+          redirectUri,
+          codeVerifier: pkce.verifier,
+          connectorState,
+          returnTo,
+        })
 
         return NextResponse.redirect(authorizeUrl)
       },
@@ -398,8 +435,9 @@ export const skatteverketExtension: Extension = {
     // ── OAuth: Callback ─────────────────────────────────────────────
     // Receives the auth code from Skatteverket after BankID login.
     // Exchanges code for tokens immediately (5-minute code expiry).
-    // skipAuth: true; browser redirect from Skatteverket. We handle
-    // user identification via the stored state token + Supabase session.
+    // skipAuth: true; browser redirect from Skatteverket. The flow is
+    // resolved from the oauth_flows row the state names, and the completion
+    // is bound to that row's user via the session on the initiating origin.
     {
       method: 'GET',
       path: '/callback',
@@ -407,9 +445,14 @@ export const skatteverketExtension: Extension = {
       handler: async (request: Request) => {
         const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
         const url = new URL(request.url)
-        const code = url.searchParams.get('code')
+        let code = url.searchParams.get('code')
         const state = url.searchParams.get('state')
         const error = url.searchParams.get('error')
+        const handoffId = url.searchParams.get('handoff')
+        const currentOrigin = requestOrigin(request)
+        // Where the opener tab lives. The canonical app origin until the flow
+        // row says otherwise; never derived from the request itself.
+        let responseOrigin = new URL(appUrl).origin
 
         // Connector branch: a self-hosted instance started this SKV consent
         // through the /api/connect/skv broker, which registered OUR redirect
@@ -417,7 +460,7 @@ export const skatteverketExtension: Extension = {
         // (the instance does, through the broker's /oauth/token): just bounce
         // the browser back to the instance with the code + its original
         // state, so no per-instance redirect uri is registered at SKV.
-        if (isConnectorState(state)) {
+        if (!handoffId && isConnectorState(state)) {
           const verified = verifyConnectorState(state as string)
           if (!verified.ok || verified.payload.svc !== 'skv') {
             return NextResponse.redirect(`${appUrl}/?connector_error=${encodeURIComponent(verified.ok ? 'wrong_service' : verified.reason)}`)
@@ -432,8 +475,9 @@ export const skatteverketExtension: Extension = {
           return NextResponse.redirect(ret.toString())
         }
 
-        // Injection-safety invariants: appUrl comes from NEXT_PUBLIC_APP_URL
-        // (deployment configuration, never user input), and jsLiteral
+        // Injection-safety invariants: responseOrigin is either deployment
+        // configuration (NEXT_PUBLIC_APP_URL) or a server-validated origin
+        // written by /authorize, never callback input, and jsLiteral
         // JSON-encodes and escapes `<` so embedded values cannot break out of
         // the script context. The per-response CSP nonce below is defense in
         // depth on top of that: even injected markup could never execute.
@@ -448,23 +492,25 @@ export const skatteverketExtension: Extension = {
           'Content-Security-Policy':
             `default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'`,
           'Cache-Control': 'no-store',
+          'Referrer-Policy': 'no-referrer',
         })
 
         // Build an HTML response that detects whether we're running inside an
         // OAuth popup. If `window.opener` exists, post a message back to the
         // parent and close the popup. Otherwise fall back to a plain redirect
-        // (preserves the legacy non-popup connect flow). The fallback uses
-        // location.replace so this callback URL (whose code and state are
-        // consumed) drops out of history: navigating Back from the landing
-        // page must not re-run the callback into a guaranteed CSRF error.
+        // (preserves the legacy non-popup connect flow). Both go to the
+        // origin the flow started on. The fallback uses location.replace so
+        // this callback URL (whose code and state are consumed) drops out of
+        // history: navigating Back from the landing page must not re-run the
+        // callback into a guaranteed state error.
         const respondWithSuccess = (fallbackPath: string) => {
           const nonce = crypto.randomUUID()
           const html = `<!DOCTYPE html><html><body><script nonce="${nonce}">
             if (window.opener) {
-              window.opener.postMessage({ type: 'skatteverket-oauth-success' }, ${jsLiteral(appUrl)});
+              window.opener.postMessage({ type: 'skatteverket-oauth-success' }, ${jsLiteral(responseOrigin)});
               window.close();
             } else {
-              window.location.replace(${jsLiteral(`${appUrl}${fallbackPath}`)});
+              window.location.replace(${jsLiteral(`${responseOrigin}${fallbackPath}`)});
             }
           </script><p>Anslutningen lyckades. Du kan stänga denna flik.</p></body></html>`
           return new Response(html, {
@@ -473,6 +519,12 @@ export const skatteverketExtension: Extension = {
           })
         }
 
+        // The tab deliberately stays open on error: a postMessage is dropped
+        // whenever the tab's origin differs from the opener's, and closing
+        // anyway turns any such drift into an invisible failure the user can
+        // only describe as "nothing happens". Leaving the reason on screen
+        // keeps every error diagnosable; the panel also shows it when the
+        // message does arrive.
         const respondWithError = (reason: string, fallbackPath: string) => {
           const nonce = crypto.randomUUID()
           const escapedReason = reason
@@ -481,134 +533,107 @@ export const skatteverketExtension: Extension = {
             .replace(/>/g, '&gt;')
           const html = `<!DOCTYPE html><html><body><script nonce="${nonce}">
             if (window.opener) {
-              window.opener.postMessage({ type: 'skatteverket-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(appUrl)});
-              window.close();
+              window.opener.postMessage({ type: 'skatteverket-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(responseOrigin)});
             } else {
-              window.location.replace(${jsLiteral(`${appUrl}${fallbackPath}`)});
+              window.location.replace(${jsLiteral(`${responseOrigin}${fallbackPath}`)});
             }
-          </script><p>Anslutningen misslyckades: ${escapedReason}</p></body></html>`
+          </script><p>Anslutningen misslyckades: ${escapedReason}</p><p>Du kan stänga denna flik.</p></body></html>`
           return new Response(html, {
             status: 200,
             headers: responseHeaders(nonce),
           })
         }
 
-        if (error) {
-          const desc = url.searchParams.get('error_description') || 'Okänt fel'
-          return respondWithError(
-            desc,
-            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(desc)}`,
-          )
+        const defaultErrorPath = (msg: string) =>
+          `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(msg)}`
+
+        if (!handoffId && ((!code && !error) || !state)) {
+          return respondWithError('Saknar auktoriseringskod', defaultErrorPath('Saknar auktoriseringskod'))
         }
 
-        if (!code || !state) {
-          return respondWithError(
-            'Saknar auktoriseringskod',
-            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Saknar auktoriseringskod')}`,
-          )
-        }
-
-        // This callback is served on the OAuth host (see getSkvOauthBaseUrl),
-        // where the browser has no session cookies once the user-facing app
-        // lives on its own domain. The flow is resolved entirely from the
-        // state token: /authorize stored state, user id, redirect_uri and
-        // PKCE verifier keyed on company_id, and the state value is an
-        // unguessable single-use UUID, so the bare lookup by value doubles
-        // as the CSRF check.
-        const { createClient, createServiceClient } = await import('@/lib/supabase/server')
+        const { createServiceClient } = await import('@/lib/supabase/server')
         const db = createServiceClient()
 
-        // States are single-use and short-lived: the recency bound both
-        // caps how long a leaked/phished authorize URL stays completable
-        // (the row expires ten minutes after /authorize refreshed it) and
-        // keeps the row set far below PostgREST's silent 1000-row cap.
-        // value is jsonb, so equality is matched in JS rather than in the
-        // PostgREST filter, where JSON serialization rules would apply.
-        const stateCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString()
-        const { data: stateRows, error: stateError } = await db
-          .from('extension_data')
-          .select('company_id, value')
-          .eq('extension_id', 'skatteverket')
-          .eq('key', 'oauth_state')
-          .gte('updated_at', stateCutoff)
-
-        if (stateError) {
-          log.error('oauth state lookup failed', stateError)
-          return respondWithError(
-            'Ett tekniskt fel uppstod. Försök igen.',
-            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Ett tekniskt fel uppstod')}`,
-          )
-        }
-
-        const stateMatch = (stateRows ?? []).find((row) => row.value === state)
-        if (!stateMatch) {
-          return respondWithError(
-            'Ogiltig state-parameter (CSRF)',
-            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Ogiltig state-parameter (CSRF)')}`,
-          )
-        }
-        const companyId = stateMatch.company_id as string
-
-        const readSetting = async (key: string): Promise<string | null> => {
-          const { data } = await db
-            .from('extension_data')
-            .select('value')
-            .eq('company_id', companyId)
-            .eq('extension_id', 'skatteverket')
-            .eq('key', key)
-            .maybeSingle()
-          return (data?.value as string | null) ?? null
-        }
-
-        // Flows that started before oauth_user_id shipped ran on the same
-        // domain as the app and still carry session cookies; fall back to
-        // those so in-flight connects survive the deploy boundary.
-        const storedUserId = await readSetting('oauth_user_id')
-        let userId = storedUserId
-        if (storedUserId) {
-          // The state row names the user who started the flow; the tokens
-          // below are stored for that user with the service client. Bind the
-          // completion to that user's own session so a victim lured into
-          // approving a Skatteverket consent someone else started cannot have
-          // their BankID-authorised access stored under that someone.
-          //
-          // Hosted, this callback is served on the pinned OAuth host
-          // (getSkvOauthBaseUrl, app.gnubok.se) where the app's session
-          // cookies never arrive: a missing session proves nothing there and
-          // the single-use state + membership check stay the guard. Where the
-          // OAuth host IS the app host (self-hosted, or the pin removed) the
-          // initiator's cookies do arrive, so no session means the initiator
-          // is not the one finishing the flow. A session for a DIFFERENT user
-          // is refused on every host.
-          const initiator = await requireFlowInitiator(request, storedUserId, {
-            flow: 'skatteverket.callback',
-          })
-          if (!initiator.ok) {
-            const sessionExpected =
-              new URL(getSkvOauthBaseUrl()).origin === new URL(appUrl).origin
-            if (initiator.reason === 'mismatch') {
-              return respondWithError(
-                FLOW_INITIATOR_MISMATCH_MESSAGE,
-                `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(FLOW_INITIATOR_MISMATCH_MESSAGE)}`,
-              )
-            }
-            if (sessionExpected) {
-              // The state row is untouched until the exchange, so signing in
-              // and re-running this callback (the helper's /login?next=...)
-              // completes the flow for its initiator.
-              return initiator.response
-            }
+        // Resolve the flow. Hop 2 (or the only hop, when the callback host is
+        // the app host) arrives with a handoff id; hop 1 with the provider's
+        // state. Both consumes are atomic and single-use, and every failure
+        // (unknown, forged, expired, replayed, wrong origin) is the same
+        // answer: this route is unauthenticated and must not be an oracle.
+        let flow: OAuthFlow
+        let providerError: string | null = null
+        if (handoffId) {
+          const handoff = await consumeOAuthFlowHandoff(db, handoffId, currentOrigin, 'skatteverket')
+          if (!handoff) {
+            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE))
           }
+          flow = handoff
+          code = handoff.providerCode
+          providerError = handoff.providerError
         } else {
-          const cookieClient = await createClient()
-          const { data: { user } } = await cookieClient.auth.getUser()
-          userId = user?.id ?? null
+          const consumed = await consumeOAuthFlowState(db, state as string, 'skatteverket')
+          if (!consumed) {
+            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE))
+          }
+          flow = consumed
+          if (error) providerError = url.searchParams.get('error_description') || 'Okänt fel'
         }
-        if (!userId) {
-          return respondWithError(
-            'Sessionen har gått ut. Stäng fliken och försök ansluta igen.',
-            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Sessionen har gått ut')}`,
+        responseOrigin = flow.origin
+
+        const successPath = flow.returnTo
+          ? `${flow.returnTo}${flow.returnTo.includes('?') ? '&' : '?'}skv_connected=true`
+          : `/reports?tab=vat-declaration&skv_connected=true`
+        const errorPath = (msg: string) =>
+          flow.returnTo
+            ? `${flow.returnTo}${flow.returnTo.includes('?') ? '&' : '?'}skv_error=${encodeURIComponent(msg)}`
+            : defaultErrorPath(msg)
+
+        // Hop 1 on the registered callback host: no session for the
+        // initiating origin can exist here. Stash the provider's result on
+        // the row (encrypted, under a separate handoff id) and send the
+        // browser to the origin the flow started on. Provider credentials
+        // never enter this URL.
+        if (!handoffId && flow.origin !== currentOrigin) {
+          const nextHandoff = await mintOAuthFlowHandoff(
+            db,
+            flow,
+            providerError !== null ? { providerError } : { providerCode: code as string },
           )
+          const target = new URL('/api/extensions/ext/skatteverket/callback', flow.origin)
+          target.searchParams.set('handoff', nextHandoff)
+          return new Response(null, {
+            status: 302,
+            headers: {
+              Location: target.toString(),
+              'Cache-Control': 'no-store',
+              'Referrer-Policy': 'no-referrer',
+            },
+          })
+        }
+
+        // The row names who started the flow; the tokens below are stored for
+        // that user with the service client. The browser finishing it must
+        // be that user: a victim lured into approving a Skatteverket consent
+        // someone else started must not have their BankID-authorised access
+        // stored under that someone. The flow is spent by now, so a missing
+        // session cannot resume via login; the user restarts the connect.
+        const initiator = await requireFlowInitiator(request, flow.userId, {
+          flow: 'skatteverket.callback',
+        })
+        if (!initiator.ok) {
+          const message =
+            initiator.reason === 'mismatch'
+              ? FLOW_INITIATOR_MISMATCH_MESSAGE
+              : SKV_SESSION_MISSING_MESSAGE
+          return respondWithError(message, errorPath(message))
+        }
+        const userId = initiator.userId
+        const companyId = flow.companyId
+
+        if (providerError !== null) {
+          return respondWithError(providerError, errorPath(providerError))
+        }
+        if (!code) {
+          return respondWithError(SKV_STATE_REJECTED_MESSAGE, errorPath(SKV_STATE_REJECTED_MESSAGE))
         }
 
         // Defense in depth for the service-role write below: the stored
@@ -626,48 +651,20 @@ export const skatteverketExtension: Extension = {
         if (!membership) {
           return respondWithError(
             'Behörighet saknas för företaget',
-            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Behörighet saknas för företaget')}`,
+            errorPath('Behörighet saknas för företaget'),
           )
         }
 
-        const redirectUri = (await readSetting('oauth_redirect_uri')) ||
-          `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
-
-        // Retrieve the PKCE verifier stored in /authorize. Optional only for
-        // backward compatibility with in-flight flows that started before the
-        // PKCE rollout: once those drain, this can be made required.
-        const codeVerifier = (await readSetting('oauth_code_verifier')) || undefined
-
-        // Connector mode: the broker's signed state, stored by /authorize
-        // (authoritative) with the hosted callback's bounced query param as
-        // fallback for a row written before the store landed. Required by the
-        // broker's token exchange; undefined on the direct path.
-        const connectorState =
-          (await readSetting('oauth_connector_state')) ||
-          url.searchParams.get('connector_state') ||
-          undefined
-
-        // Optional in-app destination set by /authorize?return_to=...
-        const returnTo = await readSetting('oauth_return_to')
-        const successPath = returnTo
-          ? `${returnTo}${returnTo.includes('?') ? '&' : '?'}skv_connected=true`
-          : `/reports?tab=vat-declaration&skv_connected=true`
-        const errorPath = (msg: string) =>
-          returnTo
-            ? `${returnTo}${returnTo.includes('?') ? '&' : '?'}skv_error=${encodeURIComponent(msg)}`
-            : `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(msg)}`
-
         try {
-          const tokens = await exchangeCodeForTokens(code, redirectUri, codeVerifier, connectorState)
+          // The exchange must repeat the redirect_uri SKV saw and the PKCE
+          // verifier /authorize generated; both come from the row.
+          const tokens = await exchangeCodeForTokens(
+            code,
+            flow.redirectUri,
+            flow.codeVerifier ?? undefined,
+            flow.connectorState ?? undefined,
+          )
           await storeTokens(db, userId, tokens, companyId)
-
-          // Clean up CSRF state + the one-shot user id/return_to/PKCE verifier.
-          await db
-            .from('extension_data')
-            .delete()
-            .eq('company_id', companyId)
-            .eq('extension_id', 'skatteverket')
-            .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier', 'oauth_connector_state'])
 
           // Refresh Skatteverket-derived data AFTER the response is sent.
           // Right-after-consent is still the one reliable window for a
@@ -697,20 +694,6 @@ export const skatteverketExtension: Extension = {
           return respondWithSuccess(successPath)
         } catch (err) {
           console.error('[skatteverket] Token exchange failed:', err)
-          // The ephemeral flow rows must not outlive the flow: oauth_user_id
-          // in particular holds a user identity and serves no purpose once
-          // the exchange has failed (#1090). Best-effort: a cleanup failure
-          // must not mask the exchange error shown to the user.
-          try {
-            await db
-              .from('extension_data')
-              .delete()
-              .eq('company_id', companyId)
-              .eq('extension_id', 'skatteverket')
-              .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier', 'oauth_connector_state'])
-          } catch (cleanupErr) {
-            log.error('oauth state cleanup after failed exchange failed', cleanupErr, { companyId })
-          }
           // BankID auth codes expire after 5 minutes. Surface timeouts distinctly
           // so the user retries quickly instead of exhausting the code window.
           const message = err instanceof TimeoutError
