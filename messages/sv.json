@@ -6891,6 +6891,7 @@
       "count": "{count} regler",
       "ladder_label": "Läge",
       "loading": "Hämtar…",
+      "load_failed": "Reglerna kunde inte hämtas.",
       "empty": "Inga regler än. De skapas när du godkänner samma kontering ett par gånger.",
       "not_found": "Regeln finns inte.",
       "more": "Fler",
