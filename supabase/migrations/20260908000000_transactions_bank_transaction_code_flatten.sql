@@ -25,6 +25,21 @@
 -- 20260818084050) and are skipped: 20260903170000 failed on prod for exactly
 -- that reason. Those rows (110 on prod, one archived company) keep the JSON
 -- text; nothing reads the column back, so nothing is lost.
+--
+-- Why no per-row rattelse log (BFL 5 kap 5 §, 5 kap 11 §): this column is not
+-- the bokforingspost and not the underlag. The underlag is the raw PSD2 page,
+-- archived verbatim by uploadDocument on every sync (räkenskapsinformation,
+-- BFL 7 kap) and untouched here; the verifikat's content lives in
+-- journal_entries / journal_entry_lines, which this statement never reads or
+-- writes. The column is a write-once ingest projection with a single consumer
+-- (classifyTransactionMethod at insert time) and no reader in UI, API, MCP,
+-- reports or SIE, and the new text is a deterministic function of the old
+-- text and the archived page. The dated migration file plus the DECISIONS.md
+-- entry are the systemdokumentation (BFNAR 2013:2 kap 9) for the change.
+--
+-- pg-test: skip (one-shot data repair: the only function is a pg_temp helper
+-- dropped in the same migration; no trigger, RPC, policy or constraint is
+-- created or changed, and the UPDATE cannot be re-exercised after apply)
 
 CREATE OR REPLACE FUNCTION pg_temp.flatten_eb_transaction_code(p_raw text)
 RETURNS text
