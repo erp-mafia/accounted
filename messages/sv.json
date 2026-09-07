@@ -2962,6 +2962,7 @@
     "invoices_help": "Förfallodatum för fakturor"
   },
   "tx_inbox_card": {
+    "proposal_title": "Förslag: {label} ({percent} % säker). Bokför använder det; klicka för att byta.",
     "drawer_close": "Stäng",
     "drawer_category": "Kategori",
     "drawer_actions": "Åtgärder",
