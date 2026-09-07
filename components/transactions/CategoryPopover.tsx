@@ -8,9 +8,9 @@ import { cn } from '@/lib/utils'
  * Shell v2 category picker (Kick-style): the template list opens beside the
  * chip that was clicked instead of in a modal over the page. A fixed panel
  * placed from the anchor's rectangle, kept inside the viewport, closed by
- * Escape, a click outside, or a resize. The content is whatever the caller
- * passes; the transactions page passes the same TemplatePicker the dialog
- * shows, in its dense mode.
+ * Escape, a click outside, or a resize. The content is three children (a
+ * head, the list, a foot); the transactions page passes the same
+ * TemplatePicker the dialog shows, in its dense mode, as the list.
  */
 
 const WIDTH = 400
@@ -75,7 +75,9 @@ export function CategoryPopover({
       ref={panelRef}
       role="dialog"
       className={cn(
-        'fixed z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-background shadow-[0_12px_32px_rgba(0,0,0,0.10)]',
+        // Three rows: head, the scrolling list, foot. A grid keeps the list
+        // inside the panel's max height so the foot never paints over it.
+        'fixed z-50 grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-lg border border-border bg-background shadow-[0_12px_32px_rgba(0,0,0,0.10)]',
         className,
       )}
       style={{
