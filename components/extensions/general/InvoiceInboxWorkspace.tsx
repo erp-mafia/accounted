@@ -817,17 +817,34 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const shell = useShell()
   const pipeCounts = useMemo(
     () => ({
+      missing: portalPurchases.length + otherPurchases.length,
       incoming: items.length,
       parsed: items.filter((it) => it.extracted_data && it.status !== 'processing' && it.status !== 'error').length,
       matched: statusCounts.linked + statusCounts.booked,
       booked: statusCounts.booked,
       archived: statusCounts.booked,
     }),
-    [items, statusCounts],
+    [items, statusCounts, portalPurchases.length, otherPurchases.length],
   )
   const pipeActive: InboxPipeStage | null =
-    filter === 'all' ? 'incoming' : filter === 'todo' ? 'parsed' : filter === 'linked' ? 'matched' : filter === 'booked' ? 'booked' : null
+    filter === 'missing' || filter === 'portal'
+      ? 'missing'
+      : filter === 'all'
+        ? 'incoming'
+        : filter === 'todo'
+          ? 'parsed'
+          : filter === 'linked'
+            ? 'matched'
+            : filter === 'booked'
+              ? 'booked'
+              : null
   const selectPipeStage = (stage: InboxPipeStage) => {
+    if (stage === 'missing') {
+      // One list in v2: the portal purchases lead, the rest follow.
+      setFilter('missing')
+      setSelectedId(null)
+      return
+    }
     setFilter(stage === 'incoming' ? 'all' : stage === 'parsed' ? 'todo' : stage === 'matched' ? 'linked' : 'booked')
     setSelectedPurchaseId(null)
   }
@@ -860,13 +877,16 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const activePill = useMemo(() => pills.find((p) => p.key === filter), [pills, filter])
 
   const filteredPurchases = useMemo(() => {
-    const base = filter === 'portal' ? portalPurchases : otherPurchases
+    // v1 keeps the two lists behind two pills; the v2 flow bar has one
+    // Saknas cell, so there the portal purchases lead the same list.
+    const base =
+      filter === 'portal' ? portalPurchases : shell === 'v2' ? [...portalPurchases, ...otherPurchases] : otherPurchases
     const term = searchTerm.trim().toLowerCase()
     if (term === '') return base
     return base.filter((p) =>
       [p.merchant_name, p.description].some((v) => v?.toLowerCase().includes(term)),
     )
-  }, [portalPurchases, otherPurchases, filter, searchTerm])
+  }, [portalPurchases, otherPurchases, filter, searchTerm, shell])
 
   const statusFilteredItems = useMemo(() => {
     if (filter === 'missing' || filter === 'portal') return []
@@ -1527,7 +1547,55 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         </div>
       </header>
 
-      {shell === 'v2' && <InboxPipeline counts={pipeCounts} active={pipeActive} onSelect={selectPipeStage} />}
+      {/* Shell v2: the flow bar is the status picker, with the two things
+          that are not stages beside it: errors (only while there are any)
+          and the document-type menu. The left column keeps only the search. */}
+      {shell === 'v2' && (
+        <div className="mx-4 mt-3 flex items-center gap-3">
+          <InboxPipeline counts={pipeCounts} active={pipeActive} onSelect={selectPipeStage} />
+          {(statusCounts.error > 0 || filter === 'error') && (
+            <button
+              type="button"
+              onClick={() => {
+                setFilter('error')
+                setSelectedPurchaseId(null)
+              }}
+              className={cn(QUIET_LINK_CLASS, 'shrink-0 text-warning', filter === 'error' && 'underline')}
+            >
+              {t('pipe_errors', { count: statusCounts.error })}
+            </button>
+          )}
+          {showKindFilter && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 shrink-0 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+                >
+                  {t(`kind_filter_${kindFilter}`)}
+                  <ChevronDown className="ml-1 h-3.5 w-3.5 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {INBOX_KIND_FILTERS.map((key) => (
+                  <DropdownMenuItem
+                    key={key}
+                    onSelect={() => setKindFilter(key)}
+                    className="justify-between gap-4 text-xs"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Check className={cn('h-3.5 w-3.5', kindFilter === key ? 'opacity-100' : 'opacity-0')} />
+                      {t(`kind_filter_${key}`)}
+                    </span>
+                    <span className="tabular-nums text-muted-foreground">{kindCounts[key]}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      )}
 
       {/* A pass takes over two minutes and reports nothing until it lands, so
           a spinner alone leaves somebody watching a button. This says which
@@ -1781,57 +1849,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   className="pl-8 h-8 text-xs"
                 />
               </div>
-              {/* One row instead of three. Five filters wrapped to three lines
-                  in a 280px column, and the counts are what people actually
-                  read, so they stay visible on the trigger and inside the menu
-                  rather than being traded away for the space. */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full justify-between h-8 px-2.5 text-xs font-normal"
-                  >
-                    <span className="flex items-center gap-1.5 min-w-0">
-                      <span className="truncate">{activePill?.label ?? 'Att göra'}</span>
-                      <span className="tabular-nums text-muted-foreground">
-                        {activePill?.count ?? 0}
-                      </span>
-                    </span>
-                    <ChevronDown className="h-3.5 w-3.5 opacity-60 shrink-0" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-[--radix-dropdown-menu-trigger-width]">
-                  {pills.map((pill) => (
-                    <DropdownMenuItem
-                      key={pill.key}
-                      onSelect={() => {
-                        setFilter(pill.key)
-                        // The panes show one kind of row at a time; a stale
-                        // selection from the other kind would outlive its list.
-                        if (pill.key === 'missing' || pill.key === 'portal') setSelectedId(null)
-                        else setSelectedPurchaseId(null)
-                      }}
-                      className="justify-between text-xs"
-                    >
-                      <span className="flex items-center gap-2">
-                        <Check
-                          className={cn(
-                            'h-3.5 w-3.5',
-                            filter === pill.key ? 'opacity-100' : 'opacity-0',
-                          )}
-                        />
-                        {pill.label}
-                      </span>
-                      <span className="tabular-nums text-muted-foreground">{pill.count}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              {/* Document type (#2129): the Fortnox-style split between
-                  leverantörsfakturor and bokföringsunderlag, as a second
-                  menu in the same shape as the status one. */}
-              {showKindFilter && (
+              {/* v1 only: the flow bar above is the v2 status picker. */}
+              {shell !== 'v2' && (
+                <>
+                {/* One row instead of three. Five filters wrapped to three lines
+                    in a 280px column, and the counts are what people actually
+                    read, so they stay visible on the trigger and inside the menu
+                    rather than being traded away for the space. */}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -1840,35 +1864,84 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                       className="w-full justify-between h-8 px-2.5 text-xs font-normal"
                     >
                       <span className="flex items-center gap-1.5 min-w-0">
-                        <span className="truncate">{t(`kind_filter_${kindFilter}`)}</span>
+                        <span className="truncate">{activePill?.label ?? 'Att göra'}</span>
                         <span className="tabular-nums text-muted-foreground">
-                          {kindCounts[kindFilter]}
+                          {activePill?.count ?? 0}
                         </span>
                       </span>
                       <ChevronDown className="h-3.5 w-3.5 opacity-60 shrink-0" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className="w-[--radix-dropdown-menu-trigger-width]">
-                    {INBOX_KIND_FILTERS.map((key) => (
+                    {pills.map((pill) => (
                       <DropdownMenuItem
-                        key={key}
-                        onSelect={() => setKindFilter(key)}
+                        key={pill.key}
+                        onSelect={() => {
+                          setFilter(pill.key)
+                          // The panes show one kind of row at a time; a stale
+                          // selection from the other kind would outlive its list.
+                          if (pill.key === 'missing' || pill.key === 'portal') setSelectedId(null)
+                          else setSelectedPurchaseId(null)
+                        }}
                         className="justify-between text-xs"
                       >
                         <span className="flex items-center gap-2">
                           <Check
                             className={cn(
                               'h-3.5 w-3.5',
-                              kindFilter === key ? 'opacity-100' : 'opacity-0',
+                              filter === pill.key ? 'opacity-100' : 'opacity-0',
                             )}
                           />
-                          {t(`kind_filter_${key}`)}
+                          {pill.label}
                         </span>
-                        <span className="tabular-nums text-muted-foreground">{kindCounts[key]}</span>
+                        <span className="tabular-nums text-muted-foreground">{pill.count}</span>
                       </DropdownMenuItem>
                     ))}
                   </DropdownMenuContent>
                 </DropdownMenu>
+                {/* Document type (#2129): the Fortnox-style split between
+                    leverantörsfakturor and bokföringsunderlag, as a second
+                    menu in the same shape as the status one. */}
+                {showKindFilter && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full justify-between h-8 px-2.5 text-xs font-normal"
+                      >
+                        <span className="flex items-center gap-1.5 min-w-0">
+                          <span className="truncate">{t(`kind_filter_${kindFilter}`)}</span>
+                          <span className="tabular-nums text-muted-foreground">
+                            {kindCounts[kindFilter]}
+                          </span>
+                        </span>
+                        <ChevronDown className="h-3.5 w-3.5 opacity-60 shrink-0" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-[--radix-dropdown-menu-trigger-width]">
+                      {INBOX_KIND_FILTERS.map((key) => (
+                        <DropdownMenuItem
+                          key={key}
+                          onSelect={() => setKindFilter(key)}
+                          className="justify-between text-xs"
+                        >
+                          <span className="flex items-center gap-2">
+                            <Check
+                              className={cn(
+                                'h-3.5 w-3.5',
+                                kindFilter === key ? 'opacity-100' : 'opacity-0',
+                              )}
+                            />
+                            {t(`kind_filter_${key}`)}
+                          </span>
+                          <span className="tabular-nums text-muted-foreground">{kindCounts[key]}</span>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                </>
               )}
             </div>
           )}

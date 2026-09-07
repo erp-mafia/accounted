@@ -24,6 +24,7 @@ import { useShell } from '@/components/dashboard/ShellProvider'
 import { useUiState } from '@/lib/hooks/use-ui-state'
 import { persistUiState } from '@/lib/ui-state/client'
 import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
+import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
@@ -441,6 +442,7 @@ export default function TransactionsPage() {
   // plus per-user column visibility (ui_state.tx_columns). v1 keeps the
   // five-column row untouched.
   const shell = useShell()
+  const tSkvCard = useTranslations('tx_skattekonto_card')
   const { uiState } = useUiState()
   const [hiddenColumns, setHiddenColumns] = useState<string[] | null>(null)
   const txColumns = useMemo(
@@ -4263,7 +4265,17 @@ export default function TransactionsPage() {
                 selected via the hover checkboxes, then it pops in with the
                 count and the batch actions. */}
             {(selectedIds.size > 0 || skvSelectedIds.size > 0) && (
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+              <div
+                className={cn(
+                  'flex items-center gap-x-5 gap-y-2 text-[12.5px] animate-fade-in',
+                  shell === 'v2'
+                    ? // Shell v2: a floating bar centred over the panel (concept
+                      // .floatbar), so it stays in view however far down the
+                      // selection reaches and the list does not shift under it.
+                      'fixed bottom-4 left-1/2 z-30 max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-x-auto whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 shadow-lg md:left-[calc(50%+var(--nav-w)/2)]'
+                    : 'flex-wrap border-b border-border px-1 py-2.5',
+                )}
+              >
                 {batchProgress ? (
                   <span className="flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -4412,6 +4424,8 @@ export default function TransactionsPage() {
                         onBokfor={handleSkvBokfor}
                         onMatch={r => setSkvMatchTarget(r)}
                         onIgnore={handleSkvIgnore}
+                        columns={txColumns ?? undefined}
+                        accountLabel={txColumns ? tSkvCard('account_label', { account: SKATTEKONTO_ACCOUNT }) : null}
                       />
                     ),
                   )}

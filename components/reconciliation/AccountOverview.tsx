@@ -24,7 +24,9 @@ import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } 
 import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } from './SignoffDialog'
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
 import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
+import { ReconciliationSummary } from './ReconciliationSummary'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { useShell } from '@/components/dashboard/ShellProvider'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
@@ -77,9 +79,11 @@ interface AccountOverviewProps {
   window: ReconciliationWindow
   /** Called after any write so the rail can refresh its status dots. */
   onChanged: () => void
+  /** Shell v2: opens the manual match view; the v1 segmented control does this. */
+  onMatchManually?: () => void
 }
 
-export function AccountOverview({ account, rail, otherBankAccounts = [], window, onChanged }: AccountOverviewProps) {
+export function AccountOverview({ account, rail, otherBankAccounts = [], window, onChanged, onMatchManually }: AccountOverviewProps) {
   const t = useTranslations('reconciliation')
   const locale = useLocale()
   const { toast } = useToast()
@@ -95,6 +99,9 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
   const autorunRequested = searchParams.get('autorun') === '1'
   const autorunDone = useRef(false)
 
+  // Shell v2: no rail (the account table is the landing) and one summary
+  // table instead of the tiles and the bridge list.
+  const v2 = useShell() === 'v2'
   const isSkv = account.kind === 'skattekonto'
   // Manual accounts have no rows to match or book: the body is the balance
   // bridge (IB, movement, UB against a specification or the signer's
@@ -412,8 +419,8 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
 
   if (loadError) {
     return (
-      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-        {rail}
+      <div className={cn(!v2 && 'grid gap-8 lg:grid-cols-[220px_1fr]')}>
+        {!v2 && rail}
         <div className="min-w-0">
           <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>
             {t('load_failed')}
@@ -425,8 +432,8 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
 
   if (!status || !items) {
     return (
-      <div className="grid gap-8 lg:grid-cols-[220px_1fr]" aria-busy>
-        {rail}
+      <div className={cn(!v2 && 'grid gap-8 lg:grid-cols-[220px_1fr]')} aria-busy>
+        {!v2 && rail}
         <div className="min-w-0 space-y-6">
         <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border">
           {[0, 1, 2, 3].map((i) => (
@@ -577,10 +584,12 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-        {rail}
+      <div className={cn(!v2 && 'grid gap-8 lg:grid-cols-[220px_1fr]')}>
+        {!v2 && rail}
         <div className="min-w-0 space-y-6">
-      {/* Tiles: label + number, nothing else. */}
+      {v2 ? (
+        <ReconciliationSummary status={status} kind={account.kind} specificationLabel={specificationLabel} />
+      ) : (
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border stagger-enter">
         {tiles.map((tile) => (
           <div key={tile.key} className="bg-background px-4 py-3.5">
@@ -602,6 +611,7 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
           </div>
         ))}
       </div>
+      )}
 
       {bankReportedLine && (
         <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
@@ -632,8 +642,8 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         </p>
       )}
 
-      {/* Bridge: how the difference is explained. */}
-      {status.bridge.length > 0 && (
+      {/* Bridge: how the difference is explained (v2 has it in the summary table). */}
+      {!v2 && status.bridge.length > 0 && (
         <dl className="max-w-[520px] text-[13px]">
           {status.bridge.map((line) => (
             <div
@@ -677,6 +687,11 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
           <Button size="sm" variant={status.is_reconciled ? 'default' : 'outline'} onClick={() => setSignoffOpen(true)} disabled={busy !== null}>
             {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
           </Button>
+        )}
+        {onMatchManually && (
+          <button type="button" className={QUIET_LINK_CLASS} onClick={onMatchManually} disabled={busy !== null}>
+            {t('mode_match')}
+          </button>
         )}
         {isSkv && (
           <span className="ml-auto">
