@@ -44,11 +44,18 @@ export default function AccountsOverview() {
   const t = useTranslations('accounts_v2')
   const { data, isLoading, error } = useSWR<ReconciliationAccount[]>('/api/reconciliation/accounts', fetchAccounts)
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
-  const rows = (data ?? []).filter((a) => !a.superseded_by)
+  // Accounts with money in them: bank accounts and the skattekonto. Ledger
+  // accounts reconciled by hand (2081, 2641 ...) belong to Avstämning.
+  const rows = (data ?? []).filter((a) => !a.superseded_by && a.kind !== 'manual')
 
-  const balanceFor = (a: ReconciliationAccount) => {
-    const cash = cashAccounts.find((c) => c.ledger_account === a.account_number && c.currency === a.currency)
-    return cash?.balance ?? null
+  const cashFor = (a: ReconciliationAccount) =>
+    cashAccounts.find((c) => c.ledger_account === a.account_number && c.currency === a.currency)
+  const balanceFor = (a: ReconciliationAccount) => cashFor(a)?.balance ?? null
+  // "Senast läst": when the bank last reported a balance; the status as_of is
+  // the moment the row was computed and says nothing about the feed.
+  const lastReadFor = (a: ReconciliationAccount) => {
+    if (a.kind === 'bank') return cashFor(a)?.balance_updated_at ?? null
+    return a.status?.as_of ?? null
   }
   const toReview = (a: ReconciliationAccount) => {
     const c = a.status?.open_counts
@@ -110,7 +117,7 @@ export default function AccountsOverview() {
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>{t(`source_${a.source.type}`)}</td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
-                      {a.status?.as_of ? formatDate(a.status.as_of) : '–'}
+                      {lastReadFor(a) ? formatDate(lastReadFor(a)!) : '–'}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                       {a.signed_off_through ? (
