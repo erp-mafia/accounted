@@ -496,14 +496,8 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
 
   return (
     <div className="space-y-4">
-      <div className={v2 ? 'flex flex-wrap items-center justify-between gap-3' : 'contents'}>
-        {latestVouchers && (
-          <p className="text-sm text-muted-foreground">
-            {t('latest_posted_vouchers')}: {latestVouchers}
-          </p>
-        )}
-        <ReportExportMenu
-          items={[
+      <ReportExportMenu
+        items={[
           { format: 'pdf', href: `/api/reports/income-statement/pdf?${reportQs}` },
           { format: 'xlsx', href: `/api/reports/income-statement/xlsx?${reportQs}` },
         ]}
@@ -746,8 +740,14 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu
-        items={[
+      <div className={v2 ? 'flex flex-wrap items-center justify-between gap-3' : 'contents'}>
+        {latestVouchers && (
+          <p className="text-sm text-muted-foreground">
+            {t('latest_posted_vouchers')}: {latestVouchers}
+          </p>
+        )}
+        <ReportExportMenu
+          items={[
           { format: 'pdf', href: `/api/reports/resultatrapport/pdf?${reportQs}` },
           { format: 'xlsx', href: `/api/reports/resultatrapport/xlsx?${reportQs}` },
           ]}
@@ -1347,7 +1347,7 @@ function VatStepper({
 
   return (
     <div
-      className="report-narrow mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
+      className="mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
       role="tablist"
       aria-label="Momsdeklarationens steg"
     >
@@ -2036,7 +2036,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           />
 
           {activeStep === 1 && (
-            <section className="report-narrow mx-auto max-w-3xl space-y-3">
+            <section className="mx-auto max-w-3xl space-y-3">
               <VatChecksCard
               checks={checks}
               periodType={periodType}
@@ -2055,7 +2055,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
 
           {activeStep === 2 && (
             <section className="space-y-3">
-              <div className="report-narrow mx-auto max-w-2xl">
+              <div className="mx-auto max-w-2xl">
             <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
               <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Momsdeklaration · {data.period.start} till {data.period.end}
@@ -2251,7 +2251,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           )}
 
           {activeStep === 3 && (
-            <section className="report-narrow mx-auto max-w-3xl space-y-3">
+            <section className="mx-auto max-w-3xl space-y-3">
               <VatBookingCard
               checksBlocked={checksBlocked}
               proposal={settlement.proposal}
@@ -2270,7 +2270,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           )}
 
           {activeStep === 4 && (
-            <section className="report-narrow mx-auto max-w-3xl space-y-8">
+            <section className="mx-auto max-w-3xl space-y-8">
               <SkatteverketPanel
                 periodType={periodType}
                 year={year}
