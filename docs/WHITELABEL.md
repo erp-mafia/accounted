@@ -41,7 +41,7 @@ All branding can be set via env vars. Public ones use `NEXT_PUBLIC_BRANDING_*` (
 | `BRANDING_SECURITY_EMAIL` | `securityEmail` | `security@arcim.io` |
 | `NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM` | `authEmailFrom`: From address Supabase Auth sends verification / reset emails from. Used to pre-populate the `from:` query on the "open in Gmail" button after signup. Set to whatever you configured in your Supabase Auth SMTP. | `noreply@gnubok.se` |
 | `NEXT_PUBLIC_APP_URL` | `appUrl` | `https://app.gnubok.se` |
-| `NEXT_PUBLIC_WHITELABEL_DOMAINS` | Exact comma-separated hostnames served by the same hosted deployment. No wildcards. Invite and auth redirects use a listed host and otherwise fall back to `NEXT_PUBLIC_APP_URL`. | `` |
+| `NEXT_PUBLIC_WHITELABEL_DOMAINS` | Exact comma-separated hostnames served by the same hosted deployment. No wildcards. Invite and auth redirects use a listed host and otherwise fall back to `NEXT_PUBLIC_APP_URL`. Enable Banking consent callbacks started from a listed host return to it; an unlisted host is sent to the canonical login instead. | `` |
 | `NEXT_PUBLIC_BRANDING_LOGO_PATH` | `logoPath` | `/gnubokiceon-removebg-preview.png` |
 | `NEXT_PUBLIC_BRANDING_FAVICON_PATH` | `faviconPath` | `/favicon.ico` |
 | `NEXT_PUBLIC_BRANDING_APPLE_ICON_PATH` | `appleTouchIconPath` | `/icons/icon-192.png` |

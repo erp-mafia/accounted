@@ -30,6 +30,7 @@ import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import type { StoredAccount } from './types'
 import type { Transaction } from '@/types'
 
@@ -519,6 +520,13 @@ export const enableBankingExtension: Extension = {
 
           const redirectUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/extensions/enable-banking/callback`
 
+          // The host the user started from. Their session lives only there
+          // (cookies are per host) while redirectUrl stays the canonical
+          // callback registered with Enable Banking, so the callback reads
+          // this back to return the browser home. Allowlist-validated: an
+          // unregistered Host header collapses to the canonical origin.
+          const oauthOrigin = resolveRequestAppOrigin(request)
+
           // Generate cryptographic state token for CSRF protection
           const oauthState = crypto.randomUUID()
 
@@ -542,6 +550,7 @@ export const enableBankingExtension: Extension = {
               .from('bank_connections')
               .update({
                 oauth_state: oauthState,
+                oauth_origin: oauthOrigin,
                 status: 'expired',
                 // session_id is deliberately KEPT here. The callback needs the
                 // session being replaced to carry the renewed consent across to
@@ -652,6 +661,7 @@ export const enableBankingExtension: Extension = {
               bank_name: resolvedAspspName,
               authorization_id,
               oauth_state: oauthState,
+              oauth_origin: oauthOrigin,
               status: 'pending',
               psu_type: psuType,
             })
