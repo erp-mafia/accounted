@@ -4868,6 +4868,8 @@
     "expense_registered_description": "The debt to {name} is now in To do. Arrival number: {number}"
   },
   "supplier_invoice_detail": {
+    "strip_registered_unbooked": "{date} · liability not booked yet",
+    "strip_skipped": "–",
     "strip_incoming": "{date}",
     "strip_registered": "{date} · liability booked",
     "strip_approved": "{date}",

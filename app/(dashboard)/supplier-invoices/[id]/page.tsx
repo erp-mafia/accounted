@@ -644,16 +644,18 @@ export default function SupplierInvoiceDetailPage() {
     if (state === 'todo') return t(`strip_pending_${s}`)
     switch (s) {
       case 'incoming':
-        return t('strip_incoming', { date: formatDate(invoice.invoice_date) })
+        return t('strip_incoming', { date: formatDate(invoice.created_at) })
       case 'registered':
-        return t('strip_registered', { date: formatDate(invoice.invoice_date) })
+        return invoice.registration_journal_entry_id
+          ? t('strip_registered', { date: formatDate(invoice.created_at) })
+          : t('strip_registered_unbooked', { date: formatDate(invoice.created_at) })
       case 'approved':
-        return t('strip_approved', { date: invoice.approved_at ? formatDate(invoice.approved_at) : '' })
+        return invoice.approved_at ? t('strip_approved', { date: formatDate(invoice.approved_at) }) : t('strip_skipped')
       case 'in_file':
         return t('strip_in_file', { date: lifecycle?.batch ? formatDate(lifecycle.batch.created_at) : '' })
       case 'paid':
         return t('strip_paid', {
-          date: lifecycle?.paid ? formatDate(lifecycle.paid.date) : invoice.paid_at ? formatDate(invoice.paid_at) : '',
+          date: invoice.paid_at ? formatDate(invoice.paid_at) : lifecycle?.paid ? formatDate(lifecycle.paid.date) : '',
         })
       case 'reconciled':
         return t('strip_reconciled', { date: lifecycle?.reconciled_through ? formatDate(lifecycle.reconciled_through) : '' })
@@ -701,6 +703,7 @@ export default function SupplierInvoiceDetailPage() {
     <div className="space-y-8 stagger-enter">
       {/* Back link + prev/next record pager on their own quiet row, so the
           title below keeps a stable position while stepping between records */}
+      {shell !== 'v2' && (
       <div className="flex items-center justify-between gap-4">
         <button
           type="button"
@@ -718,22 +721,15 @@ export default function SupplierInvoiceDetailPage() {
           className="shrink-0"
         />
       </div>
-
-      {shell === 'v2' && lifecycle && (
-        <StageSteps
-          stages={stagesFor(companySettings?.accounting_method)}
-          current={lifecycle.stage}
-          detail={stripText}
-        />
       )}
 
       {/* Header: serif title with one status element, a quiet meta line, and
           the next step on the right. Everything else lives in the ⋯ menu. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             {/* data-ph-mask: the title carries the supplier's invoice number */}
-            <h1 data-ph-mask="" className="font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
             {status.exception ? (
               <Badge variant={status.variant}>{status.label}</Badge>
             ) : (
@@ -746,10 +742,18 @@ export default function SupplierInvoiceDetailPage() {
               </Badge>
             )}
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
+          <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
+          {shell === 'v2' && (
+            <DetailPager
+              contextKey={listContextKey('supplier-invoices', company?.id)}
+              basePath="/supplier-invoices"
+              currentId={String(params.id)}
+              className="shrink-0"
+            />
+          )}
           {/* The supplier's own document, reviewed in the browser (#1190). */}
           {invoice.document_id && (
             <DocumentViewButton
@@ -864,6 +868,14 @@ export default function SupplierInvoiceDetailPage() {
           )}
         </div>
       </div>
+
+      {shell === 'v2' && lifecycle && (
+        <StageSteps
+          stages={stagesFor(companySettings?.accounting_method)}
+          current={lifecycle.stage}
+          detail={stripText}
+        />
+      )}
 
       {/* Leverantör and Fakturainformation side by side like an invoice head:
           who sent it on the left, the facts on the right. */}
