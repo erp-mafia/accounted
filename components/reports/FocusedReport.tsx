@@ -92,6 +92,8 @@ function FocusedReportInner({
   // Shell v2: the nav names Rapporter, so no back link over the title, and
   // the period presets and the dimension picker share one row.
   const v2 = useShell() === 'v2'
+  const showRange = DATE_RANGE_SLUGS.has(slug) && !!selectedPeriodBounds
+  const showDim = DIMENSION_FILTER_SLUGS.has(slug) && !!selectedPeriod
   // Calendar (VAT family) and param-less reports don't need a fiscal period.
   const isPeriodless = report?.params === 'calendar' || report?.params === 'none'
   // Nav-promoted pages (Momsdeklaration) drop the library chrome: no back
@@ -152,20 +154,21 @@ function FocusedReportInner({
         />
       )}
 
-      <div className={v2 ? 'flex flex-wrap items-center gap-x-6 gap-y-3' : 'contents'}>
-        {DATE_RANGE_SLUGS.has(slug) && selectedPeriodBounds && (
-          <ReportDateRange
-            periodStart={selectedPeriodBounds.start}
-            periodEnd={selectedPeriodBounds.end}
-            value={dateRange}
-            onChange={setDateRange}
-          />
-        )}
-
-        {DIMENSION_FILTER_SLUGS.has(slug) && selectedPeriod && (
-          <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />
-        )}
-      </div>
+      {/* Only when a filter renders: an empty row would still take the
+          stack's gap and push a standalone page's header down. */}
+      {(showRange || showDim) && (
+        <div className={v2 ? 'flex flex-wrap items-center gap-x-6 gap-y-3' : 'contents'}>
+          {showRange && selectedPeriodBounds && (
+            <ReportDateRange
+              periodStart={selectedPeriodBounds.start}
+              periodEnd={selectedPeriodBounds.end}
+              value={dateRange}
+              onChange={setDateRange}
+            />
+          )}
+          {showDim && <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />}
+        </div>
+      )}
 
       {!isReady && !isPeriodless ? (
         <Card>
