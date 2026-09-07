@@ -80,6 +80,8 @@ Shipped scope (PR 5a): no new table. `categorization_templates` already is the p
 - Pipeline bar on the list with counts per step, the invoice page with document, kontering, betalning and kopplat, one primary per step.
 - Kontantmetod companies do not see attest.
 
+Shipped scope (PR 6a): no new status values. The stage is DERIVED (`lib/supplier-invoices/stages.ts` + `lifecycle-stages.ts`): status and approved_at on the invoice, membership in an open payment batch = "I betalfil", the paying bank row = "Betald", and an account sign-off through that row's date = "Avstämd". `GET /api/supplier-invoices/lifecycle` returns the stage per invoice plus counts. In shell v2 the Inköp list shows the six-step bar with counts (click filters) instead of the status picker, and the invoice page opens with the flow strip (dates on done steps, what is still needed on the rest). Kontantmetod companies: no attest action on either page and no Attesterad step on their ladder. When payment initiation arrives, "I betalfil" reads its evidence from the initiated payment instead of the batch; the enum and the pages do not change.
+
 ### PR 7: Underlag
 
 - Inkorg with the pipeline bar and the "Tar emot från" channel line (existing intake address, WhatsApp when live, Peppol, upload).

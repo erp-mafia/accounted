@@ -34,6 +34,10 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { useCompanySettings } from '@/components/settings/useSettings'
+import useSWR from 'swr'
+import { useShell } from '@/components/dashboard/ShellProvider'
+import { StageSteps } from '@/components/supplier-invoices/StagePipeline'
+import { stagesFor, type InvoiceLifecycle, type SupplierInvoiceLadderStage } from '@/lib/supplier-invoices/stages'
 import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import {
@@ -98,6 +102,19 @@ const EXCEPTION_STATUS_VARIANTS: Record<string, 'secondary' | 'outline' | 'warni
 export default function SupplierInvoiceDetailPage() {
   const { canWrite } = useCanWrite()
   const { settings: companySettings } = useCompanySettings()
+  // Shell v2 (UI v2 PR 6): the invoice's place on the flow, derived server-side.
+  const shell = useShell()
+  const routeParams = useParams()
+  const invoiceIdParam = typeof routeParams.id === 'string' ? routeParams.id : ''
+  const { data: lifecycle } = useSWR<InvoiceLifecycle | null>(
+    shell === 'v2' && invoiceIdParam ? `/api/supplier-invoices/lifecycle?ids=${invoiceIdParam}` : null,
+    async (url: string) => {
+      const res = await fetch(url)
+      if (!res.ok) return null
+      const json = (await res.json()) as { data: { stages: Record<string, InvoiceLifecycle> } }
+      return json.data.stages[invoiceIdParam] ?? null
+    },
+  )
   const params = useParams()
   const router = useRouter()
   const company = useCompanyOptional()?.company ?? null
@@ -620,7 +637,28 @@ export default function SupplierInvoiceDetailPage() {
   // Attest keys off approved_at, not the status: the overdue cron flips
   // unbooked invoices to 'overdue' just by aging, and gating on 'registered'
   // alone left them with no way through attest (#1206).
-  const canApprove = canApproveSupplierInvoice(invoice) && !invoice.is_credit_note
+  // Kontantmetod companies never attest: the debt is not booked before payment.
+  const canApprove =
+    canApproveSupplierInvoice(invoice) && !invoice.is_credit_note && companySettings?.accounting_method !== 'cash'
+  const stripText = (s: SupplierInvoiceLadderStage, state: 'done' | 'now' | 'todo'): string => {
+    if (state === 'todo') return t(`strip_pending_${s}`)
+    switch (s) {
+      case 'incoming':
+        return t('strip_incoming', { date: formatDate(invoice.invoice_date) })
+      case 'registered':
+        return t('strip_registered', { date: formatDate(invoice.invoice_date) })
+      case 'approved':
+        return t('strip_approved', { date: invoice.approved_at ? formatDate(invoice.approved_at) : '' })
+      case 'in_file':
+        return t('strip_in_file', { date: lifecycle?.batch ? formatDate(lifecycle.batch.created_at) : '' })
+      case 'paid':
+        return t('strip_paid', {
+          date: lifecycle?.paid ? formatDate(lifecycle.paid.date) : invoice.paid_at ? formatDate(invoice.paid_at) : '',
+        })
+      case 'reconciled':
+        return t('strip_reconciled', { date: lifecycle?.reconciled_through ? formatDate(lifecycle.reconciled_through) : '' })
+    }
+  }
   const canMarkPaid = ['approved', 'overdue', 'partially_paid'].includes(invoice.status)
   // "Inlagd i banken" (#2220) sits on the same rows as Markera som betald:
   // it is the step right before it. Viewers see the bock only when it is set.
@@ -680,6 +718,14 @@ export default function SupplierInvoiceDetailPage() {
           className="shrink-0"
         />
       </div>
+
+      {shell === 'v2' && lifecycle && (
+        <StageSteps
+          stages={stagesFor(companySettings?.accounting_method)}
+          current={lifecycle.stage}
+          detail={stripText}
+        />
+      )}
 
       {/* Header: serif title with one status element, a quiet meta line, and
           the next step on the right. Everything else lives in the ⋯ menu. */}

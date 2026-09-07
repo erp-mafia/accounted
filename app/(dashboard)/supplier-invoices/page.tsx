@@ -36,6 +36,17 @@ import {
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { FiscalPeriod, SupplierInvoice } from '@/types'
+import useSWR from 'swr'
+import { useShell } from '@/components/dashboard/ShellProvider'
+import { useCompanySettings } from '@/components/settings/useSettings'
+import { StagePipeline } from '@/components/supplier-invoices/StagePipeline'
+import {
+  deriveStage,
+  stagesFor,
+  type InvoiceLifecycle,
+  type SupplierInvoiceLadderStage,
+  type SupplierInvoiceStage,
+} from '@/lib/supplier-invoices/stages'
 
 const NewSupplierInvoiceDialog = dynamic(
   () => import('@/components/supplier-invoices/NewSupplierInvoiceDialog'),
@@ -181,6 +192,30 @@ export default function SupplierInvoicesPage() {
   const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ListTab>('all')
+  // Shell v2 (UI v2 PR 6): the flow bar replaces the status picker. Stages
+  // come from /api/supplier-invoices/lifecycle (open batches, paying rows,
+  // sign-offs) and fall back to a status-only derivation while it loads.
+  const shell = useShell()
+  const { settings: companySettings } = useCompanySettings()
+  const [activeStage, setActiveStage] = useState<SupplierInvoiceLadderStage | null>(null)
+  type LifecyclePayload = { stages: Record<string, InvoiceLifecycle>; counts: Partial<Record<SupplierInvoiceStage, number>> }
+  const { data: lifecycle, mutate: refreshLifecycle } = useSWR<LifecyclePayload>(
+    shell === 'v2' ? '/api/supplier-invoices/lifecycle' : null,
+    async (url: string) => {
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`${url} ${res.status}`)
+      return ((await res.json()) as { data: LifecyclePayload }).data
+    },
+  )
+  const stageFor = (inv: SupplierInvoice): SupplierInvoiceStage =>
+    lifecycle?.stages[inv.id]?.stage ??
+    deriveStage({
+      status: inv.status,
+      approved_at: inv.approved_at,
+      is_credit_note: inv.is_credit_note,
+      in_open_batch: activeBatchInvoiceIds.has(inv.id),
+      reconciled: false,
+    })
   const [searchTerm, setSearchTerm] = useState('')
   // null = the API's default order (förfallodatum stigande).
   const [sort, setSort] = useState<SupplierInvoiceListSort | null>(null)
@@ -214,6 +249,7 @@ export default function SupplierInvoicesPage() {
   const openNewInvoice = () => router.push('/supplier-invoices?new=1', { scroll: false })
 
   async function fetchInvoices() {
+    if (shell === 'v2') void refreshLifecycle()
     // Skeleton takeover only while nothing is on screen: refetches after an
     // action (register, betalfil, approve fallback) reconcile BEHIND the
     // rendered table instead of collapsing it to 4 skeleton stubs and
@@ -289,7 +325,7 @@ export default function SupplierInvoicesPage() {
         case 'approved': return inv.status === 'approved'
         case 'to_pay': return inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue'
         case 'paid': return inv.status === 'paid'
-        default: return true
+        default: return !activeStage || stageFor(inv) === activeStage
       }
     })()
     const query = searchTerm.trim().toLowerCase()
@@ -536,7 +572,16 @@ export default function SupplierInvoicesPage() {
       {/* Toolbar: one status chip-picker (founder direction: the status
           views live behind a filter chip, not a seg), sök, FyPicker far
           right. Counts ride as row annotations and on the trigger. */}
+      {shell === 'v2' && (
+        <StagePipeline
+          stages={stagesFor(companySettings?.accounting_method)}
+          counts={lifecycle?.counts ?? {}}
+          active={activeStage}
+          onSelect={setActiveStage}
+        />
+      )}
       <div className="flex flex-wrap items-center gap-2">
+        {shell !== 'v2' && (
         <ContextPicker
           value={activeTab}
           onChange={(id) => setActiveTab(id as ListTab)}
@@ -559,6 +604,7 @@ export default function SupplierInvoicesPage() {
                   : undefined,
           }))}
         />
+        )}
         <ContextPicker
           value={groupMode}
           onChange={(id) => updateGroup(id as GroupMode)}
@@ -845,7 +891,7 @@ export default function SupplierInvoicesPage() {
                       className={cn(TD_CLASS, 'whitespace-nowrap text-right')}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {canApprove && (
+                      {canApprove && companySettings?.accounting_method !== 'cash' && (
                         <button
                           type="button"
                           className={cn(
