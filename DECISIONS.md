@@ -1650,3 +1650,4 @@ One line per decision: `[YYYY-MM-DD] <decision>: <why>`. Appended by agents and 
 [2026-09-07] Receipt chasing (card-to-person, WhatsApp/mail asks) is deferred (founder): keep the design, do not build it in the shell work.
 [2026-09-07] Supplier invoice lifecycle gets "in payment file" and "reconciled" states (founder), designed so that in-system payment initiation can replace the bank file step later without a second state model. Inköp stays one intake for receipts, invoices and files from every source.
 [2026-09-07] Cheap removals approved (founder): the defer-booking toggle, the Ny verifikation sub-doors, and hiding supplier-invoice attest for kontantmetod companies.
+[2026-09-07] Avstämning v2 redesign folded into UI v2 PR 8 (registers) instead of a tenth stacked PR: the cutover PR's base would have had to move, and the Konton table it sits next to is in the same PR.
