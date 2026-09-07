@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getStripe, priceIdForPlan } from '@/lib/stripe/client'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 
 const CheckoutSchema = z.object({
   plan: z.enum(['monthly', 'yearly']).default('monthly'),
@@ -116,7 +117,13 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
       .upsert({ company_id: companyId, stripe_customer_id: customerId }, { onConflict: 'company_id' })
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ''
+  // Return the user to the host they started on. Sessions are per domain, so
+  // sending a white-label user back to the canonical app would land them on a
+  // foreign-branded login with no session. The origin is resolved against the
+  // registered host allowlist; an unknown or spoofed host falls back to the
+  // canonical app URL. The paths stay fixed: never accept a caller-supplied
+  // return URL here.
+  const appOrigin = resolveRequestAppOrigin(request)
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
     customer: customerId,
@@ -139,8 +146,8 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
       ...(trialEnd ? { trial_end: trialEnd } : {}),
     },
     allow_promotion_codes: true,
-    success_url: `${appUrl}/settings/billing?success=1`,
-    cancel_url: `${appUrl}/settings/billing?canceled=1`,
+    success_url: `${appOrigin}/settings/billing?success=1`,
+    cancel_url: `${appOrigin}/settings/billing?canceled=1`,
   })
 
   return NextResponse.json({ url: session.url })
