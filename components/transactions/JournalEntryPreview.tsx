@@ -24,6 +24,7 @@ export default function JournalEntryPreview(props: JournalEntryPreviewProps) {
     counterpartyLegacy,
     linePattern,
     settlementAccount,
+    vatAmountSek,
   } = props
 
   // Line computation lives in lib/bookkeeping/proposal-lines.ts, shared with
@@ -44,8 +45,9 @@ export default function JournalEntryPreview(props: JournalEntryPreviewProps) {
       counterpartyLegacy,
       linePattern,
       settlementAccount,
+      vatAmountSek,
     }),
-    [amount, amountSek, category, vatTreatment, accountOverride, entityType, templateDebitAccount, templateCreditAccount, templateVatRate, templateVatTreatment, templateSupplierType, counterpartyLegacy, linePattern, settlementAccount]
+    [amount, amountSek, category, vatTreatment, accountOverride, entityType, templateDebitAccount, templateCreditAccount, templateVatRate, templateVatTreatment, templateSupplierType, counterpartyLegacy, linePattern, settlementAccount, vatAmountSek]
   )
 
   if (lines.length === 0) return null
