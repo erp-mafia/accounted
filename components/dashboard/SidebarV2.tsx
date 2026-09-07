@@ -8,7 +8,6 @@ import { activeSubHref, type NavV2Item } from './nav-v2'
 interface SidebarV2Props {
   top: NavV2Item[]
   company: NavV2Item[]
-  bottom: NavV2Item[]
   /** BOLAGET group header; empty string hides the group (cockpit mode). */
   groupLabel: string
   label: (labelKey: string) => string
@@ -19,7 +18,6 @@ interface SidebarV2Props {
   betaLabel: string
   mainNavLabel: string
   brand: ReactNode
-  switcher: ReactNode
   /** Byrå members inside a company: the pinned route back to the cockpit. */
   backLink?: ReactNode
   userBlock: ReactNode
@@ -28,14 +26,15 @@ interface SidebarV2Props {
 /**
  * Shell v2 desktop sidebar (dev_docs/ui_v2_build_plan.md, PR 2): 220px,
  * brand on top, Att göra and Assistent, then the BOLAGET sections, and the
- * company chip at the bottom next to the user. The active section shows its sub-items underneath; the rest
- * stay one line each. No collapse: the prototype has none and the panel
- * is full-bleed anyway. Mobile keeps the v1 bottom nav (DashboardNav).
+ * user block at the bottom. Settings, help and the company switcher are in
+ * the user menu, so nothing else sits below the sections (founder call
+ * 2026-09-07). The active section shows its sub-items underneath, folding
+ * open with a short height transition; the rest stay one line each. Mobile
+ * keeps the v1 bottom nav (DashboardNav).
  */
 export function SidebarV2({
   top,
   company,
-  bottom,
   groupLabel,
   label,
   isActive,
@@ -45,7 +44,6 @@ export function SidebarV2({
   betaLabel,
   mainNavLabel,
   brand,
-  switcher,
   backLink,
   userBlock,
 }: SidebarV2Props) {
@@ -58,7 +56,7 @@ export function SidebarV2({
     </span>
   )
 
-  const row = (item: NavV2Item, active: boolean, opts?: { sub?: boolean }) => {
+  const row = (item: NavV2Item, active: boolean, opts?: { sub?: boolean; hidden?: boolean }) => {
     const enabled = isEnabled(item.href) && !item.comingSoon
     const badge = badgeFor(item.href)
     const Icon = item.icon
@@ -95,7 +93,7 @@ export function SidebarV2({
         : 'text-muted-foreground/40 cursor-not-allowed',
     )
     return enabled ? (
-      <NavLink key={item.href} href={item.href} className={baseClass}>
+      <NavLink key={item.href} href={item.href} className={baseClass} tabIndex={opts?.hidden ? -1 : undefined}>
         {content}
       </NavLink>
     ) : (
@@ -109,12 +107,24 @@ export function SidebarV2({
     const subs = item.sub ?? []
     const activeSub = activeSubHref(item, isActive)
     const active = isActive(item.href) || activeSub !== null
+    // The sub-list is always in the tree and folds through grid-template-rows,
+    // so a section opening slides instead of jumping (motion-safe only).
     return (
       <div key={item.href}>
         {row(item, active)}
-        {active && subs.length > 0 && (
-          <div className="ml-[19px] mt-px border-l border-border pl-1.5 py-px space-y-px">
-            {subs.map((s) => row(s, s.href === activeSub, { sub: true }))}
+        {subs.length > 0 && (
+          <div
+            className={cn(
+              'grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none',
+              active ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+            )}
+            aria-hidden={!active}
+          >
+            <div className="min-h-0 overflow-hidden">
+              <div className="ml-[19px] mt-px border-l border-border pl-1.5 py-px space-y-px">
+                {subs.map((s) => row(s, s.href === activeSub, { sub: true, hidden: !active }))}
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -143,11 +153,6 @@ export function SidebarV2({
             </div>
           )}
         </nav>
-        <div className="flex-shrink-0 space-y-px px-3 pb-1">{bottom.map((item) => row(item, isActive(item.href)))}</div>
-        {/* The company chip sits with the user, at the bottom (founder call
-            2026-09-07): the nav is about the work, the footer about who and
-            for whom. */}
-        <div className="flex-shrink-0 px-3 pb-1 pt-1">{switcher}</div>
         {userBlock}
       </div>
     </aside>
