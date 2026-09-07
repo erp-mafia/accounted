@@ -56,7 +56,7 @@ export function ModeChip({ mode }: { mode: RuleMode }) {
 export default function RulesList() {
   const t = useTranslations('rules')
   const { toast } = useToast()
-  const { data, isLoading, mutate } = useSWR<RuleRow[]>('/api/rules', fetchRules)
+  const { data, error, isLoading, mutate } = useSWR<RuleRow[]>('/api/rules', fetchRules)
   const [search, setSearch] = useState('')
   const [step, setStep] = useState<RuleMode | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -138,6 +138,12 @@ export default function RulesList() {
               <tr>
                 <td colSpan={7} className={cn(TD_CLASS, 'text-muted-foreground')}>
                   {t('loading')}
+                </td>
+              </tr>
+            ) : error ? (
+              <tr>
+                <td colSpan={7} className={cn(TD_CLASS, 'py-8 text-muted-foreground')}>
+                  {t('load_failed')}
                 </td>
               </tr>
             ) : rows.length === 0 ? (
