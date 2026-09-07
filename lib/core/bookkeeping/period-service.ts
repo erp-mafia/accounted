@@ -399,6 +399,52 @@ export async function closePeriod(
   return updated as FiscalPeriod
 }
 
+/** Max journal_entry ids per `.in()` filter: keeps the request URL short. */
+const RESULT_LINE_CHECK_CHUNK_SIZE = 100
+
+/**
+ * Whether any journal_entry_line dated inside the period sits on a result
+ * account (BAS class 3-8), i.e. whether a bokslutsverifikat would have
+ * anything to transfer. An existence check, not a fetch: entries are read
+ * id-only, and lines are head-counted per id chunk with early exit, so a
+ * natively bookkept year answers on its first chunk. Two-step by design;
+ * see lib/bookkeeping/entry-lines.ts for why the `journal_entries!inner`
+ * embed is avoided. Throws on any query error so the caller fails closed.
+ */
+async function periodHasResultAccountLines(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<boolean> {
+  const entries = await fetchAllRows<{ id: string }>(
+    ({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select('id')
+        .eq('company_id', companyId)
+        .gte('entry_date', periodStart)
+        .lte('entry_date', periodEnd)
+        .order('id', { ascending: true })
+        .range(from, to),
+    { dedupeBy: (e) => e.id },
+  )
+  for (let i = 0; i < entries.length; i += RESULT_LINE_CHECK_CHUNK_SIZE) {
+    const chunk = entries.slice(i, i + RESULT_LINE_CHECK_CHUNK_SIZE).map((e) => e.id)
+    const { count, error } = await supabase
+      .from('journal_entry_lines')
+      .select('id', { count: 'exact', head: true })
+      .in('journal_entry_id', chunk)
+      // Account numbers are strings, so this is a text comparison: every
+      // class 3-8 account sorts at or above '3', every class 1-2 (balance
+      // sheet) account below it.
+      .gte('account_number', '3')
+    if (error) throw error
+    if ((count ?? 0) > 0) return true
+  }
+  return false
+}
+
 /**
  * Mark a fiscal period as closed in a previous bookkeeping system
  * ("klarmarkera"). Imported historical years (SIE) arrive with
@@ -457,7 +503,14 @@ export async function markPeriodClosedExternally(
   // bokslutsverifikat leaves 3xxx-8xxx untransferred (BFL 5-6 kap) with no
   // clean way back once locked. "Migrated" is read from the ledger itself:
   // the period either contains SIE-imported verifikat (source_type='import')
-  // or no verifikat at all (year closed elsewhere and never imported here).
+  // or nothing a bokslutsverifikat would have to transfer, i.e. no lines on
+  // result accounts (BAS class 3-8). The second leg used to be "no verifikat
+  // at all", which shut out the migrated first year whose only native
+  // voucher re-keys the opening balance (1930/2081 aktiekapital) after a
+  // failed SIE import: the next year's IB is already imported, so the normal
+  // year-end refuses too (NEXT_PERIOD_HAS_IB) and the year could not be
+  // closed by any path. The guard protects the result transfer, so it asks
+  // exactly that question.
   const { count: importedCount, error: importedError } = await supabase
     .from('journal_entries')
     .select('id', { count: 'exact', head: true })
@@ -469,18 +522,20 @@ export async function markPeriodClosedExternally(
     throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
   }
   if ((importedCount ?? 0) === 0) {
-    const { count: totalCount, error: totalError } = await supabase
-      .from('journal_entries')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .gte('entry_date', period.period_start)
-      .lte('entry_date', period.period_end)
-    if (totalError) {
+    let hasResultLines: boolean
+    try {
+      hasResultLines = await periodHasResultAccountLines(
+        supabase,
+        companyId,
+        period.period_start,
+        period.period_end,
+      )
+    } catch {
       throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
     }
-    if ((totalCount ?? 0) > 0) {
+    if (hasResultLines) {
       throw new Error(
-        'Perioden innehåller bokföring skapad i Accounted och inga importerade verifikat. Använd det vanliga årsbokslutet i stället.'
+        'Perioden innehåller resultatkonton (3000-8999) bokförda i Accounted och inga importerade verifikat. Använd det vanliga årsbokslutet i stället, så att årets resultat förs över.'
       )
     }
   }

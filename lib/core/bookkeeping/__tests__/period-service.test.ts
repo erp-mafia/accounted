@@ -691,7 +691,7 @@ describe('markPeriodClosedExternally', () => {
     results = [
       { data: period, error: null },          // fetch
       { count: 0, data: null, error: null },  // imported-verifikat count
-      { count: 0, data: null, error: null },  // total-verifikat count
+      { data: [], error: null },              // period entries (id-only page): none
       { count: 0, data: null, error: null },  // guard leg 1: untriaged count
       { data: [], error: null },              // guard leg 2: business-unbooked candidates
       { data: updated, error: null },         // update
@@ -703,18 +703,67 @@ describe('markPeriodClosedExternally', () => {
     expect(result.closed_externally).toBe(true)
   })
 
-  it('refuses a period bookkept natively in Accounted (no imported verifikat)', async () => {
+  it('allows a migrated first year whose only native voucher is balance-sheet only', async () => {
+    // The EHAL shape (2026-09-07): SIE import into the historical year failed,
+    // so the owner re-keyed the opening voucher by hand (1930 D / 2081 K
+    // aktiekapital). Nothing on 3xxx-8xxx, so there is no result for a
+    // bokslutsverifikat to transfer; the next year's IB is already imported,
+    // which blocks the normal year-end. Klarmarkera must stay open here.
+    const period = makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31' })
+    const updated = { ...period, is_closed: true, closed_externally: true }
+    results = [
+      { data: period, error: null },                  // fetch
+      { count: 0, data: null, error: null },          // imported-verifikat count
+      { data: [{ id: 'je-1' }], error: null },        // period entries (id-only page)
+      { count: 0, data: null, error: null },          // result-account lines in chunk 1: none
+      { count: 0, data: null, error: null },          // guard leg 1: untriaged count
+      { data: [], error: null },                      // guard leg 2: business-unbooked candidates
+      { data: updated, error: null },                 // update
+      { data: null, error: null },                    // audit_log insert
+    ]
+
+    const supabase = makeClient()
+    const result = await markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.closed_externally).toBe(true)
+
+    // The line check is a text comparison on the account number string:
+    // every class 3-8 account sorts at or above '3'.
+    const lineBuilders = supabase.from.mock.results
+      .map((r) => r.value as { in: ReturnType<typeof vi.fn>; gte: ReturnType<typeof vi.fn> })
+      .filter((b) => b.in.mock.calls.some((c) => c[0] === 'journal_entry_id'))
+    expect(lineBuilders).toHaveLength(1)
+    expect(lineBuilders[0].in).toHaveBeenCalledWith('journal_entry_id', ['je-1'])
+    expect(lineBuilders[0].gte).toHaveBeenCalledWith('account_number', '3')
+  })
+
+  it('refuses a period bookkept natively in Accounted (result accounts, no imported verifikat)', async () => {
     const period = makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31' })
     results = [
-      { data: period, error: null },          // fetch
-      { count: 0, data: null, error: null },  // imported-verifikat count
-      { count: 7, data: null, error: null },  // total-verifikat count: native entries
+      { data: period, error: null },                  // fetch
+      { count: 0, data: null, error: null },          // imported-verifikat count
+      { data: [{ id: 'je-1' }, { id: 'je-2' }], error: null }, // period entries: native
+      { count: 4, data: null, error: null },          // result-account lines in chunk 1
     ]
 
     const supabase = makeClient()
     await expect(
       markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
     ).rejects.toThrow('vanliga årsbokslutet')
+  })
+
+  it('fails closed when the result-account line check errors', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31' })
+    results = [
+      { data: period, error: null },                  // fetch
+      { count: 0, data: null, error: null },          // imported-verifikat count
+      { data: [{ id: 'je-1' }], error: null },        // period entries
+      { count: null, data: null, error: { message: 'boom' } }, // line head-count fails
+    ]
+
+    const supabase = makeClient()
+    await expect(
+      markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('Kunde inte kontrollera periodens verifikat')
   })
 
   it('rejects an already-closed period', async () => {
