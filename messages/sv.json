@@ -4441,7 +4441,7 @@
     "cancelled_title": "Begäran är avbruten",
     "update_failed_title": "Kunde inte uppdatera begäran",
     "reclaim_confirm_title": "Bokför nekat belopp?",
-    "reclaim_confirm_description": "{amount} som Skatteverket nekade i begäran {name} flyttas från konto 1513 till kundfordran (1510) och {count, plural, one {fakturan öppnas} other {fakturorna öppnas}} igen för beloppet. Kunden behöver faktureras eller påminnas om restbeloppet.",
+    "reclaim_confirm_description": "{amount} som Skatteverket nekade i begäran {name} flyttas från konto 1513 till kundfordran (1510) och {count, plural, one {fakturan öppnas} other {fakturorna öppnas}} igen för beloppet. Verifikationen dateras {date} (beslutsdatum). Kunden behöver faktureras eller påminnas om restbeloppet.",
     "reclaim_confirm_action": "Bokför",
     "reclaim_done_title": "Nekat belopp bokfört",
     "reclaim_done_description": "{amount} flyttat till kundfordran på {count, plural, one {1 faktura} other {# fakturor}}. Fakturorna visar nu restbeloppet som obetalt.",

@@ -44,7 +44,8 @@ export type MatchRotRutPayoutOutcome =
       request?: SettledRotRutPayoutRequest
     }
   | { ok: false; kind: 'code'; code: MatchRotRutPayoutErrorCode; details?: Record<string, unknown> }
-  | { ok: false; kind: 'error'; error: unknown; stage: 'fetch' | 'book' | 'update' }
+  /** At stage 'update' the voucher is posted: journalEntryId names it (see the settle service). */
+  | { ok: false; kind: 'error'; error: unknown; stage: 'fetch' | 'book' | 'update'; journalEntryId?: string }
 
 export interface MatchRotRutPayoutParams {
   transactionId: string

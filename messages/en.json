@@ -4441,7 +4441,7 @@
     "cancelled_title": "The request is cancelled",
     "update_failed_title": "Could not update the request",
     "reclaim_confirm_title": "Book the refused amount?",
-    "reclaim_confirm_description": "{amount} refused by Skatteverket in request {name} moves from account 1513 to accounts receivable (1510) and {count, plural, one {the invoice reopens} other {the invoices reopen}} for that amount. The customer needs to be invoiced or reminded for the balance.",
+    "reclaim_confirm_description": "{amount} refused by Skatteverket in request {name} moves from account 1513 to accounts receivable (1510) and {count, plural, one {the invoice reopens} other {the invoices reopen}} for that amount. The voucher is dated {date} (decision date). The customer needs to be invoiced or reminded for the balance.",
     "reclaim_confirm_action": "Book",
     "reclaim_done_title": "Refused amount booked",
     "reclaim_done_description": "{amount} moved to accounts receivable on {count, plural, one {1 invoice} other {# invoices}}. The invoices now show the balance as unpaid.",

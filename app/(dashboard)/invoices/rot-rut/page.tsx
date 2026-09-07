@@ -237,12 +237,19 @@ export default function RotRutOverviewPage() {
   async function reclaim(request: PayoutRequest) {
     if (!canWrite || busyId) return
     const state = refusedState(request, requests)
+    // The affärshändelse is Skatteverkets beslut, so the voucher is dated on
+    // the decision day (Swedish calendar date of decided_at), not on the day
+    // the bookkeeper clicks; today only when no decision date is recorded.
+    const bookingDate = request.decided_at
+      ? todayIsoStockholm(new Date(request.decided_at))
+      : todayIsoStockholm()
     const confirmed = await confirm({
       title: t('reclaim_confirm_title'),
       description: t('reclaim_confirm_description', {
         amount: formatCurrency(state.refused),
         count: request.items.length,
         name: request.name,
+        date: formatDate(bookingDate),
       }),
       confirmLabel: t('reclaim_confirm_action'),
       variant: 'warning',
@@ -253,9 +260,7 @@ export default function RotRutOverviewPage() {
       const response = await fetch(`/api/rot-rut/payout-requests/${request.id}/reclaim`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // The booking date is a Swedish calendar day (fiscal periods are), not
-        // the browser's UTC date.
-        body: JSON.stringify({ booking_date: todayIsoStockholm() }),
+        body: JSON.stringify({ booking_date: bookingDate }),
       })
       if (!response.ok) {
         toast({
