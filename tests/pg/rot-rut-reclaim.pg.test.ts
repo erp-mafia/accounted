@@ -123,8 +123,8 @@ describe('rot/rut reclaim (migration 20260907160000)', () => {
   })
 })
 
-describe('apply_rot_rut_reclaim_invoice (migration 20260907160300)', () => {
-  it('applies item marker and invoice reopen atomically, and is a no-op the second time', async () => {
+describe('apply / revert rot_rut_reclaim RPCs (migration 20260907160400)', () => {
+  async function seedReclaimCase(opts: { decidedTotal: number; itemDecided: number | null; status: string }) {
     const seeded = await seedCompany()
     const invoiceId = await insertCustomerInvoice(seeded.companyId, seeded.userId, {
       deduction_total: 7500,
@@ -136,36 +136,41 @@ describe('apply_rot_rut_reclaim_invoice (migration 20260907160300)', () => {
       [invoiceId],
     )
     const requestId = randomUUID()
+    const reclaimEntryId = await insertPostedJournalEntry({
+      userId: seeded.userId,
+      companyId: seeded.companyId,
+      fiscalPeriodId: seeded.fiscalPeriodId,
+      entryDate: '2026-08-21',
+      description: 'Nekat ROT-avdrag från Skatteverket',
+      sourceType: 'rot_rut_reclaim',
+      sourceId: requestId,
+      voucherNumber: 61,
+      lines: [
+        { accountNumber: '1510', debitAmount: 2500, creditAmount: 0 },
+        { accountNumber: '1513', debitAmount: 0, creditAmount: 2500 },
+      ],
+    })
     await getPool().query(
       `INSERT INTO public.rot_rut_payout_requests
-         (id, company_id, user_id, deduction_type, name, status, requested_total, decided_total, decided_at, file_name)
-       VALUES ($1, $2, $3, 'rot', 'ROT 2026-08', 'partially_paid', 7500, 5000, now(), 'rot.xml')`,
-      [requestId, seeded.companyId, seeded.userId],
+         (id, company_id, user_id, deduction_type, name, status, requested_total, decided_total, decided_at, file_name, reclaim_journal_entry_id)
+       VALUES ($1, $2, $3, 'rot', 'ROT 2026-08', $4, 7500, $5, now(), 'rot.xml', $6)`,
+      [requestId, seeded.companyId, seeded.userId, opts.status, opts.decidedTotal, reclaimEntryId],
     )
     const itemId = randomUUID()
     await getPool().query(
       `INSERT INTO public.rot_rut_payout_request_items (id, request_id, invoice_id, requested_amount, decided_amount)
-       VALUES ($1, $2, $3, 7500, 5000)`,
-      [itemId, requestId, invoiceId],
+       VALUES ($1, $2, $3, 7500, $4)`,
+      [itemId, requestId, invoiceId, opts.itemDecided],
     )
+    return { ...seeded, invoiceId, requestId, itemId }
+  }
 
-    const first = await getPool().query<{ applied: boolean }>(
-      `SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 2500, 2500, 'partially_paid') AS applied`,
-      [itemId, invoiceId, seeded.companyId],
-    )
-    expect(first.rows[0].applied).toBe(true)
-
-    const second = await getPool().query<{ applied: boolean }>(
-      `SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 2500, 2500, 'partially_paid') AS applied`,
-      [itemId, invoiceId, seeded.companyId],
-    )
-    expect(second.rows[0].applied).toBe(false)
-
+  async function readInvoice(invoiceId: string) {
     const { rows } = await getPool().query<{
       deduction_reclaimed_total: string
       remaining_amount: string
       status: string
-      reclaimed_amount: string
+      reclaimed_amount: string | null
     }>(
       `SELECT i.deduction_reclaimed_total, i.remaining_amount, i.status, it.reclaimed_amount
          FROM public.invoices i
@@ -173,45 +178,78 @@ describe('apply_rot_rut_reclaim_invoice (migration 20260907160300)', () => {
         WHERE i.id = $1`,
       [invoiceId],
     )
-    // Applied exactly once: 2 500 reclaimed, not 5 000.
-    expect(Number(rows[0].deduction_reclaimed_total)).toBe(2500)
-    expect(Number(rows[0].remaining_amount)).toBe(2500)
-    expect(rows[0].status).toBe('partially_paid')
-    expect(Number(rows[0].reclaimed_amount)).toBe(2500)
+    return rows[0]
+  }
+
+  it('applies once (marker + invoice, derived remaining/status) and is a no-op the second time', async () => {
+    const c = await seedReclaimCase({ decidedTotal: 5000, itemDecided: 5000, status: 'partially_paid' })
+
+    const first = await getPool().query<{ r: { applied: boolean; remaining_amount: number; status: string } }>(
+      `SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 2500) AS r`,
+      [c.itemId, c.invoiceId, c.companyId],
+    )
+    expect(first.rows[0].r).toMatchObject({ applied: true, remaining_amount: 2500, status: 'partially_paid' })
+
+    const second = await getPool().query<{ r: { applied: boolean } }>(
+      `SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 2500) AS r`,
+      [c.itemId, c.invoiceId, c.companyId],
+    )
+    expect(second.rows[0].r).toEqual({ applied: false })
+
+    const row = await readInvoice(c.invoiceId)
+    // 25 000 - 17 500 paid - 7 500 deduction + 2 500 reclaimed = 2 500, once.
+    expect(Number(row.deduction_reclaimed_total)).toBe(2500)
+    expect(Number(row.remaining_amount)).toBe(2500)
+    expect(row.status).toBe('partially_paid')
+    expect(Number(row.reclaimed_amount)).toBe(2500)
   })
 
-  it('refuses a foreign company invoice without touching the marker', async () => {
-    const seeded = await seedCompany()
-    const other = await seedCompany()
-    const invoiceId = await insertCustomerInvoice(seeded.companyId, seeded.userId, {
-      deduction_total: 7500,
-      deduction_reclaimed_total: 0,
-      remaining_amount: 17500,
-    })
-    const requestId = randomUUID()
-    await getPool().query(
-      `INSERT INTO public.rot_rut_payout_requests
-         (id, company_id, user_id, deduction_type, name, status, requested_total, decided_total, decided_at, file_name)
-       VALUES ($1, $2, $3, 'rot', 'ROT 2026-09', 'rejected', 7500, 0, now(), 'rot.xml')`,
-      [requestId, seeded.companyId, seeded.userId],
-    )
-    const itemId = randomUUID()
-    await getPool().query(
-      `INSERT INTO public.rot_rut_payout_request_items (id, request_id, invoice_id, requested_amount)
-       VALUES ($1, $2, $3, 7500)`,
-      [itemId, requestId, invoiceId],
-    )
+  it('refuses an amount above the refused share and above the 1513 headroom', async () => {
+    const c = await seedReclaimCase({ decidedTotal: 5000, itemDecided: 5000, status: 'partially_paid' })
     await expect(
-      getPool().query(
-        `SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 7500, 25000, 'sent')`,
-        [itemId, invoiceId, other.companyId],
-      ),
+      getPool().query(`SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 4000)`, [
+        c.itemId, c.invoiceId, c.companyId,
+      ]),
+    ).rejects.toThrow(/exceeds the refused share/)
+    const row = await readInvoice(c.invoiceId)
+    expect(row.reclaimed_amount).toBeNull()
+    expect(Number(row.deduction_reclaimed_total)).toBe(0)
+  })
+
+  it('refuses a foreign company without touching the marker', async () => {
+    const c = await seedReclaimCase({ decidedTotal: 0, itemDecided: null, status: 'rejected' })
+    const other = await seedCompany()
+    await expect(
+      getPool().query(`SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 7500)`, [
+        c.itemId, c.invoiceId, other.companyId,
+      ]),
     ).rejects.toThrow(/not found in company/)
-    const { rows } = await getPool().query<{ reclaimed_amount: string | null }>(
-      `SELECT reclaimed_amount FROM public.rot_rut_payout_request_items WHERE id = $1`,
-      [itemId],
+    const row = await readInvoice(c.invoiceId)
+    expect(row.reclaimed_amount).toBeNull()
+  })
+
+  it('revert hands the share back, closes the invoice, and is a no-op the second time', async () => {
+    const c = await seedReclaimCase({ decidedTotal: 5000, itemDecided: 5000, status: 'partially_paid' })
+    await getPool().query(`SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 2500)`, [
+      c.itemId, c.invoiceId, c.companyId,
+    ])
+
+    const first = await getPool().query<{ r: { reverted: boolean; remaining_amount: number; status: string } }>(
+      `SELECT public.revert_rot_rut_reclaim_invoice($1, $2, $3) AS r`,
+      [c.itemId, c.invoiceId, c.companyId],
     )
-    // The function raised, so the marker write rolled back with it.
-    expect(rows[0].reclaimed_amount).toBeNull()
+    expect(first.rows[0].r).toMatchObject({ reverted: true, remaining_amount: 0, status: 'paid' })
+
+    const second = await getPool().query<{ r: { reverted: boolean } }>(
+      `SELECT public.revert_rot_rut_reclaim_invoice($1, $2, $3) AS r`,
+      [c.itemId, c.invoiceId, c.companyId],
+    )
+    expect(second.rows[0].r).toEqual({ reverted: false })
+
+    const row = await readInvoice(c.invoiceId)
+    expect(Number(row.deduction_reclaimed_total)).toBe(0)
+    expect(Number(row.remaining_amount)).toBe(0)
+    expect(row.status).toBe('paid')
+    expect(row.reclaimed_amount).toBeNull()
   })
 })

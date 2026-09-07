@@ -22,9 +22,12 @@
  *      two concurrent reclaims cannot both stand; the partial unique index
  *      journal_entries_rot_rut_reclaim_live_unique backs this at the journal.
  *   4. Reopens every invoice for its refused share: deduction_reclaimed_total
- *      grows, remaining_amount is re-derived through invoiceCustomerOutstanding
- *      (the one definition), status goes back to partially_paid (the customer
- *      already paid their share) or sent/overdue.
+ *      grows, remaining_amount and status are derived INSIDE the RPC
+ *      apply_rot_rut_reclaim_invoice from the same formula as the SQL INSERT
+ *      guard (the database owns the accounting values; the caller only names
+ *      the refused share, which the RPC validates against the locked item,
+ *      request and invoice rows). Status goes back to partially_paid (the
+ *      customer already paid their share) or sent/overdue.
  *
  * Refusals before any write: no beslut, nothing refused, already reclaimed,
  * unknown split, an invoice without a verifikat (no 1513 debit exists to
@@ -41,7 +44,6 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createRotRutReclaimEntry, type RotRutReclaimLeg } from '@/lib/bookkeeping/rot-rut-entries'
-import { invoiceCustomerOutstanding } from '@/lib/invoices/customer-share'
 import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
 
@@ -171,27 +173,6 @@ export function computeRefusedShares(
     return { ok: false, code: 'ROT_RUT_RECLAIM_SPLIT_UNKNOWN' }
   }
   return { ok: true, shares, total }
-}
-
-/**
- * What the customer has paid on the invoice. `paid_amount` is nullable in the
- * schema; a `paid` invoice with a NULL column (older settlement paths) has by
- * definition settled its customer share, so that share stands in for the
- * missing figure instead of reopening the whole invoice.
- */
-function customerPaidAmount(invoice: Pick<InvoiceRow, 'status' | 'paid_amount' | 'total' | 'deduction_total'>): number {
-  if (invoice.paid_amount != null) return roundOre(Number(invoice.paid_amount))
-  if (invoice.status === 'paid') {
-    return roundOre(Number(invoice.total) - Number(invoice.deduction_total ?? 0))
-  }
-  return 0
-}
-
-/** Status of a reopened invoice: the customer's own share is still (partly) paid. */
-function reopenedStatus(invoice: InvoiceRow, newRemaining: number): string {
-  if (newRemaining <= 0) return invoice.status
-  if (customerPaidAmount(invoice) > 0) return 'partially_paid'
-  return invoice.status === 'overdue' ? 'overdue' : 'sent'
 }
 
 /**
@@ -438,34 +419,20 @@ export async function reclaimRotRutRefusal(
   }
 
   // Reopen every invoice for its refused share. Each leg is one atomic,
-  // idempotent RPC (apply_rot_rut_reclaim_invoice: item marker + invoice row
-  // in one transaction, a set marker is a no-op), so a failure here is
-  // retryable by calling again: the voucher stands (never unbook) and the
-  // resume path above completes the missing legs.
+  // idempotent RPC (apply_rot_rut_reclaim_invoice): the database locks the
+  // item, request and invoice, validates the amount against all three,
+  // derives remaining_amount and status from the one formula, and sets the
+  // item marker; a set marker is a no-op. A failure here is retryable by
+  // calling again: the voucher stands (never unbook) and the resume path
+  // above completes the missing legs.
   const reopened: ReclaimedInvoice[] = []
   for (const leg of legs) {
     const invoice = leg.invoice
-    const newReclaimed = roundOre(Number(invoice.deduction_reclaimed_total ?? 0) + leg.amount)
-    const newRemaining = Math.max(
-      0,
-      invoiceCustomerOutstanding(
-        {
-          total: Number(invoice.total),
-          deduction_total: Number(invoice.deduction_total ?? 0),
-          deduction_reclaimed_total: newReclaimed,
-        },
-        customerPaidAmount(invoice),
-      ),
-    )
-    const newStatus = reopenedStatus(invoice, newRemaining)
-
     const { data: applied, error: applyError } = await supabase.rpc('apply_rot_rut_reclaim_invoice', {
       p_item_id: leg.item.id,
       p_invoice_id: invoice.id,
       p_company_id: companyId,
       p_reclaimed_amount: leg.amount,
-      p_remaining_amount: newRemaining,
-      p_status: newStatus,
     })
     if (applyError) {
       log.error('rot/rut reclaim booked but invoice reopen failed (retry the reclaim to resume)', applyError as Error, {
@@ -476,7 +443,8 @@ export async function reclaimRotRutRefusal(
       })
       return { ok: false, kind: 'error', error: applyError, stage: 'update' }
     }
-    if (applied === false) {
+    const result = (applied ?? {}) as { applied?: boolean; remaining_amount?: number | string; status?: string }
+    if (result.applied !== true) {
       // Marker already set by a concurrent resume: that call reported the leg.
       log.warn('rot/rut reclaim leg already applied', { itemId: leg.item.id, invoiceId: invoice.id })
       continue
@@ -486,8 +454,8 @@ export async function reclaimRotRutRefusal(
       invoice_id: invoice.id,
       invoice_number: invoice.invoice_number,
       reclaimed_amount: leg.amount,
-      remaining_amount: newRemaining,
-      status: newStatus,
+      remaining_amount: roundOre(Number(result.remaining_amount ?? 0)),
+      status: result.status ?? invoice.status,
     })
   }
 

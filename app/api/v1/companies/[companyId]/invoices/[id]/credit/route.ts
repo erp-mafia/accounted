@@ -39,7 +39,7 @@ const CreditNoteRequest = z.object({
 })
 
 const ORIGINAL_INVOICE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions, deduction_reclaimed_total'
 
 // default_dimensions stays in this projection: the inserted credit-note row is
 // handed to createCreditNoteJournalEntry, which reads the bag off the row so

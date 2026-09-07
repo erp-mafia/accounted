@@ -62,7 +62,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       if (outcome.stage === 'book') {
         txLog.error('failed to book rot/rut payout entry', outcome.error as Error)
       }
-      return errorResponse(outcome.error, txLog, { requestId })
+      // At stage 'update' the voucher is posted: name it so nobody books the
+      // payout twice while repairing the request row.
+      return errorResponse(outcome.error, txLog, {
+        requestId,
+        ...(outcome.journalEntryId ? { details: { journal_entry_id: outcome.journalEntryId } } : {}),
+      })
     }
 
     txLog.info('rot/rut payout matched from bank transaction', {

@@ -114,9 +114,17 @@ function refusedState(
       other.status !== 'rejected' &&
       other.items.some((item) => ownInvoices.has(item.invoice_id)),
   )
+  // Pending = refused legs whose item marker (reclaimed_amount) is still
+  // unset. Before the voucher that is every refused leg; after a partial
+  // failure it is the legs the service will resume, so the action stays
+  // available until the whole begäran is applied.
+  const pending = computed.shares
+    .filter((share) => share.refused > 0)
+    .filter((share) => request.items.find((item) => item.id === share.itemId)?.reclaimed_amount == null)
+    .reduce((sum, share) => sum + share.refused, 0)
   return {
     refused: computed.total,
-    needsReclaim: computed.total > 0 && !request.reclaim_journal_entry_id && !rerequested,
+    needsReclaim: pending > 0 && !rerequested,
     splitUnknown: false,
     rerequested,
   }

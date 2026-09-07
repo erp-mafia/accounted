@@ -246,7 +246,7 @@ describe('reclaimRotRutRefusal', () => {
       makeItem('i2', INVOICE_B, 2000, 0, { total: 4000, paid_amount: 2000, deduction_total: 2000 }),
     ])
     enqueue({ data: { id: REQUEST_ID } }) // request CAS attach
-    enqueue({ data: true }) // apply_rot_rut_reclaim_invoice for B
+    enqueue({ data: { applied: true, remaining_amount: 2000, status: 'partially_paid' } }) // RPC for B
 
     const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(outcome).toEqual({
@@ -278,16 +278,14 @@ describe('reclaimRotRutRefusal', () => {
     expect(requestUpdate).toMatchObject({ reclaim_journal_entry_id: 'je-reclaim' })
     expect(findCall('rot_rut_payout_requests', 'is')).toEqual(['reclaim_journal_entry_id', null])
 
-    // Invoice reopened through the atomic RPC: item marker + invoice row in
-    // one transaction; remaining = total - paid - deduction + reclaimed.
+    // Invoice reopened through the atomic RPC: the database validates the
+    // amount and derives remaining/status; the caller names the share only.
     expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
     expect(mockSupabase.rpc).toHaveBeenCalledWith('apply_rot_rut_reclaim_invoice', {
       p_item_id: 'i2',
       p_invoice_id: INVOICE_B,
       p_company_id: 'company-1',
       p_reclaimed_amount: 2000,
-      p_remaining_amount: 2000,
-      p_status: 'partially_paid',
     })
     expect(findCalls('invoices', 'update')).toHaveLength(0)
   })
@@ -300,14 +298,14 @@ describe('reclaimRotRutRefusal', () => {
       { ...makeItem('i1', INVOICE_A, 3000, null, { total: 6000, paid_amount: 3000, deduction_total: 3000 }), reclaimed_amount: 3000 },
       makeItem('i2', INVOICE_B, 2000, null, { total: 4000, paid_amount: 2000, deduction_total: 2000 }),
     ])
-    enqueue({ data: true }) // apply for B
+    enqueue({ data: { applied: true, remaining_amount: 2000, status: 'partially_paid' } }) // apply for B
 
     const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(outcome).toMatchObject({
       ok: true,
       journalEntryId: 'je-reclaim',
       reclaimedTotal: 2000,
-      invoices: [{ invoice_id: INVOICE_B, reclaimed_amount: 2000 }],
+      invoices: [{ invoice_id: INVOICE_B, reclaimed_amount: 2000, remaining_amount: 2000, status: 'partially_paid' }],
     })
     expect(mockCreateReclaimEntry).not.toHaveBeenCalled()
     expect(findCalls('rot_rut_payout_requests', 'update')).toHaveLength(0)
@@ -343,7 +341,7 @@ describe('reclaimRotRutRefusal', () => {
       makeItem('i1', INVOICE_A, 5000, null, { status: 'sent', paid_amount: 0 }),
     ])
     enqueue({ data: { id: REQUEST_ID } })
-    enqueue({ data: true })
+    enqueue({ data: { applied: true, remaining_amount: 10000, status: 'sent' } })
 
     const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(outcome).toMatchObject({
@@ -353,14 +351,14 @@ describe('reclaimRotRutRefusal', () => {
     })
   })
 
-  it('treats a paid invoice with a NULL paid_amount as having paid its customer share', async () => {
-    // Older settlement paths left paid_amount NULL on paid invoices; the
-    // reopen must be for the refused 2 000 only, not the whole customer share.
+  it('reports what the RPC derived for the reopened invoice, never its own arithmetic', async () => {
+    // The database derives remaining/status (NULL paid_amount on a paid
+    // invoice counts the customer share as paid there); the service relays it.
     enqueueOpen(makeRequestRow(), [
       makeItem('i1', INVOICE_A, 5000, null, { status: 'paid', paid_amount: null }),
     ])
     enqueue({ data: { id: REQUEST_ID } })
-    enqueue({ data: true })
+    enqueue({ data: { applied: true, remaining_amount: '2000.00', status: 'partially_paid' } })
 
     const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(outcome).toMatchObject({

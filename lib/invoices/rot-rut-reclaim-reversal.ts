@@ -12,20 +12,19 @@
  * module so the engine can import it without a cycle (the reclaim service
  * imports the entries builder, which imports the engine).
  *
- * Per invoice: deduction_reclaimed_total shrinks by the item's reclaimed
- * amount, remaining_amount is re-derived through the one customer-share
- * definition, and the status follows the money: nothing outstanding and
- * something paid means paid again, otherwise partially_paid / sent / overdue.
+ * Every leg is one atomic, idempotent RPC (revert_rot_rut_reclaim_invoice):
+ * the item marker (reclaimed_amount) is the amount handed back and is
+ * cleared in the same transaction as the invoice row, so a re-run after a
+ * failure reverts only the legs still carrying a marker. The request's
+ * reclaim_journal_entry_id is cleared LAST and only when every leg
+ * succeeded, so a later run can still find the begäran by the reversed
+ * voucher and finish the job.
+ *
  * A customer payment that already covered the reclaimed share is NOT undone
  * (that voucher stands): the invoice then reads paid with an over-collected
  * 1510, which is the honest state of the ledger after that sequence.
- *
- * Best-effort with loud logging, like the payment sync: the storno voucher
- * is already posted and immutable when this runs.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { invoiceCustomerOutstanding } from '@/lib/invoices/customer-share'
-import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoices/rot-rut-reclaim-reversal')
@@ -34,16 +33,6 @@ interface ReclaimedItemRow {
   id: string
   invoice_id: string
   reclaimed_amount: number | string | null
-}
-
-interface InvoiceRow {
-  id: string
-  status: string
-  total: number | string
-  paid_amount: number | string | null
-  due_date: string | null
-  deduction_total: number | string | null
-  deduction_reclaimed_total: number | string | null
 }
 
 export async function syncRotRutReclaimAfterReversal(
@@ -77,64 +66,22 @@ export async function syncRotRutReclaimAfterReversal(
   }
 
   for (const item of (itemRows ?? []) as ReclaimedItemRow[]) {
-    const reclaimed = roundOre(Number(item.reclaimed_amount ?? 0))
-    if (!(reclaimed > 0)) continue
-
-    const { data: invoice, error: invoiceError } = await supabase
-      .from('invoices')
-      .select('id, status, total, paid_amount, due_date, deduction_total, deduction_reclaimed_total')
-      .eq('id', item.invoice_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (invoiceError || !invoice) {
-      log.error('reclaim reversal: invoice not readable', invoiceError ?? undefined, {
+    if (item.reclaimed_amount == null) continue
+    const { error: revertError } = await supabase.rpc('revert_rot_rut_reclaim_invoice', {
+      p_item_id: item.id,
+      p_invoice_id: item.invoice_id,
+      p_company_id: companyId,
+    })
+    if (revertError) {
+      // Keep the request link: the next reversal sync (or a support re-run)
+      // finds the begäran by the reversed voucher and completes this leg.
+      log.error('reclaim reversal: invoice leg failed, request link kept for retry', revertError as Error, {
         invoiceId: item.invoice_id,
-      })
-      continue
-    }
-    const row = invoice as InvoiceRow
-    const newReclaimed = Math.max(0, roundOre(Number(row.deduction_reclaimed_total ?? 0) - reclaimed))
-    const paid = roundOre(Number(row.paid_amount ?? 0))
-    const outstanding = invoiceCustomerOutstanding(
-      {
-        total: Number(row.total),
-        deduction_total: Number(row.deduction_total ?? 0),
-        deduction_reclaimed_total: newReclaimed,
-      },
-      paid,
-    )
-    const newRemaining = Math.max(0, outstanding)
-    let newStatus = row.status
-    if (['sent', 'overdue', 'partially_paid', 'paid'].includes(row.status)) {
-      if (newRemaining <= 0 && paid > 0) newStatus = 'paid'
-      else if (paid > 0) newStatus = 'partially_paid'
-      else if (row.due_date && new Date(row.due_date) < new Date()) newStatus = 'overdue'
-      else newStatus = 'sent'
-    }
-
-    const { error: updateError } = await supabase
-      .from('invoices')
-      .update({
-        deduction_reclaimed_total: newReclaimed,
-        remaining_amount: newRemaining,
-        status: newStatus,
-      })
-      .eq('id', row.id)
-      .eq('company_id', companyId)
-    if (updateError) {
-      log.error('reclaim reversal: invoice update failed', updateError as Error, {
-        invoiceId: row.id,
+        itemId: item.id,
+        payoutRequestId: request.id,
         reclaimJournalEntryId,
       })
-      continue
-    }
-
-    const { error: itemError } = await supabase
-      .from('rot_rut_payout_request_items')
-      .update({ reclaimed_amount: null })
-      .eq('id', item.id)
-    if (itemError) {
-      log.warn('reclaim reversal: item reset failed', { itemId: item.id, message: itemError.message })
+      return
     }
   }
 
