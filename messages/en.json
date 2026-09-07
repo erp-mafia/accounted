@@ -2961,6 +2961,7 @@
     "invoices_help": "Invoice due dates"
   },
   "tx_inbox_card": {
+    "category_pick": "Pick a category",
     "match_expense_btn": "Match to expense claims",
     "match_expense_payout_btn": "Book expense reimbursement to {name}",
     "skv_counterpart_label": "Possible 1930↔1630 transfer.",
@@ -6088,6 +6089,15 @@
     "load_failed": "Could not load the brand. Try reloading the page."
   },
   "transactions": {
+    "th_category": "Category",
+    "th_account": "Account",
+    "columns_button": "Columns",
+    "columns_reset": "Show all columns",
+    "cat_hint_invoice": "Invoice {number}",
+    "cat_hint_supplier_invoice": "Supplier invoice",
+    "cat_hint_rot_rut": "ROT/RUT payout",
+    "cat_hint_expense": "Expense payout",
+    "cat_hint_voucher": "Journal entry",
     "expense_payout_matched_title": "Expense reimbursement booked",
     "expense_payout_matched_description": "The transfer to {name} was booked and the claims marked as paid.",
     "expense_payout_match_failed_title": "Could not book the reimbursement",

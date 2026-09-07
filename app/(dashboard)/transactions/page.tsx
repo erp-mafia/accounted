@@ -19,7 +19,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { Loader2 } from 'lucide-react'
+import { Loader2, SlidersHorizontal, Check } from 'lucide-react'
+import { useShell } from '@/components/dashboard/ShellProvider'
+import { useUiState } from '@/lib/hooks/use-ui-state'
+import { persistUiState } from '@/lib/ui-state/client'
+import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
@@ -432,6 +437,27 @@ export default function TransactionsPage() {
   const companyId = company?.id ?? null
   const searchParams = useSearchParams()
   const t = useTranslations('transactions')
+  // Shell v2 (dev_docs/ui_v2_build_plan.md, PR 4): Kategori and Konto columns
+  // plus per-user column visibility (ui_state.tx_columns). v1 keeps the
+  // five-column row untouched.
+  const shell = useShell()
+  const { uiState } = useUiState()
+  const [hiddenColumns, setHiddenColumns] = useState<string[] | null>(null)
+  const txColumns = useMemo(
+    () =>
+      shell === 'v2'
+        ? resolveTxColumns({ hidden: hiddenColumns ?? uiState?.tx_columns?.hidden })
+        : null,
+    [shell, hiddenColumns, uiState?.tx_columns?.hidden],
+  )
+  const setColumnsHidden = (next: string[]) => {
+    setHiddenColumns(next)
+    persistUiState({ tx_columns: { hidden: next } })
+  }
+  const toggleColumn = (id: TxColumnId) => {
+    const current = hiddenColumns ?? uiState?.tx_columns?.hidden ?? []
+    setColumnsHidden(current.includes(id) ? current.filter((c) => c !== id) : [...current, id])
+  }
   const tDetach = useTranslations('tx_detach')
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -681,6 +707,25 @@ export default function TransactionsPage() {
   // and seeded by the dashboard layout (lib/reference-data), so the chooser
   // renders populated on the first paint. Bank sync invalidates the entry.
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
+  // v2 column texts. Konto = bank plus the account's last digits (or its
+  // ledger account); Kategori = the match hint the row already carries, or
+  // null so the cell prompts "Välj kategori".
+  const accountLabelFor = (tx: TransactionWithInvoice): string | null => {
+    const acct = tx.cash_account_id ? cashAccounts.find((a) => a.id === tx.cash_account_id) : undefined
+    if (!acct) return null
+    const bank = acct.bank_name || acct.name || ''
+    const tail = acct.account_number ? `••${acct.account_number.slice(-4)}` : acct.ledger_account
+    return `${bank} ${tail}`.trim()
+  }
+  const categoryLabelFor = (tx: TransactionWithInvoice): string | null => {
+    if (tx.potential_invoice && !tx.invoice_id)
+      return t('cat_hint_invoice', { number: tx.potential_invoice.invoice_number ?? '' })
+    if (tx.potential_supplier_invoice) return t('cat_hint_supplier_invoice')
+    if (tx.potential_rot_rut_payout) return t('cat_hint_rot_rut')
+    if (tx.potential_expense_payout) return t('cat_hint_expense')
+    if (tx.potential_voucher) return t('cat_hint_voucher')
+    return null
+  }
 
   const { toast } = useToast()
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
@@ -4112,6 +4157,35 @@ export default function TransactionsPage() {
             and on a brutet rakenskapsar they were not momsdeklaration
             quarters, so they misled more than they scoped. */}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {/* Shell v2: column visibility, persisted per user. */}
+          {txColumns && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  aria-label={t('columns_button')}
+                  title={t('columns_button')}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[12rem]">
+                {TX_COLUMNS.filter((c) => c.optional).map((c) => (
+                  <DropdownMenuItem
+                    key={c.id}
+                    onSelect={(e) => e.preventDefault()}
+                    onClick={() => toggleColumn(c.id)}
+                  >
+                    <Check className={cn('h-4 w-4', txColumns.has(c.id) ? 'opacity-100' : 'opacity-0')} />
+                    {t(c.labelKey)}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuItem onClick={() => setColumnsHidden([])}>{t('columns_reset')}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {/* Quiet cue that a scope change is reconciling behind the rendered
               list (the list itself never swaps to a skeleton for it). */}
           {isScopeRefreshing && (
@@ -4277,9 +4351,15 @@ export default function TransactionsPage() {
                 <thead>
                   <tr>
                     <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
-                    <th className={cn(TH_CLASS, '!pl-0')}>{t('th_date')}</th>
+                    {(!txColumns || txColumns.has('date')) && (
+                      <th className={cn(TH_CLASS, '!pl-0')}>{t('th_date')}</th>
+                    )}
                     <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
-                    <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                    {txColumns?.has('category') && <th className={TH_CLASS}>{t('th_category')}</th>}
+                    {txColumns?.has('account') && <th className={TH_CLASS}>{t('th_account')}</th>}
+                    {(!txColumns || txColumns.has('amount')) && (
+                      <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                    )}
                     <th className={cn(TH_CLASS, 'text-right !pr-0')}>{t('th_status')}</th>
                   </tr>
                 </thead>
@@ -4314,6 +4394,9 @@ export default function TransactionsPage() {
                         cashAccounts={cashAccounts}
                         onToggleSelect={toggleBatchSelect}
                         preMigrationCutoff={sieCoverageEnd}
+                        columns={txColumns ?? undefined}
+                        accountLabel={txColumns ? accountLabelFor(item.data) : null}
+                        categoryLabel={txColumns ? categoryLabelFor(item.data) : null}
                       />
                     ) : (
                       <SkattekontoInboxCard

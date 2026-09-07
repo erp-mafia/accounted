@@ -212,4 +212,21 @@ describe('POST /api/user/ui-state', () => {
     const res = await POST(request({ shell: 'v3' }))
     expect(res.status).toBe(400)
   })
+
+  it('stores the Transaktioner column list whole', async () => {
+    enqueue({ data: { ui_state: { tx_columns: { hidden: ['date'] } } } })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{ data: { ui_state: { tx_columns: { hidden: string[] } } } }>(
+      await POST(request({ tx_columns: { hidden: ['account'] } })),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.ui_state.tx_columns).toEqual({ hidden: ['account'] })
+  })
+
+  it('returns 400 on unknown tx_columns keys', async () => {
+    const res = await POST(request({ tx_columns: { order: ['date'] } }))
+    expect(res.status).toBe(400)
+  })
 })

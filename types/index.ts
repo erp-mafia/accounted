@@ -192,6 +192,8 @@ export interface UserUiState {
   // top bar (founder decision 2026-09-07, dev_docs/ui_v2_build_plan.md).
   // Absent or 'v1' keeps the centered max-w-5xl panel until v2 is default.
   shell?: DashboardShell
+  // Transaktioner column visibility in shell v2 (lib/transactions/columns-v2).
+  tx_columns?: { hidden?: string[] }
 }
 
 export type DashboardShell = 'v1' | 'v2'

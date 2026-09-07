@@ -47,6 +47,8 @@ Shipped scope (PR 3a): the three panes on the real worklist (`lib/worklist/tasks
 - Inline category picker that offers the rule dialog after a change ("Accounted hittade N liknande").
 - Right drawer for a row; match view for transfers.
 
+Shipped scope (PR 4a): the inbox table gains Kategori and Konto columns in shell v2, with per-user column visibility (`ui_state.tx_columns`, gear in the toolbar, `lib/transactions/columns-v2.ts`). The Kategori cell shows the match hint the row already carries (invoice, supplier invoice, ROT/RUT payout, utlägg, verifikat) or prompts "Välj kategori" and opens the existing review dialog. Konto shows bank plus the account's last digits. `ShellProvider` / `useShell()` let client pages branch on the shell. Still to come: the rule dialog after a category change (with PR 5's rules model), drag-to-reorder and saved views, the right drawer and the transfer match view (PR 4b), and the same columns on the history list.
+
 ### PR 5: one rules model
 
 Migration `rules` (per company):

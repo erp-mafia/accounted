@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
+import { ShellProvider } from '@/components/dashboard/ShellProvider'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
 import AnalyticsIdentify from '@/components/AnalyticsIdentify'
 import { computeIdentityHash } from '@/lib/analytics/identity-hash'
@@ -615,6 +616,7 @@ export default async function DashboardLayout({
             shell={shell}
           />
           <main id="main-content" className={MAIN_PANEL_CLASS} role="main" data-shell={shell}>
+            <ShellProvider shell={shell}>
             <MainContainer companyId={companyId} shell={shell}>
               {showSignpost ? (
                 <HomeDomainSignpost
@@ -629,6 +631,7 @@ export default async function DashboardLayout({
                 children
               )}
             </MainContainer>
+            </ShellProvider>
           </main>
           {/* One-time expired-trial notice. Sandbox/anonymous demo users have
               no billing (their companies carry trial grants too), so the gate

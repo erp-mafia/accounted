@@ -43,6 +43,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { canDetachDocument } from './detach-underlag'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
 import type { CashAccount } from '@/types'
+import type { TxColumnId } from '@/lib/transactions/columns-v2'
 
 interface TransactionInboxCardProps {
   transaction: TransactionWithInvoice
@@ -100,6 +101,15 @@ interface TransactionInboxCardProps {
    *  already-imported verifikat, so the row carries a quiet marker steering
    *  toward matching rather than re-booking. */
   preMigrationCutoff?: string | null
+  /**
+   * Shell v2 (dev_docs/ui_v2_build_plan.md, PR 4): the visible columns.
+   * Undefined = the v1 five-column row, byte-identical.
+   */
+  columns?: ReadonlySet<TxColumnId>
+  /** Konto column: bank and account, resolved by the page from cashAccounts. */
+  accountLabel?: string | null
+  /** Kategori column: a match hint; null shows the "Välj kategori" prompt. */
+  categoryLabel?: string | null
 }
 
 /**
@@ -131,7 +141,11 @@ export default function TransactionInboxCard({
   cashAccounts,
   onToggleSelect,
   preMigrationCutoff = null,
+  columns,
+  accountLabel = null,
+  categoryLabel = null,
 }: TransactionInboxCardProps) {
+  const show = (c: TxColumnId) => !columns || columns.has(c)
   const t = useTranslations('tx_inbox_card')
   const tDetach = useTranslations('tx_detach')
   const tMethod = useTranslations('tx_method')
@@ -356,9 +370,11 @@ export default function TransactionInboxCard({
             />
           )}
         </td>
-        <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
-          {formatDate(transaction.date)}
-        </td>
+        {show('date') && (
+          <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
+            {formatDate(transaction.date)}
+          </td>
+        )}
         {/* overflow-hidden: the shrink-0 markers below don't truncate, so on
             a viewport too narrow for them the cell must clip instead of
             painting over the Belopp column. */}
@@ -393,16 +409,38 @@ export default function TransactionInboxCard({
             )}
           </span>
         </td>
-        <td
-          className={cn(
-            TD_CLASS,
-            'whitespace-nowrap text-right tabular-nums rr-mask',
-            isIncome && 'text-success',
-          )}
-        >
-          {isIncome ? '+' : ''}
-          {formatCurrency(transaction.amount, transaction.currency)}
-        </td>
+        {columns?.has('category') && (
+          <td className={cn(TD_CLASS, 'whitespace-nowrap')} onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className={cn(
+                'inline-flex max-w-[16rem] items-center rounded-full border border-border px-2.5 py-0.5 text-xs transition-colors duration-150',
+                categoryLabel
+                  ? 'text-foreground hover:bg-secondary/60'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              onClick={() => onOpenCategoryDialog(transaction)}
+              disabled={isProcessing || isDisabled}
+            >
+              <span className="truncate">{categoryLabel ?? t('category_pick')}</span>
+            </button>
+          </td>
+        )}
+        {columns?.has('account') && (
+          <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>{accountLabel ?? ''}</td>
+        )}
+        {show('amount') && (
+          <td
+            className={cn(
+              TD_CLASS,
+              'whitespace-nowrap text-right tabular-nums rr-mask',
+              isIncome && 'text-success',
+            )}
+          >
+            {isIncome ? '+' : ''}
+            {formatCurrency(transaction.amount, transaction.currency)}
+          </td>
+        )}
         <td className={cn(TD_CLASS, 'relative whitespace-nowrap text-right !pr-0 py-[9px]')}>
           <span className="row-collapsible inline-flex items-center justify-end gap-2">
             <Button
@@ -568,7 +606,7 @@ export default function TransactionInboxCard({
       </tr>
       {expanded && (
         <tr data-no-stagger>
-          <td colSpan={5} className="border-b border-border p-0">
+          <td colSpan={columns ? columns.size + 1 : 5} className="border-b border-border p-0">
             <RowFoldout>
               <div className="pb-6 pt-1">
                 {transaction.transaction_method ||

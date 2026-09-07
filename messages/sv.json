@@ -2961,6 +2961,7 @@
     "invoices_help": "Förfallodatum för fakturor"
   },
   "tx_inbox_card": {
+    "category_pick": "Välj kategori",
     "match_expense_btn": "Matcha mot utlägg",
     "match_expense_payout_btn": "Bokför återbetalning av utlägg till {name}",
     "skv_counterpart_label": "Möjlig 1930↔1630-överföring.",
@@ -6088,6 +6089,15 @@
     "load_failed": "Kunde inte hämta varumärket. Prova att ladda om sidan."
   },
   "transactions": {
+    "th_category": "Kategori",
+    "th_account": "Konto",
+    "columns_button": "Kolumner",
+    "columns_reset": "Visa alla kolumner",
+    "cat_hint_invoice": "Faktura {number}",
+    "cat_hint_supplier_invoice": "Leverantörsfaktura",
+    "cat_hint_rot_rut": "ROT/RUT-utbetalning",
+    "cat_hint_expense": "Utlägg",
+    "cat_hint_voucher": "Verifikat",
     "expense_payout_matched_title": "Återbetalning av utlägg bokförd",
     "expense_payout_matched_description": "Överföringen till {name} bokfördes och utläggen markerades som utbetalda.",
     "expense_payout_match_failed_title": "Kunde inte bokföra återbetalningen",
