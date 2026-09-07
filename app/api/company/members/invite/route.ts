@@ -142,10 +142,10 @@ export const POST = withRouteContext(
     const expiresAt = getInviteExpiry()
 
     // The request host is used only when it is the canonical app host or an
-    // exact registered white-label domain. A spoofed Host header falls back to
-    // NEXT_PUBLIC_APP_URL, so neither the email nor GoTrue gets an open
-    // redirect target.
-    const appOrigin = resolveRequestAppOrigin(request)
+    // exact registered brand domain (brands table). A spoofed Host header
+    // falls back to NEXT_PUBLIC_APP_URL, so neither the email nor GoTrue gets
+    // an open redirect target.
+    const appOrigin = await resolveRequestAppOrigin(request)
 
     // Self-hosted installations that turn public signup off in GoTrue
     // (disable_signup) set AUTH_SIGNUPS_DISABLED=true to mirror that config:

@@ -7,6 +7,7 @@ import {
   readInviteTokenFromCookieHeader,
 } from '@/lib/auth/brand-signup-gate'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { resolveTrustedAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createLogger } from '@/lib/logger'
 
@@ -81,11 +82,14 @@ export async function POST(request: Request) {
   }
 
   // Confirmation links must land back on the ORIGINATING host (WL-05 brand
-  // mail resolves its brand from this URL), so build the callback from the
-  // forwarded host rather than request.url, which can be an internal origin
-  // behind the proxy.
-  const proto = request.headers.get('x-forwarded-proto') ?? 'https'
-  const confirmationCallback = new URL(`${proto}://${host}/auth/callback`)
+  // mail resolves its brand from this URL). The host is resolved through the
+  // same registry as every other auth link (canonical, this deployment's
+  // own Vercel hosts, or a registered brand domain); anything else falls
+  // back to the canonical origin rather than following the raw header.
+  const confirmationCallback = new URL(
+    '/auth/callback',
+    await resolveTrustedAppOrigin(host),
+  )
   const nextPath = safeReturnTo(validation.data.next ?? null, '/')
   if (nextPath !== '/') confirmationCallback.searchParams.set('next', nextPath)
 

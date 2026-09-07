@@ -39,14 +39,23 @@ import { POST } from '../portal/route'
 
 const routeParams = { params: Promise.resolve({}) }
 
+// The trusted-origin resolver reads the brands table; pin one registered
+// brand host so the return-URL tests exercise the real resolver logic.
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+
 const originalAppUrl = process.env.NEXT_PUBLIC_APP_URL
-const originalWhiteLabelDomains = process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS
 
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
   process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
-  delete process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS
+  resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
+    brand: host === 'portal.brand.test' ? { domain: host } : null,
+    lookupFailed: false,
+  }))
   guardSandboxMock.mockResolvedValue(null)
   requireAuthMock.mockResolvedValue({ user: { id: 'user-1', is_anonymous: false }, supabase: {}, error: null })
 })
@@ -54,8 +63,6 @@ beforeEach(() => {
 afterEach(() => {
   if (originalAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL
   else process.env.NEXT_PUBLIC_APP_URL = originalAppUrl
-  if (originalWhiteLabelDomains === undefined) delete process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS
-  else process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = originalWhiteLabelDomains
 })
 
 describe('POST /api/billing/portal', () => {
@@ -151,7 +158,6 @@ describe('POST /api/billing/portal', () => {
     })
 
     it('comes back to a registered white-label host when opened there', async () => {
-      process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = 'portal.brand.test'
 
       const { status } = await parseJsonResponse(
         await portalFrom('https://portal.brand.test/api/billing/portal'),
@@ -164,7 +170,6 @@ describe('POST /api/billing/portal', () => {
     })
 
     it('falls back to the canonical app for an unregistered or spoofed host', async () => {
-      process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = 'portal.brand.test'
 
       const { status } = await parseJsonResponse(
         await portalFrom('https://portal.brand.test.attacker.test/api/billing/portal'),

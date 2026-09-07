@@ -7,6 +7,10 @@ vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: vi.fn(async () => ({ brand: null, lookupFailed: false })),
+}))
+
 import { POST } from '../route'
 
 function mockUserClient(opts: {

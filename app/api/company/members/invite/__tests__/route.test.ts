@@ -60,6 +60,13 @@ const brandSenderMock = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/email/brand-sender', () => brandSenderMock)
 
+// The trusted-origin resolver reads the brands table; pin one registered
+// brand host so the invite link tests exercise the real resolver logic.
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+
 const generateInviteEmailHtmlMock = vi.hoisted(() =>
   vi.fn((data: { inviteUrl: string }) => `<p>${data.inviteUrl}</p>`),
 )
@@ -81,14 +88,16 @@ function post(body: unknown, url = '/api/company/members/invite') {
 }
 
 const originalAppUrl = process.env.NEXT_PUBLIC_APP_URL
-const originalWhiteLabelDomains = process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS
 
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
   delete process.env.AUTH_SIGNUPS_DISABLED
   process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
-  delete process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS
+  resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
+    brand: host === 'portal.brand.test' ? { domain: host } : null,
+    lookupFailed: false,
+  }))
   requireAuthMock.mockResolvedValue({
     user: { id: 'user-1', email: 'owner@example.com' },
     supabase: {},
@@ -113,12 +122,6 @@ afterEach(() => {
   delete process.env.AUTH_SIGNUPS_DISABLED
   if (originalAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL
   else process.env.NEXT_PUBLIC_APP_URL = originalAppUrl
-
-  if (originalWhiteLabelDomains === undefined) {
-    delete process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS
-  } else {
-    process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = originalWhiteLabelDomains
-  }
 })
 
 describe('POST /api/company/members/invite', () => {
@@ -331,8 +334,27 @@ describe('POST /api/company/members/invite', () => {
     consoleWarnSpy.mockRestore()
   })
 
-  it('uses a registered white-label request host in the invitation email', async () => {
-    process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = 'portal.brand.test'
+  it('503s (retryable) when the brand lookup fails instead of mailing a canonical link', async () => {
+    resolveBrandResultByHostMock.mockResolvedValue({ brand: null, lookupFailed: true })
+    enqueue({ data: { role: 'owner' } })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    enqueue({ data: { name: 'Acme AB' } })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await post(
+        { email: 'client@example.com' },
+        'https://portal.brand.test/api/company/members/invite',
+      ),
+    )
+
+    expect(status).toBe(503)
+    expect(body.error.code).toBe('TRANSIENT_ERROR')
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('uses a registered brand request host in the invitation email', async () => {
     enqueue({ data: { role: 'owner' } })
     enqueue({ data: [] })
     enqueue({ data: null })
@@ -355,7 +377,6 @@ describe('POST /api/company/members/invite', () => {
   })
 
   it('falls back to the canonical app for an untrusted spoofed request host', async () => {
-    process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = 'portal.brand.test'
     enqueue({ data: { role: 'owner' } })
     enqueue({ data: [] })
     enqueue({ data: null })
@@ -444,9 +465,8 @@ describe('POST /api/company/members/invite: AUTH_SIGNUPS_DISABLED provisioning',
     expect(body.data.email_sent).toBe(true)
   })
 
-  it('uses a registered white-label request host for the GoTrue invite redirect', async () => {
+  it('uses a registered brand request host for the GoTrue invite redirect', async () => {
     process.env.AUTH_SIGNUPS_DISABLED = 'true'
-    process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = 'portal.brand.test'
     enqueue({ data: { role: 'owner' } })
     enqueue({ data: [] })
     enqueue({ data: null })

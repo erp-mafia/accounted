@@ -24,6 +24,12 @@ vi.mock('../lib/api-client', async (importOriginal) => {
   }
 })
 
+// The connect handler records the initiating origin through the brands-table
+// resolver; no brand host is registered in these tests.
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: vi.fn(async () => ({ brand: null, lookupFailed: false })),
+}))
+
 import { enableBankingExtension } from '../index'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import type { ExtensionContext } from '@/lib/extensions/types'

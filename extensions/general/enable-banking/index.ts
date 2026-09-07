@@ -523,9 +523,13 @@ export const enableBankingExtension: Extension = {
           // The host the user started from. Their session lives only there
           // (cookies are per host) while redirectUrl stays the canonical
           // callback registered with Enable Banking, so the callback reads
-          // this back to return the browser home. Allowlist-validated: an
-          // unregistered Host header collapses to the canonical origin.
-          const oauthOrigin = resolveRequestAppOrigin(request)
+          // this back to return the browser home. Validated against the
+          // brands table: an unregistered Host header collapses to the
+          // canonical origin, as does a failed lookup (a wrong return host
+          // costs one bounce; a failed connect start costs the whole flow).
+          const oauthOrigin = await resolveRequestAppOrigin(request, {
+            onLookupFailure: 'canonical',
+          })
 
           // Generate cryptographic state token for CSRF protection
           const oauthState = crypto.randomUUID()
