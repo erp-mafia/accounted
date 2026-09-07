@@ -13,6 +13,7 @@ import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { TransactionWithInvoice } from '@/components/transactions/transaction-types'
 import type { TransactionUnderlag } from '@/lib/transactions/underlag-read'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
   const res = await fetch(url)
@@ -93,7 +94,11 @@ export function TransactionDrawer({
       const res = await fetch('/api/receipt-hunt/run', { method: 'POST' })
       const json = (await res.json().catch(() => null)) as { data?: { fetched?: number; proposed?: number }; error?: { message?: string } } | null
       if (!res.ok) {
-        toast({ title: t('underlag_search_failed'), description: json?.error?.message, variant: 'destructive' })
+        toast({
+          title: t('underlag_search_failed'),
+          description: json?.error ? getErrorMessage(json.error, { statusCode: res.status }) : undefined,
+          variant: 'destructive',
+        })
         return
       }
       toast({ title: t('underlag_search_done', { fetched: json?.data?.fetched ?? 0, proposed: json?.data?.proposed ?? 0 }) })
