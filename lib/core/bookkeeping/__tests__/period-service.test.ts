@@ -11,7 +11,7 @@ let results: Array<{ data?: unknown; error?: unknown; count?: number | null }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'insert', 'update', 'delete', 'lte', 'gte', 'in', 'not', 'or', 'order', 'limit', 'is', 'range']) {
+  for (const m of ['select', 'eq', 'insert', 'update', 'delete', 'lt', 'lte', 'gte', 'in', 'not', 'or', 'order', 'limit', 'is', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
@@ -703,19 +703,28 @@ describe('markPeriodClosedExternally', () => {
     expect(result.closed_externally).toBe(true)
   })
 
-  it('allows a migrated first year whose only native voucher is balance-sheet only', async () => {
+  it('allows a migrated first year whose only native voucher is balance-sheet only and the next year has IB', async () => {
     // The EHAL shape (2026-09-07): SIE import into the historical year failed,
     // so the owner re-keyed the opening voucher by hand (1930 D / 2081 K
     // aktiekapital). Nothing on 3xxx-8xxx, so there is no result for a
     // bokslutsverifikat to transfer; the next year's IB is already imported,
     // which blocks the normal year-end. Klarmarkera must stay open here.
     const period = makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31' })
+    const next = makeFiscalPeriod({
+      id: 'fp-2',
+      period_start: '2025-01-01',
+      period_end: '2025-12-31',
+      previous_period_id: 'fp-1',
+      opening_balance_entry_id: 'ib-1',
+    })
     const updated = { ...period, is_closed: true, closed_externally: true }
     results = [
       { data: period, error: null },                  // fetch
       { count: 0, data: null, error: null },          // imported-verifikat count
       { data: [{ id: 'je-1' }], error: null },        // period entries (id-only page)
       { count: 0, data: null, error: null },          // result-account lines in chunk 1: none
+      { data: period, error: null },                  // findNextPeriod: fetch current
+      { data: next, error: null },                    // findNextPeriod: chained lookup, has IB
       { count: 0, data: null, error: null },          // guard leg 1: untriaged count
       { data: [], error: null },                      // guard leg 2: business-unbooked candidates
       { data: updated, error: null },                 // update
@@ -727,13 +736,63 @@ describe('markPeriodClosedExternally', () => {
     expect(result.closed_externally).toBe(true)
 
     // The line check is a text comparison on the account number string:
-    // every class 3-8 account sorts at or above '3'.
+    // classes 3-8 sort at or above '3' and below '9'.
     const lineBuilders = supabase.from.mock.results
-      .map((r) => r.value as { in: ReturnType<typeof vi.fn>; gte: ReturnType<typeof vi.fn> })
+      .map(
+        (r) =>
+          r.value as {
+            in: ReturnType<typeof vi.fn>
+            gte: ReturnType<typeof vi.fn>
+            lt: ReturnType<typeof vi.fn>
+          },
+      )
       .filter((b) => b.in.mock.calls.some((c) => c[0] === 'journal_entry_id'))
     expect(lineBuilders).toHaveLength(1)
     expect(lineBuilders[0].in).toHaveBeenCalledWith('journal_entry_id', ['je-1'])
     expect(lineBuilders[0].gte).toHaveBeenCalledWith('account_number', '3')
+    expect(lineBuilders[0].lt).toHaveBeenCalledWith('account_number', '9')
+  })
+
+  it('refuses a native balance-sheet-only year when the next year has no IB (normal year-end carries the balances)', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31' })
+    const next = makeFiscalPeriod({
+      id: 'fp-2',
+      period_start: '2025-01-01',
+      period_end: '2025-12-31',
+      previous_period_id: 'fp-1',
+      opening_balance_entry_id: null,
+    })
+    results = [
+      { data: period, error: null },                  // fetch
+      { count: 0, data: null, error: null },          // imported-verifikat count
+      { data: [{ id: 'je-1' }], error: null },        // period entries: one native voucher
+      { count: 0, data: null, error: null },          // result-account lines: none
+      { data: period, error: null },                  // findNextPeriod: fetch current
+      { data: next, error: null },                    // findNextPeriod: chained lookup, no IB
+    ]
+
+    const supabase = makeClient()
+    await expect(
+      markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('saknar ingående balanser')
+  })
+
+  it('refuses a native balance-sheet-only year when no next period exists at all', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31' })
+    results = [
+      { data: period, error: null },                  // fetch
+      { count: 0, data: null, error: null },          // imported-verifikat count
+      { data: [{ id: 'je-1' }], error: null },        // period entries: one native voucher
+      { count: 0, data: null, error: null },          // result-account lines: none
+      { data: period, error: null },                  // findNextPeriod: fetch current
+      { data: null, error: null },                    // findNextPeriod: chained lookup misses
+      { data: null, error: null },                    // findNextPeriod: date lookup misses
+    ]
+
+    const supabase = makeClient()
+    await expect(
+      markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('vanliga årsbokslutet')
   })
 
   it('refuses a period bookkept natively in Accounted (result accounts, no imported verifikat)', async () => {

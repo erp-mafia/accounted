@@ -402,21 +402,28 @@ export async function closePeriod(
 /** Max journal_entry ids per `.in()` filter: keeps the request URL short. */
 const RESULT_LINE_CHECK_CHUNK_SIZE = 100
 
+interface PeriodLedgerShape {
+  /** Number of journal entries dated inside the period, any source_type. */
+  entryCount: number
+  /** Whether any of their lines sits on a result account (BAS class 3-8). */
+  hasResultLines: boolean
+}
+
 /**
- * Whether any journal_entry_line dated inside the period sits on a result
- * account (BAS class 3-8), i.e. whether a bokslutsverifikat would have
- * anything to transfer. An existence check, not a fetch: entries are read
- * id-only, and lines are head-counted per id chunk with early exit, so a
- * natively bookkept year answers on its first chunk. Two-step by design;
+ * How much bookkeeping the period holds and whether any of it sits on a
+ * result account (BAS class 3-8), i.e. whether a bokslutsverifikat would
+ * have anything to transfer. An existence check, not a fetch: entries are
+ * read id-only, and lines are head-counted per id chunk with early exit, so
+ * a natively bookkept year answers on its first chunk. Two-step by design;
  * see lib/bookkeeping/entry-lines.ts for why the `journal_entries!inner`
  * embed is avoided. Throws on any query error so the caller fails closed.
  */
-async function periodHasResultAccountLines(
+async function inspectPeriodLedger(
   supabase: SupabaseClient,
   companyId: string,
   periodStart: string,
   periodEnd: string,
-): Promise<boolean> {
+): Promise<PeriodLedgerShape> {
   const entries = await fetchAllRows<{ id: string }>(
     ({ from, to }) =>
       supabase
@@ -435,14 +442,16 @@ async function periodHasResultAccountLines(
       .from('journal_entry_lines')
       .select('id', { count: 'exact', head: true })
       .in('journal_entry_id', chunk)
-      // Account numbers are strings, so this is a text comparison: every
-      // class 3-8 account sorts at or above '3', every class 1-2 (balance
-      // sheet) account below it.
+      // Account numbers are strings, so these are text comparisons on the
+      // BAS class digit: classes 3-8 sort at or above '3' and below '9';
+      // classes 1-2 (balance sheet) sort below '3', class 9 (interna
+      // poster, never transferred by a bokslut) at or above '9'.
       .gte('account_number', '3')
+      .lt('account_number', '9')
     if (error) throw error
-    if ((count ?? 0) > 0) return true
+    if ((count ?? 0) > 0) return { entryCount: entries.length, hasResultLines: true }
   }
-  return false
+  return { entryCount: entries.length, hasResultLines: false }
 }
 
 /**
@@ -500,17 +509,20 @@ export async function markPeriodClosedExternally(
 
   // Klarmarkera exists for MIGRATED years. A period bookkept natively in
   // Accounted must go through the real year-end: closing it without a
-  // bokslutsverifikat leaves 3xxx-8xxx untransferred (BFL 5-6 kap) with no
-  // clean way back once locked. "Migrated" is read from the ledger itself:
-  // the period either contains SIE-imported verifikat (source_type='import')
-  // or nothing a bokslutsverifikat would have to transfer, i.e. no lines on
-  // result accounts (BAS class 3-8). The second leg used to be "no verifikat
-  // at all", which shut out the migrated first year whose only native
-  // voucher re-keys the opening balance (1930/2081 aktiekapital) after a
-  // failed SIE import: the next year's IB is already imported, so the normal
-  // year-end refuses too (NEXT_PERIOD_HAS_IB) and the year could not be
-  // closed by any path. The guard protects the result transfer, so it asks
-  // exactly that question.
+  // bokslutsverifikat leaves 3xxx-8xxx untransferred and the next year
+  // without IB (BFL 5-6 kap), with no clean way back once locked.
+  // "Migrated" is read from the ledger itself. The period passes when it
+  // contains SIE-imported verifikat (source_type='import'), or when it holds
+  // no verifikat at all (year closed elsewhere, never imported here), or
+  // when its native verifikat touch balance-sheet accounts only AND the
+  // next period already carries its IB. That third leg is the migrated
+  // first year whose SIE import failed and whose owner re-keyed the opening
+  // voucher (1930/2081 aktiekapital) by hand: nothing for a bokslut to
+  // transfer, the balances already continue into the next year, and the
+  // normal year-end refuses on exactly that IB (NEXT_PERIOD_HAS_IB). Until
+  // this leg existed the year could not be closed by any path. A native
+  // balance-sheet-only year whose next period lacks IB stays refused: there
+  // the normal year-end works and is what carries the balances forward.
   const { count: importedCount, error: importedError } = await supabase
     .from('journal_entries')
     .select('id', { count: 'exact', head: true })
@@ -522,9 +534,9 @@ export async function markPeriodClosedExternally(
     throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
   }
   if ((importedCount ?? 0) === 0) {
-    let hasResultLines: boolean
+    let ledger: PeriodLedgerShape
     try {
-      hasResultLines = await periodHasResultAccountLines(
+      ledger = await inspectPeriodLedger(
         supabase,
         companyId,
         period.period_start,
@@ -533,10 +545,18 @@ export async function markPeriodClosedExternally(
     } catch {
       throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
     }
-    if (hasResultLines) {
+    if (ledger.hasResultLines) {
       throw new Error(
         'Perioden innehåller resultatkonton (3000-8999) bokförda i Accounted och inga importerade verifikat. Använd det vanliga årsbokslutet i stället, så att årets resultat förs över.'
       )
+    }
+    if (ledger.entryCount > 0) {
+      const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
+      if (!nextPeriod?.opening_balance_entry_id) {
+        throw new Error(
+          'Perioden innehåller bokföring skapad i Accounted och nästa räkenskapsår saknar ingående balanser. Använd det vanliga årsbokslutet i stället, så förs balanserna över.'
+        )
+      }
     }
   }
 
