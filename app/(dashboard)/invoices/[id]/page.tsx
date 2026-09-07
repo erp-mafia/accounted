@@ -34,6 +34,10 @@ import {
   type PaymentVoucherRef,
 } from '@/lib/invoices/payment-history-gap'
 import { effectiveQuoteStatus, isQuoteExpired } from '@/lib/invoices/quote-status'
+import {
+  draftDownloadDecision,
+  type DraftDownloadDecision,
+} from '@/lib/invoices/draft-download-decision'
 import type { QuoteStatus } from '@/types'
 import {
   invoiceDocumentCaveat,
@@ -237,6 +241,26 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
   const [showSendDialog, setShowSendDialog] = useState(false)
   const [sendDialogMode, setSendDialogMode] = useState<'email' | 'manual'>('email')
+  // #2399: "Ladda ner PDF" on a document that is not issued yet. The render
+  // carries the UTKAST stamp, so the page asks before the file exists and
+  // offers the path to the real document.
+  const [draftDownloadPrompt, setDraftDownloadPrompt] = useState<Exclude<
+    DraftDownloadDecision,
+    'download'
+  > | null>(null)
+  // Set when the user picked "... och ladda ner" in that prompt: the manual
+  // send dialog's success then queues the download of the issued document.
+  const [downloadAfterSend, setDownloadAfterSend] = useState(false)
+  const [downloadQueued, setDownloadQueued] = useState(false)
+  // The issued document is downloaded once the refetch after mark-sent has
+  // landed: only then does the source resolver see the new status and the
+  // archived copy, and the toast names the real document, not the draft.
+  useEffect(() => {
+    if (!downloadQueued || !invoice || invoice.status === 'draft') return
+    setDownloadQueued(false)
+    void downloadPDF()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [downloadQueued, invoice])
   const [isConverting, setIsConverting] = useState(false)
   const [isCreatingOrder, setIsCreatingOrder] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -914,9 +938,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     })
   }
 
-  async function downloadPDF() {
+  async function downloadPDF(options?: { asDraft?: boolean }) {
     if (!invoice) return
     setPdfArchiveIssue(null)
+    // Not issued yet: the render is stamped UTKAST. Ask before the file
+    // exists (#2399); `asDraft` is the prompt's own "Ladda ner utkast".
+    const decision = draftDownloadDecision(invoice)
+    if (decision !== 'download' && !options?.asDraft) {
+      setDraftDownloadPrompt(decision)
+      return
+    }
     await runInvoiceDownload(
       resolveInvoicePdfSource({
         invoiceId: invoice.id,
@@ -2680,6 +2711,57 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </DialogContent>
       </Dialog>
 
+      {/* #2399: the document is not issued, so its PDF carries the UTKAST
+          stamp. Say so before the file exists and offer the path to the real
+          document: the same manual mark-sent (and book) as the primary
+          button. "Ladda ner utkast" stays a working choice (soft guard). */}
+      <Dialog
+        open={draftDownloadPrompt !== null}
+        onOpenChange={(open) => {
+          if (!open) setDraftDownloadPrompt(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {draftDownloadPrompt === 'confirm_draft'
+                ? t('draft_download_unnumbered_title')
+                : t(booksOnIssue && !isQuote ? 'draft_download_book_title' : 'draft_download_send_title')}
+            </DialogTitle>
+            <DialogDescription>
+              {draftDownloadPrompt === 'confirm_draft'
+                ? t('draft_download_unnumbered_desc')
+                : t(booksOnIssue && !isQuote ? 'draft_download_book_desc' : 'draft_download_send_desc')}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDraftDownloadPrompt(null)}>
+              {tCommon('cancel')}
+            </Button>
+            <Button
+              variant={draftDownloadPrompt === 'offer_issue' && canWrite ? 'secondary' : 'default'}
+              onClick={() => {
+                setDraftDownloadPrompt(null)
+                void downloadPDF({ asDraft: true })
+              }}
+            >
+              {t('draft_download_draft_action')}
+            </Button>
+            {draftDownloadPrompt === 'offer_issue' && canWrite && (
+              <Button
+                onClick={() => {
+                  setDraftDownloadPrompt(null)
+                  setDownloadAfterSend(true)
+                  openSendDialog('manual')
+                }}
+              >
+                {t(booksOnIssue && !isQuote ? 'draft_download_book_action' : 'draft_download_send_action')}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* The archived PDF the customer received could not be produced. Nothing
           has been downloaded at this point: a re-render is a different
           document, so the user chooses it deliberately or not at all. */}
@@ -2738,10 +2820,27 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {invoice && (
         <SendInvoiceDialog
           open={showSendDialog}
-          onOpenChange={setShowSendDialog}
+          onOpenChange={(open) => {
+            setShowSendDialog(open)
+            // Cancelled: the download the user chained onto it is off too.
+            if (!open) setDownloadAfterSend(false)
+          }}
           invoice={invoice}
           mode={sendDialogMode}
-          onSuccess={() => fetchInvoice()}
+          onSuccess={() => {
+            if (downloadAfterSend) {
+              setDownloadAfterSend(false)
+              setDownloadQueued(true)
+            }
+            fetchInvoice()
+          }}
+          // The toast's "Ladda ner PDF" queues the download rather than
+          // starting it: the invoice in this closure is still the draft.
+          manualSuccessAction={
+            downloadAfterSend || invoice.is_self_billed
+              ? undefined
+              : { label: t('download_pdf'), onClick: () => setDownloadQueued(true) }
+          }
         />
       )}
 
