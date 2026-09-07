@@ -8,8 +8,12 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
 vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: vi.fn() } }))
+vi.mock('@/lib/domains/trusted-app-origin', () => ({
+  resolveRequestAppOrigin: vi.fn(async () => 'http://localhost:3000'),
+}))
 
 import { GET } from '../return/route'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { createServiceClient, createClient } from '@/lib/supabase/server'
 import { eventBus } from '@/lib/events/bus'
 import { extensionRegistry } from '@/lib/extensions/registry'
@@ -58,7 +62,6 @@ const ACTIVATED = {
 describe('GET /api/extensions/woocommerce/return', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.stubEnv('NEXT_PUBLIC_APP_URL', BASE)
     vi.mocked(extensionRegistry.get).mockReturnValue(
       { id: 'woocommerce' } as ReturnType<typeof extensionRegistry.get>,
     )
@@ -72,6 +75,35 @@ describe('GET /api/extensions/woocommerce/return', () => {
     vi.mocked(extensionRegistry.get).mockReturnValue(undefined)
     const res = await GET(makeReturnRequest({ success: '1', user_id: STATE }))
     expect(res.status).toBe(503)
+  })
+
+  it('redirects to the brand host the browser arrived on, resolved through the trusted-origin helper', async () => {
+    const { enqueue } = mockServiceClient()
+    mockSession('user-1')
+    vi.mocked(resolveRequestAppOrigin).mockResolvedValueOnce('https://app.testbrand.example')
+    enqueue({ data: ROW('pending') })
+    enqueue({ data: null }) // browser_confirmed_at update
+    enqueue({ data: ACTIVATED }) // activateIfComplete
+
+    const request = makeReturnRequest({ success: '1', user_id: STATE })
+    const res = await GET(request)
+
+    expect(resolveRequestAppOrigin).toHaveBeenCalledWith(request, { onLookupFailure: 'canonical' })
+    expect(res.headers.get('location')).toBe(
+      'https://app.testbrand.example/import?mode=woocommerce&woocommerce_connected=true',
+    )
+  })
+
+  it('sends a denial back to the brand host too', async () => {
+    const { enqueue } = mockServiceClient()
+    vi.mocked(resolveRequestAppOrigin).mockResolvedValueOnce('https://app.testbrand.example')
+    enqueue({ data: null })
+
+    const res = await GET(makeReturnRequest({ success: '0', user_id: STATE }))
+
+    expect(res.headers.get('location')).toBe(
+      'https://app.testbrand.example/import?mode=woocommerce&woocommerce_error=denied',
+    )
   })
 
   it('closes the pending row and reports the denial when the store says no', async () => {
@@ -295,7 +327,7 @@ describe('GET /api/extensions/woocommerce/return', () => {
       expect(findCalls('woocommerce_connections', 'update')).toHaveLength(0)
     })
 
-    it('redirects without a database round trip when the state is missing or not a uuid', async () => {
+    it('never touches woocommerce_connections when the state is missing or not a uuid', async () => {
       const { supabase } = mockServiceClient()
 
       const res1 = await GET(makeReturnRequest({ success: '1' }))

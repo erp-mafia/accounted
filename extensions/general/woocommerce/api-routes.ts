@@ -5,6 +5,7 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { isWooCommerceConfigured, encryptCredential } from './lib/credentials'
 import { normalizeStoreUrl, testConnectionAndFetchStoreInfo } from './lib/api-client'
 import { buildAuthorizeUrl } from './lib/connect'
@@ -217,11 +218,20 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
+      // The browser comes back to the host it started on (brand domain or
+      // canonical), validated against the brands table: an unregistered
+      // Host header collapses to the canonical origin, as does a failed
+      // lookup (a wrong return host costs one bounce; a failed connect start
+      // would cost the whole flow).
+      const appOrigin = await resolveRequestAppOrigin(request, {
+        onLookupFailure: 'canonical',
+      })
+
       log.info('[woocommerce] Starting wc-auth handshake', {
         connection_id: created.id,
         company_id: auth.companyId,
       })
-      return NextResponse.json({ url: buildAuthorizeUrl(storeUrl, oauthState) })
+      return NextResponse.json({ url: buildAuthorizeUrl(storeUrl, oauthState, appOrigin) })
     },
   },
   {

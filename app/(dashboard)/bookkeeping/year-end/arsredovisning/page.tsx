@@ -115,6 +115,11 @@ export default function ArsredovisningPage() {
   useEffect(() => {
     if (!periodId) return
     let cancelled = false
+    // A year switch from the header picker re-runs this effect: show the
+    // skeleton instead of the previous year's numbers while the new one
+    // loads, and drop a stale error so the picker stays reachable.
+    setLoading(true)
+    setError(null)
     Promise.all([
       fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning`).then((r) => r.json()),
       fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures`).then((r) =>
@@ -551,11 +556,28 @@ export default function ArsredovisningPage() {
           </span>
         }
         action={
-          <Button variant="outline" asChild>
-            <Link href={`/bookkeeping/year-end?period=${periodId}`}>
-              <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
-            </Link>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* The year switch has to live on the loaded view too: the
+                no-period branch above auto-jumps to the remembered scope (or
+                the newest year) before anyone sees its picker, so without
+                this the only way to another year's årsredovisning was to
+                change the scope on some other page and come back. */}
+            <FyPicker
+              value={periodId}
+              onChange={(id) => {
+                if (id && id !== periodId) {
+                  router.replace(`/bookkeeping/year-end/arsredovisning?period=${id}`)
+                }
+              }}
+              includeAllOption={false}
+              hideFuturePeriods
+            />
+            <Button variant="outline" asChild>
+              <Link href={`/bookkeeping/year-end?period=${periodId}`}>
+                <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
+              </Link>
+            </Button>
+          </div>
         }
       />
 

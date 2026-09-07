@@ -5,6 +5,7 @@ import { eventBus } from '@/lib/events/bus'
 import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createLogger } from '@/lib/logger'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import {
   requireFlowInitiator,
   FLOW_INITIATOR_MISMATCH_MESSAGE,
@@ -62,7 +63,11 @@ export async function GET(request: Request) {
   const success = searchParams.get('success')
   const state = searchParams.get('user_id')
 
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+  // The store redirected the browser to the origin the connect started on
+  // (buildAuthorizeUrl), where the session lives. Send the panel redirect to
+  // that same host, validated against the brands table; an unknown host or
+  // a failed lookup collapses to the canonical app URL.
+  const baseUrl = await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' })
   // The WooCommerce surface lives on the import page; the base already has a
   // query, so appended params below must use '&'.
   const returnUrl = `${baseUrl}/import?mode=woocommerce`

@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   activateIfComplete,
+  buildAuthorizeUrl,
   expireStaleHandshakes,
   HANDSHAKE_TTL_MS,
   HANDSHAKE_EXPIRED_MESSAGE,
@@ -10,6 +11,26 @@ import {
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const asClient = (supabase: unknown) => supabase as SupabaseClient
+
+describe('buildAuthorizeUrl', () => {
+  beforeEach(() => vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.canonical.example'))
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('puts the browser return on the initiating origin and the server callback on the canonical host', () => {
+    const url = new URL(
+      buildAuthorizeUrl('https://shop.example.se', 'state-1', 'https://app.testbrand.example'),
+    )
+    expect(url.origin + url.pathname).toBe('https://shop.example.se/wc-auth/v1/authorize')
+    expect(url.searchParams.get('return_url')).toBe(
+      'https://app.testbrand.example/api/extensions/woocommerce/return',
+    )
+    expect(url.searchParams.get('callback_url')).toBe(
+      'https://app.canonical.example/api/extensions/woocommerce/callback',
+    )
+    expect(url.searchParams.get('user_id')).toBe('state-1')
+    expect(url.searchParams.get('scope')).toBe('read')
+  })
+})
 
 describe('isHandshakeExpired', () => {
   it('is false inside the TTL and true past it', () => {
