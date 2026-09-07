@@ -877,8 +877,52 @@ export default function SupplierInvoiceDetailPage() {
         />
       )}
 
-      {/* Leverantör and Fakturainformation side by side like an invoice head:
-          who sent it on the left, the facts on the right. */}
+      {/* Shell v2: the invoice head is one line of facts. The number is the
+          title, the dates that moved are on the strip, so only the supplier
+          and the document facts remain. */}
+      {shell === 'v2' ? (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px] text-muted-foreground" data-ph-mask>
+          {invoice.supplier && (
+            <Link href={`/suppliers/${invoice.supplier.id}`} className="text-foreground hover:underline">
+              {invoice.supplier.name}
+            </Link>
+          )}
+          {invoice.supplier?.org_number && (
+            <span>
+              {t('def_org_number')} <span className="tabular-nums text-foreground">{invoice.supplier.org_number}</span>
+            </span>
+          )}
+          <span>
+            {t('invoice_date_label')} <span className="tabular-nums text-foreground">{formatDate(invoice.invoice_date)}</span>
+          </span>
+          <span>
+            {t('due_date_label')} <span className="tabular-nums text-foreground">{formatDate(invoice.due_date)}</span>
+          </span>
+          <span>
+            {t('arrival_number_label')} <span className="tabular-nums text-foreground">#{invoice.arrival_number}</span>
+          </span>
+          {invoice.payment_reference && (
+            <span>
+              {t('ocr_reference_label')} <span className="tabular-nums text-foreground">{invoice.payment_reference}</span>
+            </span>
+          )}
+          {invoice.reverse_charge && <span>{t('reverse_charge_badge')}</span>}
+          {invoice.is_credit_note && (
+            <span>
+              {t('def_credits')}{' '}
+              {creditedOriginal ? (
+                <Link href={`/supplier-invoices/${creditedOriginal.id}`} className="text-foreground hover:underline">
+                  {creditedOriginal.supplier_invoice_number
+                    ? t('title_invoice', { number: creditedOriginal.supplier_invoice_number })
+                    : t('arrival_header', { number: creditedOriginal.arrival_number })}
+                </Link>
+              ) : (
+                t('credit_note_banner_original_fallback')
+              )}
+            </span>
+          )}
+        </div>
+      ) : (
       <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
         {invoice.supplier && (
           <DetailSection kicker={t('supplier_section_title')}>
@@ -951,6 +995,7 @@ export default function SupplierInvoiceDetailPage() {
           )}
         </DetailSection>
       </div>
+      )}
 
       {/* Invoice lines: the list-page table idiom straight on the panel, with
           the totals as a right-aligned block and the total in the serif. */}
