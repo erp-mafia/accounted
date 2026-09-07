@@ -37,8 +37,9 @@ function Mark({ account }: { account: ReconciliationAccount }) {
  * bank accounts and the skattekonto alike. Rows come from the reconciliation
  * service (the same list the Avstämning workspace shows), joined with the
  * cash-account balances. Each row says when it was last read, through which
- * date it is signed off, and how many rows still need a look; the links go
- * to the reconciliation for that account.
+ * date it is signed off, and how many rows still need a look. The mark in
+ * front of the name says where the money comes from, so there is no source
+ * column.
  */
 export default function AccountsOverview() {
   const t = useTranslations('accounts_v2')
@@ -78,7 +79,6 @@ export default function AccountsOverview() {
           <thead>
             <tr>
               <th className={cn(TH_CLASS, '!pl-0 w-full')}>{t('th_account')}</th>
-              <th className={TH_CLASS}>{t('th_source')}</th>
               <th className={TH_CLASS}>{t('th_synced')}</th>
               <th className={TH_CLASS}>{t('th_signed_off')}</th>
               <th className={TH_CLASS}>{t('th_review')}</th>
@@ -88,15 +88,15 @@ export default function AccountsOverview() {
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={6} className={cn(TD_CLASS, '!pl-0 text-muted-foreground')}>{t('loading')}</td>
+                <td colSpan={5} className={cn(TD_CLASS, '!pl-0 text-muted-foreground')}>{t('loading')}</td>
               </tr>
             ) : error ? (
               <tr>
-                <td colSpan={6} className={cn(TD_CLASS, '!pl-0 text-muted-foreground')}>{t('load_failed')}</td>
+                <td colSpan={5} className={cn(TD_CLASS, '!pl-0 text-muted-foreground')}>{t('load_failed')}</td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className={cn(TD_CLASS, '!pl-0 py-8 text-muted-foreground')}>
+                <td colSpan={5} className={cn(TD_CLASS, '!pl-0 py-8 text-muted-foreground')}>
                   {t('empty')}{' '}
                   <Link href="/settings/banking" className="underline underline-offset-2">
                     {t('connect_bank')}
@@ -123,7 +123,6 @@ export default function AccountsOverview() {
                         </span>
                       </Link>
                     </td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>{t(`source_${a.source.type}`)}</td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
                       {lastReadFor(a) ? formatDate(lastReadFor(a)!) : '–'}
                     </td>

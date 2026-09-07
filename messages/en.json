@@ -7043,6 +7043,11 @@
       "agents_same_rule": "the same rule via MCP"
   },
   "accounts_v2": {
+    "add_bank_desc": "Transactions arrive every night through PSD2. Read only, never moves money.",
+    "add_skattekonto_desc": "Events and balance from Skatteverket.",
+    "add_stripe_desc": "Payouts and fees from Stripe.",
+    "add_shopify_desc": "Orders and payouts from your Shopify store.",
+    "add_woocommerce_desc": "Orders and payouts from your WooCommerce store.",
     "add_account": "Add account",
     "add_bank": "Bank account",
     "add_skattekonto": "Tax account",

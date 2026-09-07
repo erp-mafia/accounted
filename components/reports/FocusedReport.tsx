@@ -14,6 +14,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import type { FiscalPeriod } from '@/types'
 
@@ -88,6 +89,9 @@ function FocusedReportInner({
   const [isReady, setIsReady] = useState(false)
 
   const report = getReport(slug)
+  // Shell v2: the nav names Rapporter, so no back link over the title, and
+  // the period presets and the dimension picker share one row.
+  const v2 = useShell() === 'v2'
   // Calendar (VAT family) and param-less reports don't need a fiscal period.
   const isPeriodless = report?.params === 'calendar' || report?.params === 'none'
   // Nav-promoted pages (Momsdeklaration) drop the library chrome: no back
@@ -107,7 +111,7 @@ function FocusedReportInner({
 
   return (
     <div className="space-y-8">
-      {!isStandalone && (
+      {!isStandalone && !v2 && (
         <Link
           href="/reports"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -148,18 +152,20 @@ function FocusedReportInner({
         />
       )}
 
-      {DATE_RANGE_SLUGS.has(slug) && selectedPeriodBounds && (
-        <ReportDateRange
-          periodStart={selectedPeriodBounds.start}
-          periodEnd={selectedPeriodBounds.end}
-          value={dateRange}
-          onChange={setDateRange}
-        />
-      )}
+      <div className={v2 ? 'flex flex-wrap items-center gap-x-6 gap-y-3' : 'contents'}>
+        {DATE_RANGE_SLUGS.has(slug) && selectedPeriodBounds && (
+          <ReportDateRange
+            periodStart={selectedPeriodBounds.start}
+            periodEnd={selectedPeriodBounds.end}
+            value={dateRange}
+            onChange={setDateRange}
+          />
+        )}
 
-      {DIMENSION_FILTER_SLUGS.has(slug) && selectedPeriod && (
-        <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />
-      )}
+        {DIMENSION_FILTER_SLUGS.has(slug) && selectedPeriod && (
+          <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />
+        )}
+      </div>
 
       {!isReady && !isPeriodless ? (
         <Card>

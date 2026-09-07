@@ -7043,6 +7043,11 @@
       "agents_same_rule": "samma regel via MCP"
   },
   "accounts_v2": {
+    "add_bank_desc": "Transaktioner hämtas varje natt via PSD2. Läser bara, flyttar aldrig pengar.",
+    "add_skattekonto_desc": "Händelser och saldo från Skatteverket.",
+    "add_stripe_desc": "Utbetalningar och avgifter från Stripe.",
+    "add_shopify_desc": "Ordrar och utbetalningar från din Shopify-butik.",
+    "add_woocommerce_desc": "Ordrar och utbetalningar från din WooCommerce-butik.",
     "add_account": "Lägg till konto",
     "add_bank": "Bankkonto",
     "add_skattekonto": "Skattekonto",
