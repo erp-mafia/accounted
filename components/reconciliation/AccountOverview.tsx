@@ -25,6 +25,7 @@ import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } fro
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
 import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
 import { ReconciliationSummary } from './ReconciliationSummary'
+import { PairRow, PairsHead } from './ReconciliationPairs'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { useShell } from '@/components/dashboard/ShellProvider'
 
@@ -415,6 +416,9 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when the status first loads
   }, [autorunRequested, isSkv, status])
 
+  // v2 rows are pairs (outside | sign | ledger); v1 keeps the five-column row.
+  const Row = v2 ? PairRow : ItemRow
+
   // ---- render -------------------------------------------------------------
 
   if (loadError) {
@@ -750,9 +754,12 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
       ) : items.items.length === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
       ) : (
-        <div className="-mx-4 overflow-x-auto sm:mx-0">
+        <div className={cn('overflow-x-auto', !v2 && '-mx-4 sm:mx-0')}>
           <table className="w-full text-[13px]">
             <thead>
+              {v2 ? (
+                <PairsHead externalLabel={isSkv ? t('v2_side_external_skv') : t('v2_side_external_bank')} />
+              ) : (
               <tr>
                 <th className={cn(TH_CLASS, 'w-[110px]')}>{t('col_date')}</th>
                 <th className={TH_CLASS}>{t('col_event')}</th>
@@ -760,6 +767,7 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
                 <th className={cn(TH_CLASS, 'w-[34%]')}>{t('col_voucher')}</th>
                 <th className={cn(TH_CLASS, 'w-[170px]')} />
               </tr>
+              )}
             </thead>
             <tbody className="stagger-enter">
               {BUCKET_ORDER.map((bucket) => {
@@ -777,8 +785,11 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
                   <Fragment key={bucket}>
                     <tr className="bg-muted/30">
                       <td
-                        colSpan={5}
-                        className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
+                        colSpan={v2 ? 8 : 5}
+                        className={cn(
+                          'py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground',
+                          v2 ? 'px-0' : 'px-4',
+                        )}
                       >
                         <span className="flex items-center gap-3">
                           <span>
@@ -801,7 +812,7 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
                     </tr>
                     {!folded &&
                       rows.map((item) => (
-                        <ItemRow
+                        <Row
                           key={item.item_id}
                           item={item}
                           isSkv={isSkv}

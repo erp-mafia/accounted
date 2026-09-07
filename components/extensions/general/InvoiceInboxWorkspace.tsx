@@ -822,7 +822,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       parsed: items.filter((it) => it.extracted_data && it.status !== 'processing' && it.status !== 'error').length,
       matched: statusCounts.linked + statusCounts.booked,
       booked: statusCounts.booked,
-      archived: statusCounts.booked,
     }),
     [items, statusCounts, portalPurchases.length, otherPurchases.length],
   )

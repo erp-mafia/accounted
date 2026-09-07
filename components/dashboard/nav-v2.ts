@@ -11,9 +11,6 @@ import {
   BarChart3,
   FileCheck,
   Landmark,
-  Puzzle,
-  HelpCircle,
-  Settings,
 } from 'lucide-react'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
@@ -44,7 +41,8 @@ export interface NavGateFlags {
  * the prototype's BOLAGET list; a section's sub-items render under it while
  * the section is active, so nothing the v1 rail reached becomes a dead end.
  * Every href here already has a page; PR 3 to PR 8 change what the pages
- * show, not where they live.
+ * show, not where they live. Settings, help and the company switcher live
+ * in the user menu at the bottom, so the sidebar has no bottom group.
  */
 export interface NavV2Item extends NavGateFlags {
   labelKey: string
@@ -72,10 +70,10 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/accounts',
     labelKey: 'v2_accounts',
     icon: Landmark,
+    // Each account opens from the overview's rows; sub-items per account
+    // kind pointed at a settings dialog and at the skattekonto page.
     sub: [
       { href: '/accounts', labelKey: 'v2_accounts_overview' },
-      { href: '/settings/banking', labelKey: 'v2_bank_accounts' },
-      { href: '/skattekonto', labelKey: 'skattekonto' },
       { href: '/reconciliation', labelKey: 'reconciliation' },
     ],
   },
@@ -170,12 +168,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
       { href: '/reports/ne-declaration', labelKey: 'income_declaration', entityOnly: 'enskild_firma' },
     ],
   },
-]
-
-export const NAV_V2_BOTTOM: NavV2Item[] = [
-  { href: '/extensions', labelKey: 'extensions', icon: Puzzle },
-  { href: '/help', labelKey: 'help', icon: HelpCircle },
-  { href: '/settings', labelKey: 'settings', icon: Settings },
 ]
 
 /**

@@ -2,6 +2,7 @@ import { getTranslations } from 'next-intl/server'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import AccountsOverview from '@/components/accounts/AccountsOverview'
+import AddAccountMenu from '@/components/accounts/AddAccountMenu'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,7 +15,7 @@ export default async function AccountsPage() {
   const t = await getTranslations('accounts_v2')
   return (
     <>
-      <PageHeader title={t('title')} help={<HelpPopover>{t('help')}</HelpPopover>} />
+      <PageHeader title={t('title')} help={<HelpPopover>{t('help')}</HelpPopover>} action={<AddAccountMenu />} />
       <AccountsOverview />
     </>
   )
