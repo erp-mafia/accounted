@@ -3382,6 +3382,9 @@
     "mixed_currency_note": "Documents in different currencies cannot be summed into a single amount. Each document is still booked separately, against its matched bank transaction and the amount the bank actually settled in SEK."
   },
   "inbox_workspace": {
+    "pipe_missing": "Missing",
+    "pipe_missing_help": "Card or account purchases without a receipt or invoice. Ask for the document or fetch it from the supplier's portal.",
+    "pipe_errors": "{count, plural, =1 {1 error} other {# errors}}",
     "pipe_incoming": "Received",
     "pipe_parsed": "Read",
     "pipe_matched": "Matched",

@@ -3382,6 +3382,9 @@
     "mixed_currency_note": "Underlag i olika valutor kan inte summeras till ett belopp. Varje underlag bokförs ändå var för sig, mot sin matchade banktransaktion och det belopp banken faktiskt drog i SEK."
   },
   "inbox_workspace": {
+    "pipe_missing": "Saknas",
+    "pipe_missing_help": "Köp på kort eller konto utan kvitto eller faktura. Efterlys underlaget eller hämta det från leverantörens portal.",
+    "pipe_errors": "{count, plural, =1 {1 fel} other {# fel}}",
     "pipe_incoming": "Inkommet",
     "pipe_parsed": "Tolkat",
     "pipe_matched": "Matchat",
