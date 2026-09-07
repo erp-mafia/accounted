@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
+import {
+  resolveRequestAppOrigin,
+  resolveTrustedAppOrigin,
+} from '@/lib/domains/trusted-app-origin'
 
 /**
  * Bind the completion of a browser-driven OAuth/consent flow to the user who
@@ -21,9 +25,15 @@ import { createLogger } from '@/lib/logger'
  *
  * Outcomes:
  *   - ok: the session user is the initiator; carry on.
- *   - no_session: nobody is signed in (expired mid-flow, cookies cleared).
- *     `response` redirects to /login?next=<this callback URL> so the initiator
- *     can sign in and the callback re-runs with the same code + state.
+ *   - no_session: nobody is signed in (expired mid-flow, cookies cleared, or
+ *     the session lives on another host). `response` redirects to
+ *     /login?next=<this callback URL> so the initiator can sign in and the
+ *     callback re-runs with the same code + state. The login lives on the
+ *     origin the flow was started from when the caller recorded one: provider
+ *     redirect URIs are pinned to the canonical host while sessions are per
+ *     host, so a white-label user reaches the callback signed out and must be
+ *     sent to THEIR brand host, where the session already exists and the
+ *     login page forwards straight back into the callback.
  *   - mismatch: a different user is signed in. `response` is a 403 in the
  *     canonical error envelope; a route whose UX is a settings redirect
  *     inspects `reason` and builds its own redirect instead. The mismatch is
@@ -52,6 +62,13 @@ export type FlowInitiatorResult =
 export interface RequireFlowInitiatorOptions {
   /** Short label for the log line, e.g. 'stripe.callback'. */
   flow?: string
+  /**
+   * Origin the initiator started the flow on, as recorded by the start route.
+   * Validated against the canonical host and the registered white-label hosts;
+   * anything else falls back to the canonical origin. Omit when the flow has
+   * no record of it.
+   */
+  returnOrigin?: string | null
 }
 
 /**
@@ -67,10 +84,19 @@ export function redactUserId(id: string | null | undefined): string {
  * The /login redirect for a callback reached without a session. `next` is the
  * callback's own path + query (same-origin relative, which is the only form
  * the login page's safeReturnTo accepts), so signing in resumes the flow.
+ *
+ * The login host is, in order: the recorded initiating origin (allowlisted),
+ * the host the callback arrived on (allowlisted, so a brand-domain callback is
+ * never dragged to the canonical login), or the request origin itself on a
+ * self-hosted deployment with no NEXT_PUBLIC_APP_URL.
  */
-export function buildLoginRedirect(request: Request): Response {
+export function buildLoginRedirect(request: Request, returnOrigin?: string | null): Response {
   const current = new URL(request.url)
-  const appOrigin = process.env.NEXT_PUBLIC_APP_URL || current.origin
+  const appOrigin = returnOrigin
+    ? resolveTrustedAppOrigin(returnOrigin)
+    : process.env.NEXT_PUBLIC_APP_URL
+      ? resolveRequestAppOrigin(request)
+      : current.origin
   const next = `${current.pathname}${current.search}`
   const login = new URL('/login', appOrigin)
   login.searchParams.set('next', next)
@@ -106,7 +132,11 @@ export async function requireFlowInitiator(
       path,
       expectedUser: redactUserId(expectedUserId),
     })
-    return { ok: false, reason: 'no_session', response: buildLoginRedirect(request) }
+    return {
+      ok: false,
+      reason: 'no_session',
+      response: buildLoginRedirect(request, options.returnOrigin),
+    }
   }
 
   if (sessionUserId !== expectedUserId) {
