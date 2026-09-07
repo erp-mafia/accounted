@@ -12,3 +12,5 @@ ALTER TABLE public.bank_connections
 
 COMMENT ON COLUMN public.bank_connections.oauth_origin IS
   'Allowlist-validated app origin the OAuth flow was started from; null = canonical app URL.';
+
+NOTIFY pgrst, 'reload schema';
