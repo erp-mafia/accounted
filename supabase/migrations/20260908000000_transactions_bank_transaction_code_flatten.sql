@@ -19,6 +19,12 @@
 -- pure text rewrite of an evidence column: no journal entries, no matching,
 -- no categorization, no transaction_method re-derivation. Guarded so a value
 -- that is not valid JSON is left as it is rather than failing the migration.
+--
+-- Rows of a company that is a migration-reset source (company_migration_resets)
+-- are immutable by trigger (transactions_block_migration_reset_source_mutation,
+-- 20260818084050) and are skipped: 20260903170000 failed on prod for exactly
+-- that reason. Those rows (110 on prod, one archived company) keep the JSON
+-- text; nothing reads the column back, so nothing is lost.
 
 CREATE OR REPLACE FUNCTION pg_temp.flatten_eb_transaction_code(p_raw text)
 RETURNS text
@@ -60,6 +66,10 @@ WHERE import_source = 'enable_banking'
   AND (
     bank_transaction_code ~ '^\{.*\}$'
     OR proprietary_bank_transaction_code ~ '^\{.*\}$'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM public.company_migration_resets r
+    WHERE r.source_company_id = transactions.company_id
   );
 
 DROP FUNCTION pg_temp.flatten_eb_transaction_code(text);
