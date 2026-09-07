@@ -167,7 +167,6 @@ export default function KpiPage() {
                 // overwrite the row with a layout the user never chose.
                 <Button
                   variant="outline"
-                  size="sm"
                   className="gap-1.5"
                   disabled
                   aria-describedby={prefsError ? prefsStatusId : undefined}
