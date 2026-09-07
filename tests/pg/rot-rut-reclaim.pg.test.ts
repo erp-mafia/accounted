@@ -122,3 +122,96 @@ describe('rot/rut reclaim (migration 20260907160000)', () => {
     expect(Number(rows[0].remaining_amount)).toBe(20000)
   })
 })
+
+describe('apply_rot_rut_reclaim_invoice (migration 20260907160300)', () => {
+  it('applies item marker and invoice reopen atomically, and is a no-op the second time', async () => {
+    const seeded = await seedCompany()
+    const invoiceId = await insertCustomerInvoice(seeded.companyId, seeded.userId, {
+      deduction_total: 7500,
+      deduction_reclaimed_total: 0,
+      remaining_amount: 0,
+    })
+    await getPool().query(
+      `UPDATE public.invoices SET status = 'paid', paid_amount = 17500 WHERE id = $1`,
+      [invoiceId],
+    )
+    const requestId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.rot_rut_payout_requests
+         (id, company_id, user_id, deduction_type, name, status, requested_total, decided_total, decided_at, file_name)
+       VALUES ($1, $2, $3, 'rot', 'ROT 2026-08', 'partially_paid', 7500, 5000, now(), 'rot.xml')`,
+      [requestId, seeded.companyId, seeded.userId],
+    )
+    const itemId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.rot_rut_payout_request_items (id, request_id, invoice_id, requested_amount, decided_amount)
+       VALUES ($1, $2, $3, 7500, 5000)`,
+      [itemId, requestId, invoiceId],
+    )
+
+    const first = await getPool().query<{ applied: boolean }>(
+      `SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 2500, 2500, 'partially_paid') AS applied`,
+      [itemId, invoiceId, seeded.companyId],
+    )
+    expect(first.rows[0].applied).toBe(true)
+
+    const second = await getPool().query<{ applied: boolean }>(
+      `SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 2500, 2500, 'partially_paid') AS applied`,
+      [itemId, invoiceId, seeded.companyId],
+    )
+    expect(second.rows[0].applied).toBe(false)
+
+    const { rows } = await getPool().query<{
+      deduction_reclaimed_total: string
+      remaining_amount: string
+      status: string
+      reclaimed_amount: string
+    }>(
+      `SELECT i.deduction_reclaimed_total, i.remaining_amount, i.status, it.reclaimed_amount
+         FROM public.invoices i
+         JOIN public.rot_rut_payout_request_items it ON it.invoice_id = i.id
+        WHERE i.id = $1`,
+      [invoiceId],
+    )
+    // Applied exactly once: 2 500 reclaimed, not 5 000.
+    expect(Number(rows[0].deduction_reclaimed_total)).toBe(2500)
+    expect(Number(rows[0].remaining_amount)).toBe(2500)
+    expect(rows[0].status).toBe('partially_paid')
+    expect(Number(rows[0].reclaimed_amount)).toBe(2500)
+  })
+
+  it('refuses a foreign company invoice without touching the marker', async () => {
+    const seeded = await seedCompany()
+    const other = await seedCompany()
+    const invoiceId = await insertCustomerInvoice(seeded.companyId, seeded.userId, {
+      deduction_total: 7500,
+      deduction_reclaimed_total: 0,
+      remaining_amount: 17500,
+    })
+    const requestId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.rot_rut_payout_requests
+         (id, company_id, user_id, deduction_type, name, status, requested_total, decided_total, decided_at, file_name)
+       VALUES ($1, $2, $3, 'rot', 'ROT 2026-09', 'rejected', 7500, 0, now(), 'rot.xml')`,
+      [requestId, seeded.companyId, seeded.userId],
+    )
+    const itemId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.rot_rut_payout_request_items (id, request_id, invoice_id, requested_amount)
+       VALUES ($1, $2, $3, 7500)`,
+      [itemId, requestId, invoiceId],
+    )
+    await expect(
+      getPool().query(
+        `SELECT public.apply_rot_rut_reclaim_invoice($1, $2, $3, 7500, 25000, 'sent')`,
+        [itemId, invoiceId, other.companyId],
+      ),
+    ).rejects.toThrow(/not found in company/)
+    const { rows } = await getPool().query<{ reclaimed_amount: string | null }>(
+      `SELECT reclaimed_amount FROM public.rot_rut_payout_request_items WHERE id = $1`,
+      [itemId],
+    )
+    // The function raised, so the marker write rolled back with it.
+    expect(rows[0].reclaimed_amount).toBeNull()
+  })
+})

@@ -21,9 +21,13 @@ import { STANDARD_VOUCHER_SERIES_MAP } from '@/lib/bookkeeping/voucher-series-re
  * Superuser pool on purpose: the object under test is the default, not RLS.
  */
 
+// The LATEST default-setting migration: every source type added since #2184
+// re-states the whole map in a new migration (20260907160200 added
+// rot_rut_reclaim), and re-applying an older one here would reset the
+// default to a shorter map for every test that follows.
 const MIGRATION_PATH = join(
   process.cwd(),
-  'supabase/migrations/20260906210500_voucher_series_standard_default.sql',
+  'supabase/migrations/20260907160200_voucher_series_default_rot_rut_reclaim.sql',
 )
 
 type SeriesMap = Record<string, string>

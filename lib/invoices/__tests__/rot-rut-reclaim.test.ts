@@ -63,6 +63,13 @@ function makeItem(
   }
 }
 
+/** Queue order: request, items, sibling-request scan (empty), then the writes. */
+function enqueueOpen(request: Record<string, unknown>, items: unknown[], siblings: unknown[] = []) {
+  enqueue({ data: request })
+  enqueue({ data: items })
+  enqueue({ data: siblings })
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
@@ -133,6 +140,19 @@ describe('computeRefusedShares', () => {
     })
   })
 
+  it('refuses per-item amounts that do not reconcile with the request-level beslut', () => {
+    // Items say 4 000 refused, the header says 2 000: an inconsistent beslut
+    // must not book legs for a different sum than it displays.
+    const result = computeRefusedShares(
+      { requested_total: 5000, decided_total: 3000, decided_at: '2026-08-20' },
+      [
+        { id: 'i1', invoice_id: INVOICE_A, requested_amount: 3000, decided_amount: 1000 },
+        { id: 'i2', invoice_id: INVOICE_B, requested_amount: 2000, decided_amount: 0 },
+      ],
+    )
+    expect(result).toEqual({ ok: false, code: 'ROT_RUT_RECLAIM_SPLIT_UNKNOWN' })
+  })
+
   it('reports nothing refused on a fully approved beslut', () => {
     const result = computeRefusedShares(
       { requested_total: 5000, decided_total: 5000, decided_at: '2026-08-20' },
@@ -160,8 +180,9 @@ describe('reclaimRotRutRefusal', () => {
     expect(mockCreateReclaimEntry).not.toHaveBeenCalled()
   })
 
-  it('refuses a request that already carries a reclaim voucher', async () => {
+  it('refuses a request whose reclaim voucher and every leg are already applied', async () => {
     enqueue({ data: makeRequestRow({ reclaim_journal_entry_id: 'je-old' }) })
+    enqueue({ data: [{ ...makeItem('i1', INVOICE_A, 5000, null), reclaimed_amount: 2000 }] })
     const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(outcome).toMatchObject({ ok: false, code: 'ROT_RUT_RECLAIM_ALREADY_DONE' })
     expect(mockCreateReclaimEntry).not.toHaveBeenCalled()
@@ -183,23 +204,36 @@ describe('reclaimRotRutRefusal', () => {
     expect(mockCreateReclaimEntry).not.toHaveBeenCalled()
   })
 
+  it('refuses while an invoice is re-requested in a later live begäran', async () => {
+    // Avslag on A, invoice re-requested in B (submitted): the refused share
+    // stays at Skatteverket until B is decided.
+    enqueueOpen(makeRequestRow({ status: 'rejected', decided_total: 0 }), [makeItem('i1', INVOICE_A, 5000, null)], [
+      { invoice_id: INVOICE_A, request: { id: 'req-b', status: 'submitted', company_id: 'company-1' } },
+    ])
+    const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'ROT_RUT_RECLAIM_INVOICE_REREQUESTED',
+      details: { invoice_ids: [INVOICE_A] },
+    })
+    expect(findCall('rot_rut_payout_request_items', 'neq')).toEqual(['request_id', REQUEST_ID])
+    expect(mockCreateReclaimEntry).not.toHaveBeenCalled()
+  })
+
   it('refuses an invoice without a verifikat: no 1513 debit exists to move', async () => {
-    enqueue({ data: makeRequestRow() })
-    enqueue({ data: [makeItem('i1', INVOICE_A, 5000, null, { journal_entry_id: null })] })
+    enqueueOpen(makeRequestRow(), [makeItem('i1', INVOICE_A, 5000, null, { journal_entry_id: null })])
     const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(outcome).toMatchObject({ ok: false, code: 'ROT_RUT_RECLAIM_INVOICE_NOT_BOOKED' })
     expect(mockCreateReclaimEntry).not.toHaveBeenCalled()
   })
 
   it('refuses a credited or cancelled invoice and a non-SEK invoice', async () => {
-    enqueue({ data: makeRequestRow() })
-    enqueue({ data: [makeItem('i1', INVOICE_A, 5000, null, { status: 'credited' })] })
+    enqueueOpen(makeRequestRow(), [makeItem('i1', INVOICE_A, 5000, null, { status: 'credited' })])
     const credited = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(credited).toMatchObject({ ok: false, code: 'ROT_RUT_RECLAIM_INVOICE_NOT_OPEN' })
 
     reset()
-    enqueue({ data: makeRequestRow() })
-    enqueue({ data: [makeItem('i1', INVOICE_A, 5000, null, { currency: 'EUR' })] })
+    enqueueOpen(makeRequestRow(), [makeItem('i1', INVOICE_A, 5000, null, { currency: 'EUR' })])
     const foreign = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(foreign).toMatchObject({ ok: false, code: 'ROT_RUT_RECLAIM_CURRENCY' })
     expect(mockCreateReclaimEntry).not.toHaveBeenCalled()
@@ -207,16 +241,12 @@ describe('reclaimRotRutRefusal', () => {
 
   it('books one voucher and reopens every invoice for its refused share', async () => {
     // Two invoices, beslutsfil split: A fully approved (3 000), B refused (2 000).
-    enqueue({ data: makeRequestRow() })
-    enqueue({
-      data: [
-        makeItem('i1', INVOICE_A, 3000, 3000, { total: 6000, paid_amount: 3000, deduction_total: 3000 }),
-        makeItem('i2', INVOICE_B, 2000, 0, { total: 4000, paid_amount: 2000, deduction_total: 2000 }),
-      ],
-    })
+    enqueueOpen(makeRequestRow(), [
+      makeItem('i1', INVOICE_A, 3000, 3000, { total: 6000, paid_amount: 3000, deduction_total: 3000 }),
+      makeItem('i2', INVOICE_B, 2000, 0, { total: 4000, paid_amount: 2000, deduction_total: 2000 }),
+    ])
     enqueue({ data: { id: REQUEST_ID } }) // request CAS attach
-    enqueue({ data: null }) // invoice B update
-    enqueue({ data: null }) // item i2 update
+    enqueue({ data: true }) // apply_rot_rut_reclaim_invoice for B
 
     const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(outcome).toEqual({
@@ -248,25 +278,72 @@ describe('reclaimRotRutRefusal', () => {
     expect(requestUpdate).toMatchObject({ reclaim_journal_entry_id: 'je-reclaim' })
     expect(findCall('rot_rut_payout_requests', 'is')).toEqual(['reclaim_journal_entry_id', null])
 
-    // Invoice reopened: reclaimed grows, remaining = total - paid - deduction + reclaimed.
-    const invoiceUpdates = findCalls('invoices', 'update')
-    expect(invoiceUpdates).toHaveLength(1)
-    expect(invoiceUpdates[0][0]).toEqual({
-      deduction_reclaimed_total: 2000,
-      remaining_amount: 2000,
-      status: 'partially_paid',
+    // Invoice reopened through the atomic RPC: item marker + invoice row in
+    // one transaction; remaining = total - paid - deduction + reclaimed.
+    expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('apply_rot_rut_reclaim_invoice', {
+      p_item_id: 'i2',
+      p_invoice_id: INVOICE_B,
+      p_company_id: 'company-1',
+      p_reclaimed_amount: 2000,
+      p_remaining_amount: 2000,
+      p_status: 'partially_paid',
     })
-    expect(findCall('rot_rut_payout_request_items', 'update')?.[0]).toEqual({ reclaimed_amount: 2000 })
+    expect(findCalls('invoices', 'update')).toHaveLength(0)
+  })
+
+  it('resumes a reclaim whose voucher exists but whose invoice legs were not applied', async () => {
+    // Voucher + marker on the request landed, then the RPC failed for B.
+    // The second call books nothing, skips the CAS, and applies B only.
+    // Full avslag on both invoices: A's leg applied (marker 3 000), B's not.
+    enqueueOpen(makeRequestRow({ reclaim_journal_entry_id: 'je-reclaim', status: 'rejected', decided_total: 0 }), [
+      { ...makeItem('i1', INVOICE_A, 3000, null, { total: 6000, paid_amount: 3000, deduction_total: 3000 }), reclaimed_amount: 3000 },
+      makeItem('i2', INVOICE_B, 2000, null, { total: 4000, paid_amount: 2000, deduction_total: 2000 }),
+    ])
+    enqueue({ data: true }) // apply for B
+
+    const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
+    expect(outcome).toMatchObject({
+      ok: true,
+      journalEntryId: 'je-reclaim',
+      reclaimedTotal: 2000,
+      invoices: [{ invoice_id: INVOICE_B, reclaimed_amount: 2000 }],
+    })
+    expect(mockCreateReclaimEntry).not.toHaveBeenCalled()
+    expect(findCalls('rot_rut_payout_requests', 'update')).toHaveLength(0)
+    expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('apply_rot_rut_reclaim_invoice', expect.objectContaining({ p_item_id: 'i2' }))
+  })
+
+  it('reports ROT_RUT_RECLAIM_ALREADY_DONE once every leg carries its marker', async () => {
+    enqueueOpen(makeRequestRow({ reclaim_journal_entry_id: 'je-reclaim' }), [
+      { ...makeItem('i1', INVOICE_A, 5000, null), reclaimed_amount: 2000 },
+    ])
+    const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'ROT_RUT_RECLAIM_ALREADY_DONE',
+      details: { journal_entry_id: 'je-reclaim' },
+    })
+    expect(mockCreateReclaimEntry).not.toHaveBeenCalled()
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a failed invoice leg as an update-stage error and leaves the voucher standing', async () => {
+    enqueueOpen(makeRequestRow(), [makeItem('i1', INVOICE_A, 5000, null)])
+    enqueue({ data: { id: REQUEST_ID } })
+    enqueue({ data: null, error: { message: 'deadlock detected' } })
+    const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
+    expect(outcome).toMatchObject({ ok: false, kind: 'error', stage: 'update' })
+    expect(mockCreateReclaimEntry).toHaveBeenCalledTimes(1)
   })
 
   it('reopens a full avslag on a never-paid customer share as sent', async () => {
-    enqueue({ data: makeRequestRow({ status: 'rejected', decided_total: 0 }) })
-    enqueue({
-      data: [makeItem('i1', INVOICE_A, 5000, null, { status: 'sent', paid_amount: 0 })],
-    })
+    enqueueOpen(makeRequestRow({ status: 'rejected', decided_total: 0 }), [
+      makeItem('i1', INVOICE_A, 5000, null, { status: 'sent', paid_amount: 0 }),
+    ])
     enqueue({ data: { id: REQUEST_ID } })
-    enqueue({ data: null })
-    enqueue({ data: null })
+    enqueue({ data: true })
 
     const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(outcome).toMatchObject({
@@ -276,9 +353,25 @@ describe('reclaimRotRutRefusal', () => {
     })
   })
 
+  it('treats a paid invoice with a NULL paid_amount as having paid its customer share', async () => {
+    // Older settlement paths left paid_amount NULL on paid invoices; the
+    // reopen must be for the refused 2 000 only, not the whole customer share.
+    enqueueOpen(makeRequestRow(), [
+      makeItem('i1', INVOICE_A, 5000, null, { status: 'paid', paid_amount: null }),
+    ])
+    enqueue({ data: { id: REQUEST_ID } })
+    enqueue({ data: true })
+
+    const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
+    expect(outcome).toMatchObject({
+      ok: true,
+      reclaimedTotal: 2000,
+      invoices: [{ invoice_id: INVOICE_A, reclaimed_amount: 2000, remaining_amount: 2000, status: 'partially_paid' }],
+    })
+  })
+
   it('reports a lost CAS as ROT_RUT_RECLAIM_RACE and never unbooks', async () => {
-    enqueue({ data: makeRequestRow() })
-    enqueue({ data: [makeItem('i1', INVOICE_A, 5000, null)] })
+    enqueueOpen(makeRequestRow(), [makeItem('i1', INVOICE_A, 5000, null)])
     enqueue({ data: null }) // CAS lost: 0 rows
     const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(outcome).toMatchObject({
@@ -290,8 +383,7 @@ describe('reclaimRotRutRefusal', () => {
   })
 
   it('surfaces an engine failure as a book-stage error without touching any row', async () => {
-    enqueue({ data: makeRequestRow() })
-    enqueue({ data: [makeItem('i1', INVOICE_A, 5000, null)] })
+    enqueueOpen(makeRequestRow(), [makeItem('i1', INVOICE_A, 5000, null)])
     mockCreateReclaimEntry.mockRejectedValue(new Error('Bokföringen är låst'))
     const outcome = await reclaimRotRutRefusal(supabase, 'user-1', 'company-1', params)
     expect(outcome).toMatchObject({ ok: false, kind: 'error', stage: 'book' })

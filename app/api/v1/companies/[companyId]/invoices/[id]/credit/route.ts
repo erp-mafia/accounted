@@ -199,6 +199,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
       })
     }
+    // Same guard as the dashboard credit route: a reclaimed ROT/RUT share
+    // (rot_rut_reclaim) must be reversed before the issue-time split is credited.
+    if (Number((original as { deduction_reclaimed_total?: number | null }).deduction_reclaimed_total ?? 0) > 0) {
+      return v1ErrorResponseFromCode('INVOICE_CREDIT_ROT_RUT_RECLAIMED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { deduction_reclaimed_total: original.deduction_reclaimed_total },
+      })
+    }
     if (!['sent', 'paid', 'overdue'].includes(original.status)) {
       return v1ErrorResponseFromCode('INVOICE_CREDIT_NOT_SENT', ctx.log, {
         requestId: ctx.requestId,

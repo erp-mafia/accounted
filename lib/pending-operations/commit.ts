@@ -429,7 +429,14 @@ async function commitSettleRotRutPayout(
       }
     }
     const message = outcome.error instanceof Error ? outcome.error.message : 'rot/rut payout settle failed'
-    return { error: `${message} (stage: ${outcome.stage})`, status: 500 }
+    // stage 'update' = the voucher posted and the request row did not absorb
+    // it: failed_partial with the voucher id, never a plain retryable 500
+    // (a retry would hit journal_entries_rot_rut_payout_live_unique).
+    return {
+      error: `${message} (stage: ${outcome.stage})`,
+      status: 500,
+      ...(outcome.journalEntryId ? { partialPostedIds: { journal_entry_id: outcome.journalEntryId } } : {}),
+    }
   }
 
   // Audit-trail entry (ids only, no amounts or counterparty PII), same shape
@@ -5219,6 +5226,18 @@ async function commitCreditInvoice(
   if (original.status === 'credited') return { error: 'Invoice has already been credited', status: 409 }
   if (!['sent', 'paid', 'overdue'].includes(original.status)) {
     return { error: 'Only sent, paid, or overdue invoices can be credited', status: 400 }
+  }
+  // A refused ROT/RUT share booked onto the customer (rot_rut_reclaim) moved
+  // kronor from 1513 to 1510 after issue; the credit note reverses the
+  // issue-time split and would leave both accounts wrong. Reverse the reclaim
+  // first (same guard as the dashboard and v1 credit routes).
+  if (Number((original as { deduction_reclaimed_total?: number | null }).deduction_reclaimed_total ?? 0) > 0) {
+    const entry = getErrorEntry('INVOICE_CREDIT_ROT_RUT_RECLAIMED')
+    return {
+      error: entry?.message_en ?? 'Reverse the ROT/RUT reclaim voucher before crediting the invoice',
+      errorCode: 'INVOICE_CREDIT_ROT_RUT_RECLAIMED',
+      status: entry?.httpStatus ?? 400,
+    }
   }
 
   const today = new Date().toISOString().split('T')[0]

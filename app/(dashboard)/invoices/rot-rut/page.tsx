@@ -28,6 +28,7 @@ import {
 import { computeRefusedShares } from '@/lib/invoices/rot-rut-reclaim'
 import { expectedRotRutPayoutAmount } from '@/lib/invoices/rot-rut-payout-matching'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const RotRutPayoutDialog = dynamic(() => import('@/components/invoices/RotRutPayoutDialog'), {
   ssr: false,
@@ -85,21 +86,39 @@ function daysSince(iso: string): number {
   return Math.max(0, Math.floor(ms / 86_400_000))
 }
 
-/** Local calendar date (the user's day), same shape the dialogs use. */
-function todayIso(): string {
-  return new Date().toISOString().split('T')[0]
-}
 
-/** Refused share and whether it still needs its reclaim voucher. */
-function refusedState(request: PayoutRequest): { refused: number; needsReclaim: boolean; splitUnknown: boolean } {
+/**
+ * Refused share and whether it still needs its reclaim voucher. An invoice
+ * re-requested in a later live begäran (avslag → new file) is being reviewed
+ * again, so its refused share stays at Skatteverket: no reclaim offered, the
+ * same rule the reclaim route enforces.
+ */
+function refusedState(
+  request: PayoutRequest,
+  allRequests: PayoutRequest[],
+): { refused: number; needsReclaim: boolean; splitUnknown: boolean; rerequested: boolean } {
   const computed = computeRefusedShares(request, request.items)
   if (!computed.ok) {
-    return { refused: 0, needsReclaim: false, splitUnknown: computed.code === 'ROT_RUT_RECLAIM_SPLIT_UNKNOWN' }
+    return {
+      refused: 0,
+      needsReclaim: false,
+      splitUnknown: computed.code === 'ROT_RUT_RECLAIM_SPLIT_UNKNOWN',
+      rerequested: false,
+    }
   }
+  const ownInvoices = new Set(request.items.map((item) => item.invoice_id))
+  const rerequested = allRequests.some(
+    (other) =>
+      other.id !== request.id &&
+      other.status !== 'cancelled' &&
+      other.status !== 'rejected' &&
+      other.items.some((item) => ownInvoices.has(item.invoice_id)),
+  )
   return {
     refused: computed.total,
-    needsReclaim: computed.total > 0 && !request.reclaim_journal_entry_id,
+    needsReclaim: computed.total > 0 && !request.reclaim_journal_entry_id && !rerequested,
     splitUnknown: false,
+    rerequested,
   }
 }
 
@@ -171,7 +190,7 @@ export default function RotRutOverviewPage() {
     let refusedOpenCount = 0
     for (const request of requests) {
       if (request.status === 'cancelled') continue
-      const state = refusedState(request)
+      const state = refusedState(request, requests)
       if (state.needsReclaim) {
         refusedOpen += state.refused
         refusedOpenCount += 1
@@ -217,7 +236,7 @@ export default function RotRutOverviewPage() {
 
   async function reclaim(request: PayoutRequest) {
     if (!canWrite || busyId) return
-    const state = refusedState(request)
+    const state = refusedState(request, requests)
     const confirmed = await confirm({
       title: t('reclaim_confirm_title'),
       description: t('reclaim_confirm_description', {
@@ -234,7 +253,9 @@ export default function RotRutOverviewPage() {
       const response = await fetch(`/api/rot-rut/payout-requests/${request.id}/reclaim`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ booking_date: todayIso() }),
+        // The booking date is a Swedish calendar day (fiscal periods are), not
+        // the browser's UTC date.
+        body: JSON.stringify({ booking_date: todayIsoStockholm() }),
       })
       if (!response.ok) {
         toast({
@@ -435,10 +456,16 @@ export default function RotRutOverviewPage() {
             </thead>
             <tbody>
               {requests.map((request) => {
-                const state = refusedState(request)
+                const state = refusedState(request, requests)
                 const isBusy = busyId === request.id
+                // Waiting = at Skatteverket without a beslut. A decided begäran
+                // (beslutsfil imported, status may still read submitted) is
+                // waiting for money, not for a decision: no counter.
                 const waitingSince =
-                  !request.settlement_journal_entry_id && request.status !== 'cancelled' && request.status !== 'rejected'
+                  !request.settlement_journal_entry_id &&
+                  !request.decided_at &&
+                  request.status !== 'cancelled' &&
+                  request.status !== 'rejected'
                     ? request.submitted_at ?? request.created_at
                     : null
                 return (
@@ -496,7 +523,15 @@ export default function RotRutOverviewPage() {
                           {t('split_unknown')}
                         </span>
                       ) : state.refused > 0 ? (
-                        <span className={state.needsReclaim ? 'text-attn' : undefined}>{formatCurrency(state.refused)}</span>
+                        <span
+                          className={state.needsReclaim ? 'text-attn' : undefined}
+                          title={state.rerequested ? t('rerequested_hint') : undefined}
+                        >
+                          {formatCurrency(state.refused)}
+                          {state.rerequested && (
+                            <span className="ml-1 text-xs text-muted-foreground">{t('rerequested')}</span>
+                          )}
+                        </span>
                       ) : (
                         <span className="text-muted-foreground">-</span>
                       )}

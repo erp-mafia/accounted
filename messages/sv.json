@@ -4430,6 +4430,8 @@
     "reclaimed_link": "Nekat belopp bokfört",
     "split_unknown": "Fördelning saknas",
     "split_unknown_hint": "Beslutet registrerades som en totalsumma. Importera beslutsfilen så kan det nekade beloppet fördelas per faktura.",
+    "rerequested": "(begärd igen)",
+    "rerequested_hint": "Minst en faktura ingår i en senare begäran som Skatteverket prövar. Det nekade beloppet bokförs först när den begäran är avgjord.",
     "waiting_days": "{days, plural, =0 {i dag} one {1 dag} other {# dagar}}",
     "download": "Hämta fil",
     "cancel_request": "Avbryt",

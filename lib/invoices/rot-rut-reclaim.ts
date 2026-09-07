@@ -63,6 +63,7 @@ export type ReclaimRotRutErrorCode =
   | 'ROT_RUT_RECLAIM_INVOICE_NOT_BOOKED'
   | 'ROT_RUT_RECLAIM_INVOICE_NOT_OPEN'
   | 'ROT_RUT_RECLAIM_CURRENCY'
+  | 'ROT_RUT_RECLAIM_INVOICE_REREQUESTED'
   | 'ROT_RUT_RECLAIM_RACE'
 
 export interface ReclaimedInvoice {
@@ -160,18 +161,63 @@ export function computeRefusedShares(
     const refused = roundOre(Math.max(0, Math.min(requested, requested - decided)))
     shares.push({ itemId: item.id, invoiceId: item.invoice_id, refused })
   }
-  // Refused shares never exceed what the beslut refused overall: a beslut
-  // recorded above the requested total refuses nothing.
-  const total = roundOre(Math.min(shares.reduce((sum, s) => sum + s.refused, 0), Math.max(0, requestedTotal - decidedTotal)))
+  // The per-item shares ARE what gets booked, so they must reconcile with the
+  // request-level beslut to the öre. Items decided at less than the header
+  // says (or more) mean the recorded beslut is inconsistent: refuse, never
+  // book legs that sum to something else than the refused total.
+  const total = roundOre(shares.reduce((sum, s) => sum + s.refused, 0))
+  const refusedByHeader = roundOre(Math.max(0, requestedTotal - decidedTotal))
+  if (Math.abs(total - refusedByHeader) > 0.005) {
+    return { ok: false, code: 'ROT_RUT_RECLAIM_SPLIT_UNKNOWN' }
+  }
   return { ok: true, shares, total }
+}
+
+/**
+ * What the customer has paid on the invoice. `paid_amount` is nullable in the
+ * schema; a `paid` invoice with a NULL column (older settlement paths) has by
+ * definition settled its customer share, so that share stands in for the
+ * missing figure instead of reopening the whole invoice.
+ */
+function customerPaidAmount(invoice: Pick<InvoiceRow, 'status' | 'paid_amount' | 'total' | 'deduction_total'>): number {
+  if (invoice.paid_amount != null) return roundOre(Number(invoice.paid_amount))
+  if (invoice.status === 'paid') {
+    return roundOre(Number(invoice.total) - Number(invoice.deduction_total ?? 0))
+  }
+  return 0
 }
 
 /** Status of a reopened invoice: the customer's own share is still (partly) paid. */
 function reopenedStatus(invoice: InvoiceRow, newRemaining: number): string {
   if (newRemaining <= 0) return invoice.status
-  const paid = roundOre(Number(invoice.paid_amount ?? 0))
-  if (paid > 0) return 'partially_paid'
+  if (customerPaidAmount(invoice) > 0) return 'partially_paid'
   return invoice.status === 'overdue' ? 'overdue' : 'sent'
+}
+
+/**
+ * Invoices of this begäran that sit in ANOTHER begäran Skatteverket has not
+ * refused or the company has not cancelled. Avslag → new file is the normal
+ * retry (payout-requests/[id]/route.ts): while the invoice is re-requested,
+ * the refused share is being reviewed again and must not be booked onto the
+ * customer (skeptic #2397 C2). Returns the invoice ids, or the raw error.
+ */
+export async function findRerequestedInvoiceIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  requestId: string,
+  invoiceIds: string[],
+): Promise<{ ids: string[]; error: unknown }> {
+  if (invoiceIds.length === 0) return { ids: [], error: null }
+  const { data, error } = await supabase
+    .from('rot_rut_payout_request_items')
+    .select('invoice_id, request:rot_rut_payout_requests!inner(id, status, company_id)')
+    .eq('request.company_id', companyId)
+    .neq('request_id', requestId)
+    .in('invoice_id', invoiceIds)
+    .not('request.status', 'in', '("cancelled","rejected")')
+  if (error) return { ids: [], error }
+  const ids = [...new Set(((data ?? []) as Array<{ invoice_id: string }>).map((row) => row.invoice_id))]
+  return { ids, error: null }
 }
 
 export async function reclaimRotRutRefusal(
@@ -200,14 +246,12 @@ export async function reclaimRotRutRefusal(
       details: { status: req.status, reason: 'En avbruten begäran har inget beslut att bokföra.' },
     }
   }
-  if (req.reclaim_journal_entry_id) {
-    return {
-      ok: false,
-      kind: 'code',
-      code: 'ROT_RUT_RECLAIM_ALREADY_DONE',
-      details: { journal_entry_id: req.reclaim_journal_entry_id },
-    }
-  }
+  // A begäran that already carries its reclaim voucher is not refused
+  // outright: a failure between the voucher and the per-invoice writes leaves
+  // legs whose item marker (reclaimed_amount) is still NULL, and re-running
+  // completes exactly those legs through the idempotent RPC (resume mode).
+  // Only when every leg is applied is the call ROT_RUT_RECLAIM_ALREADY_DONE.
+  const resumeJournalEntryId = req.reclaim_journal_entry_id
 
   const { data: itemRows, error: itemsError } = await supabase
     .from('rot_rut_payout_request_items')
@@ -222,13 +266,48 @@ export async function reclaimRotRutRefusal(
   if (!computed.ok) {
     return { ok: false, kind: 'code', code: computed.code, details: { request_id: req.id } }
   }
-  const shares = computed.shares.filter((share) => share.refused > 0)
-  if (shares.length === 0 || computed.total <= 0) {
+  const refusedShares = computed.shares.filter((share) => share.refused > 0)
+  if (refusedShares.length === 0 || computed.total <= 0) {
     return {
       ok: false,
       kind: 'code',
       code: 'ROT_RUT_RECLAIM_NOTHING_REFUSED',
       details: { requested_total: Number(req.requested_total), decided_total: Number(req.decided_total) },
+    }
+  }
+  // Resume mode: only the legs whose marker is still unset are pending.
+  const shares = resumeJournalEntryId
+    ? refusedShares.filter((share) => {
+        const item = items.find((row) => row.id === share.itemId)
+        return item != null && item.reclaimed_amount == null
+      })
+    : refusedShares
+  if (resumeJournalEntryId && shares.length === 0) {
+    return {
+      ok: false,
+      kind: 'code',
+      code: 'ROT_RUT_RECLAIM_ALREADY_DONE',
+      details: { journal_entry_id: resumeJournalEntryId },
+    }
+  }
+
+  // An invoice Skatteverket is reviewing again (a later, live begäran) keeps
+  // its refused share on 1513 until that beslut lands.
+  const rerequested = await findRerequestedInvoiceIds(
+    supabase,
+    companyId,
+    req.id,
+    shares.map((share) => share.invoiceId),
+  )
+  if (rerequested.error) {
+    return { ok: false, kind: 'error', error: rerequested.error, stage: 'fetch' }
+  }
+  if (rerequested.ids.length > 0) {
+    return {
+      ok: false,
+      kind: 'code',
+      code: 'ROT_RUT_RECLAIM_INVOICE_REREQUESTED',
+      details: { invoice_ids: rerequested.ids },
     }
   }
 
@@ -299,58 +378,70 @@ export async function reclaimRotRutRefusal(
     })
   }
 
-  // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
-  try {
-    const entry = await createRotRutReclaimEntry(supabase, companyId, userId, {
-      requestId: req.id,
-      requestName: req.name,
-      deductionType: req.deduction_type,
-      bookingDate: params.bookingDate,
-      legs: legs.map((leg) => ({
-        invoiceId: leg.invoiceId,
-        invoiceNumber: leg.invoiceNumber,
-        amount: leg.amount,
-      })),
+  if (resumeJournalEntryId) {
+    journalEntryId = resumeJournalEntryId
+    log.warn('rot/rut reclaim resuming: voucher exists, completing unapplied invoice legs', {
+      payoutRequestId: req.id,
+      journalEntryId,
+      pendingInvoiceIds: legs.map((leg) => leg.invoiceId),
     })
-    journalEntryId = entry.id
-  } catch (engineError) {
-    return { ok: false, kind: 'error', error: engineError, stage: 'book' }
-  }
+  } else {
+    // The voucher is the accounting record: engine failure must block.
+    try {
+      const entry = await createRotRutReclaimEntry(supabase, companyId, userId, {
+        requestId: req.id,
+        requestName: req.name,
+        deductionType: req.deduction_type,
+        bookingDate: params.bookingDate,
+        legs: legs.map((leg) => ({
+          invoiceId: leg.invoiceId,
+          invoiceNumber: leg.invoiceNumber,
+          amount: leg.amount,
+        })),
+      })
+      journalEntryId = entry.id
+    } catch (engineError) {
+      return { ok: false, kind: 'error', error: engineError, stage: 'book' }
+    }
 
-  // CAS on reclaim_journal_entry_id IS NULL: a concurrent reclaim must not
-  // reopen the invoices twice. The loser's voucher is caught by the partial
-  // unique index before it posts; this guard covers the request row itself.
-  const { data: attached, error: attachError } = await supabase
-    .from('rot_rut_payout_requests')
-    .update({ reclaim_journal_entry_id: journalEntryId, reclaimed_at: new Date().toISOString() })
-    .eq('company_id', companyId)
-    .eq('id', req.id)
-    .is('reclaim_journal_entry_id', null)
-    .select('id')
-    .maybeSingle()
-  if (attachError) {
-    log.error('rot/rut reclaim entry booked but request update failed', attachError as Error, {
-      journalEntryId,
-      payoutRequestId: req.id,
-    })
-    return { ok: false, kind: 'error', error: attachError, stage: 'update' }
-  }
-  if (!attached) {
-    log.error('rot/rut reclaim entry booked but request was reclaimed concurrently', undefined, {
-      journalEntryId,
-      payoutRequestId: req.id,
-    })
-    return {
-      ok: false,
-      kind: 'code',
-      code: 'ROT_RUT_RECLAIM_RACE',
-      details: { journal_entry_id: journalEntryId, request_id: req.id },
+    // CAS on reclaim_journal_entry_id IS NULL: a concurrent reclaim must not
+    // reopen the invoices twice. The loser's voucher is caught by the partial
+    // unique index before it posts; this guard covers the request row itself.
+    const { data: attached, error: attachError } = await supabase
+      .from('rot_rut_payout_requests')
+      .update({ reclaim_journal_entry_id: journalEntryId, reclaimed_at: new Date().toISOString() })
+      .eq('company_id', companyId)
+      .eq('id', req.id)
+      .is('reclaim_journal_entry_id', null)
+      .select('id')
+      .maybeSingle()
+    if (attachError) {
+      log.error('rot/rut reclaim entry booked but request update failed', attachError as Error, {
+        journalEntryId,
+        payoutRequestId: req.id,
+      })
+      return { ok: false, kind: 'error', error: attachError, stage: 'update' }
+    }
+    if (!attached) {
+      log.error('rot/rut reclaim entry booked but request was reclaimed concurrently', undefined, {
+        journalEntryId,
+        payoutRequestId: req.id,
+      })
+      return {
+        ok: false,
+        kind: 'code',
+        code: 'ROT_RUT_RECLAIM_RACE',
+        details: { journal_entry_id: journalEntryId, request_id: req.id },
+      }
     }
   }
 
-  // Reopen every invoice for its refused share. Best-effort after the voucher
-  // (never unbook); a failed row is logged with ids so support can repair it.
+  // Reopen every invoice for its refused share. Each leg is one atomic,
+  // idempotent RPC (apply_rot_rut_reclaim_invoice: item marker + invoice row
+  // in one transaction, a set marker is a no-op), so a failure here is
+  // retryable by calling again: the voucher stands (never unbook) and the
+  // resume path above completes the missing legs.
   const reopened: ReclaimedInvoice[] = []
   for (const leg of legs) {
     const invoice = leg.invoice
@@ -363,39 +454,32 @@ export async function reclaimRotRutRefusal(
           deduction_total: Number(invoice.deduction_total ?? 0),
           deduction_reclaimed_total: newReclaimed,
         },
-        Number(invoice.paid_amount ?? 0),
+        customerPaidAmount(invoice),
       ),
     )
     const newStatus = reopenedStatus(invoice, newRemaining)
 
-    const { error: invoiceError } = await supabase
-      .from('invoices')
-      .update({
-        deduction_reclaimed_total: newReclaimed,
-        remaining_amount: newRemaining,
-        status: newStatus,
-      })
-      .eq('company_id', companyId)
-      .eq('id', invoice.id)
-    if (invoiceError) {
-      log.error('rot/rut reclaim booked but invoice reopen failed', invoiceError as Error, {
+    const { data: applied, error: applyError } = await supabase.rpc('apply_rot_rut_reclaim_invoice', {
+      p_item_id: leg.item.id,
+      p_invoice_id: invoice.id,
+      p_company_id: companyId,
+      p_reclaimed_amount: leg.amount,
+      p_remaining_amount: newRemaining,
+      p_status: newStatus,
+    })
+    if (applyError) {
+      log.error('rot/rut reclaim booked but invoice reopen failed (retry the reclaim to resume)', applyError as Error, {
         journalEntryId,
         payoutRequestId: req.id,
         invoiceId: invoice.id,
         reclaimedAmount: leg.amount,
       })
-      return { ok: false, kind: 'error', error: invoiceError, stage: 'update' }
+      return { ok: false, kind: 'error', error: applyError, stage: 'update' }
     }
-
-    const { error: itemError } = await supabase
-      .from('rot_rut_payout_request_items')
-      .update({ reclaimed_amount: leg.amount })
-      .eq('id', leg.item.id)
-    if (itemError) {
-      log.warn('failed to record reclaimed_amount on item', {
-        itemId: leg.item.id,
-        message: itemError.message,
-      })
+    if (applied === false) {
+      // Marker already set by a concurrent resume: that call reported the leg.
+      log.warn('rot/rut reclaim leg already applied', { itemId: leg.item.id, invoiceId: invoice.id })
+      continue
     }
 
     reopened.push({

@@ -1075,6 +1075,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Det nekade beloppet kan bara bokföras för fakturor i SEK.',
     message_en: 'The refused amount can only be booked for invoices in SEK.',
   },
+  ROT_RUT_RECLAIM_INVOICE_REREQUESTED: {
+    httpStatus: 409,
+    message_sv:
+      'Minst en faktura i begäran ingår i en senare begäran som inte är avslagen. Det nekade beloppet kan inte bokföras på kunden när Skatteverket prövar fakturan igen.',
+    message_en:
+      'At least one invoice in this request is part of a later request that is not rejected. The refused amount cannot be booked onto the customer while Skatteverket is reviewing the invoice again.',
+  },
   ROT_RUT_RECLAIM_RACE: {
     httpStatus: 409,
     message_sv:
@@ -1123,6 +1130,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Fakturan har redan krediterats.',
     message_en: 'Invoice has already been credited.',
+  },
+  INVOICE_CREDIT_ROT_RUT_RECLAIMED: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan har ett nekat ROT/RUT-avdrag bokfört som kundfordran. Makulera den bokningen (verifikationen med nekat avdrag) innan fakturan krediteras, annars stämmer inte kreditfakturans fördelning mellan konto 1510 och 1513.',
+    message_en:
+      'The invoice carries a refused ROT/RUT deduction booked as a customer receivable. Reverse that voucher before crediting the invoice, otherwise the credit note splits 1510 and 1513 wrongly.',
   },
   INVOICE_CREDIT_NOT_SENT: {
     httpStatus: 400,

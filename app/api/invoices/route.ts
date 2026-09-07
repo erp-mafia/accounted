@@ -351,6 +351,18 @@ async function createCreditNote(
     })
   }
 
+  // A refused ROT/RUT share booked onto the customer (rot_rut_reclaim) moved
+  // kronor from 1513 to 1510 after issue; the credit note reverses the
+  // issue-time split (1510 total minus deduction, 1513 deduction) and would
+  // leave a phantom fordran on 1510 and a phantom liability on 1513. Reverse
+  // the reclaim voucher first; the storno sync closes the invoice again.
+  if (Number((originalInvoice as { deduction_reclaimed_total?: number | null }).deduction_reclaimed_total ?? 0) > 0) {
+    return errorResponseFromCode('INVOICE_CREDIT_ROT_RUT_RECLAIMED', log, {
+      requestId,
+      details: { deduction_reclaimed_total: originalInvoice.deduction_reclaimed_total },
+    })
+  }
+
   // Self-billed originals have invoice_number null by design (the DB
   // constraint invoices_self_billed_numbering enforces it); their number
   // lives in external_invoice_number. Without this fallback the credit note

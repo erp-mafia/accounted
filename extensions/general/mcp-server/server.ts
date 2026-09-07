@@ -57,6 +57,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
@@ -17266,7 +17267,7 @@ export const tools: McpTool[] = [
         settlement_journal_entry_id: { type: ['string', 'null'], description: 'Voucher that booked Skatteverkets utbetalning (debit 19xx / credit 1513)' },
         refused_total: { type: 'number', description: 'Share Skatteverket refused (requested minus decided), 0 until a beslut is recorded' },
         reclaim_journal_entry_id: { type: ['string', 'null'], description: 'Voucher that moved the refused share back onto the customers (debit 1510 / credit 1513); null while still to book' },
-        refused_needs_reclaim: { type: 'boolean', description: 'True when a refused share exists and no reclaim voucher is booked yet (book it in the dashboard, Fakturor > ROT/RUT)' },
+        refused_needs_reclaim: { type: 'boolean', description: 'True when a refused share exists, no reclaim voucher is booked yet, and no invoice of the begäran is re-requested in a later live begäran (book it in the dashboard, Fakturor > ROT/RUT)' },
         skv_referensnummer: { type: ['string', 'null'] },
         created_at: { type: 'string' },
         submitted_at: { type: ['string', 'null'] },
@@ -17340,10 +17341,34 @@ export const tools: McpTool[] = [
         }> | null
       }
       const rows = ((data ?? []) as unknown as Row[])
-      const payoutRequests = rows.slice(0, limit).map((row) => {
+      const pageRows = rows.slice(0, limit)
+      // An invoice re-requested in a later live begäran keeps its refused
+      // share at Skatteverket: the reclaim service refuses it, so the list
+      // must not advertise it either (one query for the whole page).
+      const rerequestedByRequest = new Map<string, Set<string>>()
+      const pageInvoiceIds = [...new Set(pageRows.flatMap((row) => (row.items ?? []).map((item) => item.invoice_id)))]
+      if (pageInvoiceIds.length > 0) {
+        const { data: siblings, error: siblingsError } = await supabase
+          .from('rot_rut_payout_request_items')
+          .select('invoice_id, request_id, request:rot_rut_payout_requests!inner(id, status, company_id)')
+          .eq('request.company_id', companyId)
+          .in('invoice_id', pageInvoiceIds)
+          .not('request.status', 'in', '("cancelled","rejected")')
+        if (siblingsError) throw dbError(siblingsError)
+        for (const row of pageRows) {
+          const own = new Set((row.items ?? []).map((item) => item.invoice_id))
+          const hits = new Set<string>()
+          for (const sibling of (siblings ?? []) as Array<{ invoice_id: string; request_id: string }>) {
+            if (sibling.request_id !== row.id && own.has(sibling.invoice_id)) hits.add(sibling.invoice_id)
+          }
+          rerequestedByRequest.set(row.id, hits)
+        }
+      }
+      const payoutRequests = pageRows.map((row) => {
         const items = row.items ?? []
         const refused = computeRefusedShares(row, items)
         const refusedTotal = refused.ok ? refused.total : 0
+        const rerequested = rerequestedByRequest.get(row.id)?.size ?? 0
         return {
           request_id: row.id,
           name: row.name,
@@ -17356,7 +17381,7 @@ export const tools: McpTool[] = [
           settlement_journal_entry_id: row.settlement_journal_entry_id,
           refused_total: refusedTotal,
           reclaim_journal_entry_id: row.reclaim_journal_entry_id,
-          refused_needs_reclaim: refusedTotal > 0 && !row.reclaim_journal_entry_id,
+          refused_needs_reclaim: refusedTotal > 0 && !row.reclaim_journal_entry_id && rerequested === 0,
           skv_referensnummer: row.skv_referensnummer,
           created_at: row.created_at,
           submitted_at: row.submitted_at,
@@ -17413,14 +17438,22 @@ export const tools: McpTool[] = [
 
       const { data: transaction, error: txError } = await supabase
         .from('transactions')
-        .select('id, description, merchant_name, amount, currency, date, journal_entry_id')
+        .select('id, description, merchant_name, amount, currency, date, journal_entry_id, transaction_voucher_links(journal_entry_id, role)')
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .single()
       if (txError || !transaction) throw registryError('TX_CATEGORIZE_TX_NOT_FOUND')
       if (!(transaction.amount > 0)) throw registryError('ROT_RUT_MATCH_NOT_INCOME')
       if ((transaction.currency || 'SEK').toUpperCase() !== 'SEK') throw registryError('ROT_RUT_MATCH_CURRENCY')
-      if (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id)) {
+      // Same predicate as the commit writer: a live pointer OR a bank_line
+      // junction row (samlingsverifikat) means the row is already booked.
+      if (
+        hasBankLineJunctionRow(
+          (transaction as { transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null })
+            .transaction_voucher_links,
+        ) ||
+        (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id))
+      ) {
         throw registryError('ROT_RUT_MATCH_TX_ALREADY_LINKED')
       }
 
@@ -17435,9 +17468,11 @@ export const tools: McpTool[] = [
       if (missing.length > 0) throw registryError('ROT_RUT_REQUEST_NOT_FOUND')
       const blocked = requests.find((r) => !isMatchableRotRutPayoutRequest(r))
       if (blocked) {
-        throw codedError(
-          'ROT_RUT_SETTLE_INVALID_STATE',
-          `Begäran "${blocked.name}" är ${blocked.settlement_journal_entry_id ? 'redan bokförd som utbetald' : blocked.status} och kan inte matchas.`,
+        throw Object.assign(
+          new Error(
+            `Begäran "${blocked.name}" är ${blocked.settlement_journal_entry_id ? 'redan bokförd som utbetald' : blocked.status} och kan inte matchas.`,
+          ),
+          { code: 'ROT_RUT_SETTLE_INVALID_STATE' },
         )
       }
 
@@ -17447,9 +17482,11 @@ export const tools: McpTool[] = [
       const expectedTotal = roundOre(requests.reduce((sum, r) => sum + expectedRotRutPayoutAmount(r), 0))
       const txAmount = roundOre(transaction.amount)
       if (Math.abs(txAmount - expectedTotal) > 0.005) {
-        throw codedError(
-          requestIds.length === 1 ? 'ROT_RUT_SETTLE_AMOUNT_EXCEEDS' : 'ROT_RUT_SETTLE_SET_AMOUNT',
-          `Transaktionen är ${txAmount} kr men ${requestIds.length === 1 ? 'begäran väntar' : 'de valda begäran väntar tillsammans'} ${expectedTotal} kr. Skatteverket betalar exakt beslutade belopp: välj de begäran som summerar till transaktionen, eller registrera beslutet först.`,
+        throw Object.assign(
+          new Error(
+            `Transaktionen är ${txAmount} kr men ${requestIds.length === 1 ? 'begäran väntar' : 'de valda begäran väntar tillsammans'} ${expectedTotal} kr. Skatteverket betalar exakt beslutade belopp: välj de begäran som summerar till transaktionen, eller registrera beslutet först.`,
+          ),
+          { code: requestIds.length === 1 ? 'ROT_RUT_SETTLE_AMOUNT_EXCEEDS' : 'ROT_RUT_SETTLE_SET_AMOUNT' },
         )
       }
 

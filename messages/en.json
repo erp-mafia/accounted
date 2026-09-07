@@ -4430,6 +4430,8 @@
     "reclaimed_link": "Refused amount booked",
     "split_unknown": "Split missing",
     "split_unknown_hint": "The decision was recorded as one total. Import the decision file so the refused amount can be split per invoice.",
+    "rerequested": "(requested again)",
+    "rerequested_hint": "At least one invoice is part of a later request Skatteverket is reviewing. The refused amount is booked once that request is decided.",
     "waiting_days": "{days, plural, =0 {today} one {1 day} other {# days}}",
     "download": "Download file",
     "cancel_request": "Cancel",

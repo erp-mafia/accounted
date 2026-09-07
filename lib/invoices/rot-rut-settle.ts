@@ -88,8 +88,12 @@ export type SettleRotRutPayoutOutcome =
       fullyPaid: boolean
     }
   | { ok: false; kind: 'code'; code: SettleRotRutPayoutErrorCode; details?: Record<string, unknown> }
-  /** A raw Supabase/engine error the route maps through errorResponse(). */
-  | { ok: false; kind: 'error'; error: unknown; stage: 'fetch' | 'book' | 'update' }
+  /**
+   * A raw Supabase/engine error the route maps through errorResponse(). At
+   * stage 'update' the voucher is already posted: journalEntryId names it so
+   * a caller can persist the partial state instead of losing the id.
+   */
+  | { ok: false; kind: 'error'; error: unknown; stage: 'fetch' | 'book' | 'update'; journalEntryId?: string }
 
 const SETTLED_REQUEST_COLUMNS =
   'id, name, deduction_type, status, requested_total, decided_total, decided_at, settlement_journal_entry_id'
@@ -343,7 +347,7 @@ export async function settleRotRutPayoutRequest(
       journalEntryId,
       payoutRequestId: params.requestId,
     })
-    return { ok: false, kind: 'error', error: updateError, stage: 'update' }
+    return { ok: false, kind: 'error', error: updateError, stage: 'update', journalEntryId }
   }
   if (!updated) {
     // The loser's voucher already exists (immutable per BFL): say so loudly
@@ -436,7 +440,7 @@ export type SettleRotRutPayoutSetOutcome =
       amount: number
     }
   | { ok: false; kind: 'code'; code: SettleRotRutPayoutErrorCode; details?: Record<string, unknown> }
-  | { ok: false; kind: 'error'; error: unknown; stage: 'fetch' | 'book' | 'update' }
+  | { ok: false; kind: 'error'; error: unknown; stage: 'fetch' | 'book' | 'update'; journalEntryId?: string }
 
 /**
  * Settle several begäran with ONE bank transfer: one voucher (debit 19xx for
@@ -555,7 +559,7 @@ export async function settleRotRutPayoutRequestSet(
         payoutRequestId: leg.request.id,
         settledRequestIds: settled.map((request) => request.id),
       })
-      return { ok: false, kind: 'error', error: updateError, stage: 'update' }
+      return { ok: false, kind: 'error', error: updateError, stage: 'update', journalEntryId }
     }
     if (!updated) {
       log.error('rot/rut payout set entry booked but a request was settled concurrently', undefined, {

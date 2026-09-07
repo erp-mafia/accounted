@@ -34,6 +34,7 @@ import {
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
+import { syncRotRutReclaimAfterReversal } from '@/lib/invoices/rot-rut-reclaim-reversal'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import type {
   AssetDisposalType,
@@ -1453,6 +1454,14 @@ export async function reverseEntry(
   // covers the business-level state that lives outside the GL).
   if (isPaymentSourceType(original.source_type)) {
     await syncInvoiceStatusFromPaymentEntry(supabase, companyId, original as JournalEntry)
+  }
+
+  // A reversed rot_rut_reclaim voucher hands the refused share back to
+  // Skatteverket's side: the invoices it reopened close again, the begäran
+  // becomes reclaimable again (same business-state mirror as the payment
+  // sync above, skeptic #2397 R3).
+  if (original.source_type === 'rot_rut_reclaim') {
+    await syncRotRutReclaimAfterReversal(supabase, companyId, original.id)
   }
 
   // Fetch complete reversal entry with lines
