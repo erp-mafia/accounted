@@ -1710,6 +1710,10 @@ export const CategorizeTransactionSchema = z
     category: TransactionCategorySchema.optional(),
     template_id: z.string().optional(),
     vat_treatment: VatTreatmentSchema.optional(),
+    // The underlag's actual moms, in the transaction's currency. Replaces the
+    // rate-based VAT line of a category or template booking (see
+    // buildMappingResultFromCategory / applyVatAmountOverride).
+    vat_amount: z.number().positive().optional(),
     account_override: accountNumber.optional(),
     counterparty_template_id: z.string().uuid().optional(),
     // Dimensions bag {sie_dim_no: code} applied to the business lines of the
