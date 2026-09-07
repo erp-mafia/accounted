@@ -12,17 +12,12 @@
  * 6. GET /accounts/{uid}/transactions
  */
 
-import { getAuthorizationHeader } from './jwt'
 import { deriveTransactionLabel } from './transaction-label'
 import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
-import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
 import { dateFromDaysBefore, historyWindowDays } from './history-window'
+import { ENABLE_BANKING_API_URL, resolveEnableBankingTransport } from './transport'
 
-// Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
-const ENABLE_BANKING_API_URL =
-  process.env.ENABLE_BANKING_API_URL_PRODUCTION ||
-  process.env.ENABLE_BANKING_API_URL ||
-  'https://api.enablebanking.com'
+export { ENABLE_BANKING_API_URL }
 
 // Types
 
@@ -393,16 +388,12 @@ async function authenticatedFetch(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  // Connector mode: a self-host with a connector key and no own Enable Banking
-  // credentials routes every upstream call through the hosted bank proxy. The
-  // proxy holds the real EB credentials and mints the JWT on its side, so the
-  // instance sends the connector key as a Bearer token and NEVER calls
-  // getAuthorizationHeader() (there is no private key to sign with here). When
-  // this instance has its own EB credentials, or on hosted, bankConnectorMode()
-  // returns null and the direct path below is byte-identical to before.
-  const connector = bankConnectorMode()
-  const url = connector ? `${connector.baseUrl}${endpoint}` : `${ENABLE_BANKING_API_URL}${endpoint}`
-  const authorization = connector ? `Bearer ${connector.key}` : getAuthorizationHeader()
+  // The transport (own credentials, or the Accounted Connect bank proxy) is
+  // decided in ./transport from installation configuration; this client only
+  // sends where it is told and authenticates how it is told.
+  const transport = resolveEnableBankingTransport()
+  const url = `${transport.baseUrl}${endpoint}`
+  const authorization = transport.authorization()
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
 
@@ -632,20 +623,15 @@ export async function startAuthorization(
     requestBody.auth_method = authMethod
   }
 
-  // In connector mode the hosted bank proxy meters the per-company connection
-  // quota, so it needs to know which company this authorization is for. This is
-  // gated on bankConnectorMode(), NOT merely on companyId: on hosted and on
-  // own-credentials self-hosts companyId is always set, and sending an internal
-  // company UUID to the real Enable Banking API is both a needless behavior
-  // change and an identifier leak to a third-party processor. Off the connector
-  // path the direct request stays byte-identical.
-  const authHeaders =
-    companyId && bankConnectorMode() ? { [CONNECTOR_COMPANY_HEADER]: companyId } : undefined
+  // The Connect bank proxy meters the per-company connection quota, so it
+  // needs to know which company this authorization is for; the direct path
+  // adds nothing (see transport.companyHeaders).
+  const authHeaders = resolveEnableBankingTransport().companyHeaders(companyId)
 
   const response = await authenticatedFetch('/auth', {
     method: 'POST',
     body: JSON.stringify(requestBody),
-    ...(authHeaders ? { headers: authHeaders } : {}),
+    ...(Object.keys(authHeaders).length > 0 ? { headers: authHeaders } : {}),
   })
 
   if (!response.ok) {
