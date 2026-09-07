@@ -128,14 +128,15 @@ export async function POST(request: Request) {
 
   // WooCommerce posts once per approval. A second POST for the same state is
   // a replay of something we already hold: never re-probe or overwrite staged
-  // keys on its say-so. Answer 200 without touching anything so the response
-  // does not double as an "has the merchant approved yet" oracle for whoever
-  // holds the state.
+  // keys on its say-so. It still runs the activation flip, so a callback that
+  // was cut off between staging and activating is completed by its retry, and
+  // it answers 200 either way so the status code does not double as an "has
+  // the merchant approved yet" oracle for whoever holds the state.
   if (pending.consumer_key_encrypted) {
     log.warn('duplicate handshake callback for a state that already holds keys', {
       connectionId: pending.id,
     })
-    return NextResponse.json({ success: true, activated: false })
+    return finishActivation(supabase, pending.id, markError)
   }
 
   // Authenticity check: the keys must actually work against the store URL the
@@ -192,7 +193,19 @@ export async function POST(request: Request) {
     )
   }
 
-  const activation = await activateIfComplete(supabase, pending.id)
+  return finishActivation(supabase, pending.id, markError)
+}
+
+/**
+ * Run the conditional flip for a row whose keys are staged and answer
+ * WooCommerce. Shared by the first callback and by a replayed one.
+ */
+async function finishActivation(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  connectionId: string,
+  markError: (message: string) => PromiseLike<unknown>,
+): Promise<Response> {
+  const activation = await activateIfComplete(supabase, connectionId)
 
   if (activation.outcome === 'incomplete') {
     // Browser has not confirmed yet (the usual order: WooCommerce posts here
@@ -205,7 +218,7 @@ export async function POST(request: Request) {
     // (to this or another company), or the company connected in a parallel tab.
     const isConflict = activation.outcome === 'conflict'
     log.error('failed to activate connection', {
-      connectionId: pending.id,
+      connectionId,
       code: activation.error.code,
       message: activation.error.message,
     })

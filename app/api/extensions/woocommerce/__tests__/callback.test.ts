@@ -203,9 +203,10 @@ describe('POST /api/extensions/woocommerce/callback', () => {
     )
   })
 
-  it('answers a duplicate POST for a state that already holds keys with 200 and touches nothing', async () => {
+  it('answers a duplicate POST for a state that already holds keys with 200, never re-probes, but still runs the flip', async () => {
     const { enqueue, findCalls } = mockServiceClient()
     enqueue({ data: { ...PENDING_ROW, consumer_key_encrypted: 'enc:already' } })
+    enqueue({ data: null }) // activateIfComplete: browser not confirmed yet
 
     const res = await POST(makeCallbackRequest({ ...VALID_BODY, consumer_key: 'ck_forged' }))
     // 200, not 4xx: WooCommerce deletes its key and shows a store-side error
@@ -214,7 +215,33 @@ describe('POST /api/extensions/woocommerce/callback', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, activated: false })
     expect(testConnectionAndFetchStoreInfo).not.toHaveBeenCalled()
-    expect(findCalls('woocommerce_connections', 'update')).toHaveLength(0)
+    // The only write is the conditional activation: the forged keys in the
+    // body never reach the row.
+    const updates = findCalls('woocommerce_connections', 'update')
+    expect(updates).toHaveLength(1)
+    expect(updates[0][0]).toMatchObject({ status: 'active' })
+    expect(updates[0][0]).not.toHaveProperty('consumer_key_encrypted')
+  })
+
+  it('completes a callback that was cut off between staging and activating when WooCommerce replays it', async () => {
+    const { enqueue } = mockServiceClient()
+    enqueue({ data: { ...PENDING_ROW, consumer_key_encrypted: 'enc:already' } })
+    enqueue({
+      data: {
+        id: 'conn-1',
+        company_id: 'company-1',
+        user_id: 'user-1',
+        store_url: 'https://shop.example.se',
+      },
+    }) // activateIfComplete: browser had confirmed in the meantime
+
+    const res = await POST(makeCallbackRequest(VALID_BODY))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, activated: true })
+    expect(testConnectionAndFetchStoreInfo).not.toHaveBeenCalled()
+    expect(eventBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'woocommerce.connected' }),
+    )
   })
 
   it('stages keys for a slow approval past the handshake TTL instead of refusing (WooCommerce wp_dies on non-200)', async () => {

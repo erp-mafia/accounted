@@ -39,6 +39,10 @@ update public.woocommerce_connections
  where status = 'active'
    and browser_confirmed_at is null;
 
+-- NOT VALID: enforced for every new and updated row from this statement on,
+-- without the full-table scan under ACCESS EXCLUSIVE that a plain ADD
+-- CONSTRAINT takes. The two UPDATEs above already made every existing row
+-- conform; 20260907150000 runs VALIDATE CONSTRAINT under the weaker lock.
 alter table public.woocommerce_connections
   add constraint woocommerce_connections_active_requires_both_signals
   check (
@@ -48,6 +52,6 @@ alter table public.woocommerce_connections
       and consumer_secret_encrypted is not null
       and browser_confirmed_at is not null
     )
-  );
+  ) not valid;
 
 NOTIFY pgrst, 'reload schema';

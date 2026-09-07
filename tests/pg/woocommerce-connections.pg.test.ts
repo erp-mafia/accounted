@@ -27,6 +27,11 @@ const ACTIVE_VALUES = "'active', 'enc:k', 'enc:s', now()"
  *      on insert and on update, so the wc-auth callback (keys only) and the
  *      return leg (confirmation only) can each write their signal without
  *      either alone ever producing a syncable row.
+ * Covers migration 20260907150000_woocommerce_browser_confirmation_server_only:
+ *   6. browser_confirmed_at is server-only: an end-user session (JWT role
+ *      authenticated) cannot insert or update it, even on its own company's
+ *      row, so a colleague cannot supply the initiator's signal. Service-role
+ *      and pool writes pass.
  */
 
 describe('woocommerce_connections RLS', () => {
@@ -252,6 +257,53 @@ describe('woocommerce_connections RLS', () => {
         [id],
       )
       expect(rows[0].status).toBe('pending')
+    })
+
+    it('refuses browser_confirmed_at from an end-user session, on insert and on update', async () => {
+      const { userId, companyId } = await seedCompany()
+      const id = await insertPending(companyId, userId, uniqueStore('server-only'))
+      await getPool().query(
+        `UPDATE public.woocommerce_connections
+            SET consumer_key_encrypted = 'enc:k', consumer_secret_encrypted = 'enc:s'
+          WHERE id = $1`,
+        [id],
+      )
+      // One user block per statement: withUserContext is a single transaction
+      // and the first refusal aborts it.
+      await withUserContext(userId, async (client) => {
+        // A member of the company (RLS passes) still cannot supply the signal.
+        await expect(
+          client.query(
+            `UPDATE public.woocommerce_connections SET browser_confirmed_at = now() WHERE id = $1`,
+            [id],
+          ),
+        ).rejects.toMatchObject({ code: '42501' })
+      })
+      await withUserContext(userId, async (client) => {
+        await expect(
+          client.query(
+            `INSERT INTO public.woocommerce_connections
+               (company_id, user_id, store_url, status, browser_confirmed_at)
+             VALUES ($1, $2, $3, 'pending', now())`,
+            [companyId, userId, uniqueStore('server-only-insert')],
+          ),
+        ).rejects.toMatchObject({ code: '42501' })
+      })
+      await withUserContext(userId, async (client) => {
+        // Other columns stay member-writable (the disconnect/supersede paths).
+        const ok = await client.query(
+          `UPDATE public.woocommerce_connections SET error_message = 'x' WHERE id = $1`,
+          [id],
+        )
+        expect(ok.rowCount).toBe(1)
+      })
+      // The server path (no end-user JWT) can.
+      const server = await getPool().query(
+        `UPDATE public.woocommerce_connections SET browser_confirmed_at = now()
+          WHERE id = $1 RETURNING browser_confirmed_at`,
+        [id],
+      )
+      expect(server.rows[0].browser_confirmed_at).not.toBeNull()
     })
 
     it('lets a parked row drop its keys: the CHECK only constrains active rows', async () => {
