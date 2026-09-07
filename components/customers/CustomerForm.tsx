@@ -126,6 +126,16 @@ export default function CustomerForm({
         message: COUNTRY_CONSISTENCY_MESSAGES[countryIssue][locale],
       })
     }
+    // ML 17 kap. 24 § p.4: a reverse-charge invoice must carry the buyer's VAT
+    // number. The API refuses the flag without one; saying it here keeps the
+    // fix one click away instead of one failed save away.
+    if (customer.construction_reverse_charge && !customer.vat_number?.trim()) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['vat_number'],
+        message: t('construction_reverse_charge_vat_required'),
+      })
+    }
     // A personnummer entered as a business org number would be shown
     // unmasked in every list (only individual customers are masked).
     if (

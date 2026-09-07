@@ -1048,6 +1048,16 @@ export const CreateCustomerSchema = z.object({
       message: 'Construction reverse charge is only allowed for Swedish business customers',
     })
   }
+  // ML 17 kap. 24 § p.4: a reverse-charge invoice must carry the buyer's VAT
+  // number. Refuse the flag without one rather than letting it produce an
+  // invoice that is missing a mandatory field.
+  if (customer.construction_reverse_charge && !customer.vat_number?.trim()) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['vat_number'],
+      message: "Construction reverse charge requires the buyer's VAT number",
+    })
+  }
   // Country vs customer type vs VAT prefix (#2025): an EU business with
   // country SE got reverse charge and nothing objected until the periodisk
   // sammanställning, after the invoice was sent. An omitted country is SE

@@ -21,6 +21,17 @@
 ALTER TABLE public.customers
   ADD COLUMN IF NOT EXISTS construction_reverse_charge BOOLEAN NOT NULL DEFAULT false;
 
+-- Defense in depth, same as customers_customer_type_check: the API refuses the
+-- combination and the VAT rules ignore it, but two concurrent updates (one
+-- setting the flag, one changing the type) could still leave a stale true on a
+-- customer the rule cannot apply to. A later switch back to swedish_business
+-- would then zero-rate invoices without anyone opting in again.
+ALTER TABLE public.customers
+  DROP CONSTRAINT IF EXISTS customers_construction_reverse_charge_type_check;
+ALTER TABLE public.customers
+  ADD CONSTRAINT customers_construction_reverse_charge_type_check
+  CHECK (NOT construction_reverse_charge OR customer_type = 'swedish_business');
+
 COMMENT ON COLUMN public.customers.construction_reverse_charge IS
   'Buyer accounts for VAT on construction services (ML 16 kap. 13 §). Honoured for customer_type swedish_business only.';
 

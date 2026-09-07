@@ -67,7 +67,7 @@ export const PATCH = withRouteContext(
 
     const { data: existing, error: existingError } = await supabase
       .from('customers')
-      .select('id, customer_type, country, vat_number')
+      .select('id, customer_type, country, vat_number, construction_reverse_charge')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -150,6 +150,27 @@ export const PATCH = withRouteContext(
         messageSv: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv,
         messageEn: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en,
         details: { issue: countryIssue, field: 'country' },
+      })
+    }
+
+    // ML 17 kap. 24 § p.4: the flag makes every invoice to this customer a
+    // reverse-charge invoice, which must carry the buyer's VAT number. Judged on
+    // the effective values so clearing the VAT number on an already-flagged
+    // customer is refused too, not only setting the flag without one.
+    const effectiveConstructionRc =
+      body.construction_reverse_charge ?? existing.construction_reverse_charge ?? false
+    const effectiveVatNumber = body.vat_number ?? existing.vat_number
+    const constructionRcTouched =
+      body.construction_reverse_charge !== undefined || body.vat_number !== undefined
+    if (
+      constructionRcTouched
+      && effectiveConstructionRc
+      && effectiveType === 'swedish_business'
+      && !effectiveVatNumber?.trim()
+    ) {
+      return errorResponseFromCode('CUSTOMER_CONSTRUCTION_RC_VAT_NUMBER_MISSING', opLog, {
+        requestId,
+        details: { field: 'vat_number' },
       })
     }
 
