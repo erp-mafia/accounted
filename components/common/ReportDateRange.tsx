@@ -202,7 +202,8 @@ export function ReportDateRange({
 
   return (
     <div className={cn('flex flex-col gap-2', className)}>
-      <Label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      {/* field-label: a styling-free hook so shell v2 can drop the label inside its top bar. */}
+      <Label className="field-label text-xs font-medium uppercase tracking-wider text-muted-foreground">
         {t('date_range_label')}
       </Label>
       <div className="flex flex-wrap items-center gap-1.5">
