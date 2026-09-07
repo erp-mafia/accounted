@@ -38,12 +38,14 @@ import { HELVETICA_WIDTHS } from '@/lib/invoices/pdf-glyph-widths'
  * be dropped from the page entirely.
  *
  * Widths are the real Helvetica advances at 10pt (HELVETICA_WIDTHS) with a
- * 10% margin so the bundled fonts (Source Sans 3, Source Serif 4, measured
- * within a few percent of Helvetica) stay under the same budget. A glyph
- * Helvetica does not carry (Cyrillic, Greek, symbols) is counted at the
- * widest Latin advance so it can only be over-estimated. Ordinary Swedish
- * compounds up to about 28 characters come out under 160pt and are never
- * split in the narrowest column.
+ * 10% margin for the bundled fonts (Source Sans 3, Source Serif 4). Those
+ * are narrower than Helvetica on most letters but up to 20% wider on the
+ * narrow ones (i, l, I, r); ordinary words come out at or under the
+ * estimate, and only a token of some 40 consecutive narrow glyphs could
+ * get past it. A glyph Helvetica does not carry (Cyrillic, Greek, symbols)
+ * is counted at the widest Latin advance so it can only be over-estimated.
+ * Ordinary Swedish compounds up to about 28 characters come out under
+ * 160pt and are never split in the narrowest column.
  */
 const FONT_SIZE_PT = 10
 const WIDTH_SAFETY_FACTOR = 1.1
