@@ -3382,6 +3382,18 @@
     "mixed_currency_note": "Underlag i olika valutor kan inte summeras till ett belopp. Varje underlag bokförs ändå var för sig, mot sin matchade banktransaktion och det belopp banken faktiskt drog i SEK."
   },
   "inbox_workspace": {
+    "pipe_incoming": "Inkommet",
+    "pipe_parsed": "Tolkat",
+    "pipe_matched": "Matchat",
+    "pipe_booked": "Bokfört",
+    "pipe_archived": "Arkiverat",
+    "pipe_auto": "auto",
+    "pipe_aria": "Steg i flödet",
+    "pipe_incoming_help": "Allt som kommit in via mejl, WhatsApp, Peppol, uppladdning eller kvittojakt.",
+    "pipe_parsed_help": "Belopp, datum och motpart är lästa. Väntar på matchning eller bokföring.",
+    "pipe_matched_help": "Kopplat till en bankrad eller registrerat som faktura.",
+    "pipe_booked_help": "Bokfört som verifikat.",
+    "pipe_archived_help": "Arkiverat med verifikatet i sju år (BFL 7 kap.).",
     "payer_help_owner_ef": "Bokförs som egen insättning (2018). Inget att betala ut.",
     "expense_dialog_help_owner_ef": "Kostnad och moms bokförs nu som egen insättning på konto 2018. Firman har ingen skuld till dig: tar du ut pengar senare är det ett eget uttag.",
     "expense_outcome_ef": "Ingen rad i Att göra: en egen insättning är inget som ska betalas ut.",

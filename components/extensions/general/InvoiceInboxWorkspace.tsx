@@ -3,6 +3,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
+import { useShell } from '@/components/dashboard/ShellProvider'
+import { InboxPipeline, type InboxPipeStage } from '@/components/extensions/general/InboxPipeline'
 import { useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -809,6 +811,27 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     return counts
   }, [items])
 
+  // Shell v2 (UI v2 PR 7): the flow bar over the same rows. Each cell is a
+  // status filter the workspace already has; Tolkat counts items whose
+  // fields have been read, Arkiverat follows booking.
+  const shell = useShell()
+  const pipeCounts = useMemo(
+    () => ({
+      incoming: items.length,
+      parsed: items.filter((it) => it.extracted_data && it.status !== 'processing' && it.status !== 'error').length,
+      matched: statusCounts.linked + statusCounts.booked,
+      booked: statusCounts.booked,
+      archived: statusCounts.booked,
+    }),
+    [items, statusCounts],
+  )
+  const pipeActive: InboxPipeStage | null =
+    filter === 'all' ? 'incoming' : filter === 'todo' ? 'parsed' : filter === 'linked' ? 'matched' : filter === 'booked' ? 'booked' : null
+  const selectPipeStage = (stage: InboxPipeStage) => {
+    setFilter(stage === 'incoming' ? 'all' : stage === 'parsed' ? 'todo' : stage === 'matched' ? 'linked' : 'booked')
+    setSelectedPurchaseId(null)
+  }
+
   // Pills, in order. The error pill only appears when there's something errored
   // (or it's the active filter): keeps the happy-path inbox uncluttered.
   const pills = useMemo(() => {
@@ -1503,6 +1526,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           </Button>
         </div>
       </header>
+
+      {shell === 'v2' && <InboxPipeline counts={pipeCounts} active={pipeActive} onSelect={selectPipeStage} />}
 
       {/* A pass takes over two minutes and reports nothing until it lands, so
           a spinner alone leaves somebody watching a button. This says which

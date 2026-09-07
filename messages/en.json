@@ -3382,6 +3382,18 @@
     "mixed_currency_note": "Documents in different currencies cannot be summed into a single amount. Each document is still booked separately, against its matched bank transaction and the amount the bank actually settled in SEK."
   },
   "inbox_workspace": {
+    "pipe_incoming": "Received",
+    "pipe_parsed": "Read",
+    "pipe_matched": "Matched",
+    "pipe_booked": "Booked",
+    "pipe_archived": "Archived",
+    "pipe_auto": "auto",
+    "pipe_aria": "Flow steps",
+    "pipe_incoming_help": "Everything that arrived by email, WhatsApp, Peppol, upload or receipt hunt.",
+    "pipe_parsed_help": "Amount, date and counterparty are read. Waiting to be matched or booked.",
+    "pipe_matched_help": "Linked to a bank row or registered as an invoice.",
+    "pipe_booked_help": "Booked as a journal entry.",
+    "pipe_archived_help": "Archived with the entry for seven years (BFL 7 kap.).",
     "payer_help_owner_ef": "Booked as an owner contribution (2018). Nothing to pay out.",
     "expense_dialog_help_owner_ef": "Cost and VAT are booked now as an owner contribution on account 2018. The firm owes you nothing: taking money out later is an owner withdrawal.",
     "expense_outcome_ef": "No row in To do: an owner contribution is not something to pay out.",

@@ -88,6 +88,8 @@ Shipped scope (PR 6a): no new status values. The stage is DERIVED (`lib/supplier
 - Underlag rows link to the bank row or the invoice they belong to; "Svara vad det var" creates the own document per BFL 5 kap. 6–7 §§.
 - Chasing is out of scope in this PR (decision 5).
 
+Shipped scope (PR 7a): in shell v2 the Dokumentinkorg workspace opens with the flow bar Inkommet → Tolkat → Matchat → Bokfört → Arkiverat, counted from the rows it already holds and wired to the status filters it already has (all / todo / linked / booked). The "källor" chip in the header remains the "Tar emot från" line (mailboxes, WhatsApp number, last searched). "Svara vad det var" is the existing Bokför direkt path. Chasing is not built (decision 5).
+
 ### PR 8: registers as lists
 
 Fakturering, Bokföring, Löner, Skatt, Rapporter, Bokslut and Konton get the toolbar row, the section picker and the one-line table. Existing editors stay. This is the long tail and can be split per page.
