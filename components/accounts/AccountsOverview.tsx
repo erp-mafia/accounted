@@ -24,9 +24,9 @@ function Mark({ account }: { account: ReconciliationAccount }) {
     .join('')
   return account.logo_url ? (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={account.logo_url} alt="" className="h-7 w-7 shrink-0 rounded-md object-contain" />
+    <img src={account.logo_url} alt="" className="h-7 w-7 shrink-0 rounded-sm object-contain" />
   ) : (
-    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-secondary text-[11px] font-medium text-muted-foreground">
+    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm bg-secondary text-[11px] font-medium text-muted-foreground">
       {initials || '·'}
     </span>
   )
