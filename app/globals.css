@@ -891,10 +891,18 @@ input[type="number"] {
   letter-spacing: 0;
   white-space: nowrap;
 }
-/* A field label above a picker in the top bar would make the bar two rows
-   tall; the pickers' own values say what they are. */
-[data-shell="v2"] .page-header .field-label {
+/* A field label above a picker (PERIOD, DIMENSION) makes a toolbar two rows
+   tall; in v2 the pickers' own values say what they are, in the top bar and
+   in a page's filter row alike. */
+[data-shell="v2"] .field-label {
   display: none;
+}
+/* Pages that centre a narrow column in v1 (Momsdeklaration) run full
+   width in v2, like every other v2 page. Styling-free hook. */
+[data-shell="v2"] .report-narrow {
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
 }
 [data-shell="v2"] .page-header-desc {
   display: none;
