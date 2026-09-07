@@ -246,6 +246,9 @@ describe('woocommerce extension routes', () => {
         string
       >
       expect(inserted.status).toBe('active')
+      // Keys typed in under a session count as the browser confirmation the
+      // activation CHECK (20260907100000) requires alongside the keys.
+      expect(typeof inserted.browser_confirmed_at).toBe('string')
       expect(inserted.store_name).toBe('Testbutiken')
       // Secrets never stored in plaintext, and they decrypt back.
       expect(inserted.consumer_key_encrypted).not.toContain('ck_x')

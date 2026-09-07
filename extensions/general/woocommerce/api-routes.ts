@@ -110,6 +110,8 @@ async function blockOrSupersedeExisting(
         status: 'error',
         error_message: 'Superseded by new connection attempt',
         oauth_state: null,
+        consumer_key_encrypted: null,
+        consumer_secret_encrypted: null,
       })
       .eq('company_id', auth.companyId)
       .eq('store_url', storeUrl)
@@ -302,6 +304,9 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
           consumer_secret_encrypted: encryptCredential(consumerSecret),
           status: 'active',
           connected_at: new Date().toISOString(),
+          // The keys were typed in under this user's session: that IS the
+          // browser confirmation the activation CHECK requires.
+          browser_confirmed_at: new Date().toISOString(),
           transaction_sync_enabled: true,
         })
         .select('id, store_url')

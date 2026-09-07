@@ -4,11 +4,14 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
   createClient: vi.fn(),
 }))
+vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
+vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
 vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: vi.fn() } }))
 
 import { GET } from '../return/route'
 import { createServiceClient, createClient } from '@/lib/supabase/server'
+import { eventBus } from '@/lib/events/bus'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
@@ -38,11 +41,19 @@ function mockSession(userId: string | null) {
   return getUser
 }
 
-const ROW = (status: 'pending' | 'active') => ({
+const ROW = (status: 'pending' | 'active', ageMs = 0) => ({
   id: 'conn-1',
   user_id: 'user-1',
   status,
+  created_at: new Date(Date.now() - ageMs).toISOString(),
 })
+
+const ACTIVATED = {
+  id: 'conn-1',
+  company_id: 'company-1',
+  user_id: 'user-1',
+  store_url: 'https://shop.example.se',
+}
 
 describe('GET /api/extensions/woocommerce/return', () => {
   beforeEach(() => {
@@ -73,12 +84,17 @@ describe('GET /api/extensions/woocommerce/return', () => {
       `${BASE}/import?mode=woocommerce&woocommerce_error=denied`,
     )
     const update = findCall('woocommerce_connections', 'update')?.[0] as Record<string, unknown>
-    expect(update).toMatchObject({ status: 'error', oauth_state: null })
+    expect(update).toMatchObject({
+      status: 'error',
+      oauth_state: null,
+      consumer_key_encrypted: null,
+      consumer_secret_encrypted: null,
+    })
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
   describe('approved leg (success=1)', () => {
-    it('hands an active row over to its initiator and consumes the state', async () => {
+    it('hands a row the pre-gate callback activated over to its initiator and consumes the state', async () => {
       const { enqueue, findCalls } = mockServiceClient()
       const getUser = mockSession('user-1')
       enqueue({ data: ROW('active') }) // lookup by oauth_state
@@ -94,18 +110,97 @@ describe('GET /api/extensions/woocommerce/return', () => {
       expect(updates[0][0]).toEqual({ oauth_state: null })
     })
 
-    it('leaves a still-pending row untouched for the initiator (the callback still needs the state)', async () => {
-      const { enqueue, findCalls } = mockServiceClient()
-      mockSession('user-1')
-      enqueue({ data: ROW('pending') })
+    it('records the initiator confirmation and activates a pending row whose keys are staged', async () => {
+      const { enqueue, findCalls, calls } = mockServiceClient()
+      const getUser = mockSession('user-1')
+      enqueue({ data: ROW('pending') }) // lookup by oauth_state
+      enqueue({ data: null }) // browser_confirmed_at update
+      enqueue({ data: ACTIVATED }) // activateIfComplete: keys already staged
 
       const res = await GET(makeReturnRequest({ success: '1', user_id: STATE }))
 
       expect(res.headers.get('location')).toBe(CONNECTED)
-      expect(findCalls('woocommerce_connections', 'update')).toHaveLength(0)
+      expect(getUser).toHaveBeenCalledTimes(1)
+      const updates = findCalls('woocommerce_connections', 'update')
+      expect(updates).toHaveLength(2)
+      expect(Object.keys(updates[0][0] as object)).toEqual(['browser_confirmed_at'])
+      expect(updates[1][0]).toMatchObject({
+        status: 'active',
+        transaction_sync_enabled: true,
+        oauth_state: null,
+      })
+      // Activation is conditional on both signals, scoped to this pending row.
+      const notCalls = calls.filter((c) => c.method === 'not').map((c) => c.args)
+      expect(notCalls).toContainEqual(['consumer_key_encrypted', 'is', null])
+      expect(notCalls).toContainEqual(['browser_confirmed_at', 'is', null])
+      expect(eventBus.emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'woocommerce.connected',
+          payload: expect.objectContaining({ connectionId: 'conn-1', companyId: 'company-1' }),
+        }),
+      )
     })
 
-    it('revokes an already-activated row when a different user completes the handshake', async () => {
+    it('records the confirmation and waits (no connected toast) when the keys have not landed yet', async () => {
+      const { enqueue, findCalls } = mockServiceClient()
+      mockSession('user-1')
+      enqueue({ data: ROW('pending') })
+      enqueue({ data: null }) // browser_confirmed_at update
+      enqueue({ data: null }) // activateIfComplete: no keys yet, zero rows
+
+      const res = await GET(makeReturnRequest({ success: '1', user_id: STATE }))
+
+      expect(res.headers.get('location')).toBe(`${BASE}/import?mode=woocommerce`)
+      const updates = findCalls('woocommerce_connections', 'update')
+      expect(updates).toHaveLength(2)
+      expect(Object.keys(updates[0][0] as object)).toEqual(['browser_confirmed_at'])
+      // The state is left on the row: the late callback still needs it.
+      expect(updates[0][0]).not.toHaveProperty('oauth_state')
+      expect(eventBus.emit).not.toHaveBeenCalled()
+    })
+
+    it('parks an expired pending row with its keys wiped instead of confirming it', async () => {
+      const { enqueue, findCalls } = mockServiceClient()
+      mockSession('user-1')
+      enqueue({ data: ROW('pending', 16 * 60_000) })
+      enqueue({ data: null }) // expire update
+
+      const res = await GET(makeReturnRequest({ success: '1', user_id: STATE }))
+
+      expect(res.headers.get('location')).toBe(
+        `${BASE}/import?mode=woocommerce&woocommerce_error=expired`,
+      )
+      const updates = findCalls('woocommerce_connections', 'update')
+      expect(updates).toHaveLength(1)
+      expect(updates[0][0]).toMatchObject({
+        status: 'error',
+        oauth_state: null,
+        consumer_key_encrypted: null,
+        consumer_secret_encrypted: null,
+      })
+      expect(eventBus.emit).not.toHaveBeenCalled()
+    })
+
+    it('parks the row and reports a conflict when the store is already actively connected', async () => {
+      const { enqueue, findCalls } = mockServiceClient()
+      mockSession('user-1')
+      enqueue({ data: ROW('pending') })
+      enqueue({ data: null }) // browser_confirmed_at update
+      enqueue({ data: null, error: { code: '23505', message: 'duplicate key' } })
+      enqueue({ data: null }) // park update
+
+      const res = await GET(makeReturnRequest({ success: '1', user_id: STATE }))
+
+      expect(res.headers.get('location')).toBe(
+        `${BASE}/import?mode=woocommerce&woocommerce_error=conflict`,
+      )
+      const updates = findCalls('woocommerce_connections', 'update')
+      expect(updates).toHaveLength(3)
+      expect(updates[2][0]).toMatchObject({ status: 'error', consumer_key_encrypted: null })
+      expect(eventBus.emit).not.toHaveBeenCalled()
+    })
+
+    it('revokes a row the pre-gate callback already activated when a different user completes the handshake', async () => {
       const { enqueue, findCalls, calls } = mockServiceClient()
       mockSession('user-2')
       enqueue({ data: ROW('active') })
@@ -135,7 +230,7 @@ describe('GET /api/extensions/woocommerce/return', () => {
       expect(eqCalls).toContainEqual(['id', 'conn-1'])
     })
 
-    it('closes a still-pending row when a different user completes it, so the late callback cannot activate it', async () => {
+    it('closes a still-pending row when a different user completes it, so the late callback cannot stage or activate it', async () => {
       const { enqueue, findCalls } = mockServiceClient()
       mockSession('user-2')
       enqueue({ data: ROW('pending') })
@@ -148,7 +243,14 @@ describe('GET /api/extensions/woocommerce/return', () => {
       )
       const updates = findCalls('woocommerce_connections', 'update')
       expect(updates).toHaveLength(1)
-      expect(updates[0][0]).toMatchObject({ status: 'error', oauth_state: null })
+      expect(updates[0][0]).toMatchObject({
+        status: 'error',
+        oauth_state: null,
+        consumer_key_encrypted: null,
+        consumer_secret_encrypted: null,
+      })
+      expect(updates[0][0]).not.toHaveProperty('browser_confirmed_at')
+      expect(eventBus.emit).not.toHaveBeenCalled()
     })
 
     it('sends an anonymous browser to /login with the return URL preserved and touches nothing', async () => {

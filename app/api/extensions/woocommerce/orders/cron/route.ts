@@ -8,6 +8,7 @@ import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { isWooCommerceConfigured } from '@/extensions/general/woocommerce/lib/credentials'
 import { syncWooCommerceOrders } from '@/extensions/general/woocommerce/lib/order-sync'
+import { expireStaleHandshakes } from '@/extensions/general/woocommerce/lib/connect'
 import type { WooCommerceConnection } from '@/extensions/general/woocommerce/types'
 
 export const maxDuration = 300
@@ -52,6 +53,19 @@ export const GET = withCronContext('cron.woocommerce_order_sync', async (_reques
   }
 
   const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+
+  // Hygiene first: park handshakes nobody completed and wipe their staged
+  // keys. A pending row never syncs (every consumer selects 'active'), so a
+  // failure here is logged, not fatal.
+  const sweep = await expireStaleHandshakes(supabase)
+  if (sweep.error) {
+    ctx.log.error('failed to expire stale woocommerce handshakes', {
+      code: sweep.error.code,
+      message: sweep.error.message,
+    })
+  } else if (sweep.expired > 0) {
+    ctx.log.info('expired stale woocommerce handshakes', { expired: sweep.expired })
+  }
 
   const { data: connections, error: connError } = await supabase
     .from('woocommerce_connections')

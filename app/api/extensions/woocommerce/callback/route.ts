@@ -11,6 +11,11 @@ import {
   isWooCommerceConfigured,
 } from '@/extensions/general/woocommerce/lib/credentials'
 import { testConnectionAndFetchStoreInfo } from '@/extensions/general/woocommerce/lib/api-client'
+import {
+  activateIfComplete,
+  HANDSHAKE_EXPIRED_MESSAGE,
+  isHandshakeExpired,
+} from '@/extensions/general/woocommerce/lib/connect'
 
 // This route emits woocommerce.connected (audit trail). ensureInitialized()
 // must run at module load so the event_log handler has subscribed before the
@@ -32,6 +37,12 @@ export const maxDuration = 60
  * unauthenticated: the single-use oauth_state riding in user_id locates the
  * pending row, and the received keys are verified against that row's stored
  * store_url before anything is persisted.
+ *
+ * This leg has no browser session, so it can only STAGE the verified keys on
+ * the pending row. The row becomes active when the initiator's browser has
+ * confirmed on the return leg as well (activateIfComplete, either order).
+ * A pending row never syncs, so keys staged for a handshake nobody confirms
+ * are inert until the nightly sweep wipes them.
  */
 export async function POST(request: Request) {
   loadExtensions()
@@ -81,7 +92,7 @@ export async function POST(request: Request) {
 
   const { data: pending, error: findError } = await supabase
     .from('woocommerce_connections')
-    .select('id, company_id, user_id, store_url')
+    .select('id, company_id, user_id, store_url, created_at, consumer_key_encrypted')
     .eq('oauth_state', state)
     .eq('status', 'pending')
     .single()
@@ -97,9 +108,31 @@ export async function POST(request: Request) {
   const markError = (message: string) =>
     supabase
       .from('woocommerce_connections')
-      .update({ status: 'error', error_message: message, oauth_state: null })
+      .update({
+        status: 'error',
+        error_message: message,
+        oauth_state: null,
+        consumer_key_encrypted: null,
+        consumer_secret_encrypted: null,
+      })
       .eq('id', pending.id)
       .eq('status', 'pending')
+
+  if (isHandshakeExpired(pending.created_at)) {
+    log.warn('handshake callback arrived after the TTL', { connectionId: pending.id })
+    await markError(HANDSHAKE_EXPIRED_MESSAGE)
+    return NextResponse.json({ error: 'Handshake expired' }, { status: 410 })
+  }
+
+  // WooCommerce posts once per approval. A second POST for the same state is
+  // a replay or a retry of something we already hold: never re-probe or
+  // overwrite staged keys on its say-so.
+  if (pending.consumer_key_encrypted) {
+    log.warn('duplicate handshake callback for a state that already holds keys', {
+      connectionId: pending.id,
+    })
+    return NextResponse.json({ error: 'Credentials already received' }, { status: 409 })
+  }
 
   // Authenticity check: the keys must actually work against the store URL the
   // user asked to connect. A forged callback with someone else's (or made-up)
@@ -120,7 +153,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Credential verification failed' }, { status: 502 })
   }
 
-  const { data: activated, error: updateError } = await supabase
+  // Stage the verified keys. Status stays pending: this POST has no browser
+  // session, so the initiator binding happens on the return leg, and the row
+  // only flips to active once that leg has confirmed too. oauth_state stays
+  // until activation so the return leg can still find the row.
+  const { data: staged, error: stageError } = await supabase
     .from('woocommerce_connections')
     .update({
       consumer_key_encrypted: encryptCredential(consumerKey),
@@ -130,32 +167,43 @@ export async function POST(request: Request) {
       currency: storeInfo.currency,
       prices_include_tax: storeInfo.prices_include_tax,
       wc_version: storeInfo.wc_version,
-      status: 'active',
-      connected_at: new Date().toISOString(),
       error_message: null,
-      // oauth_state is deliberately KEPT here. This POST is server-to-server
-      // (the store calls it, no browser session), so the initiator check has
-      // to happen on the browser leg (../return), which locates the row by
-      // this same state and consumes it there. Replay is still blocked: both
-      // the lookup above and this update are scoped to status 'pending', so
-      // an active row can never be activated again.
-      // Feed-only product: connecting the store means fetching its orders, so
-      // the nightly feed starts on by default; the panel toggle is the opt-out.
-      transaction_sync_enabled: true,
     })
     .eq('id', pending.id)
     .eq('status', 'pending')
-    .select('id, company_id, user_id, store_url')
-    .single()
+    .select('id')
+    .maybeSingle()
 
-  if (updateError || !activated) {
+  if (stageError || !staged) {
+    // The row left 'pending' between lookup and here (superseded, denied on
+    // the return leg, or expired by the sweep): nothing to stage against.
+    log.error('failed to stage verified credentials', {
+      connectionId: pending.id,
+      code: stageError?.code,
+      message: stageError?.message,
+    })
+    return NextResponse.json(
+      { error: stageError ? 'Staging failed' : 'Unknown or expired state' },
+      { status: stageError ? 500 : 404 },
+    )
+  }
+
+  const activation = await activateIfComplete(supabase, pending.id)
+
+  if (activation.outcome === 'incomplete') {
+    // Browser has not confirmed yet (the usual order: WooCommerce posts here
+    // before it redirects the merchant). The return leg finishes the job.
+    return NextResponse.json({ success: true, activated: false })
+  }
+
+  if (activation.outcome !== 'activated') {
     // 23505 = a partial unique index: the store is already actively connected
     // (to this or another company), or the company connected in a parallel tab.
-    const isConflict = updateError?.code === '23505'
+    const isConflict = activation.outcome === 'conflict'
     log.error('failed to activate connection', {
       connectionId: pending.id,
-      code: updateError?.code,
-      message: updateError?.message,
+      code: activation.error.code,
+      message: activation.error.message,
     })
     await markError(
       isConflict
@@ -168,6 +216,7 @@ export async function POST(request: Request) {
     )
   }
 
+  const activated = activation.connection
   try {
     await eventBus.emit({
       type: 'woocommerce.connected',
@@ -186,5 +235,5 @@ export async function POST(request: Request) {
     })
   }
 
-  return NextResponse.json({ success: true })
+  return NextResponse.json({ success: true, activated: true })
 }
