@@ -105,7 +105,6 @@ async function refusePendingLogin(
       supabase,
       email: user.email,
       host: forwardedHost(request),
-      proto: request.headers.get('x-forwarded-proto'),
     })
     if (!sent.ok) {
       log.warn('could not re-send bankid confirmation mail', { userId, step: sent.step })
@@ -1417,7 +1416,6 @@ export const ticExtension: Extension = {
             supabase,
             email: trimmedEmail!,
             host,
-            proto: request.headers.get('x-forwarded-proto'),
           })
 
           if (!sent.ok) {
