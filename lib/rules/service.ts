@@ -7,6 +7,7 @@ import { aliasPatterns, type RuleMode, type RuleRow } from './model'
  * route, the detail route and the MCP surface read the same thing.
  */
 
+/** Column list, repeated literally in every query so the schema guard can read it. */
 export const RULE_COLUMNS =
   'id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at'
 
@@ -22,7 +23,7 @@ export interface RuleMatch {
 export async function listRules(supabase: SupabaseClient, companyId: string): Promise<RuleRow[]> {
   const { data, error } = await supabase
     .from('categorization_templates')
-    .select(RULE_COLUMNS)
+    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
     .eq('company_id', companyId)
     .order('occurrence_count', { ascending: false })
     .order('updated_at', { ascending: false })
@@ -33,7 +34,7 @@ export async function listRules(supabase: SupabaseClient, companyId: string): Pr
 export async function getRule(supabase: SupabaseClient, companyId: string, id: string): Promise<RuleRow | null> {
   const { data, error } = await supabase
     .from('categorization_templates')
-    .select(RULE_COLUMNS)
+    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('id', id)
     .maybeSingle()
@@ -85,7 +86,7 @@ export async function setRuleMode(
     .update({ mode })
     .eq('company_id', companyId)
     .eq('id', id)
-    .select(RULE_COLUMNS)
+    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
     .maybeSingle()
   if (error) throw error
   return (data as unknown as RuleRow) ?? null
