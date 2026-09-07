@@ -4358,11 +4358,11 @@ export default function TransactionsPage() {
                 checkbox/chevron hang into the page margins without being
                 clipped by the overflow container, while the columns stay
                 flush with the page edges. */}
-            <div className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8">
+            <div className={cn('overflow-x-auto', txColumns ? '-mx-4 px-4 md:-mx-6 md:px-6' : '-mx-5 px-5 md:-mx-8 md:px-8')}>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
-                    <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
+                    <th className={cn(TH_CLASS, txColumns ? 'w-7 !pl-0 !pr-2' : 'w-0 !p-0')} aria-hidden="true"></th>
                     {(!txColumns || txColumns.has('date')) && (
                       <th className={cn(TH_CLASS, '!pl-0')}>{t('th_date')}</th>
                     )}
