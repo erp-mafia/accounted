@@ -27,10 +27,58 @@ import { unitLabel } from '@/lib/invoices/unit-labels'
 
 /**
  * react-pdf hyphenates long words with English patterns by default, which
- * split Swedish words at English syllable boundaries ("Septem-ber"). Passing
- * this callback to a Text node makes every word wrap whole instead.
+ * split Swedish words at English syllable boundaries ("Septem-ber"). This
+ * callback keeps ordinary words whole. A token longer than the cap (a URL, an
+ * e-mail address, an order reference) still gets break opportunities, first
+ * after its natural separators and then every MAX_UNBROKEN_CHARS characters:
+ * react-pdf cannot break inside a word it was not given parts for, so a token
+ * wider than its column would otherwise overprint the next column or be
+ * dropped from the page entirely.
+ *
+ * 16 characters is under the narrowest column that carries free text (the
+ * description column, about 212pt: 16 wide glyphs at 10pt is about 150pt).
  */
-export const keepWordsWhole = (word: string): string[] => [word]
+export const MAX_UNBROKEN_CHARS = 16
+
+export const wrapWholeWords = (word: string): string[] => {
+  if (word.length <= MAX_UNBROKEN_CHARS) return [word]
+  const parts: string[] = []
+  for (const piece of word.split(/(?<=[/\-.@_?&=:])/)) {
+    for (let i = 0; i < piece.length; i += MAX_UNBROKEN_CHARS) {
+      parts.push(piece.slice(i, i + MAX_UNBROKEN_CHARS))
+    }
+  }
+  return parts
+}
+
+/**
+ * Whether a free-text block is short enough to be kept on one page.
+ *
+ * `wrap={false}` keeps a block from splitting across pages, but react-pdf
+ * places a non-splittable block that is taller than a page anyway and
+ * everything past the page edge is lost. Blocks that could plausibly be that
+ * tall (line descriptions and notes, both multi-line) are only kept together
+ * when a rough line estimate says they fit comfortably; past that they are
+ * allowed to split, which is the lesser evil.
+ */
+export const MAX_KEEP_TOGETHER_LINES = 20
+
+export function fitsOnOnePage(text: string | null | undefined, charsPerLine: number): boolean {
+  if (!text) return true
+  let lines = 0
+  for (const line of text.split('\n')) {
+    lines += Math.max(1, Math.ceil(line.length / charsPerLine))
+    if (lines > MAX_KEEP_TOGETHER_LINES) return false
+  }
+  return true
+}
+
+// Conservative characters-per-line for the two free-text widths: the
+// description column (about 212pt at 10pt) and a full-width notice box
+// (about 490pt at 9pt). Under-estimating lets a block split a little early,
+// never the other way round.
+const DESCRIPTION_CHARS_PER_LINE = 35
+const NOTICE_CHARS_PER_LINE = 80
 
 /**
  * How much content (in pt) must fit below a heading on the same page before
@@ -544,17 +592,18 @@ function createStyles(branding?: InvoiceBranding) {
     creditNoteTitle: {
       color: '#721c24',
     },
-    // Draft stamp: lives in the page's top margin (page padding is 40pt, the
-    // stamp is under 30pt tall) and is taken out of the flow, so a draft
-    // previews exactly as the final invoice will print. `fixed` repeats it on
-    // every page. It used to be a full-size banner in the flow, which pushed
-    // the whole document down and made the preview lie about page breaks.
+    // Draft stamp: lives in the page's top margin (page padding is 40pt; the
+    // stamp is at most about 32pt tall when the English no-number text wraps
+    // to two lines) and is taken out of the flow, so a draft previews exactly
+    // as the final invoice will print. `fixed` repeats it on every page. It
+    // used to be a full-size banner in the flow, which pushed the whole
+    // document down and made the preview lie about page breaks.
     draftBanner: {
       position: 'absolute',
-      top: 8,
+      top: 5,
       left: 40,
       right: 40,
-      paddingVertical: 3,
+      paddingVertical: 2,
       paddingHorizontal: 8,
       backgroundColor: '#fff3cd',
       borderWidth: 1,
@@ -908,7 +957,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         ) : isPreview ? null : (invoice.status === 'draft' || !invoice.invoice_number) ? (
           <View style={styles.draftBanner} fixed>
             <Text style={styles.draftBannerTitle}>{isQuote ? L.draftTitleQuote : L.draftTitle}</Text>
-            <Text style={styles.draftBannerText} hyphenationCallback={keepWordsWhole}>
+            <Text style={styles.draftBannerText} hyphenationCallback={wrapWholeWords}>
               {isQuote
                 ? L.draftTextQuote
                 : invoice.invoice_number
@@ -1103,14 +1152,22 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               isTextLikeLine(item) ? (
                 // Free-text / blank row: description spans the full width, no
                 // numeric columns. An empty description renders as a spacer.
-                <View key={index} style={styles.tableRow} wrap={false}>
-                  <Text style={[styles.colDescription, { width: '100%' }]} hyphenationCallback={keepWordsWhole}>
+                <View
+                  key={index}
+                  style={styles.tableRow}
+                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_CHARS_PER_LINE)}
+                >
+                  <Text style={[styles.colDescription, { width: '100%' }]} hyphenationCallback={wrapWholeWords}>
                     {item.description || ' '}
                   </Text>
                 </View>
               ) : (
-                <View key={index} style={styles.tableRow} wrap={false}>
-                  <Text style={styles.colDescription} hyphenationCallback={keepWordsWhole}>{item.description}</Text>
+                <View
+                  key={index}
+                  style={styles.tableRow}
+                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_CHARS_PER_LINE)}
+                >
+                  <Text style={styles.colDescription} hyphenationCallback={wrapWholeWords}>{item.description}</Text>
                   <Text style={styles.colQty}>{item.quantity}</Text>
                   <Text style={styles.colUnit}>{unitLabel(item.unit, lang)}</Text>
                   {!isDeliveryNote && (
@@ -1294,7 +1351,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         {/* Proforma notice */}
         {isProforma && (
           <View style={styles.noticeBox} wrap={false}>
-            <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>
+            <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>
               {L.proformaNotice}
             </Text>
           </View>
@@ -1303,7 +1360,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         {/* Quote notice */}
         {isQuote && (
           <View style={styles.noticeBox} wrap={false}>
-            <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>
+            <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>
               {L.quoteNotice}
             </Text>
           </View>
@@ -1428,18 +1485,18 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             shown in the totals block. */}
         {company.vat_registered === false && invoice.vat_amount === 0 ? (
           <View style={styles.noticeBox} wrap={false}>
-            <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>{L.notVatRegisteredNotice}</Text>
+            <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>{L.notVatRegisteredNotice}</Text>
           </View>
         ) : (
           <>
             {invoice.reverse_charge_text && (
               <View style={styles.noticeBox} wrap={false}>
-                <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>{localizeVatNotice(invoice.reverse_charge_text, lang)}</Text>
+                <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>{localizeVatNotice(invoice.reverse_charge_text, lang)}</Text>
               </View>
             )}
             {invoice.vat_treatment === 'exempt' && !invoice.reverse_charge_text && (
               <View style={styles.noticeBox} wrap={false}>
-                <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>{L.exemptNotice}</Text>
+                <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>{L.exemptNotice}</Text>
               </View>
             )}
           </>
@@ -1447,8 +1504,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Notes */}
         {invoice.notes && (
-          <View style={styles.noticeBox} wrap={false}>
-            <Text style={styles.noticeText} hyphenationCallback={keepWordsWhole}>{invoice.notes}</Text>
+          <View style={styles.noticeBox} wrap={!fitsOnOnePage(invoice.notes, NOTICE_CHARS_PER_LINE)}>
+            <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>{invoice.notes}</Text>
           </View>
         )}
 
@@ -1470,9 +1527,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             in its own Text node, not inside the join). */}
         <View style={styles.footer}>
           {footerText && (
-            <Text style={styles.brandingFooterText} hyphenationCallback={keepWordsWhole}>{footerText}</Text>
+            <Text style={styles.brandingFooterText} hyphenationCallback={wrapWholeWords}>{footerText}</Text>
           )}
-          <Text style={styles.footerText} hyphenationCallback={keepWordsWhole}>
+          <Text style={styles.footerText} hyphenationCallback={wrapWholeWords}>
             {[
               (company.invoice_show_company_name ?? true) &&
               (company.invoice_company_name_position ?? 'header') === 'footer'

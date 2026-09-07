@@ -15,7 +15,17 @@
 import { describe, expect, it } from 'vitest'
 import type { ReactElement, ReactNode } from 'react'
 import { renderToBuffer } from '@react-pdf/renderer'
-import { HEADING_MIN_PRESENCE_AHEAD, InvoicePDF, keepWordsWhole } from '@/lib/invoices/pdf-template'
+import { pdf } from '@react-pdf/renderer'
+import layoutDocument from '@react-pdf/layout'
+import FontStore from '@react-pdf/font'
+import {
+  HEADING_MIN_PRESENCE_AHEAD,
+  InvoicePDF,
+  MAX_KEEP_TOGETHER_LINES,
+  MAX_UNBROKEN_CHARS,
+  fitsOnOnePage,
+  wrapWholeWords,
+} from '@/lib/invoices/pdf-template'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import type { InvoiceItem } from '@/types'
 
@@ -110,9 +120,79 @@ function sentInvoice() {
 }
 
 /** Number of pages in a rendered PDF (pdfkit writes one /Type /Page per page). */
-function pageCount(pdf: Buffer): number {
-  return (pdf.toString('latin1').match(/\/Type\s*\/Page\b/g) ?? []).length
+function pageCount(buffer: Buffer): number {
+  return (buffer.toString('latin1').match(/\/Type\s*\/Page\b/g) ?? []).length
 }
+
+// The laid-out node tree react-pdf hands to the painter: every node carries
+// its resolved box (top/left/width/height, relative to the page) and TEXT
+// nodes carry their broken lines. This is what the PDF will look like, so it
+// is the place to check geometry rather than parsing content streams.
+interface LaidOutNode {
+  type: string
+  value?: string
+  box?: { top: number; left: number; width: number; height: number }
+  // `box.width` is the line's allotment (the column); `xAdvance` is the ink.
+  lines?: Array<{ box: { width: number; height: number }; xAdvance?: number; string?: string }>
+  children?: LaidOutNode[]
+}
+
+async function layOut(element: ReactElement): Promise<LaidOutNode[]> {
+  const instance = pdf(element as Parameters<typeof pdf>[0]) as unknown as { container: { document: unknown } }
+  // The layout package types its default export as one argument; at runtime
+  // it takes the document and a FontStore (this is how the renderer calls it).
+  const layout = layoutDocument as unknown as (document: unknown, fontStore: unknown) => Promise<LaidOutNode>
+  const root = await layout(instance.container.document, new FontStore())
+  return root.children ?? []
+}
+
+function walk(node: LaidOutNode, visit: (n: LaidOutNode) => void) {
+  visit(node)
+  for (const child of node.children ?? []) walk(child, visit)
+}
+
+function textOf(node: LaidOutNode): string {
+  let out = ''
+  walk(node, (n) => {
+    if (n.type === 'TEXT_INSTANCE') out += n.value ?? ''
+  })
+  return out
+}
+
+/** Every TEXT node on the page, with the page's own height for bounds checks. */
+function textNodes(page: LaidOutNode): LaidOutNode[] {
+  const out: LaidOutNode[] = []
+  walk(page, (n) => {
+    if (n.type === 'TEXT' && n.box) out.push(n)
+  })
+  return out
+}
+
+function expectNothingPastThePageEdge(pages: LaidOutNode[]) {
+  for (const page of pages) {
+    const pageHeight = page.box!.height
+    for (const node of textNodes(page)) {
+      expect(node.box!.top + node.box!.height).toBeLessThanOrEqual(pageHeight + 0.5)
+    }
+  }
+}
+
+function expectEveryLineInsideItsBox(pages: LaidOutNode[], needle: string) {
+  let seen = 0
+  for (const page of pages) {
+    for (const node of textNodes(page)) {
+      if (!textOf(node).includes(needle)) continue
+      seen += 1
+      for (const line of node.lines ?? []) {
+        const ink = line.xAdvance ?? line.box.width
+        expect(ink, `line "${line.string}" overflows its column`).toBeLessThanOrEqual(node.box!.width + 0.5)
+      }
+    }
+  }
+  expect(seen).toBeGreaterThan(0)
+}
+
+const PAGE_TOP_PADDING = 40
 
 describe('draft stamp', () => {
   it('is out of the flow, in the top margin, and repeats on every page', () => {
@@ -136,10 +216,95 @@ describe('draft stamp', () => {
     const items = Array.from({ length: 60 }, (_, i) =>
       makeItem({ sort_order: i, id: `item-${i}`, description: `Rad ${i + 1}` }),
     )
-    const pdf = await renderToBuffer(
+    const buffer = await renderToBuffer(
       InvoicePDF({ invoice: draftInvoice(), customer, items, company }),
     )
-    expect(pageCount(pdf)).toBeGreaterThan(1)
+    expect(pageCount(buffer)).toBeGreaterThan(1)
+
+    const pages = await layOut(InvoicePDF({ invoice: draftInvoice(), customer, items, company }))
+    expect(pages.length).toBeGreaterThan(1)
+    for (const page of pages) {
+      expect(textOf(page)).toContain('UTKAST')
+    }
+  })
+
+  it.each([
+    ['sv', 'draft'],
+    ['en', 'draft'],
+    ['sv', 'sent'],
+    ['en', 'sent'],
+  ] as const)('stays inside the top margin (%s, %s without number)', async (language, status) => {
+    // 'sent' without a number is the corrupt-state case with the longest text.
+    const invoice = { ...draftInvoice(), status }
+    const pages = await layOut(InvoicePDF({ invoice, customer, items: [makeItem()], company, language }))
+    const stamp = textNodes(pages[0]).find((n) => /UTKAST|DRAFT/.test(textOf(n)))
+    expect(stamp).toBeDefined()
+    let box: LaidOutNode['box']
+    walk(pages[0], (n) => {
+      if (n.children?.includes(stamp!)) box = n.box
+    })
+    expect(box).toBeDefined()
+    expect(box!.top + box!.height).toBeLessThanOrEqual(PAGE_TOP_PADDING)
+  })
+})
+
+describe('oversize free text', () => {
+  it('estimates whether a block fits on one page', () => {
+    expect(fitsOnOnePage('Konsultation', 35)).toBe(true)
+    expect(fitsOnOnePage(null, 35)).toBe(true)
+    expect(fitsOnOnePage(Array.from({ length: MAX_KEEP_TOGETHER_LINES + 1 }, () => 'x').join('\n'), 35)).toBe(false)
+    expect(fitsOnOnePage('x'.repeat(35 * (MAX_KEEP_TOGETHER_LINES + 1)), 35)).toBe(false)
+  })
+
+  it('an 80-line description is split across pages instead of clipped', async () => {
+    const description = Array.from({ length: 80 }, (_, i) => `Specifikationsrad ${i + 1}`).join('\n')
+    const items = [makeItem({ description }), makeItem({ sort_order: 1, id: 'item-1', description: 'Efterföljande rad' })]
+    const pages = await layOut(InvoicePDF({ invoice: sentInvoice(), customer, items, company }))
+    expectNothingPastThePageEdge(pages)
+    const all = pages.map(textOf).join('')
+    expect(all).toContain('Specifikationsrad 80')
+    expect(all).toContain('Efterföljande rad')
+  })
+
+  it('80 lines of notes are split across pages instead of clipped', async () => {
+    const notes = Array.from({ length: 80 }, (_, i) => `Villkor ${i + 1}: leverans sker enligt avtal.`).join('\n')
+    const pages = await layOut(InvoicePDF({ invoice: { ...sentInvoice(), notes }, customer, items: [makeItem()], company }))
+    expectNothingPastThePageEdge(pages)
+    expect(pages.map(textOf).join('')).toContain('Villkor 80')
+  })
+
+  it('a 3000-character description without line breaks is not clipped', async () => {
+    const description = Array.from({ length: 400 }, (_, i) => `ord${i + 1}`).join(' ')
+    const pages = await layOut(InvoicePDF({ invoice: sentInvoice(), customer, items: [makeItem({ description })], company }))
+    expectNothingPastThePageEdge(pages)
+    expect(pages.map(textOf).join('')).toContain('ord400')
+  })
+})
+
+describe('long tokens', () => {
+  it.each([
+    'https://app.testbrand.example/invoices/pay/7c1f0b7e-3d2a-4f1c-9a8e-2b6d5c4e3f21',
+    'AB-2026-09-KUND-1042-LEVERANS-SPECIFIKATION',
+    'fornamn.efternamn@ekonomi.exempelforetaget.se',
+    'Konsulttjänsteavtalsförlängningsdokumentationssammanställning',
+  ])('stay inside the description column and on the page: %s', async (token) => {
+    const items = [makeItem({ description: `Leverans ${token}` })]
+    const pages = await layOut(InvoicePDF({ invoice: sentInvoice(), customer, items, company }))
+    expectEveryLineInsideItsBox(pages, 'Leverans')
+    // The whole token is printed, not dropped by the line breaker.
+    const printed = pages.map(textOf).join('')
+    expect(printed).toContain(token)
+  })
+
+  it('stay inside a text row and in the notes', async () => {
+    const url = 'https://www.skatteverket.se/foretag/moms/saljavarorochtjanster/omvandbetalningsskyldighet.4.html'
+    const items = [makeItem({ description: `Villkor: ${url}`, line_type: 'text', quantity: 0, unit_price: 0 })]
+    const invoice = { ...sentInvoice(), notes: `Läs mer: ${url}` }
+    const pages = await layOut(InvoicePDF({ invoice, customer, items, company }))
+    expectEveryLineInsideItsBox(pages, 'Villkor:')
+    expectEveryLineInsideItsBox(pages, 'Läs mer:')
+    const printed = pages.map(textOf).join('')
+    expect(printed.split(url).length - 1).toBe(2)
   })
 })
 
@@ -167,15 +332,30 @@ describe('page breaks', () => {
 })
 
 describe('word wrapping', () => {
-  it('never hyphenates a word', () => {
-    expect(keepWordsWhole('September')).toEqual(['September'])
-    expect(keepWordsWhole('Konsulttimmar')).toEqual(['Konsulttimmar'])
+  it('never hyphenates an ordinary word', () => {
+    expect(wrapWholeWords('September')).toEqual(['September'])
+    expect(wrapWholeWords('Konsulttimmar')).toEqual(['Konsulttimmar'])
+    expect(wrapWholeWords('Öresavrundning')).toEqual(['Öresavrundning'])
+  })
+
+  it('gives a long token break opportunities after separators and every few characters', () => {
+    const url = 'https://app.testbrand.example/invoices/pay/7c1f0b7e-3d2a-4f1c-9a8e-2b6d5c4e3f21'
+    const parts = wrapWholeWords(url)
+    expect(parts.join('')).toBe(url)
+    expect(parts.length).toBeGreaterThan(1)
+    for (const part of parts) expect(part.length).toBeLessThanOrEqual(MAX_UNBROKEN_CHARS)
+    expect(parts[0]).toBe('https:')
+
+    const compound = 'Konsulttjänsteavtalsförlängningsdokumentation'
+    const chunks = wrapWholeWords(compound)
+    expect(chunks.join('')).toBe(compound)
+    for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(MAX_UNBROKEN_CHARS)
   })
 
   it('applies to line descriptions, notes and the footer', () => {
     const invoice = { ...sentInvoice(), notes: 'Tack för förtroendet' }
     const tree = InvoicePDF({ invoice, customer, items: [makeItem()], company })
-    const withCallback = elements(tree).filter((el) => el.props.hyphenationCallback === keepWordsWhole)
+    const withCallback = elements(tree).filter((el) => el.props.hyphenationCallback === wrapWholeWords)
     expect(withCallback.some((el) => containsText(el, 'Konsulttimmar'))).toBe(true)
     expect(withCallback.some((el) => containsText(el, 'Tack för förtroendet'))).toBe(true)
     expect(withCallback.some((el) => containsText(el, 'Testbrand AB') || containsText(el, 'Org.nr'))).toBe(true)

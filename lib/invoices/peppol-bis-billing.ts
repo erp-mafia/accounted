@@ -8,6 +8,7 @@ import { isSaneDateString, normalizeOrgNumber } from '@/lib/invariants'
 import { resolveInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { computeLineAmounts, hasLineDiscount } from '@/lib/invoices/line-amounts'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { toSingleLine } from '@/lib/invoices/display'
 import { equalOre, roundOre } from '@/lib/money'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
@@ -586,9 +587,9 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     `    <cbc:LineExtensionAmount currencyID="SEK">${formatMoney(item.line_total)}</cbc:LineExtensionAmount>`,
     ...allowance,
     '    <cac:Item>',
-    // Descriptions may carry line breaks (the editor allows them for the
-    // PDF); the UBL item name is a single-line field, so collapse whitespace.
-    `      <cbc:Name>${escapeXml(item.description.replace(/\s+/g, ' ').trim())}</cbc:Name>`,
+    // The UBL item name is a single-line field; descriptions may carry
+    // line breaks.
+    `      <cbc:Name>${escapeXml(toSingleLine(item.description))}</cbc:Name>`,
     '      <cac:ClassifiedTaxCategory>',
     '        <cbc:ID>S</cbc:ID>',
     `        <cbc:Percent>${formatDecimal(item.vat_rate)}</cbc:Percent>`,

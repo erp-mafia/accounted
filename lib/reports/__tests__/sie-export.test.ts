@@ -524,6 +524,41 @@ describe('generateSIEExport', () => {
     expect(output).toContain('#VER "A" 1 20240115 "Invoice for \\"consulting\\""')
   })
 
+  it('keeps a description with line breaks on one record line', async () => {
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      {
+        data: [
+          { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Periodisering: Konsultation\nSeptember 2026', status: 'posted' },
+        ],
+        error: null,
+      },
+      {
+        data: [
+          { journal_entry_id: 'e1', account_number: '1930', debit_amount: 100, credit_amount: 0, line_description: 'Rad 1\r\nRad 2', dimensions: {} },
+          { journal_entry_id: 'e1', account_number: '3001', debit_amount: 0, credit_amount: 100, line_description: null, dimensions: {} },
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // dimensions
+      { data: [], error: null }, // dimension_values
+      { data: [], error: null }, // RPC fallback
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#VER "A" 1 20240115 "Periodisering: Konsultation September 2026"')
+    expect(output).toContain('"Rad 1 Rad 2"')
+    // Every record is one line: no line starts with something other than a
+    // (possibly indented) record tag or a brace.
+    for (const line of output.split('\r\n')) {
+      if (line.length === 0) continue
+      expect(line).toMatch(/^\s*(#|\{|\})/)
+    }
+  })
+
   it('uses \\r\\n line endings', async () => {
     results = [
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
