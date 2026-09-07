@@ -23,7 +23,7 @@ import type { WooCommerceConnection } from '../types'
  * bound to the initiator's session). Either leg may land first; both run
  * activateIfComplete() after writing their own signal, and the row flips to
  * active exactly once, under the DB CHECK that forbids an active row missing
- * either signal (migration 20260907100000). Every credential consumer selects
+ * either signal (migration 20260907143000). Every credential consumer selects
  * status = 'active', so staged keys on a pending row can never sync.
  *
  * Scope of the guarantee: a connection can never go live headless (callback

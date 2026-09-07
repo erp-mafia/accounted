@@ -14,7 +14,7 @@ export interface WooCommerceConnection {
   /**
    * Set by the session-bound leg (wc-auth return, or manual key entry).
    * Together with stored credentials it is required for status 'active'
-   * (DB CHECK, migration 20260907100000).
+   * (DB CHECK, migration 20260907143000).
    */
   browser_confirmed_at: string | null
   currency: string | null

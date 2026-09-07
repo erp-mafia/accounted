@@ -8,7 +8,7 @@ import { seedCompany } from './fixtures'
 // a previous run before the assertion under test is ever reached.
 const uniqueStore = (label: string) => 'https://' + label + '-' + randomUUID() + '.example.se'
 
-// An ACTIVE row must carry both activation signals (CHECK, 20260907100000):
+// An ACTIVE row must carry both activation signals (CHECK, 20260907143000):
 // stored credentials and the session-bound browser confirmation.
 const ACTIVE_COLUMNS =
   '(company_id, user_id, store_url, status, consumer_key_encrypted, consumer_secret_encrypted, browser_confirmed_at)'
@@ -22,7 +22,7 @@ const ACTIVE_VALUES = "'active', 'enc:k', 'enc:s', now()"
  *      one-active-per-company index was dropped in 20260811073422).
  *   3. One store actively connected to at most one company.
  *   4. No DELETE policy: a member DELETE silently affects zero rows.
- * Covers migration 20260907100000_woocommerce_activation_gate:
+ * Covers migration 20260907143000_woocommerce_activation_gate:
  *   5. status = 'active' requires stored credentials AND browser_confirmed_at,
  *      on insert and on update, so the wc-auth callback (keys only) and the
  *      return leg (confirmation only) can each write their signal without
@@ -140,7 +140,7 @@ describe('woocommerce_connections RLS', () => {
     expect(still.rows).toHaveLength(1)
   })
 
-  describe('activation gate (20260907100000)', () => {
+  describe('activation gate (20260907143000)', () => {
     const insertPending = async (companyId: string, userId: string, storeUrl: string) => {
       const { rows } = await getPool().query(
         `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status, oauth_state)
