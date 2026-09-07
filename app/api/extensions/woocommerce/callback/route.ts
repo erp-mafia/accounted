@@ -11,11 +11,7 @@ import {
   isWooCommerceConfigured,
 } from '@/extensions/general/woocommerce/lib/credentials'
 import { testConnectionAndFetchStoreInfo } from '@/extensions/general/woocommerce/lib/api-client'
-import {
-  activateIfComplete,
-  HANDSHAKE_EXPIRED_MESSAGE,
-  isHandshakeExpired,
-} from '@/extensions/general/woocommerce/lib/connect'
+import { activateIfComplete } from '@/extensions/general/woocommerce/lib/connect'
 
 // This route emits woocommerce.connected (audit trail). ensureInitialized()
 // must run at module load so the event_log handler has subscribed before the
@@ -39,10 +35,16 @@ export const maxDuration = 60
  * store_url before anything is persisted.
  *
  * This leg has no browser session, so it can only STAGE the verified keys on
- * the pending row. The row becomes active when the initiator's browser has
+ * the pending row. The row becomes active when the initiator's session has
  * confirmed on the return leg as well (activateIfComplete, either order).
  * A pending row never syncs, so keys staged for a handshake nobody confirms
  * are inert until the nightly sweep wipes them.
+ *
+ * No TTL is enforced here on purpose: WooCommerce treats any non-200 as a
+ * failed handshake (deletes the key it just minted and shows the merchant an
+ * error page on the store, no redirect back), so refusing a slow approval
+ * here would strand a legitimate merchant. The session-bound return leg and
+ * the nightly sweep enforce expiry instead; a stale pending row cannot sync.
  */
 export async function POST(request: Request) {
   loadExtensions()
@@ -92,7 +94,7 @@ export async function POST(request: Request) {
 
   const { data: pending, error: findError } = await supabase
     .from('woocommerce_connections')
-    .select('id, company_id, user_id, store_url, created_at, consumer_key_encrypted')
+    .select('id, company_id, user_id, store_url, consumer_key_encrypted')
     .eq('oauth_state', state)
     .eq('status', 'pending')
     .single()
@@ -114,24 +116,25 @@ export async function POST(request: Request) {
         oauth_state: null,
         consumer_key_encrypted: null,
         consumer_secret_encrypted: null,
+        store_name: null,
+        currency: null,
+        prices_include_tax: null,
+        wc_version: null,
+        key_permissions: null,
       })
       .eq('id', pending.id)
       .eq('status', 'pending')
 
-  if (isHandshakeExpired(pending.created_at)) {
-    log.warn('handshake callback arrived after the TTL', { connectionId: pending.id })
-    await markError(HANDSHAKE_EXPIRED_MESSAGE)
-    return NextResponse.json({ error: 'Handshake expired' }, { status: 410 })
-  }
-
   // WooCommerce posts once per approval. A second POST for the same state is
-  // a replay or a retry of something we already hold: never re-probe or
-  // overwrite staged keys on its say-so.
+  // a replay of something we already hold: never re-probe or overwrite staged
+  // keys on its say-so. Answer 200 without touching anything so the response
+  // does not double as an "has the merchant approved yet" oracle for whoever
+  // holds the state.
   if (pending.consumer_key_encrypted) {
     log.warn('duplicate handshake callback for a state that already holds keys', {
       connectionId: pending.id,
     })
-    return NextResponse.json({ error: 'Credentials already received' }, { status: 409 })
+    return NextResponse.json({ success: true, activated: false })
   }
 
   // Authenticity check: the keys must actually work against the store URL the

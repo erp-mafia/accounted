@@ -177,6 +177,11 @@ describe('GET /api/extensions/woocommerce/return', () => {
         oauth_state: null,
         consumer_key_encrypted: null,
         consumer_secret_encrypted: null,
+        // The store's name and settings the callback staged go too.
+        store_name: null,
+        currency: null,
+        prices_include_tax: null,
+        wc_version: null,
       })
       expect(eventBus.emit).not.toHaveBeenCalled()
     })

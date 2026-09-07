@@ -94,6 +94,11 @@ describe('expireStaleHandshakes', () => {
       oauth_state: null,
       consumer_key_encrypted: null,
       consumer_secret_encrypted: null,
+      store_name: null,
+      currency: null,
+      prices_include_tax: null,
+      wc_version: null,
+      key_permissions: null,
     })
     expect(calls.filter((c) => c.method === 'eq').map((c) => c.args)).toEqual([
       ['status', 'pending'],

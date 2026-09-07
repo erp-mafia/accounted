@@ -203,34 +203,34 @@ describe('POST /api/extensions/woocommerce/callback', () => {
     )
   })
 
-  it('refuses a duplicate POST for a state that already holds keys without re-probing', async () => {
+  it('answers a duplicate POST for a state that already holds keys with 200 and touches nothing', async () => {
     const { enqueue, findCalls } = mockServiceClient()
     enqueue({ data: { ...PENDING_ROW, consumer_key_encrypted: 'enc:already' } })
 
     const res = await POST(makeCallbackRequest({ ...VALID_BODY, consumer_key: 'ck_forged' }))
-    expect(res.status).toBe(409)
+    // 200, not 4xx: WooCommerce deletes its key and shows a store-side error
+    // on any non-200, and a distinct status would tell whoever holds the
+    // state whether the merchant has approved yet.
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, activated: false })
     expect(testConnectionAndFetchStoreInfo).not.toHaveBeenCalled()
     expect(findCalls('woocommerce_connections', 'update')).toHaveLength(0)
   })
 
-  it('parks an expired handshake with its keys wiped and never probes', async () => {
+  it('stages keys for a slow approval past the handshake TTL instead of refusing (WooCommerce wp_dies on non-200)', async () => {
     const { enqueue, findCalls } = mockServiceClient()
     enqueue({
-      data: { ...PENDING_ROW, created_at: new Date(Date.now() - 16 * 60_000).toISOString() },
+      data: { ...PENDING_ROW, created_at: new Date(Date.now() - 45 * 60_000).toISOString() },
     })
-    enqueue({ data: null }) // markError update
+    enqueue({ data: { id: 'conn-1' } }) // stage update
+    enqueue({ data: null }) // activateIfComplete: browser not confirmed
+    vi.mocked(testConnectionAndFetchStoreInfo).mockResolvedValue(STORE_INFO)
 
     const res = await POST(makeCallbackRequest(VALID_BODY))
-    expect(res.status).toBe(410)
-    expect(testConnectionAndFetchStoreInfo).not.toHaveBeenCalled()
+    expect(res.status).toBe(200)
     const updates = findCalls('woocommerce_connections', 'update')
-    expect(updates).toHaveLength(1)
-    expect(updates[0][0]).toMatchObject({
-      status: 'error',
-      oauth_state: null,
-      consumer_key_encrypted: null,
-      consumer_secret_encrypted: null,
-    })
+    expect(updates).toHaveLength(2)
+    expect(updates[0][0]).not.toHaveProperty('status')
   })
 
   it('parks the row and returns 409 when activation hits the one-active-per-store index', async () => {
@@ -245,7 +245,14 @@ describe('POST /api/extensions/woocommerce/callback', () => {
     expect(res.status).toBe(409)
     const updates = findCalls('woocommerce_connections', 'update')
     expect(updates).toHaveLength(3)
-    expect(updates[2][0]).toMatchObject({ status: 'error', consumer_key_encrypted: null })
+    // Parking wipes the staged secrets AND the store metadata the probe read.
+    expect(updates[2][0]).toMatchObject({
+      status: 'error',
+      consumer_key_encrypted: null,
+      consumer_secret_encrypted: null,
+      store_name: null,
+      currency: null,
+    })
     expect(eventBus.emit).not.toHaveBeenCalled()
   })
 

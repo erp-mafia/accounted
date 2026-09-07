@@ -468,7 +468,7 @@
     "error_generic": "Something went wrong. Please try again.",
     "error_denied": "The connection was denied in the store.",
     "error_wrong_user": "The connection was started by another user in this company. Sign in as that user or restart the connection.",
-    "error_expired": "The connection timed out before it was completed. Start the connection again.",
+    "error_expired": "The connection timed out before it was completed. Start it again and remove the unused API key in the store's WooCommerce settings.",
     "error_conflict": "The store is already connected to a company.",
     "sync_now": "Sync now",
     "syncing": "Syncing…",

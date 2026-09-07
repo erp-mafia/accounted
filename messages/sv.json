@@ -468,7 +468,7 @@
     "error_generic": "Något gick fel. Försök igen.",
     "error_denied": "Anslutningen nekades i butiken.",
     "error_wrong_user": "Anslutningen startades av en annan användare i det här företaget. Logga in som den användaren eller starta om anslutningen.",
-    "error_expired": "Anslutningen gick ut innan den slutfördes. Starta om anslutningen.",
+    "error_expired": "Anslutningen gick ut innan den slutfördes. Starta om anslutningen och ta bort den oanvända API-nyckeln i butikens WooCommerce-inställningar.",
     "error_conflict": "Butiken är redan ansluten till ett företag.",
     "sync_now": "Synka nu",
     "syncing": "Synkar…",

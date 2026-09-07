@@ -25,6 +25,15 @@ import type { WooCommerceConnection } from '../types'
  * active exactly once, under the DB CHECK that forbids an active row missing
  * either signal (migration 20260907100000). Every credential consumer selects
  * status = 'active', so staged keys on a pending row can never sync.
+ *
+ * Scope of the guarantee: a connection can never go live headless (callback
+ * alone) or under a session other than the initiator's, and abandoned
+ * handshakes are parked with their keys wiped. It is NOT a defense against a
+ * store admin approving a link the initiator generated for them: wc-auth
+ * cannot tell us who approved, and the initiator legitimately supplies the
+ * second signal. The confirmation column is member-writable through RLS
+ * like every other column on this row-scoped table; it records that the
+ * handshake completed under a session, it is not a trust boundary.
  */
 
 const APP_NAME = 'Accounted'
@@ -44,14 +53,16 @@ export function buildAuthorizeUrl(storeUrl: string, state: string): string {
 }
 
 /**
- * A pending handshake older than this is dead: the callback and the return
- * leg both refuse it, and the nightly cron parks it with its staged keys
- * wiped. Generous enough for a merchant to sign in to wp-admin on the way.
+ * A pending handshake older than this is dead: the return leg refuses it and
+ * the nightly cron parks it with its staged keys wiped. The callback leg does
+ * NOT check it: WooCommerce turns any non-200 into a store-side error page
+ * and deletes the freshly minted key, which would strand a slow but
+ * legitimate approval. A stale pending row cannot sync either way.
  */
 export const HANDSHAKE_TTL_MS = 15 * 60_000
 
 export const HANDSHAKE_EXPIRED_MESSAGE =
-  'Anslutningen gick ut innan den slutfördes. Starta om anslutningen.'
+  'Anslutningen gick ut innan den slutfördes. Starta om anslutningen och ta bort den oanvända API-nyckeln i butikens WooCommerce-inställningar.'
 
 export function isHandshakeExpired(createdAt: string, now = Date.now()): boolean {
   return now - new Date(createdAt).getTime() > HANDSHAKE_TTL_MS
@@ -134,6 +145,11 @@ export async function expireStaleHandshakes(
       oauth_state: null,
       consumer_key_encrypted: null,
       consumer_secret_encrypted: null,
+      store_name: null,
+      currency: null,
+      prices_include_tax: null,
+      wc_version: null,
+      key_permissions: null,
     })
     .eq('status', 'pending')
     .lt('created_at', new Date(now - HANDSHAKE_TTL_MS).toISOString())

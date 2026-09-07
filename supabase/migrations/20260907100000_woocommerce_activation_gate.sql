@@ -2,17 +2,20 @@
 -- store-verified credentials (server-to-server wc-auth callback) AND the
 -- initiating user's browser confirmation (the return leg, session-bound).
 --
--- Before this, the callback alone flipped a row to active. Between that
--- moment and the initiator's browser reaching the return route the row was
--- syncable: if the person who approved in the store never came back (closed
--- the tab, skipped the sign-in, or was lured into approving a connect someone
--- else started), their store's keys stayed active inside another company's
--- books, and the manual sync button could pull orders within seconds.
+-- Before this, the callback alone flipped a row to active: a connection could
+-- go live headless, with nobody's session involved, and an abandoned handshake
+-- stayed active (feed on) forever. browser_confirmed_at records the session-
+-- bound confirmation of the initiating user. The CHECK makes "active implies
+-- stored keys and a recorded confirmation" a database invariant instead of an
+-- application promise: staged credentials live on PENDING rows, and every
+-- consumer selects status = 'active'.
 --
--- browser_confirmed_at records the session-bound confirmation. The CHECK makes
--- "no sync path can use staged credentials" a database invariant instead of an
--- application promise: staged credentials live on PENDING rows, every consumer
--- selects status = 'active', and active is unreachable without both signals.
+-- Scope: this does not authenticate the person who approved in the store.
+-- wc-auth delivers keys server-to-server and its redirect carries nothing
+-- that identifies the approver, so a store admin who approves a link the
+-- initiator generated still connects their store to the initiator's company.
+-- The column is member-writable through RLS like the rest of the row; it is a
+-- completion record, not a trust boundary.
 
 alter table public.woocommerce_connections
   add column browser_confirmed_at timestamptz;

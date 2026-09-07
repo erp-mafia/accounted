@@ -39,10 +39,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * flow: the callback POST has no cookies (the store calls it) and so can only
  * stage the keys. Confirmation here is the second signal; the row flips to
  * active only when both are present (activateIfComplete, either order).
- * Without that binding a victim lured into approving a connect someone else
- * started would have their store's orders flowing into that someone's books,
- * and without the gate they would flow from the moment the callback landed,
- * whether or not the victim ever came back here.
+ *
+ * What this binding does and does not give: activation always happens under
+ * the initiating user's session (auditable, never headless), and a return
+ * completed by a different signed-in user is refused and the keys taken
+ * back. It does NOT authenticate the person who approved in wp-admin: the
+ * wc-auth redirect carries only success and our own state, and the keys
+ * travel server-to-server, so a store admin who approves a link someone else
+ * generated still connects their store to that someone's company. Closing
+ * that needs a proof of store control from the initiator (follow-up).
  */
 export async function GET(request: Request) {
   loadExtensions()
@@ -149,6 +154,11 @@ async function completeApproved(
         oauth_state: null,
         consumer_key_encrypted: null,
         consumer_secret_encrypted: null,
+        store_name: null,
+        currency: null,
+        prices_include_tax: null,
+        wc_version: null,
+        key_permissions: null,
       })
       .eq('id', row.id)
       .in('status', ['pending', 'active'])
@@ -190,6 +200,11 @@ async function completeApproved(
         oauth_state: null,
         consumer_key_encrypted: null,
         consumer_secret_encrypted: null,
+        store_name: null,
+        currency: null,
+        prices_include_tax: null,
+        wc_version: null,
+        key_permissions: null,
       })
       .eq('id', row.id)
       .eq('status', 'pending')
@@ -238,6 +253,11 @@ async function completeApproved(
         oauth_state: null,
         consumer_key_encrypted: null,
         consumer_secret_encrypted: null,
+        store_name: null,
+        currency: null,
+        prices_include_tax: null,
+        wc_version: null,
+        key_permissions: null,
       })
       .eq('id', row.id)
       .eq('status', 'pending')
