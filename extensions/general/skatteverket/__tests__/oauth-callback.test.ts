@@ -47,7 +47,15 @@ const { mockConsumeState, mockConsumeHandoff, mockMintHandoff, mockResolveBrandB
   mockMintHandoff: vi.fn(),
   mockResolveBrandByHost: vi.fn(),
 }))
-vi.mock('@/lib/branding/resolve', () => ({ resolveBrandByHost: mockResolveBrandByHost }))
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandByHost: mockResolveBrandByHost,
+  // requireFlowInitiator's login redirect (unused by this callback, which
+  // answers its own error page) resolves hosts through the same table.
+  resolveBrandResultByHost: async (host: string) => ({
+    brand: await mockResolveBrandByHost(host),
+    lookupFailed: false,
+  }),
+}))
 vi.mock('@/lib/auth/oauth-flows', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/oauth-flows')>()
   return {
