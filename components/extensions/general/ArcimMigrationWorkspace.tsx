@@ -2445,6 +2445,13 @@ export default function ArcimMigrationWorkspace({
     setStep('connect')
     setIsLoading(true)
     setError(null)
+    // Drop the previous attempt's consent and one-time URLs before asking for
+    // new ones: if /connect fails, the step must not keep offering a stale
+    // activation link that completes the earlier consent.
+    setConsentId(null)
+    setAuthType(null)
+    setAuthUrl(null)
+    setActivationUrl(null)
 
     try {
       const res = await fetch('/api/extensions/ext/arcim-migration/connect', {
