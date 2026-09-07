@@ -71,6 +71,8 @@ Migration `rules` (per company):
 - UI: Regler page with the four-step bar, sentence rows, and a rule page (Om / Gör / Utom, "Så här läser Accounted regeln", matches this year, origin, trust, links).
 - Agents: the same table behind `list_rules` and the existing categorisation tools.
 
+Shipped scope (PR 5a): no new table. `categorization_templates` already is the per-counterparty rule (aliases, accounts, VAT, occurrence_count, confidence, source), so the ladder lives there: migration 20260907120000 adds `mode` (proposed / propose / auto / paused), `corrections` and `paused_at`, with a BEFORE trigger that keeps `mode` and `is_active` in step both ways (soft-delete reads as paused, a paused rule stops matching). `insertOrUpdateTemplate` counts corrections. `lib/rules` (model + service), `/api/rules` and `/api/rules/[id]` (GET, PATCH mode), the Regler page with the ladder bar and sentence rows, and the rule page (Om / Gör, "Så här läser Accounted regeln", this year's matches by bank text, origin, trust, links). Regler is a sub-item under Transaktioner in the v2 sidebar. Still to come: 'auto' is refused by the API until the autopilot tier (PR 5b: company opt-in + rule-driven auto-commit under the autonomy envelope); 'proposed' rules (suggest before confirm) need the repetition detector to write mode = proposed instead of activating (PR 5c); the rule dialog after a category change on Transaktioner; merging booking_template_library into a `then` action (it stays Mallar for now).
+
 ### PR 6: Inköp lifecycle
 
 - `SupplierInvoiceStatus` gains `in_payment_file` and `reconciled`. Betalfil batches already exist; "in payment file" is set when a batch includes the invoice, "reconciled" when the bank row is matched in reconciliation.

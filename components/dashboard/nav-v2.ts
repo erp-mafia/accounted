@@ -74,6 +74,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     sub: [
       { href: '/reconciliation', labelKey: 'reconciliation' },
       { href: '/parties', labelKey: 'v2_parties' },
+      { href: '/rules', labelKey: 'v2_rules' },
     ],
   },
   {

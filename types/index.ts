@@ -2149,6 +2149,11 @@ export interface CategorizationTemplate {
   last_seen_date: string | null
   source: CategorizationTemplateSource
   is_active: boolean
+  // Rules ladder (migration 20260907120000): mode is kept in step with
+  // is_active by a trigger; corrections counts changed proposals.
+  mode: 'proposed' | 'propose' | 'auto' | 'paused'
+  corrections: number
+  paused_at: string | null
   created_at: string
   updated_at: string
 }
