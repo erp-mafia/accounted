@@ -148,6 +148,21 @@ describe('classifyTransactionMethod', () => {
     expect(r.method).toBe('swish')
   })
 
+  it('reads the flattened Enable Banking description "Kortköp/uttag" as card, not withdrawal', () => {
+    // SEB/Swedbank send this combined channel wording as the code description
+    // for ordinary card purchases; the row title carries only the merchant.
+    expect(
+      classifyTransactionMethod({ description: 'AIMO PARK', bankTransactionCode: 'Kortköp/uttag' }).method
+    ).toBe('card')
+    expect(
+      classifyTransactionMethod({ description: 'SPOTIFY', bankTransactionCode: 'Card purchase' }).method
+    ).toBe('card')
+    // A bare withdrawal wording still classifies as withdrawal.
+    expect(
+      classifyTransactionMethod({ description: 'BANKOMAT 123', bankTransactionCode: 'ATM WITHDRAWAL' }).method
+    ).toBe('withdrawal')
+  })
+
   // ── MCC and explicit methods ─────────────────────────────────────────────
 
   it('uses MCC presence as the card-rail fallback (6011 = ATM withdrawal)', () => {
