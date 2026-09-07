@@ -6930,6 +6930,7 @@
       "count": "{count} rules",
       "ladder_label": "Mode",
       "loading": "Loading…",
+      "load_failed": "The rules could not be loaded.",
       "empty": "No rules yet. They appear once you approve the same booking a couple of times.",
       "not_found": "The rule does not exist.",
       "more": "More",
