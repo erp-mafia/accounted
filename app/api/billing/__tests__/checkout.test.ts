@@ -4,7 +4,7 @@
  * Exercises the route through the real withRouteContext wrapper, mocking
  * auth/company, the Stripe client, and the service-role Supabase client.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
@@ -46,15 +46,34 @@ import { POST } from '../checkout/route'
 
 const routeParams = { params: Promise.resolve({}) }
 
+// The trusted-origin resolver reads the brands table; pin one registered
+// brand host so the return-URL tests exercise the real resolver logic.
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+
+const originalAppUrl = process.env.NEXT_PUBLIC_APP_URL
+
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+  process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
+  resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
+    brand: host === 'portal.brand.test' ? { domain: host } : null,
+    lookupFailed: false,
+  }))
   guardSandboxMock.mockResolvedValue(null)
   requireAuthMock.mockResolvedValue({
     user: { id: 'user-1', email: 'u@example.com', is_anonymous: false },
     supabase: {},
     error: null,
   })
+})
+
+afterEach(() => {
+  if (originalAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL
+  else process.env.NEXT_PUBLIC_APP_URL = originalAppUrl
 })
 
 describe('POST /api/billing/checkout', () => {
@@ -239,5 +258,58 @@ describe('POST /api/billing/checkout', () => {
     expect(status).toBe(500)
     expect(body.error.code).toBe('TRIAL_LOOKUP_FAILED')
     expect(sessionsCreate).not.toHaveBeenCalled()
+  })
+
+  describe('return URLs', () => {
+    function checkoutFrom(url: string) {
+      enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+      enqueue({ data: null }) // no trial grant
+      sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+      return POST(createMockRequest(url, { method: 'POST', body: {} }), routeParams)
+    }
+
+    it('returns to the canonical app when checkout starts there', async () => {
+      const { status } = await parseJsonResponse(
+        await checkoutFrom('https://app.accounted.test/api/billing/checkout'),
+      )
+
+      expect(status).toBe(200)
+      expect(sessionsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success_url: 'https://app.accounted.test/settings/billing?success=1',
+          cancel_url: 'https://app.accounted.test/settings/billing?canceled=1',
+        }),
+      )
+    })
+
+    it('returns to a registered white-label host when checkout starts there', async () => {
+
+      const { status } = await parseJsonResponse(
+        await checkoutFrom('https://portal.brand.test/api/billing/checkout'),
+      )
+
+      expect(status).toBe(200)
+      expect(sessionsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success_url: 'https://portal.brand.test/settings/billing?success=1',
+          cancel_url: 'https://portal.brand.test/settings/billing?canceled=1',
+        }),
+      )
+    })
+
+    it('falls back to the canonical app for an unregistered or spoofed host', async () => {
+
+      const { status } = await parseJsonResponse(
+        await checkoutFrom('https://portal.brand.test.attacker.test/api/billing/checkout'),
+      )
+
+      expect(status).toBe(200)
+      expect(sessionsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success_url: 'https://app.accounted.test/settings/billing?success=1',
+          cancel_url: 'https://app.accounted.test/settings/billing?canceled=1',
+        }),
+      )
+    })
   })
 })

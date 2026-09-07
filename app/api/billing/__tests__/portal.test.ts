@@ -1,7 +1,7 @@
 /**
  * Tests for POST /api/billing/portal.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
@@ -39,11 +39,30 @@ import { POST } from '../portal/route'
 
 const routeParams = { params: Promise.resolve({}) }
 
+// The trusted-origin resolver reads the brands table; pin one registered
+// brand host so the return-URL tests exercise the real resolver logic.
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+
+const originalAppUrl = process.env.NEXT_PUBLIC_APP_URL
+
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+  process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
+  resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
+    brand: host === 'portal.brand.test' ? { domain: host } : null,
+    lookupFailed: false,
+  }))
   guardSandboxMock.mockResolvedValue(null)
   requireAuthMock.mockResolvedValue({ user: { id: 'user-1', is_anonymous: false }, supabase: {}, error: null })
+})
+
+afterEach(() => {
+  if (originalAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL
+  else process.env.NEXT_PUBLIC_APP_URL = originalAppUrl
 })
 
 describe('POST /api/billing/portal', () => {
@@ -117,5 +136,49 @@ describe('POST /api/billing/portal', () => {
     expect(portalCreate).toHaveBeenCalledWith(
       expect.objectContaining({ customer: 'cus_1' })
     )
+  })
+
+  describe('return URL', () => {
+    function portalFrom(url: string) {
+      enqueue({ data: { stripe_customer_id: 'cus_1' } })
+      portalCreate.mockResolvedValue({ url: 'https://stripe.test/portal' })
+      return POST(createMockRequest(url, { method: 'POST' }), routeParams)
+    }
+
+    it('comes back to the canonical app when opened there', async () => {
+      const { status } = await parseJsonResponse(
+        await portalFrom('https://app.accounted.test/api/billing/portal'),
+      )
+
+      expect(status).toBe(200)
+      expect(portalCreate).toHaveBeenCalledWith({
+        customer: 'cus_1',
+        return_url: 'https://app.accounted.test/settings/billing',
+      })
+    })
+
+    it('comes back to a registered white-label host when opened there', async () => {
+
+      const { status } = await parseJsonResponse(
+        await portalFrom('https://portal.brand.test/api/billing/portal'),
+      )
+
+      expect(status).toBe(200)
+      expect(portalCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ return_url: 'https://portal.brand.test/settings/billing' }),
+      )
+    })
+
+    it('falls back to the canonical app for an unregistered or spoofed host', async () => {
+
+      const { status } = await parseJsonResponse(
+        await portalFrom('https://portal.brand.test.attacker.test/api/billing/portal'),
+      )
+
+      expect(status).toBe(200)
+      expect(portalCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ return_url: 'https://app.accounted.test/settings/billing' }),
+      )
+    })
   })
 })

@@ -20,6 +20,7 @@ import { supersedeSiblingConnections } from '@/extensions/general/enable-banking
 import { getBankConnectionErrorMessage } from '@/lib/errors/get-error-message'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
 import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
+import { getCanonicalAppOrigin, resolveTrustedAppOrigin } from '@/lib/domains/trusted-app-origin'
 import {
   requireFlowInitiator,
   FLOW_INITIATOR_MISMATCH_MESSAGE,
@@ -92,7 +93,10 @@ export async function GET(request: Request) {
   // /sessions exchange to the pending ledger row. Null on the direct path.
   const connectorState = searchParams.get('connector_state')
 
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+  // Redirects issued before a pending row is known go to the canonical host
+  // (the only one the provider ever sends the browser to). Once the row is
+  // found, its recorded initiating origin takes over: see returnOrigin below.
+  const baseUrl = getCanonicalAppOrigin()
 
   // Connector branch: a self-hosted instance started this authorization through
   // the /api/connect/bank proxy, which replaced the upstream state with a
@@ -143,7 +147,7 @@ export async function GET(request: Request) {
         // (which stays 'expired' during the round-trip) is also handled.
         const { data: pendingConn } = await supabase
           .from('bank_connections')
-          .select('id, user_id, company_id, bank_name, psu_type, status')
+          .select('id, user_id, company_id, bank_name, psu_type, status, oauth_origin')
           .eq('oauth_state', state)
           .in('status', ['pending', 'expired', 'error'])
           .single()
@@ -220,7 +224,12 @@ export async function GET(request: Request) {
             bank_error_code: error,
             ...(pendingConn.psu_type ? { psu_type: pendingConn.psu_type } : {}),
           })
-          return NextResponse.redirect(`${baseUrl}/settings/banking?${params.toString()}`)
+          // Back to the host the user started on: the denial banner is only
+          // visible where their session is (a white-label user has none on
+          // the canonical host and would be bounced to its login instead).
+          return NextResponse.redirect(
+            `${await resolveTrustedAppOrigin(pendingConn.oauth_origin, { onLookupFailure: 'canonical' })}/settings/banking?${params.toString()}`
+          )
         }
       } catch (cleanupError) {
         console.error('[enable-banking] Failed to clean up pending bank connection:', cleanupError)
@@ -257,7 +266,7 @@ export async function GET(request: Request) {
   // state stays a plain redirect.
   const { data: pendingConnection, error: findError } = await supabase
     .from('bank_connections')
-    .select('id, user_id, company_id, bank_name, status, session_id, accounts_data')
+    .select('id, user_id, company_id, bank_name, status, session_id, accounts_data, oauth_origin')
     .eq('oauth_state', state)
     .in('status', ['pending', 'expired', 'error'])
     .single()
@@ -279,8 +288,23 @@ export async function GET(request: Request) {
   // victim lured into approving a consent someone else started would have
   // their bank accounts attached to that someone's company. The connector
   // branch above is exempt on purpose (server-to-server, HMAC-verified).
+  // The initiator's session lives on the host they started from (cookies are
+  // per host) while Enable Banking always redirects to the canonical callback.
+  // A white-label user therefore arrives signed out. From here on every
+  // redirect, including the login bounce that re-runs this callback with the
+  // same code + state, goes to the recorded initiating origin: their brand
+  // host already holds the session, so its login page forwards straight back
+  // here and the callback completes with cookies. Validated against the
+  // brands table; an unregistered or missing origin collapses to the
+  // canonical host, and so does a failed lookup (no token rides in this
+  // redirect, and a 500 mid-callback would strand the user).
+  const returnOrigin = await resolveTrustedAppOrigin(pendingConnection.oauth_origin, {
+    onLookupFailure: 'canonical',
+  })
+
   const initiator = await requireFlowInitiator(request, pendingConnection.user_id, {
     flow: 'enable-banking.callback',
+    returnOrigin,
   })
   if (!initiator.ok) {
     if (initiator.reason === 'no_session') {
@@ -295,7 +319,7 @@ export async function GET(request: Request) {
       bank_error: FLOW_INITIATOR_MISMATCH_MESSAGE,
       ...(pendingConnection.bank_name ? { bank_name: pendingConnection.bank_name } : {}),
     })
-    return NextResponse.redirect(`${baseUrl}/settings/banking?${params.toString()}`)
+    return NextResponse.redirect(`${returnOrigin}/settings/banking?${params.toString()}`)
   }
 
   // Kick the finalize work off eagerly, decoupled from the response stream:
@@ -374,7 +398,7 @@ export async function GET(request: Request) {
       controller.enqueue(encoder.encode(renderFinalizeShell(pendingConnection.bank_name, cspNonce)))
       const targetPath = await finalizePromise
       try {
-        controller.enqueue(encoder.encode(renderFinalizeRedirect(`${baseUrl}${targetPath}`, cspNonce)))
+        controller.enqueue(encoder.encode(renderFinalizeRedirect(`${returnOrigin}${targetPath}`, cspNonce)))
         controller.close()
       } catch {
         // Stream already cancelled (client closed the tab). The finalize

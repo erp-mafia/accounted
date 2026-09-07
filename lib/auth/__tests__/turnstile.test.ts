@@ -73,9 +73,15 @@ describe('Turnstile integration contract', () => {
     expect(login).toMatch(
       /signInWithPassword\([\s\S]*?options: captchaTokenOptions\(passwordCaptchaToken\)/,
     )
+    // The reset flow moved server-side (brands-table host resolution,
+    // 2026-09-07): the captcha token must travel to
+    // POST /api/auth/password-reset, and that route must forward it into
+    // the GoTrue resetPasswordForEmail call.
     expect(login).toMatch(
-      /resetPasswordForEmail\([\s\S]*?captchaTokenOptions\(resetCaptchaToken\)/,
+      /fetch\('\/api\/auth\/password-reset'[\s\S]*?captchaTokenOptions\(resetCaptchaToken\)/,
     )
+    const resetRoute = readRepoFile('app/api/auth/password-reset/route.ts')
+    expect(resetRoute).toMatch(/resetPasswordForEmail\([\s\S]*?captchaToken/)
     expect(login).toContain('action="accounted_login"')
     expect(login).toContain('action="accounted_password_reset"')
 

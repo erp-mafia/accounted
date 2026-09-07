@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getStripe } from '@/lib/stripe/client'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 
 /**
  * Create a Stripe Billing Customer Portal session so the user can manage,
@@ -13,7 +14,7 @@ import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
  * is webhook-owned and not member-readable under RLS; the query still filters
  * by the membership-validated companyId.
  */
-export const POST = withRouteContext('billing.portal', async (_request, ctx) => {
+export const POST = withRouteContext('billing.portal', async (request, ctx) => {
   const { user, supabase, companyId } = ctx
 
   // Demo accounts must never reach Stripe (see billing/checkout for the full
@@ -44,10 +45,13 @@ export const POST = withRouteContext('billing.portal', async (_request, ctx) => 
     )
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ''
+  // Same host the user started on (see billing/checkout): a registered
+  // white-label host stays on its brand, anything else returns to the
+  // canonical app. The path is fixed.
+  const appOrigin = await resolveRequestAppOrigin(request)
   const portal = await getStripe().billingPortal.sessions.create({
     customer: customerId,
-    return_url: `${appUrl}/settings/billing`,
+    return_url: `${appOrigin}/settings/billing`,
   })
 
   return NextResponse.json({ url: portal.url })

@@ -1,62 +1,129 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+
 import {
+  BrandLookupFailedError,
   buildPasswordResetRedirectTo,
   getCanonicalAppOrigin,
+  requestHost,
   resolveRequestAppOrigin,
   resolveTrustedAppOrigin,
 } from '../trusted-app-origin'
 
-const ORIGINAL_APP_URL = process.env.NEXT_PUBLIC_APP_URL
-const ORIGINAL_WHITELABEL_DOMAINS = process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS
+const REGISTERED = new Set(['portal.brand.test', 'books.partner.test'])
+
+const ORIGINAL_ENV = {
+  NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+  VERCEL_URL: process.env.VERCEL_URL,
+  VERCEL_BRANCH_URL: process.env.VERCEL_BRANCH_URL,
+}
+
+function restoreEnv() {
+  for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+}
 
 describe('trusted application origins', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
-    delete process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS
+    delete process.env.VERCEL_URL
+    delete process.env.VERCEL_BRANCH_URL
+    resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
+      brand: REGISTERED.has(host) ? { domain: host } : null,
+      lookupFailed: false,
+    }))
   })
 
-  afterEach(() => {
-    if (ORIGINAL_APP_URL === undefined) delete process.env.NEXT_PUBLIC_APP_URL
-    else process.env.NEXT_PUBLIC_APP_URL = ORIGINAL_APP_URL
+  afterEach(restoreEnv)
 
-    if (ORIGINAL_WHITELABEL_DOMAINS === undefined) {
-      delete process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS
-    } else {
-      process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = ORIGINAL_WHITELABEL_DOMAINS
-    }
-  })
-
-  it('uses an exact registered white-label host over HTTPS', () => {
-    process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = 'portal.brand.test, books.partner.test'
-
-    expect(resolveTrustedAppOrigin('https://portal.brand.test')).toBe(
+  it('uses an exact registered brand host over HTTPS', async () => {
+    expect(await resolveTrustedAppOrigin('https://portal.brand.test')).toBe(
       'https://portal.brand.test',
     )
-    expect(resolveTrustedAppOrigin('PORTAL.BRAND.TEST.')).toBe(
+    expect(await resolveTrustedAppOrigin('PORTAL.BRAND.TEST.')).toBe(
       'https://portal.brand.test',
     )
+    expect(resolveBrandResultByHostMock).toHaveBeenCalledWith('portal.brand.test')
   })
 
-  it('rejects spoofed, credential, wildcard, and non-default-port hosts', () => {
-    process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = 'portal.brand.test,*.wildcard.test'
-
+  it('rejects spoofed, credential, suffix, and non-default-port hosts', async () => {
     for (const candidate of [
       'https://portal.brand.test.attacker.test',
       'https://portal.brand.test@attacker.test',
-      'https://child.wildcard.test',
+      'https://child.portal.brand.test',
       'https://portal.brand.test:444',
     ]) {
-      expect(resolveTrustedAppOrigin(candidate), candidate).toBe(
+      expect(await resolveTrustedAppOrigin(candidate), candidate).toBe(
         'https://app.accounted.test',
       )
     }
   })
 
-  it('falls back to the canonical origin when the request host is not registered', () => {
-    expect(resolveTrustedAppOrigin('https://unregistered.test')).toBe(
+  it('falls back to the canonical origin when the host is not registered', async () => {
+    expect(await resolveTrustedAppOrigin('https://unregistered.test')).toBe(
       'https://app.accounted.test',
     )
-    expect(resolveTrustedAppOrigin(null)).toBe('https://app.accounted.test')
+    expect(await resolveTrustedAppOrigin(null)).toBe('https://app.accounted.test')
+  })
+
+  it('does not consult the registry for the canonical host itself', async () => {
+    expect(await resolveTrustedAppOrigin('app.accounted.test')).toBe(
+      'https://app.accounted.test',
+    )
+    expect(resolveBrandResultByHostMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses with BrandLookupFailedError when the brands lookup fails', async () => {
+    resolveBrandResultByHostMock.mockResolvedValue({ brand: null, lookupFailed: true })
+
+    await expect(resolveTrustedAppOrigin('https://portal.brand.test')).rejects.toBeInstanceOf(
+      BrandLookupFailedError,
+    )
+    await expect(resolveTrustedAppOrigin('https://portal.brand.test')).rejects.toMatchObject({
+      code: 'TRANSIENT_ERROR',
+      status: 503,
+    })
+    // The canonical host never consults the registry, so it is unaffected.
+    expect(await resolveTrustedAppOrigin('app.accounted.test')).toBe('https://app.accounted.test')
+    // Redirect-only callers opt into the canonical fallback explicitly.
+    expect(
+      await resolveTrustedAppOrigin('https://portal.brand.test', { onLookupFailure: 'canonical' }),
+    ).toBe('https://app.accounted.test')
+  })
+
+  it('lets a local canonical trust other local hosts and ports on the same scheme', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000'
+
+    expect(await resolveTrustedAppOrigin('localhost:3001')).toBe('http://localhost:3001')
+    expect(await resolveTrustedAppOrigin('http://127.0.0.1:3000')).toBe('http://127.0.0.1:3000')
+    expect(await resolveTrustedAppOrigin('lane.localhost:3002')).toBe('http://lane.localhost:3002')
+    expect(resolveBrandResultByHostMock).not.toHaveBeenCalled()
+
+    // A hosted canonical grants nothing to local hosts.
+    process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
+    expect(await resolveTrustedAppOrigin('localhost:3001')).toBe('https://app.accounted.test')
+  })
+
+  it("trusts this deployment's own Vercel hostnames, but no other *.vercel.app", async () => {
+    process.env.VERCEL_URL = 'erp-base-abc123-team.vercel.app'
+    process.env.VERCEL_BRANCH_URL = 'erp-base-git-feature-team.vercel.app'
+
+    expect(await resolveTrustedAppOrigin('erp-base-abc123-team.vercel.app')).toBe(
+      'https://erp-base-abc123-team.vercel.app',
+    )
+    expect(await resolveTrustedAppOrigin('https://erp-base-git-feature-team.vercel.app')).toBe(
+      'https://erp-base-git-feature-team.vercel.app',
+    )
+    expect(await resolveTrustedAppOrigin('https://someone-else.vercel.app')).toBe(
+      'https://app.accounted.test',
+    )
   })
 
   it('normalises the canonical URL to its origin and has a local safe fallback', () => {
@@ -67,46 +134,53 @@ describe('trusted application origins', () => {
     expect(getCanonicalAppOrigin()).toBe('http://localhost:3000')
   })
 
-  it('validates the request URL and ignores a spoofed forwarded host', () => {
-    process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = 'portal.brand.test'
+  it('reads the forwarded host first, then Host, then the request URL', () => {
+    expect(
+      requestHost(
+        new Request('https://internal/api/x', {
+          headers: { host: 'internal', 'x-forwarded-host': 'portal.brand.test' },
+        }),
+      ),
+    ).toBe('portal.brand.test')
+    expect(
+      requestHost(new Request('https://internal/api/x', { headers: { host: 'books.partner.test' } })),
+    ).toBe('books.partner.test')
+    expect(requestHost(new Request('https://portal.brand.test/api/x'))).toBe('portal.brand.test')
+  })
 
-    const trusted = new Request('https://portal.brand.test/api/company/members/invite', {
-      headers: { 'x-forwarded-host': 'attacker.test' },
-    })
-    const spoofed = new Request('https://attacker.test/api/company/members/invite', {
+  it('resolves a request through the registry and ignores an unregistered forwarded host', async () => {
+    const registered = new Request('https://internal/api/company/members/invite', {
       headers: { 'x-forwarded-host': 'portal.brand.test' },
     })
+    const spoofed = new Request('https://portal.brand.test/api/company/members/invite', {
+      headers: { 'x-forwarded-host': 'attacker.test' },
+    })
 
-    expect(resolveRequestAppOrigin(trusted)).toBe('https://portal.brand.test')
-    expect(resolveRequestAppOrigin(spoofed)).toBe('https://app.accounted.test')
+    expect(await resolveRequestAppOrigin(registered)).toBe('https://portal.brand.test')
+    expect(await resolveRequestAppOrigin(spoofed)).toBe('https://app.accounted.test')
   })
 })
 
 describe('password reset callback', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
-    process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = 'portal.brand.test'
+    resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
+      brand: REGISTERED.has(host) ? { domain: host } : null,
+      lookupFailed: false,
+    }))
   })
 
-  afterEach(() => {
-    if (ORIGINAL_APP_URL === undefined) delete process.env.NEXT_PUBLIC_APP_URL
-    else process.env.NEXT_PUBLIC_APP_URL = ORIGINAL_APP_URL
+  afterEach(restoreEnv)
 
-    if (ORIGINAL_WHITELABEL_DOMAINS === undefined) {
-      delete process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS
-    } else {
-      process.env.NEXT_PUBLIC_WHITELABEL_DOMAINS = ORIGINAL_WHITELABEL_DOMAINS
-    }
-  })
-
-  it('keeps a registered brand callback on the brand domain', () => {
-    expect(buildPasswordResetRedirectTo('https://portal.brand.test')).toBe(
+  it('keeps a registered brand callback on the brand domain', async () => {
+    expect(await buildPasswordResetRedirectTo('portal.brand.test')).toBe(
       'https://portal.brand.test/auth/callback?next=/reset-password',
     )
   })
 
-  it('uses the allowlisted canonical callback for an unknown browser origin', () => {
-    expect(buildPasswordResetRedirectTo('https://attacker.test')).toBe(
+  it('uses the canonical callback for an unknown host', async () => {
+    expect(await buildPasswordResetRedirectTo('attacker.test')).toBe(
       'https://app.accounted.test/auth/callback?next=/reset-password',
     )
   })

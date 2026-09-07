@@ -34,7 +34,6 @@ import {
   consumeInviteCookie,
   INVITE_PROBLEM_MESSAGE_KEYS,
 } from '@/lib/auth/consume-invite-cookie'
-import { buildPasswordResetRedirectTo } from '@/lib/domains/trusted-app-origin'
 import { AuthFormError } from '@/components/auth/AuthFormError'
 import { OAuthButton } from '@/components/auth/OAuthButton'
 import {
@@ -415,12 +414,28 @@ export function LoginClient({
     const emailValue = (formData.get('email') as string) || email
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(emailValue, {
-        redirectTo: buildPasswordResetRedirectTo(window.location.origin),
-        ...captchaTokenOptions(resetCaptchaToken),
+      // Server-side reset (POST /api/auth/password-reset): the route resolves
+      // the recovery callback against the brands table from the request
+      // host, so the browser carries no domain list and a new brand needs no
+      // redeploy. GoTrue call, captcha and rate limits are unchanged.
+      const res = await fetch('/api/auth/password-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: emailValue,
+          captchaToken: captchaTokenOptions(resetCaptchaToken).captchaToken ?? null,
+        }),
       })
 
-      if (error) {
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}))
+        const error = {
+          code: json?.error?.code,
+          message:
+            (errorLocale === 'en' ? json?.error?.message_en : json?.error?.message) ??
+            json?.error?.message,
+          status: res.status,
+        }
         const kind = classifyAuthError(error)
         setFormError({
           kind,

@@ -201,8 +201,7 @@ describe('production white-label proxy guard', () => {
     expect(updateSessionMock).not.toHaveBeenCalled()
   })
 
-  it('does not treat the callback allowlist as a production classification', async () => {
-    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'demo.partner-brand.se')
+  it('does not treat an unclassified custom domain as production', async () => {
     const request = new NextRequest('https://demo.partner-brand.se/login')
 
     expect((await proxy(request)).status).toBe(204)
