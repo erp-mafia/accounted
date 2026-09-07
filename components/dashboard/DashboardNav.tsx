@@ -71,7 +71,7 @@ import { persistUiState } from '@/lib/ui-state/client'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { DashboardShell, EntityType, UserUiState } from '@/types'
 import { SidebarV2 } from './SidebarV2'
-import { NAV_V2_BOTTOM, NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags, type NavV2Item } from './nav-v2'
+import { NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags, type NavV2Item } from './nav-v2'
 
 void _ENABLED_EXTENSION_IDS
 
@@ -679,7 +679,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     ? cockpitNavItems.filter(passesGates).map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
     : gateTree(NAV_V2_TOP)
   const v2Company = cockpitMode ? [] : gateTree(NAV_V2_COMPANY)
-  const v2Bottom = gateTree(NAV_V2_BOTTOM)
   // Att göra carries the whole queue (unbooked rows + staged operations);
   // Transaktioner and Assistentens förslag keep their own share.
   const v2BadgeFor = (href: string): number | null => {
@@ -872,7 +871,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         <SidebarV2
           top={v2Top}
           company={v2Company}
-          bottom={v2Bottom}
           groupLabel={cockpitMode ? '' : tNav('v2_group_company')}
           label={(key) => tNav(key as NavLabelKey)}
           isActive={isActive}
@@ -882,7 +880,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           betaLabel={tNav('badge_beta')}
           mainNavLabel={tNav('main_navigation')}
           brand={<BrandHomeLink showLabel />}
-          switcher={<CompanySwitcher />}
           backLink={
             byraTeam && !cockpitMode ? (
               <div className="mb-2">
