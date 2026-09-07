@@ -124,7 +124,10 @@
     "v2_recurring": "Återkommande",
     "v2_payment_files": "Betalfiler",
     "v2_parties": "Motparter",
-    "v2_rules": "Regler"
+    "v2_rules": "Regler",
+    "v2_accounts": "Konton",
+    "v2_accounts_overview": "Översikt",
+    "v2_bank_accounts": "Bankkonton"
   },
   "trial_expired_dialog": {
     "title": "Din provperiod har löpt ut",
@@ -7013,6 +7016,30 @@
       "linked_counterparty": "Motpart",
       "linked_agents": "Agenter",
       "agents_same_rule": "samma regel via MCP"
+  },
+  "accounts_v2": {
+      "title": "Konton",
+      "help": "Alla konton med pengar: bankkonton och skattekontot. Raden visar när kontot senast lästes, till vilket datum det är avstämt och hur många rader som väntar. Avstämningen görs per konto, månad för månad.",
+      "loading": "Hämtar…",
+      "load_failed": "Kontona kunde inte hämtas.",
+      "empty": "Inga konton kopplade än.",
+      "connect_bank": "Koppla bank",
+      "th_account": "Konto",
+      "th_source": "Källa",
+      "th_synced": "Senast läst",
+      "th_signed_off": "Avstämt t.o.m.",
+      "th_review": "Att granska",
+      "th_balance": "Saldo",
+      "kind_bank": "Bank",
+      "kind_skv": "Skatteverket",
+      "kind_manual": "Manuellt",
+      "source_psd2": "bankkoppling",
+      "source_bank_file": "kontoutdrag (fil)",
+      "source_skatteverket_api": "Skatteverket",
+      "source_skatteverket_file": "skattekontoutdrag (fil)",
+      "source_manual": "manuellt",
+      "sign_off_link": "Stäm av",
+      "review_rows": "{count} rader"
   },
   "dashboard": {
     "suggested_kind_expense_payout": "Återbetalning av utlägg",

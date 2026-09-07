@@ -551,9 +551,9 @@ export default function SupplierInvoicesPage() {
           The help popover carries the payment model (convention 7): approval
           attests for payment; payments reconcile via bank matching, so there
           is deliberately no mark-as-paid button here. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <span className="flex items-center gap-2">
-          <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+          <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
           <HelpPopover>{t('help_body')}</HelpPopover>
         </span>
         {canWrite ? (

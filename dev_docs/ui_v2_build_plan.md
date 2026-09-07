@@ -94,6 +94,8 @@ Shipped scope (PR 7a): in shell v2 the Dokumentinkorg workspace opens with the f
 
 Fakturering, Bokföring, Löner, Skatt, Rapporter, Bokslut and Konton get the toolbar row, the section picker and the one-line table. Existing editors stay. This is the long tail and can be split per page.
 
+Shipped scope (PR 8a): every list page that drew its own title (Kundfakturor, Leverantörsfakturor, Kunder, Leverantörer, Artiklar, Anläggningstillgångar, Dimensioner, Löner, Anställda, Kundorder, Granskning, Årsbokslut, Transaktioner's status bar, Kontoplan) now carries the `page-header` class hooks, so in shell v2 its title and primary action sit in the top bar like every PageHeader page; v1 is untouched. New page `/accounts` (Konton): bank accounts and the skattekonto from the reconciliation service with source, last read, signed-off-through, rows to review and balance, each row linking into the reconciliation for that account. The v2 sidebar gets Konton first under BOLAGET (Översikt, Bankkonton, Skattekonto, Avstämning). Still to come per page: section pickers replacing in-page tab rows, one-line rows where lists still stack secondary text (PR 8b onwards).
+
 ### PR 9: cutover
 
 Shell v2 becomes the default, v1 is removed, design.md conventions 1, 2 and 9 lose their addenda and state v2 plainly.

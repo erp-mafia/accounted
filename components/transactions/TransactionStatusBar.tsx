@@ -71,8 +71,8 @@ export default function TransactionStatusBar({
   ]
 
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <h1 className="font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
+    <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
       <SplitButton
         key={`${loaded ? 'loaded' : 'initial'}-${showSync ? 'sync' : 'nosync'}`}
         persistKey="transactions"

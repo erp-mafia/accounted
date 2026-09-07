@@ -10,6 +10,7 @@ import {
   Percent,
   BarChart3,
   FileCheck,
+  Landmark,
   Puzzle,
   HelpCircle,
   Settings,
@@ -68,11 +69,21 @@ export const NAV_V2_TOP: NavV2Item[] = [
 
 export const NAV_V2_COMPANY: NavV2Item[] = [
   {
+    href: '/accounts',
+    labelKey: 'v2_accounts',
+    icon: Landmark,
+    sub: [
+      { href: '/accounts', labelKey: 'v2_accounts_overview' },
+      { href: '/settings/banking', labelKey: 'v2_bank_accounts' },
+      { href: '/skattekonto', labelKey: 'skattekonto' },
+      { href: '/reconciliation', labelKey: 'reconciliation' },
+    ],
+  },
+  {
     href: '/transactions',
     labelKey: 'transactions',
     icon: ArrowLeftRight,
     sub: [
-      { href: '/reconciliation', labelKey: 'reconciliation' },
       { href: '/parties', labelKey: 'v2_parties' },
       { href: '/rules', labelKey: 'v2_rules' },
     ],
@@ -136,7 +147,6 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     icon: Percent,
     sub: [
       { href: '/reports/vat-declaration', labelKey: 'vat_declaration' },
-      { href: '/skattekonto', labelKey: 'skattekonto' },
       { href: '/deadlines', labelKey: 'deadlines' },
     ],
   },

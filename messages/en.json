@@ -124,7 +124,10 @@
     "v2_recurring": "Recurring",
     "v2_payment_files": "Payment files",
     "v2_parties": "Counterparties",
-    "v2_rules": "Rules"
+    "v2_rules": "Rules",
+    "v2_accounts": "Accounts",
+    "v2_accounts_overview": "Overview",
+    "v2_bank_accounts": "Bank accounts"
   },
   "trial_expired_dialog": {
     "title": "Your trial has expired",
@@ -7013,6 +7016,30 @@
       "linked_counterparty": "Counterparty",
       "linked_agents": "Agents",
       "agents_same_rule": "the same rule via MCP"
+  },
+  "accounts_v2": {
+      "title": "Accounts",
+      "help": "Every account with money in it: bank accounts and the tax account. Each row shows when the account was last read, through which date it is signed off and how many rows are waiting. Reconciliation is done per account, month by month.",
+      "loading": "Loading…",
+      "load_failed": "The accounts could not be loaded.",
+      "empty": "No accounts connected yet.",
+      "connect_bank": "Connect a bank",
+      "th_account": "Account",
+      "th_source": "Source",
+      "th_synced": "Last read",
+      "th_signed_off": "Signed off through",
+      "th_review": "To review",
+      "th_balance": "Balance",
+      "kind_bank": "Bank",
+      "kind_skv": "Skatteverket",
+      "kind_manual": "Manual",
+      "source_psd2": "bank connection",
+      "source_bank_file": "statement (file)",
+      "source_skatteverket_api": "Skatteverket",
+      "source_skatteverket_file": "tax account statement (file)",
+      "source_manual": "manual",
+      "sign_off_link": "Reconcile",
+      "review_rows": "{count} rows"
   },
   "dashboard": {
     "suggested_kind_expense_payout": "Expense reimbursement",

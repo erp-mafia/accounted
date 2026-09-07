@@ -767,8 +767,8 @@ export default function InvoicesPage() {
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 15): title + invoice actions */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <div className="flex flex-wrap items-center gap-2">
           {showRotRutAction && (
             <Button
