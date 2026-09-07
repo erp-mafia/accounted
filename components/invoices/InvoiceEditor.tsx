@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useForm, useFieldArray, Controller, type FieldErrors } from 'react-hook-form'
 import { Reorder } from 'framer-motion'
 import { SortableRow } from '@/components/ui/sortable-row'
+import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { addDays, format } from 'date-fns'
@@ -2295,7 +2296,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               className={cn('group border-b border-border', settleIndex === index && 'row-settle')}
                             >
                               <div className="flex items-center gap-1 py-1">
-                                <input
+                                <AutoGrowTextarea
                                   {...register(`items.${index}.description`)}
                                   placeholder={t('text_row_placeholder')}
                                   aria-label={t('text_row_label')}
@@ -2356,7 +2357,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                             className={cn('group border-b border-border', settleIndex === index && 'row-settle')}
                           >
                             <div className={cn(rowGridClass, 'py-1')}>
-                              <input
+                              <AutoGrowTextarea
                                 {...register(`items.${index}.description`)}
                                 placeholder={t('description_placeholder')}
                                 aria-label={t('description_label')}
