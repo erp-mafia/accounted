@@ -3612,6 +3612,9 @@
     "invoiced_after_payment_badge": "Invoiced {date}, after the payment"
   },
   "tx_skattekonto_card": {
+    "category_pick": "Pick a category",
+    "more_actions_aria": "More actions",
+    "account_label": "Skatteverket {account}",
     "skv_badge": "Skatteverket",
     "duplicate_title_with_voucher": "Possible duplicate of voucher {label}",
     "duplicate_title_draft": "Possible duplicate of voucher (draft)",
