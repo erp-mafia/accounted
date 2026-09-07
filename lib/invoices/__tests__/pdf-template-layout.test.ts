@@ -387,6 +387,12 @@ const ORDINARY_LONG_WORDS = [
   'Verksamhetsutveckling',
   'Kvartalsrapportering',
   'Redovisningskonsult',
+  'Momskompensationsansökan',
+  'Kommunikationsavdelningen',
+  'Sammanställningsdokumentet',
+  'Systemadministrationstjänst',
+  'Semesterlöneskuldsberäkning',
+  'Mervärdesskattedeklarationen',
 ]
 
 describe('word wrapping', () => {
@@ -412,12 +418,37 @@ describe('word wrapping', () => {
     for (const chunk of chunks) expect(approxWidthPt(chunk)).toBeLessThanOrEqual(DESCRIPTION_COLUMN_PT)
   })
 
+  it('estimates from real Helvetica metrics and over-estimates unknown glyphs', () => {
+    // 'a' is 556 units: 5.56pt at 10pt, times the 10% margin.
+    expect(approxWidthPt('a')).toBeCloseTo(6.116, 3)
+    expect(approxWidthPt('æ')).toBeGreaterThan(approxWidthPt('a'))
+    // A glyph outside Helvetica counts wider than any Latin glyph.
+    expect(approxWidthPt('Ш')).toBeGreaterThan(approxWidthPt('W'))
+  })
+
+  it('breaks tokens of wide or unknown glyphs so they never overflow the column', async () => {
+    for (const token of ['æ'.repeat(24), 'Œ'.repeat(24), 'Ш'.repeat(24)]) {
+      expect(wrapDescriptionWords(token).length).toBeGreaterThan(1)
+    }
+    const items = [
+      makeItem({ description: `Ref ${'æ'.repeat(24)}`, discount_percent: 10 }),
+      makeItem({ sort_order: 1, id: 'item-1', description: 'Annan rad', vat_rate: 12 }),
+    ]
+    const pages = await layOut(InvoicePDF({ invoice: sentInvoice(), customer, items, company }))
+    expectEveryLineInsideItsBox(pages, 'Ref ')
+  })
+
   it('renders ordinary compounds whole in the narrowest description column', async () => {
     const descriptions = [
       'Timarvode augusti, uppdrag Fastighetsskötsel 2026',
       'Utveckling av ny funktion samt Företagsförsäkring 2026',
       'Konsultarvode enligt avtal för Marknadsföringstjänster',
       'Timarvode augusti, uppdrag Verksamhetsutveckling',
+      'Möte om Momskompensationsansökan',
+      'Möte om Kommunikationsavdelningen',
+      'Möte om Sammanställningsdokumentet',
+      'Avser Systemadministrationstjänst 2026',
+      'Uppdrag: Mervärdesskattedeklarationen',
     ]
     for (const description of descriptions) {
       // Discount and a second VAT rate show every column, so the description

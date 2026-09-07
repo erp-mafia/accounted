@@ -24,6 +24,7 @@ import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnumm
 import { getCountryName } from '@/lib/vat/country-codes'
 import { EXPORT_NOTICE_SV } from '@/lib/invoices/vat-rules'
 import { unitLabel } from '@/lib/invoices/unit-labels'
+import { HELVETICA_WIDTHS } from '@/lib/invoices/pdf-glyph-widths'
 
 /**
  * react-pdf hyphenates long words with English patterns by default, which
@@ -36,19 +37,24 @@ import { unitLabel } from '@/lib/invoices/unit-labels'
  * token wider than its column would otherwise overprint the next column or
  * be dropped from the page entirely.
  *
- * Widths are Helvetica advances at 10pt rounded up so the wider bundled
- * fonts (Source Sans 3, Source Serif 4) stay under the same budget. Ordinary
- * Swedish compounds (Marknadsföringstjänster, Fastighetsskötsel) come out at
- * 120 to 150pt and are never split in the narrowest column.
+ * Widths are the real Helvetica advances at 10pt (HELVETICA_WIDTHS) with a
+ * 10% margin so the bundled fonts (Source Sans 3, Source Serif 4, measured
+ * within a few percent of Helvetica) stay under the same budget. A glyph
+ * Helvetica does not carry (Cyrillic, Greek, symbols) is counted at the
+ * widest Latin advance so it can only be over-estimated. Ordinary Swedish
+ * compounds up to about 28 characters come out under 160pt and are never
+ * split in the narrowest column.
  */
+const FONT_SIZE_PT = 10
+const WIDTH_SAFETY_FACTOR = 1.1
+const UNKNOWN_GLYPH_WIDTH = 1100
+
 export function approxWidthPt(word: string): number {
-  let width = 0
+  let units = 0
   for (const ch of word) {
-    if (/[iljtfr.,:;'|!I()[\]/\\-]/.test(ch)) width += 4
-    else if (/[A-ZÅÄÖÆØÜ@%&MWmw]/.test(ch)) width += 10
-    else width += 6.5
+    units += HELVETICA_WIDTHS.get(ch.codePointAt(0) ?? 0) ?? UNKNOWN_GLYPH_WIDTH
   }
-  return width
+  return (units / 1000) * FONT_SIZE_PT * WIDTH_SAFETY_FACTOR
 }
 
 /**
