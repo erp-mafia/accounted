@@ -17,6 +17,7 @@ const APPROVED_PRODUCTION_HOSTS = [
   'improveone.accounted.se',
   'm360.accounted.se',
   'redovisningskompaniet.accounted.se',
+  'solbo.accounted.se',
   'willem.accounted.se',
   'ziffr.accounted.se',
 ]

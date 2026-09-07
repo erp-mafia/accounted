@@ -8,6 +8,7 @@ import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { isWooCommerceConfigured } from '@/extensions/general/woocommerce/lib/credentials'
 import { syncWooCommerceOrders } from '@/extensions/general/woocommerce/lib/order-sync'
+import { expireStaleHandshakes } from '@/extensions/general/woocommerce/lib/connect'
 import type { WooCommerceConnection } from '@/extensions/general/woocommerce/types'
 
 export const maxDuration = 300
@@ -53,6 +54,28 @@ export const GET = withCronContext('cron.woocommerce_order_sync', async (_reques
 
   const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
+  // The budget covers the whole handler, sweep included: maxDuration is
+  // wall-clock for the route, so the deadline is fixed before any awaited
+  // work, not after it.
+  const startTime = Date.now()
+  const TIME_BUDGET_MS = 240_000 // leave a minute of margin inside maxDuration
+  // Shared with syncWooCommerceOrders: it stops between pages and persists
+  // its cursor, so a truncated connection resumes next night.
+  const deadlineMs = startTime + TIME_BUDGET_MS
+
+  // Hygiene first: park handshakes nobody completed and wipe their staged
+  // keys. A pending row never syncs (every consumer selects 'active'), so a
+  // failure here is logged, not fatal.
+  const sweep = await expireStaleHandshakes(supabase)
+  if (sweep.error) {
+    ctx.log.error('failed to expire stale woocommerce handshakes', {
+      code: sweep.error.code,
+      message: sweep.error.message,
+    })
+  } else if (sweep.expired > 0) {
+    ctx.log.info('expired stale woocommerce handshakes', { expired: sweep.expired })
+  }
+
   const { data: connections, error: connError } = await supabase
     .from('woocommerce_connections')
     .select('*')
@@ -75,12 +98,6 @@ export const GET = withCronContext('cron.woocommerce_order_sync', async (_reques
       processed: 0,
     })
   }
-
-  const startTime = Date.now()
-  const TIME_BUDGET_MS = 240_000 // leave a minute of margin inside maxDuration
-  // Shared with syncWooCommerceOrders: it stops between pages and persists
-  // its cursor, so a truncated connection resumes next night.
-  const deadlineMs = startTime + TIME_BUDGET_MS
 
   const results: Array<{
     connectionId: string

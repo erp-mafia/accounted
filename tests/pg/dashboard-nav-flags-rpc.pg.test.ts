@@ -42,7 +42,12 @@ describe('get_dashboard_nav_flags()', () => {
     expect((await flagsAs(userId, companyId)).has_webshop).toBe(false)
 
     await getPool().query(
-      `UPDATE public.woocommerce_connections SET status = 'active' WHERE company_id = $1`,
+      // Active requires stored keys + browser confirmation (CHECK, 20260907143000).
+      `UPDATE public.woocommerce_connections
+          SET status = 'active',
+              consumer_key_encrypted = 'enc:k', consumer_secret_encrypted = 'enc:s',
+              browser_confirmed_at = now()
+        WHERE company_id = $1`,
       [companyId],
     )
     expect((await flagsAs(userId, companyId)).has_webshop).toBe(true)

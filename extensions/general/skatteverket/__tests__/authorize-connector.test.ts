@@ -2,8 +2,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // The route is exercised through the extension registration; the connector
-// seam and the paywall gate are mocked so the test pins ONLY the /authorize
-// wiring: what is stored, and where the browser is sent.
+// seam, the paywall gate and the flow store are mocked so the test pins ONLY
+// the /authorize wiring: what is recorded, and where the browser is sent.
 const { mockConnectorMode, mockStartAuth } = vi.hoisted(() => ({
   mockConnectorMode: vi.fn(),
   mockStartAuth: vi.fn(),
@@ -27,6 +27,28 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
   requireCapability: vi.fn(async () => null),
 }))
 
+const { mockCreateFlow, mockPurge, mockResolveOrigin, mockNewId } = vi.hoisted(() => ({
+  mockCreateFlow: vi.fn(),
+  mockPurge: vi.fn(),
+  mockResolveOrigin: vi.fn(),
+  mockNewId: vi.fn(),
+}))
+vi.mock('@/lib/auth/oauth-flows', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/oauth-flows')>()
+  return {
+    ...actual,
+    createOAuthFlow: mockCreateFlow,
+    purgeExpiredOAuthFlows: mockPurge,
+    resolveOAuthOrigin: mockResolveOrigin,
+    newOAuthFlowId: mockNewId,
+  }
+})
+
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: vi.fn(),
+  createServiceClient: vi.fn(() => ({ tag: 'service' })),
+}))
+
 import { skatteverketExtension } from '../index'
 import { buildAuthorizeUrl } from '../lib/oauth'
 
@@ -38,33 +60,21 @@ function authorizeRoute() {
   return route!
 }
 
-function makeCtx() {
-  const stored: Record<string, string> = {}
-  const cleared: string[] = []
-  return {
-    stored,
-    cleared,
-    ctx: {
-      userId: 'user-1',
-      companyId: 'company-1',
-      supabase: {} as any,
-      settings: {
-        set: vi.fn(async (key: string, value: string) => {
-          stored[key] = value
-        }),
-        clear: vi.fn(async (key: string) => {
-          cleared.push(key)
-        }),
-        get: vi.fn(async () => null),
-      },
-    } as any,
-  }
-}
+const ctx = {
+  userId: 'user-1',
+  companyId: 'company-1',
+  supabase: {} as any,
+  settings: { set: vi.fn(), clear: vi.fn(), get: vi.fn(async () => null) },
+} as any
 
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.NEXT_PUBLIC_APP_URL = 'https://instans.example.se'
   delete process.env.NEXT_PUBLIC_SKV_OAUTH_BASE_URL
+  mockNewId.mockReturnValue('state-fixed')
+  mockResolveOrigin.mockResolvedValue('https://instans.example.se')
+  mockPurge.mockResolvedValue(undefined)
+  mockCreateFlow.mockResolvedValue(undefined)
 })
 
 describe('skatteverket /authorize: connector mode', () => {
@@ -80,8 +90,7 @@ describe('skatteverket /authorize: connector mode', () => {
     })
   })
 
-  it('starts the consent through the broker and stores its redirect_uri + connector_state', async () => {
-    const { ctx, stored } = makeCtx()
+  it('starts the consent through the broker and records its redirect_uri + connector_state on the flow', async () => {
     const res = await authorizeRoute().handler(
       new Request('https://instans.example.se/api/extensions/ext/skatteverket/authorize'),
       ctx,
@@ -99,23 +108,33 @@ describe('skatteverket /authorize: connector mode', () => {
         // The instance's own callback: where the hosted SKV callback bounces
         // the browser back to.
         returnUrl: 'https://instans.example.se/api/extensions/ext/skatteverket/callback',
-        state: stored.oauth_state,
+        state: 'state-fixed',
         codeChallenge: 'pkce-c',
       },
     )
     // The BROKER's redirect_uri (what SKV saw) is what the token exchange
     // must repeat, so it replaces the locally computed one.
-    expect(stored.oauth_redirect_uri).toBe(
-      'https://app.hosted.example/api/extensions/ext/skatteverket/callback',
+    expect(mockCreateFlow).toHaveBeenCalledWith(
+      { tag: 'service' },
+      {
+        id: 'state-fixed',
+        kind: 'skatteverket',
+        companyId: 'company-1',
+        userId: 'user-1',
+        origin: 'https://instans.example.se',
+        redirectUri: 'https://app.hosted.example/api/extensions/ext/skatteverket/callback',
+        codeVerifier: 'pkce-v',
+        connectorState: 'signed-cs',
+        returnTo: null,
+      },
     )
-    expect(stored.oauth_connector_state).toBe('signed-cs')
-    expect(stored.oauth_code_verifier).toBe('pkce-v')
     expect(buildAuthorizeUrl).not.toHaveBeenCalled()
+    // Nothing goes through extension settings any more.
+    expect(ctx.settings.set).not.toHaveBeenCalled()
   })
 
-  it('answers 502 with operator guidance when the broker refuses, storing no flow state', async () => {
+  it('answers 502 with operator guidance when the broker refuses, recording no flow', async () => {
     mockStartAuth.mockRejectedValueOnce(new Error('Connector authorize-url failed (403): quota'))
-    const { ctx, stored } = makeCtx()
     const res = await authorizeRoute().handler(
       new Request('https://instans.example.se/api/extensions/ext/skatteverket/authorize'),
       ctx,
@@ -124,27 +143,65 @@ describe('skatteverket /authorize: connector mode', () => {
     expect(res.status).toBe(502)
     const body = await (res as Response).json()
     expect(body.error).toMatch(/GNUBOK_CONNECTOR_KEY/)
-    expect(Object.keys(stored)).toHaveLength(0)
+    expect(mockCreateFlow).not.toHaveBeenCalled()
   })
 })
 
 describe('skatteverket /authorize: direct mode', () => {
-  it('builds the authorize URL locally and clears any stale connector state', async () => {
+  beforeEach(() => {
     mockConnectorMode.mockReturnValue(null)
-    const { ctx, stored, cleared } = makeCtx()
+  })
+
+  it('builds the authorize URL locally and records the validated origin, return path and PKCE verifier', async () => {
+    process.env.NEXT_PUBLIC_SKV_OAUTH_BASE_URL = 'https://oauth.example'
+    mockResolveOrigin.mockResolvedValue('https://brand.example')
+
     const res = await authorizeRoute().handler(
-      new Request('https://instans.example.se/api/extensions/ext/skatteverket/authorize'),
+      new Request('https://brand.example/api/extensions/ext/skatteverket/authorize?return_to=%2Fsettings%2Ftax'),
       ctx,
     )
 
     expect(res.status).toBe(307)
     expect(res.headers.get('location')).toBe('https://skv.test/authorize?direct=1')
     expect(mockStartAuth).not.toHaveBeenCalled()
-    expect(stored.oauth_redirect_uri).toBe(
-      'https://instans.example.se/api/extensions/ext/skatteverket/callback',
+    expect(buildAuthorizeUrl).toHaveBeenCalledWith(
+      'https://oauth.example/api/extensions/ext/skatteverket/callback',
+      'state-fixed',
+      { codeChallenge: 'pkce-c' },
     )
-    // A row surviving from a connector-era flow must not leak into a direct
-    // exchange.
-    expect(cleared).toContain('oauth_connector_state')
+    expect(mockCreateFlow).toHaveBeenCalledWith(
+      { tag: 'service' },
+      expect.objectContaining({
+        id: 'state-fixed',
+        origin: 'https://brand.example',
+        redirectUri: 'https://oauth.example/api/extensions/ext/skatteverket/callback',
+        codeVerifier: 'pkce-v',
+        connectorState: null,
+        returnTo: '/settings/tax',
+      }),
+    )
+    // Expired rows are swept on the way in, best-effort.
+    expect(mockPurge).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a return_to that is not an in-app path', async () => {
+    await authorizeRoute().handler(
+      new Request('https://instans.example.se/api/extensions/ext/skatteverket/authorize?return_to=//evil.example'),
+      ctx,
+    )
+    expect(mockCreateFlow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ returnTo: null }),
+    )
+  })
+
+  it('still starts the flow when the purge fails', async () => {
+    mockPurge.mockRejectedValueOnce(new Error('purge boom'))
+    const res = await authorizeRoute().handler(
+      new Request('https://instans.example.se/api/extensions/ext/skatteverket/authorize'),
+      ctx,
+    )
+    expect(res.status).toBe(307)
+    expect(mockCreateFlow).toHaveBeenCalledTimes(1)
   })
 })

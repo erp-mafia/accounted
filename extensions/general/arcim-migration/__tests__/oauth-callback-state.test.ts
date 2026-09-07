@@ -118,7 +118,7 @@ function forgedLegacyState(consentId: string, provider: string) {
 describe('white-label OAuth callback handoff', () => {
   const BRAND_ORIGIN = 'https://solbo.accounted.se'
   const path = '/api/extensions/ext/arcim-migration/callback'
-  const state = { consentId: 'consent-1', provider: 'fortnox', userId: 'user-1', origin: BRAND_ORIGIN } as const
+  const state = { consentId: 'consent-1', provider: 'fortnox', companyId: 'company-1', userId: 'user-1', origin: BRAND_ORIGIN } as const
   const request = (origin: string, params: Record<string, string>) =>
     createMockRequest(`${origin}${path}`, { searchParams: params })
   const storedHandoff = { ...state, providerCode: 'stored-code', providerError: null }
