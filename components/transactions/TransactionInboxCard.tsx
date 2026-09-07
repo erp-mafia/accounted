@@ -35,6 +35,14 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { TransactionDrawer, type DrawerAction } from './TransactionDrawer'
+import { HUE_DOT_CLASS, type TemplateHue } from '@/lib/bookkeeping/template-group-colors'
+
+/** Shell v2: the top suggestion for an unbooked row, shown in the Kategori cell. */
+export interface RowProposal {
+  label: string
+  hue: TemplateHue
+  confidence: number
+}
 
 // True when the AI tier is active: gates user-facing strings that promise
 // AI behavior. On the free build (document-extraction disabled) we keep the
@@ -113,6 +121,12 @@ interface TransactionInboxCardProps {
   accountLabel?: string | null
   /** Kategori column: a match hint; null shows the "Välj kategori" prompt. */
   categoryLabel?: string | null
+  /** Shell v2: brand icon for the Konto cell (bank, Stripe, Skatteverket). */
+  accountLogo?: string | null
+  /** Shell v2: the top rule or keyword suggestion, shown in the Kategori cell; Bokför uses it. */
+  proposal?: RowProposal | null
+  /** Shell v2: book the row with its proposal (opens the review with the template set). */
+  onBookProposal?: (transaction: TransactionWithInvoice) => void
 }
 
 /**
@@ -147,6 +161,9 @@ export default function TransactionInboxCard({
   columns,
   accountLabel = null,
   categoryLabel = null,
+  accountLogo = null,
+  proposal = null,
+  onBookProposal,
 }: TransactionInboxCardProps) {
   const show = (c: TxColumnId) => !columns || columns.has(c)
   const t = useTranslations('tx_inbox_card')
@@ -244,6 +261,7 @@ export default function TransactionInboxCard({
   // row-level quiet pill AND as the foldout's leading pill.
   const runPrimary = (anchor?: HTMLElement) => {
     if (matchLabel) onOpenMatchDialog(transaction)
+    else if (proposal && onBookProposal) onBookProposal(transaction)
     else onOpenCategoryDialog(transaction, anchor)
   }
   const primaryLabel = matchLabel ?? 'Bokför'
@@ -445,20 +463,32 @@ export default function TransactionInboxCard({
             <button
               type="button"
               className={cn(
-                'inline-flex max-w-[16rem] items-center rounded-full border border-border px-2.5 py-0.5 text-xs transition-colors duration-150',
-                categoryLabel
+                'inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-xs transition-colors duration-150',
+                categoryLabel || proposal
                   ? 'text-foreground hover:bg-secondary/60'
                   : 'text-muted-foreground hover:text-foreground',
               )}
               onClick={(e) => onOpenCategoryDialog(transaction, e.currentTarget)}
               disabled={isProcessing || isDisabled}
+              title={!categoryLabel && proposal ? t('proposal_title', { label: proposal.label, percent: Math.round(proposal.confidence * 100) }) : undefined}
             >
-              <span className="truncate">{categoryLabel ?? t('category_pick')}</span>
+              {!categoryLabel && proposal && (
+                <span className={cn('h-2 w-2 shrink-0 rounded-full', HUE_DOT_CLASS[proposal.hue])} aria-hidden />
+              )}
+              <span className="truncate">{categoryLabel ?? proposal?.label ?? t('category_pick')}</span>
             </button>
           </td>
         )}
         {columns?.has('account') && (
-          <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>{accountLabel ?? ''}</td>
+          <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
+            <span className="inline-flex items-center gap-2">
+              {accountLogo && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={accountLogo} alt="" className="h-4 w-4 shrink-0 rounded-sm object-contain" />
+              )}
+              {accountLabel ?? ''}
+            </span>
+          </td>
         )}
         {show('amount') && (
           <td
@@ -553,7 +583,8 @@ export default function TransactionInboxCard({
           <TransactionDrawer
             transaction={transaction}
             accountLabel={accountLabel}
-            categoryLabel={categoryLabel}
+            categoryLabel={categoryLabel ?? proposal?.label ?? null}
+            accountLogo={accountLogo}
             primaryLabel={primaryLabel}
             onPrimary={(anchor) => runPrimary(anchor)}
             onOpenCategory={(anchor) => onOpenCategoryDialog(transaction, anchor)}

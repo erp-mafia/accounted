@@ -2980,6 +2980,7 @@
     "invoices_help": "Invoice due dates"
   },
   "tx_inbox_card": {
+    "proposal_title": "Proposal: {label} ({percent} % sure). Post uses it; click to change.",
     "drawer_close": "Close",
     "drawer_category": "Category",
     "drawer_actions": "Actions",

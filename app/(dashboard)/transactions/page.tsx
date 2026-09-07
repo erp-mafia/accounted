@@ -26,6 +26,10 @@ import { persistUiState } from '@/lib/ui-state/client'
 import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
+import { accountHue, templateGroupHue } from '@/lib/bookkeeping/template-group-colors'
+import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import type { RowProposal } from '@/components/transactions/TransactionInboxCard'
+import type { TemplateGroup } from '@/lib/bookkeeping/booking-templates'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
@@ -721,6 +725,23 @@ export default function TransactionsPage() {
     const bank = acct.bank_name || acct.name || ''
     const tail = acct.account_number ? `••${acct.account_number.slice(-4)}` : acct.ledger_account
     return `${bank} ${tail}`.trim()
+  }
+  // Shell v2: the brand mark next to the Konto text (bank, Stripe, Skatteverket).
+  const accountLogoFor = (tx: TransactionWithInvoice): string | null => {
+    const acct = tx.cash_account_id ? cashAccounts.find((a) => a.id === tx.cash_account_id) : undefined
+    return acct ? bankLogoUrl(acct.bank_name, acct.name) : null
+  }
+  // Shell v2: the top suggestion (counterparty template, then keyword/MCC)
+  // stands in the Kategori cell so the person sees what Bokför will do
+  // before clicking anything. Suggestions arrive with the list
+  // (fetchCategorySuggestions), so nothing is computed on click.
+  const proposalFor = (tx: TransactionWithInvoice): RowProposal | null => {
+    if (tx.journal_entry_id || tx.is_business !== null) return null
+    const s = templateSuggestions[tx.id]?.[0]
+    if (!s) return null
+    const account = s.debit_account.startsWith('19') ? s.credit_account : s.debit_account
+    const hue = s.group === 'counterparty' ? accountHue(account) : templateGroupHue(s.group as TemplateGroup)
+    return { label: s.name_sv, hue, confidence: s.confidence }
   }
   const categoryLabelFor = (tx: TransactionWithInvoice): string | null => {
     if (tx.potential_invoice && !tx.invoice_id)
@@ -3819,15 +3840,26 @@ export default function TransactionsPage() {
     setTemplatePickerOpen(true)
   }
 
-  function handleTemplateSelected(template: BookingTemplate) {
+  function handleTemplateSelected(template: BookingTemplate, txOverride?: TransactionWithInvoice) {
     setTemplatePickerOpen(false)
-    const tx = templatePickerTransaction
+    const tx = txOverride ?? templatePickerTransaction
     if (!tx) return
     // Library templates aren't validated server-side via template_id; the
     // template's debit/credit + VAT drive the booking through account_override.
     const templateId = isLibraryTemplateId(template.id) ? undefined : template.id
     setQuickReview({ transaction: tx, category: template.fallback_category, label: template.name_sv, template, templateId, linePattern: null })
     setQuickReviewOpen(true)
+  }
+
+  // Shell v2: Bokför on a row that carries a proposal goes straight to the
+  // review with that template set; no picker in between.
+  function bookProposal(transaction: TransactionWithInvoice) {
+    const s = templateSuggestions[transaction.id]?.[0]
+    if (!s) return openCategoryDialog(transaction)
+    if (isCounterpartyTemplateId(s.template_id)) return handleOpenTemplateReview(transaction, s.template_id)
+    const template = getTemplateById(s.template_id)
+    if (!template) return openCategoryDialog(transaction)
+    handleTemplateSelected(template, transaction)
   }
 
   function handleOpenTemplateReview(transaction: TransactionWithInvoice, templateId: string) {
@@ -4459,6 +4491,9 @@ export default function TransactionsPage() {
                         columns={txColumns ?? undefined}
                         accountLabel={txColumns ? accountLabelFor(item.data) : null}
                         categoryLabel={txColumns ? categoryLabelFor(item.data) : null}
+                        accountLogo={txColumns ? accountLogoFor(item.data) : null}
+                        proposal={txColumns ? proposalFor(item.data) : null}
+                        onBookProposal={txColumns ? bookProposal : undefined}
                       />
                     ) : (
                       <SkattekontoInboxCard
@@ -4476,6 +4511,7 @@ export default function TransactionsPage() {
                         onIgnore={handleSkvIgnore}
                         columns={txColumns ?? undefined}
                         accountLabel={txColumns ? tSkvCard('account_label', { account: SKATTEKONTO_ACCOUNT }) : null}
+                        accountLogo={txColumns ? '/logos/skatteverket_color.svg' : null}
                       />
                     ),
                   )}
@@ -4789,6 +4825,7 @@ export default function TransactionsPage() {
           templateId={quickReview?.templateId}
           counterpartyLinePattern={quickReview?.linePattern ?? null}
           counterpartyDefaultDimensions={quickReview?.defaultDimensions ?? null}
+          hideAiProposal={shell === 'v2' && !!quickReview?.template}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
           onEditLines={handleEditProposedLines}
