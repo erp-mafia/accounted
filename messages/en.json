@@ -3560,7 +3560,7 @@
     "kind_filter_supplier_invoice": "Supplier invoices",
     "kind_filter_underlag": "Receipts and other",
     "empty_no_kind_hits": "No items of that type here. Pick All types to see the rest.",
-    "address_plus_hint": "Add +lev before the @ for supplier invoices and +ver for receipts: {lev} or {ver}",
+    "address_plus_hint": "+lev before the @ for supplier invoices, +ver for receipts.",
     "hidden_by_kind_filter": "{count, plural, =1 {1 item is hidden} other {# items are hidden}} by the type filter.",
     "inbound_mail_title": "Received mail",
     "inbound_mail_hint": "Every mail that reached the address in the last {days} days, including the ones that were rejected.",

@@ -262,12 +262,6 @@ const INBOUND_MAIL_DAYS = 30
 // `acme-x7f2@inbox.example` + 'lev' → `acme-x7f2+lev@inbox.example`. The
 // webhook splits the local part at the first `+` and looks up what is before
 // it, so the tag never changes which company the mail reaches.
-function plusAddress(address: string, tag: string): string {
-  const at = address.indexOf('@')
-  if (at === -1) return address
-  return `${address.slice(0, at)}+${tag}${address.slice(at)}`
-}
-
 // How far the underlag behind the selected row got.
 //
 // `none` is the only state that may claim "Inget underlag bifogat": it means the
@@ -1664,23 +1658,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           {inboxAddress && (
             <div className="flex items-center gap-3 px-4 py-2 border-b border-border">
               <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-              <div className="min-w-0 flex-1">
-                <span className="tabular-nums">{inboxAddress.address}</span>
-                {/* Plus-addressing (#2129): the sender sorts the mail by
-                    writing +lev or +ver before the @. Both variants spelled
-                    out, since a tag is easier to copy than to construct. */}
-                <p className="mt-1 text-muted-foreground break-all">
-                  {t('address_plus_hint', {
-                    lev: plusAddress(inboxAddress.address, 'lev'),
-                    ver: plusAddress(inboxAddress.address, 'ver'),
-                  })}
-                </p>
-              </div>
+              {/* The address once, where the copy button is. Plus-addressing
+                  (#2129) as a rule, not spelled out per variant: the tag is
+                  the only part that changes. */}
               <InboxAddressBar
                 address={inboxAddress.address}
                 onRotate={handleRotateAddress}
                 isRotating={isRotating}
               />
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">{t('address_plus_hint')}</span>
             </div>
           )}
 
@@ -2488,7 +2474,6 @@ function InboxAddressBar({
   return (
     <div className="flex flex-col min-w-0">
       <div className="flex items-center gap-2 min-w-0">
-        <span className="text-muted-foreground text-xs shrink-0">·</span>
         <code
           className={cn(
             'select-all font-mono text-xs text-muted-foreground min-w-0',
