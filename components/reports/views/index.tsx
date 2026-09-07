@@ -29,6 +29,7 @@ import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import { PageHeader } from '@/components/ui/page-header'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
@@ -495,8 +496,14 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu
-        items={[
+      <div className={v2 ? 'flex flex-wrap items-center justify-between gap-3' : 'contents'}>
+        {latestVouchers && (
+          <p className="text-sm text-muted-foreground">
+            {t('latest_posted_vouchers')}: {latestVouchers}
+          </p>
+        )}
+        <ReportExportMenu
+          items={[
           { format: 'pdf', href: `/api/reports/income-statement/pdf?${reportQs}` },
           { format: 'xlsx', href: `/api/reports/income-statement/xlsx?${reportQs}` },
         ]}
@@ -692,6 +699,8 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
   const [error, setError] = useState<string | null>(null)
   const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
   const latestVouchers = formatLatestVouchers(data?.latest_vouchers)
+  // Shell v2: the export menu and the latest-voucher line share one row.
+  const v2 = useShell() === 'v2'
 
   useEffect(() => {
     setLoading(true)
@@ -741,13 +750,9 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
         items={[
           { format: 'pdf', href: `/api/reports/resultatrapport/pdf?${reportQs}` },
           { format: 'xlsx', href: `/api/reports/resultatrapport/xlsx?${reportQs}` },
-        ]}
-      />
-      {latestVouchers && (
-        <p className="text-sm text-muted-foreground">
-          {t('latest_posted_vouchers')}: {latestVouchers}
-        </p>
-      )}
+          ]}
+        />
+      </div>
 
       <Card>
         <CardContent className="p-0">
@@ -836,6 +841,8 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
   const [error, setError] = useState<string | null>(null)
   const reportQs = reportQuery(periodId, dateRange)
   const latestVouchers = formatLatestVouchers(data?.latest_vouchers)
+  // Shell v2: the export menu and the latest-voucher line share one row.
+  const v2 = useShell() === 'v2'
 
   useEffect(() => {
     setLoading(true)
@@ -878,17 +885,19 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu
-        items={[
+      <div className={v2 ? 'flex flex-wrap items-center justify-between gap-3' : 'contents'}>
+        {latestVouchers && (
+          <p className="text-sm text-muted-foreground">
+            {t('latest_posted_vouchers')}: {latestVouchers}
+          </p>
+        )}
+        <ReportExportMenu
+          items={[
           { format: 'pdf', href: `/api/reports/balansrapport/pdf?${reportQs}` },
           { format: 'xlsx', href: `/api/reports/balansrapport/xlsx?${reportQs}` },
-        ]}
-      />
-      {latestVouchers && (
-        <p className="text-sm text-muted-foreground">
-          {t('latest_posted_vouchers')}: {latestVouchers}
-        </p>
-      )}
+          ]}
+        />
+      </div>
 
       <Card>
         <CardContent className="p-0">
@@ -1338,7 +1347,7 @@ function VatStepper({
 
   return (
     <div
-      className="mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
+      className="report-narrow mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
       role="tablist"
       aria-label="Momsdeklarationens steg"
     >
@@ -2027,7 +2036,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           />
 
           {activeStep === 1 && (
-            <section className="mx-auto max-w-3xl space-y-3">
+            <section className="report-narrow mx-auto max-w-3xl space-y-3">
               <VatChecksCard
               checks={checks}
               periodType={periodType}
@@ -2046,7 +2055,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
 
           {activeStep === 2 && (
             <section className="space-y-3">
-              <div className="mx-auto max-w-2xl">
+              <div className="report-narrow mx-auto max-w-2xl">
             <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
               <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Momsdeklaration · {data.period.start} till {data.period.end}
@@ -2242,7 +2251,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           )}
 
           {activeStep === 3 && (
-            <section className="mx-auto max-w-3xl space-y-3">
+            <section className="report-narrow mx-auto max-w-3xl space-y-3">
               <VatBookingCard
               checksBlocked={checksBlocked}
               proposal={settlement.proposal}
@@ -2261,7 +2270,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           )}
 
           {activeStep === 4 && (
-            <section className="mx-auto max-w-3xl space-y-8">
+            <section className="report-narrow mx-auto max-w-3xl space-y-8">
               <SkatteverketPanel
                 periodType={periodType}
                 year={year}

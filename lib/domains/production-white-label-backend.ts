@@ -39,6 +39,7 @@ const CUSTOMER_PRODUCTION_WHITE_LABEL_HOSTS = new Set([
   'improveone.accounted.se',
   'm360.accounted.se',
   'redovisningskompaniet.accounted.se',
+  'solbo.accounted.se',
   'willem.accounted.se',
   'ziffr.accounted.se',
 ])

@@ -83,7 +83,9 @@ function ResultBarsPane({ report, flat = false }: { report: KPIReport; flat?: bo
     return months.length - 1
   })()
 
-  const W = 320
+  // Flat (v2) draws twice as wide at the same height: the bars spread over
+  // the page instead of sitting in a card's half.
+  const W = flat ? 640 : 320
   const H = 120
   const hasNegative = months.some((m) => m.net < 0)
   // Fixed headroom above (and below, when negatives exist) keeps the endpoint
@@ -109,7 +111,7 @@ function ResultBarsPane({ report, flat = false }: { report: KPIReport; flat?: bo
     m.income === 0 && m.expenses === 0 && m.net === 0
 
   return (
-    <Pane title={t('bars_title')} annotation={t('bars_unit')} flat={flat} className={flat ? 'max-w-[760px]' : 'sm:row-span-2'}>
+    <Pane title={t('bars_title')} annotation={t('bars_unit')} flat={flat} className={flat ? undefined : 'sm:row-span-2'}>
       <svg
         viewBox={`0 0 ${W} ${H + 8}`}
         className="mt-3 h-auto w-full"

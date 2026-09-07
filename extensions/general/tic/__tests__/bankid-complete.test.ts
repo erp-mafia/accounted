@@ -295,7 +295,6 @@ describe('POST /bankid/complete', () => {
         supabase: client,
         email: 'fresh@example.com',
         host: 'app.gnubok.se',
-        proto: 'https',
       })
       expect(admin.deleteUser).not.toHaveBeenCalled()
     })

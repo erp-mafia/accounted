@@ -56,7 +56,16 @@ import {
   FileDown,
   FileText,
   FileClock,
+  SlidersHorizontal,
 } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -275,6 +284,8 @@ export default function InvoicesPage() {
       ? (candidate as ListTab)
       : 'all'
   })
+  // Shell v2: grouping sits behind a gear at the right (same as Inköp).
+  const shell = useShell()
   const [groupMode, setGroupMode] = useState<GroupMode>(() => {
     const param = searchParams.get('group')
     return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'none'
@@ -810,16 +821,18 @@ export default function InvoicesPage() {
             annotation: tabCounts[tab] > 0 ? String(tabCounts[tab]) : undefined,
           }))}
         />
-        <ContextPicker
-          value={groupMode}
-          onChange={(id) => updateGroup(id as GroupMode)}
-          ariaLabel={t('group_picker_aria')}
-          triggerLabel={`${t('group_by')} · ${t(GROUP_LABEL_KEYS[groupMode])}`}
-          items={GROUP_MODES.map((mode) => ({
-            id: mode,
-            label: t(GROUP_LABEL_KEYS[mode]),
-          }))}
-        />
+        {shell !== 'v2' && (
+          <ContextPicker
+            value={groupMode}
+            onChange={(id) => updateGroup(id as GroupMode)}
+            ariaLabel={t('group_picker_aria')}
+            triggerLabel={`${t('group_by')} · ${t(GROUP_LABEL_KEYS[groupMode])}`}
+            items={GROUP_MODES.map((mode) => ({
+              id: mode,
+              label: t(GROUP_LABEL_KEYS[mode]),
+            }))}
+          />
+        )}
         <ToolbarSearch
           containerClassName="min-w-[190px]"
           placeholder={t('search_placeholder')}
@@ -839,6 +852,30 @@ export default function InvoicesPage() {
             }}
             includeAllOption
           />
+          {shell === 'v2' && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn('h-8 w-8 text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
+                  aria-label={t('group_picker_aria')}
+                  title={t('group_by')}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuRadioGroup value={groupMode} onValueChange={(v) => updateGroup(v as GroupMode)}>
+                  {GROUP_MODES.map((mode) => (
+                    <DropdownMenuRadioItem key={mode} value={mode}>
+                      {t(GROUP_LABEL_KEYS[mode])}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
 
