@@ -38,7 +38,17 @@ import type { WooCommerceConnection } from '../types'
 
 const APP_NAME = 'Accounted'
 
-export function buildAuthorizeUrl(storeUrl: string, state: string): string {
+/**
+ * @param appOrigin The trusted application origin the merchant started the
+ *   connect on (canonical app URL or a registered white-label brand domain,
+ *   already validated by resolveRequestAppOrigin). The BROWSER leg returns
+ *   there: sessions are per domain, so a brand-domain user sent back to the
+ *   canonical host would hit the initiator check with no session and land
+ *   on a foreign-branded login. The server-to-server callback stays on the
+ *   canonical host: no session is involved and the store must reach a
+ *   stable URL.
+ */
+export function buildAuthorizeUrl(storeUrl: string, state: string, appOrigin: string): string {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL
   if (!baseUrl) throw new Error('NEXT_PUBLIC_APP_URL is not configured')
   const params = new URLSearchParams({
@@ -46,7 +56,7 @@ export function buildAuthorizeUrl(storeUrl: string, state: string): string {
     // Read-only: the feed never writes to the store.
     scope: 'read',
     user_id: state,
-    return_url: `${baseUrl}/api/extensions/woocommerce/return`,
+    return_url: `${appOrigin}/api/extensions/woocommerce/return`,
     callback_url: `${baseUrl}/api/extensions/woocommerce/callback`,
   })
   return `${storeUrl}/wc-auth/v1/authorize?${params.toString()}`
