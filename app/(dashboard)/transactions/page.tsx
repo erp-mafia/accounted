@@ -1,7 +1,7 @@
 'use client'
 
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
@@ -25,6 +25,7 @@ import { useUiState } from '@/lib/hooks/use-ui-state'
 import { persistUiState } from '@/lib/ui-state/client'
 import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
@@ -519,6 +520,8 @@ export default function TransactionsPage() {
   // Template picker dialog
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
   const [templatePickerTransaction, setTemplatePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  // Shell v2: the element the picker opens beside (chip or Bokför button); null = the dialog.
+  const [templatePickerAnchor, setTemplatePickerAnchor] = useState<HTMLElement | null>(null)
   // The picker renders non-modal (agent sheet stays usable); hand-restore
   // page modality while it is open. See useDashShellInert in ui/dialog.tsx.
   useDashShellInert(templatePickerOpen)
@@ -3810,8 +3813,9 @@ export default function TransactionsPage() {
     setMatchDialogOpen(true)
   }
 
-  function openCategoryDialog(transaction: TransactionWithInvoice) {
+  function openCategoryDialog(transaction: TransactionWithInvoice, anchor?: HTMLElement) {
     setTemplatePickerTransaction(transaction)
+    setTemplatePickerAnchor(shell === 'v2' ? (anchor ?? null) : null)
     setTemplatePickerOpen(true)
   }
 
@@ -4098,6 +4102,52 @@ export default function TransactionsPage() {
     quickReview?.template,
     quickReview?.templateId,
     quickReview?.category,
+  )
+
+  const templatePickerProps: ComponentProps<typeof TemplatePicker> = {
+    direction: templatePickerTransaction && templatePickerTransaction.amount < 0 ? 'expense' : 'income',
+    entityType: entityType as EntityType,
+    suggestedTemplates: templatePickerTransaction ? templateSuggestions[templatePickerTransaction.id] : undefined,
+    onSelect: handleTemplateSelected,
+    onSelectCounterparty: (templateId: string) => {
+              if (!templatePickerTransaction) return
+              setTemplatePickerOpen(false)
+              handleOpenTemplateReview(templatePickerTransaction, templateId)
+    },
+    onPickLibraryTemplate: handlePickLibraryTemplate,
+    onSelectAccount: handlePickAccount,
+  }
+  // Alternate paths as quiet links (concept vact): the templates are the
+  // main content, not three stacked buttons.
+  const templatePickerLinks = (
+    <>
+            <button type="button" className={QUIET_LINK_CLASS} onClick={handleManualBooking}>
+              Bokför manuellt
+            </button>
+            {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
+                onClick={() => {
+                  const tx = templatePickerTransaction
+                  setTemplatePickerOpen(false)
+                  setInvoicePickerTransaction(tx)
+                  setInvoicePickerOpen(true)
+                }}
+              >
+                Matcha med faktura
+              </button>
+            )}
+            {templatePickerTransaction && (
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
+                onClick={() => void handleIgnoreTransaction(templatePickerTransaction)}
+              >
+                Ignorera transaktionen
+              </button>
+            )}
+    </>
   )
 
   return (
@@ -4620,7 +4670,26 @@ export default function TransactionsPage() {
           Esc and veil-click still close: the picker holds no user input.
           Clicks in the assistant don't dismiss: data-agent-ui counts as
           inside (see DialogContent). */}
-      {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen} modal={false}>
+      {/* The picker's props, shared by the v2 popover and the v1 dialog. */}
+      {templatePickerOpen && shell === 'v2' && templatePickerAnchor && (
+        <CategoryPopover anchor={templatePickerAnchor} onClose={() => setTemplatePickerOpen(false)}>
+          {templatePickerTransaction && (
+            <div className="flex items-center justify-between gap-3 border-b border-border/70 px-3 py-2 text-[12.5px]">
+              <span className="truncate" data-ph-mask>{templatePickerTransaction.description}</span>
+              <span className="shrink-0 font-medium tabular-nums" data-ph-mask>
+                {templatePickerTransaction.amount > 0 ? '+' : ''}{formatCurrency(templatePickerTransaction.amount, templatePickerTransaction.currency)}
+              </span>
+            </div>
+          )}
+          <div className="flex min-h-0 flex-1 flex-col">
+            <TemplatePicker {...templatePickerProps} dense />
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/70 px-3 py-2">
+            {templatePickerLinks}
+          </div>
+        </CategoryPopover>
+      )}
+      {templatePickerOpen && !(shell === 'v2' && templatePickerAnchor) && <Dialog open onOpenChange={setTemplatePickerOpen} modal={false}>
         <DialogVeil />
         {/* Width capped at the space left of a docked sheet (--agent-sheet-w
             is docked-only) so the picker never clips off-screen left on
@@ -4640,46 +4709,9 @@ export default function TransactionsPage() {
           {/* Alternate paths as quiet links (concept vact): the templates are
               the main content, not three stacked buttons. */}
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-            <button type="button" className={QUIET_LINK_CLASS} onClick={handleManualBooking}>
-              Bokför manuellt
-            </button>
-            {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
-              <button
-                type="button"
-                className={QUIET_LINK_CLASS}
-                onClick={() => {
-                  const tx = templatePickerTransaction
-                  setTemplatePickerOpen(false)
-                  setInvoicePickerTransaction(tx)
-                  setInvoicePickerOpen(true)
-                }}
-              >
-                Matcha med faktura
-              </button>
-            )}
-            {templatePickerTransaction && (
-              <button
-                type="button"
-                className={QUIET_LINK_CLASS}
-                onClick={() => void handleIgnoreTransaction(templatePickerTransaction)}
-              >
-                Ignorera transaktionen
-              </button>
-            )}
+            {templatePickerLinks}
           </div>
-          <TemplatePicker
-            direction={templatePickerTransaction && templatePickerTransaction.amount < 0 ? 'expense' : 'income'}
-            entityType={entityType as EntityType}
-            suggestedTemplates={templatePickerTransaction ? templateSuggestions[templatePickerTransaction.id] : undefined}
-            onSelect={handleTemplateSelected}
-            onSelectCounterparty={(templateId) => {
-              if (!templatePickerTransaction) return
-              setTemplatePickerOpen(false)
-              handleOpenTemplateReview(templatePickerTransaction, templateId)
-            }}
-            onPickLibraryTemplate={handlePickLibraryTemplate}
-            onSelectAccount={handlePickAccount}
-          />
+          <TemplatePicker {...templatePickerProps} />
         </DialogContent>
       </Dialog>}
 
