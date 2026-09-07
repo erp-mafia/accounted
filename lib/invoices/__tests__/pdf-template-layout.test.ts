@@ -20,10 +20,12 @@ import layoutDocument from '@react-pdf/layout'
 import {
   HEADING_MIN_PRESENCE_AHEAD,
   InvoicePDF,
+  DESCRIPTION_COLUMN_PT,
   MAX_KEEP_TOGETHER_LINES,
-  MAX_UNBROKEN_CHARS,
+  approxWidthPt,
   fitsOnOnePage,
-  wrapWholeWords,
+  wrapDescriptionWords,
+  wrapFullWidthWords,
 } from '@/lib/invoices/pdf-template'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import type { InvoiceItem } from '@/types'
@@ -266,17 +268,19 @@ describe('draft stamp', () => {
 
 describe('oversize free text', () => {
   it('estimates whether a block fits on one page', () => {
-    expect(fitsOnOnePage('Konsultation', 35)).toBe(true)
-    expect(fitsOnOnePage(null, 35)).toBe(true)
-    expect(fitsOnOnePage(Array.from({ length: MAX_KEEP_TOGETHER_LINES }, () => 'Rad').join('\n'), 35)).toBe(true)
-    expect(fitsOnOnePage(Array.from({ length: MAX_KEEP_TOGETHER_LINES + 1 }, () => 'Rad').join('\n'), 35)).toBe(false)
-    expect(fitsOnOnePage(Array.from({ length: 35 * (MAX_KEEP_TOGETHER_LINES + 1) / 4 }, () => 'ord').join(' '), 35)).toBe(false)
+    const column = DESCRIPTION_COLUMN_PT
+    expect(fitsOnOnePage('Konsultation', column)).toBe(true)
+    expect(fitsOnOnePage(null, column)).toBe(true)
+    expect(fitsOnOnePage(Array.from({ length: MAX_KEEP_TOGETHER_LINES }, () => 'Rad').join('\n'), column)).toBe(true)
+    expect(fitsOnOnePage(Array.from({ length: MAX_KEEP_TOGETHER_LINES + 1 }, () => 'Rad').join('\n'), column)).toBe(false)
+    // About 25 short words per column line; 13 lines' worth on one source line.
+    expect(fitsOnOnePage(Array.from({ length: 25 * (MAX_KEEP_TOGETHER_LINES + 1) }, () => 'ord').join(' '), column)).toBe(false)
   })
 
   it('counts the chunks a long token is broken into, not the source line', () => {
     // 35 W per line is one source line but three rendered chunk lines.
     const wide = Array.from({ length: 5 }, () => 'W'.repeat(35)).join('\n')
-    expect(fitsOnOnePage(wide, 35)).toBe(false)
+    expect(fitsOnOnePage(wide, DESCRIPTION_COLUMN_PT)).toBe(false)
   })
 
   it('keeps the kept-together budget under a third of the page for any font', () => {
@@ -372,31 +376,72 @@ describe('page breaks', () => {
   })
 })
 
+const ORDINARY_LONG_WORDS = [
+  'September',
+  'Konsulttimmar',
+  'Öresavrundning',
+  'Företagsförsäkring',
+  'Marknadsföringstjänster',
+  'Fastighetsskötsel',
+  'Löneadministration',
+  'Verksamhetsutveckling',
+  'Kvartalsrapportering',
+  'Redovisningskonsult',
+]
+
 describe('word wrapping', () => {
-  it('never hyphenates an ordinary word', () => {
-    expect(wrapWholeWords('September')).toEqual(['September'])
-    expect(wrapWholeWords('Konsulttimmar')).toEqual(['Konsulttimmar'])
-    expect(wrapWholeWords('Öresavrundning')).toEqual(['Öresavrundning'])
+  it('never hyphenates an ordinary word, however long', () => {
+    for (const word of ORDINARY_LONG_WORDS) {
+      expect(wrapDescriptionWords(word)).toEqual([word])
+      expect(wrapFullWidthWords(word)).toEqual([word])
+    }
   })
 
-  it('gives a long token break opportunities after separators and every few characters', () => {
+  it('gives a token wider than the column break opportunities after separators and where the column is full', () => {
     const url = 'https://app.testbrand.example/invoices/pay/7c1f0b7e-3d2a-4f1c-9a8e-2b6d5c4e3f21'
-    const parts = wrapWholeWords(url)
+    const parts = wrapDescriptionWords(url)
     expect(parts.join('')).toBe(url)
     expect(parts.length).toBeGreaterThan(1)
-    for (const part of parts) expect(part.length).toBeLessThanOrEqual(MAX_UNBROKEN_CHARS)
+    for (const part of parts) expect(approxWidthPt(part)).toBeLessThanOrEqual(DESCRIPTION_COLUMN_PT)
     expect(parts[0]).toBe('https:')
 
-    const compound = 'Konsulttjänsteavtalsförlängningsdokumentation'
-    const chunks = wrapWholeWords(compound)
+    const compound = 'Konsulttjänsteavtalsförlängningsdokumentationssammanställning'
+    const chunks = wrapDescriptionWords(compound)
     expect(chunks.join('')).toBe(compound)
-    for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(MAX_UNBROKEN_CHARS)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const chunk of chunks) expect(approxWidthPt(chunk)).toBeLessThanOrEqual(DESCRIPTION_COLUMN_PT)
+  })
+
+  it('renders ordinary compounds whole in the narrowest description column', async () => {
+    const descriptions = [
+      'Timarvode augusti, uppdrag Fastighetsskötsel 2026',
+      'Utveckling av ny funktion samt Företagsförsäkring 2026',
+      'Konsultarvode enligt avtal för Marknadsföringstjänster',
+      'Timarvode augusti, uppdrag Verksamhetsutveckling',
+    ]
+    for (const description of descriptions) {
+      // Discount and a second VAT rate show every column, so the description
+      // column is at its narrowest.
+      const items = [
+        makeItem({ description, discount_percent: 10 }),
+        makeItem({ sort_order: 1, id: 'item-1', description: 'Annan rad', vat_rate: 12 }),
+      ]
+      const pages = await layOut(InvoicePDF({ invoice: sentInvoice(), customer, items, company }))
+      const node = textNodes(pages[0]).find((n) => textOf(n) === description)
+      expect(node).toBeDefined()
+      for (const line of node!.lines ?? []) {
+        expect(line.string, description).not.toMatch(/-$/)
+      }
+      expectEveryLineInsideItsBox(pages, description.slice(0, 12))
+    }
   })
 
   it('applies to line descriptions, notes and the footer', () => {
     const invoice = { ...sentInvoice(), notes: 'Tack för förtroendet' }
     const tree = InvoicePDF({ invoice, customer, items: [makeItem()], company })
-    const withCallback = elements(tree).filter((el) => el.props.hyphenationCallback === wrapWholeWords)
+    const withCallback = elements(tree).filter(
+      (el) => el.props.hyphenationCallback === wrapDescriptionWords || el.props.hyphenationCallback === wrapFullWidthWords,
+    )
     expect(withCallback.some((el) => containsText(el, 'Konsulttimmar'))).toBe(true)
     expect(withCallback.some((el) => containsText(el, 'Tack för förtroendet'))).toBe(true)
     expect(withCallback.some((el) => containsText(el, 'Testbrand AB') || containsText(el, 'Org.nr'))).toBe(true)

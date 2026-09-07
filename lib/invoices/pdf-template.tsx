@@ -27,29 +27,63 @@ import { unitLabel } from '@/lib/invoices/unit-labels'
 
 /**
  * react-pdf hyphenates long words with English patterns by default, which
- * split Swedish words at English syllable boundaries ("Septem-ber"). This
- * callback keeps ordinary words whole. A token longer than the cap (a URL, an
- * e-mail address, an order reference) still gets break opportunities, first
- * after its natural separators and then every MAX_UNBROKEN_CHARS characters:
- * react-pdf cannot break inside a word it was not given parts for, so a token
- * wider than its column would otherwise overprint the next column or be
- * dropped from the page entirely.
+ * split Swedish words at English syllable boundaries ("Septem-ber"). The
+ * callbacks below keep every word whole that can fit its column, judged by a
+ * rough ink-width estimate. Only a token that cannot fit (a URL, an e-mail
+ * address, an order reference) gets break opportunities, first after its
+ * natural separators and then wherever the estimate says the column is
+ * full: react-pdf cannot break inside a word it was not given parts for, so a
+ * token wider than its column would otherwise overprint the next column or
+ * be dropped from the page entirely.
  *
- * 16 characters is under the narrowest column that carries free text (the
- * description column, about 212pt: 16 wide glyphs at 10pt is about 150pt).
+ * Widths are Helvetica advances at 10pt rounded up so the wider bundled
+ * fonts (Source Sans 3, Source Serif 4) stay under the same budget. Ordinary
+ * Swedish compounds (Marknadsföringstjänster, Fastighetsskötsel) come out at
+ * 120 to 150pt and are never split in the narrowest column.
  */
-export const MAX_UNBROKEN_CHARS = 16
-
-export const wrapWholeWords = (word: string): string[] => {
-  if (word.length <= MAX_UNBROKEN_CHARS) return [word]
-  const parts: string[] = []
-  for (const piece of word.split(/(?<=[/\-.@_?&=:])/)) {
-    for (let i = 0; i < piece.length; i += MAX_UNBROKEN_CHARS) {
-      parts.push(piece.slice(i, i + MAX_UNBROKEN_CHARS))
-    }
+export function approxWidthPt(word: string): number {
+  let width = 0
+  for (const ch of word) {
+    if (/[iljtfr.,:;'|!I()[\]/\\-]/.test(ch)) width += 4
+    else if (/[A-ZÅÄÖÆØÜ@%&MWmw]/.test(ch)) width += 10
+    else width += 6.5
   }
-  return parts
+  return width
 }
+
+/**
+ * The narrowest description column (discount and VAT columns shown) is about
+ * 172pt at 10pt; a full-width notice box is about 490pt at 9pt. The budgets
+ * sit under those so an estimate error still lands inside the column.
+ */
+export const DESCRIPTION_COLUMN_PT = 160
+export const FULL_WIDTH_BOX_PT = 440
+
+export function wrapWholeWordsWithin(budgetPt: number): (word: string) => string[] {
+  return (word: string): string[] => {
+    if (approxWidthPt(word) <= budgetPt) return [word]
+    const parts: string[] = []
+    for (const piece of word.split(/(?<=[/\-.@_?&=:])/)) {
+      let chunk = ''
+      let chunkWidth = 0
+      for (const ch of piece) {
+        const w = approxWidthPt(ch)
+        if (chunk.length > 0 && chunkWidth + w > budgetPt) {
+          parts.push(chunk)
+          chunk = ''
+          chunkWidth = 0
+        }
+        chunk += ch
+        chunkWidth += w
+      }
+      if (chunk.length > 0) parts.push(chunk)
+    }
+    return parts
+  }
+}
+
+export const wrapDescriptionWords = wrapWholeWordsWithin(DESCRIPTION_COLUMN_PT)
+export const wrapFullWidthWords = wrapWholeWordsWithin(FULL_WIDTH_BOX_PT)
 
 /**
  * Whether a free-text block is short enough to be kept on one page.
@@ -61,39 +95,33 @@ export const wrapWholeWords = (word: string): string[] => {
  * when a line estimate says they fit comfortably; past that they are allowed
  * to split, which is the lesser evil.
  *
- * The estimate counts rendered lines, not source lines: a token longer than
- * MAX_UNBROKEN_CHARS is chunked by wrapWholeWords and each chunk can take a
- * line of its own. The cap is small enough that even the tallest font a
- * company can pick (bundled Source Serif 4 at about 13.7pt per line, or an
- * uploaded font at 20pt) keeps 12 lines under 250pt, a third of the usable
- * page height, so a kept-together block can never be taller than a page.
+ * The estimate counts rendered lines, not source lines: a token wider than
+ * the column is chunked by the wrap callback and each chunk can take a line
+ * of its own. The cap is small enough that even the tallest font a company
+ * can pick (bundled Source Serif 4 at about 13.7pt per line, or an uploaded
+ * font at 20pt) keeps 12 lines under 250pt, a third of the usable page
+ * height, so a kept-together block can never be taller than a page.
  */
 export const MAX_KEEP_TOGETHER_LINES = 12
 
-export function fitsOnOnePage(text: string | null | undefined, charsPerLine: number): boolean {
+export function fitsOnOnePage(text: string | null | undefined, budgetPt: number): boolean {
   if (!text) return true
   let lines = 0
   for (const line of text.split('\n')) {
     let chunkLines = 0
-    let flowingChars = 0
+    let flowingWidth = 0
     for (const word of line.split(/\s+/)) {
-      if (word.length > MAX_UNBROKEN_CHARS) chunkLines += Math.ceil(word.length / MAX_UNBROKEN_CHARS)
-      else if (word.length > 0) flowingChars += word.length + 1
+      if (word.length === 0) continue
+      const width = approxWidthPt(word)
+      if (width > budgetPt) chunkLines += Math.ceil(width / budgetPt)
+      else flowingWidth += width + 4
     }
-    const flowingLines = Math.ceil(flowingChars / charsPerLine)
+    const flowingLines = Math.ceil(flowingWidth / budgetPt)
     lines += chunkLines + Math.max(chunkLines === 0 ? 1 : 0, flowingLines)
     if (lines > MAX_KEEP_TOGETHER_LINES) return false
   }
   return true
 }
-
-// Conservative characters-per-line for the two free-text widths: the
-// description column (about 172pt at its narrowest, with discount and VAT
-// columns shown, at 10pt) and a full-width notice box (about 490pt at 9pt).
-// Under-estimating lets a block split a little early, never the other way
-// round.
-const DESCRIPTION_CHARS_PER_LINE = 30
-const NOTICE_CHARS_PER_LINE = 80
 
 /**
  * How much content (in pt) must fit below a heading on the same page before
@@ -972,7 +1000,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         ) : isPreview ? null : (invoice.status === 'draft' || !invoice.invoice_number) ? (
           <View style={styles.draftBanner} fixed>
             <Text style={styles.draftBannerTitle}>{isQuote ? L.draftTitleQuote : L.draftTitle}</Text>
-            <Text style={styles.draftBannerText} hyphenationCallback={wrapWholeWords}>
+            <Text style={styles.draftBannerText} hyphenationCallback={wrapFullWidthWords}>
               {isQuote
                 ? L.draftTextQuote
                 : invoice.invoice_number
@@ -1170,9 +1198,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <View
                   key={index}
                   style={styles.tableRow}
-                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_CHARS_PER_LINE)}
+                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_COLUMN_PT)}
                 >
-                  <Text style={[styles.colDescription, { width: '100%' }]} hyphenationCallback={wrapWholeWords}>
+                  <Text style={[styles.colDescription, { width: '100%' }]} hyphenationCallback={wrapFullWidthWords}>
                     {item.description || ' '}
                   </Text>
                 </View>
@@ -1180,9 +1208,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <View
                   key={index}
                   style={styles.tableRow}
-                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_CHARS_PER_LINE)}
+                  wrap={!fitsOnOnePage(item.description, DESCRIPTION_COLUMN_PT)}
                 >
-                  <Text style={styles.colDescription} hyphenationCallback={wrapWholeWords}>{item.description}</Text>
+                  <Text style={styles.colDescription} hyphenationCallback={wrapDescriptionWords}>{item.description}</Text>
                   <Text style={styles.colQty}>{item.quantity}</Text>
                   <Text style={styles.colUnit}>{unitLabel(item.unit, lang)}</Text>
                   {!isDeliveryNote && (
@@ -1366,7 +1394,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         {/* Proforma notice */}
         {isProforma && (
           <View style={styles.noticeBox} wrap={false}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>
+            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>
               {L.proformaNotice}
             </Text>
           </View>
@@ -1375,7 +1403,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         {/* Quote notice */}
         {isQuote && (
           <View style={styles.noticeBox} wrap={false}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>
+            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>
               {L.quoteNotice}
             </Text>
           </View>
@@ -1500,18 +1528,18 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             shown in the totals block. */}
         {company.vat_registered === false && invoice.vat_amount === 0 ? (
           <View style={styles.noticeBox} wrap={false}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>{L.notVatRegisteredNotice}</Text>
+            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{L.notVatRegisteredNotice}</Text>
           </View>
         ) : (
           <>
             {invoice.reverse_charge_text && (
               <View style={styles.noticeBox} wrap={false}>
-                <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>{localizeVatNotice(invoice.reverse_charge_text, lang)}</Text>
+                <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{localizeVatNotice(invoice.reverse_charge_text, lang)}</Text>
               </View>
             )}
             {invoice.vat_treatment === 'exempt' && !invoice.reverse_charge_text && (
               <View style={styles.noticeBox} wrap={false}>
-                <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>{L.exemptNotice}</Text>
+                <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{L.exemptNotice}</Text>
               </View>
             )}
           </>
@@ -1519,8 +1547,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
         {/* Notes */}
         {invoice.notes && (
-          <View style={styles.noticeBox} wrap={!fitsOnOnePage(invoice.notes, NOTICE_CHARS_PER_LINE)}>
-            <Text style={styles.noticeText} hyphenationCallback={wrapWholeWords}>{invoice.notes}</Text>
+          <View style={styles.noticeBox} wrap={!fitsOnOnePage(invoice.notes, FULL_WIDTH_BOX_PT)}>
+            <Text style={styles.noticeText} hyphenationCallback={wrapFullWidthWords}>{invoice.notes}</Text>
           </View>
         )}
 
@@ -1542,9 +1570,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             in its own Text node, not inside the join). */}
         <View style={styles.footer}>
           {footerText && (
-            <Text style={styles.brandingFooterText} hyphenationCallback={wrapWholeWords}>{footerText}</Text>
+            <Text style={styles.brandingFooterText} hyphenationCallback={wrapFullWidthWords}>{footerText}</Text>
           )}
-          <Text style={styles.footerText} hyphenationCallback={wrapWholeWords}>
+          <Text style={styles.footerText} hyphenationCallback={wrapFullWidthWords}>
             {[
               (company.invoice_show_company_name ?? true) &&
               (company.invoice_company_name_position ?? 'header') === 'footer'
