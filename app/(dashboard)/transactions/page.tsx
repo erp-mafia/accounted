@@ -4673,18 +4673,20 @@ export default function TransactionsPage() {
       {/* The picker's props, shared by the v2 popover and the v1 dialog. */}
       {templatePickerOpen && shell === 'v2' && templatePickerAnchor && (
         <CategoryPopover anchor={templatePickerAnchor} onClose={() => setTemplatePickerOpen(false)}>
-          {templatePickerTransaction && (
-            <div className="flex items-center justify-between gap-3 border-b border-border/70 px-3 py-2 text-[12.5px]">
-              <span className="truncate" data-ph-mask>{templatePickerTransaction.description}</span>
-              <span className="shrink-0 font-medium tabular-nums" data-ph-mask>
-                {templatePickerTransaction.amount > 0 ? '+' : ''}{formatCurrency(templatePickerTransaction.amount, templatePickerTransaction.currency)}
-              </span>
-            </div>
-          )}
-          <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex items-center justify-between gap-3 border-b border-border/70 px-3 py-2 text-[12.5px]">
+            {templatePickerTransaction && (
+              <>
+                <span className="truncate" data-ph-mask>{templatePickerTransaction.description}</span>
+                <span className="shrink-0 font-medium tabular-nums" data-ph-mask>
+                  {templatePickerTransaction.amount > 0 ? '+' : ''}{formatCurrency(templatePickerTransaction.amount, templatePickerTransaction.currency)}
+                </span>
+              </>
+            )}
+          </div>
+          <div className="flex min-h-0 flex-col overflow-hidden">
             <TemplatePicker {...templatePickerProps} dense />
           </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/70 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/70 bg-background px-3 py-2">
             {templatePickerLinks}
           </div>
         </CategoryPopover>
