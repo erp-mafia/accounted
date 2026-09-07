@@ -6921,7 +6921,7 @@
       "assist_setup_skatteverket": "With Skatteverket connected I fetch the tax account and declaration dates myself.",
       "assist_setup_receipts": "Forward receipts to the inbox address and I match them to bank rows.",
       "assist_setup_claude": "Connected to Claude you can ask for things in chat; I stage the proposals here.",
-      "assist_book_transaction": "{count, plural, =0 {All transactions are booked.} one {One transaction awaits review. I categorised it by your rules.} other {# transactions await review. I categorised them by your rules; approve and they are booked.}}",
+      "assist_book_transaction": "{count, plural, =0 {Every transaction is posted.} one {One transaction awaits review. If a rule matched, its proposal is on the row; otherwise it needs a category.} other {# transactions await review. Those that matched a rule carry their proposal on the row, the rest need a category. Post them and they become vouchers.}}",
       "assist_book_skattekonto": "{count, plural, =0 {The tax account is booked.} one {One tax account event is waiting.} other {# tax account events are waiting to be booked.}}",
       "assist_suggested_match": "{count, plural, =0 {No matches waiting.} one {One payment matches an invoice. Confirm and it is booked against 1510.} other {# payments match invoices. Confirm and they are booked against 1510.}}",
       "assist_inbox_document": "{count, plural, =0 {No documents waiting.} one {One document waits to be matched or booked.} other {# documents wait to be matched or booked.}}",
