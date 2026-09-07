@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import useSWR from 'swr'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -9,7 +10,15 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { AttnLine } from '@/components/ui/attn-line'
+import { needsUnderlagPrompt, vatDisagrees, type TransactionUnderlag } from '@/lib/transactions/underlag-read'
+
+async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`${url} ${res.status}`)
+  return ((await res.json()) as { data: TransactionUnderlag }).data
+}
 import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-documents'
 import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, AlertTriangle, Inbox, FileText, X } from 'lucide-react'
 import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping'
@@ -60,7 +69,9 @@ interface QuickReviewDialogProps {
     vatTreatment: VatTreatment | undefined,
     accountOverride: string | undefined,
     templateId?: string,
-    dimensions?: Record<string, string>
+    dimensions?: Record<string, string>,
+    /** The underlag's moms in the transaction's currency, when the person chose it over the proposal's rate. */
+    vatAmount?: number
   ) => Promise<string | null>
   onChangeTemplate?: () => void
   /**
@@ -142,6 +153,14 @@ export default function QuickReviewDialog({
   )
 
   const preAttachedDocumentId = transaction?.document_id ?? null
+  // The underlag from either door (pinned to the row, or matched in the
+  // inbox): shown beside the review, and its moms offered over the rate.
+  const { data: underlag } = useSWR<TransactionUnderlag>(
+    open && transaction?.id ? `/api/transactions/${transaction.id}/underlag` : null,
+    fetchUnderlag,
+  )
+  const documentId = preAttachedDocumentId ?? underlag?.document?.id ?? null
+  const [useDocVat, setUseDocVat] = useState(true)
 
   // Handle account changes: clear VAT for liability/equity accounts (class 2)
   const handleAccountChange = useCallback((account: string) => {
@@ -160,6 +179,7 @@ export default function QuickReviewDialog({
     // A document picked for the previous row must never follow the dialog to
     // the next one: it would attach that underlag to the wrong verifikat.
     setPickedInboxDocs([])
+    setUseDocVat(true)
     // Re-seeding on counterpartyDefaultDimensions alone would clobber in-
     // flight edits; the bag only changes together with the transaction.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -319,6 +339,39 @@ export default function QuickReviewDialog({
   // the exact payload the link hands over.
   const proposalLines = onEditLines ? computeProposalLines(proposalInput) : []
 
+  // The document's moms against the proposal's. The VAT leg of the lines the
+  // preview shows (ingående 264x on a purchase, utgående 261x-263x on a sale)
+  // is SEK; the document's figure is in the row's currency, so the proposal
+  // is scaled back by the gross's own ratio before they are compared. Only a
+  // rate-based treatment has a line to replace, and a counterparty pattern
+  // carries its own lines, which the override does not touch.
+  const currentTreatment = isTemplateBooking ? (template?.vat_treatment ?? null) : vatTreatment
+  const rateBased = currentTreatment === 'standard_25' || currentTreatment === 'reduced_12' || currentTreatment === 'reduced_6'
+  const proposedVatSek = computeProposalLines(proposalInput)
+    .filter((l) =>
+      tx.amount < 0
+        ? l.side === 'debet' && l.account.startsWith('264') && l.account !== '2645'
+        : l.side === 'kredit' && /^26[123]/.test(l.account),
+    )
+    .reduce((sum, l) => sum + l.amount, 0)
+  const docVat = underlag?.facts?.vat_amount ?? null
+  const docVatUsable =
+    docVat != null &&
+    docVat > 0 &&
+    rateBased &&
+    !isLiabilityAccount &&
+    !isCounterpartyTemplate &&
+    !hasCounterpartyPattern &&
+    proposedVatSek > 0 &&
+    !sekConversionMissing &&
+    (underlag?.facts?.currency ?? tx.currency) === tx.currency
+  const proposedVatInTxCurrency =
+    sekAmount && Math.abs(sekAmount) > 0 ? proposedVatSek * (Math.abs(tx.amount) / Math.abs(sekAmount)) : proposedVatSek
+  const docVatDiffers = docVatUsable && vatDisagrees(docVat, proposedVatInTxCurrency)
+  // A purchase worth asking about and nothing to show for it: the review
+  // says so and the button says what booking now means.
+  const bookingWithoutUnderlag = !documentId && attachedCount === 0 && !!underlag && needsUnderlagPrompt(sekAmount)
+
   function handleEditLines() {
     if (!onEditLines || proposalLines.length === 0) return
     onEditLines(proposalLines, tx)
@@ -354,6 +407,7 @@ export default function QuickReviewDialog({
         override,
         templateId,
         Object.keys(cleanedDims).length > 0 ? cleanedDims : undefined,
+        docVatUsable && docVatDiffers && useDocVat && docVat != null ? docVat : undefined,
       )
 
       // Calibration telemetry: what the model proposed vs what was actually
@@ -459,7 +513,7 @@ export default function QuickReviewDialog({
       {/* Both variants cap at the space left of a docked agent sheet so the
           right edge never lands unreachable under it (sheet is z-60).
           --agent-sheet-w is docked-only: sheet closed = the old widths. */}
-      <DialogContent className={preAttachedDocumentId ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto' : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[85vh] overflow-y-auto'}>
+      <DialogContent className={documentId ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto' : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[85vh] overflow-y-auto'}>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
@@ -470,13 +524,19 @@ export default function QuickReviewDialog({
         {/* When a document is pre-attached, show it side-by-side (receipt left,
             review right). With no document the wrappers use display:contents so
             the dialog collapses to the original single-column layout. */}
-        <div className={preAttachedDocumentId ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]' : 'contents'}>
-          {preAttachedDocumentId && (
+        <div className={documentId ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]' : 'contents'}>
+          {documentId && (
             <div className="h-[45vh] lg:sticky lg:top-0 lg:h-[72vh] lg:self-start">
-              <DocumentViewerPane documentId={preAttachedDocumentId} className="h-full" />
+              <DocumentViewerPane documentId={documentId} className="h-full" />
             </div>
           )}
-          <div className={preAttachedDocumentId ? 'space-y-4' : 'contents'}>
+          <div className={documentId ? 'space-y-4' : 'contents'}>
+
+        {bookingWithoutUnderlag && (
+          <AttnLine action={{ label: t('underlag_fetch'), onClick: () => setShowUploadZone(true) }}>
+            {t('underlag_missing_title', { amount: formatCurrency(Math.abs(tx.amount), tx.currency) })} {t('underlag_missing_body')}
+          </AttnLine>
+        )}
 
         {/* Transaction summary */}
         <div className="flex items-center gap-3 rounded-lg border p-3">
@@ -635,6 +695,32 @@ export default function QuickReviewDialog({
           </div>
         )}
 
+        {/* Moms per the underlag: stated whenever the document has one, with
+            the choice to book it when it differs from the proposal's rate. */}
+        {docVatUsable && (
+          <div className={cn('rounded-lg border border-border px-3 py-2 text-xs', docVatDiffers && 'bg-muted/30')}>
+            <p className="text-muted-foreground">
+              {t('vat_from_doc', { amount: formatCurrency(docVat, tx.currency) })}
+              {underlag?.source ? ` · ${t('vat_doc_source', { source: underlag.source })}` : ''}
+            </p>
+            {docVatDiffers && (
+              <label className="mt-1.5 flex items-center gap-2 text-foreground">
+                <input
+                  type="checkbox"
+                  checked={useDocVat}
+                  onChange={(e) => setUseDocVat(e.target.checked)}
+                  className="h-3.5 w-3.5"
+                  disabled={isProcessing}
+                />
+                <span>
+                  {t('vat_use_doc')}{' '}
+                  <span className="text-muted-foreground">({t('vat_from_proposal', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })})</span>
+                </span>
+              </label>
+            )}
+          </div>
+        )}
+
         {/* Account & VAT: hidden for template bookings (accounts defined by the template) */}
         {!isTemplateBooking && (
           <>
@@ -708,7 +794,7 @@ export default function QuickReviewDialog({
 
         {/* No pre-attached document: let the user upload one. (When a document
             IS pre-attached it's shown in the left preview column instead.) */}
-        {!preAttachedDocumentId && (
+        {!documentId && (
           <div className="rounded-lg border">
             <button
               type="button"
@@ -808,7 +894,7 @@ export default function QuickReviewDialog({
             }
           >
             <Check className="mr-2 h-4 w-4" />
-            {isProcessing ? t('booking') : rateLoading ? t('fetching_rate') : t('book')}
+            {isProcessing ? t('booking') : rateLoading ? t('fetching_rate') : bookingWithoutUnderlag ? t('book_without_underlag') : t('book')}
           </Button>
         </div>
           </div>

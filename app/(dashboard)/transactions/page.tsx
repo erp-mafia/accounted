@@ -1695,8 +1695,8 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactions.length])
 
-  const handleCategorize: CategorizeHandler = async (id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions) => {
-    const outcome = await runCategorize({ id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch: false })
+  const handleCategorize: CategorizeHandler = async (id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, vatAmount) => {
+    const outcome = await runCategorize({ id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, vatAmount, confirmNoMatch: false })
     return outcome.journalEntryId
   }
 
@@ -1835,6 +1835,8 @@ export default function TransactionsPage() {
     templateId?: string
     inboxItemId?: string
     dimensions?: Record<string, string>
+    /** The underlag's moms (transaction currency): sent as vat_amount. */
+    vatAmount?: number
     confirmNoMatch: boolean
     // Set after the user confirms the booking-time duplicate warning. force
     // bypasses the guard; the bypass is bound to the reviewed candidate's
@@ -1854,7 +1856,7 @@ export default function TransactionsPage() {
     // the batch aggregate would count the row as failed after finishBooking
     // already animated it out of the inbox.
   }): Promise<{ ok: boolean; journalEntryId: string | null }> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent } = args
+    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -1868,6 +1870,7 @@ export default function TransactionsPage() {
           template_id: templateId,
           inbox_item_id: inboxItemId,
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
+          ...(vatAmount != null ? { vat_amount: vatAmount } : {}),
           ...(confirmNoMatch ? { confirm_no_match: true } : {}),
           ...(force && expectedDuplicateJournalEntryId
             ? { force: true, expected_duplicate_journal_entry_id: expectedDuplicateJournalEntryId }
@@ -3978,7 +3981,8 @@ export default function TransactionsPage() {
     vatTreatment: VatTreatment | undefined,
     accountOverride: string | undefined,
     templateId?: string,
-    dimensions?: Record<string, string>
+    dimensions?: Record<string, string>,
+    vatAmount?: number
   ): Promise<string | null> {
     let journalEntryId: string | null
     if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
@@ -4116,7 +4120,7 @@ export default function TransactionsPage() {
       })
       journalEntryId = cpJeId
     } else {
-      journalEntryId = await handleCategorize(id, true, category, vatTreatment, accountOverride, templateId, undefined, dimensions)
+      journalEntryId = await handleCategorize(id, true, category, vatTreatment, accountOverride, templateId, undefined, dimensions, vatAmount)
     }
     // Always close: whether the server created a verifikation, returned a
     // structured 4xx (ACCOUNTS_NOT_IN_CHART, INVALID_MAPPING, …), or hit a
