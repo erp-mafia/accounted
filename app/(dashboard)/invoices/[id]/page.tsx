@@ -2256,13 +2256,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             {invoice.items.map((item) =>
               isTextLikeLine(item) ? (
                 <tr key={item.id}>
-                  <td colSpan={5} className={cn(TD_CLASS, 'pl-0 pr-0 text-muted-foreground')}>
+                  <td colSpan={5} className={cn(TD_CLASS, 'whitespace-pre-line pl-0 pr-0 text-muted-foreground')}>
                     {item.description || ' '}
                   </td>
                 </tr>
               ) : (
                 <tr key={item.id}>
-                  <td className={cn(TD_CLASS, 'pl-0')}>
+                  <td className={cn(TD_CLASS, 'whitespace-pre-line pl-0')}>
                     {item.description}
                     {lineSubInfo(item)}
                   </td>
@@ -2284,11 +2284,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         <div className="divide-y divide-border text-sm sm:hidden">
           {invoice.items.map((item) =>
             isTextLikeLine(item) ? (
-              <p key={item.id} className="py-3 text-muted-foreground">{item.description || ' '}</p>
+              <p key={item.id} className="whitespace-pre-line py-3 text-muted-foreground">{item.description || ' '}</p>
             ) : (
               <div key={item.id} className="flex items-start justify-between gap-4 py-3">
                 <div className="min-w-0">
-                  <p>{item.description}</p>
+                  <p className="whitespace-pre-line">{item.description}</p>
                   <p className="text-xs text-muted-foreground tabular-nums">
                     {item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}
                   </p>

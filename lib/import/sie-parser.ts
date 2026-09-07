@@ -265,7 +265,9 @@ function parseStringField(field: string): string {
 
   // Remove surrounding quotes if present
   if (field.startsWith('"') && field.endsWith('"')) {
-    return field.slice(1, -1).replace(/\\"/g, '"')
+    // `\"` is a literal quote and `\\` a literal backslash (what the export
+    // in lib/reports/sie-export.ts writes).
+    return field.slice(1, -1).replace(/\\(["\\])/g, '$1')
   }
 
   return field

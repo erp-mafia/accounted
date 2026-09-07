@@ -335,8 +335,13 @@ function formatAmount(amount: number): string {
  * CodeQL flags this as js/incomplete-sanitization; it is a false positive here,
  * because the rule assumes a grammar in which backslash escapes itself.
  */
+// SIE is one record per line: a line break inside a quoted text would end
+// the record early and orphan the rest, so it is collapsed to a space.
+// Backslash is the escape character (`\"` is a literal quote), so a literal
+// backslash is written as `\\`; the parser in lib/import/sie-parser.ts
+// unescapes both.
 function escapeQuotes(str: string): string {
-  return str.replace(/"/g, '\\"')
+  return str.replace(/[\r\n]+/g, ' ').replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
 // ── Dimensions (#DIM / #UNDERDIM / #OBJEKT) ─────────────────────────────────

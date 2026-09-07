@@ -24,6 +24,7 @@ import {
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
+import { toSingleLine } from '@/lib/invoices/display'
 import type { EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
 
@@ -85,7 +86,7 @@ export async function createSchedulesForSupplierInvoice(
           totalAmountSek: totalSek,
           periodStart: item.accrual_period_start as string,
           periodEnd: item.accrual_period_end as string,
-          description: `${item.description} (leverantörsfaktura ${invoice.supplier_invoice_number})`,
+          description: `${toSingleLine(item.description)} (leverantörsfaktura ${invoice.supplier_invoice_number})`,
           dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
         },
         {
@@ -166,7 +167,9 @@ export async function createSchedulesForCustomerInvoice(
           totalAmountSek: totalSek,
           periodStart: item.accrual_period_start as string,
           periodEnd: item.accrual_period_end as string,
-          description: `${item.description} (faktura ${invoice.invoice_number ?? ''})`.trim(),
+          // Voucher text is one line by format (SIE #VER is one record per
+          // line); the line description may carry line breaks.
+          description: `${toSingleLine(item.description)} (faktura ${invoice.invoice_number ?? ''})`.trim(),
           dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
         },
         {

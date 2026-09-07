@@ -154,4 +154,29 @@ describe('createSchedulesForCustomerInvoice', () => {
       expect.anything(),
     )
   })
+
+  it('collapses a multi-line description to one line of voucher text', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: [] }])
+
+    const invoice = makeInvoice({ id: 'inv-1', status: 'sent', invoice_number: '1042' })
+    const item = makeInvoiceItem({ description: 'Konsultation\nSeptember 2026' })
+
+    await createSchedulesForCustomerInvoice(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      invoice,
+      [item],
+      'je-origin',
+    )
+
+    expect(mockCreateAccrualSchedule).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY,
+      USER,
+      expect.objectContaining({ description: 'Konsultation September 2026 (faktura 1042)' }),
+      expect.anything(),
+    )
+  })
 })

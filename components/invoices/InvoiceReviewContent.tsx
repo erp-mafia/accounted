@@ -168,13 +168,13 @@ export function InvoiceReviewContent({
             {items.map((item, index) =>
               isTextLikeLine(item) ? (
                 <tr key={index} className="border-b last:border-0">
-                  <td className="py-2 text-muted-foreground" colSpan={showVatColumn ? 6 : 5}>
+                  <td className="whitespace-pre-line py-2 text-muted-foreground" colSpan={showVatColumn ? 6 : 5}>
                     {item.description || ' '}
                   </td>
                 </tr>
               ) : (
                 <tr key={index} className="border-b last:border-0">
-                  <td className="py-2">
+                  <td className="whitespace-pre-line py-2">
                     {item.description}
                     {itemHasAccrual(item) && (
                       <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
@@ -213,10 +213,10 @@ export function InvoiceReviewContent({
       <div className="sm:hidden space-y-2">
         {items.map((item, index) =>
           isTextLikeLine(item) ? (
-            <p key={index} className="text-sm text-muted-foreground px-1">{item.description || ' '}</p>
+            <p key={index} className="whitespace-pre-line text-sm text-muted-foreground px-1">{item.description || ' '}</p>
           ) : (
             <div key={index} className="border rounded-lg p-3 text-sm space-y-1.5">
-              <p className="font-medium">{item.description}</p>
+              <p className="whitespace-pre-line font-medium">{item.description}</p>
               {itemHasAccrual(item) && (
                 <p className="flex items-center gap-1 text-xs text-muted-foreground">
                   <CalendarClock className="h-3 w-3 shrink-0" />
