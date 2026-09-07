@@ -1,15 +1,24 @@
 'use client'
 
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
+import useSWR from 'swr'
 import { useTranslations } from 'next-intl'
 import { ChevronDown, X, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { useToast } from '@/components/ui/use-toast'
+import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { TransactionWithInvoice } from '@/components/transactions/transaction-types'
-import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
+import type { TransactionUnderlag } from '@/lib/transactions/underlag-read'
+
+async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`${url} ${res.status}`)
+  return ((await res.json()) as { data: TransactionUnderlag }).data
+}
 
 /**
  * Shell v2 transaction drawer (concept .drawer): a fixed panel on the right
@@ -39,7 +48,8 @@ interface TransactionDrawerProps {
   originalName: string | null
   skvCounterpartDate?: string
   isPreMigration: boolean
-  attachedDocumentId: string | null
+  /** Kept for callers; the drawer reads the underlag route, which covers both doors. */
+  attachedDocumentId?: string | null
   /** Anything the foldout showed that has no slot here (extraction status). */
   extra?: ReactNode
   processing: boolean
@@ -59,15 +69,43 @@ export function TransactionDrawer({
   originalName,
   skvCounterpartDate,
   isPreMigration,
-  attachedDocumentId,
   extra,
   processing,
   onClose,
 }: TransactionDrawerProps) {
   const t = useTranslations('tx_inbox_card')
+  const { toast } = useToast()
   const isIncome = transaction.amount > 0
   const booked = !!transaction.journal_entry_id
   const attach = actions.find((a) => a.key === 'attach')
+  // The underlag from either door: pinned to the row, or matched in the
+  // inbox. The receipt is what makes the booking decidable, so it sits
+  // above the details rather than as one line among them.
+  const { data: underlag, mutate: refreshUnderlag } = useSWR<TransactionUnderlag>(
+    `/api/transactions/${transaction.id}/underlag`,
+    fetchUnderlag,
+  )
+  const facts = underlag?.facts ?? null
+  const [hunting, setHunting] = useState(false)
+  async function searchMail() {
+    setHunting(true)
+    try {
+      const res = await fetch('/api/receipt-hunt/run', { method: 'POST' })
+      const json = (await res.json().catch(() => null)) as { data?: { fetched?: number; proposed?: number }; error?: { message?: string } } | null
+      if (!res.ok) {
+        toast({ title: t('underlag_search_failed'), description: json?.error?.message, variant: 'destructive' })
+        return
+      }
+      toast({ title: t('underlag_search_done', { fetched: json?.data?.fetched ?? 0, proposed: json?.data?.proposed ?? 0 }) })
+      await refreshUnderlag()
+    } catch {
+      toast({ title: t('underlag_search_failed'), variant: 'destructive' })
+    } finally {
+      setHunting(false)
+    }
+  }
+  const kindLabel = (kind: string | null) =>
+    kind === 'receipt' ? t('kind_receipt') : kind === 'supplier_invoice' ? t('kind_supplier_invoice') : kind
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -158,6 +196,75 @@ export function TransactionDrawer({
           </div>
         </div>
 
+        <div className="border-b border-border/70 px-5 py-3">
+          <p className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            <span>{t('underlag_heading')}</span>
+            {underlag?.source && (
+              <span className="font-normal normal-case tracking-normal">{t(`underlag_source_${underlag.source}`)}</span>
+            )}
+          </p>
+          {underlag?.document ? (
+            <>
+              <DocumentViewerPane
+                documentId={underlag.document.id}
+                mime={underlag.document.mime_type}
+                fileName={underlag.document.file_name}
+                className="h-56 overflow-hidden rounded-sm border border-border"
+              />
+              {facts && (
+                <dl className="mt-2 grid grid-cols-[110px_1fr] gap-x-3 gap-y-1 text-[12.5px]">
+                  {facts.supplier && (
+                    <>
+                      <dt className="text-muted-foreground">{t('underlag_supplier')}</dt>
+                      <dd data-ph-mask>{facts.supplier}</dd>
+                    </>
+                  )}
+                  {facts.date && (
+                    <>
+                      <dt className="text-muted-foreground">{t('underlag_date')}</dt>
+                      <dd className="tabular-nums">{formatDate(facts.date)}</dd>
+                    </>
+                  )}
+                  {facts.total != null && (
+                    <>
+                      <dt className="text-muted-foreground">{t('underlag_total')}</dt>
+                      <dd className="tabular-nums" data-ph-mask>{formatCurrency(facts.total, facts.currency ?? 'SEK')}</dd>
+                    </>
+                  )}
+                  {facts.vat_amount != null && (
+                    <>
+                      <dt className="text-muted-foreground">{t('underlag_vat')}</dt>
+                      <dd className="tabular-nums" data-ph-mask>{formatCurrency(facts.vat_amount, facts.currency ?? 'SEK')}</dd>
+                    </>
+                  )}
+                  {facts.kind && (
+                    <>
+                      <dt className="text-muted-foreground">{t('underlag_kind')}</dt>
+                      <dd>{kindLabel(facts.kind)}</dd>
+                    </>
+                  )}
+                </dl>
+              )}
+            </>
+          ) : (
+            <div className="text-[12.5px]">
+              <p className={underlag ? 'text-warning' : 'text-muted-foreground'}>{underlag ? t('underlag_missing_line') : '…'}</p>
+              {underlag && !booked && (
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                  {attach && (
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={attach.onSelect} disabled={processing}>
+                      {t('underlag_attach')}
+                    </button>
+                  )}
+                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => void searchMail()} disabled={hunting || processing}>
+                    {hunting ? t('underlag_search_running') : t('underlag_search_mail')}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <div className="px-5 py-3">
           <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_details')}</p>
           <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
@@ -178,24 +285,6 @@ export function TransactionDrawer({
             {transaction.currency !== 'SEK' && transaction.amount_sek != null
               ? fact(t('drawer_amount_fx'), <span className="tabular-nums">{formatCurrency(transaction.amount_sek)}</span>)
               : null}
-            {fact(
-              t('drawer_underlag'),
-              attachedDocumentId ? (
-                <span className="inline-flex items-center gap-1.5">
-                  {t('drawer_underlag_attached')}
-                  <TransactionAttachmentIndicator documentId={attachedDocumentId} />
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-2">
-                  <span className="text-warning">{t('drawer_underlag_missing')}</span>
-                  {attach && (
-                    <button type="button" className={QUIET_LINK_CLASS} onClick={attach.onSelect} disabled={processing}>
-                      {attach.label}
-                    </button>
-                  )}
-                </span>
-              ),
-            )}
             {booked
               ? fact(
                   t('drawer_voucher'),
