@@ -880,12 +880,21 @@ input[type="number"] {
     padding-right: 1.5rem;
   }
 }
+[data-shell="v2"] .page-header-lead {
+  min-width: 0;
+}
 [data-shell="v2"] .page-header-title {
   font-family: var(--font-body);
   font-size: 13px;
   line-height: 20px;
   font-weight: 500;
   letter-spacing: 0;
+  white-space: nowrap;
+}
+/* A field label above a picker in the top bar would make the bar two rows
+   tall; the pickers' own values say what they are. */
+[data-shell="v2"] .page-header .field-label {
+  display: none;
 }
 [data-shell="v2"] .page-header-desc {
   display: none;
