@@ -128,6 +128,16 @@ async function resolveRedirect(
       requestedUrl = null
     }
   }
+  // URL.origin drops userinfo, so a credential-bearing redirect on a served
+  // host would pass the origin comparison and be cloned into the link with
+  // the credentials still in it. No flow of ours ever sends one: treat it as
+  // untrusted outright (canonical link, no next), never as a served host.
+  if (requestedUrl && (requestedUrl.username || requestedUrl.password)) {
+    log.warn('redirect_to carries credentials; linking to the canonical origin', {
+      host: requestedUrl.hostname,
+    })
+    requestedUrl = null
+  }
   const origin = await resolveTrustedAppOrigin(requestedUrl?.origin ?? null)
   if (requestedUrl && requestedUrl.origin === origin) {
     return { origin, redirectUrl: requestedUrl }

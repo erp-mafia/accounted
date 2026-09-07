@@ -262,6 +262,9 @@ describe('POST /api/auth/email-hook', () => {
       ['a lookalike of a registered host', 'https://app.siffra.se.evil.example/auth/callback'],
       ['a registered host on a non-default port', 'https://app.siffra.se:8443/auth/callback'],
       ['a credential-bearing URL', 'https://app.siffra.se@evil.example/auth/callback'],
+      // URL.origin drops userinfo: the host alone would pass as trusted.
+      ['credentials on a registered host', 'https://evil.example@app.siffra.se/auth/callback?next=/x'],
+      ['credentials on the canonical host', 'https://user:pw@app.gnubok.se/auth/callback?next=/x'],
       ['a malformed value', 'not a url'],
     ])('links %s to the canonical callback without the requested path', async (_label, redirectTo) => {
       const res = await POST(
