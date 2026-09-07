@@ -119,6 +119,13 @@ export interface ProposalLinesInput {
   /** For multi-line counterparty template bookings */
   linePattern?: LinePatternEntry[]
   settlementAccount?: string
+  /**
+   * The underlag's moms in SEK, booked instead of the rate's: the VAT leg
+   * takes this figure and the net leg absorbs the difference. Mirrors the
+   * server's applyVatAmountOverride. Ignored when the lines have no
+   * rate-based VAT leg (reverse charge, exempt, counterparty patterns).
+   */
+  vatAmountSek?: number
 }
 
 
@@ -151,6 +158,40 @@ export function resolveTemplateAccountsForEntity(
  * engine will book for this proposal, expressed as display/prefill lines.
  */
 export function computeProposalLines(input: ProposalLinesInput): ProposalLine[] {
+  const lines = computeRateLines(input)
+  return input.vatAmountSek != null ? applyVatAmountToLines(lines, input.vatAmountSek, input.amount < 0) : lines
+}
+
+/**
+ * Replace the rate-based VAT leg with the underlag's moms and let the net leg
+ * absorb the difference, so the entry still balances on the gross. Same leg
+ * selection as the server's applyVatAmountOverride: ingående 264x (not the
+ * reverse-charge 2645) on a purchase, utgående 261x-263x on a sale. Lines
+ * without such a leg, or where the net would not stay positive, come back
+ * unchanged.
+ */
+export function applyVatAmountToLines(lines: ProposalLine[], vatAmountSek: number, isExpense: boolean): ProposalLine[] {
+  if (!Number.isFinite(vatAmountSek) || vatAmountSek <= 0) return lines
+  const side = isExpense ? 'debet' : 'kredit'
+  const vatIdx = lines.findIndex((l) =>
+    isExpense
+      ? l.side === 'debet' && l.account.startsWith('264') && l.account !== '2645'
+      : l.side === 'kredit' && /^26[123]/.test(l.account),
+  )
+  if (vatIdx < 0) return lines
+  let netIdx = -1
+  lines.forEach((l, i) => {
+    if (i === vatIdx || l.side !== side || l.settlement || l.account.startsWith('26')) return
+    if (netIdx < 0 || l.amount > lines[netIdx].amount) netIdx = i
+  })
+  if (netIdx < 0) return lines
+  const vat = engineRound(vatAmountSek)
+  const net = engineRound(lines[netIdx].amount + lines[vatIdx].amount - vat)
+  if (net <= 0) return lines
+  return lines.map((l, i) => (i === vatIdx ? { ...l, amount: vat } : i === netIdx ? { ...l, amount: net } : l))
+}
+
+function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
   const {
     amount,
     amountSek,
