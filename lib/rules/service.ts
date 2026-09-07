@@ -20,6 +20,25 @@ export interface RuleMatch {
   journal_entry_id: string | null
 }
 
+/** Postgres: the column does not exist (the ladder migration has not run here yet). */
+const UNDEFINED_COLUMN = '42703'
+
+/**
+ * Before migration 20260907120000 the table has is_active but no mode,
+ * corrections or paused_at. Read the same rows through the old columns so
+ * the page works on a database the migration has not reached: active means
+ * propose, inactive means paused, nothing has been corrected yet.
+ */
+function fromLegacyRow(row: Record<string, unknown>): RuleRow {
+  const { is_active, ...rest } = row
+  return {
+    ...rest,
+    mode: is_active === false ? 'paused' : 'propose',
+    corrections: 0,
+    paused_at: null,
+  } as unknown as RuleRow
+}
+
 export async function listRules(supabase: SupabaseClient, companyId: string): Promise<RuleRow[]> {
   const { data, error } = await supabase
     .from('categorization_templates')
@@ -27,6 +46,16 @@ export async function listRules(supabase: SupabaseClient, companyId: string): Pr
     .eq('company_id', companyId)
     .order('occurrence_count', { ascending: false })
     .order('updated_at', { ascending: false })
+  if (error && error.code === UNDEFINED_COLUMN) {
+    const legacy = await supabase
+      .from('categorization_templates')
+      .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, confidence, last_seen_date, source, is_active, created_at, updated_at')
+      .eq('company_id', companyId)
+      .order('occurrence_count', { ascending: false })
+      .order('updated_at', { ascending: false })
+    if (legacy.error) throw legacy.error
+    return (legacy.data ?? []).map((row) => fromLegacyRow(row as Record<string, unknown>))
+  }
   if (error) throw error
   return (data ?? []) as unknown as RuleRow[]
 }
@@ -38,6 +67,16 @@ export async function getRule(supabase: SupabaseClient, companyId: string, id: s
     .eq('company_id', companyId)
     .eq('id', id)
     .maybeSingle()
+  if (error && error.code === UNDEFINED_COLUMN) {
+    const legacy = await supabase
+      .from('categorization_templates')
+      .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, confidence, last_seen_date, source, is_active, created_at, updated_at')
+      .eq('company_id', companyId)
+      .eq('id', id)
+      .maybeSingle()
+    if (legacy.error) throw legacy.error
+    return legacy.data ? fromLegacyRow(legacy.data as Record<string, unknown>) : null
+  }
   if (error) throw error
   return (data as unknown as RuleRow) ?? null
 }
