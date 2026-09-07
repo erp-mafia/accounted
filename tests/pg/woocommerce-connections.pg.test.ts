@@ -202,7 +202,8 @@ describe('woocommerce_connections RLS', () => {
             WHERE id = $1 AND status = 'pending'
               AND consumer_key_encrypted IS NOT NULL
               AND consumer_secret_encrypted IS NOT NULL
-              AND browser_confirmed_at IS NOT NULL`,
+              AND browser_confirmed_at IS NOT NULL
+              AND created_at >= now() - interval '15 minutes'`,
           [id],
         )
       expect((await flip()).rowCount).toBe(0)
@@ -221,6 +222,36 @@ describe('woocommerce_connections RLS', () => {
         [id],
       )
       expect(rows[0]).toEqual({ status: 'active', oauth_state: null })
+    })
+
+    it('never flips a pending row older than the handshake TTL, even with both signals present', async () => {
+      const { userId, companyId } = await seedCompany()
+      const id = await insertPending(companyId, userId, uniqueStore('stale'))
+      // Initiator confirmed early, keys landed hours later.
+      await getPool().query(
+        `UPDATE public.woocommerce_connections
+            SET browser_confirmed_at = now(),
+                consumer_key_encrypted = 'enc:k', consumer_secret_encrypted = 'enc:s',
+                created_at = now() - interval '20 minutes'
+          WHERE id = $1`,
+        [id],
+      )
+      const flip = await getPool().query(
+        `UPDATE public.woocommerce_connections
+            SET status = 'active', oauth_state = NULL
+          WHERE id = $1 AND status = 'pending'
+            AND consumer_key_encrypted IS NOT NULL
+            AND consumer_secret_encrypted IS NOT NULL
+            AND browser_confirmed_at IS NOT NULL
+            AND created_at >= now() - interval '15 minutes'`,
+        [id],
+      )
+      expect(flip.rowCount).toBe(0)
+      const { rows } = await getPool().query(
+        `SELECT status FROM public.woocommerce_connections WHERE id = $1`,
+        [id],
+      )
+      expect(rows[0].status).toBe('pending')
     })
 
     it('lets a parked row drop its keys: the CHECK only constrains active rows', async () => {

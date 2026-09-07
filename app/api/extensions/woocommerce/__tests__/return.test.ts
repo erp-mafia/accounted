@@ -84,11 +84,19 @@ describe('GET /api/extensions/woocommerce/return', () => {
       `${BASE}/import?mode=woocommerce&woocommerce_error=denied`,
     )
     const update = findCall('woocommerce_connections', 'update')?.[0] as Record<string, unknown>
+    // The callback may already have staged keys AND the store's metadata for
+    // this state (WooCommerce re-serves the approval page); a denial takes
+    // all of it back.
     expect(update).toMatchObject({
       status: 'error',
       oauth_state: null,
       consumer_key_encrypted: null,
       consumer_secret_encrypted: null,
+      store_name: null,
+      currency: null,
+      prices_include_tax: null,
+      wc_version: null,
+      key_permissions: null,
     })
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })

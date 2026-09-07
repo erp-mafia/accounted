@@ -84,6 +84,11 @@ export async function GET(request: Request) {
           oauth_state: null,
           consumer_key_encrypted: null,
           consumer_secret_encrypted: null,
+          store_name: null,
+          currency: null,
+          prices_include_tax: null,
+          wc_version: null,
+          key_permissions: null,
         })
         .eq('oauth_state', state)
         .eq('status', 'pending')

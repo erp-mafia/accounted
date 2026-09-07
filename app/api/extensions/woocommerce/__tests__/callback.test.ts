@@ -218,7 +218,7 @@ describe('POST /api/extensions/woocommerce/callback', () => {
   })
 
   it('stages keys for a slow approval past the handshake TTL instead of refusing (WooCommerce wp_dies on non-200)', async () => {
-    const { enqueue, findCalls } = mockServiceClient()
+    const { enqueue, findCalls, calls } = mockServiceClient()
     enqueue({
       data: { ...PENDING_ROW, created_at: new Date(Date.now() - 45 * 60_000).toISOString() },
     })
@@ -228,9 +228,15 @@ describe('POST /api/extensions/woocommerce/callback', () => {
 
     const res = await POST(makeCallbackRequest(VALID_BODY))
     expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, activated: false })
     const updates = findCalls('woocommerce_connections', 'update')
     expect(updates).toHaveLength(2)
     expect(updates[0][0]).not.toHaveProperty('status')
+    // Even if the initiator confirmed early, the flip carries the TTL, so a
+    // stale row cannot become active from this leg.
+    const gte = calls.filter((c) => c.method === 'gte').map((c) => c.args)
+    expect(gte).toHaveLength(1)
+    expect(gte[0][0]).toBe('created_at')
   })
 
   it('parks the row and returns 409 when activation hits the one-active-per-store index', async () => {

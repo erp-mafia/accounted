@@ -30,7 +30,8 @@ describe('activateIfComplete', () => {
       data: { id: 'conn-1', company_id: 'c1', user_id: 'u1', store_url: 'https://s.example.se' },
     })
 
-    const result = await activateIfComplete(asClient(supabase), 'conn-1')
+    const now = Date.parse('2026-09-07T12:00:00Z')
+    const result = await activateIfComplete(asClient(supabase), 'conn-1', now)
 
     expect(result).toEqual({
       outcome: 'activated',
@@ -52,6 +53,11 @@ describe('activateIfComplete', () => {
       ['consumer_key_encrypted', 'is', null],
       ['consumer_secret_encrypted', 'is', null],
       ['browser_confirmed_at', 'is', null],
+    ])
+    // The TTL is part of the flip: a row confirmed early and keyed late must
+    // not activate once it is older than the handshake window.
+    expect(calls.filter((c) => c.method === 'gte').map((c) => c.args)).toEqual([
+      ['created_at', new Date(now - HANDSHAKE_TTL_MS).toISOString()],
     ])
   })
 

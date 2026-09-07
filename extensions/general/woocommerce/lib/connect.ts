@@ -53,11 +53,13 @@ export function buildAuthorizeUrl(storeUrl: string, state: string): string {
 }
 
 /**
- * A pending handshake older than this is dead: the return leg refuses it and
- * the nightly cron parks it with its staged keys wiped. The callback leg does
- * NOT check it: WooCommerce turns any non-200 into a store-side error page
- * and deletes the freshly minted key, which would strand a slow but
- * legitimate approval. A stale pending row cannot sync either way.
+ * A pending handshake older than this is dead: the return leg refuses it,
+ * activateIfComplete() will not flip it, and the nightly cron parks it with
+ * its staged keys wiped. The callback leg does NOT refuse it: WooCommerce
+ * turns any non-200 into a store-side error page and deletes the freshly
+ * minted key, which would strand a slow but legitimate approval; staging on
+ * a stale row is harmless because a pending row never syncs and the flip
+ * itself carries the TTL.
  */
 export const HANDSHAKE_TTL_MS = 15 * 60_000
 
@@ -92,10 +94,18 @@ export type ActivationResult =
  * signals and activates; the other matches zero rows and reports incomplete.
  * The status = 'pending' scope makes it idempotent and blocks replay: an
  * active row can never be activated again.
+ *
+ * The TTL is part of the predicate, not only of the return leg: the
+ * initiator can confirm early (the return URL is theirs to open), so
+ * without it a row confirmed at minute 1 would still flip when the keys
+ * land hours later. Past the TTL the flip matches zero rows and the sweep
+ * parks the row; the callback still answers 200 so the store does not
+ * wp_die on the merchant.
  */
 export async function activateIfComplete(
   supabase: SupabaseClient,
   connectionId: string,
+  now = Date.now(),
 ): Promise<ActivationResult> {
   const { data, error } = await supabase
     .from('woocommerce_connections')
@@ -114,6 +124,7 @@ export async function activateIfComplete(
     .not('consumer_key_encrypted', 'is', null)
     .not('consumer_secret_encrypted', 'is', null)
     .not('browser_confirmed_at', 'is', null)
+    .gte('created_at', new Date(now - HANDSHAKE_TTL_MS).toISOString())
     .select('id, company_id, user_id, store_url')
     .maybeSingle()
 

@@ -40,11 +40,12 @@ export const maxDuration = 60
  * A pending row never syncs, so keys staged for a handshake nobody confirms
  * are inert until the nightly sweep wipes them.
  *
- * No TTL is enforced here on purpose: WooCommerce treats any non-200 as a
+ * No TTL refusal here on purpose: WooCommerce treats any non-200 as a
  * failed handshake (deletes the key it just minted and shows the merchant an
  * error page on the store, no redirect back), so refusing a slow approval
- * here would strand a legitimate merchant. The session-bound return leg and
- * the nightly sweep enforce expiry instead; a stale pending row cannot sync.
+ * here would strand a legitimate merchant. The TTL lives in the activation
+ * predicate and on the session-bound return leg, and the nightly sweep parks
+ * what is left; a stale pending row cannot flip and never syncs.
  */
 export async function POST(request: Request) {
   loadExtensions()
