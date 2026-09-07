@@ -4,7 +4,7 @@ import { getPool } from './setup'
 import { insertPostedJournalEntry, seedCompany } from './fixtures'
 
 /**
- * Migration 20260907140000_rot_rut_reclaim:
+ * Migration 20260907160000_rot_rut_reclaim:
  *  - journal_entries.source_type accepts 'rot_rut_reclaim'
  *  - one live reclaim voucher per begäran (partial unique index)
  *  - invoices.deduction_reclaimed_total never exceeds the deduction
@@ -44,7 +44,7 @@ async function insertCustomerInvoice(
   return id
 }
 
-describe('rot/rut reclaim (migration 20260907140000)', () => {
+describe('rot/rut reclaim (migration 20260907160000)', () => {
   it('accepts source_type rot_rut_reclaim and allows exactly one live reclaim voucher per begäran', async () => {
     const seeded = await seedCompany()
     const requestId = randomUUID()

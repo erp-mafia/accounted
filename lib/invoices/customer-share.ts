@@ -12,7 +12,7 @@
  * drifted (#2248: the kontantmetod cut-off compared payments against the
  * gross total). It now lives here and in exactly one SQL twin:
  *
- *   invoices_derive_remaining_amount (migrations 20260817191708, 20260907140000)
+ *   invoices_derive_remaining_amount (migrations 20260817191708, 20260907160000)
  *   remaining_amount = GREATEST(0, ROUND(total - paid_amount - deduction_total
  *                                        + deduction_reclaimed_total, 2))
  *
