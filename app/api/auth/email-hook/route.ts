@@ -3,10 +3,15 @@ import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { getEmailService } from '@/lib/email/service'
 import { getBranding } from '@/lib/branding/service'
-import { resolveBrandByHost } from '@/lib/branding/resolve'
+import { resolveBrandResultByHost } from '@/lib/branding/resolve'
 import { getSenderForBrand } from '@/lib/email/brand-sender'
 import { buildAuthEmail } from '@/lib/email/auth-templates'
 import { verifyStandardWebhookSignature } from '@/lib/email/standard-webhook'
+import {
+  BrandLookupFailedError,
+  getCanonicalAppOrigin,
+  resolveTrustedAppOrigin,
+} from '@/lib/domains/trusted-app-origin'
 
 // Loads the email extension so getEmailService() returns the Resend
 // implementation instead of the noop default.
@@ -22,14 +27,21 @@ const log = createLogger('auth-email-hook')
  * sending auth mail itself and this endpoint sends every auth mail (signup
  * confirmation, recovery, magic link, invite, email change, reauthentication)
  * through the platform email service, branded per the requesting host: the
- * brand is resolved from the redirect_to origin via resolveBrandByHost, so a
+ * brand is resolved from the trusted redirect_to origin, so a
  * reset requested on app.partner.se is sent in the partner's brand and links
  * back to app.partner.se. Unknown hosts get canonical platform mail.
  *
  * Unauthenticated by design (server-to-server): authenticity comes from the
  * Standard Webhooks signature, not a session, exactly like the Stripe and
  * Resend webhook routes. The raw body is verified byte-for-byte before
- * parsing. This endpoint is availability-critical once the hook is enabled:
+ * parsing. The signature proves WHO sent the payload, not that every
+ * destination in it should be followed: redirect_to is GoTrue's already
+ * allowlisted referrer, but that allowlist is a glob configured by hand, so
+ * the origin is resolved here again through lib/domains/trusted-app-origin
+ * (canonical, this deployment's own Vercel hosts, or a registered brand
+ * domain). Anything else gets a canonical link, and the token never rides
+ * to a host this deployment does not serve. This endpoint is
+ * availability-critical once the hook is enabled:
  * any internal failure returns 500 so Supabase retries (up to 3 times within
  * a 5 second budget); success returns 200 {} fast.
  *
@@ -71,8 +83,13 @@ interface SendEmailHookPayload {
  * /auth/callback consumes token_hash + type server-side and then honors the
  * `next` path. If redirect_to already points at /auth/callback (our client
  * flows do), its query (e.g. next=/reset-password) is preserved.
+ *
+ * `origin` is the already-trusted application origin; `redirectUrl` is the
+ * requested redirect_to only when it sits on that origin, else null (the
+ * link then lands on the origin's /auth/callback with no `next`).
  */
 function buildActionUrl(
+  origin: string,
   redirectUrl: URL | null,
   tokenHash: string,
   actionType: string,
@@ -82,7 +99,7 @@ function buildActionUrl(
   if (redirectUrl && redirectUrl.pathname === '/auth/callback') {
     url = new URL(redirectUrl.toString())
   } else {
-    url = new URL('/auth/callback', redirectUrl ? redirectUrl.origin : getBranding().appUrl)
+    url = new URL('/auth/callback', origin)
     if (redirectUrl) {
       const next = redirectUrl.pathname + redirectUrl.search
       if (next && next !== '/') url.searchParams.set('next', next)
@@ -91,6 +108,47 @@ function buildActionUrl(
   url.searchParams.set('token_hash', tokenHash)
   url.searchParams.set('type', verifyType)
   return url.toString()
+}
+
+/**
+ * The requested redirect_to, kept only when its origin is one this
+ * deployment serves. The comparison is on the resolved origin, so an http
+ * link to a hosted domain, a lookalike host, a non-default port or a
+ * credential-bearing URL all collapse to the canonical /auth/callback.
+ * Throws BrandLookupFailedError when the brands table cannot be read.
+ */
+async function resolveRedirect(
+  requested: string | undefined,
+): Promise<{ origin: string; redirectUrl: URL | null }> {
+  let requestedUrl: URL | null = null
+  if (requested) {
+    try {
+      requestedUrl = new URL(requested)
+    } catch {
+      requestedUrl = null
+    }
+  }
+  // URL.origin drops userinfo, so a credential-bearing redirect on a served
+  // host would pass the origin comparison and be cloned into the link with
+  // the credentials still in it. No flow of ours ever sends one: treat it as
+  // untrusted outright (canonical link, no next), never as a served host.
+  if (requestedUrl && (requestedUrl.username || requestedUrl.password)) {
+    log.warn('redirect_to carries credentials; linking to the canonical origin', {
+      host: requestedUrl.hostname,
+    })
+    requestedUrl = null
+  }
+  const origin = await resolveTrustedAppOrigin(requestedUrl?.origin ?? null)
+  if (requestedUrl && requestedUrl.origin === origin) {
+    return { origin, redirectUrl: requestedUrl }
+  }
+  if (requestedUrl) {
+    // Hostname only: the URL may carry a query, never log the token side.
+    log.warn('redirect_to origin is not a served host; linking to the canonical origin', {
+      host: requestedUrl.hostname,
+    })
+  }
+  return { origin, redirectUrl: null }
 }
 
 export async function POST(request: Request) {
@@ -126,16 +184,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Missing recipient' }, { status: 400 })
   }
 
-  // Brand from the requesting host: redirect_to carries the tenant origin.
-  let redirectUrl: URL | null = null
-  if (emailData.redirect_to) {
-    try {
-      redirectUrl = new URL(emailData.redirect_to)
-    } catch {
-      redirectUrl = null
-    }
+  // Brand from the RESOLVED host: redirect_to carries the tenant origin, and
+  // the sender identity must match the host the link lands on. A lookup
+  // failure is a 500 so Supabase retries rather than sending a mail whose
+  // link would land on the wrong domain.
+  let resolved: Awaited<ReturnType<typeof resolveRedirect>>
+  try {
+    resolved = await resolveRedirect(emailData.redirect_to)
+  } catch (err) {
+    if (!(err instanceof BrandLookupFailedError)) throw err
+    log.error('brand lookup failed while resolving redirect_to', err, { host: err.host })
+    return NextResponse.json({ error: 'Origin lookup failed' }, { status: 500 })
   }
-  const brand = redirectUrl ? await resolveBrandByHost(redirectUrl.hostname) : null
+  const { origin, redirectUrl } = resolved
+  // A brand host whose row cannot be read right now (a second registry read
+  // can fail after the first succeeded) must not get platform-branded mail
+  // carrying a brand link: 500, Supabase retries. On the canonical origin a
+  // failed read is the platform sender either way, so it does not block.
+  const brandResult = await resolveBrandResultByHost(new URL(origin).hostname)
+  if (brandResult.lookupFailed && origin !== getCanonicalAppOrigin()) {
+    log.error('brand lookup failed for the resolved origin', undefined, { origin })
+    return NextResponse.json({ error: 'Origin lookup failed' }, { status: 500 })
+  }
+  const brand = brandResult.brand
   const sender = getSenderForBrand(brand)
   const appName = brand?.appName ?? getBranding().appName
 
@@ -158,13 +229,13 @@ export async function POST(request: Request) {
     mails.push({
       to: newEmail,
       actionType: 'email_change',
-      actionUrl: buildActionUrl(redirectUrl, emailData.token_hash, 'email_change'),
+      actionUrl: buildActionUrl(origin, redirectUrl, emailData.token_hash, 'email_change'),
     })
     if (emailData.token_hash_new) {
       mails.push({
         to: recipient,
         actionType: 'email_change_current',
-        actionUrl: buildActionUrl(redirectUrl, emailData.token_hash_new, 'email_change'),
+        actionUrl: buildActionUrl(origin, redirectUrl, emailData.token_hash_new, 'email_change'),
       })
     }
   } else {
@@ -174,7 +245,7 @@ export async function POST(request: Request) {
     mails.push({
       to: recipient,
       actionType,
-      actionUrl: buildActionUrl(redirectUrl, emailData.token_hash, actionType),
+      actionUrl: buildActionUrl(origin, redirectUrl, emailData.token_hash, actionType),
     })
   }
 
