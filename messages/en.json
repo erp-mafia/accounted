@@ -4273,6 +4273,7 @@
     "draft_download_unnumbered_title": "The draft has no invoice number",
     "draft_download_unnumbered_desc": "The PDF is stamped UTKAST and is not a valid invoice. Use Review & create before sending it to the customer.",
     "draft_download_draft_action": "Download draft",
+    "draft_download_preview_action": "Preview draft",
     "draft_download_book_action": "Post and download",
     "draft_download_send_action": "Mark as sent and download",
     "pdf_download_failed_title": "Could not download PDF",

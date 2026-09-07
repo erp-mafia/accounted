@@ -708,9 +708,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         variant: 'destructive',
       })
       return false
+    } finally {
+      setIsUpdating(false)
     }
-
-    setIsUpdating(false)
   }
 
   function openSendDialog(mode: 'email' | 'manual') {
@@ -957,6 +957,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     // exists (#2399); `asDraft` is the prompt's own "Ladda ner utkast".
     const decision = draftDownloadDecision(invoice)
     if (decision !== 'download' && !options?.asDraft) {
+      setPdfIntent('download')
       setDraftDownloadPrompt(decision)
       return
     }
@@ -1276,9 +1277,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
-  function previewPDF() {
+  function previewPDF(options?: { asDraft?: boolean }) {
     if (!invoice) return
     setPdfArchiveIssue(null)
+    // Same guard as the download: the browser viewer has its own save
+    // button, so an unwarned preview is an unwarned download (#2399).
+    const decision = draftDownloadDecision(invoice)
+    if (decision !== 'download' && !options?.asDraft) {
+      setPdfIntent('preview')
+      setDraftDownloadPrompt(decision)
+      return
+    }
     void runInvoicePreview(
       resolveInvoicePdfSource({
         invoiceId: invoice.id,
@@ -2759,10 +2768,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               variant={draftDownloadPrompt === 'offer_issue' && canWrite ? 'secondary' : 'default'}
               onClick={() => {
                 setDraftDownloadPrompt(null)
-                void downloadPDF({ asDraft: true })
+                // Honour what was asked for: open the viewer, or save the file.
+                if (pdfIntent === 'preview') previewPDF({ asDraft: true })
+                else void downloadPDF({ asDraft: true })
               }}
             >
-              {t('draft_download_draft_action')}
+              {t(pdfIntent === 'preview' ? 'draft_download_preview_action' : 'draft_download_draft_action')}
             </Button>
             {draftDownloadPrompt === 'offer_issue' && canWrite && (
               <Button

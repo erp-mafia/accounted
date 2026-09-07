@@ -82,7 +82,7 @@ export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab)
     case 'paid':
       return invoice.status === 'paid'
     case 'credit':
-      return isCreditNote
+      return isCreditNote && invoice.status !== 'cancelled'
     case 'proforma':
       return docType === 'proforma' && invoice.status !== 'cancelled'
     case 'quote':

@@ -83,6 +83,9 @@ describe('matchesInvoiceListTab', () => {
 
   it('keeps cancelled rows out of every view but cancelled', () => {
     expect(tabsFor(row({ status: 'cancelled', invoice_number: 'F-12' }))).toEqual(['cancelled'])
+    expect(
+      tabsFor(row({ status: 'cancelled', invoice_number: 'F-13', credited_invoice_id: 'orig' })),
+    ).toEqual(['cancelled'])
   })
 
   it('counts every non-cancelled faktura in exactly one of unsent, draft, unpaid, paid', () => {
