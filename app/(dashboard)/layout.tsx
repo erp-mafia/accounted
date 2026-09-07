@@ -579,7 +579,7 @@ export default async function DashboardLayout({
         <div
           id="dash-shell"
           className="min-h-dvh bg-frame md:flex md:flex-col"
-          style={{ '--nav-w': navCollapsed ? '64px' : '248px' } as React.CSSProperties}
+          style={{ '--nav-w': shell === 'v2' ? '220px' : navCollapsed ? '64px' : '248px' } as React.CSSProperties}
         >
           {/* Skip to content link for keyboard/screen reader users */}
           <a
@@ -612,6 +612,7 @@ export default async function DashboardLayout({
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
             initialUiState={uiState}
+            shell={shell}
           />
           <main id="main-content" className={MAIN_PANEL_CLASS} role="main" data-shell={shell}>
             <MainContainer companyId={companyId} shell={shell}>

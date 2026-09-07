@@ -111,7 +111,19 @@
     "subscription": "Subscription",
     "trial_expired_cta": "Trial ended · Upgrade",
     "subscription_lapsed_cta": "Subscription ended · Reactivate",
-    "discord_community": "Discord community"
+    "discord_community": "Discord community",
+    "v2_todo": "To do",
+    "v2_proposals": "Assistant proposals",
+    "v2_group_company": "The company",
+    "v2_invoicing": "Invoicing",
+    "v2_purchases": "Purchases",
+    "v2_tax": "Tax",
+    "v2_closing": "Year-end",
+    "v2_vouchers": "Journal entries",
+    "v2_salary_runs": "Payroll runs",
+    "v2_recurring": "Recurring",
+    "v2_payment_files": "Payment files",
+    "v2_parties": "Counterparties"
   },
   "trial_expired_dialog": {
     "title": "Your trial has expired",

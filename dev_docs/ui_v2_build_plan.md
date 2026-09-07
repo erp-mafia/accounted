@@ -28,7 +28,7 @@ Done when: any page renders in both shells, the toggle persists, lint and tests 
 ### PR 2: sidebar and top bar to the prototype's proportions
 
 - Sidebar 220 px with 15 px icons, company chip at the top, Enheter group.
-- Top bar gets the plus, the comment bubble placeholder and the avatar menu (Mitt konto / Bolaget).
+- The avatar menu stays at the bottom of the sidebar in PR 2; moving it and the plus into the top bar is part of PR 9 (cutover polish), since the top bar is the page header and lives inside each page.
 - Nav IA: Att göra, Aktivitet, then Konton, Transaktioner, Fakturering, Inköp, Bokföring, Löner, Skatt, Rapporter, Bokslut. Sub-pages become section pickers in the toolbar row instead of nav items.
 
 ### PR 3: Att göra as three panes on the worklist

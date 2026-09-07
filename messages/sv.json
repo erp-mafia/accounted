@@ -111,7 +111,19 @@
     "subscription": "Abonnemang",
     "trial_expired_cta": "Provperioden är slut · Uppgradera",
     "subscription_lapsed_cta": "Abonnemanget har avslutats · Aktivera",
-    "discord_community": "Discord-community"
+    "discord_community": "Discord-community",
+    "v2_todo": "Att göra",
+    "v2_proposals": "Assistentens förslag",
+    "v2_group_company": "Bolaget",
+    "v2_invoicing": "Fakturering",
+    "v2_purchases": "Inköp",
+    "v2_tax": "Skatt",
+    "v2_closing": "Bokslut",
+    "v2_vouchers": "Verifikationer",
+    "v2_salary_runs": "Lönekörningar",
+    "v2_recurring": "Återkommande",
+    "v2_payment_files": "Betalfiler",
+    "v2_parties": "Motparter"
   },
   "trial_expired_dialog": {
     "title": "Din provperiod har löpt ut",

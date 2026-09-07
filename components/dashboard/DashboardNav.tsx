@@ -69,7 +69,9 @@ import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { persistUiState } from '@/lib/ui-state/client'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
-import type { EntityType, UserUiState } from '@/types'
+import type { DashboardShell, EntityType, UserUiState } from '@/types'
+import { SidebarV2 } from './SidebarV2'
+import { NAV_V2_BOTTOM, NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags, type NavV2Item } from './nav-v2'
 
 void _ENABLED_EXTENSION_IDS
 
@@ -116,6 +118,9 @@ interface DashboardNavProps {
   // Server-read user_preferences.ui_state: seeds sidebar collapse + fold
   // state so the first client render matches the server-stamped width.
   initialUiState?: UserUiState
+  // Dashboard shell (ui_state.shell). 'v2' swaps the desktop sidebar for
+  // SidebarV2 (220px, sections with sub-items); mobile nav is shared.
+  shell?: DashboardShell
 }
 
 type NavLabelKey =
@@ -356,7 +361,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState, shell = 'v1' }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -601,7 +606,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
   const isEmployer = entityType === 'aktiebolag' || paysSalaries
 
-  const filteredItems = (cockpitMode ? cockpitNavItems : navItems).filter(item => {
+  // One gate for both shells: a surface hides for the same reason in the
+  // v1 rail and the v2 section tree (nav-v2.ts).
+  const passesGates = (item: NavGateFlags) => {
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
     // Payroll (employerOnly) is hidden until the company is an employer, an
@@ -638,7 +645,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // surfaces the count when there are pending ops, but the link is
     // always present so users can navigate there manually.
     return true
-  })
+  }
+  const filteredItems = (cockpitMode ? cockpitNavItems : navItems).filter(passesGates)
 
   const topItems = filteredItems.filter((i) => i.group === 'top')
 
@@ -662,6 +670,25 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // Flat leaf list for the collapsed 64px icon rail: fold children render
   // as plain icons (group headers and fold headers disappear).
   const railItems = [...topItems, ...sidebarGroups.flatMap(({ items }) => items)]
+
+  // Shell v2 tree: the same gates applied to sections and their sub-items.
+  // In cockpit mode the lean cockpit list is the whole sidebar.
+  const gateTree = (items: NavV2Item[]): NavV2Item[] =>
+    items.filter(passesGates).map((i) => ({ ...i, sub: i.sub?.filter(passesGates) }))
+  const v2Top: NavV2Item[] = cockpitMode
+    ? cockpitNavItems.filter(passesGates).map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
+    : gateTree(NAV_V2_TOP)
+  const v2Company = cockpitMode ? [] : gateTree(NAV_V2_COMPANY)
+  const v2Bottom = gateTree(NAV_V2_BOTTOM)
+  // Att göra carries the whole queue (unbooked rows + staged operations);
+  // Transaktioner and Assistentens förslag keep their own share.
+  const v2BadgeFor = (href: string): number | null => {
+    if (href === '/' && !cockpitMode) {
+      const n = uncategorizedCount + pendingOpsCount
+      return n > 0 ? n : null
+    }
+    return badgeFor(href)
+  }
 
   const allMobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = cockpitMode
     ? cockpitNavItems.map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
@@ -839,9 +866,69 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
   return (
     <>
-      {/* Desktop sidebar */}
-      {/* Width, and the panel margin beside it, share the same 300ms
-          decelerating curve so collapse reads as one movement. */}
+      {/* Desktop sidebar. Shell v2 renders SidebarV2 instead; the mobile
+          nav below is shared by both shells. */}
+      {shell === 'v2' ? (
+        <SidebarV2
+          top={v2Top}
+          company={v2Company}
+          bottom={v2Bottom}
+          groupLabel={cockpitMode ? '' : tNav('v2_group_company')}
+          label={(key) => tNav(key as NavLabelKey)}
+          isActive={isActive}
+          isEnabled={isItemEnabled}
+          badgeFor={v2BadgeFor}
+          needsCompanyTitle={tNav('needs_company_tooltip')}
+          betaLabel={tNav('badge_beta')}
+          mainNavLabel={tNav('main_navigation')}
+          brand={<BrandHomeLink showLabel />}
+          switcher={<CompanySwitcher />}
+          backLink={
+            byraTeam && !cockpitMode ? (
+              <div className="mb-2">
+                {cockpitExternal ? (
+                  <a
+                    href={cockpitHref}
+                    title={cockpitHint ?? undefined}
+                    className="group flex items-center rounded-lg px-3 py-[7px] text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
+                  >
+                    <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
+                    <span className="flex-1 min-w-0">
+                      <span className="block">{tNav('back_to_clients')}</span>
+                      <span className="block truncate text-[11px] text-muted-foreground">{cockpitHint}</span>
+                    </span>
+                  </a>
+                ) : (
+                  <NavLink
+                    href={cockpitHref}
+                    className="group flex items-center rounded-lg px-3 py-[7px] text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
+                  >
+                    <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
+                    <span className="flex-1">{tNav('back_to_clients')}</span>
+                  </NavLink>
+                )}
+                <div className="mx-3 mt-2 border-t border-border/60" />
+              </div>
+            ) : null
+          }
+          userBlock={
+            <div className="flex-shrink-0">
+              <SubscriptionTouchpoint variant="sidebar" collapsed={false} />
+              <div className="mx-3 border-t border-border/60" />
+              <div className="px-3 py-2">
+                <UserMenu
+                  userName={userName}
+                  userEmail={userEmail}
+                  isSandbox={isSandbox}
+                  collapsed={false}
+                  cockpitMode={cockpitMode}
+                  onLogout={() => void handleLogout()}
+                />
+              </div>
+            </div>
+          }
+        />
+      ) : (
       <aside className="hidden md:fixed md:inset-y-0 md:z-10 md:flex md:w-[var(--nav-w)] md:flex-col md:transition-[width] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)]">
         {/* Borderless on the frame: the panel next to it carries the border */}
         <div className="flex min-h-0 flex-1 flex-col bg-transparent">
@@ -1085,6 +1172,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           </div>
         </div>
       </aside>
+      )}
 
       {/* Mobile bottom navigation. data-mobile-nav is the brand-style hook:
           on branded hosts the brand style block re-tints the bar's tokens
