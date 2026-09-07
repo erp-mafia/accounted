@@ -87,17 +87,18 @@ export async function POST(request: Request) {
     }
   }
 
-  // Trusted-origin resolution, not request.url: behind a proxy request.url
-  // can be an internal origin (dead confirmation links on self-hosted), and
-  // auth links may never follow an attacker-chosen host. Registered
-  // white-label hosts pass through so the mail carries the right brand.
+  // Trusted-origin resolution against the brands table, not request.url:
+  // behind a proxy request.url can be an internal origin (dead confirmation
+  // links on self-hosted), and auth links may never follow an
+  // attacker-chosen host. Registered brand hosts pass through so the mail
+  // carries the right brand.
   //
   // flow=email_change marks the callback so the stock GoTrue links (verified
   // on the GoTrue host, returned here via redirect_to with ?message=, ?error=
   // or ?code= instead of a token_hash) land on the email-change status page
   // rather than the silent login bounce. The Send Email hook preserves this
   // query on its token_hash links, so both link styles share the marker.
-  const origin = resolveRequestAppOrigin(request)
+  const origin = await resolveRequestAppOrigin(request)
 
   // Cross-instance gate (migration 20260903083000). The pending-state read
   // above is not atomic: two concurrent requests (two tabs, a retried fetch)

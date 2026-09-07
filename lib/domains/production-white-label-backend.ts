@@ -27,8 +27,9 @@ const PRODUCTION_SUPABASE_HOST = 'pwxtzglxptnnvjrpixpg.supabase.co'
 // (docs/WHITELABEL.md step 1).
 //
 // This is an owner-approved production classification, not an auth callback
-// allowlist. Do not derive it from NEXT_PUBLIC_WHITELABEL_DOMAINS, which can
-// also contain demo, pilot, or self-hosted domains.
+// registry. Do not derive it from the brands table (the registry auth links
+// resolve against, lib/domains/trusted-app-origin.ts), which can also hold
+// demo, pilot, or staging-only brands.
 const CUSTOMER_PRODUCTION_WHITE_LABEL_HOSTS = new Set([
   'acount.accounted.se',
   'amnas.accounted.se',
