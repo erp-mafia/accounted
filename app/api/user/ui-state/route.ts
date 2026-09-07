@@ -41,6 +41,8 @@ const BodySchema = z
     trial_expired_ack: z
       .record(z.string().uuid(), z.string().datetime())
       .optional(),
+    // Dashboard shell opt-in (Inställningar → Konto → Layout).
+    shell: z.enum(['v1', 'v2']).optional(),
   })
   .strict()
 

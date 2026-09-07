@@ -33,7 +33,7 @@ import {
   resolveCockpitHref,
 } from '@/lib/company/home-domain'
 import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
-import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
+import type { AccountingFramework, EntityType, CompanyRole, Team, DashboardShell } from '@/types'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
@@ -485,6 +485,10 @@ export default async function DashboardLayout({
   // flip the data attribute client-side and persist via /api/user/ui-state.
   const uiState = (userPrefs?.ui_state ?? {}) as import('@/types').UserUiState
   const navCollapsed = uiState.nav_collapsed === true
+  // Shell v2 is a per-user opt-in (Inställningar → Konto → Layout) until it
+  // becomes the default. Rendered as data-shell on the panel so the CSS in
+  // globals.css can restyle PageHeader without touching page code.
+  const shell: DashboardShell = uiState.shell === 'v2' ? 'v2' : 'v1'
 
   const allCompanyEntries = (allMemberships || [])
     .filter((m) => m.companies)
@@ -609,8 +613,8 @@ export default async function DashboardLayout({
             userEmail={user.email ?? null}
             initialUiState={uiState}
           />
-          <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
-            <MainContainer companyId={companyId}>
+          <main id="main-content" className={MAIN_PANEL_CLASS} role="main" data-shell={shell}>
+            <MainContainer companyId={companyId} shell={shell}>
               {showSignpost ? (
                 <HomeDomainSignpost
                   activeCompanyName={displayName}

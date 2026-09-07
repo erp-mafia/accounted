@@ -30,6 +30,9 @@ import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
 import { PalettePicker } from '@/components/settings/PalettePicker'
 import { usePalette } from '@/components/providers/PaletteProvider'
 import type { Palette } from '@/lib/theme/palettes'
+import { mutate } from 'swr'
+import { useUiState } from '@/lib/hooks/use-ui-state'
+import type { DashboardShell } from '@/types'
 
 export function AccountSettingsContent() {
   const router = useRouter()
@@ -37,6 +40,31 @@ export function AccountSettingsContent() {
   const { theme, setTheme } = useTheme()
   const { palette, setPalette } = usePalette()
   const [mounted, setMounted] = useState(false)
+  // Dashboard shell opt-in (ui_state.shell). Awaited, not fire-and-forget:
+  // the layout reads the flag server-side, so the refresh must follow the
+  // write or the page would come back in the old shell.
+  const { uiState } = useUiState()
+  const [shellSaving, setShellSaving] = useState(false)
+  const shell: DashboardShell = uiState?.shell === 'v2' ? 'v2' : 'v1'
+  async function changeShell(next: DashboardShell) {
+    if (next === shell) return
+    setShellSaving(true)
+    try {
+      const res = await fetch('/api/user/ui-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shell: next }),
+      })
+      if (!res.ok) throw new Error('ui_state save failed')
+      await mutate('user-ui-state')
+      toast({ description: tSettings('shell_saved') })
+      router.refresh()
+    } catch {
+      toast({ variant: 'destructive', description: tSettings('shell_save_failed') })
+    } finally {
+      setShellSaving(false)
+    }
+  }
   const hasCalendarExtension = ENABLED_EXTENSION_IDS.has('calendar')
   const { settings } = useSettings()
   const { toast } = useToast()
@@ -309,6 +337,21 @@ export function AccountSettingsContent() {
               onChange={setPalette}
               labels={paletteLabels}
               aria-label={tSettings('palette_label')}
+            />
+          )}
+        </SettingsRow>
+
+        <SettingsRow label={tSettings('shell_label')} help={tSettings('shell_description')}>
+          {mounted && (
+            <SettingsSeg<DashboardShell>
+              value={shell}
+              onChange={(v) => void changeShell(v)}
+              disabled={shellSaving}
+              aria-label={tSettings('shell_label')}
+              options={[
+                { value: 'v1', label: tSettings('shell_v1') },
+                { value: 'v2', label: tSettings('shell_v2') },
+              ]}
             />
           )}
         </SettingsRow>

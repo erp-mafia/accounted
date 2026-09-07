@@ -850,3 +850,49 @@ input[type="number"] {
 .prefill-settle {
   animation: prefill-settle 0.9s ease-out both;
 }
+
+/* Dashboard shell v2 (founder decision 2026-09-07, dev_docs/ui_v2_build_plan.md).
+   Opt-in per user via ui_state.shell, rendered as data-shell on #main-content.
+   The PageHeader keeps its markup and becomes the panel's 48px top bar:
+   sticky, full width, 13px/500 body-face title, help and primary action on
+   the same line, description hidden (it lives behind the "?" popover).
+   The negative margins undo MainContainer's v2 padding (pt-4, px-4/md:px-6),
+   so keep the two in step. v1 pages are untouched: nothing here matches
+   without the attribute. */
+[data-shell="v2"] .page-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 3rem;
+  margin: -1rem -1rem 1rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid hsl(var(--border) / 0.7);
+  background: hsl(var(--background));
+}
+@media (min-width: 768px) {
+  [data-shell="v2"] .page-header {
+    margin-left: -1.5rem;
+    margin-right: -1.5rem;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+[data-shell="v2"] .page-header-title {
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+[data-shell="v2"] .page-header-desc {
+  display: none;
+}
+[data-shell="v2"] .page-header-action {
+  width: auto;
+}
+[data-shell="v2"] .page-header-action > * {
+  width: auto;
+}

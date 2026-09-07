@@ -195,4 +195,21 @@ describe('POST /api/user/ui-state', () => {
     const res = await POST(request({ nav_collapsed: true }))
     expect(res.status).toBe(500)
   })
+
+  it('accepts the shell opt-in and keeps the rest of the bag', async () => {
+    enqueue({ data: { ui_state: { nav_collapsed: true } } })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: { ui_state: { shell: string; nav_collapsed: boolean } }
+    }>(await POST(request({ shell: 'v2' })))
+
+    expect(status).toBe(200)
+    expect(body.data.ui_state).toEqual({ nav_collapsed: true, shell: 'v2' })
+  })
+
+  it('returns 400 on an unknown shell value', async () => {
+    const res = await POST(request({ shell: 'v3' }))
+    expect(res.status).toBe(400)
+  })
 })

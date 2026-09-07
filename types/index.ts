@@ -188,7 +188,13 @@ export interface UserUiState {
   // (companyId -> ISO timestamp of the ack). Lives on the user so each
   // member of a company sees the notice once.
   trial_expired_ack?: Record<string, string>
+  // Dashboard shell. 'v2' is the full-bleed frame with the page title in a
+  // top bar (founder decision 2026-09-07, dev_docs/ui_v2_build_plan.md).
+  // Absent or 'v1' keeps the centered max-w-5xl panel until v2 is default.
+  shell?: DashboardShell
 }
+
+export type DashboardShell = 'v1' | 'v2'
 
 export type AgentPanelMode = 'docked' | 'floating'
 
