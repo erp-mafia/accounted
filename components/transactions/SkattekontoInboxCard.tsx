@@ -15,6 +15,7 @@ import {
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { TxColumnId } from '@/lib/transactions/columns-v2'
+import { HUE_DOT_CLASS, accountHue } from '@/lib/bookkeeping/template-group-colors'
 import { AlertCircle, Landmark, Link2, Loader2, MoreHorizontal } from 'lucide-react'
 import type {
   SkattekontoBookingSuggestion,
@@ -47,6 +48,7 @@ export default function SkattekontoInboxCard({
   onIgnore,
   columns,
   accountLabel = null,
+  accountLogo = null,
 }: {
   row: StoredSkattekontoTransaction
   matchSuggestion?: SkattekontoMatchSuggestion | null
@@ -68,6 +70,8 @@ export default function SkattekontoInboxCard({
   columns?: ReadonlySet<TxColumnId>
   /** Shell v2: text for the Konto cell (the source account). */
   accountLabel?: string | null
+  /** Shell v2: the Skatteverket mark for the Konto cell. */
+  accountLogo?: string | null
 }) {
   const t = useTranslations('tx_skattekonto_card')
   // See TransactionInboxCard: onCheckedChange has no event, so shift is
@@ -163,18 +167,29 @@ export default function SkattekontoInboxCard({
           <button
             type="button"
             className={cn(
-              'inline-flex max-w-[16rem] items-center rounded-full border border-border px-2.5 py-0.5 text-xs transition-colors duration-150',
+              'inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-xs transition-colors duration-150',
               suggestionLabel ? 'text-foreground hover:bg-secondary/60' : 'text-muted-foreground hover:text-foreground',
             )}
             onClick={() => onBokfor(row)}
             disabled={processing}
           >
+            {suggestionLabel && bookingSuggestion && (
+              <span className={cn('h-2 w-2 shrink-0 rounded-full', HUE_DOT_CLASS[accountHue(bookingSuggestion.account)])} aria-hidden />
+            )}
             <span className="truncate">{suggestionLabel ?? t('category_pick')}</span>
           </button>
         </td>
       )}
       {columns?.has('account') && (
-        <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>{accountLabel ?? ''}</td>
+        <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
+          <span className="inline-flex items-center gap-2">
+            {accountLogo && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={accountLogo} alt="" className="h-4 w-4 shrink-0 rounded-sm object-contain" />
+            )}
+            {accountLabel ?? ''}
+          </span>
+        </td>
       )}
       {show('amount') && (
         <td
