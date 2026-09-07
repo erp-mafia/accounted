@@ -110,6 +110,13 @@ async function blockOrSupersedeExisting(
         status: 'error',
         error_message: 'Superseded by new connection attempt',
         oauth_state: null,
+        consumer_key_encrypted: null,
+        consumer_secret_encrypted: null,
+        store_name: null,
+        currency: null,
+        prices_include_tax: null,
+        wc_version: null,
+        key_permissions: null,
       })
       .eq('company_id', auth.companyId)
       .eq('store_url', storeUrl)
@@ -288,7 +295,12 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      const { data: created, error: insertError } = await auth.supabase
+      // The keys were typed in under this user's session: that IS the browser
+      // confirmation the activation CHECK requires. browser_confirmed_at is
+      // server-only (trigger, 20260907150000), so the insert runs on the
+      // service client; membership was already proven by requireUserAndCompany
+      // and company_id/user_id come from that context, never from the body.
+      const { data: created, error: insertError } = await createServiceClientNoCookies()
         .from('woocommerce_connections')
         .insert({
           company_id: auth.companyId,
@@ -302,6 +314,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
           consumer_secret_encrypted: encryptCredential(consumerSecret),
           status: 'active',
           connected_at: new Date().toISOString(),
+          browser_confirmed_at: new Date().toISOString(),
           transaction_sync_enabled: true,
         })
         .select('id, store_url')
