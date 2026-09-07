@@ -27,8 +27,8 @@ interface SidebarV2Props {
 
 /**
  * Shell v2 desktop sidebar (dev_docs/ui_v2_build_plan.md, PR 2): 220px,
- * brand and company chip on top, Att göra and Assistent, then the BOLAGET
- * sections. The active section shows its sub-items underneath; the rest
+ * brand on top, Att göra and Assistent, then the BOLAGET sections, and the
+ * company chip at the bottom next to the user. The active section shows its sub-items underneath; the rest
  * stay one line each. No collapse: the prototype has none and the panel
  * is full-bleed anyway. Mobile keeps the v1 bottom nav (DashboardNav).
  */
@@ -124,8 +124,7 @@ export function SidebarV2({
   return (
     <aside className="hidden md:fixed md:inset-y-0 md:z-10 md:flex md:w-[var(--nav-w)] md:flex-col">
       <div className="flex min-h-0 flex-1 flex-col bg-transparent">
-        <div className="flex flex-shrink-0 items-center justify-between pl-5 pr-3 pt-3 pb-1">{brand}</div>
-        <div className="flex-shrink-0 px-3 pb-2">{switcher}</div>
+        <div className="flex flex-shrink-0 items-center justify-between pl-5 pr-3 pt-3 pb-2">{brand}</div>
         <nav
           data-ph-unmask
           aria-label={mainNavLabel}
@@ -145,6 +144,10 @@ export function SidebarV2({
           )}
         </nav>
         <div className="flex-shrink-0 space-y-px px-3 pb-1">{bottom.map((item) => row(item, isActive(item.href)))}</div>
+        {/* The company chip sits with the user, at the bottom (founder call
+            2026-09-07): the nav is about the work, the footer about who and
+            for whom. */}
+        <div className="flex-shrink-0 px-3 pb-1 pt-1">{switcher}</div>
         {userBlock}
       </div>
     </aside>
