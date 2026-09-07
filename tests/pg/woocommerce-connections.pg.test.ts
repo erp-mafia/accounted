@@ -32,6 +32,10 @@ const ACTIVE_VALUES = "'active', 'enc:k', 'enc:s', now()"
  *      authenticated) cannot insert or update it, even on its own company's
  *      row, so a colleague cannot supply the initiator's signal. Service-role
  *      and pool writes pass.
+ *   7. Activation is server-only: an end-user session cannot insert an
+ *      'active' row or move a row into 'active', even one that carries both
+ *      signals (the TTL lives in the server's conditional update, which the
+ *      CHECK alone does not enforce). Leaving 'active' stays member-writable.
  */
 
 describe('woocommerce_connections RLS', () => {
@@ -304,6 +308,52 @@ describe('woocommerce_connections RLS', () => {
         [id],
       )
       expect(server.rows[0].browser_confirmed_at).not.toBeNull()
+    })
+
+    it('refuses an end-user session moving a fully staged row into active, but lets it leave active', async () => {
+      const { userId, companyId } = await seedCompany()
+      const id = await insertPending(companyId, userId, uniqueStore('user-activate'))
+      // Both signals present, staged by the server, but already past the TTL:
+      // the CHECK would pass, the server's conditional flip would not.
+      await getPool().query(
+        `UPDATE public.woocommerce_connections
+            SET consumer_key_encrypted = 'enc:k', consumer_secret_encrypted = 'enc:s',
+                browser_confirmed_at = now(), created_at = now() - interval '20 minutes'
+          WHERE id = $1`,
+        [id],
+      )
+      await withUserContext(userId, async (client) => {
+        await expect(
+          client.query(
+            `UPDATE public.woocommerce_connections SET status = 'active' WHERE id = $1`,
+            [id],
+          ),
+        ).rejects.toMatchObject({ code: '42501' })
+      })
+      await withUserContext(userId, async (client) => {
+        await expect(
+          client.query(
+            `INSERT INTO public.woocommerce_connections
+               (company_id, user_id, store_url, status, consumer_key_encrypted, consumer_secret_encrypted)
+             VALUES ($1, $2, $3, 'active', 'enc:k', 'enc:s')`,
+            [companyId, userId, uniqueStore('user-activate-insert')],
+          ),
+        ).rejects.toMatchObject({ code: '42501' })
+      })
+      // The server activates; the member may then disconnect (leave active).
+      await getPool().query(
+        `UPDATE public.woocommerce_connections SET status = 'active', created_at = now() WHERE id = $1`,
+        [id],
+      )
+      await withUserContext(userId, async (client) => {
+        const revoked = await client.query(
+          `UPDATE public.woocommerce_connections
+              SET status = 'revoked', consumer_key_encrypted = NULL, consumer_secret_encrypted = NULL
+            WHERE id = $1`,
+          [id],
+        )
+        expect(revoked.rowCount).toBe(1)
+      })
     })
 
     it('lets a parked row drop its keys: the CHECK only constrains active rows', async () => {
