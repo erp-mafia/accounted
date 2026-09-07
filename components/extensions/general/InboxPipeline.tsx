@@ -4,13 +4,14 @@ import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 
 /**
- * Underlag as a flow (UI v2 PR 7): Inkommet → Tolkat → Matchat → Bokfört →
- * Arkiverat, one flat bar with the number of documents at each step. Maps
- * onto the workspace's existing status filters (all / todo / linked /
- * booked), so clicking a cell is the same as picking a pill. Inkommet and
+ * Underlag as a flow (UI v2 PR 7): Saknas → Inkommet → Tolkat → Matchat →
+ * Bokfört → Arkiverat, one flat bar with the number of documents at each
+ * step. It is the page's only status picker: each cell is one of the
+ * workspace's filters (missing / all / todo / linked / booked). Saknas is
+ * the step before arrival, a purchase with no document yet. Inkommet and
  * Tolkat happen without the user; Arkiverat follows booking (BFL 7 kap.).
  */
-export const INBOX_PIPE_STAGES = ['incoming', 'parsed', 'matched', 'booked', 'archived'] as const
+export const INBOX_PIPE_STAGES = ['missing', 'incoming', 'parsed', 'matched', 'booked', 'archived'] as const
 export type InboxPipeStage = (typeof INBOX_PIPE_STAGES)[number]
 
 const AUTO: ReadonlySet<InboxPipeStage> = new Set(['incoming', 'parsed', 'archived'])
@@ -26,7 +27,7 @@ export function InboxPipeline({
 }) {
   const t = useTranslations('inbox_workspace')
   return (
-    <div className="mx-4 mt-3 flex overflow-hidden rounded-lg border border-border" role="tablist" aria-label={t('pipe_aria')}>
+    <div className="flex min-w-0 flex-1 overflow-hidden rounded-lg border border-border" role="tablist" aria-label={t('pipe_aria')}>
       {INBOX_PIPE_STAGES.map((s) => {
         const on = active === s
         return (
@@ -44,7 +45,10 @@ export function InboxPipeline({
           >
             <span className="truncate">{t(`pipe_${s}`)}</span>
             {AUTO.has(s) && <span className="text-[10.5px] text-muted-foreground">{t('pipe_auto')}</span>}
-            <span className="font-medium tabular-nums text-foreground" data-ph-mask>
+            <span
+              className={cn('font-medium tabular-nums', s === 'missing' && counts[s] > 0 ? 'text-warning' : 'text-foreground')}
+              data-ph-mask
+            >
               {counts[s] || '–'}
             </span>
           </button>
