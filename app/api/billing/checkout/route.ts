@@ -120,10 +120,10 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
   // Return the user to the host they started on. Sessions are per domain, so
   // sending a white-label user back to the canonical app would land them on a
   // foreign-branded login with no session. The origin is resolved against the
-  // registered host allowlist; an unknown or spoofed host falls back to the
+  // brands table; an unknown or spoofed host falls back to the
   // canonical app URL. The paths stay fixed: never accept a caller-supplied
   // return URL here.
-  const appOrigin = resolveRequestAppOrigin(request)
+  const appOrigin = await resolveRequestAppOrigin(request)
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
     customer: customerId,

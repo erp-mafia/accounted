@@ -48,7 +48,7 @@ export const POST = withRouteContext('billing.portal', async (request, ctx) => {
   // Same host the user started on (see billing/checkout): a registered
   // white-label host stays on its brand, anything else returns to the
   // canonical app. The path is fixed.
-  const appOrigin = resolveRequestAppOrigin(request)
+  const appOrigin = await resolveRequestAppOrigin(request)
   const portal = await getStripe().billingPortal.sessions.create({
     customer: customerId,
     return_url: `${appOrigin}/settings/billing`,
