@@ -20,6 +20,9 @@ vi.mock('../lib/order-sync', async (importOriginal) => {
   return { ...actual, syncWooCommerceOrders: vi.fn() }
 })
 
+vi.mock('@/lib/domains/trusted-app-origin', () => ({
+  resolveRequestAppOrigin: vi.fn(async () => 'http://localhost:3000'),
+}))
 vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: vi.fn(() => ({ service: true })),
 }))
@@ -30,6 +33,8 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { testConnectionAndFetchStoreInfo } from '../lib/api-client'
 import { syncWooCommerceOrders } from '../lib/order-sync'
 import { decryptCredential } from '../lib/credentials'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -180,6 +185,9 @@ describe('woocommerce extension routes', () => {
       expect(body.url).toContain(
         encodeURIComponent('http://localhost:3000/api/extensions/woocommerce/callback'),
       )
+      expect(body.url).toContain(
+        encodeURIComponent('http://localhost:3000/api/extensions/woocommerce/return'),
+      )
       const inserted = findCall('woocommerce_connections', 'insert')?.[0] as Record<
         string,
         unknown
@@ -187,6 +195,30 @@ describe('woocommerce extension routes', () => {
       expect(inserted.store_url).toBe('https://shop.example.se')
       expect(inserted.status).toBe('pending')
       expect(inserted.oauth_state).toBeTruthy()
+    })
+
+    it('sends the browser back to the brand host it started on while the callback stays canonical', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: { is_sandbox: false } })
+      enqueue({ data: [] })
+      enqueue({ data: { id: 'conn-1' } })
+      vi.mocked(resolveRequestAppOrigin).mockResolvedValueOnce('https://app.testbrand.example')
+      const request = makeRequest('POST', { store_url: 'https://shop.example.se' })
+      const res = await findRoute('POST', '/connect').handler(request, makeContext(supabase))
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      // Validated against the brands table by the helper; the route never
+      // trusts a raw Host header on its own.
+      expect(resolveRequestAppOrigin).toHaveBeenCalledWith(request, {
+        onLookupFailure: 'canonical',
+      })
+      expect(body.url).toContain(
+        encodeURIComponent('https://app.testbrand.example/api/extensions/woocommerce/return'),
+      )
+      expect(body.url).toContain(
+        encodeURIComponent('http://localhost:3000/api/extensions/woocommerce/callback'),
+      )
     })
   })
 
@@ -222,6 +254,9 @@ describe('woocommerce extension routes', () => {
     it('verifies, encrypts and activates on the happy path', async () => {
       const { supabase, enqueue, findCall } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      // browser_confirmed_at is server-only, so the insert runs on the service
+      // client; route it to the same queue so the call is observable.
+      vi.mocked(createServiceClientNoCookies).mockReturnValueOnce(supabase as never)
       enqueue({ data: { is_sandbox: false } })
       enqueue({ data: [] }) // no existing connection
       enqueue({ data: { id: 'conn-1', store_url: 'https://shop.example.se' } }) // insert
@@ -246,6 +281,13 @@ describe('woocommerce extension routes', () => {
         string
       >
       expect(inserted.status).toBe('active')
+      // Keys typed in under a session count as the browser confirmation the
+      // activation CHECK (20260907143000) requires alongside the keys.
+      expect(typeof inserted.browser_confirmed_at).toBe('string')
+      // Scoped to the authenticated context, never to anything in the body.
+      expect(inserted.company_id).toBe('company-1')
+      expect(inserted.user_id).toBe(USER.id)
+      expect(createServiceClientNoCookies).toHaveBeenCalled()
       expect(inserted.store_name).toBe('Testbutiken')
       // Secrets never stored in plaintext, and they decrypt back.
       expect(inserted.consumer_key_encrypted).not.toContain('ck_x')

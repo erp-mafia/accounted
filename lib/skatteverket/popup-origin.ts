@@ -1,12 +1,13 @@
 /**
  * Origins the Skatteverket OAuth popup may post back from.
  *
- * The OAuth callback is served from the host pinned by
- * NEXT_PUBLIC_SKV_OAUTH_BASE_URL: the redirect_uri registered with
- * Skatteverket in Utvecklarportalen, kept on the legacy app.gnubok.se
- * domain after the user-facing app moved to app.accounted.se. The panels
- * that open the popup therefore accept postMessage events from that origin
- * in addition to their own.
+ * The provider redirects to the host pinned by NEXT_PUBLIC_SKV_OAUTH_BASE_URL
+ * (the redirect_uri registered with Skatteverket in Utvecklarportalen, kept
+ * on the legacy app.gnubok.se domain after the user-facing app moved to
+ * app.accounted.se). Since the oauth_flows handoff (lib/auth/oauth-flows.ts)
+ * that host only forwards the browser to the origin the flow started on,
+ * and the success/error page posts from there: the opener's own origin.
+ * The pinned host stays accepted for flows in flight across the deploy.
  *
  * Origin alone is never sufficient: callers must also verify that
  * event.source is the popup window they themselves opened.

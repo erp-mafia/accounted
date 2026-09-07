@@ -234,7 +234,10 @@ interface InboxRow {
   source: string | null
   created_at: string
   extracted_data: Record<string, unknown> | null
+  file_name?: string | null
 }
+
+const INBOX_SOURCES = new Set(['mail_hunt', 'email', 'upload', 'whatsapp', 'peppol'])
 
 function InboxPane({ task }: { task: AttGoraTask }) {
   const t = useTranslations('att_gora_v2')
@@ -246,10 +249,13 @@ function InboxPane({ task }: { task: AttGoraTask }) {
       (d.supplier_name as string | undefined) ??
       (d.vendor as string | undefined) ??
       (d.counterparty as string | undefined) ??
-      r.source ??
+      // A document nobody has read yet: its file name says more than the
+      // channel it came through.
+      r.file_name ??
       t('inbox_unknown')
     )
   }
+  const sourceLabel = (r: InboxRow) => (r.source && INBOX_SOURCES.has(r.source) ? t(`source_${r.source}`) : (r.source ?? ''))
   const amount = (r: InboxRow) => {
     const d = r.extracted_data ?? {}
     const v = (d.total_amount ?? d.amount ?? d.total) as number | string | undefined
@@ -274,7 +280,7 @@ function InboxPane({ task }: { task: AttGoraTask }) {
               {formatDate(r.created_at)}
             </Cell>
             <Cell muted className="w-20 shrink-0">
-              {r.source ?? ''}
+              {sourceLabel(r)}
             </Cell>
             <Cell>{name(r)}</Cell>
             <Cell num>{amount(r)}</Cell>

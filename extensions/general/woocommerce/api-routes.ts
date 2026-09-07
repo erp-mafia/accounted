@@ -5,6 +5,7 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { isWooCommerceConfigured, encryptCredential } from './lib/credentials'
 import { normalizeStoreUrl, testConnectionAndFetchStoreInfo } from './lib/api-client'
 import { buildAuthorizeUrl } from './lib/connect'
@@ -110,6 +111,13 @@ async function blockOrSupersedeExisting(
         status: 'error',
         error_message: 'Superseded by new connection attempt',
         oauth_state: null,
+        consumer_key_encrypted: null,
+        consumer_secret_encrypted: null,
+        store_name: null,
+        currency: null,
+        prices_include_tax: null,
+        wc_version: null,
+        key_permissions: null,
       })
       .eq('company_id', auth.companyId)
       .eq('store_url', storeUrl)
@@ -210,11 +218,20 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
+      // The browser comes back to the host it started on (brand domain or
+      // canonical), validated against the brands table: an unregistered
+      // Host header collapses to the canonical origin, as does a failed
+      // lookup (a wrong return host costs one bounce; a failed connect start
+      // would cost the whole flow).
+      const appOrigin = await resolveRequestAppOrigin(request, {
+        onLookupFailure: 'canonical',
+      })
+
       log.info('[woocommerce] Starting wc-auth handshake', {
         connection_id: created.id,
         company_id: auth.companyId,
       })
-      return NextResponse.json({ url: buildAuthorizeUrl(storeUrl, oauthState) })
+      return NextResponse.json({ url: buildAuthorizeUrl(storeUrl, oauthState, appOrigin) })
     },
   },
   {
@@ -288,7 +305,12 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      const { data: created, error: insertError } = await auth.supabase
+      // The keys were typed in under this user's session: that IS the browser
+      // confirmation the activation CHECK requires. browser_confirmed_at is
+      // server-only (trigger, 20260907150000), so the insert runs on the
+      // service client; membership was already proven by requireUserAndCompany
+      // and company_id/user_id come from that context, never from the body.
+      const { data: created, error: insertError } = await createServiceClientNoCookies()
         .from('woocommerce_connections')
         .insert({
           company_id: auth.companyId,
@@ -302,6 +324,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
           consumer_secret_encrypted: encryptCredential(consumerSecret),
           status: 'active',
           connected_at: new Date().toISOString(),
+          browser_confirmed_at: new Date().toISOString(),
           transaction_sync_enabled: true,
         })
         .select('id, store_url')
