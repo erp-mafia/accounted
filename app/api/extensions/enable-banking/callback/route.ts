@@ -228,7 +228,7 @@ export async function GET(request: Request) {
           // visible where their session is (a white-label user has none on
           // the canonical host and would be bounced to its login instead).
           return NextResponse.redirect(
-            `${resolveTrustedAppOrigin(pendingConn.oauth_origin)}/settings/banking?${params.toString()}`
+            `${await resolveTrustedAppOrigin(pendingConn.oauth_origin, { onLookupFailure: 'canonical' })}/settings/banking?${params.toString()}`
           )
         }
       } catch (cleanupError) {
@@ -294,9 +294,13 @@ export async function GET(request: Request) {
   // redirect, including the login bounce that re-runs this callback with the
   // same code + state, goes to the recorded initiating origin: their brand
   // host already holds the session, so its login page forwards straight back
-  // here and the callback completes with cookies. Allowlist-validated; an
-  // unregistered or missing origin collapses to the canonical host.
-  const returnOrigin = resolveTrustedAppOrigin(pendingConnection.oauth_origin)
+  // here and the callback completes with cookies. Validated against the
+  // brands table; an unregistered or missing origin collapses to the
+  // canonical host, and so does a failed lookup (no token rides in this
+  // redirect, and a 500 mid-callback would strand the user).
+  const returnOrigin = await resolveTrustedAppOrigin(pendingConnection.oauth_origin, {
+    onLookupFailure: 'canonical',
+  })
 
   const initiator = await requireFlowInitiator(request, pendingConnection.user_id, {
     flow: 'enable-banking.callback',

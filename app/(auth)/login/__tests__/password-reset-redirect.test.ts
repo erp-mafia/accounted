@@ -8,10 +8,13 @@ const SOURCE = readFileSync(
 )
 
 describe('password reset redirect wiring', () => {
-  it('routes the browser origin through the trusted app-origin resolver', () => {
-    expect(SOURCE).toContain('buildPasswordResetRedirectTo(window.location.origin)')
-    expect(SOURCE).not.toContain(
-      '`${window.location.origin}/auth/callback?next=/reset-password`',
-    )
+  it('requests the reset through the server route, never with a browser-built callback', () => {
+    // POST /api/auth/password-reset resolves the recovery callback against
+    // the brands table from the request host. The browser must not call
+    // GoTrue directly with a redirectTo of its own: that is what needed a
+    // compiled-in domain list and a redeploy per brand.
+    expect(SOURCE).toContain("fetch('/api/auth/password-reset'")
+    expect(SOURCE).not.toContain('resetPasswordForEmail(')
+    expect(SOURCE).not.toContain('/auth/callback?next=/reset-password')
   })
 })

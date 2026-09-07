@@ -90,12 +90,17 @@ export function redactUserId(id: string | null | undefined): string {
  * never dragged to the canonical login), or the request origin itself on a
  * self-hosted deployment with no NEXT_PUBLIC_APP_URL.
  */
-export function buildLoginRedirect(request: Request, returnOrigin?: string | null): Response {
+export async function buildLoginRedirect(
+  request: Request,
+  returnOrigin?: string | null,
+): Promise<Response> {
   const current = new URL(request.url)
+  // A login bounce carries no token, so a failed brands lookup degrades to
+  // the canonical host rather than failing the callback.
   const appOrigin = returnOrigin
-    ? resolveTrustedAppOrigin(returnOrigin)
+    ? await resolveTrustedAppOrigin(returnOrigin, { onLookupFailure: 'canonical' })
     : process.env.NEXT_PUBLIC_APP_URL
-      ? resolveRequestAppOrigin(request)
+      ? await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' })
       : current.origin
   const next = `${current.pathname}${current.search}`
   const login = new URL('/login', appOrigin)
@@ -135,7 +140,7 @@ export async function requireFlowInitiator(
     return {
       ok: false,
       reason: 'no_session',
-      response: buildLoginRedirect(request, options.returnOrigin),
+      response: await buildLoginRedirect(request, options.returnOrigin),
     }
   }
 

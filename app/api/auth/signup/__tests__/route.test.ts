@@ -16,6 +16,11 @@ vi.mock('@/lib/auth/brand-signup-gate', async (importOriginal) => {
   }
 })
 
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+
 import { POST } from '../route'
 
 function makeRequest(
@@ -33,6 +38,13 @@ const validBody = { email: 'kund@example.com', password: 'Str0ng!Pass' }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.se'
+  // app.testbrand.example is a registered brand host; app.accounted.se is
+  // the canonical host and never consults the registry.
+  resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
+    brand: host === 'app.testbrand.example' ? { domain: host } : null,
+    lookupFailed: false,
+  }))
   gateMock.mockResolvedValue({ allowed: true, brand: null, via: 'no_brand' })
   signUpMock.mockResolvedValue({
     data: { user: { identities: [{ id: 'i1' }] }, session: null },

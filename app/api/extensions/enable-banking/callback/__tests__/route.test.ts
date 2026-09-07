@@ -104,6 +104,20 @@ vi.mock('@/lib/cash-accounts/service', () => ({
 
 vi.stubEnv('NEXT_PUBLIC_APP_URL', 'http://localhost:3000')
 
+// The trusted-origin resolver reads the brands table; books.partner.example
+// is the one registered brand host in these tests.
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+function registerBrandHost(host: string | null) {
+  resolveBrandResultByHostMock.mockImplementation(async (candidate: string) => ({
+    brand: host !== null && candidate === host ? { domain: host } : null,
+    lookupFailed: false,
+  }))
+}
+registerBrandHost('books.partner.example')
+
 import { GET } from '../route'
 import { eventBus } from '@/lib/events/bus'
 
@@ -242,11 +256,10 @@ describe('GET /api/extensions/enable-banking/callback', () => {
       const BRAND_ROW = { ...PENDING_ROW, oauth_origin: 'https://books.partner.example' }
 
       beforeEach(() => {
-        vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'books.partner.example')
       })
 
       afterEach(() => {
-        vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', '')
+        registerBrandHost('books.partner.example')
       })
 
       it('sends an anonymous white-label user to their own brand login, not the canonical one', async () => {
@@ -300,7 +313,7 @@ describe('GET /api/extensions/enable-banking/callback', () => {
       })
 
       it('collapses a recorded origin that is not a registered host to the canonical one', async () => {
-        vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', '')
+        registerBrandHost(null)
         const chain = mockChain({ data: BRAND_ROW, error: null })
         mockFrom.mockReturnValue(chain)
         mockGetUser.mockResolvedValue({ data: { user: null }, error: null })
@@ -1796,7 +1809,6 @@ describe('GET /api/extensions/enable-banking/callback', () => {
   })
 
   it('returns a bank denial to the recorded brand origin so the banner is seen where the session is', async () => {
-    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'books.partner.example')
     mockFrom.mockImplementation(() =>
       mockChain({
         data: {
@@ -1812,7 +1824,6 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     )
 
     const response = await GET(makeRequest({ error: 'access_denied', state: 'pending-state' }))
-    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', '')
 
     expect(response.status).toBe(307)
     const location = new URL(response.headers.get('location') || '')

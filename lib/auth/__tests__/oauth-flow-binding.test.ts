@@ -4,6 +4,20 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
+// The trusted-origin resolver reads the brands table; books.partner.example
+// is the one registered brand host in these tests.
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+function registerBrandHost(host: string | null) {
+  resolveBrandResultByHostMock.mockImplementation(async (candidate: string) => ({
+    brand: host !== null && candidate === host ? { domain: host } : null,
+    lookupFailed: false,
+  }))
+}
+registerBrandHost('books.partner.example')
+
 import { createClient } from '@/lib/supabase/server'
 import {
   requireFlowInitiator,
@@ -90,7 +104,6 @@ describe('requireFlowInitiator', () => {
     // Provider redirect URIs are pinned to the canonical host while sessions
     // are per host: a white-label user reaches the callback signed out and
     // must be sent to THEIR brand login, where the session already exists.
-    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'books.partner.example')
     sessionWith(null)
 
     const result = await requireFlowInitiator(new Request(CALLBACK_URL), 'user-1', {
@@ -143,10 +156,10 @@ describe('buildLoginRedirect', () => {
     vi.unstubAllEnvs()
   })
 
-  it('falls back to the request origin when NEXT_PUBLIC_APP_URL is unset', () => {
+  it('falls back to the request origin when NEXT_PUBLIC_APP_URL is unset', async () => {
     vi.stubEnv('NEXT_PUBLIC_APP_URL', '')
 
-    const response = buildLoginRedirect(
+    const response = await buildLoginRedirect(
       new Request('http://localhost:3000/api/extensions/woocommerce/return?success=1&user_id=abc'),
     )
 
@@ -156,36 +169,34 @@ describe('buildLoginRedirect', () => {
     )
   })
 
-  it('uses a recorded origin only when it is the canonical host or a registered white-label host', () => {
+  it('uses a recorded origin only when it is the canonical host or a registered white-label host', async () => {
     vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.example.se')
-    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'books.partner.example')
     const request = new Request('https://app.example.se/api/extensions/stripe/callback?code=1&state=2')
 
-    const brand = buildLoginRedirect(request, 'https://books.partner.example')
+    const brand = await buildLoginRedirect(request, 'https://books.partner.example')
     expect(new URL(brand.headers.get('location') ?? '').origin).toBe('https://books.partner.example')
 
     // A stored value that is no longer (or never was) registered must not
     // become a redirect target: the allowlist is the only authority.
-    const unknown = buildLoginRedirect(request, 'https://evil.example')
+    const unknown = await buildLoginRedirect(request, 'https://evil.example')
     expect(new URL(unknown.headers.get('location') ?? '').origin).toBe('https://app.example.se')
 
-    const canonical = buildLoginRedirect(request, 'https://app.example.se')
+    const canonical = await buildLoginRedirect(request, 'https://app.example.se')
     expect(new URL(canonical.headers.get('location') ?? '').origin).toBe('https://app.example.se')
   })
 
-  it('keeps a callback that arrived on a registered brand host on that host', () => {
+  it('keeps a callback that arrived on a registered brand host on that host', async () => {
     // NEXT_PUBLIC_APP_URL used to win over the request origin here, dragging
     // a brand-domain callback to the canonical login. The allowlisted request
     // host is the fallback now; an unregistered host still collapses.
     vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.example.se')
-    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'books.partner.example')
 
-    const onBrand = buildLoginRedirect(
+    const onBrand = await buildLoginRedirect(
       new Request('https://books.partner.example/api/extensions/stripe/callback?code=1&state=2'),
     )
     expect(new URL(onBrand.headers.get('location') ?? '').origin).toBe('https://books.partner.example')
 
-    const onUnknown = buildLoginRedirect(
+    const onUnknown = await buildLoginRedirect(
       new Request('https://evil.example/api/extensions/stripe/callback?code=1&state=2'),
     )
     expect(new URL(onUnknown.headers.get('location') ?? '').origin).toBe('https://app.example.se')

@@ -18,6 +18,20 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
   requireCapability: vi.fn().mockResolvedValue(null),
 }))
 
+// The trusted-origin resolver reads the brands table; books.partner.example
+// is the one registered brand host in these tests.
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
+}))
+function registerBrandHost(host: string | null) {
+  resolveBrandResultByHostMock.mockImplementation(async (candidate: string) => ({
+    brand: host !== null && candidate === host ? { domain: host } : null,
+    lookupFailed: false,
+  }))
+}
+registerBrandHost('books.partner.example')
+
 import {
   isSessionExpiredResponse,
   SessionExpiredError,
@@ -267,7 +281,9 @@ describe('POST /connect (enable-banking): reconnect in place', () => {
       oauth_state: expect.any(String),
       // The host the renewal was started from, so the callback can return
       // there (a white-label user's session exists only on their brand host).
-      oauth_origin: getCanonicalAppOrigin(),
+      // A local canonical trusts other local hosts as-is, so the request's
+      // own http://localhost is recorded rather than the :3000 canonical.
+      oauth_origin: 'http://localhost',
       status: 'expired',
       error_message: null,
     })
@@ -394,7 +410,6 @@ describe('POST /connect (enable-banking): psu_type persistence', () => {
   })
 
   it('records the initiating brand origin on a fresh connect so the callback can return there', async () => {
-    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'books.partner.example')
     stubAuth()
     const insertSpy = vi.fn()
     const ctx = makeContext({ id: 'conn-new', entity_type: 'aktiebolag' }, vi.fn(), insertSpy)
@@ -406,7 +421,6 @@ describe('POST /connect (enable-banking): psu_type persistence', () => {
     })
 
     const res = await connectRoute.handler(req, ctx)
-    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', '')
     expect(res.status).toBe(200)
     expect(insertSpy.mock.calls[0][0]).toMatchObject({
       oauth_origin: 'https://books.partner.example',
