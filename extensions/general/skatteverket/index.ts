@@ -25,6 +25,8 @@ import {
   createOAuthFlow,
   mintOAuthFlowHandoff,
   newOAuthFlowId,
+  peekOAuthFlowHandoff,
+  peekOAuthFlowState,
   purgeExpiredOAuthFlows,
   requestMatchesOrigin,
   resolveOAuthOrigin,
@@ -101,8 +103,9 @@ const log = createLogger('skatteverket')
 const SKV_STATE_REJECTED_MESSAGE =
   'Anslutningen kunde inte verifieras (ogiltig eller förbrukad state). Stäng fliken och försök ansluta igen.'
 
-// The flow is spent once the callback reads it, so a completion without a
-// session cannot be resumed by signing in; the user restarts the connect.
+// Answered only when the session vanished between the identity check and
+// the consume (a race, not the normal path: a session-less arrival is sent
+// to login BEFORE the flow is spent and resumes from there).
 const SKV_SESSION_MISSING_MESSAGE =
   'Sessionen har gått ut. Stäng fliken, logga in och försök ansluta igen.'
 
@@ -568,10 +571,46 @@ export const skatteverketExtension: Extension = {
         // request arrived on: decided by host with the scheme from
         // configuration, so a proxy that drops x-forwarded-proto cannot make
         // hop 2 disagree with what /authorize recorded.
+        //
+        // On the hop that finishes the flow (it has the initiating origin's
+        // cookies), the completing browser is bound to the initiator BEFORE
+        // the one-shot row is spent: the row names who started the flow, and
+        // the tokens below are stored for that user with the service client.
+        // A session-less arrival goes to login and resumes into this very
+        // URL; a different user is refused and the row stays claimable for
+        // the initiator; only then is the row consumed. A victim lured into
+        // approving a consent someone else started thus never has their
+        // BankID-authorised access stored under that someone, and nobody
+        // can burn a live flow by merely reaching its URL signed out.
+        const bindInitiator = async (identity: { userId: string; origin: string }) => {
+          responseOrigin = identity.origin
+          const initiator = await requireFlowInitiator(request, identity.userId, {
+            flow: 'skatteverket.callback',
+            returnOrigin: identity.origin,
+          })
+          if (initiator.ok) return { userId: initiator.userId, response: null }
+          if (initiator.reason === 'no_session') return { userId: null, response: initiator.response }
+          return {
+            userId: null,
+            response: respondWithError(
+              FLOW_INITIATOR_MISMATCH_MESSAGE,
+              defaultErrorPath(FLOW_INITIATOR_MISMATCH_MESSAGE),
+            ),
+          }
+        }
+
         let flow: OAuthFlow
         let providerError: string | null = null
+        let boundUserId: string | null = null
         if (handoffId) {
           const arrivedOn = await resolveOAuthOrigin(request)
+          const identity = await peekOAuthFlowHandoff(db, handoffId, arrivedOn, 'skatteverket')
+          if (!identity) {
+            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
+          }
+          const bound = await bindInitiator(identity)
+          if (bound.response) return bound.response
+          boundUserId = bound.userId
           const handoff = await consumeOAuthFlowHandoff(db, handoffId, arrivedOn, 'skatteverket')
           if (!handoff) {
             return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
@@ -580,6 +619,17 @@ export const skatteverketExtension: Extension = {
           code = handoff.providerCode
           providerError = handoff.providerError
         } else {
+          const identity = await peekOAuthFlowState(db, state as string, 'skatteverket')
+          if (!identity) {
+            return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
+          }
+          // Single hop (the callback host is the initiating host): bind here.
+          // Hop 1 on the registered host has no session to bind; hop 2 does.
+          if (requestMatchesOrigin(request, identity.origin)) {
+            const bound = await bindInitiator(identity)
+            if (bound.response) return bound.response
+            boundUserId = bound.userId
+          }
           const consumed = await consumeOAuthFlowState(db, state as string, 'skatteverket')
           if (!consumed) {
             return respondWithError(SKV_STATE_REJECTED_MESSAGE, defaultErrorPath(SKV_STATE_REJECTED_MESSAGE), { closeTab: true })
@@ -620,23 +670,16 @@ export const skatteverketExtension: Extension = {
           })
         }
 
-        // The row names who started the flow; the tokens below are stored for
-        // that user with the service client. The browser finishing it must
-        // be that user: a victim lured into approving a Skatteverket consent
-        // someone else started must not have their BankID-authorised access
-        // stored under that someone. The flow is spent by now, so a missing
-        // session cannot resume via login; the user restarts the connect.
-        const initiator = await requireFlowInitiator(request, flow.userId, {
-          flow: 'skatteverket.callback',
-        })
-        if (!initiator.ok) {
-          const message =
-            initiator.reason === 'mismatch'
-              ? FLOW_INITIATOR_MISMATCH_MESSAGE
-              : SKV_SESSION_MISSING_MESSAGE
-          return respondWithError(message, errorPath(message))
+        // Bound above, before the consume. Re-checked here only because the
+        // row was read twice: the session that passed the identity check is
+        // the one that must own the tokens.
+        if (!boundUserId || boundUserId !== flow.userId) {
+          log.error('oauth callback bound user diverged from the consumed flow', {
+            companyId: flow.companyId,
+          })
+          return respondWithError(SKV_SESSION_MISSING_MESSAGE, errorPath(SKV_SESSION_MISSING_MESSAGE))
         }
-        const userId = initiator.userId
+        const userId = boundUserId
         const companyId = flow.companyId
 
         if (providerError !== null) {

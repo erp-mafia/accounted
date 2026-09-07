@@ -48,8 +48,13 @@ export interface OAuthFlowHandoff extends OAuthFlow {
 
 /** How long an authorize URL stays completable. */
 export const OAUTH_FLOW_TTL_SECONDS = 10 * 60
-/** How long hop 1's stash stays claimable by hop 2. */
-export const OAUTH_FLOW_HANDOFF_TTL_SECONDS = 2 * 60
+/**
+ * How long hop 1's stash stays claimable by hop 2. Long enough for the
+ * initiator to sign in again when hop 2 finds no session (the login page
+ * forwards straight back into the callback); the provider code inside it
+ * expires on the provider's side anyway.
+ */
+export const OAUTH_FLOW_HANDOFF_TTL_SECONDS = 5 * 60
 
 // Column set every consume returns; decrypted into an OAuthFlow below.
 const FLOW_COLUMNS =
@@ -183,6 +188,55 @@ export async function createOAuthFlow(db: SupabaseClient, input: CreateOAuthFlow
     expires_at: new Date(Date.now() + ttl * 1000).toISOString(),
   })
   if (error) throw new Error(`Failed to create OAuth flow: ${error.message}`)
+}
+
+/** Who a flow belongs to and where it must finish, without consuming it. */
+export interface OAuthFlowIdentity {
+  userId: string
+  origin: string
+}
+
+/**
+ * Read a live state's identity without consuming it, so the callback can
+ * bind the completing browser to the initiator BEFORE the one-shot state is
+ * spent: a session-less arrival is sent to login and resumes, a wrong user
+ * is refused, and the true initiator can still finish. Never trusted for
+ * anything but that identity check; the consume below is the gate.
+ */
+export async function peekOAuthFlowState(
+  db: SupabaseClient,
+  state: string,
+  kind: OAuthFlowKind,
+): Promise<OAuthFlowIdentity | null> {
+  const { data, error } = await db
+    .from('oauth_flows')
+    .select('user_id, origin')
+    .eq('id', state)
+    .eq('kind', kind)
+    .is('used_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .maybeSingle()
+  if (error || !data) return null
+  return { userId: data.user_id as string, origin: data.origin as string }
+}
+
+/** Same as peekOAuthFlowState, for a live handoff bound to `origin`. */
+export async function peekOAuthFlowHandoff(
+  db: SupabaseClient,
+  handoffId: string,
+  origin: string,
+  kind: OAuthFlowKind,
+): Promise<OAuthFlowIdentity | null> {
+  const { data, error } = await db
+    .from('oauth_flows')
+    .select('user_id, origin')
+    .eq('handoff_id', handoffId)
+    .eq('origin', origin)
+    .eq('kind', kind)
+    .gt('handoff_expires_at', new Date().toISOString())
+    .maybeSingle()
+  if (error || !data) return null
+  return { userId: data.user_id as string, origin: data.origin as string }
 }
 
 /**

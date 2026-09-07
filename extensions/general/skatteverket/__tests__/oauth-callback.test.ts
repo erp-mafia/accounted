@@ -41,7 +41,16 @@ vi.mock('@/lib/supabase/server', () => ({
 // callback's routing, binding and delivery only. Host and origin resolution
 // stay real (with the brands table mocked) because the hop decision is the
 // thing under test.
-const { mockConsumeState, mockConsumeHandoff, mockMintHandoff, mockResolveBrandByHost } = vi.hoisted(() => ({
+const {
+  mockPeekState,
+  mockPeekHandoff,
+  mockConsumeState,
+  mockConsumeHandoff,
+  mockMintHandoff,
+  mockResolveBrandByHost,
+} = vi.hoisted(() => ({
+  mockPeekState: vi.fn(),
+  mockPeekHandoff: vi.fn(),
   mockConsumeState: vi.fn(),
   mockConsumeHandoff: vi.fn(),
   mockMintHandoff: vi.fn(),
@@ -60,6 +69,8 @@ vi.mock('@/lib/auth/oauth-flows', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/oauth-flows')>()
   return {
     ...actual,
+    peekOAuthFlowState: mockPeekState,
+    peekOAuthFlowHandoff: mockPeekHandoff,
     consumeOAuthFlowState: mockConsumeState,
     consumeOAuthFlowHandoff: mockConsumeHandoff,
     mintOAuthFlowHandoff: mockMintHandoff,
@@ -102,6 +113,18 @@ function flowOn(origin: string, overrides: Partial<OAuthFlow> = {}): OAuthFlow {
 
 function handoffOn(origin: string, overrides: Partial<OAuthFlowHandoff> = {}): OAuthFlowHandoff {
   return { ...flowOn(origin), providerCode: 'abc', providerError: null, ...overrides }
+}
+
+/** A live state row: peek sees its identity, consume returns the flow. */
+function stateIs(flow: OAuthFlow) {
+  mockPeekState.mockResolvedValue({ userId: flow.userId, origin: flow.origin })
+  mockConsumeState.mockResolvedValue(flow)
+}
+
+/** A live handoff row: peek sees its identity, consume returns the result. */
+function handoffIs(handoff: OAuthFlowHandoff) {
+  mockPeekHandoff.mockResolvedValue({ userId: handoff.userId, origin: handoff.origin })
+  mockConsumeHandoff.mockResolvedValue(handoff)
 }
 
 /** Service client: only the membership check runs through it here. */
@@ -169,6 +192,8 @@ describe('skatteverket OAuth callback', () => {
     mockResolveBrandByHost.mockImplementation(async (host: string) =>
       host === 'brand.example' ? { domain: 'brand.example' } : null,
     )
+    mockPeekState.mockResolvedValue(null)
+    mockPeekHandoff.mockResolvedValue(null)
     mockConsumeState.mockResolvedValue(null)
     mockConsumeHandoff.mockResolvedValue(null)
     mockMintHandoff.mockResolvedValue('handoff-minted')
@@ -189,7 +214,7 @@ describe('skatteverket OAuth callback', () => {
 
   describe('hop 1 on the registered OAuth host', () => {
     it('consumes the state, stashes the code and redirects to the initiating brand origin', async () => {
-      mockConsumeState.mockResolvedValue(flowOn(BRAND))
+      stateIs(flowOn(BRAND))
 
       const response = await callbackRoute().handler(
         callbackRequest(OAUTH_HOST, `code=abc&state=${STATE}`),
@@ -214,7 +239,7 @@ describe('skatteverket OAuth callback', () => {
     })
 
     it('hands a plain app user to the app origin the same way', async () => {
-      mockConsumeState.mockResolvedValue(flowOn(APP))
+      stateIs(flowOn(APP))
 
       const response = await callbackRoute().handler(
         callbackRequest(OAUTH_HOST, `code=abc&state=${STATE}`),
@@ -226,7 +251,7 @@ describe('skatteverket OAuth callback', () => {
     })
 
     it('carries a provider denial through the handoff instead of answering on the wrong origin', async () => {
-      mockConsumeState.mockResolvedValue(flowOn(BRAND))
+      stateIs(flowOn(BRAND))
 
       const response = await callbackRoute().handler(
         callbackRequest(OAUTH_HOST, `error=access_denied&error_description=Avbrutet&state=${STATE}`),
@@ -247,6 +272,7 @@ describe('skatteverket OAuth callback', () => {
       // Nothing better than the canonical app origin is known for a rejected
       // state; the request's own host is never trusted.
       expect(html).toContain(JSON.stringify(APP))
+      expect(mockConsumeState).not.toHaveBeenCalled()
       expect(mockMintHandoff).not.toHaveBeenCalled()
       expect(mockExchange).not.toHaveBeenCalled()
     })
@@ -259,8 +285,8 @@ describe('skatteverket OAuth callback', () => {
   })
 
   describe('hop 2 on the initiating origin', () => {
-    it('claims the handoff for this origin, binds to the initiator and exchanges the stashed code', async () => {
-      mockConsumeHandoff.mockResolvedValue(handoffOn(BRAND, { connectorState: 'signed-cs' }))
+    it('binds to the initiator, then claims the handoff for this origin and exchanges the stashed code', async () => {
+      handoffIs(handoffOn(BRAND, { connectorState: 'signed-cs' }))
       // A refresh that never settles: if the handler regressed to awaiting
       // it, this test would hang into the vitest timeout instead of passing.
       let refreshStarted = false
@@ -281,7 +307,12 @@ describe('skatteverket OAuth callback', () => {
       expect(html).toContain(JSON.stringify(`${BRAND}/settings/tax?skv_connected=true`))
       expect(html).not.toContain(APP)
 
+      expect(mockPeekHandoff).toHaveBeenCalledWith(expect.anything(), HANDOFF, BRAND, 'skatteverket')
       expect(mockConsumeHandoff).toHaveBeenCalledWith(expect.anything(), HANDOFF, BRAND, 'skatteverket')
+      // The identity check ran before the row was spent.
+      expect(mockCreateClient.mock.invocationCallOrder[0]).toBeLessThan(
+        mockConsumeHandoff.mock.invocationCallOrder[0]!,
+      )
       // The exchange repeats what SKV saw: the registered redirect_uri, the
       // PKCE verifier and the connector state, all from the row.
       expect(mockExchange).toHaveBeenCalledWith(
@@ -301,7 +332,7 @@ describe('skatteverket OAuth callback', () => {
     })
 
     it('still succeeds when after() is unavailable (outside a request scope)', async () => {
-      mockConsumeHandoff.mockResolvedValue(handoffOn(BRAND))
+      handoffIs(handoffOn(BRAND))
       vi.mocked(after).mockImplementation(() => {
         throw new Error('after called outside request scope')
       })
@@ -313,7 +344,7 @@ describe('skatteverket OAuth callback', () => {
     })
 
     it('shows the provider denial on the initiating origin', async () => {
-      mockConsumeHandoff.mockResolvedValue(handoffOn(BRAND, { providerCode: null, providerError: 'Avbrutet' }))
+      handoffIs(handoffOn(BRAND, { providerCode: null, providerError: 'Avbrutet' }))
 
       const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
 
@@ -327,28 +358,41 @@ describe('skatteverket OAuth callback', () => {
 
       await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
       expect(mockCreateClient).not.toHaveBeenCalled()
+      expect(mockConsumeHandoff).not.toHaveBeenCalled()
       expect(mockExchange).not.toHaveBeenCalled()
     })
 
-    it('refuses a completion without a session, with no login round-trip (the flow is spent)', async () => {
-      mockConsumeHandoff.mockResolvedValue(handoffOn(BRAND))
+    it('sends a session-less arrival to login on the initiating origin, leaving the handoff claimable', async () => {
+      handoffIs(handoffOn(BRAND))
       mockCreateClient.mockResolvedValue(makeCookieClient(null) as any)
 
       const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
 
-      await expectErrorPage(response, 'Sessionen har gått ut')
+      expect(response.status).toBe(307)
+      const location = new URL(response.headers.get('location') as string)
+      expect(location.origin).toBe(BRAND)
+      expect(location.pathname).toBe('/login')
+      // Signing in re-runs this exact URL: the row was only peeked, not spent.
+      expect(location.searchParams.get('next')).toBe(
+        `/api/extensions/ext/skatteverket/callback?handoff=${HANDOFF}`,
+      )
+      expect(mockConsumeHandoff).not.toHaveBeenCalled()
       expect(mockExchange).not.toHaveBeenCalled()
       expect(mockStoreTokens).not.toHaveBeenCalled()
     })
 
-    it('refuses a completion by a different signed-in user', async () => {
+    it('refuses a different signed-in user without burning the flow for its initiator', async () => {
       // The victim (user-2) was lured into approving user-1's consent.
-      mockConsumeHandoff.mockResolvedValue(handoffOn(BRAND))
+      handoffIs(handoffOn(BRAND))
       mockCreateClient.mockResolvedValue(makeCookieClient('user-2') as any)
 
       const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
 
-      await expectErrorPage(response, 'annat användarkonto')
+      const html = await expectErrorPage(response, 'annat användarkonto')
+      // Delivered to the initiating origin the row names, and the row is not
+      // consumed: user-1 can still finish, user-2 cannot burn it.
+      expect(html).toContain(JSON.stringify(BRAND))
+      expect(mockConsumeHandoff).not.toHaveBeenCalled()
       // Refused before the exchange: the one-shot code is not burned and no
       // token is written under the initiator's id.
       expect(mockExchange).not.toHaveBeenCalled()
@@ -356,8 +400,18 @@ describe('skatteverket OAuth callback', () => {
       expect(mockRefresh).not.toHaveBeenCalled()
     })
 
+    it('answers the error page when the handoff is claimed by a concurrent delivery after the identity check', async () => {
+      mockPeekHandoff.mockResolvedValue({ userId: 'user-1', origin: BRAND })
+      mockConsumeHandoff.mockResolvedValue(null)
+
+      const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
+
+      await expectErrorPage(response, 'ogiltig eller förbrukad state', { closesTab: true })
+      expect(mockExchange).not.toHaveBeenCalled()
+    })
+
     it('rejects the flow when the initiator is no longer a member of the company', async () => {
-      mockConsumeHandoff.mockResolvedValue(handoffOn(BRAND))
+      handoffIs(handoffOn(BRAND))
       mockCreateServiceClient.mockReturnValue(makeServiceSupabase({ isMember: false }) as any)
 
       const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
@@ -369,7 +423,7 @@ describe('skatteverket OAuth callback', () => {
     })
 
     it('answers the error page on the initiating origin when the token exchange fails', async () => {
-      mockConsumeHandoff.mockResolvedValue(handoffOn(BRAND))
+      handoffIs(handoffOn(BRAND))
       mockExchange.mockRejectedValueOnce(new Error('exchange boom'))
 
       const response = await callbackRoute().handler(callbackRequest(BRAND, `handoff=${HANDOFF}`))
@@ -386,7 +440,7 @@ describe('skatteverket OAuth callback', () => {
     })
 
     it('binds and exchanges directly without a handoff', async () => {
-      mockConsumeState.mockResolvedValue(flowOn(APP, { redirectUri: `${APP}/api/extensions/ext/skatteverket/callback` }))
+      stateIs(flowOn(APP, { redirectUri: `${APP}/api/extensions/ext/skatteverket/callback` }))
 
       const response = await callbackRoute().handler(callbackRequest(APP, `code=abc&state=${STATE}`))
 
@@ -402,7 +456,7 @@ describe('skatteverket OAuth callback', () => {
     })
 
     it('shows the provider denial directly', async () => {
-      mockConsumeState.mockResolvedValue(flowOn(APP))
+      stateIs(flowOn(APP))
 
       const response = await callbackRoute().handler(
         callbackRequest(APP, `error=access_denied&error_description=Avbrutet&state=${STATE}`),
@@ -418,12 +472,12 @@ describe('skatteverket OAuth callback', () => {
       // /authorize recorded the configured https app origin. Hop 1 compares
       // hosts (mismatch, so it hands off to the public origin) and hop 2
       // resolves the internal host back to the app origin for the claim.
-      mockConsumeState.mockResolvedValue(flowOn(APP))
+      stateIs(flowOn(APP))
       const hop1 = await callbackRoute().handler(callbackRequest('http://127.0.0.1:3000', `code=abc&state=${STATE}`))
       expect(hop1.status).toBe(302)
       expect(new URL(hop1.headers.get('location') as string).origin).toBe(APP)
 
-      mockConsumeHandoff.mockResolvedValue(handoffOn(APP))
+      handoffIs(handoffOn(APP))
       const hop2 = await callbackRoute().handler(callbackRequest('http://127.0.0.1:3000', `handoff=${HANDOFF}`))
       expect(hop2.status).toBe(200)
       expect(await hop2.text()).toContain('skatteverket-oauth-success')
@@ -431,20 +485,38 @@ describe('skatteverket OAuth callback', () => {
     })
 
     it('treats a proxy-reported http scheme on the app host as the same hop', async () => {
-      mockConsumeState.mockResolvedValue(flowOn(APP))
+      stateIs(flowOn(APP))
       const response = await callbackRoute().handler(callbackRequest('http://app.example', `code=abc&state=${STATE}`))
       expect(response.status).toBe(200)
       expect(await response.text()).toContain('skatteverket-oauth-success')
       expect(mockMintHandoff).not.toHaveBeenCalled()
     })
 
-    it('refuses a session-less completion here too: no host is exempt any more', async () => {
-      mockConsumeState.mockResolvedValue(flowOn(APP))
+    it('sends a session-less completion to login before spending the state', async () => {
+      stateIs(flowOn(APP))
       mockCreateClient.mockResolvedValue(makeCookieClient(null) as any)
 
       const response = await callbackRoute().handler(callbackRequest(APP, `code=abc&state=${STATE}`))
 
-      await expectErrorPage(response, 'Sessionen har gått ut')
+      expect(response.status).toBe(307)
+      const location = new URL(response.headers.get('location') as string)
+      expect(location.origin).toBe(APP)
+      expect(location.pathname).toBe('/login')
+      expect(location.searchParams.get('next')).toBe(
+        `/api/extensions/ext/skatteverket/callback?code=abc&state=${STATE}`,
+      )
+      expect(mockConsumeState).not.toHaveBeenCalled()
+      expect(mockExchange).not.toHaveBeenCalled()
+    })
+
+    it('refuses a different signed-in user here too, leaving the state for its initiator', async () => {
+      stateIs(flowOn(APP))
+      mockCreateClient.mockResolvedValue(makeCookieClient('user-2') as any)
+
+      const response = await callbackRoute().handler(callbackRequest(APP, `code=abc&state=${STATE}`))
+
+      await expectErrorPage(response, 'annat användarkonto')
+      expect(mockConsumeState).not.toHaveBeenCalled()
       expect(mockExchange).not.toHaveBeenCalled()
     })
   })
@@ -472,6 +544,7 @@ describe('skatteverket OAuth callback: connector branch', () => {
     expect(loc.searchParams.get('state')).toBe('inst-state')
     expect(loc.searchParams.get('connector_state')).toBe(signed)
     expect(exchangeCodeForTokens).not.toHaveBeenCalled()
+    expect(mockPeekState).not.toHaveBeenCalled()
     expect(mockConsumeState).not.toHaveBeenCalled()
   })
 

@@ -10,6 +10,8 @@ import {
   createOAuthFlow,
   mintOAuthFlowHandoff,
   newOAuthFlowId,
+  peekOAuthFlowHandoff,
+  peekOAuthFlowState,
   purgeExpiredOAuthFlows,
   requestHost,
   requestMatchesOrigin,
@@ -256,7 +258,8 @@ describe('mintOAuthFlowHandoff / consumeOAuthFlowHandoff', () => {
       ),
     ).toBe('code-1')
     const ttl = new Date(row.handoff_expires_at).getTime() - Date.now()
-    expect(ttl).toBeLessThanOrEqual(2 * 60 * 1000)
+    expect(ttl).toBeGreaterThan(4 * 60 * 1000)
+    expect(ttl).toBeLessThanOrEqual(5 * 60 * 1000)
     expect(calls).toEqual(
       expect.arrayContaining([
         ['eq', ['id', 'state-1']],
@@ -299,6 +302,51 @@ describe('mintOAuthFlowHandoff / consumeOAuthFlowHandoff', () => {
     const row = rowFor(FLOW, { handoff_code: 'v1:garbage', handoff_error: null })
     expect(
       await consumeOAuthFlowHandoff(makeDb({ data: row, error: null }).db, 'h', 'https://brand.example', 'skatteverket'),
+    ).toBeNull()
+  })
+})
+
+describe('peekOAuthFlowState / peekOAuthFlowHandoff', () => {
+  it('reads a live state identity without writing, with the same liveness predicate as the consume', async () => {
+    const { db, calls } = makeDb({ data: { user_id: 'user-1', origin: 'https://brand.example' }, error: null })
+    expect(await peekOAuthFlowState(db, 'state-1', 'skatteverket')).toEqual({
+      userId: 'user-1',
+      origin: 'https://brand.example',
+    })
+    expect(calls[0]?.[0]).toBe('select')
+    expect(calls.map(([n]) => n)).not.toContain('update')
+    expect(calls.map(([n]) => n)).not.toContain('delete')
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        ['eq', ['id', 'state-1']],
+        ['eq', ['kind', 'skatteverket']],
+        ['is', ['used_at', null]],
+        ['gt', ['expires_at', expect.any(String)]],
+      ]),
+    )
+  })
+
+  it('reads a live handoff identity bound to the origin, without writing', async () => {
+    const { db, calls } = makeDb({ data: { user_id: 'user-1', origin: 'https://brand.example' }, error: null })
+    expect(await peekOAuthFlowHandoff(db, 'handoff-1', 'https://brand.example', 'skatteverket')).toEqual({
+      userId: 'user-1',
+      origin: 'https://brand.example',
+    })
+    expect(calls[0]?.[0]).toBe('select')
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        ['eq', ['handoff_id', 'handoff-1']],
+        ['eq', ['origin', 'https://brand.example']],
+        ['eq', ['kind', 'skatteverket']],
+        ['gt', ['handoff_expires_at', expect.any(String)]],
+      ]),
+    )
+  })
+
+  it('returns null for no row or a query error', async () => {
+    expect(await peekOAuthFlowState(makeDb({ data: null, error: null }).db, 's', 'skatteverket')).toBeNull()
+    expect(
+      await peekOAuthFlowHandoff(makeDb({ data: null, error: { message: 'x' } }).db, 'h', 'https://brand.example', 'skatteverket'),
     ).toBeNull()
   })
 })
