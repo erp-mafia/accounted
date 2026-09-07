@@ -7027,6 +7027,12 @@
       "agents_same_rule": "samma regel via MCP"
   },
   "accounts_v2": {
+    "add_account": "Lägg till konto",
+    "add_bank": "Bankkonto",
+    "add_skattekonto": "Skattekonto",
+    "add_stripe": "Stripe",
+    "add_shopify": "Shopify",
+    "add_woocommerce": "WooCommerce",
       "title": "Konton",
       "help": "Alla konton med pengar: bankkonton och skattekontot. Raden visar när kontot senast lästes, till vilket datum det är avstämt och hur många rader som väntar. Avstämningen görs per konto, månad för månad.",
       "loading": "Hämtar…",
@@ -8308,6 +8314,19 @@
     "skattekonto_primary": "Anslut Skatteverket"
   },
   "reconciliation": {
+    "v2_side_external_bank": "Kontoutdrag",
+    "v2_side_external_skv": "Skatteverket",
+    "v2_side_ledger": "Accounted",
+    "v2_chip_not_booked": "ej bokförd",
+    "v2_chip_ignored": "ignorerad",
+    "v2_move_to": "Flytta till {account}",
+    "v2_more": "Fler åtgärder",
+    "v2_sign_matched": "Stämmer",
+    "v2_sign_proposed": "Föreslagen koppling",
+    "v2_sign_unmatched_external": "Saknas i bokföringen",
+    "v2_sign_unmatched_ledger": "Saknas hos motparten",
+    "v2_sign_ignored": "Ignorerad",
+    "v2_sign_upcoming": "Kommande",
     "v2_th_account": "Konto",
     "v2_th_source": "Källa",
     "v2_th_open": "Att titta på",

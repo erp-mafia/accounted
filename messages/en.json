@@ -7027,6 +7027,12 @@
       "agents_same_rule": "the same rule via MCP"
   },
   "accounts_v2": {
+    "add_account": "Add account",
+    "add_bank": "Bank account",
+    "add_skattekonto": "Tax account",
+    "add_stripe": "Stripe",
+    "add_shopify": "Shopify",
+    "add_woocommerce": "WooCommerce",
       "title": "Accounts",
       "help": "Every account with money in it: bank accounts and the tax account. Each row shows when the account was last read, through which date it is signed off and how many rows are waiting. Reconciliation is done per account, month by month.",
       "loading": "Loading…",
@@ -8308,6 +8314,19 @@
     "skattekonto_primary": "Connect Skatteverket"
   },
   "reconciliation": {
+    "v2_side_external_bank": "Bank statement",
+    "v2_side_external_skv": "Skatteverket",
+    "v2_side_ledger": "Accounted",
+    "v2_chip_not_booked": "not booked",
+    "v2_chip_ignored": "ignored",
+    "v2_move_to": "Move to {account}",
+    "v2_more": "More actions",
+    "v2_sign_matched": "Agrees",
+    "v2_sign_proposed": "Proposed link",
+    "v2_sign_unmatched_external": "Missing from the ledger",
+    "v2_sign_unmatched_ledger": "Missing on the other side",
+    "v2_sign_ignored": "Ignored",
+    "v2_sign_upcoming": "Upcoming",
     "v2_th_account": "Account",
     "v2_th_source": "Source",
     "v2_th_open": "To review",

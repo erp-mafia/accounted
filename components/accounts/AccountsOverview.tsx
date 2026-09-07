@@ -62,6 +62,14 @@ export default function AccountsOverview() {
     return c ? c.proposed + c.unmatched_external + c.unmatched_ledger : 0
   }
   const reconHref = (a: ReconciliationAccount) => `/reconciliation?account=${encodeURIComponent(a.account_key)}`
+  // The name opens the account's own rows; Stäm av and the review count open
+  // the reconciliation. account_key is 'bank:<cash_account_id>' for banks.
+  const accountHref = (a: ReconciliationAccount) =>
+    a.kind === 'bank'
+      ? `/transactions?source=${encodeURIComponent(`acct:${a.account_key.slice('bank:'.length)}`)}`
+      : a.kind === 'skattekonto'
+        ? '/skattekonto'
+        : reconHref(a)
 
   return (
     <div className="stagger-enter">
@@ -102,7 +110,7 @@ export default function AccountsOverview() {
                 return (
                   <tr key={a.account_key} className="group transition-colors duration-150 hover:bg-secondary/35">
                     <td className={cn(TD_CLASS, '!pl-0')}>
-                      <Link href={reconHref(a)} className="flex items-center gap-3">
+                      <Link href={accountHref(a)} className="flex items-center gap-3">
                         <Mark account={a} />
                         <span className="min-w-0">
                           <span className="block truncate font-medium" data-ph-mask>

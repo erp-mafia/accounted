@@ -72,10 +72,10 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/accounts',
     labelKey: 'v2_accounts',
     icon: Landmark,
+    // Each account opens from the overview's rows; sub-items per account
+    // kind pointed at a settings dialog and at the skattekonto page.
     sub: [
       { href: '/accounts', labelKey: 'v2_accounts_overview' },
-      { href: '/settings/banking', labelKey: 'v2_bank_accounts' },
-      { href: '/skattekonto', labelKey: 'skattekonto' },
       { href: '/reconciliation', labelKey: 'reconciliation' },
     ],
   },
