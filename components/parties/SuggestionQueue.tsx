@@ -6,9 +6,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { HOVER_REVEAL_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
+import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { PartyRole, RegisterRow } from '@/lib/parties/register'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { AccountNub } from './AccountNub'
 import { isDuplicateCandidate, reasonText, rolesLabel } from './format'
 
@@ -44,6 +44,7 @@ export function SuggestionQueue({
   onDismiss,
   onOpen,
   onFind,
+  dense = false,
 }: {
   rows: RegisterRow[]
   selected: Set<string>
@@ -59,11 +60,18 @@ export function SuggestionQueue({
   onOpen: (id: string) => void
   /** Open the SCB picker for a row without an org number; undefined hides the link. */
   onFind?: (row: RegisterRow) => void
+  /**
+   * Shell v2: one line per row, the selection actions in a floating bar that
+   * appears with the first tick, and the near-duplicate hint as a muted
+   * word instead of a warning chip.
+   */
+  dense?: boolean
 }) {
   const t = useTranslations('parties')
   const locale = useLocale()
   const count = selected.size
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id))
+  const td = dense ? `${TD_CLASS} !py-[7px] align-middle` : TD_CLASS
 
   function toggleRole(row: RegisterRow, role: PartyRole) {
     const current = roles(row)
@@ -73,7 +81,29 @@ export function SuggestionQueue({
   }
 
   return (
-    <div className="space-y-4">
+    <div className={dense ? 'space-y-2' : 'space-y-4'}>
+      {dense ? (
+        <>
+          <div className="flex items-center justify-end text-[12.5px]">
+            <button type="button" className={QUIET_LINK_CLASS} onClick={allSelected ? onClear : onSelectAll} disabled={rows.length === 0}>
+              {allSelected ? t('deselect') : t('select_all')}
+            </button>
+          </div>
+          {count > 0 && (
+            <div className="fixed bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-x-5 whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 text-[12.5px] shadow-lg animate-fade-in md:left-[calc(50%+var(--nav-w)/2)]">
+              <span className="tabular-nums">
+                <strong className="font-semibold">{count}</strong> {t('selected_n', { count }).replace(/^\d+\s*/, '')}
+              </span>
+              <Button type="button" size="sm" onClick={onConfirmSelected} disabled={!canWrite || busy}>
+                {t('promote_n', { count })}
+              </Button>
+              <button type="button" className={QUIET_LINK_CLASS} onClick={onClear}>
+                {t('deselect')}
+              </button>
+            </div>
+          )}
+        </>
+      ) : (
       <div className="flex flex-wrap items-center gap-3 text-[13px]">
         <span className="tabular-nums text-muted-foreground">{t('selected_n', { count })}</span>
         <span className="text-muted-foreground">{t('selected_hint')}</span>
@@ -86,6 +116,7 @@ export function SuggestionQueue({
           </Button>
         </div>
       </div>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
@@ -106,10 +137,10 @@ export function SuggestionQueue({
               const current = roles(row)
               return (
                 <tr key={row.id} className="group transition-colors duration-150 hover:bg-secondary/35">
-                  <td className={`${TD_CLASS} w-8`}>
+                  <td className={`${td} w-8`}>
                     <Checkbox checked={checked} onCheckedChange={() => onToggle(row.id)} aria-label={row.displayName} disabled={!canWrite} />
                   </td>
-                  <td className={`${TD_CLASS} max-w-[22rem]`}>
+                  <td className={`${td} max-w-[22rem]`}>
                     <button
                       type="button"
                       className="block max-w-full truncate text-left font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -119,15 +150,28 @@ export function SuggestionQueue({
                     >
                       {row.displayName}
                     </button>
-                    {isDuplicateCandidate(row) ? (
+                    {!dense && isDuplicateCandidate(row) ? (
                       <Badge variant="warning" className="ml-2">
                         {t('chip_duplicate')}
                       </Badge>
                     ) : null}
                   </td>
-                  <td className={`${TD_CLASS} min-w-[16rem] max-w-[28rem] text-muted-foreground`}>
-                    {reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}
-                    {isForeign(row) ? (
+                  <td className={cn(td, 'min-w-[16rem] max-w-[28rem] text-muted-foreground', dense && 'max-w-[24rem]')}>
+                    {dense ? (
+                      <span className="inline-block max-w-[20rem] truncate align-bottom" title={reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}>
+                        {reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}
+                      </span>
+                    ) : (
+                      reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)
+                    )}
+                    {isForeign(row) && dense ? (
+                      <span
+                        className="ml-1.5 inline-flex items-center rounded-full border border-border px-1.5 text-[10.5px] text-foreground"
+                        title={t('row_foreign', { country: regionName(row.country as string, locale) })}
+                      >
+                        {row.country}
+                      </span>
+                    ) : isForeign(row) ? (
                       <>
                         {' · '}
                         <span className="text-foreground">{t('row_foreign', { country: regionName(row.country as string, locale) })}</span>
@@ -146,7 +190,7 @@ export function SuggestionQueue({
                       </>
                     ) : null}
                   </td>
-                  <td className={`${TD_CLASS} whitespace-nowrap`}>
+                  <td className={`${td} whitespace-nowrap`}>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <button
@@ -169,12 +213,12 @@ export function SuggestionQueue({
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </td>
-                  <td className={TD_CLASS}>
+                  <td className={td}>
                     <AccountNub account={row.stats?.dominantAccount ?? null} />
                   </td>
-                  <td className={`${TD_CLASS} text-right tabular-nums`}>{row.stats?.revenueSek ? formatCurrency(row.stats.revenueSek) : ''}</td>
-                  <td className={`${TD_CLASS} text-right tabular-nums`}>{row.stats?.expenseSek ? formatCurrency(row.stats.expenseSek) : ''}</td>
-                  <td className={`${TD_CLASS} text-right`}>
+                  <td className={`${td} text-right tabular-nums`}>{row.stats?.revenueSek ? formatCurrency(row.stats.revenueSek) : ''}</td>
+                  <td className={`${td} text-right tabular-nums`}>{row.stats?.expenseSek ? formatCurrency(row.stats.expenseSek) : ''}</td>
+                  <td className={`${td} text-right`}>
                     <button
                       type="button"
                       className={`${HOVER_REVEAL_CLASS} text-xs text-muted-foreground underline-offset-2 hover:underline`}

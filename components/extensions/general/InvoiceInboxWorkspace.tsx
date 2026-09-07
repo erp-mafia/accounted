@@ -1546,9 +1546,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         </div>
       </header>
 
-      {/* Shell v2: the flow bar is the status picker, with the two things
-          that are not stages beside it: errors (only while there are any)
-          and the document-type menu. The left column keeps only the search. */}
+      {/* Shell v2: the flow bar is the status picker, with errors beside it
+          only while there are any. No document-type menu: the bar is the one
+          axis, and a second one next to it read as a second picker (founder
+          review 2026-09-07). The left column keeps only the search. */}
       {shell === 'v2' && (
         <div className="mx-4 mt-3 flex items-center gap-3">
           <InboxPipeline counts={pipeCounts} active={pipeActive} onSelect={selectPipeStage} />
@@ -1563,35 +1564,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             >
               {t('pipe_errors', { count: statusCounts.error })}
             </button>
-          )}
-          {showKindFilter && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 shrink-0 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
-                >
-                  {t(`kind_filter_${kindFilter}`)}
-                  <ChevronDown className="ml-1 h-3.5 w-3.5 opacity-60" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {INBOX_KIND_FILTERS.map((key) => (
-                  <DropdownMenuItem
-                    key={key}
-                    onSelect={() => setKindFilter(key)}
-                    className="justify-between gap-4 text-xs"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Check className={cn('h-3.5 w-3.5', kindFilter === key ? 'opacity-100' : 'opacity-0')} />
-                      {t(`kind_filter_${key}`)}
-                    </span>
-                    <span className="tabular-nums text-muted-foreground">{kindCounts[key]}</span>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
           )}
         </div>
       )}
