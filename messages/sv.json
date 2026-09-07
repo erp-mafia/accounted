@@ -3064,7 +3064,7 @@
     "adjustment": "Justering"
   },
   "tx_quick_review": {
-    "underlag_missing_title": "Inget underlag för {amount}",
+    "underlag_missing_title": "Inget underlag för {amount}.",
     "underlag_missing_body": "Varje verifikat ska ha ett kvitto eller en faktura (BFL 5 kap. 7 §). Hämta det nu, eller bokför utan och komplettera senare.",
     "underlag_fetch": "Hämta underlag",
     "book_without_underlag": "Bokför utan underlag",

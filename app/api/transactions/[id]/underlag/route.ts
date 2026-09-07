@@ -43,7 +43,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     let document: TransactionUnderlag['document'] = null
     if (documentId) {
       const { data: doc, error: docError } = await supabase
-        .from('documents')
+        .from('document_attachments')
         .select('id, file_name, mime_type')
         .eq('company_id', companyId)
         .eq('id', documentId)
