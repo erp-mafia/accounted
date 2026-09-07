@@ -62,7 +62,6 @@ const ACTIVATED = {
 describe('GET /api/extensions/woocommerce/return', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.stubEnv('NEXT_PUBLIC_APP_URL', BASE)
     vi.mocked(extensionRegistry.get).mockReturnValue(
       { id: 'woocommerce' } as ReturnType<typeof extensionRegistry.get>,
     )
@@ -328,7 +327,7 @@ describe('GET /api/extensions/woocommerce/return', () => {
       expect(findCalls('woocommerce_connections', 'update')).toHaveLength(0)
     })
 
-    it('redirects without a database round trip when the state is missing or not a uuid', async () => {
+    it('never touches woocommerce_connections when the state is missing or not a uuid', async () => {
       const { supabase } = mockServiceClient()
 
       const res1 = await GET(makeReturnRequest({ success: '1' }))
