@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
-import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
+import {
+  BrandLookupFailedError,
+  resolveRequestAppOrigin,
+} from '@/lib/domains/trusted-app-origin'
 import { validateBody } from '@/lib/api/validate'
 import { createLogger } from '@/lib/logger'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -98,7 +101,19 @@ export async function POST(request: Request) {
   // or ?code= instead of a token_hash) land on the email-change status page
   // rather than the silent login bounce. The Send Email hook preserves this
   // query on its token_hash links, so both link styles share the marker.
-  const origin = await resolveRequestAppOrigin(request)
+  let origin: string
+  try {
+    origin = await resolveRequestAppOrigin(request)
+  } catch (err) {
+    if (!(err instanceof BrandLookupFailedError)) throw err
+    // Refuse rather than send a wrong-brand confirmation pair; nothing has
+    // been claimed or sent yet, so a retry is clean.
+    log.warn('email change refused: brand lookup failed', { userId: user.id })
+    return NextResponse.json(
+      { error: 'Tillfälligt fel. Försök igen om en stund.' },
+      { status: 503 },
+    )
+  }
 
   // Cross-instance gate (migration 20260903083000). The pending-state read
   // above is not atomic: two concurrent requests (two tabs, a retried fetch)

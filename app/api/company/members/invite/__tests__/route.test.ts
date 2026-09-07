@@ -334,6 +334,26 @@ describe('POST /api/company/members/invite', () => {
     consoleWarnSpy.mockRestore()
   })
 
+  it('503s (retryable) when the brand lookup fails instead of mailing a canonical link', async () => {
+    resolveBrandResultByHostMock.mockResolvedValue({ brand: null, lookupFailed: true })
+    enqueue({ data: { role: 'owner' } })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    enqueue({ data: { name: 'Acme AB' } })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await post(
+        { email: 'client@example.com' },
+        'https://portal.brand.test/api/company/members/invite',
+      ),
+    )
+
+    expect(status).toBe(503)
+    expect(body.error.code).toBe('TRANSIENT_ERROR')
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
   it('uses a registered brand request host in the invitation email', async () => {
     enqueue({ data: { role: 'owner' } })
     enqueue({ data: [] })

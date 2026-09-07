@@ -2,7 +2,11 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { validateBody } from '@/lib/api/validate'
-import { buildPasswordResetRedirectTo, requestHost } from '@/lib/domains/trusted-app-origin'
+import {
+  BrandLookupFailedError,
+  buildPasswordResetRedirectTo,
+  requestHost,
+} from '@/lib/domains/trusted-app-origin'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createLogger } from '@/lib/logger'
 
@@ -42,7 +46,25 @@ export async function POST(request: Request) {
   if (!validation.success) return validation.response
   const { email, captchaToken } = validation.data
 
-  const redirectTo = await buildPasswordResetRedirectTo(requestHost(request))
+  let redirectTo: string
+  try {
+    redirectTo = await buildPasswordResetRedirectTo(requestHost(request))
+  } catch (err) {
+    if (!(err instanceof BrandLookupFailedError)) throw err
+    // Transient brands-table error: fail safe like /api/auth/signup. A
+    // canonical fallback here would mail a white-label user a wrong-brand
+    // link; 503 tells the client to retry instead.
+    return NextResponse.json(
+      {
+        error: {
+          code: 'brand_lookup_failed',
+          message: 'Tillfälligt fel. Försök igen om en stund.',
+          message_en: 'Temporary error. Please try again shortly.',
+        },
+      },
+      { status: 503 },
+    )
+  }
 
   const supabase = await createClient()
   const { error } = await supabase.auth.resetPasswordForEmail(email, {

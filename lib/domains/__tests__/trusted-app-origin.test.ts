@@ -6,6 +6,7 @@ vi.mock('@/lib/branding/resolve', () => ({
 }))
 
 import {
+  BrandLookupFailedError,
   buildPasswordResetRedirectTo,
   getCanonicalAppOrigin,
   requestHost,
@@ -79,12 +80,31 @@ describe('trusted application origins', () => {
     expect(resolveBrandResultByHostMock).not.toHaveBeenCalled()
   })
 
-  it('falls back to the canonical origin when the brands lookup fails', async () => {
+  it('refuses with BrandLookupFailedError when the brands lookup fails', async () => {
     resolveBrandResultByHostMock.mockResolvedValue({ brand: null, lookupFailed: true })
 
-    expect(await resolveTrustedAppOrigin('https://portal.brand.test')).toBe(
-      'https://app.accounted.test',
+    await expect(resolveTrustedAppOrigin('https://portal.brand.test')).rejects.toBeInstanceOf(
+      BrandLookupFailedError,
     )
+    await expect(resolveTrustedAppOrigin('https://portal.brand.test')).rejects.toMatchObject({
+      code: 'TRANSIENT_ERROR',
+      status: 503,
+    })
+    // The canonical host never consults the registry, so it is unaffected.
+    expect(await resolveTrustedAppOrigin('app.accounted.test')).toBe('https://app.accounted.test')
+  })
+
+  it('lets a local canonical trust other local hosts and ports on the same scheme', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000'
+
+    expect(await resolveTrustedAppOrigin('localhost:3001')).toBe('http://localhost:3001')
+    expect(await resolveTrustedAppOrigin('http://127.0.0.1:3000')).toBe('http://127.0.0.1:3000')
+    expect(await resolveTrustedAppOrigin('lane.localhost:3002')).toBe('http://lane.localhost:3002')
+    expect(resolveBrandResultByHostMock).not.toHaveBeenCalled()
+
+    // A hosted canonical grants nothing to local hosts.
+    process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
+    expect(await resolveTrustedAppOrigin('localhost:3001')).toBe('https://app.accounted.test')
   })
 
   it("trusts this deployment's own Vercel hostnames, but no other *.vercel.app", async () => {

@@ -22,11 +22,44 @@ import { createLogger } from '@/lib/logger'
 // deployment's own Vercel hostnames, or exactly a registered brand domain.
 // Everything else falls back to NEXT_PUBLIC_APP_URL, so a spoofed header
 // can at most select another host Accounted already serves. GoTrue's own
-// redirect allowlist remains the backstop behind all of this.
+// redirect allowlist remains the backstop behind all of this: it matches
+// the FULL redirect_to including the query, with `*` stopping at `.` and
+// `/`, so hosted carries `https://*.accounted.se/auth/callback**` and
+// `https://*.accounted.se/invite/**` (docs/WHITELABEL.md).
 
 const log = createLogger('trusted-app-origin')
 
 const LOCAL_APP_ORIGIN = 'http://localhost:3000'
+
+// Development-only hostnames. When the canonical app URL itself is local,
+// any of these is the same developer machine, so a lane dev server on
+// localhost:3001 keeps receiving its own auth links instead of the port
+// 3000 canonical. Production never has a local canonical, so this branch
+// is unreachable there.
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+
+function isLocalHostname(hostname: string): boolean {
+  return LOCAL_HOSTNAMES.has(hostname) || hostname.endsWith('.localhost')
+}
+
+/**
+ * The brands table could not be read, so the request host cannot be
+ * classified. Thrown instead of silently answering with the canonical
+ * origin: for a white-label user that answer is a wrong-brand mail whose
+ * recovery session lands on a foreign domain, the exact failure this
+ * registry exists to prevent. The code maps to the TRANSIENT_ERROR entry
+ * (503, retryable) in withRouteContext routes; anonymous routes answer 503
+ * themselves, mirroring the signup gate's fail-safe branch.
+ */
+export class BrandLookupFailedError extends Error {
+  readonly code = 'TRANSIENT_ERROR'
+  readonly status = 503
+
+  constructor(readonly host: string) {
+    super(`brand lookup failed for host ${host}`)
+    this.name = 'BrandLookupFailedError'
+  }
+}
 
 interface ParsedHost {
   hostname: string
@@ -109,22 +142,30 @@ export function getCanonicalAppOrigin(): string {
  * brands.domain. Wildcards, suffixes and non-default ports are never
  * accepted. Registered hosts are always upgraded to HTTPS.
  *
- * A failed brands lookup falls back to the canonical origin: the user still
- * gets a working link, in the platform brand, and the failure is logged so
- * a wrong-brand mail can be traced to its cause.
+ * Throws BrandLookupFailedError when the brands table cannot be read, so
+ * the caller refuses (503, retry) rather than sending a wrong-brand link.
  */
 export async function resolveTrustedAppOrigin(
   candidate: string | null | undefined,
 ): Promise<string> {
   const canonicalOrigin = getCanonicalAppOrigin()
   const canonical = new URL(canonicalOrigin)
+  const canonicalHostname = normalizeHostname(canonical.hostname)
   const parsed = parseHost(candidate)
 
   if (!parsed) return canonicalOrigin
 
-  if (parsed.hostname === normalizeHostname(canonical.hostname)) {
+  if (parsed.hostname === canonicalHostname && parsed.port === canonical.port) {
     return canonicalOrigin
   }
+
+  // Local development: a local canonical trusts every local host and port
+  // on the same scheme (lane servers on 3001-3003 confirm on themselves).
+  if (isLocalHostname(canonicalHostname) && isLocalHostname(parsed.hostname)) {
+    return `${canonical.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ''}`
+  }
+
+  if (parsed.hostname === canonicalHostname) return canonicalOrigin
 
   // A non-default port is not a hosted domain, even when its hostname
   // matches. URL normalisation represents :443 as an empty port.
@@ -136,10 +177,10 @@ export async function resolveTrustedAppOrigin(
 
   const { brand, lookupFailed } = await resolveBrandResultByHost(parsed.hostname)
   if (lookupFailed) {
-    log.warn('brand lookup failed; auth link falls back to the canonical origin', {
+    log.warn('brand lookup failed; refusing to build an auth link for this host', {
       host: parsed.hostname,
     })
-    return canonicalOrigin
+    throw new BrandLookupFailedError(parsed.hostname)
   }
   if (!brand) return canonicalOrigin
 

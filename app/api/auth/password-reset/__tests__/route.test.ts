@@ -72,6 +72,19 @@ describe('POST /api/auth/password-reset', () => {
     })
   })
 
+  it('503s (fail safe) when the brand lookup errors, without calling GoTrue', async () => {
+    resolveBrandResultByHostMock.mockResolvedValue({ brand: null, lookupFailed: true })
+
+    const res = await POST(
+      makeRequest({ email: 'kund@example.com' }, { host: 'app.testbrand.example' }),
+    )
+    const { body: json } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(res.status).toBe(503)
+    expect(json.error.code).toBe('brand_lookup_failed')
+    expect(resetPasswordForEmailMock).not.toHaveBeenCalled()
+  })
+
   it('maps a GoTrue error to the canonical envelope with its status', async () => {
     resetPasswordForEmailMock.mockResolvedValue({
       data: null,
