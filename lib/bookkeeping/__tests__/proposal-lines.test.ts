@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeProposalLines, proposalLinesToFormLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
+import { applyVatAmountToLines, computeProposalLines, proposalLinesToFormLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import { buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { makeCategorizationTemplate, makeTransaction } from '@/tests/helpers'
@@ -570,5 +570,38 @@ describe('proposalLinesToFormLines', () => {
     const debits = formLines.reduce((s, l) => s + (l.debit_amount ? Number(l.debit_amount) : 0), 0)
     const credits = formLines.reduce((s, l) => s + (l.credit_amount ? Number(l.credit_amount) : 0), 0)
     expect(roundOre(debits)).toBe(roundOre(credits))
+  })
+})
+
+describe('vatAmountSek: the underlag\'s moms over the rate', () => {
+  it('moves the difference between the VAT leg and the net leg, keeping the gross', () => {
+    const base = computeProposalLines({ amount: -546, category: 'expense_representation', vatTreatment: 'reduced_12', entityType: 'aktiebolag' })
+    const vatLeg = base.find((l) => l.side === 'debet' && l.account.startsWith('264'))
+    expect(vatLeg?.amount).toBe(58.5)
+    const lines = computeProposalLines({ amount: -546, category: 'expense_representation', vatTreatment: 'reduced_12', entityType: 'aktiebolag', vatAmountSek: 73.17 })
+    expect(lines.find((l) => l.side === 'debet' && l.account.startsWith('264'))?.amount).toBe(73.17)
+    expect(lines.find((l) => l.side === 'debet' && !l.account.startsWith('264'))?.amount).toBe(472.83)
+    expect(sumSide(lines, 'debet')).toBe(sumSide(lines, 'kredit'))
+    expect(sumSide(lines, 'kredit')).toBe(546)
+  })
+
+  it('leaves lines without a rate-based VAT leg alone', () => {
+    const lines: ProposalLine[] = [
+      { side: 'debet', account: '5420', amount: 100 },
+      { side: 'kredit', account: '1930', amount: 100, settlement: true },
+      { side: 'debet', account: '2645', amount: 25 },
+      { side: 'kredit', account: '2614', amount: 25 },
+    ]
+    expect(applyVatAmountToLines(lines, 10, true)).toBe(lines)
+    expect(applyVatAmountToLines(lines, 0, true)).toBe(lines)
+  })
+
+  it('refuses a moms that would eat the whole net', () => {
+    const lines: ProposalLine[] = [
+      { side: 'debet', account: '6071', amount: 487.5 },
+      { side: 'debet', account: '2641', amount: 58.5 },
+      { side: 'kredit', account: '1930', amount: 546, settlement: true },
+    ]
+    expect(applyVatAmountToLines(lines, 546, true)).toBe(lines)
   })
 })
