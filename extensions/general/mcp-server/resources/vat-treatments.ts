@@ -37,12 +37,26 @@ export const vatTreatmentsResource: McpResource = {
     }
 
     return {
-      treatments: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'],
+      treatments: [
+        'standard_25', 'reduced_12', 'reduced_6',
+        'reverse_charge', 'reverse_charge_domestic', 'export', 'exempt',
+      ],
       by_customer_type: matrix,
+      // Not a customer type: the same swedish_business with the seller's
+      // construction-reverse-charge flag set, which moves the VAT to the buyer
+      // under ML 16 kap. 13 §. Published separately so an agent can see the
+      // rate set without having to guess what the flag does.
+      construction_reverse_charge: {
+        applies_to: "customer_type 'swedish_business' with customers.construction_reverse_charge = true",
+        default_rates: getAvailableVatRates('swedish_business', false, 'SE', true),
+        permitted_rates: getPermittedVatRates('swedish_business', false, 'SE', true),
+        default_rule: getVatRules('swedish_business', false, 'SE', true),
+      },
       notes: {
         rate_sets: 'default_rates is what a line should normally use; permitted_rates is everything the invoice tools accept. Identical for Swedish customers; wider for a foreign business, see swedish_vat_to_foreign_business.',
         swedish_vat_to_foreign_business: 'Huvudregeln (ML 6 kap. 34 §) taxes a B2B service where the buyer is established, so 0% is the default for a VAT-validated EU business and for a non-EU business. Supplies taxed where they are performed carry Swedish VAT even to a foreign business: hotel and restaurang/catering 12%, persontransport and admission to cultural or sporting events 6%, fastighetstjänst and short-term vehicle hire 25%. Set such a rate on the line only for that kind of supply; consulting, licensing and other huvudregel services stay at 0%.',
         eu_business_validated: 'Reverse charge is the default: invoice 0%, customer self-accounts, moms ruta 39.',
+        construction_reverse_charge: 'Domestic byggtjänster (ML 16 kap. 13 §): when the buyer is a taxable person supplying construction services other than temporarily, the buyer accounts for the VAT. Invoice 0%, revenue books to 3231, moms ruta 41 (not 39, which is the EU services box). Driven by the flag on the customer, never inferred from the line text. The non-zero rates stay permitted because the rule covers construction services only: material sold off the shelf or a machine hired out without an operator to the same buyer is an ordinary 25% supply.',
         non_eu_business: 'Export is the default: invoice 0%, no Swedish VAT, moms ruta 40.',
         mixed_rate: 'Invoice line items can have individual VAT rates; the engine generates per-rate lines.',
       },

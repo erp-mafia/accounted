@@ -1287,6 +1287,8 @@
     "vat_placeholder_se": "SE123456789001",
     "vat_verify": "Verify",
     "vat_hint_eu": "Verify the VAT number to invoice with reverse charge (0% VAT)",
+    "construction_reverse_charge_label": "Reverse charge for construction services",
+    "construction_reverse_charge_hint": "Tick this when the buyer is a construction business that supplies construction services other than temporarily. The invoice is then issued without VAT and the buyer accounts for it (ML 16 kap. 13 §). Revenue books to 3231 and reaches box 41.",
     "vat_verified_title": "VAT number verified",
     "vat_verified_description": "Company: {name}",
     "vat_failed_title": "Verification failed",

@@ -592,12 +592,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
-    // Customer fetch (scoped to company). The builder only reads
-    // customer_type + vat_number_validated (VAT rules / allowed rates);
-    // select exactly those instead of '*' to keep PII out of this path.
+    // Customer fetch (scoped to company). The builder only reads customer_type,
+    // vat_number_validated and construction_reverse_charge (VAT rules / allowed
+    // rates); select exactly those instead of '*' to keep PII out of this path.
     const { data: customer, error: customerErr } = await ctx.supabase
       .from('customers')
-      .select('id, customer_type, vat_number_validated')
+      .select('id, customer_type, vat_number_validated, construction_reverse_charge')
       .eq('company_id', ctx.companyId!)
       .eq('id', input.customer_id)
       .maybeSingle()
@@ -621,7 +621,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const build = await buildInvoiceWriteData({
       supabase: ctx.supabase,
       companyId: ctx.companyId!,
-      // Narrow projection above; the builder only touches these two fields.
+      // Narrow projection above; the builder only touches these three fields.
       customer: customer as unknown as Customer,
       documentType,
       input,

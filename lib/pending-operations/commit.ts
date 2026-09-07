@@ -2013,7 +2013,12 @@ async function commitCreateInvoice(
     return { error: 'Customer not found: they may have been deleted.', status: 404 }
   }
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
+  const vatRules = getVatRules(
+    customer.customer_type,
+    customer.vat_number_validated,
+    customer.country,
+    customer.construction_reverse_charge ?? false,
+  )
   // Gate on the PERMITTED set, not the picker default, exactly like
   // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
   // (hotel/restaurang 12%, persontransport and event admission 6%,

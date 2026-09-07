@@ -7055,7 +7055,12 @@ export const tools: McpTool[] = [
       }
 
       // VAT rules from customer type (same logic as web UI)
-      const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
+      const vatRules = getVatRules(
+        customer.customer_type,
+        customer.vat_number_validated,
+        customer.country,
+        customer.construction_reverse_charge ?? false,
+      )
       // The DEFAULT set governs article-rate adoption (web parity: the picker
       // only adopts a rate the customer could have picked themselves); a
       // customer locked to a single rate (foreign business 0%) adopts nothing.
@@ -18590,7 +18595,7 @@ export const tools: McpTool[] = [
         // for individuals); never decrypted, staged, or returned here.
         const { data: customer, error: custError } = await supabase
           .from('customers')
-          .select('customer_type, vat_number_validated, country, personal_number')
+          .select('customer_type, vat_number_validated, country, personal_number, construction_reverse_charge')
           .eq('id', invoice.customer_id)
           .eq('company_id', companyId)
           .single()
@@ -18598,7 +18603,12 @@ export const tools: McpTool[] = [
           throw new Error('Customer not found: they may have been deleted. The draft cannot be edited without its customer.')
         }
 
-        const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
+        const vatRules = getVatRules(
+          customer.customer_type,
+          customer.vat_number_validated,
+          customer.country,
+          customer.construction_reverse_charge ?? false,
+        )
         defaultVatRate = vatRules.rate
         const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated, customer.country)
 

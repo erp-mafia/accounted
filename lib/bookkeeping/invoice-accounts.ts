@@ -64,6 +64,8 @@ export function getRevenueAccount(vatTreatment: VatTreatment, entityType: Entity
       return '3003' // Försäljning 6%
     case 'reverse_charge':
       return '3308' // Försäljning tjänst EU
+    case 'reverse_charge_domestic':
+      return '3231' // Försäljning byggsektorn, omvänd betalningsskyldighet
     case 'export':
       return '3305' // Försäljning tjänst Export
     case 'exempt':

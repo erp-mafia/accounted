@@ -232,7 +232,10 @@ export async function executeRecurringSchedule(
     throw new Error(`customer not found for schedule ${schedule.id}`)
   }
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
+  const constructionRc = customer.construction_reverse_charge ?? false
+  const vatRules = getVatRules(
+    customer.customer_type, customer.vat_number_validated, customer.country, constructionRc,
+  )
   // Gate on the PERMITTED set, not the picker default, exactly like
   // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
   // (hotel/restaurang 12%, persontransport and event admission 6%,
@@ -240,7 +243,9 @@ export async function executeRecurringSchedule(
   // foreign business customer. A monthly hotel or catering retainer to a German
   // company is such a schedule. The default is still 0% (vatRules.rate is the
   // fallback below), so a Swedish rate only lands here when the schedule set it.
-  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
+  const permittedRates = getPermittedVatRates(
+    customer.customer_type, customer.vat_number_validated, customer.country, constructionRc,
+  )
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   // 2. Compute amounts (mirrors POST /api/invoices).

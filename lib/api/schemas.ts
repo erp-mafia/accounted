@@ -234,7 +234,7 @@ export const InvoiceDocumentTypeSchema = z.enum([
 
 
 export const VatTreatmentSchema = z.enum([
-  'standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt',
+  'standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'reverse_charge_domestic', 'export', 'exempt',
 ])
 
 export const AccountingMethodSchema = z.enum(['accrual', 'cash'])
@@ -1016,6 +1016,11 @@ export const CreateCustomerSchema = z.object({
   country: CountryCodeSchema,
   org_number: z.string().optional(),
   vat_number: z.string().optional(),
+  /**
+   * Buyer accounts for the VAT on construction services (ML 16 kap. 13 §).
+   * Swedish business customers only; see isDomesticConstructionReverseCharge().
+   */
+  construction_reverse_charge: z.boolean().optional(),
   personal_number: z
     .string()
     .regex(/^(\d{6}|\d{8})[-+]?\d{4}$/, 'Invalid personal number')
@@ -1031,6 +1036,16 @@ export const CreateCustomerSchema = z.object({
       code: 'custom',
       path: ['personal_number'],
       message: 'Personal number is only allowed for individual customers',
+    })
+  }
+  // ML 16 kap. 13 § moves the liability to a buyer who supplies construction
+  // services other than temporarily. A private person or a foreign buyer is
+  // never such a buyer, so the flag is refused rather than silently ignored.
+  if (customer.construction_reverse_charge && customer.customer_type !== 'swedish_business') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['construction_reverse_charge'],
+      message: 'Construction reverse charge is only allowed for Swedish business customers',
     })
   }
   // Country vs customer type vs VAT prefix (#2025): an EU business with
@@ -1148,6 +1163,11 @@ export const UpdateCustomerSchema = z.object({
   country: CountryCodeSchema,
   org_number: z.string().optional(),
   vat_number: z.string().optional(),
+  /**
+   * Buyer accounts for the VAT on construction services (ML 16 kap. 13 §).
+   * Swedish business customers only; see isDomesticConstructionReverseCharge().
+   */
+  construction_reverse_charge: z.boolean().optional(),
   // Plaintext personnummer (validated here, then encrypted by the route), or
   // either masked form a read path returns: '********-1234' when the stored
   // value decrypted, '********-????' when it did not. The route reads a mask

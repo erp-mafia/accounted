@@ -123,6 +123,13 @@ describe('getRevenueAccount', () => {
     expect(getRevenueAccount('export')).toBe('3305')
   })
 
+  // ML 16 kap. 13 §: the domestic construction sale is revenue without output
+  // VAT, and 3231 is what carries it into momsdeklaration ruta 41.
+  it('reverse_charge_domestic returns 3231', () => {
+    expect(getRevenueAccount('reverse_charge_domestic')).toBe('3231')
+    expect(getRevenueAccount('reverse_charge_domestic', 'aktiebolag')).toBe('3231')
+  })
+
   it('exempt defaults to 3100 for enskild_firma', () => {
     expect(getRevenueAccount('exempt')).toBe('3100')
     expect(getRevenueAccount('exempt', 'enskild_firma')).toBe('3100')
@@ -269,6 +276,75 @@ describe('createInvoiceJournalEntry: per-line VAT', () => {
       l.account_number.startsWith('26')
     )
     expect(vatLines).toHaveLength(0)
+  })
+
+  it('domestic construction reverse charge creates single 3231, no VAT lines', async () => {
+    const invoice = makeInvoice({
+      subtotal: 5000,
+      vat_amount: 0,
+      total: 5000,
+      vat_treatment: 'reverse_charge_domestic',
+      vat_rate: 0,
+      items: [
+        makeItem({ quantity: 1, unit_price: 5000, line_total: 5000, vat_rate: 0, vat_amount: 0 }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines).toHaveLength(2)
+    expect(input.lines.find((l) => l.account_number === '1510')?.debit_amount).toBe(5000)
+    expect(input.lines.find((l) => l.account_number === '3231')?.credit_amount).toBe(5000)
+    // The buyer accounts for the VAT, so the seller books none.
+    expect(input.lines.filter((l) => l.account_number.startsWith('26'))).toHaveLength(0)
+  })
+
+  it('ignores a per-line override on domestic reverse charge: revenue stays on 3231', async () => {
+    const invoice = makeInvoice({
+      subtotal: 5000,
+      vat_amount: 0,
+      total: 5000,
+      vat_treatment: 'reverse_charge_domestic',
+      vat_rate: 0,
+      items: [
+        makeItem({ unit_price: 5000, line_total: 5000, vat_rate: 0, vat_amount: 0, revenue_account: '3041' }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(input.lines.find((l) => l.account_number === '3231')?.credit_amount).toBe(5000)
+    expect(input.lines.find((l) => l.account_number === '3041')).toBeUndefined()
+  })
+
+  it('splits a mixed invoice: the construction line to 3231, the material line to 3001 + 2611', async () => {
+    // 16 kap. 13 § covers the construction service. Material sold off the
+    // shelf to the same byggföretag is an ordinary 25% supply on the same
+    // invoice, and each half has to reach its own ruta.
+    const invoice = makeInvoice({
+      subtotal: 5000,
+      vat_amount: 250,
+      total: 5250,
+      vat_treatment: 'reverse_charge_domestic',
+      vat_rate: null as unknown as number,
+      items: [
+        makeItem({ unit_price: 4000, line_total: 4000, vat_rate: 0, vat_amount: 0 }),
+        makeItem({ unit_price: 1000, line_total: 1000, vat_rate: 25, vat_amount: 250 }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(input.lines.find((l) => l.account_number === '3231')?.credit_amount).toBe(4000)
+    expect(input.lines.find((l) => l.account_number === '3001')?.credit_amount).toBe(1000)
+    expect(input.lines.find((l) => l.account_number === '2611')?.credit_amount).toBe(250)
+
+    const debits = input.lines.reduce((s, l) => s + (l.debit_amount || 0), 0)
+    const credits = input.lines.reduce((s, l) => s + (l.credit_amount || 0), 0)
+    expect(roundOre(debits)).toBe(roundOre(credits))
   })
 
   it('balance: debit(1510) = sum(revenue + VAT credits)', async () => {

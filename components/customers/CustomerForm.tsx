@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
@@ -86,6 +87,7 @@ export default function CustomerForm({
     country: z.string().refine((v) => normalizeCountryCode(v) !== null, t('country_invalid')),
     org_number: z.string().optional(),
     vat_number: z.string().optional(),
+    construction_reverse_charge: z.boolean().optional(),
     // Accepts a plaintext personnummer or either mask the API returns. The
     // '********-????' placeholder has to pass: it is what a row whose stored
     // value cannot be decrypted renders as, and rejecting it here blocked the
@@ -189,6 +191,7 @@ export default function CustomerForm({
       country: normalizeCountryCode(initialData?.country) ?? initialData?.country ?? 'SE',
       org_number: initialData?.org_number || '',
       vat_number: initialData?.vat_number || '',
+      construction_reverse_charge: initialData?.construction_reverse_charge ?? false,
       personal_number: initialData?.personal_number || '',
       language: initialData?.language || 'sv',
       // ?? not ||: a stored 0 (betalning direkt) must not reopen as 30.
@@ -198,6 +201,7 @@ export default function CustomerForm({
   })
 
   const customerType = watch('customer_type')
+  const constructionReverseCharge = watch('construction_reverse_charge') ?? false
   const vatNumber = watch('vat_number')
   const orgNumber = watch('org_number')
   // A complete org number of a Swedish company is looked up in SCB's
@@ -305,6 +309,11 @@ export default function CustomerForm({
     const isEditing = initialData !== undefined
     const payload: CreateCustomerInput = {
       ...customerData,
+      // ML 16 kap. 13 § applies to a Swedish business buyer only. The checkbox
+      // is hidden for the other types but its value survives a type switch in
+      // the open form, so it is cleared here rather than sent and refused.
+      construction_reverse_charge:
+        data.customer_type === 'swedish_business' && (data.construction_reverse_charge ?? false),
       // NULL means never configured and lets a migration enrich the row.
       // Empty values on an existing row are explicit clears and survive sync.
       contact_person: data.contact_person?.trim() || (isEditing ? '' : null),
@@ -384,7 +393,33 @@ export default function CustomerForm({
             )}
           </div>
 
-          {(customerType === 'eu_business' || customerType === 'non_eu_business') && (
+          {customerType === 'swedish_business' && (
+            <div className="space-y-2">
+              <div className="flex items-start gap-2">
+                <Controller
+                  name="construction_reverse_charge"
+                  control={control}
+                  render={({ field }) => (
+                    <Checkbox
+                      id="construction_reverse_charge"
+                      checked={field.value ?? false}
+                      onCheckedChange={(v) => field.onChange(v === true)}
+                    />
+                  )}
+                />
+                <Label htmlFor="construction_reverse_charge" className="font-normal leading-snug">
+                  {t('construction_reverse_charge_label')}
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t('construction_reverse_charge_hint')}
+              </p>
+            </div>
+          )}
+
+          {(customerType === 'eu_business'
+            || customerType === 'non_eu_business'
+            || (customerType === 'swedish_business' && constructionReverseCharge)) && (
             <div className="space-y-2">
               <Label htmlFor="vat_number">{t('vat_label')}</Label>
               <div className="flex gap-2">

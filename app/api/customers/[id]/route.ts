@@ -176,6 +176,17 @@ export const PATCH = withRouteContext(
       updateData.org_number = reroutedPersonalNumber ? null : body.org_number
     }
     if (body.vat_number !== undefined) updateData.vat_number = body.vat_number
+    // ML 16 kap. 13 § applies to a Swedish business buyer only. Changing the
+    // type away from swedish_business clears the flag in the same write rather
+    // than leaving a stale true behind: the VAT rules ignore it either way, so
+    // the stored row must not claim something the invoices will not do.
+    if (effectiveType !== 'swedish_business') {
+      if (body.construction_reverse_charge || body.customer_type !== undefined) {
+        updateData.construction_reverse_charge = false
+      }
+    } else if (body.construction_reverse_charge !== undefined) {
+      updateData.construction_reverse_charge = body.construction_reverse_charge
+    }
     if (reroutedPersonalNumber && !(personalNumberSubmitted && body.personal_number)) {
       updateData.personal_number = encryptCustomerPersonalNumber(reroutedPersonalNumber)
     } else if (personalNumberSubmitted) {

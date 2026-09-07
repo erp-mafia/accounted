@@ -61,6 +61,8 @@ interface SelfBilledCustomer {
   vat_number_validated: boolean | null
   /** ISO 3166-1 alpha-2; gates reverse charge together with the two above. */
   country?: string | null
+  /** Buyer accounts for VAT on construction services (ML 16 kap. 13 §). */
+  construction_reverse_charge?: boolean | null
 }
 
 export interface SelfBilledSaleComputedItem {
@@ -106,7 +108,7 @@ export async function resolveSelfBilledSaleDraft(
   // the fields used (data minimisation).
   const { data: customer, error: customerError } = await supabase
     .from('customers')
-    .select('id, name, customer_type, vat_number_validated, country')
+    .select('id, name, customer_type, vat_number_validated, country, construction_reverse_charge')
     .eq('id', input.customer_id)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -122,6 +124,7 @@ export async function resolveSelfBilledSaleDraft(
     c.customer_type as Parameters<typeof getVatRules>[0],
     c.vat_number_validated ?? undefined,
     c.country,
+    c.construction_reverse_charge ?? false,
   )
   // Gate on the PERMITTED set, not the picker default, exactly like
   // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed

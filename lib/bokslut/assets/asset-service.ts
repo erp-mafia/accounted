@@ -951,6 +951,7 @@ function outputVatAccountFor(treatment: VatTreatment): string | null {
     case 'reduced_6':
       return '2631'
     case 'reverse_charge':
+    case 'reverse_charge_domestic':
     case 'export':
     case 'exempt':
       return null
