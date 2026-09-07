@@ -161,7 +161,14 @@ export default function AttGoraV2({
   return (
     <div className="stagger-enter">
       {notices}
-      <div className="-mx-4 -mb-8 grid border-t border-border/60 md:-mx-6 md:h-[calc(100vh-124px)] md:grid-cols-[250px_minmax(0,1fr)] xl:grid-cols-[250px_minmax(0,1fr)_256px]">
+      {/* Without notices the panes butt against the top bar: its border is
+          the only line, instead of a second one 16px below it. */}
+      <div
+        className={cn(
+          '-mx-4 -mb-8 grid md:-mx-6 md:grid-cols-[250px_minmax(0,1fr)] xl:grid-cols-[250px_minmax(0,1fr)_256px]',
+          notices ? 'border-t border-border/60 md:h-[calc(100vh-124px)]' : '-mt-4 md:h-[calc(100vh-108px)]',
+        )}
+      >
         {/* Tree */}
         <aside
           aria-label={t('tree_label')}
@@ -241,11 +248,10 @@ export default function AttGoraV2({
                   <dd>{t(`lagrum_${selected.id}`)}</dd>
                 </dl>
               </RightSection>
-              <RightSection title={t('deps')} status={selected.deps.length ? String(selected.deps.length) : ''}>
-                {selected.deps.length === 0 ? (
-                  <p className="text-[12.5px] text-muted-foreground">{t('deps_none')}</p>
-                ) : (
-                  selected.deps.map((d) => (
+              {/* Only when there are any: "Inga beroenden" was a section saying nothing. */}
+              {selected.deps.length > 0 && (
+              <RightSection title={t('deps')} status={String(selected.deps.length)}>
+                {selected.deps.map((d) => (
                     <div key={d} className="flex items-center gap-2 py-0.5 text-[12.5px]">
                       <span
                         className={cn(
@@ -266,9 +272,9 @@ export default function AttGoraV2({
                         </Link>
                       )}
                     </div>
-                  ))
-                )}
+                  ))}
               </RightSection>
+              )}
               <RightSection title={t('assistant')}>
                 <div className="rounded-lg border border-border px-3 py-2.5 text-[12.5px] text-foreground/80">
                   <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
