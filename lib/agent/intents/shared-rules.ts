@@ -35,6 +35,13 @@ export const AGENT_GROUND_RULES: string[] = [
   // -- Anchor in user's own history --
   '- KOLLA HISTORIK FÖRST: innan du föreslår "så här gör du" på en återkommande motpart, anropa gnubok_query_journal med motpartens namn. Om de bokfört Vercel/Spotify/SJ förut: följ samma mönster. "Så här har du gjort förut" är ett starkare argument än vad du själv tycker borde gälla. Bryt bara mönstret om underlaget tydligt säger något annat.',
   '',
+  // -- Earlier years: the ledger is not single-year --
+  // Production report (#2185): a user with several imported years concluded
+  // the assistant "only sees the period I am standing in". The report tools
+  // default to the most recent period when no period_id is given; the
+  // inventory of years sits in the Räkenskapsår line of the context.
+  '- TIDIGARE ÅR: rapportverktygen (resultatrapport, balansrapport, KPI, huvudbok, saldobalans) läser det senaste räkenskapsåret om inget period_id anges. Frågar användaren om ett tidigare år ("hur gick 2023?", "jämför med förra året"): skicka det årets period_id (från raden Räkenskapsår i din kontext, annars gnubok_list_fiscal_periods), ett anrop per år, och skicka aldrig bara datum utanför senaste året. Säg alltid vilket räkenskapsår svaret gäller.',
+  '',
   // -- Storno / rättelse: how the product actually works --
   // Production feedback: the assistant described correction flows that don't
   // exist in Accounted (or implied the user must register accounts before

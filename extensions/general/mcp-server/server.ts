@@ -2650,17 +2650,69 @@ async function countMissingUnderlagInPeriod(
 }
 
 /**
+ * The company's fiscal period that contains an ISO date, or null. A date in a
+ * report call names the year the caller wants: "resultatrapporten för 2023"
+ * arrives as from_date/to_date, not as a period_id the model would first
+ * have to look up (#2185).
+ */
+async function findFiscalPeriodContaining(
+  supabase: SupabaseClient,
+  companyId: string,
+  date: string,
+): Promise<{ id: string; name: string; period_start: string; period_end: string } | null> {
+  const { data } = await supabase
+    .from('fiscal_periods')
+    .select('id, name, period_start, period_end')
+    .eq('company_id', companyId)
+    .lte('period_start', date)
+    .gte('period_end', date)
+    .order('period_start', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return data ?? null
+}
+
+/** "the company's fiscal periods span A to B", for an error that names a date no period covers. */
+async function describeFiscalPeriodSpan(supabase: SupabaseClient, companyId: string): Promise<string> {
+  const { data } = await supabase
+    .from('fiscal_periods')
+    .select('period_start, period_end')
+    .eq('company_id', companyId)
+    .order('period_start', { ascending: true })
+  const rows = (data ?? []) as { period_start: string; period_end: string }[]
+  if (rows.length === 0) return 'the company has no fiscal periods'
+  return `the company's fiscal periods span ${rows[0].period_start} to ${rows[rows.length - 1].period_end}`
+}
+
+/**
  * Resolve the fiscal period a report tool runs against: the caller's
- * `period_id` when given, else the company's most recent period. The period
- * is then re-read scoped to the company, so a foreign id never resolves.
+ * `period_id` when given; else, when the call carries a date (from_date,
+ * as_of_date, ...), the period that contains that date; else the company's
+ * most recent period. An explicit id is re-read scoped to the company, so a
+ * foreign id never resolves.
+ *
+ * The date fallback exists because the previous default (most recent period,
+ * then a loud range check) made every question about an earlier year fail
+ * unless the model had first looked up that year's UUID (#2185).
  */
 async function resolveReportPeriod(
   supabase: SupabaseClient,
   companyId: string,
   periodIdArg: unknown,
   noPeriodsMessage: string,
+  dateHint?: unknown,
 ) {
   let periodId = periodIdArg as string | undefined
+
+  if (!periodId && typeof dateHint === 'string' && ISO_DATE_RE.test(dateHint)) {
+    const containing = await findFiscalPeriodContaining(supabase, companyId, dateHint)
+    if (containing) return containing
+    const span = await describeFiscalPeriodSpan(supabase, companyId)
+    throw new Error(
+      `No fiscal period contains ${dateHint}: ${span}. ` +
+      `Pass a date inside one of them, or that period's period_id (gnubok_list_fiscal_periods).`,
+    )
+  }
 
   if (!periodId) {
     const { data: periods } = await supabase
@@ -8197,7 +8249,13 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      const period = await resolveReportPeriod(supabase, companyId, args.period_id, 'No fiscal periods found. Categorize some transactions first.')
+      const period = await resolveReportPeriod(
+        supabase,
+        companyId,
+        args.period_id,
+        'No fiscal periods found. Categorize some transactions first.',
+        args.from_date ?? args.to_date,
+      )
 
       rejectUnknownArgs(args, ['period_id', 'from_date', 'to_date', 'dimensions'])
       const range = parseReportRangeArgs(args, period, { from: 'from_date', to: 'to_date' })
@@ -10123,6 +10181,20 @@ export const tools: McpTool[] = [
       }
 
       let periodId = args.period_id as string | undefined
+      const toDate = args.to_date as string | undefined
+
+      // No period but a date: the period that contains the date (#2185).
+      if (!periodId && typeof toDate === 'string' && ISO_DATE_RE.test(toDate)) {
+        periodId = (
+          await resolveReportPeriod(
+            supabase,
+            companyId,
+            undefined,
+            'No fiscal periods found. Categorize some transactions first to auto-create a period.',
+            toDate,
+          )
+        ).id
+      }
 
       // If no period specified, find the most recent one (same default as
       // gnubok_get_trial_balance).
@@ -10140,8 +10212,6 @@ export const tools: McpTool[] = [
         }
         periodId = periods.id
       }
-
-      const toDate = args.to_date as string | undefined
 
       return await generateDimensionPnl(supabase, companyId, periodId!, sieDimNo, { toDate })
     },
@@ -10165,7 +10235,13 @@ export const tools: McpTool[] = [
     outputSchema: { type: 'object' },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      const period = await resolveReportPeriod(supabase, companyId, args.period_id, 'No fiscal periods found. Create one first.')
+      const period = await resolveReportPeriod(
+        supabase,
+        companyId,
+        args.period_id,
+        'No fiscal periods found. Create one first.',
+        args.as_of_date,
+      )
 
       rejectUnknownArgs(args, ['period_id', 'as_of_date'])
       const range = parseReportRangeArgs(args, period, { to: 'as_of_date' })
