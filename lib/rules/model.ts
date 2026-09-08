@@ -119,6 +119,15 @@ export const USER_SETTABLE_MODES: readonly RuleMode[] = ['propose', 'paused'] as
  * Aliases as a safe PostgREST ilike filter list: only letters, digits, space,
  * dot and dash survive, so no alias can smuggle a filter operator.
  */
+/**
+ * A value for a PostgREST filter, double-quoted with backslash escapes, so a
+ * period, comma or parenthesis inside a counterparty alias ("booking.com",
+ * "Restaurang Nunnan (Bageriet)") is read as text and never as filter syntax.
+ */
+export function postgrestFilterValue(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
+
 export function aliasPatterns(row: Pick<RuleRow, 'counterparty_name' | 'counterparty_aliases'>): string[] {
   const raw = [row.counterparty_name, ...(row.counterparty_aliases ?? [])]
   const seen = new Set<string>()
