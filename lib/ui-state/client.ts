@@ -1,6 +1,16 @@
-'use client'
-
+import { mutate } from 'swr'
 import type { UserUiState } from '@/types'
+
+export const USER_UI_STATE_SWR_KEY = 'user-ui-state'
+
+/**
+ * Att göra PWA badge is off until the user stores an explicit true.
+ * A missing key must not set the icon badge: that path never asks for
+ * notification permission, so iOS shows nothing.
+ */
+export function isPwaWorklistBadgeEnabled(uiState: UserUiState | undefined | null): boolean {
+  return uiState?.pwa_worklist_badge === true
+}
 
 /**
  * Fire-and-forget persistence of a partial user_preferences.ui_state patch
@@ -9,11 +19,21 @@ import type { UserUiState } from '@/types'
  * swallowed deliberately.
  */
 export function persistUiState(patch: Partial<UserUiState>): void {
-  void fetch('/api/user/ui-state', {
+  void applyUiStatePatch(patch).catch(() => {})
+}
+
+/** Same write as persistUiState, but the caller can await and handle errors. */
+export function applyUiStatePatch(patch: Partial<UserUiState>): Promise<Response> {
+  void mutate(
+    USER_UI_STATE_SWR_KEY,
+    (current: UserUiState | undefined) => ({ ...(current ?? {}), ...patch }),
+    { revalidate: false },
+  ).catch(() => {})
+  return fetch('/api/user/ui-state', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
-  }).catch(() => {})
+  })
 }
 
 /**

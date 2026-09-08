@@ -235,8 +235,6 @@ describe('readVercelCrons', () => {
 const INTENTIONALLY_UNSCHEDULED: Readonly<Record<string, string>> = {
   '/api/invoices/reminders/cron':
     'Feature switched off: the route is a tombstone that logs and returns 503 { disabled: true }.',
-  '/api/extensions/push-notifications/cron':
-    'Pre-existing gap: the docstring says daily 09:00 UTC but no schedule exists anywhere. Needs a vercel.json entry, which is outside the crontab-parity change.',
   '/api/extensions/stripe/sync/cron':
     'Pre-existing gap: the docstring says every 15 minutes but no schedule exists anywhere. Needs a vercel.json entry, which is outside the crontab-parity change.',
 }

@@ -13,10 +13,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 /**
  * GET /api/extensions/push-notifications/cron: daily 09:00 UTC.
  * Sends due tax, invoice and missing-underlag push notifications.
- *
- * NOT scheduled: this path is absent from vercel.json's crons (and therefore
- * from the Docker crontabs generated from it). Adding it there is a product
- * decision, not a code change.
+ * Scheduled from vercel.json (and the Docker crontabs generated from it).
  */
 export const GET = withCronContext('cron.push_notifications', async (_request, ctx) => {
   // Load the registry so it reflects extensions.config.json.

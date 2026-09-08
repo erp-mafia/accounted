@@ -196,5 +196,20 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "hasOwnData": true,
           "subscriptionNotice": "Kräver ett Google-konto. Varje brevlåda kopplas av sin egen ägare och kan kopplas från när som helst."
     },
+    {
+          "slug": "push-notifications",
+          "name": "Push-notiser",
+          "sector": "general",
+          "category": "operations",
+          "icon": "Bell",
+          "dataPattern": "core",
+          "description": "Händelsenotiser för bokföringsaktiviteter",
+          "longDescription": "Få push-notiser direkt i webbläsaren när viktiga händelser sker: nya fakturor, förfallna betalningar, slutförda bokföringar med mera.",
+          "readsCoreTables": [
+                "journal_entries",
+                "invoices",
+                "receipts"
+          ]
+    },
   ],
 }
