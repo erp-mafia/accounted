@@ -330,7 +330,9 @@ export default function QuickReviewDialog({
       // booked 25% moms against an explicit "Ingen moms" while the preview
       // showed none. See resolveExplicitVat.
       const resolvedVat = resolveExplicitVat(vatTreatment, defaultVat)
-      const catDefault = getDefaultAccountForCategory(category)
+      // Only decides whether the account is sent as an override; the server
+      // resolves the form itself, so a missing prop may assume the EF default.
+      const catDefault = getDefaultAccountForCategory(category, entityType ?? 'enskild_firma')
       const override = accountOverride && accountOverride !== catDefault
         ? accountOverride
         : undefined

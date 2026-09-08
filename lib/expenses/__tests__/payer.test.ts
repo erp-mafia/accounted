@@ -18,6 +18,11 @@ describe('resolveExpenseLiabilityAccount', () => {
     expect(resolveExpenseLiabilityAccount('enskild_firma', 'owner')).toBe('2018')
   })
 
+  it('a member of an ideell förening is a plain short-term creditor (2890)', () => {
+    expect(resolveExpenseLiabilityAccount('ideell_forening', 'owner')).toBe('2890')
+    expect(resolveExpenseLiabilityAccount('ideell_forening', 'employee')).toBe('2820')
+  })
+
   it('an unknown entity type falls back to the AB rule, never to 2018', () => {
     expect(resolveExpenseLiabilityAccount(undefined, 'owner')).toBe('2893')
     expect(resolveExpenseLiabilityAccount('handelsbolag', 'owner')).toBe('2893')

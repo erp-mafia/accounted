@@ -1,4 +1,4 @@
-import type { VatPeriodType } from '@/types'
+import type { EntityType, VatPeriodType } from '@/types'
 import { toRedovisare12 } from '@/lib/invariants/org-number'
 
 /**
@@ -16,7 +16,7 @@ import { toRedovisare12 } from '@/lib/invariants/org-number'
  */
 export function formatRedovisare(
   orgNumber: string,
-  entityType: 'enskild_firma' | 'aktiebolag'
+  entityType: EntityType
 ): string {
   return toRedovisare12(orgNumber, entityType)
 }

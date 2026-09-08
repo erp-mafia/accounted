@@ -82,7 +82,7 @@ Request body:
 ```ts
 {
   name: string,
-  entity_type: "enskild_firma" | "aktiebolag",
+  entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening",
   org_number?: string,
   vat_registered: boolean,
   moms_period?: "monthly" | "quarterly" | "yearly",
@@ -116,7 +116,7 @@ Response `200`:
   data: {
     id: string,
     name: string,
-    entity_type: "enskild_firma" | "aktiebolag",
+    entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening",
     org_number: string,
     vat_registered: boolean,
     moms_period: "monthly" | "quarterly" | "yearly",

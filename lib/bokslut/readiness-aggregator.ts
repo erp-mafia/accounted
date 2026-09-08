@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
@@ -60,7 +61,7 @@ export interface BokslutReadinessReport {
     closing_entry_id: string | null
   }
   /** Entity type drives which dispositions apply (e.g. bolagsskatt only for AB). */
-  entityType: 'aktiebolag' | 'enskild_firma' | 'handelsbolag' | 'kommanditbolag' | 'ekonomisk_forening'
+  entityType: 'aktiebolag' | 'enskild_firma' | 'ideell_forening' | 'handelsbolag' | 'kommanditbolag' | 'ekonomisk_forening'
   /** The full raw validation, for callers that want every field. */
   rawValidation: YearEndValidation
 }
@@ -125,7 +126,11 @@ export async function buildBokslutReadinessReport(
   }
 
   const period = periodResult.data
-  const entityType = (settingsResult.data?.entity_type ?? 'aktiebolag') as BokslutReadinessReport['entityType']
+  const entityType: BokslutReadinessReport['entityType'] = await resolveCompanyEntityType(
+    supabase,
+    companyId,
+    settingsResult.data?.entity_type,
+  )
   const accountingMethod =
     ((settingsResult.data as { accounting_method?: string | null } | null)?.accounting_method ??
       'accrual')

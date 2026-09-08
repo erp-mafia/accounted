@@ -70,7 +70,12 @@ function createQueueMockSupabase() {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
-          const next = resultQueue.shift() ?? { data: null, error: null }
+          // The legal form is resolved from `companies` (never defaulted) before
+          // mapping rules run; it is not part of the per-test queue.
+          const next =
+            table === 'companies'
+              ? { data: { entity_type: 'aktiebolag' }, error: null }
+              : resultQueue.shift() ?? { data: null, error: null }
           return (resolve: (v: unknown) => void) => resolve(next)
         }
         if (prop === 'insert') {

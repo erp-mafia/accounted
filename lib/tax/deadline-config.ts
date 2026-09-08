@@ -4,6 +4,7 @@
  */
 
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
+import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
 import { isBankingDay } from './swedish-holidays'
 
 // Condition function type for determining if a deadline applies
@@ -92,7 +93,7 @@ export interface VatDeadlineCalculationSettings {
 }
 
 interface AnnualVatDeadlineSettings {
-  entity_type: 'aktiebolag' | 'enskild_firma'
+  entity_type: EntityType
   fiscal_year_start_month: number
   vat_has_eu_trade: boolean
   vat_filing_method?: TaxFilingMethod | null
@@ -131,8 +132,9 @@ function getAnnualVatDeadline(
   // Enskild firma (calendar year only, BFL 3 kap.): without EU trade the
   // annual momsdeklaration follows the income tax return (12 May); with EU
   // trade it is due 26 February (26 kap. 33-33a §§ SFL, Skatteverket's
-  // published helårsmoms schedule).
-  if (settings.entity_type === 'enskild_firma') {
+  // published helårsmoms schedule). Every juridisk person (AB, ideell
+  // förening) follows the räkenskapsår schedule below.
+  if (fiscalYearLockedToCalendar(settings.entity_type)) {
     return settings.vat_has_eu_trade
       ? { day: 26, month: 1, year: fiscalYearEndYear + 1 }
       : { day: 12, month: 4, year: fiscalYearEndYear + 1 }
@@ -204,12 +206,13 @@ export function getVatDeadlineForPeriod(
   }
 
   if (period !== 1) return null
-  if (settings.entity_type !== 'aktiebolag' && settings.entity_type !== 'enskild_firma') {
+  if (!isEntityType(settings.entity_type)) {
     return null
   }
+  const calendarYearOnly = fiscalYearLockedToCalendar(settings.entity_type)
   if (typeof settings.vat_has_eu_trade !== 'boolean') return null
   if (
-    settings.entity_type === 'aktiebolag'
+    !calendarYearOnly
     && settings.vat_has_eu_trade === false
     && settings.vat_filing_method !== 'electronic'
     && settings.vat_filing_method !== 'paper'
@@ -222,13 +225,11 @@ export function getVatDeadlineForPeriod(
     && settings.fiscal_year_start_month <= 12
     ? settings.fiscal_year_start_month
     : null
-  if (settings.entity_type === 'aktiebolag' && configuredFiscalYearStartMonth === null) {
+  if (!calendarYearOnly && configuredFiscalYearStartMonth === null) {
     return null
   }
-  const fiscalYearStartMonth = settings.entity_type === 'enskild_firma'
-    ? 1
-    : configuredFiscalYearStartMonth!
-  const fiscalYearEndMonth = settings.entity_type === 'enskild_firma'
+  const fiscalYearStartMonth = calendarYearOnly ? 1 : configuredFiscalYearStartMonth!
+  const fiscalYearEndMonth = calendarYearOnly
     ? 12
     : (fiscalYearStartMonth === 1 ? 12 : fiscalYearStartMonth - 1)
   const deadline = getAnnualVatDeadline(fiscalYearEndMonth, year, {
@@ -562,7 +563,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     priority: 'normal',
     linkedReportType: null,
     generateDates: (year, settings) => {
-      const fyEndMonth = settings.entity_type === 'enskild_firma'
+      const fyEndMonth = fiscalYearLockedToCalendar(settings.entity_type)
         ? 12
         : (settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1)
       const results: DeadlineInstance[] = []

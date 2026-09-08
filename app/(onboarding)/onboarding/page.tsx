@@ -8,7 +8,7 @@ import {
 } from '@/lib/company/pending-invites'
 import type { EntityType } from '@/types'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
-import { mapEntityType as mapTicEntityType } from '@/lib/company-lookup/entity-type-map'
+import { mapSetupEntityType as mapTicEntityType } from '@/lib/company-lookup/entity-type-map'
 
 export const dynamic = 'force-dynamic'
 

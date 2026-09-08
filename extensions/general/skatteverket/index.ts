@@ -1,6 +1,7 @@
 import { sleep } from '@/lib/utils'
 import crypto from 'crypto'
 import { z } from 'zod'
+import { parseEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse, after } from 'next/server'
@@ -923,7 +924,7 @@ export const skatteverketExtension: Extension = {
         }
         const orgNumber = formatRedovisare(
           settings.org_number as string,
-          settings.entity_type as 'enskild_firma' | 'aktiebolag'
+          parseEntityType(settings.entity_type)
         )
 
         const contestedForVerify = await contestedOrgNumberResponse(orgNumber)
@@ -989,7 +990,7 @@ export const skatteverketExtension: Extension = {
         }
         const orgNumber = formatRedovisare(
           settings.org_number as string,
-          settings.entity_type as 'enskild_firma' | 'aktiebolag'
+          parseEntityType(settings.entity_type)
         )
 
         const contestedForLink = await contestedOrgNumberResponse(orgNumber)

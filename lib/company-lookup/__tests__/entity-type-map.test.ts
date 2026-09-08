@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { mapEntityType } from '../entity-type-map'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { mapEntityType, mapSetupEntityType } from '../entity-type-map'
 
 describe('mapEntityType', () => {
   it('maps the exact AB codes and labels to aktiebolag', () => {
@@ -42,5 +42,32 @@ describe('mapEntityType', () => {
     expect(mapEntityType('')).toBeNull()
     expect(mapEntityType(null)).toBeNull()
     expect(mapEntityType(undefined)).toBeNull()
+  })
+})
+
+describe('mapSetupEntityType: only creatable forms are prefilled', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('maps ideell förening only when the creation flag is on', () => {
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
+    expect(mapSetupEntityType('Ideell förening')).toBeNull()
+    expect(mapSetupEntityType('Aktiebolag')).toBe('aktiebolag')
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
+    expect(mapSetupEntityType('Ideell förening')).toBe('ideell_forening')
+  })
+})
+
+describe('mapEntityType: ideell förening (issue #2072)', () => {
+  it('maps the registry spelling of ideell förening', () => {
+    expect(mapEntityType('Ideell förening')).toBe('ideell_forening')
+    expect(mapEntityType('ideell forening')).toBe('ideell_forening')
+  })
+
+  it('does not map other föreningar or stiftelser', () => {
+    expect(mapEntityType('Ekonomisk förening')).toBeNull()
+    expect(mapEntityType('Registrerat trossamfund')).toBeNull()
+    expect(mapEntityType('Stiftelse')).toBeNull()
   })
 })

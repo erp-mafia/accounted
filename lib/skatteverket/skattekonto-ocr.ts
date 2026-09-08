@@ -25,6 +25,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { EntityType } from '@/types'
 import { luhnCheckDigit, luhnValidate } from '@/lib/bankgiro/luhn'
 import { toRedovisare12 } from '@/lib/invariants/org-number'
 
@@ -50,7 +51,7 @@ const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
  */
 export function generateSkattekontoOcr(
   orgOrPersonnummer: string,
-  entityType: 'enskild_firma' | 'aktiebolag',
+  entityType: EntityType,
 ): string {
   const redovisare = toRedovisare12(orgOrPersonnummer, entityType)
   return redovisare + luhnCheckDigit(redovisare).toString()
@@ -74,7 +75,7 @@ export async function resolveSkattekontoOcr(
   supabase: SupabaseClient,
   companyId: string,
   orgOrPersonnummer: string,
-  entityType: 'enskild_firma' | 'aktiebolag',
+  entityType: EntityType,
 ): Promise<string> {
   const reported = await readReportedOcr(supabase, companyId)
   return reported ?? generateSkattekontoOcr(orgOrPersonnummer, entityType)

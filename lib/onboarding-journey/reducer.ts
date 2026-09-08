@@ -4,7 +4,7 @@ import type {
   CompanyLookupOutcome,
   CompanySearchOutcome,
 } from '@/lib/company-lookup/fetch-company-lookup'
-import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
+import { mapSetupEntityType } from '@/lib/company-lookup/entity-type-map'
 import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
 
 /**
@@ -263,7 +263,9 @@ function withOrgNumber(state: JourneyState, orgNumber: string): JourneyState {
  * advances past whatever the lookup already answered.
  */
 function applyLookupFound(state: JourneyState, lookup: CompanyLookupResult): JourneyState {
-  const mapped = mapEntityType(lookup.legalEntityType)
+  // Only forms this deployment can create are prefilled; a flagged-off form
+  // falls through to the picker instead of failing at the create step.
+  const mapped = mapSetupEntityType(lookup.legalEntityType)
   const settings: Partial<CompanySettings> = {
     ...state.settings,
     entity_type: mapped ?? state.settings.entity_type,

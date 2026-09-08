@@ -23,6 +23,7 @@
  * resolved preview before commit. Skip the flag here; document it.
  */
 import { z } from 'zod'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -440,8 +441,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .eq('company_id', ctx.companyId!)
       .single()
     const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType: EntityType =
-      (settings?.entity_type as EntityType) || 'enskild_firma'
+    const entityType: EntityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settings?.entity_type)
 
     // Debit the cash account THIS transaction actually belongs to, never a
     // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the

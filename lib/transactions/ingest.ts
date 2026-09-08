@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
@@ -1164,7 +1165,7 @@ export async function ingestTransactions(
           supabase,
           companyId,
           newTransaction as Transaction,
-          undefined,
+          await resolveCompanyEntityType(supabase, companyId),
           options?.settlementAccount
         )
 

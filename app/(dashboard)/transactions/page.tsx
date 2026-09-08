@@ -4051,6 +4051,7 @@ export default function TransactionsPage() {
     quickReview?.template,
     quickReview?.templateId,
     quickReview?.category,
+    entityType as EntityType,
   )
 
   return (

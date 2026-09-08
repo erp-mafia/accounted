@@ -27,20 +27,28 @@ export function isPersonPayer(choice: PayerChoice | null | undefined): choice is
  * the owner), so every writer that lets the name default must default to the
  * same string or one person shows up as two.
  */
+import { isEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
+
 export const OWNER_FALLBACK_NAME = 'Ägare'
 
-export type ExpenseLiabilityAccount = '2893' | '2820' | '2018'
+export type ExpenseLiabilityAccount = '2893' | '2820' | '2018' | '2890'
 
 /**
  * Liability account for an utlägg. An employee is always 2820 (kortfristiga
  * skulder till anställda). The owner's account follows the entity type: an AB
  * owner is a creditor (2893 skulder till närstående); an enskild firma owner
- * makes an egen insättning (2018), which is equity, not a debt.
+ * makes an egen insättning (2018), which is equity, not a debt; a member of an
+ * ideell förening is a plain short-term creditor (2890).
+ *
+ * Same resolver as lib/expenses/expense-claims-service.ts, which is the
+ * authority at booking time; an unknown form here (a dialog rendering before
+ * the company context loads) previews the AB account, never books it.
  */
 export function resolveExpenseLiabilityAccount(
   entityType: string | null | undefined,
   payer: ExpensePayer,
 ): ExpenseLiabilityAccount {
   if (payer === 'employee') return '2820'
-  return entityType === 'enskild_firma' ? '2018' : '2893'
+  if (!isEntityType(entityType)) return '2893'
+  return ownerSettlementAccount(entityType, 'contribution') as ExpenseLiabilityAccount
 }

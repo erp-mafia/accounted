@@ -20,6 +20,7 @@
  * the lack of any preview was part of the reported bug.
  */
 import { NextResponse } from 'next/server'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
@@ -92,7 +93,7 @@ export const GET = withRouteContext(
       .single()
 
     const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+    const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
 
     // Same resolution as the POST handler: debit the cash account this
     // transaction is actually linked to, never a hardcoded 1930, so the

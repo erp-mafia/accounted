@@ -34,7 +34,18 @@ import {
   type FirstYearEndOption,
 } from '@/lib/onboarding-journey/fiscal-options'
 import type { EntityType } from '@/types'
+import { isEntityTypeCreatable, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
+
+/** Display order of the form picker (AB first, as before); flags filter it. */
+const FORM_PICKER_ORDER: EntityType[] = ['aktiebolag', 'enskild_firma', 'ideell_forening']
+
+/** i18n key per legal form for the picker chips and the summary card. */
+const FORM_LABEL_KEY: Record<EntityType, 'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening'> = {
+  aktiebolag: 'journey_form_ab',
+  enskild_firma: 'journey_form_ef',
+  ideell_forening: 'journey_form_forening',
+}
 import JourneyTrack from './JourneyTrack'
 import Question from './Question'
 import ChipRow from './ChipRow'
@@ -379,7 +390,7 @@ export default function OnboardingJourney({
     const lk = state.ticLookup
     if (!lk || station > 0) return []
     const facts: { text: string; warn?: boolean }[] = []
-    if (entity) facts.push({ text: entity === 'aktiebolag' ? t('journey_form_ab') : t('journey_form_ef') })
+    if (entity) facts.push({ text: t(FORM_LABEL_KEY[entity]) })
     if (lk.address?.city) facts.push({ text: lk.address.city })
     if (lk.sniCodes[0]?.name) facts.push({ text: lk.sniCodes[0].name })
     if (lk.registration.fTax) facts.push({ text: 'F-skatt' })
@@ -492,10 +503,10 @@ export default function OnboardingJourney({
         return (
           <Question title={t('journey_form_title')} info={t('journey_form_info')}>
             <ChipRow
-              options={[
-                { key: 'aktiebolag', label: t('journey_form_ab') },
-                { key: 'enskild_firma', label: t('journey_form_ef') },
-              ]}
+              options={FORM_PICKER_ORDER.filter(isEntityTypeCreatable).map((key) => ({
+                key,
+                label: t(FORM_LABEL_KEY[key]),
+              }))}
               onPick={(k) => dispatch({ type: 'ENTITY_PICKED', entityType: k as EntityType })}
               {...flyProps}
             />
@@ -1107,11 +1118,11 @@ function DoneStep({
   const s = state.settings
   const shortName = (s.company_name ?? '').split(' ')[0] || ''
   const rows: [string, string][] = [
-    [t('journey_card_form'), s.entity_type === 'aktiebolag' ? t('journey_form_ab') : t('journey_form_ef')],
+    [t('journey_card_form'), s.entity_type ? t(FORM_LABEL_KEY[s.entity_type]) : ''],
   ]
   if (s.org_number) {
     rows.push([
-      s.entity_type === 'enskild_firma' ? t('journey_card_persnr') : t('journey_card_orgnr'),
+      s.entity_type && usesPersonnummerAsOrgNumber(s.entity_type) ? t('journey_card_persnr') : t('journey_card_orgnr'),
       s.org_number,
     ])
   }

@@ -54,6 +54,7 @@
  * be handed a legal citation on a guess.
  */
 import type { EntityType } from '@/types'
+import { preparesArsredovisning as preparesArsredovisningByForm } from '@/lib/company/entity-type'
 import { getBASReference, type BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
 
 /** Swedish and English rejection text, mirroring the structured-errors registry shape. */
@@ -108,7 +109,7 @@ export function k2ExcludedAccountMessages(
   entityType?: EntityType | null,
 ): K2ExcludedAccountMessages {
   const label = `${account.account_number} (${account.account_name})`
-  const preparesArsredovisning = entityType === 'aktiebolag'
+  const preparesArsredovisning = entityType ? preparesArsredovisningByForm(entityType) : false
 
   if (isEgenupparbetadImmateriell(account)) {
     if (!preparesArsredovisning) {
