@@ -5,7 +5,7 @@ import { insertPostedJournalEntry, seedCompany } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
 /**
- * pg-real coverage for 20260908111134_backfill_bas2026_retired_12xx_labels.sql
+ * pg-real coverage for 20260908113353_backfill_bas2026_retired_12xx_labels.sql
  * (#2413).
  *
  * The backfill renames 1249/1259/1269 only where the chart carries the
@@ -22,7 +22,7 @@ import { getPool } from '@/tests/pg/setup'
  */
 
 const BACKFILL_SQL = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20260908111134_backfill_bas2026_retired_12xx_labels.sql'),
+  join(process.cwd(), 'supabase/migrations/20260908113353_backfill_bas2026_retired_12xx_labels.sql'),
   'utf8',
 )
 

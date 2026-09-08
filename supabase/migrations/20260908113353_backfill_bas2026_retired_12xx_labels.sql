@@ -25,6 +25,13 @@
 -- 1249. A label with history is the user's to change; this backfill only
 -- corrects the label the picker handed out before anything was booked on it.
 -- No row is deleted; bookings key on account_number, never on the label.
+--
+-- The migration runs in one transaction (Supabase CLI wraps it). The SHARE
+-- lock below makes the "no journal lines" check and the rename atomic against
+-- concurrent postings: inserts on journal_entry_lines wait the few
+-- milliseconds this takes, reads are unaffected.
+
+LOCK TABLE public.journal_entry_lines IN SHARE MODE;
 
 UPDATE public.chart_of_accounts a
    SET account_name = 'Ackumulerade avskrivningar (fritt konto för Maskiner och andra tekniska anläggningar)',
