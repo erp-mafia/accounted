@@ -30,7 +30,7 @@ create table public.zettle_connections (
   -- Sync claim: set by the run that holds the connection (cron or manual
   -- sync), so two runs never refresh the rotating token concurrently (a
   -- reused refresh token comes back 400 and would flip the row to revoked).
-  sync_lock_until          timestamptz,
+  sync_lock_until          timestamptz not null default 'epoch',
   status                   text not null default 'pending'
                              check (status in ('pending', 'active', 'revoked', 'error')),
   currency                 text,
