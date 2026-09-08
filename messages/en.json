@@ -1447,6 +1447,8 @@
     "journey_notfound_sub": "Newly registered companies can take a few days to appear at Bolagsverket.",
     "journey_notfound_continue": "Continue manually",
     "journey_notfound_edit": "Change the number",
+    "journey_search_nomatch": "No company matched that name. Try another name or type the organisation number.",
+    "journey_search_pick": "Which company do you mean?",
     "journey_ceased_title": "The company is deregistered.",
     "journey_ceased_sub": "According to Bolagsverket the company is deregistered.",
     "journey_ceased_continue": "Continue anyway",

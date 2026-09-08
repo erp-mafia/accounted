@@ -1,6 +1,9 @@
 import type { CompanySettings, EntityType, MomsPeriod } from '@/types'
-import type { CompanyLookupResult } from '@/lib/company-lookup/types'
-import type { CompanyLookupOutcome } from '@/lib/company-lookup/fetch-company-lookup'
+import type { CompanyLookupResult, CompanySearchHit } from '@/lib/company-lookup/types'
+import type {
+  CompanyLookupOutcome,
+  CompanySearchOutcome,
+} from '@/lib/company-lookup/fetch-company-lookup'
 import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
 import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
 
@@ -79,7 +82,8 @@ interface JourneySnapshot {
   settings: Partial<CompanySettings>
   ticLookup: CompanyLookupResult | null
   lookupRan: boolean
-  lookupNote: 'none' | 'error'
+  /** `nomatch`: a name search returned nothing; the user refines in place. */
+  lookupNote: 'none' | 'error' | 'nomatch'
   addressAsked: boolean
   /** EF only: the verksamhetsnamn question was explicitly answered. */
   nameConfirmedForEf: boolean
@@ -91,6 +95,9 @@ export interface JourneyState extends JourneySnapshot {
   history: JourneySnapshot[]
   /** Component fires the lookup while this is true; reducer set on ORG_SUBMITTED. */
   lookupPending: boolean
+  /** Name-search hits awaiting a pick on the orgnr step; empty otherwise.
+   *  Not snapshotted: leaving the step drops them, Back re-asks. */
+  searchHits: CompanySearchHit[]
   /** BankID CompanyRoles prefill present (name/entity trusted without lookup). */
   viaPrefill: boolean
   mode: 'first' | 'add'
@@ -111,6 +118,9 @@ export interface JourneyInit {
 export type JourneyAction =
   | { type: 'ORG_SUBMITTED'; orgNumber: string }
   | { type: 'LOOKUP_RESULT'; outcome: CompanyLookupOutcome }
+  | { type: 'SEARCH_SUBMITTED'; query: string }
+  | { type: 'SEARCH_RESULT'; outcome: CompanySearchOutcome }
+  | { type: 'SEARCH_HIT_PICKED'; hit: CompanySearchHit }
   | { type: 'NOTFOUND_CONTINUE' }
   | { type: 'NOTFOUND_EDIT' }
   | { type: 'CEASED_CONTINUE' }
@@ -165,6 +175,7 @@ export function initJourney(init: JourneyInit = {}): JourneyState {
     entry: snapshotOf(base),
     history: [],
     lookupPending: false,
+    searchHits: [],
     viaPrefill: Boolean(init.initialOrgNumber && (init.initialEntityType || init.initialLegalName)),
     mode: init.mode ?? 'first',
     submitting: false,
@@ -178,6 +189,7 @@ function go(state: JourneyState, next: JourneyStep, patch?: Partial<JourneyState
   const moved: JourneyState = {
     ...state,
     lookupPending: false,
+    searchHits: [],
     serverError: null,
     ...patch,
     step: next,
@@ -241,6 +253,37 @@ function wipeDownstream(settings: Partial<CompanySettings>): Partial<CompanySett
   return next
 }
 
+function withOrgNumber(state: JourneyState, orgNumber: string): JourneyState {
+  return stay(state, { settings: { ...state.settings, org_number: orgNumber } })
+}
+
+/**
+ * The single "TIC answered with data" transition, shared by a typed orgnr,
+ * a one-hit name search and a picked hit: facts become settings, the step
+ * advances past whatever the lookup already answered.
+ */
+function applyLookupFound(state: JourneyState, lookup: CompanyLookupResult): JourneyState {
+  const mapped = mapEntityType(lookup.legalEntityType)
+  const settings: Partial<CompanySettings> = {
+    ...state.settings,
+    entity_type: mapped ?? state.settings.entity_type,
+    company_name: lookup.companyName || state.settings.company_name,
+    address_line1: lookup.address?.street ?? state.settings.address_line1,
+    postal_code: lookup.address?.postalCode ?? state.settings.postal_code,
+    city: lookup.address?.city ?? state.settings.city,
+    f_skatt: lookup.registration.fTax,
+  }
+  const enriched = stay(state, {
+    settings,
+    ticLookup: lookup,
+    lookupRan: true,
+    lookupNote: 'none' as const,
+  })
+  if (lookup.isCeased) return go(enriched, 'ceased')
+  if (!settings.entity_type) return go(enriched, 'form')
+  return go(enriched, nextCompanyStep(enriched))
+}
+
 export function journeyReducer(state: JourneyState, action: JourneyAction): JourneyState {
   switch (action.type) {
     case 'ORG_SUBMITTED': {
@@ -252,6 +295,21 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
         lookupRan: false,
         lookupNote: 'none',
         lookupPending: true,
+        searchHits: [],
+        serverError: null,
+      })
+    }
+
+    case 'SEARCH_SUBMITTED': {
+      if (state.submitting) return state
+      // A name search has no orgnr yet: it arrives with the picked hit.
+      return stay(state, {
+        settings: { ...state.settings, org_number: undefined },
+        ticLookup: null,
+        lookupRan: false,
+        lookupNote: 'none',
+        lookupPending: true,
+        searchHits: [],
         serverError: null,
       })
     }
@@ -264,26 +322,7 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
       if (outcome.status === 'aborted') return cleared
 
       if (outcome.status === 'found') {
-        const lookup = outcome.result
-        const mapped = mapEntityType(lookup.legalEntityType)
-        const settings: Partial<CompanySettings> = {
-          ...state.settings,
-          entity_type: mapped ?? state.settings.entity_type,
-          company_name: lookup.companyName || state.settings.company_name,
-          address_line1: lookup.address?.street ?? state.settings.address_line1,
-          postal_code: lookup.address?.postalCode ?? state.settings.postal_code,
-          city: lookup.address?.city ?? state.settings.city,
-          f_skatt: lookup.registration.fTax,
-        }
-        const enriched = stay(cleared, {
-          settings,
-          ticLookup: lookup,
-          lookupRan: true,
-          lookupNote: 'none' as const,
-        })
-        if (lookup.isCeased) return go(enriched, 'ceased')
-        if (!settings.entity_type) return go(enriched, 'form')
-        return go(enriched, nextCompanyStep(enriched))
+        return applyLookupFound(cleared, outcome.result)
       }
 
       if (outcome.status === 'not_found') {
@@ -300,6 +339,34 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
         return go(noted, nextCompanyStep(noted))
       }
       return go(noted, 'form')
+    }
+
+    case 'SEARCH_RESULT': {
+      if (!state.lookupPending) return state
+      const cleared = stay(state, { lookupPending: false })
+      const outcome = action.outcome
+
+      if (outcome.status === 'aborted') return cleared
+
+      if (outcome.status === 'found') {
+        // One hit resolves exactly like a typed orgnr; several wait for a pick.
+        if (outcome.hits.length === 1) {
+          return applyLookupFound(withOrgNumber(cleared, outcome.hits[0].orgNumber), outcome.hits[0].result)
+        }
+        return stay(cleared, { searchHits: outcome.hits })
+      }
+
+      // Without an orgnr there is no "continue manually" path from here:
+      // the user refines the query or types the number. Both misses and
+      // failures stay on the step with an advisory note.
+      return stay(cleared, {
+        lookupNote: outcome.status === 'not_found' ? ('nomatch' as const) : ('error' as const),
+      })
+    }
+
+    case 'SEARCH_HIT_PICKED': {
+      if (state.submitting || state.step !== 'orgnr') return state
+      return applyLookupFound(withOrgNumber(state, action.hit.orgNumber), action.hit.result)
     }
 
     case 'NOTFOUND_CONTINUE': {

@@ -1,4 +1,5 @@
-import type { CompanyLookupResult } from './types'
+import { COMPANY_SEARCH_MIN_CHARS } from './types'
+import type { CompanyLookupResult, CompanySearchHit } from './types'
 import { normalizeOrgNumber } from './normalize-org-number'
 
 /**
@@ -69,6 +70,62 @@ export async function fetchCompanyLookup(
     }
   }
 
+  return mapFailure(res)
+}
+
+export type CompanySearchOutcome =
+  | { status: 'found'; hits: CompanySearchHit[] }
+  | { status: 'not_found' }
+  | { status: 'disabled' }
+  | { status: 'error' }
+  | { status: 'aborted' }
+
+/**
+ * Free-text counterpart of fetchCompanyLookup for the journey's orgnr field,
+ * which also accepts a company name. Same dispatcher, same failure mapping,
+ * same budget rule: fire once per Enter, never per keystroke. Each hit already
+ * carries the full lookup result, so picking one needs no further call.
+ */
+export async function fetchCompanySearch(
+  query: string,
+  opts: { ticEnabled: boolean; signal?: AbortSignal },
+): Promise<CompanySearchOutcome> {
+  if (!opts.ticEnabled) return { status: 'disabled' }
+  const trimmed = query.trim()
+  if (trimmed.length < COMPANY_SEARCH_MIN_CHARS) return { status: 'disabled' }
+
+  let res: Response
+  try {
+    res = await fetch(`/api/extensions/ext/tic/search?q=${encodeURIComponent(trimmed)}`, {
+      signal: opts.signal,
+    })
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') return { status: 'aborted' }
+    return { status: 'error' }
+  }
+  if (opts.signal?.aborted) return { status: 'aborted' }
+
+  if (res.ok) {
+    try {
+      const { data } = (await res.json()) as { data: CompanySearchHit[] }
+      if (!Array.isArray(data)) return { status: 'error' }
+      const hits = data.filter(
+        (h) => h && typeof h.orgNumber === 'string' && h.result && typeof h.result === 'object',
+      )
+      return hits.length > 0 ? { status: 'found', hits } : { status: 'not_found' }
+    } catch {
+      return { status: 'error' }
+    }
+  }
+
+  return mapFailure(res)
+}
+
+/** Shared non-ok mapping: dispatcher misses degrade silently, only the TIC
+ *  handler's own 404 is a user-facing "not found". */
+async function mapFailure(
+  res: Response,
+): Promise<{ status: 'not_found' } | { status: 'disabled' } | { status: 'error' }> {
   // Non-ok: read the body (best-effort) to disambiguate.
   let body: { error?: unknown; code?: unknown } = {}
   try {
