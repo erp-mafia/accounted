@@ -13,6 +13,7 @@ import {
   FiscalPeriodNotFoundError,
   withUnusedVoucherAllocation,
   JournalEntryNotBalancedError,
+  JournalLineNegativeAmountError,
   JournalEntryNotFoundError,
 } from '@/lib/bookkeeping/errors'
 import {
@@ -32,6 +33,7 @@ import {
   isDimensionValidationExemptSource,
 } from '@/lib/bookkeeping/dimension-rules'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { creditNatural } from '@/lib/bookkeeping/line-side'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { syncRotRutReclaimAfterReversal } from '@/lib/invoices/rot-rut-reclaim-reversal'
@@ -68,6 +70,22 @@ export function validateBalance(lines: CreateJournalEntryLineInput[]): {
     valid: roundedDebit === roundedCredit && roundedDebit > 0,
     totalDebit: roundedDebit,
     totalCredit: roundedCredit,
+  }
+}
+
+/**
+ * Refuse any line whose debit_amount or credit_amount is below zero. The
+ * balance check cannot catch this (a negative debit nets like a credit), so
+ * it is the engine's job to keep the one-non-negative-side invariant that the
+ * DB CHECK `journal_entry_lines_amounts_non_negative` mirrors.
+ */
+export function assertLinesNonNegative(lines: CreateJournalEntryLineInput[]): void {
+  for (const line of lines) {
+    const debit = line.debit_amount || 0
+    const credit = line.credit_amount || 0
+    if (debit < 0 || credit < 0) {
+      throw new JournalLineNegativeAmountError(line.account_number, debit, credit)
+    }
   }
 }
 
@@ -248,7 +266,8 @@ export async function createDraftEntry(
   userId: string,
   input: CreateJournalEntryInput
 ): Promise<JournalEntry> {
-  // Validate balance
+  // Validate sides and balance
+  assertLinesNonNegative(input.lines)
   const balance = validateBalance(input.lines)
   if (!balance.valid) {
     throw new JournalEntryNotBalancedError(balance.totalDebit, balance.totalCredit, 'draft')
@@ -448,7 +467,8 @@ export async function updateDraftEntry(
     throw new CannotEditNonDraftError(existing.status as string)
   }
 
-  // Same balance gate as createDraftEntry.
+  // Same side and balance gates as createDraftEntry.
+  assertLinesNonNegative(input.lines)
   const balance = validateBalance(input.lines)
   if (!balance.valid) {
     throw new JournalEntryNotBalancedError(balance.totalDebit, balance.totalCredit, 'draft')
@@ -884,6 +904,7 @@ export async function replaceOpeningBalanceEntry(
     )
   }
 
+  assertLinesNonNegative(input.lines)
   const balance = validateBalance(input.lines)
   if (!balance.valid) {
     throw new JournalEntryNotBalancedError(
@@ -1100,11 +1121,13 @@ export async function reverseEntry(
 
   const lines = (original.lines as JournalEntryLine[]) || []
 
-  // Create reversed lines (swap debit and credit, preserve dimensions)
+  // Create reversed lines (swap debit and credit, preserve dimensions). The
+  // swap runs on the line's NET so a legacy negative-side line (debit -0.25,
+  // booked before the non-negative CHECK) reverses to a well-formed positive
+  // line on the opposite side instead of copying the bad sign into the storno.
   const reversedLines: CreateJournalEntryLineInput[] = lines.map((line) => ({
     account_number: line.account_number,
-    debit_amount: line.credit_amount,
-    credit_amount: line.debit_amount,
+    ...creditNatural((line.debit_amount || 0) - (line.credit_amount || 0)),
     line_description: `Reversal: ${line.line_description || ''}`,
     currency: line.currency,
     amount_in_currency: line.amount_in_currency

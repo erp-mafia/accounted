@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { validateBalance, getSwedishLocalDate, createDraftEntry, reverseEntry } from '../engine'
+import { validateBalance, getSwedishLocalDate, createDraftEntry, reverseEntry, assertLinesNonNegative } from '../engine'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotReverseStornoError,
+  JournalLineNegativeAmountError,
   getUnusedVoucherAllocation,
 } from '../errors'
 import type { CreateJournalEntryLineInput, JournalEntryStatus } from '@/types'
@@ -96,6 +97,147 @@ describe('validateBalance', () => {
 
     const result = validateBalance(lines)
     expect(result.valid).toBe(false)
+  })
+})
+
+describe('assertLinesNonNegative', () => {
+  it('accepts one non-negative side per line', () => {
+    expect(() =>
+      assertLinesNonNegative([
+        { account_number: '6110', debit_amount: 16000, credit_amount: 0 },
+        { account_number: '3740', debit_amount: 0, credit_amount: 0.25 },
+        { account_number: '2440', debit_amount: 0, credit_amount: 15999.75 },
+      ])
+    ).not.toThrow()
+  })
+
+  it('rejects a negative debit even though the entry balances arithmetically', () => {
+    const lines: CreateJournalEntryLineInput[] = [
+      { account_number: '6110', debit_amount: 16000, credit_amount: 0 },
+      { account_number: '3740', debit_amount: -0.25, credit_amount: 0 },
+      { account_number: '2440', debit_amount: 0, credit_amount: 15999.75 },
+    ]
+    expect(validateBalance(lines).valid).toBe(true)
+    expect(() => assertLinesNonNegative(lines)).toThrow(JournalLineNegativeAmountError)
+    try {
+      assertLinesNonNegative(lines)
+    } catch (err) {
+      const e = err as JournalLineNegativeAmountError
+      expect(e.code).toBe('JOURNAL_LINE_NEGATIVE_AMOUNT')
+      expect(e.accountNumber).toBe('3740')
+      expect(e.debitAmount).toBe(-0.25)
+    }
+  })
+
+  it('rejects a negative credit', () => {
+    expect(() =>
+      assertLinesNonNegative([
+        { account_number: '1510', debit_amount: 999.5, credit_amount: 0 },
+        { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+        { account_number: '3740', debit_amount: 0, credit_amount: -0.5 },
+      ])
+    ).toThrow(JournalLineNegativeAmountError)
+  })
+})
+
+describe('createDraftEntry: refuses negative-side lines before any write', () => {
+  it('throws JournalLineNegativeAmountError and never touches the database', async () => {
+    const from = vi.fn()
+    await expect(
+      createDraftEntry({ from } as never, 'company-1', 'user-1', {
+        fiscal_period_id: 'period-1',
+        entry_date: '2024-01-01',
+        description: 'Leverantörsfaktura 374',
+        source_type: 'supplier_invoice_registered',
+        lines: [
+          { account_number: '6110', debit_amount: 16000, credit_amount: 0 },
+          { account_number: '3740', debit_amount: -0.25, credit_amount: 0 },
+          { account_number: '2440', debit_amount: 0, credit_amount: 15999.75 },
+        ],
+      })
+    ).rejects.toThrow(JournalLineNegativeAmountError)
+    expect(from).not.toHaveBeenCalled()
+  })
+})
+
+describe('reverseEntry: legacy negative-side lines reverse on their net', () => {
+  it('a debit -0.25 original becomes debit 0.25 on the storno, never credit -0.25', async () => {
+    const original = {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'A',
+      voucher_number: 42,
+      entry_date: '2026-06-06',
+      description: 'Leverantörsfaktura 374',
+      source_type: 'supplier_invoice_registered',
+      source_id: null,
+      lines: [
+        { account_number: '6110', debit_amount: 16000, credit_amount: 0 },
+        { account_number: '3740', debit_amount: -0.25, credit_amount: 0 },
+        { account_number: '2440', debit_amount: 0, credit_amount: 15999.75 },
+      ],
+    }
+    const reversal = { id: 'reversal-1', reverses_id: 'entry-1' }
+
+    let jeCall = 0
+    const jeResults = [
+      { data: original, error: null },
+      { data: reversal, error: null },
+      { data: null, error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      { data: { ...reversal, lines: [] }, error: null },
+    ]
+    function jeBuilder() {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'update', 'insert']) b[m] = vi.fn().mockReturnValue(b)
+      b.single = vi.fn().mockImplementation(async () => jeResults[jeCall++])
+      b.then = (resolve: (v: unknown) => void) => resolve(jeResults[jeCall++])
+      return b
+    }
+
+    let insertedLines: Array<{ account_number: string; debit_amount: number; credit_amount: number }> = []
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 43, error: null }),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'journal_entries') return jeBuilder()
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({
+              data: [
+                { id: 'acc-6110', account_number: '6110' },
+                { id: 'acc-3740', account_number: '3740' },
+                { id: 'acc-2440', account_number: '2440' },
+              ],
+              error: null,
+            })
+          return b
+        }
+        if (table === 'journal_entry_lines') {
+          return {
+            insert: vi.fn().mockImplementation(async (rows: typeof insertedLines) => {
+              insertedLines = rows
+              return { error: null }
+            }),
+          }
+        }
+        return createMockChain()
+      }),
+    }
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    const byAccount = Object.fromEntries(insertedLines.map((l) => [l.account_number, l]))
+    expect(byAccount['6110']).toMatchObject({ debit_amount: 0, credit_amount: 16000 })
+    expect(byAccount['3740']).toMatchObject({ debit_amount: 0.25, credit_amount: 0 })
+    expect(byAccount['2440']).toMatchObject({ debit_amount: 15999.75, credit_amount: 0 })
+    for (const l of insertedLines) {
+      expect(l.debit_amount).toBeGreaterThanOrEqual(0)
+      expect(l.credit_amount).toBeGreaterThanOrEqual(0)
+    }
   })
 })
 
