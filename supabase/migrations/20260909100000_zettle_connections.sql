@@ -24,6 +24,9 @@ create table public.zettle_connections (
   -- AES-256-GCM encrypted OAuth refresh token.
   refresh_token_encrypted  text,
   oauth_state              text,
+  -- Validated origin the connect flow started on (app origin or a brand
+  -- domain from the brands table); the callback returns the browser there.
+  return_origin            text,
   status                   text not null default 'pending'
                              check (status in ('pending', 'active', 'revoked', 'error')),
   currency                 text,

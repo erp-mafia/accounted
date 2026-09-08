@@ -3,7 +3,7 @@ import { syncSummary } from '../lib/settings-actions'
 
 describe('zettle syncSummary', () => {
   it('classifies revoked / empty / feed / errors / partial', () => {
-    expect(syncSummary({ transactions: { fetched: 1, revoked: 1, revoked: true } }).reason).toBe(
+    expect(syncSummary({ transactions: { fetched: 1, revoked: true } }).reason).toBe(
       'revoked',
     )
     expect(syncSummary({ transactions: { fetched: 0, inserted: 0 } }).reason).toBe('empty')

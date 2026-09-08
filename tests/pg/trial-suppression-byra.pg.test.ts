@@ -65,7 +65,7 @@ describe('trial suppression for byrå-team companies', () => {
     // Guard against the seed list drifting from lib/entitlements/keys.ts:
     // if PAID_CAPABILITIES grows, the migration VALUES list (and this test)
     // must grow with it. multi_user joined at 20260901081417; zettle_sync
-    // at 20260908120300.
+    // at 20260909100300.
     expect(TRIAL_KEYS).toEqual(
       [
         'ai',

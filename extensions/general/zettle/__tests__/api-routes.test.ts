@@ -23,10 +23,15 @@ vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: vi.fn(() => ({ service: true })),
 }))
 
+vi.mock('@/lib/auth/oauth-flows', () => ({
+  resolveOAuthOrigin: vi.fn().mockResolvedValue('https://brand.testbrand.example'),
+}))
+
 import { zettleExtension } from '../index'
 import { requireCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { syncZettlePurchases } from '../lib/order-sync'
+import { resolveOAuthOrigin } from '@/lib/auth/oauth-flows'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -117,6 +122,10 @@ describe('zettle extension routes', () => {
     expect(url.origin + url.pathname).toBe('https://oauth.zettle.com/authorize')
     expect(url.searchParams.get('client_id')).toBe('cid')
     expect(url.searchParams.get('scope')).toBe('READ:PURCHASE READ:USERINFO')
+    // The validated brand/app origin is frozen on the pending row so the
+    // callback can send the browser back to the domain it started on.
+    expect(resolveOAuthOrigin).toHaveBeenCalledTimes(1)
+    expect(supabase.from).toHaveBeenCalledWith('zettle_connections')
     expect(requireCapability).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',

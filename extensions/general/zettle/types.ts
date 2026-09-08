@@ -12,6 +12,8 @@ export interface ZettleConnection {
   /** AES-256-GCM encrypted OAuth refresh token. */
   refresh_token_encrypted: string | null
   oauth_state: string | null
+  /** Validated app or brand origin the connect flow started on; the callback returns there. */
+  return_origin: string | null
   status: 'pending' | 'active' | 'revoked' | 'error'
   currency: string | null
   /** Opt-in: nightly purchase-feed cron (the manual sync button ignores it). */

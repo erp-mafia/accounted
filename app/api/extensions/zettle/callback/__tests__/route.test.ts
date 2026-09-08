@@ -24,6 +24,12 @@ vi.mock('@/lib/supabase/server', () => ({
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
+const registryGet = vi.fn((..._args: unknown[]) => ({ id: 'zettle' }) as unknown)
+vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
+vi.mock('@/lib/extensions/registry', () => ({
+  extensionRegistry: { get: (...args: unknown[]) => registryGet(...args) },
+}))
+
 vi.stubEnv('NEXT_PUBLIC_APP_URL', 'http://localhost:3000')
 
 import { GET } from '../route'
@@ -135,6 +141,58 @@ describe('GET /api/extensions/zettle/callback', () => {
     )
     // Must not fall through into the conflict/error cleanup update.
     expect(mockFrom).toHaveBeenCalledTimes(3)
+  })
+
+  it('returns the browser to the brand origin the connect flow started on', async () => {
+    const findChain = mockChain({
+      data: {
+        id: CONNECTION_ID,
+        user_id: 'user-1',
+        company_id: 'company-1',
+        return_origin: 'https://brand.testbrand.example',
+      },
+    })
+    const replayChain = mockChain({ error: null })
+    const activateChain = mockChain({
+      data: {
+        id: CONNECTION_ID,
+        company_id: 'company-1',
+        user_id: 'user-1',
+        organization_uuid: 'org-uuid-1',
+      },
+    })
+    mockFrom
+      .mockReturnValueOnce(findChain)
+      .mockReturnValueOnce(replayChain)
+      .mockReturnValueOnce(activateChain)
+
+    const response = await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+    expect(response.headers.get('location')).toBe(
+      'https://brand.testbrand.example/import?mode=zettle&zettle_connected=true',
+    )
+  })
+
+  it('returns a denied authorization to the stored brand origin', async () => {
+    mockFrom.mockReturnValueOnce(
+      mockChain({ data: { return_origin: 'https://brand.testbrand.example' } }),
+    )
+
+    const response = await GET(makeRequest({ error: 'access_denied', state: OAUTH_STATE }))
+
+    expect(response.headers.get('location')).toBe(
+      'https://brand.testbrand.example/import?mode=zettle&zettle_error=access_denied',
+    )
+    expect(mockExchangeCodeForTokens).not.toHaveBeenCalled()
+  })
+
+  it('refuses with 503 when the zettle extension is not enabled', async () => {
+    registryGet.mockReturnValueOnce(undefined)
+
+    const response = await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+    expect(response.status).toBe(503)
+    expect(mockFrom).not.toHaveBeenCalled()
   })
 
   it('redirects with invalid_state when the oauth state is unknown', async () => {

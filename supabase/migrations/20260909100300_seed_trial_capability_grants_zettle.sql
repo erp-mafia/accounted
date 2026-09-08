@@ -18,7 +18,7 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- Full PAID set as of 20260908120300; keep this VALUES list in step with
+  -- Full PAID set as of 20260909100300; keep this VALUES list in step with
   -- lib/entitlements/keys.ts PAID_CAPABILITIES whenever a key is added.
   INSERT INTO public.capability_grants (company_id, capability_key, source, expires_at)
   SELECT NEW.id, k.key, 'trial', NEW.created_at + interval '30 days'
