@@ -1,4 +1,13 @@
 import { UUID_RE } from '@/lib/invariants/uuid'
+import {
+  ENTITY_TYPES,
+  ENTITY_TYPE_LABELS_SV,
+  creatableEntityTypes,
+  fiscalYearLockedToCalendar,
+  isEntityType,
+  parseEntityType,
+  resolveCompanyEntityType,
+} from '@/lib/company/entity-type'
 import { NextResponse, after } from 'next/server'
 import {
   TASKS_EXTENSION_ID,
@@ -25,7 +34,7 @@ import { CompanySetupSchema, planCompanySetup } from '@/lib/company/onboarding-i
 import { lookupCompanyByOrgNumber } from '@/extensions/general/tic/lib/lookup'
 import { TICAPIError } from '@/extensions/general/tic/lib/tic-types'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
+import { mapSetupEntityType } from '@/lib/company-lookup/entity-type-map'
 import { deriveFirstYearDefaults, parseStartMonthDay } from '@/lib/company/first-year-defaults'
 import {
   ANONYMOUS_METHODS,
@@ -1444,7 +1453,7 @@ async function categorizeTransactionCore(
     .eq('company_id', companyId)
     .single()
 
-  const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+  const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
 
   // Build mapping
   let mappingResult = buildMappingResultFromCategory(
@@ -2766,9 +2775,7 @@ export async function computeVatCloseCheck(
     .eq('company_id', companyId)
     .single()
   const momsPeriod = (settings?.moms_period as 'monthly' | 'quarterly' | 'yearly' | null) ?? null
-  const entityType = settings?.entity_type === 'aktiebolag' || settings?.entity_type === 'enskild_firma'
-    ? settings.entity_type
-    : null
+  const entityType = isEntityType(settings?.entity_type) ? settings.entity_type : null
   // 3) Deadline: based on the *requested* period type, not company setting,
   //    so the model gets the right deadline even when querying ad-hoc periods.
   //    Never turn missing settings into a plausible statutory date. Monthly
@@ -2795,10 +2802,11 @@ export async function computeVatCloseCheck(
       : null
     const reportEndMonth = Number(end.slice(5, 7))
     const reportStartMonth = reportEndMonth === 12 ? 1 : reportEndMonth + 1
-    const fiscalYearMatches = entityType === 'enskild_firma'
+    const calendarYearOnly = fiscalYearLockedToCalendar(entityType)
+    const fiscalYearMatches = calendarYearOnly
       ? reportEndMonth === 12
       : configuredStartMonth === reportStartMonth
-    const filingMethodRequired = entityType === 'aktiebolag' && settings.vat_has_eu_trade === false
+    const filingMethodRequired = !calendarYearOnly && settings.vat_has_eu_trade === false
     const filingProfileComplete = typeof settings.vat_has_eu_trade === 'boolean'
       && (!filingMethodRequired
         || settings.vat_filing_method === 'electronic'
@@ -3698,7 +3706,7 @@ export const tools: McpTool[] = [
 
       const askEverything = [
         'name',
-        'entity_type (enskild firma or aktiebolag)',
+        'entity_type (enskild_firma, aktiebolag or ideell_forening)',
         'f_skatt',
         'vat_registered (and moms_period if yes)',
         'accounting_method (accrual or cash)',
@@ -3736,7 +3744,7 @@ export const tools: McpTool[] = [
         }
       }
 
-      const entityType = mapEntityType(lookup.legalEntityType)
+      const entityType = mapSetupEntityType(lookup.legalEntityType)
       const warnings: string[] = []
       if (lookup.isCeased) {
         warnings.push(
@@ -3745,7 +3753,7 @@ export const tools: McpTool[] = [
       }
       if (!entityType) {
         warnings.push(
-          `Legal form "${lookup.legalEntityType ?? 'unknown'}" is not supported for automatic setup: only enskild firma and aktiebolag can be created here.`
+          `Legal form "${lookup.legalEntityType ?? 'unknown'}" is not supported for automatic setup: only ${creatableEntityTypes().map((t) => ENTITY_TYPE_LABELS_SV[t]).join(', ')} can be created here.`
         )
       }
 
@@ -3757,7 +3765,7 @@ export const tools: McpTool[] = [
       // accounting method are ALWAYS the user's answer.
       const vatIsFact = lookup.registration.vat === true
       const stillToAsk: string[] = []
-      if (!entityType) stillToAsk.push('entity_type (enskild firma or aktiebolag)')
+      if (!entityType) stillToAsk.push('entity_type (enskild_firma, aktiebolag or ideell_forening)')
       if (entityType === 'enskild_firma') {
         stillToAsk.push(
           'name: for enskild firma the verksamhetsnamn is freely choosable; suggest the registered name but let the user pick'
@@ -3850,7 +3858,7 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         name: { type: 'string', minLength: 1, maxLength: 200 },
-        entity_type: { type: 'string', enum: ['enskild_firma', 'aktiebolag'] },
+        entity_type: { type: 'string', enum: [...ENTITY_TYPES] },
         org_number: { type: 'string', description: '10 digits; required when VAT-registered' },
         vat_registered: { type: 'boolean' },
         moms_period: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'Required when vat_registered' },
@@ -17926,7 +17934,7 @@ export const tools: McpTool[] = [
         companyId,
         period,
         nextPeriod.id,
-        (settings.entity_type ?? 'aktiebolag') as EntityType,
+        parseEntityType(settings.entity_type),
       )
       if (assessment.collection.unknownVatTreatment.length > 0) {
         throw new Error(
@@ -17956,7 +17964,7 @@ export const tools: McpTool[] = [
       }
 
       const reversalDate = nextDay(period.period_end)
-      const entityType = (settings.entity_type ?? 'aktiebolag') as EntityType
+      const entityType = parseEntityType(settings.entity_type)
       const entries = [
         ...(assessment.lines.receivableLines.length > 0 &&
         !assessment.postings.receivableEntryId &&

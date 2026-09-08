@@ -23,20 +23,20 @@ describe('resolveQuickReviewDefaults', () => {
 
   it('never returns undefined for the account, whatever the template omits', () => {
     const bare: ReviewTemplate = { id: 'counterparty:abc', name_sv: 'Fee' }
-    const { account, vat } = resolveQuickReviewDefaults(bare, undefined, 'expense_other')
-    expect(account).toBe(getDefaultAccountForCategory('expense_other'))
+    const { account, vat } = resolveQuickReviewDefaults(bare, undefined, 'expense_other', 'enskild_firma')
+    expect(account).toBe(getDefaultAccountForCategory('expense_other', 'enskild_firma'))
     expect(typeof account).toBe('string')
     expect(vat).toBe('none')
   })
 
   it('returns an empty account rather than undefined when there is nothing at all', () => {
-    expect(resolveQuickReviewDefaults(null, undefined, null)).toEqual({ account: '', vat: 'none' })
-    expect(resolveQuickReviewDefaults({ id: 'counterparty:abc', name_sv: 'Fee' }, undefined, null))
+    expect(resolveQuickReviewDefaults(null, undefined, null, 'enskild_firma')).toEqual({ account: '', vat: 'none' })
+    expect(resolveQuickReviewDefaults({ id: 'counterparty:abc', name_sv: 'Fee' }, undefined, null, 'enskild_firma'))
       .toEqual({ account: '', vat: 'none' })
   })
 
   it('seeds from the counterparty template accounts, not the category fallback', () => {
-    const { account, vat } = resolveQuickReviewDefaults(counterparty, undefined, 'expense_other')
+    const { account, vat } = resolveQuickReviewDefaults(counterparty, undefined, 'expense_other', 'enskild_firma')
     expect(account).toBe('6570')
     expect(vat).toBe('none')
   })
@@ -46,6 +46,7 @@ describe('resolveQuickReviewDefaults', () => {
       { ...counterparty, debit_account: '5420', vat_treatment: 'standard_25' },
       undefined,
       'expense_other',
+      'enskild_firma',
     )
     expect(vat).toBe('standard_25')
   })
@@ -58,15 +59,15 @@ describe('resolveQuickReviewDefaults', () => {
       credit_account: '1930',
       vat_treatment: null,
     }
-    const { account } = resolveQuickReviewDefaults(catalog, 'bank_fees', 'expense_other')
+    const { account } = resolveQuickReviewDefaults(catalog, 'bank_fees', 'expense_other', 'enskild_firma')
     // Catalog templates are validated server-side by id; the form's account
     // field is not the source of truth for them.
-    expect(account).toBe(getDefaultAccountForCategory('expense_other'))
+    expect(account).toBe(getDefaultAccountForCategory('expense_other', 'enskild_firma'))
   })
 
   it('falls back to the category defaults when no template is involved', () => {
-    const { account, vat } = resolveQuickReviewDefaults(null, undefined, 'expense_other')
-    expect(account).toBe(getDefaultAccountForCategory('expense_other'))
+    const { account, vat } = resolveQuickReviewDefaults(null, undefined, 'expense_other', 'enskild_firma')
+    expect(account).toBe(getDefaultAccountForCategory('expense_other', 'enskild_firma'))
     expect(vat === 'none' || typeof vat === 'string').toBe(true)
   })
 })

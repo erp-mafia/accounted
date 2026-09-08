@@ -21,6 +21,7 @@ import type {
   VatJournalLine,
 } from '@/types'
 import { createLogger } from '@/lib/logger'
+import { ownerSettlementAccount } from '@/lib/company/entity-type'
 
 const log = createLogger('mapping-engine')
 
@@ -82,7 +83,7 @@ export async function evaluateMappingRules(
   supabase: SupabaseClient,
   companyId: string,
   transaction: Transaction,
-  entityType?: EntityType,
+  entityType: EntityType,
   settlementAccount?: string
 ): Promise<MappingResult> {
   const bankAccount = settlementAccount || '1930'
@@ -161,7 +162,7 @@ export async function evaluateMappingRules(
  */
 function evaluateTemplateRules(
   transaction: Transaction,
-  entityType?: EntityType
+  entityType: EntityType
 ): MappingResult | null {
   const matches = findMatchingTemplates(transaction, entityType)
   if (matches.length === 0 || matches[0].confidence < 0.3) return null
@@ -170,7 +171,7 @@ function evaluateTemplateRules(
   const result = buildMappingResultFromTemplate(
     best.template,
     transaction,
-    entityType || 'enskild_firma'
+    entityType
   )
   // Override the confidence with the auto-match confidence (not 1.0)
   result.confidence = best.confidence
@@ -186,7 +187,7 @@ async function evaluateCounterpartyTemplates(
   supabase: SupabaseClient,
   companyId: string,
   transaction: Transaction,
-  entityType?: EntityType
+  entityType: EntityType
 ): Promise<MappingResult | null> {
   try {
     const match = await findCounterpartyTemplate(supabase, companyId, transaction)
@@ -198,7 +199,7 @@ async function evaluateCounterpartyTemplates(
     return buildMappingResultFromCounterpartyTemplate(
       match,
       transaction,
-      entityType || 'enskild_firma'
+      entityType
     )
   } catch {
     // Non-critical: fall through to next fallback
@@ -303,7 +304,7 @@ function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
 /**
  * Build a MappingResult from a matched rule
  */
-function buildResult(rule: MappingRule, transaction: Transaction, entityType?: EntityType): MappingResult {
+function buildResult(rule: MappingRule, transaction: Transaction, entityType: EntityType): MappingResult {
   // VAT figures land on journal entry lines, which are always SEK, so they
   // are derived from the SEK value of the transaction. The LENIENT resolver
   // is deliberate: buildTransactionEntryLines resolves the gross with the
@@ -353,7 +354,7 @@ function buildResult(rule: MappingRule, transaction: Transaction, entityType?: E
 
   // If default_private, use entity-specific private account
   if (rule.default_private && isExpense) {
-    debitAccount = entityType === 'aktiebolag' ? '2893' : '2013'
+    debitAccount = ownerSettlementAccount(entityType, 'withdrawal')
   }
 
   // Generate VAT lines if applicable

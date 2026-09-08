@@ -55,3 +55,21 @@ export interface CompanyLookupResult {
    */
   registrationDate?: number | null
 }
+
+/**
+ * One hit from a free-text company search (onboarding's orgnr field also
+ * accepts a name). Carries the org number the hit resolves to alongside the
+ * same lookup result `/lookup` would return for it, so picking a hit costs
+ * no second provider call.
+ */
+export interface CompanySearchHit {
+  orgNumber: string
+  result: CompanyLookupResult
+}
+
+/**
+ * Shortest free-text query the search accepts. Shared by the client (which
+ * shakes the field instead of calling) and the TIC route (which answers 400)
+ * so the two never disagree on what is worth a provider call.
+ */
+export const COMPANY_SEARCH_MIN_CHARS = 3

@@ -1,4 +1,5 @@
 import { renderToBuffer } from '@react-pdf/renderer'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
@@ -190,7 +191,7 @@ export async function issueAndBookInvoice(
     return { ok: false, errorCode: 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED' }
   }
 
-  const entityType = (settings.entity_type as EntityType) || 'enskild_firma'
+  const entityType = await resolveCompanyEntityType(supabase, companyId, settings.entity_type)
 
   // Compare-and-set prevents two concurrent requests from posting two journal
   // entries for the same draft.

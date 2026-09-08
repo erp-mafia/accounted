@@ -1,4 +1,6 @@
 import { luhnValidate } from '@/lib/bankgiro/luhn'
+import { usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import type { EntityType } from '@/types'
 
 /**
  * Swedish organisationsnummer / personnummer: the one place that decides what
@@ -157,7 +159,7 @@ export function formatOrgNumberDisplay(raw: string | null | undefined): string {
  */
 export function toRedovisare12(
   orgNumber: string,
-  entityType: 'enskild_firma' | 'aktiebolag',
+  entityType: EntityType,
 ): string {
   const clean = stripOrgNumberFormatting(orgNumber)
 
@@ -167,7 +169,9 @@ export function toRedovisare12(
     throw new Error(`Ogiltigt organisationsnummer: ${orgNumber} (förväntar 10 eller 12 siffror)`)
   }
 
-  if (entityType === 'aktiebolag') return `16${clean}`
+  // Juridiska personer (AB, förening) carry the fixed 16 prefix; only an
+  // enskild firma identifies by the owner's personnummer.
+  if (!usesPersonnummerAsOrgNumber(entityType)) return `16${clean}`
 
   // Enskild firma: personnummer. A two-digit year above the current one must
   // belong to the previous century (someone born in 98 is 1998, not 2098).

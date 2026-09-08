@@ -1,4 +1,5 @@
 import type Stripe from 'stripe'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getStripe } from '@/lib/stripe/client'
 import { eventBus } from '@/lib/events/bus'
@@ -393,7 +394,7 @@ async function processCheckoutSessionEvent(
     .eq('company_id', connection.company_id)
     .maybeSingle()
   const accountingMethod = settings?.accounting_method || 'accrual'
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+  const entityType = await resolveCompanyEntityType(supabase, connection.company_id, settings?.entity_type)
 
   const paymentDate = new Date(event.created * 1000).toISOString().split('T')[0]
 

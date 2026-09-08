@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import {
   creditNoteNeedsJournalEntry,
@@ -156,7 +157,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   }
 
   const accountingMethod = (settings.accounting_method || 'accrual') as AccountingMethod
-  const entityType = (settings.entity_type as EntityType) || 'enskild_firma'
+  const entityType = await resolveCompanyEntityType(supabase, companyId, settings.entity_type)
 
   const { data: original } = await supabase
     .from('invoices')

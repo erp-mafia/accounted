@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { parseEntityType } from '@/lib/company/entity-type'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
@@ -119,7 +120,7 @@ export const POST = withRouteContext(
         },
         underlag,
         candidates,
-        entityType: ((company?.entity_type as EntityType | undefined) ?? 'enskild_firma'),
+        entityType: parseEntityType(company?.entity_type),
         vatRegistered: settings?.vat_registered ?? false,
         samples: parsed.data.samples,
       })

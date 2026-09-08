@@ -14,6 +14,7 @@
  * private to this module: call `commitPendingOperation()` to invoke them.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
@@ -352,7 +353,7 @@ async function loadBookingContext(
 
   return {
     accountingMethod: (settings?.accounting_method as AccountingMethod) || 'accrual',
-    entityType: (settings?.entity_type as EntityType) || 'enskild_firma',
+    entityType: await resolveCompanyEntityType(supabase, companyId, settings?.entity_type),
   }
 }
 
@@ -3331,7 +3332,7 @@ async function commitMarkInvoiceSent(
     try {
       const je = await createInvoiceJournalEntry(
         supabase, companyId, userId, invoice as Invoice,
-        (settings?.entity_type as EntityType) || 'enskild_firma',
+        await resolveCompanyEntityType(supabase, companyId, settings?.entity_type),
         invoice.customer?.name
       )
       if (je) {
@@ -4468,7 +4469,7 @@ async function commitPostKontantmetodCutoff(
       companyId,
       period,
       nextFiscalPeriodId,
-      settings.entity_type ?? 'aktiebolag',
+      parseEntityType(settings.entity_type),
     )
 
     if (assessment.postings.complete || hasIncompleteKontantmetodCutoffPair(
@@ -4484,7 +4485,7 @@ async function commitPostKontantmetodCutoff(
     const currentFingerprint = cutoffPreviewFingerprint({
       collection: assessment.collection,
       lines: assessment.lines,
-      entityType: settings.entity_type ?? 'aktiebolag',
+      entityType: parseEntityType(settings.entity_type),
       periodEnd: period.period_end,
     })
     if (currentFingerprint !== stagedFingerprint) {
@@ -4501,7 +4502,7 @@ async function commitPostKontantmetodCutoff(
       periodEnd: period.period_end,
       receivables: assessment.collection.receivables,
       payables: assessment.collection.payables,
-      entityType: settings.entity_type ?? 'aktiebolag',
+      entityType: parseEntityType(settings.entity_type),
       unknownVatTreatment: assessment.collection.unknownVatTreatment,
       strayVatOnZeroRate: assessment.collection.strayVatOnZeroRate,
     })

@@ -23,6 +23,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { createCompanyCore } from '@/lib/company/create-company'
 import { CompanySetupSchema, planCompanySetup } from '@/lib/company/onboarding-input'
+import { EntityTypeSchema } from '@/lib/api/schemas'
 
 const Company = z.object({
   id: z.string().uuid(),
@@ -77,7 +78,7 @@ registerEndpoint({
 const CreatedCompany = z.object({
   id: z.string().uuid(),
   name: z.string(),
-  entity_type: z.enum(['enskild_firma', 'aktiebolag']),
+  entity_type: EntityTypeSchema,
   org_number: z.string().nullable(),
   vat_registered: z.boolean(),
   moms_period: z.enum(['monthly', 'quarterly', 'yearly']).nullable(),

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EntityType } from '@/types'
 import { roundOre } from '@/lib/money'
+import { simplifiedYearEndRegelverk } from '@/lib/company/entity-type'
 import { parseInvoiceDateRange } from './date-range-parser'
 
 export type PeriodiseringSource = 'invoice' | 'supplier_invoice'
@@ -198,7 +199,7 @@ function buildSuggestion(args: {
     !touchesPersonnelCost
   ) {
     confidence = 'low'
-    const regelverk = entityType === 'enskild_firma' ? 'K1' : 'K2'
+    const regelverk = entityType ? simplifiedYearEndRegelverk(entityType) : 'K2'
     reason = `${reason} Under 5 000 kr: behöver normalt inte periodiseras (${regelverk}).`
   }
 

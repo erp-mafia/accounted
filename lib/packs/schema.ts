@@ -52,7 +52,7 @@ export const PACK_CATEGORIES = [
 ] as const
 
 /** Which entity types a pack applies to. Mirrors the `entity_type` CHECK. */
-export const PACK_ENTITY_TYPES = ['all', 'enskild_firma', 'aktiebolag'] as const
+export const PACK_ENTITY_TYPES = ['all', 'enskild_firma', 'aktiebolag', 'ideell_forening'] as const
 
 /** Line roles. Drives the amount maths in `applyTemplate()`. */
 export const PACK_LINE_TYPES = ['business', 'vat', 'settlement'] as const
