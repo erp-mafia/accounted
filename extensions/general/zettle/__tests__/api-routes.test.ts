@@ -124,6 +124,20 @@ describe('zettle extension routes', () => {
     )
   })
 
+  it('POST /connect invalidates a prior pending row before staging a new one', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    enqueue({ data: { is_sandbox: false } }) // guardSandbox
+    enqueue({ data: [] }) // no active connection
+    enqueue({ data: [] }) // clear stale pending (status -> error)
+    enqueue({ data: { id: 'pending-2' } }) // insert replacement pending
+    const res = await findRoute('POST', '/connect').handler(makeRequest('POST'), makeContext(supabase))
+    expect(res.status).toBe(200)
+    // Second connect must leave the abandoned oauth_state unusable so a late
+    // callback for the first flow cannot activate that row (see callback test).
+    expect(supabase.from).toHaveBeenCalledWith('zettle_connections')
+  })
+
   it('POST /connect refuses when capability is blocked', async () => {
     vi.mocked(requireCapability).mockResolvedValue(capabilityBlockedResponse(CAPABILITY.zettle_sync))
     const { supabase, enqueue } = createQueuedMockSupabase()

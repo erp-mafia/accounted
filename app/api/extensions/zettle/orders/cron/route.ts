@@ -12,10 +12,21 @@ import type { ZettleConnection } from '@/extensions/general/zettle/types'
 
 export const maxDuration = 300
 
+/** Cap of entitled connections synced per cron invocation. */
+const MAX_SYNCED = 50
+/** Page size when scanning candidates ordered by purchase cursor. */
+const CANDIDATE_PAGE_SIZE = 100
+/** Hard stop so a flood of non-entitled rows cannot burn the whole budget scanning. */
+const MAX_CANDIDATES_SCANNED = 2000
+
 /**
  * GET /api/extensions/zettle/orders/cron
  * Nightly purchase sync for connections that opted in (transaction_sync_enabled):
  * upserts each connected org's paid purchases and refunds into webshop_orders.
+ *
+ * Candidates are paged by last_order_synced_at. Entitlement skips do not advance
+ * that cursor (it controls purchase recovery) and do not consume the sync cap,
+ * so a front of non-entitled rows cannot starve eligible connections behind them.
  */
 export const GET = withCronContext('cron.zettle_order_sync', async (_request, ctx) => {
   loadExtensions()
@@ -42,29 +53,6 @@ export const GET = withCronContext('cron.zettle_order_sync', async (_request, ct
 
   const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
-  const { data: connections, error: connError } = await supabase
-    .from('zettle_connections')
-    .select('*')
-    .eq('status', 'active')
-    .eq('transaction_sync_enabled', true)
-    .order('last_order_synced_at', { ascending: true, nullsFirst: true })
-    .limit(50)
-
-  if (connError) {
-    ctx.log.error('failed to fetch zettle connections', connError, {
-      message: connError.message,
-      code: connError.code,
-    })
-    return errorResponse(connError, ctx.log, { requestId: ctx.requestId })
-  }
-
-  if (!connections || connections.length === 0) {
-    return NextResponse.json({
-      message: 'No connections with transaction sync enabled',
-      processed: 0,
-    })
-  }
-
   const startTime = Date.now()
   const TIME_BUDGET_MS = 240_000
   const deadlineMs = startTime + TIME_BUDGET_MS
@@ -76,47 +64,89 @@ export const GET = withCronContext('cron.zettle_order_sync', async (_request, ct
     status: 'synced' | 'revoked' | 'error'
   }> = []
 
-  for (const connection of connections as ZettleConnection[]) {
-    if (Date.now() >= deadlineMs) {
-      ctx.log.info('time budget reached', { processedSoFar: results.length })
-      break
+  let offset = 0
+  let scanned = 0
+  let hadCandidates = false
+
+  while (
+    results.length < MAX_SYNCED &&
+    scanned < MAX_CANDIDATES_SCANNED &&
+    Date.now() < deadlineMs
+  ) {
+    const { data: page, error: connError } = await supabase
+      .from('zettle_connections')
+      .select('*')
+      .eq('status', 'active')
+      .eq('transaction_sync_enabled', true)
+      .order('last_order_synced_at', { ascending: true, nullsFirst: true })
+      .range(offset, offset + CANDIDATE_PAGE_SIZE - 1)
+
+    if (connError) {
+      ctx.log.error('failed to fetch zettle connections', connError, {
+        message: connError.message,
+        code: connError.code,
+      })
+      return errorResponse(connError, ctx.log, { requestId: ctx.requestId })
     }
 
-    if (!(await hasCapability(supabase, connection.company_id, CAPABILITY.zettle_sync))) {
-      ctx.log.info('skip: capability not entitled', { companyId: connection.company_id })
-      continue
-    }
+    if (!page || page.length === 0) break
+    hadCandidates = true
 
-    try {
-      const summary = await syncZettlePurchases(supabase, connection, ctx.log, deadlineMs)
-      if (summary.deadlineReached) {
-        ctx.log.info('connection stopped early on time budget; remaining rows resume next run', {
+    for (const connection of page as ZettleConnection[]) {
+      scanned += 1
+      if (Date.now() >= deadlineMs) {
+        ctx.log.info('time budget reached', { processedSoFar: results.length, scanned })
+        break
+      }
+      if (results.length >= MAX_SYNCED) break
+
+      if (!(await hasCapability(supabase, connection.company_id, CAPABILITY.zettle_sync))) {
+        ctx.log.info('skip: capability not entitled', { companyId: connection.company_id })
+        continue
+      }
+
+      try {
+        const summary = await syncZettlePurchases(supabase, connection, ctx.log, deadlineMs)
+        if (summary.deadlineReached) {
+          ctx.log.info('connection stopped early on time budget; remaining rows resume next run', {
+            connectionId: connection.id,
+          })
+        }
+        results.push({
           connectionId: connection.id,
+          inserted: summary.inserted,
+          updated: summary.updated,
+          status: summary.revoked ? 'revoked' : 'synced',
+        })
+      } catch (error) {
+        ctx.log.error('zettle purchase sync failed for connection', error as Error, {
+          connectionId: connection.id,
+          companyId: connection.company_id,
+        })
+        results.push({
+          connectionId: connection.id,
+          inserted: 0,
+          updated: 0,
+          status: 'error',
         })
       }
-      results.push({
-        connectionId: connection.id,
-        inserted: summary.inserted,
-        updated: summary.updated,
-        status: summary.revoked ? 'revoked' : 'synced',
-      })
-    } catch (error) {
-      ctx.log.error('zettle purchase sync failed for connection', error as Error, {
-        connectionId: connection.id,
-        companyId: connection.company_id,
-      })
-      results.push({
-        connectionId: connection.id,
-        inserted: 0,
-        updated: 0,
-        status: 'error',
-      })
     }
+
+    offset += page.length
+    if (page.length < CANDIDATE_PAGE_SIZE) break
+  }
+
+  if (!hadCandidates) {
+    return NextResponse.json({
+      message: 'No connections with transaction sync enabled',
+      processed: 0,
+    })
   }
 
   const totalInserted = results.reduce((acc, r) => acc + r.inserted, 0)
   ctx.log.info('zettle purchase sync summary', {
     processed: results.length,
+    scanned,
     totalInserted,
     failed: results.filter((r) => r.status === 'error').length,
   })
