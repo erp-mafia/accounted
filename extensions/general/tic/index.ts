@@ -34,7 +34,12 @@ import {
   readBankIdFlow,
   setBankIdFlowCookies,
 } from './lib/bankid-flow-cookie'
-import { lookupCompanyByOrgNumber, registrationDateToMs } from './lib/lookup'
+import {
+  lookupCompanyByOrgNumber,
+  registrationDateToMs,
+  searchCompaniesForLookup,
+} from './lib/lookup'
+import { COMPANY_SEARCH_MIN_CHARS } from '@/lib/company-lookup/types'
 import {
   hasForeignCredential,
   isUnadoptedPendingAccount,
@@ -359,7 +364,7 @@ function toFinancialReportSummary(
 function handleTicError(
   error: unknown,
   log: { error: (msg: string, meta?: unknown) => void } | Console,
-  route: 'lookup' | 'profile',
+  route: 'lookup' | 'profile' | 'search',
   orgNumber: string,
   fallbackMessage: string
 ): Response {
@@ -1689,6 +1694,36 @@ export const ticExtension: Extension = {
         } catch (error) {
           log.error('unlink failed', error)
           return NextResponse.json({ error: 'Failed to unlink BankID' }, { status: 500 })
+        }
+      },
+    },
+    {
+      method: 'GET',
+      path: '/search',
+      // Onboarding's orgnr field also accepts a company name: one Lens call
+      // returns up to five hits in /lookup's shape so a pick needs no second
+      // call. User is authenticated but may not yet have a company.
+      skipCompanyContext: true,
+      handler: async (request: Request, ctx?) => {
+        const log = ctx?.log ?? console
+        const url = new URL(request.url)
+        const query = (url.searchParams.get('q') ?? '').trim()
+
+        if (query.length < COMPANY_SEARCH_MIN_CHARS) {
+          return NextResponse.json(
+            { error: `q must be at least ${COMPANY_SEARCH_MIN_CHARS} characters` },
+            { status: 400 }
+          )
+        }
+
+        try {
+          const hits = await searchCompaniesForLookup(query)
+          if (hits.length === 0) {
+            return NextResponse.json({ error: 'Company not found' }, { status: 404 })
+          }
+          return NextResponse.json({ data: hits })
+        } catch (error) {
+          return handleTicError(error, log, 'search', query, 'Failed to search companies')
         }
       },
     },

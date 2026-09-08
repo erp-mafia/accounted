@@ -1447,6 +1447,8 @@
     "journey_notfound_sub": "Nystartade företag kan ta några dagar innan de syns hos Bolagsverket.",
     "journey_notfound_continue": "Fortsätt manuellt",
     "journey_notfound_edit": "Ändra numret",
+    "journey_search_nomatch": "Inget företag matchade namnet. Prova ett annat namn eller skriv organisationsnumret.",
+    "journey_search_pick": "Vilket företag menar du?",
     "journey_ceased_title": "Företaget är avregistrerat.",
     "journey_ceased_sub": "Enligt Bolagsverket är företaget avregistrerat.",
     "journey_ceased_continue": "Fortsätt ändå",

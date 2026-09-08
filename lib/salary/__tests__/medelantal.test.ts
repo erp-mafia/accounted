@@ -1,5 +1,41 @@
 import { describe, it, expect } from 'vitest'
-import { computeMedelantalAnstallda } from '../medelantal'
+import { computeMedelantalAnstallda, resolveMedelantalAnstallda } from '../medelantal'
+
+describe('resolveMedelantalAnstallda', () => {
+  const START = '2025-07-01'
+  const END = '2026-06-30'
+  // The support case: owner registered in Löner from 2026-01-01 in a
+  // July-June year. 181 / 365 = 0.496 rounds to 0 although salary was
+  // drawn all year.
+  const halfYearOwner = [
+    { employment_start: '2026-01-01', employment_end: null, employment_degree: 100 },
+  ]
+
+  it('falls back to the FTE average when no override is set', () => {
+    expect(resolveMedelantalAnstallda(null, halfYearOwner, START, END)).toBe(0)
+    expect(resolveMedelantalAnstallda(undefined, halfYearOwner, START, END)).toBe(0)
+  })
+
+  it('lets a manual figure replace the FTE average', () => {
+    expect(resolveMedelantalAnstallda(1, halfYearOwner, START, END)).toBe(1)
+    expect(resolveMedelantalAnstallda(3, [], START, END)).toBe(3)
+  })
+
+  it('treats an explicit 0 as an override, not as "unset"', () => {
+    const fullYear = [
+      { employment_start: '2020-01-01', employment_end: null, employment_degree: 100 },
+    ]
+    expect(resolveMedelantalAnstallda(0, fullYear, START, END)).toBe(0)
+  })
+
+  it('ignores a negative or non-finite override', () => {
+    const fullYear = [
+      { employment_start: '2020-01-01', employment_end: null, employment_degree: 100 },
+    ]
+    expect(resolveMedelantalAnstallda(-1, fullYear, START, END)).toBe(1)
+    expect(resolveMedelantalAnstallda(Number.NaN, fullYear, START, END)).toBe(1)
+  })
+})
 
 describe('computeMedelantalAnstallda', () => {
   const START = '2025-01-01'

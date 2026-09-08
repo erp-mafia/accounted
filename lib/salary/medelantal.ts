@@ -66,3 +66,21 @@ export function computeMedelantalAnstallda(
 
   return Math.round(totalFteDays / periodDays)
 }
+
+/**
+ * The figure the årsredovisning discloses: a manual override from
+ * arsredovisning_narratives when the user has set one, otherwise the FTE
+ * average above. One resolver so the PDF note, the iXBRL fact, and any
+ * other reader cannot disagree about which number wins.
+ */
+export function resolveMedelantalAnstallda(
+  override: number | null | undefined,
+  employees: EmployeePeriodInput[],
+  periodStartIso: string,
+  periodEndIso: string,
+): number {
+  if (typeof override === 'number' && Number.isFinite(override) && override >= 0) {
+    return Math.round(override)
+  }
+  return computeMedelantalAnstallda(employees, periodStartIso, periodEndIso)
+}
