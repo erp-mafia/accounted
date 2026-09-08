@@ -159,7 +159,8 @@ export const sendingTheCreditNoteReversesTheEntry = env.test(
     expect(
       lines[0]?.description,
       "the correcting verifikat names the verifikat it corrects, not just the invoice",
-    ).toContain("avser verifikation A-1");
+    // Customer invoices book into series B since the standard verifikationsserier (#2336, #2358).
+    ).toContain("avser verifikation B-1");
 
     // Nothing was deleted or rewritten: the original entry is still there,
     // still posted, and the books now hold both sides of the correction.
