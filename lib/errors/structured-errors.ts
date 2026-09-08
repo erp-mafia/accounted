@@ -1407,6 +1407,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Offerten är redan fakturerad och kan inte ändras.',
     message_en: 'This quote has already been invoiced and can no longer change.',
   },
+  INVOICE_QUOTE_ALREADY_ORDERED: {
+    httpStatus: 409,
+    message_sv: 'Offerten har redan en kundorder. Fakturera från kundordern i stället.',
+    message_en: 'This quote already has a sales order. Invoice from the sales order instead.',
+  },
   INVOICE_CONVERT_NOT_CONVERTIBLE: {
     httpStatus: 400,
     message_sv: 'Endast proformafakturor och offerter kan omvandlas till faktura.',
@@ -1655,13 +1660,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   SALES_ORDER_SOURCE_NOT_PROFORMA: {
     httpStatus: 400,
-    message_sv: 'Bara en proformafaktura kan omvandlas till kundorder.',
-    message_en: 'Only a proforma invoice can be converted into a sales order.',
+    message_sv: 'Bara en proformafaktura eller offert kan omvandlas till kundorder.',
+    message_en: 'Only a proforma invoice or a quote can be converted into a sales order.',
   },
   SALES_ORDER_SOURCE_UNSUPPORTED_LINES: {
     httpStatus: 400,
-    message_sv: 'Proformafakturan innehåller rader som inte kan föras över till en kundorder (ROT/RUT-avdrag, periodisering eller negativt antal). Skapa kundordern manuellt.',
-    message_en: 'The proforma has lines that cannot be carried into a sales order (ROT/RUT deduction, accrual period or negative quantity). Create the sales order manually.',
+    message_sv: 'Underlaget innehåller rader som inte kan föras över till en kundorder (ROT/RUT-avdrag, periodisering eller negativt antal). Skapa kundordern manuellt.',
+    message_en: 'The source document has lines that cannot be carried into a sales order (ROT/RUT deduction, accrual period or negative quantity). Create the sales order manually.',
   },
   SALES_ORDER_CUSTOMER_VAT_CHANGED: {
     httpStatus: 409,
@@ -1675,8 +1680,15 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   SALES_ORDER_SOURCE_ALREADY_CONVERTED: {
     httpStatus: 409,
-    message_sv: 'Proformafakturan har redan omvandlats till en kundorder.',
-    message_en: 'The proforma has already been converted into a sales order.',
+    message_sv: 'Underlaget har redan en kundorder.',
+    message_en: 'The source document already has a sales order.',
+  },
+  SALES_ORDER_INVOICE_FX_RATE_UNAVAILABLE: {
+    httpStatus: 502,
+    message_sv:
+      'Kunde inte hämta växelkursen från Riksbanken för leverans-/fakturadatumet. Fakturan har inte skapats: en gissad kurs får inte bokföras. Försök igen om en stund.',
+    message_en:
+      'Could not fetch the Riksbanken exchange rate for the delivery/invoice date. No invoice was created: a guessed rate must not be booked. Try again shortly.',
   },
   // POST /api/invoices/{id}/peppol/send. The Access Point is an environment
   // decision (PEPPOL_TRANSPORT_PROVIDER + adapter credentials); the product

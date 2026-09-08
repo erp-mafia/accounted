@@ -130,13 +130,23 @@ export const singleActionWarnings: Record<string, string> = {
   delete_draft_invoice: 'Genom att klicka godkänn så tas utkastet bort: onumrerade utkast raderas permanent, numrerade makuleras med bevarat fakturanummer.',
   credit_supplier_invoice: 'Genom att klicka godkänn så krediteras leverantörsfakturan och registreringsverifikationen stornas.',
   approve_supplier_invoice: 'Genom att klicka godkänn så attesteras leverantörsfakturan och blir betalningsbar.',
-  convert_invoice: 'Genom att klicka godkänn så konverteras proformafakturan till en riktig faktura med F-nummer.',
+  convert_invoice: 'Genom att klicka godkänn så konverteras proforman eller offerten till en riktig faktura med F-nummer.',
   import_sie: 'Genom att klicka godkänn så importeras SIE-filen: räkenskapsperiod, ingående balans och verifikationer skapas.',
   explain_voucher_gap: 'Genom att klicka godkänn så dokumenteras förklaringen för verifikationsluckan (BFNAR 2013:2).',
   post_annual_depreciation: 'Genom att klicka godkänn så bokförs planenlig avskrivning: en verifikation per tillgång.',
 }
 
-export function singleActionWarning(operationType: string): string {
+/**
+ * The consequence sentence the approver consents to. Keyed on the operation
+ * type; the one type whose outcome depends on its params (convert_invoice
+ * with target 'order' creates a draft kundorder, no F-number, nothing
+ * booked) reads the params so the dialog never promises a faktura that the
+ * approval will not create.
+ */
+export function singleActionWarning(operationType: string, params?: Record<string, unknown> | null): string {
+  if (operationType === 'convert_invoice' && params?.target === 'order') {
+    return 'Genom att klicka godkänn så skapas en kundorder (utkast, OR-nummer) från proforman eller offerten. Ingen faktura skapas och inget bokförs; fakturan skapas senare från kundordern.'
+  }
   return singleActionWarnings[operationType] ?? ''
 }
 
