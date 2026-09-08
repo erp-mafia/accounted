@@ -66,8 +66,13 @@ async function decorateResponse(response: Response, requestId: string): Promise<
 
 ensureInitialized()
 
-// Heavy extension routes (SIE import, migration) need up to 5 minutes
-export const maxDuration = 300
+// Heavy extension routes (SIE import, entity migration) hold one request
+// open for the whole job. 800 s is the Pro-plan ceiling with Fluid compute
+// (the default is 300). The migration budgets itself against
+// MIGRATE_RUN_BUDGET_MS in extensions/general/arcim-migration/index.ts so it
+// hands back its result before this fires: a Björn Lundén company with 9 415
+// customer invoices was killed at 300 s on every attempt (2026-09-07).
+export const maxDuration = 800
 
 /**
  * Per-extension runtime feature flags. Lets ops toggle an integration off

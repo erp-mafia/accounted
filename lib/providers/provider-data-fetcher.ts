@@ -5,7 +5,7 @@ import type {
   SalesInvoiceDto,
   SupplierInvoiceDto,
 } from './dto';
-import type { ProviderName } from './types';
+import type { BjornLundenResourceConfig, ProviderName } from './types';
 
 import { FortnoxClient } from './fortnox/client';
 import { FORTNOX_RESOURCE_CONFIGS } from './fortnox/config';
@@ -70,6 +70,24 @@ async function blPaginate<T>(
   } while (page <= totalPages);
 
   return allItems;
+}
+
+/**
+ * List a Björn Lundén resource the way its endpoint is shaped. The batch
+ * endpoints page; the registers (/customer, /supplier) ignore paging and
+ * answer the whole register as one bare array, so they take the single-call
+ * path. The config's `paginated` flag has said which is which since the
+ * provider was added; the fetchers never read it, and paged the registers.
+ */
+async function blList<T>(
+  accessToken: string,
+  userKey: string,
+  config: BjornLundenResourceConfig,
+): Promise<T[]> {
+  if (config.paginated === false) {
+    return bjornLundenClient.getAll<T>(accessToken, userKey, config.listEndpoint);
+  }
+  return blPaginate<T>(accessToken, userKey, config.listEndpoint);
 }
 
 // ── Public fetch functions ──────────────────────────────────────────
@@ -186,7 +204,7 @@ export async function fetchCustomersDirect(
   if (provider === 'bjornlunden') {
     const config = BL_RESOURCE_CONFIGS[ResourceType.Customers]!;
     if (!providerCompanyId) return [];
-    const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
+    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
     return items.map((item) => config.mapper(item) as CustomerDto);
   }
 
@@ -242,7 +260,7 @@ export async function fetchSuppliersDirect(
   if (provider === 'bjornlunden') {
     const config = BL_RESOURCE_CONFIGS[ResourceType.Suppliers]!;
     if (!providerCompanyId) return [];
-    const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
+    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
     return items.map((item) => config.mapper(item) as SupplierDto);
   }
 
@@ -294,7 +312,7 @@ export async function fetchSalesInvoicesDirect(
   if (provider === 'bjornlunden') {
     const config = BL_RESOURCE_CONFIGS[ResourceType.SalesInvoices]!;
     if (!providerCompanyId) return [];
-    const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
+    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
     return items.map((item) => config.mapper(item) as SalesInvoiceDto);
   }
 
@@ -350,7 +368,7 @@ export async function fetchSupplierInvoicesDirect(
   if (provider === 'bjornlunden') {
     const config = BL_RESOURCE_CONFIGS[ResourceType.SupplierInvoices]!;
     if (!providerCompanyId) return [];
-    const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
+    const items = await blList<Record<string, unknown>>(accessToken, providerCompanyId, config);
     return items.map((item) => config.mapper(item) as SupplierInvoiceDto);
   }
 
@@ -791,7 +809,21 @@ export async function fetchSupplierInvoicesHydrated(
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
 ): Promise<HydratedInvoices<SupplierInvoiceDto>> {
   const invoices = await fetchSupplierInvoicesDirect(provider, accessToken, providerCompanyId);
+  return hydrateSupplierInvoices(provider, accessToken, providerCompanyId, invoices, budgetMs);
+}
 
+/**
+ * Hydrate a caller-chosen set of already-listed supplier invoices: the
+ * supplier-side twin of hydrateSalesInvoices, for callers that list first,
+ * drop what they already hold, and spend the budget on the rest.
+ */
+export async function hydrateSupplierInvoices(
+  provider: ProviderName,
+  accessToken: string,
+  providerCompanyId: string | undefined,
+  invoices: SupplierInvoiceDto[],
+  budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
+): Promise<HydratedInvoices<SupplierInvoiceDto>> {
   const { items, report, unhydratedIds } = await hydrateInvoices<SupplierInvoiceDto>(
     invoices,
     supplierInvoiceNeedsDetail,

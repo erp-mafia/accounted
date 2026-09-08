@@ -1,6 +1,6 @@
 import { TokenBucketRateLimiter } from '../rate-limiter';
 import { withRetry } from '../retry';
-import { BL_BASE_URL, BL_RATE_LIMIT } from './config';
+import { BL_BASE_URL, BL_BATCH_PAGE_SIZE, BL_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -136,10 +136,20 @@ export class BjornLundenClient {
     // re-fetch page 1 forever.
     const params = new URLSearchParams();
     params.set('page', String(options?.page ?? 1));
-    params.set('rows', String(options?.pageSize ?? 50));
+    params.set('rows', String(options?.pageSize ?? BL_BATCH_PAGE_SIZE));
 
     const path = `${relativePath}?${params.toString()}`;
-    const response = await this.get<BLPaginatedResponse<T>>(accessToken, userKey, path);
+    const response = await this.get<BLPaginatedResponse<T> | T[]>(accessToken, userKey, path);
+
+    // The register endpoints (/customer, /supplier) ignore paging and answer
+    // the whole register as one bare array. That is the one and only page.
+    // Read as an envelope it has no `data`, which looked like an empty
+    // register: every Björn Lundén migration before 2026-09-08 imported zero
+    // customers and zero suppliers that way and rebuilt both from invoice
+    // stubs.
+    if (Array.isArray(response)) {
+      return { items: response, page: 1, totalPages: 1, totalCount: response.length };
+    }
 
     return {
       items: Array.isArray(response.data) ? response.data : [],

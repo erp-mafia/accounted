@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchSalesInvoicesDirect, fetchSalesInvoicesHydrated, hydrateSalesInvoices } from '../provider-data-fetcher';
+import {
+  fetchSalesInvoicesDirect,
+  fetchSalesInvoicesHydrated,
+  fetchSupplierInvoicesDirect,
+  hydrateSalesInvoices,
+  hydrateSupplierInvoices,
+} from '../provider-data-fetcher';
 
 /**
  * Hydration is what makes the VAT fix work in production: the list payload
@@ -264,5 +270,53 @@ describe('hydrateSalesInvoices: a caller-chosen subset of an already-listed regi
     expect(hydration).toMatchObject({ needed: 2, hydrated: 0, skippedForBudget: 2 });
     expect([...unhydratedIds].sort()).toEqual(['4', '5']);
     expect(invoices).toHaveLength(2);
+  });
+});
+
+describe('hydrateSupplierInvoices: the supplier-side twin (bjornlunden)', () => {
+  let requested: string[];
+
+  beforeEach(() => {
+    requested = [];
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', '');
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+  it('fetches the detail form for the given subset only and merges its VAT', async () => {
+    const listRow = (entityId: number, invoiceNumber: string) => ({
+      entityId, invoiceNumber, invoiceDate: '2025-11-01', currency: 'SEK', amountInLocalCurrency: 1250, supplierName: 'Lev AB', paid: false,
+    });
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.includes('/supplierinvoice/batch')) {
+        return json({ data: [listRow(442, 'L-1'), listRow(443, 'L-2')], totalPages: 1, pageRequested: 1, totalRows: 2 });
+      }
+      if (url.includes('/supplierinvoice/byId/443')) {
+        return json({ ...listRow(443, 'L-2'), vatAmount: 250 });
+      }
+      throw new Error(`unexpected request ${url}`);
+    }));
+
+    const listed = await fetchSupplierInvoicesDirect('bjornlunden', 'token', 'user-key');
+    // The caller already holds L-1: only L-2 is worth a request.
+    const subset = listed.filter((dto) => dto.invoiceNumber === 'L-2');
+
+    const { invoices, hydration, unhydratedIds } = await hydrateSupplierInvoices('bjornlunden', 'token', 'user-key', subset);
+
+    expect(hydration).toMatchObject({ needed: 1, hydrated: 1, failed: 0, skippedForBudget: 0 });
+    expect(unhydratedIds.size).toBe(0);
+    expect(invoices).toHaveLength(1);
+    expect(invoices[0].taxTotal?.taxAmount.value).toBe(250);
+    const details = requested.filter((u) => u.includes('/supplierinvoice/byId/'));
+    expect(details).toHaveLength(1);
+    expect(details[0]).toContain('/supplierinvoice/byId/443');
   });
 });

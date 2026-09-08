@@ -92,6 +92,34 @@ describe('BjornLundenClient', () => {
       const result = await client.getPage(TOKEN, USER_KEY, '/customerinvoice/batch', { page: 99 })
       expect(result.items).toEqual([])
     })
+
+    it('getPage asks for 1 000 rows a page unless told otherwise', async () => {
+      // Production-verified 2026-09-08: BL honors `rows` at every size tried
+      // up to 10 000. At the old default of 50, a 9 415-invoice register was
+      // 189 sequential requests before any insert.
+      fetchSpy.mockResolvedValueOnce(
+        jsonResponse({ pageRequested: 1, totalPages: 10, totalRows: 9415, data: [] }),
+      )
+
+      await client.getPage(TOKEN, USER_KEY, '/customerinvoice/batch')
+
+      const url = new URL(String(fetchSpy.mock.calls[0][0]))
+      expect(url.searchParams.get('rows')).toBe('1000')
+      expect(url.searchParams.get('page')).toBe('1')
+    })
+
+    it('getPage reads a bare-array answer (the /customer and /supplier registers) as the one and only page', async () => {
+      // The registers ignore paging and answer the whole register as an
+      // array. Read as an envelope with no `data`, that was an empty page:
+      // every BL migration imported zero customers and zero suppliers.
+      fetchSpy.mockResolvedValueOnce(jsonResponse([{ id: 1 }, { id: 2 }, { id: 3 }]))
+
+      const result = await client.getPage(TOKEN, USER_KEY, '/customer', { page: 1 })
+
+      expect(result.items).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }])
+      expect(result.totalPages).toBe(1)
+      expect(result.totalCount).toBe(3)
+    })
   })
 
   describe('getAll', () => {

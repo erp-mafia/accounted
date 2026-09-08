@@ -23,8 +23,10 @@ vi.mock('@/lib/providers/provider-data-fetcher', () => ({
   fetchCompanyInfoDirect: vi.fn(),
   fetchCustomersDirect: vi.fn(),
   fetchSuppliersDirect: vi.fn(),
-  fetchSalesInvoicesHydrated: vi.fn(),
-  fetchSupplierInvoicesHydrated: vi.fn(),
+  fetchSalesInvoicesDirect: vi.fn(),
+  fetchSupplierInvoicesDirect: vi.fn(),
+  hydrateSalesInvoices: vi.fn(),
+  hydrateSupplierInvoices: vi.fn(),
 }))
 
 vi.mock('@/lib/invoices/bulk-reconcile-supplier-vouchers', () => ({
@@ -55,8 +57,10 @@ vi.mock('../lib/insert-fallback', () => ({
 
 import { executeMigration } from '../lib/migration-orchestrator'
 import {
-  fetchSalesInvoicesHydrated,
-  fetchSupplierInvoicesHydrated,
+  fetchSalesInvoicesDirect,
+  fetchSupplierInvoicesDirect,
+  hydrateSalesInvoices,
+  hydrateSupplierInvoices,
 } from '@/lib/providers/provider-data-fetcher'
 import { linkMigratedRegistrationVouchers } from '@/lib/invoices/link-migrated-registration-vouchers'
 import type { SalesInvoiceDto, SupplierInvoiceDto } from '@/lib/providers/dto'
@@ -64,6 +68,26 @@ import type { SalesInvoiceDto, SupplierInvoiceDto } from '@/lib/providers/dto'
 const mLink = linkMigratedRegistrationVouchers as Mock
 
 const HYDRATION = { needed: 0, hydrated: 0, failed: 0, skippedForBudget: 0 }
+
+/**
+ * Stand in for the list-then-hydrate pair: the list answers `invoices`, and
+ * the hydration pass hands back whatever subset it was given, unchanged,
+ * with the report and unhydrated ids the test wants the step to see.
+ */
+function listAndHydrate(
+  list: Mock,
+  hydrate: Mock,
+  invoices: unknown[],
+  hydration: typeof HYDRATION,
+  unhydratedIds: Set<string>,
+) {
+  list.mockResolvedValue(invoices)
+  hydrate.mockImplementation(async (_p: unknown, _t: unknown, _c: unknown, given: unknown[]) => ({
+    invoices: given,
+    hydration,
+    unhydratedIds,
+  }))
+}
 
 function party(name: string) {
   return { name, identifications: [] }
@@ -132,21 +156,25 @@ describe('executeMigration: registration voucher links', () => {
   })
 
   it('hands every inserted invoice, with its provider voucher ref, to the linker once and reports the counts', async () => {
-    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({
-      invoices: [
+    listAndHydrate(
+      fetchSalesInvoicesDirect as Mock,
+      hydrateSalesInvoices as Mock,
+      [
         salesDto({ invoiceNumber: '1001', sourceVoucher: { series: 'A', number: 329 } }),
         salesDto({ invoiceNumber: '1002' }),
         salesDto({ invoiceNumber: '1003', currencyCode: 'EUR' }),
       ],
-      hydration: { ...HYDRATION, needed: 1, skippedForBudget: 1 },
+      { ...HYDRATION, needed: 1, skippedForBudget: 1 },
       // 1003's detail form was never fetched: its ref is unknown, not absent.
-      unhydratedIds: new Set(['1003']),
-    })
-    ;(fetchSupplierInvoicesHydrated as Mock).mockResolvedValue({
-      invoices: [supplierDto({ invoiceNumber: 'L-77', sourceVoucher: { series: 'B', number: 5 } })],
-      hydration: HYDRATION,
-      unhydratedIds: new Set(),
-    })
+      new Set(['1003']),
+    )
+    listAndHydrate(
+      fetchSupplierInvoicesDirect as Mock,
+      hydrateSupplierInvoices as Mock,
+      [supplierDto({ invoiceNumber: 'L-77', sourceVoucher: { series: 'B', number: 5 } })],
+      HYDRATION,
+      new Set(),
+    )
 
     const results = await executeMigration(
       baseOptions({ importSalesInvoices: true, importSupplierInvoices: true }),
@@ -209,7 +237,7 @@ describe('executeMigration: registration voucher links', () => {
   })
 
   it('skips the linker entirely when no invoice was inserted', async () => {
-    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({ invoices: [], hydration: HYDRATION, unhydratedIds: new Set() })
+    listAndHydrate(fetchSalesInvoicesDirect as Mock, hydrateSalesInvoices as Mock, [], HYDRATION, new Set())
 
     const results = await executeMigration(baseOptions({ importSalesInvoices: true }))
 
@@ -218,11 +246,13 @@ describe('executeMigration: registration voucher links', () => {
   })
 
   it('records a linker failure as a step error and keeps the imported invoices', async () => {
-    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({
-      invoices: [salesDto({ invoiceNumber: '1001', sourceVoucher: { series: 'A', number: 1 } })],
-      hydration: HYDRATION,
-      unhydratedIds: new Set(),
-    })
+    listAndHydrate(
+      fetchSalesInvoicesDirect as Mock,
+      hydrateSalesInvoices as Mock,
+      [salesDto({ invoiceNumber: '1001', sourceVoucher: { series: 'A', number: 1 } })],
+      HYDRATION,
+      new Set(),
+    )
     mLink.mockRejectedValue(new Error('db down'))
 
     const results = await executeMigration(baseOptions({ importSalesInvoices: true }))
