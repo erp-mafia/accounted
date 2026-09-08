@@ -17,6 +17,7 @@ import {
 } from './dimension-resolver'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { debitNatural } from './line-side'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExpenseClaimLineInput } from '@/lib/expenses/expense-claims-service'
 import type {
@@ -166,13 +167,14 @@ export async function createSupplierInvoiceRegistrationEntry(
     defaultDimensions
   )
 
-  // Debit: Expense accounts (in SEK)
+  // Debit: Expense accounts (in SEK). A bucket that nets below zero (rabatt
+  // row, öresavrundning on 3740) books as a credit of the absolute value:
+  // every line carries exactly one non-negative side (debitNatural).
   const debitLines: CreateJournalEntryLineInput[] = []
   for (const bucket of expenseBuckets) {
     debitLines.push({
       account_number: bucket.account,
-      debit_amount: Math.round(bucket.amount * 100) / 100,
-      credit_amount: 0,
+      ...debitNatural(bucket.amount),
       line_description: desc,
       dimensions: bucket.dimensions,
     })
@@ -444,12 +446,12 @@ export async function createSupplierInvoiceCashEntry(
     defaultDimensions
   )
 
-  // Debit: Expense accounts (in SEK)
+  // Debit: Expense accounts (in SEK). Negative buckets flip to the credit
+  // side (debitNatural), same rule as the registration entry.
   for (const bucket of expenseBuckets) {
     const line: CreateJournalEntryLineInput = {
       account_number: bucket.account,
-      debit_amount: Math.round(bucket.amount * 100) / 100,
-      credit_amount: 0,
+      ...debitNatural(bucket.amount),
       line_description: desc,
       dimensions: bucket.dimensions,
     }
@@ -604,8 +606,7 @@ export function buildSupplierInvoicePrivatelyPaidLines(
     if (amount === 0) continue
     lines.push({
       account_number: bucket.account,
-      debit_amount: amount > 0 ? amount : 0,
-      credit_amount: amount < 0 ? -amount : 0,
+      ...debitNatural(amount),
       line_description: description,
       dimensions: bucket.dimensions,
     })

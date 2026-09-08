@@ -153,6 +153,40 @@ describe('getOutputVatAccount', () => {
   })
 })
 
+describe('createInvoiceJournalEntry: negative item rows keep one non-negative side', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('books a negative 0 % row (avrundning on 3740) as a debit, not a negative credit', async () => {
+    const invoice = makeInvoice({
+      subtotal: 999.5,
+      vat_amount: 250,
+      total: 1249.5,
+      vat_treatment: 'standard_25',
+      items: [
+        makeItem({ line_total: 1000, vat_rate: 25, vat_amount: 250 }),
+        makeItem({ id: 'item-2', description: 'Öresavrundning', unit_price: -0.5, line_total: -0.5, vat_rate: 0, vat_amount: 0, revenue_account: '3740' }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice, 'aktiebolag')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const rounding = input.lines.find((l) => l.account_number === '3740')
+    expect(rounding?.debit_amount).toBe(0.5)
+    expect(rounding?.credit_amount).toBe(0)
+    expect(input.lines.find((l) => l.account_number === '1510')?.debit_amount).toBe(1249.5)
+    for (const l of input.lines) {
+      expect(l.debit_amount).toBeGreaterThanOrEqual(0)
+      expect(l.credit_amount).toBeGreaterThanOrEqual(0)
+    }
+    const totalDebit = input.lines.reduce((s, l) => s + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(roundOre(totalDebit)).toBe(roundOre(totalCredit))
+  })
+})
+
 describe('createInvoiceJournalEntry: per-line VAT', () => {
   beforeEach(() => {
     vi.clearAllMocks()

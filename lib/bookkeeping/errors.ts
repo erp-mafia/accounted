@@ -18,6 +18,7 @@ export { DimensionValidationError, MandatoryDimensionMissingError } from './dime
 
 export const ACCOUNTS_NOT_IN_CHART = 'ACCOUNTS_NOT_IN_CHART' as const
 export const JOURNAL_ENTRY_NOT_BALANCED = 'JOURNAL_ENTRY_NOT_BALANCED' as const
+export const JOURNAL_LINE_NEGATIVE_AMOUNT = 'JOURNAL_LINE_NEGATIVE_AMOUNT' as const
 export const FISCAL_PERIOD_NOT_FOUND = 'FISCAL_PERIOD_NOT_FOUND' as const
 export const ENTRY_DATE_OUTSIDE_FISCAL_PERIOD = 'ENTRY_DATE_OUTSIDE_FISCAL_PERIOD' as const
 export const JOURNAL_ENTRY_NOT_FOUND = 'JOURNAL_ENTRY_NOT_FOUND' as const
@@ -91,6 +92,27 @@ export class JournalEntryNotBalancedError extends Error {
   ) {
     super(`Journal entry is not balanced: debits (${totalDebit}) != credits (${totalCredit})`)
     this.name = 'JournalEntryNotBalancedError'
+  }
+}
+
+/**
+ * A line arrived with a negative debit_amount or credit_amount. Such a line
+ * balances arithmetically (debit -0.25 nets like credit 0.25), so the balance
+ * trigger never fires, but every reader assumes one non-negative side per
+ * line: the verifikat page hides it, sums disagree with the visible rows.
+ * Producers must flip the side instead (lib/bookkeeping/line-side.ts).
+ */
+export class JournalLineNegativeAmountError extends Error {
+  readonly code = JOURNAL_LINE_NEGATIVE_AMOUNT
+  constructor(
+    public readonly accountNumber: string,
+    public readonly debitAmount: number,
+    public readonly creditAmount: number
+  ) {
+    super(
+      `Journal line on ${accountNumber} has a negative amount (debit ${debitAmount}, credit ${creditAmount}); book it on the opposite side instead`
+    )
+    this.name = 'JournalLineNegativeAmountError'
   }
 }
 

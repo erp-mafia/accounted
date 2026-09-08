@@ -12,6 +12,7 @@ import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { creditNatural } from './line-side'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -263,10 +264,12 @@ function generatePerRateLines(
         ? Math.round((rateSubtotalSek - allocated) * 100) / 100
         : Math.round(toSek(bucket.subtotal) * 100) / 100
       allocated = Math.round((allocated + credit) * 100) / 100
+      // A bucket that nets below zero (rabatt row, negative correction row)
+      // books as a debit of the absolute value: every line carries exactly
+      // one non-negative side (creditNatural), never a negative credit.
       lines.push({
         account_number: bucket.account,
-        debit_amount: 0,
-        credit_amount: credit,
+        ...creditNatural(credit),
         line_description: `Försäljning faktura ${invoiceTagText}`,
         dimensions: bucket.dimensions,
       })
@@ -277,8 +280,7 @@ function generatePerRateLines(
       const vatAccount = getOutputVatAccount(treatment)
       lines.push({
         account_number: vatAccount,
-        debit_amount: 0,
-        credit_amount: roundedVat,
+        ...creditNatural(roundedVat),
         line_description: `Utgående moms ${rate}% faktura ${invoiceTagText}`,
         dimensions: options?.defaultDimensions,
       })
@@ -738,11 +740,16 @@ export async function createCreditNoteJournalEntry(
       // cancelled/stornoed by the credit flow.
       { deferAccruals: true, defaultDimensions }
     )
+    // Credit-note items carry negative totals, so generatePerRateLines
+    // already lands them on the debit side (creditNatural); a positive item
+    // lands on the credit side. Either way the credit note debits the
+    // revenue/VAT account by the line's magnitude, so take |net| here
+    // instead of swapping sides, which would undo the sign normalisation.
     for (const line of creditLines) {
       debitLines.push({
         ...line,
-        debit_amount: Math.abs(line.credit_amount),
-        credit_amount: Math.abs(line.debit_amount),
+        debit_amount: Math.round(Math.abs(line.credit_amount - line.debit_amount) * 100) / 100,
+        credit_amount: 0,
         line_description: `Kreditfaktura ${tag}${lineSuffix}`,
       })
     }
