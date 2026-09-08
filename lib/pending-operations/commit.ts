@@ -189,6 +189,7 @@ import { createSalesOrder } from '@/lib/sales-orders/write'
 import { transitionSalesOrder } from '@/lib/sales-orders/transitions'
 import { registerSalesOrderDelivery } from '@/lib/sales-orders/register-delivery'
 import { createInvoiceFromSalesOrder } from '@/lib/sales-orders/create-invoice-from-order'
+import { convertToSalesOrder } from '@/lib/sales-orders/convert-to-sales-order'
 import type { ServiceFailure } from '@/lib/sales-orders/result'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
@@ -3130,7 +3131,7 @@ async function commitSendInvoice(
 
   // Override `status` to 'sent' on the in-memory copy. The DB flip happens
   // after email delivery (line ~625); rendering with the stale 'draft' status
-  // would stamp the customer's PDF with "UTKAST: inte en giltig faktura".
+  // would stamp the customer's PDF with "UTKAST".
   const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company as CompanySettings,
@@ -5478,6 +5479,15 @@ async function commitConvertInvoice(
 ): Promise<ExecutorResult> {
   const id = params.invoice_id as string
   if (!id) return { error: 'invoice_id is required', status: 400 }
+
+  // target 'order': shared with POST /api/invoices/[id]/convert-to-order,
+  // proforma or quote to a draft kundorder. Staged under the same operation
+  // type as the invoice conversion; the target rides in the params.
+  if (params.target === 'order') {
+    const converted = await convertToSalesOrder(supabase, { companyId, userId, invoiceId: id })
+    if (!converted.ok) return salesOrderFailure(converted)
+    return { data: { sales_order_id: converted.order.id, order_number: converted.order.order_number } }
+  }
 
   // Shared with POST /api/invoices/[id]/convert: proforma or quote to
   // invoice, F-number allocated last, source cancelled (proforma) or

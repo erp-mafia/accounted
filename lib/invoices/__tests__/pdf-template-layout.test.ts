@@ -2,9 +2,9 @@
  * Page layout of the invoice PDF: what a user reported after the English
  * translation shipped.
  *
- * - The draft stamp must not move the document: it sits in the page margin,
- *   out of the flow, on every page. A draft is otherwise a preview that lies
- *   about where the final invoice will break.
+ * - The draft watermark must not move the document: a faint diagonal word
+ *   over the page, out of the flow, on every page. A draft is otherwise a
+ *   preview that lies about where the final invoice will break.
  * - Table rows, totals, the payment box and the notice boxes never split
  *   across a page; a section heading never ends up alone at a page bottom.
  * - Words wrap whole: react-pdf's default English hyphenation split Swedish
@@ -13,11 +13,16 @@
  * - A description with line breaks keeps them.
  */
 import { describe, expect, it } from 'vitest'
+import { inflateSync } from 'node:zlib'
 import type { ReactElement, ReactNode } from 'react'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { Font, pdf } from '@react-pdf/renderer'
 import layoutDocument from '@react-pdf/layout'
 import {
+  DRAFT_WATERMARK_COLOR,
+  DRAFT_WATERMARK_FONT_SIZE_PT,
+  DRAFT_WATERMARK_OPACITY,
+  DRAFT_WATERMARK_ROTATION_DEG,
   HEADING_MIN_PRESENCE_AHEAD,
   InvoicePDF,
   DESCRIPTION_COLUMN_PT,
@@ -126,6 +131,27 @@ function pageCount(buffer: Buffer): number {
   return (buffer.toString('latin1').match(/\/Type\s*\/Page\b/g) ?? []).length
 }
 
+/** Every deflated content stream in a rendered PDF, as PDF operator text. */
+function contentStreams(buffer: Buffer): string[] {
+  const s = buffer.toString('latin1')
+  const out: string[] = []
+  let idx = 0
+  for (;;) {
+    const start = s.indexOf('stream\n', idx)
+    if (start < 0) break
+    const dataStart = start + 'stream\n'.length
+    const end = s.indexOf('endstream', dataStart)
+    if (end < 0) break
+    try {
+      out.push(inflateSync(buffer.subarray(dataStart, end)).toString('latin1'))
+    } catch {
+      // Not a deflated stream (font program, image): skip.
+    }
+    idx = end + 'endstream'.length
+  }
+  return out
+}
+
 // The laid-out node tree react-pdf hands to the painter: every node carries
 // its resolved box (top/left/width/height, relative to the page) and TEXT
 // nodes carry their broken lines. This is what the PDF will look like, so it
@@ -213,17 +239,43 @@ function expectEveryLineInsideItsBox(pages: LaidOutNode[], needle: string) {
 
 const PAGE_TOP_PADDING = 40
 
-describe('draft stamp', () => {
-  it('is out of the flow, in the top margin, and repeats on every page', () => {
+describe('draft watermark', () => {
+  // #2437: one diagonal, faint word across the page instead of a banner in
+  // the top margin. Out of the flow, on every page, and nothing else: the
+  // legal sentence about löpnummer is gone on purpose.
+  it('is a fixed full-page overlay carrying only the word UTKAST', () => {
     const tree = InvoicePDF({ invoice: draftInvoice(), customer, items: [makeItem()], company })
-    const stamp = elements(tree).find(
+    const overlay = elements(tree).find(
       (el) => el.props.fixed === true && containsText(el, 'UTKAST'),
     )
-    expect(stamp).toBeDefined()
-    const style = styleOf(stamp!)
+    expect(overlay).toBeDefined()
+    const style = styleOf(overlay!)
     expect(style.position).toBe('absolute')
-    // The page has a 40pt top padding; the stamp must fit inside it.
-    expect(style.top).toBeLessThan(40)
+    expect([style.top, style.left, style.right, style.bottom]).toEqual([0, 0, 0, 0])
+    expect(textLeaves(overlay!.props.children)).toEqual(['UTKAST'])
+
+    // Rotation and opacity sit on a wrapper around the Text; the Text
+    // carries the type.
+    const wrapper = elements(overlay!).find((el) => containsText(el, 'UTKAST') && el !== overlay)
+    const wrapperStyle = styleOf(wrapper!)
+    expect(wrapperStyle.opacity).toBe(DRAFT_WATERMARK_OPACITY)
+    // Faint enough to stay background, dark enough to survive a greyscale
+    // print: the composited grey on white must land between 70% and 85%.
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(DRAFT_WATERMARK_COLOR.slice(i, i + 2), 16))
+    const composited = 255 - DRAFT_WATERMARK_OPACITY * (255 - (0.2126 * r + 0.7152 * g + 0.0722 * b))
+    expect(composited / 255).toBeGreaterThan(0.7)
+    expect(composited / 255).toBeLessThan(0.85)
+    expect(wrapperStyle.transform).toBe(`rotate(${DRAFT_WATERMARK_ROTATION_DEG}deg)`)
+    const word = elements(wrapper!).find((el) => el.props.children === 'UTKAST')
+    expect(styleOf(word!).fontSize).toBe(DRAFT_WATERMARK_FONT_SIZE_PT)
+  })
+
+  it('says DRAFT on an English document', () => {
+    const tree = InvoicePDF({ invoice: draftInvoice(), customer, items: [makeItem()], company, language: 'en' })
+    const overlay = elements(tree).find((el) => el.props.fixed === true && containsText(el, 'DRAFT'))
+    expect(overlay).toBeDefined()
+    expect(textLeaves(overlay!.props.children)).toEqual(['DRAFT'])
+    expect(elements(tree).some((el) => containsText(el, 'not a valid invoice'))).toBe(false)
   })
 
   it('is not rendered for a numbered, sent invoice', () => {
@@ -231,7 +283,7 @@ describe('draft stamp', () => {
     expect(elements(tree).some((el) => containsText(el, 'UTKAST'))).toBe(false)
   })
 
-  it('renders a real PDF with the stamp on each page of a long draft', { timeout: 30_000 }, async () => {
+  it('renders a real PDF with the watermark on each page of a long draft', { timeout: 30_000 }, async () => {
     const items = Array.from({ length: 60 }, (_, i) =>
       makeItem({ sort_order: i, id: `item-${i}`, description: `Rad ${i + 1}` }),
     )
@@ -247,23 +299,87 @@ describe('draft stamp', () => {
     }
   })
 
+  it('is painted last on every page, so no opaque box can cover the word', { timeout: 30_000 }, async () => {
+    // react-pdf paints children in document order and `fixed` does not hoist:
+    // an overlay emitted before the payment box (opaque #f8f9fa, full content
+    // width) is painted underneath it and the word disappears on exactly the
+    // page that carries totals, bankgiro and OCR. Skeptic finding on #2437.
+    const items = Array.from({ length: 22 }, (_, i) =>
+      makeItem({ sort_order: i, id: `item-${i}`, description: `Rad ${i + 1}` }),
+    )
+    const tree = InvoicePDF({ invoice: draftInvoice(), customer, items, company })
+    const page = elements(tree).find((el) => el.props.size === 'A4')
+    const pageChildren = (page!.props.children as ReactNode[]).flat().filter(
+      (c) => c !== null && c !== undefined && typeof c !== 'boolean',
+    )
+    const last = pageChildren[pageChildren.length - 1] as AnyElement
+    expect(last.props.fixed).toBe(true)
+    expect(containsText(last, 'UTKAST')).toBe(true)
+
+    // And in the actual PDF: within each page's content stream the watermark
+    // glyph run comes after the last rectangle fill.
+    const buffer = await renderToBuffer(tree)
+    expect(pageCount(buffer)).toBeGreaterThan(1)
+    const streams = contentStreams(buffer)
+    // U T K A S T as WinAnsi glyph codes, letter-spaced, in one TJ array.
+    const watermarkRun = /\[<55>[^\]<]*<54>[^\]<]*<4b>[^\]<]*<41>[^\]<]*<53>[^\]<]*<54>[^\]<]*\]\s*TJ/
+    const pagesWithWord = streams.filter((s) => watermarkRun.test(s))
+    expect(pagesWithWord.length).toBe(pageCount(buffer))
+    for (const s of pagesWithWord) {
+      const wordAt = s.search(watermarkRun)
+      const lastFill = Math.max(s.lastIndexOf(' re\nf'), s.lastIndexOf(' re\n'))
+      expect(lastFill).toBeGreaterThan(-1)
+      expect(wordAt).toBeGreaterThan(lastFill)
+    }
+  })
+
+  it('does not move the document: the first row sits where it sits on a sent invoice', async () => {
+    const items = [makeItem({ description: 'Rad 1' })]
+    const draftPages = await layOut(InvoicePDF({ invoice: draftInvoice(), customer, items, company }))
+    const sentPages = await layOut(InvoicePDF({ invoice: sentInvoice(), customer, items, company }))
+    const rowBottom = (ps: LaidOutNode[]) =>
+      absoluteTextBottoms(ps[0]).find((t) => t.text === 'Rad 1')?.bottom
+    expect(rowBottom(draftPages)).toBeDefined()
+    expect(rowBottom(draftPages)).toBe(rowBottom(sentPages))
+  })
+
   it.each([
-    ['sv', 'draft'],
-    ['en', 'draft'],
-    ['sv', 'sent'],
-    ['en', 'sent'],
-  ] as const)('stays inside the top margin (%s, %s without number)', async (language, status) => {
-    // 'sent' without a number is the corrupt-state case with the longest text.
-    const invoice = { ...draftInvoice(), status }
+    ['sv', 'draft', 'invoice'],
+    ['en', 'draft', 'invoice'],
+    ['sv', 'sent', 'invoice'],
+    ['en', 'sent', 'invoice'],
+    ['sv', 'draft', 'quote'],
+    ['en', 'draft', 'quote'],
+  ] as const)('covers the page and keeps the word on one line inside it (%s, %s %s)', async (language, status, documentType) => {
+    // 'sent' without a number is the corrupt-state case; it is marked too.
+    const invoice = { ...draftInvoice(), status, document_type: documentType }
     const pages = await layOut(InvoicePDF({ invoice, customer, items: [makeItem()], company, language }))
-    const stamp = textNodes(pages[0]).find((n) => /UTKAST|DRAFT/.test(textOf(n)))
-    expect(stamp).toBeDefined()
-    let box: LaidOutNode['box']
+    const word = textNodes(pages[0]).find((n) => /^(UTKAST|DRAFT)$/.test(textOf(n)))
+    expect(word).toBeDefined()
+    expect(word!.lines).toHaveLength(1)
+    // word -> rotated wrapper -> full-page overlay
+    let wrapper: LaidOutNode | undefined
+    let overlay: LaidOutNode | undefined
     walk(pages[0], (n) => {
-      if (n.children?.includes(stamp!)) box = n.box
+      if (n.children?.includes(word!)) wrapper = n
     })
-    expect(box).toBeDefined()
-    expect(box!.top + box!.height).toBeLessThanOrEqual(PAGE_TOP_PADDING)
+    walk(pages[0], (n) => {
+      if (wrapper && n.children?.includes(wrapper)) overlay = n
+    })
+    expect(overlay?.box).toBeDefined()
+    const page = pages[0].box!
+    expect(overlay!.box!.top).toBe(0)
+    expect(overlay!.box!.left).toBe(0)
+    expect(overlay!.box!.width).toBeCloseTo(page.width, 0)
+    expect(overlay!.box!.height).toBeCloseTo(page.height, 0)
+    // Rotation happens at paint time around the word's centre; the unrotated
+    // ink must fit the page width so no glyph is clipped once turned.
+    const ink = word!.lines![0].xAdvance ?? word!.lines![0].box.width
+    expect(ink).toBeLessThan(page.width)
+    // Centred on the page, well below the top margin (boxes are parent-relative;
+    // the overlay sits at the page origin, so the wrapper's top is absolute).
+    expect(wrapper!.box!.top).toBeGreaterThan(PAGE_TOP_PADDING)
+    expect(wrapper!.box!.top + wrapper!.box!.height / 2).toBeCloseTo(page.height / 2, 0)
   })
 })
 

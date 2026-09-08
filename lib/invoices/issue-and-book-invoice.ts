@@ -89,7 +89,7 @@ export async function archiveIssuedInvoicePdf(args: {
 
     // The DB status flip already happened, but the in-memory `invoice` is
     // stale and still reads 'draft': override here so the archived underlag
-    // isn't stamped "UTKAST: inte en giltig faktura".
+    // isn't stamped "UTKAST".
     const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
     const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(

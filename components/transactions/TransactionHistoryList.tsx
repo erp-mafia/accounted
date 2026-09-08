@@ -318,7 +318,9 @@ function BankHistoryRow({
       <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(transaction.date)}
       </td>
-      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+      {/* overflow-hidden: see #2003, the shrink-0 markers below cannot
+          truncate and would paint over Belopp. */}
+      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
         <span className="row-collapsible flex min-w-0 items-center gap-2">
           <span className="truncate">{transaction.description}</span>
           <TransactionAttachmentIndicator
@@ -490,7 +492,8 @@ function SkattekontoHistoryRow({
       <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(row.transaktionsdatum)}
       </td>
-      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+      {/* overflow-hidden: see the bank row above. */}
+      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate">{row.transaktionstext}</span>
           <Badge variant="outline" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal">
