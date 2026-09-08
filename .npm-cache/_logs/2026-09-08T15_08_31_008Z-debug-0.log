@@ -1,0 +1,24 @@
+0 verbose cli /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npm-cli.js
+1 info using npm@10.9.8
+2 info using node@v22.23.2
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/w/.npmrc
+5 silly config load:file:/root/.npmrc
+6 silly config load:file:/usr/local/etc/npmrc
+7 verbose title npm exec vitest run --project unit supabase/migrations/__tests__
+8 verbose argv "exec" "--" "vitest" "run" "--project" "unit" "supabase/migrations/__tests__"
+9 verbose logfile logs-max:10 dir:/w/.npm-cache/_logs/2026-09-08T15_08_31_008Z-
+10 verbose logfile /w/.npm-cache/_logs/2026-09-08T15_08_31_008Z-debug-0.log
+11 silly logfile done cleaning log files
+12 http fetch GET 200 https://registry.npmjs.org/npm 150ms
+13 verbose cwd /w
+14 verbose os Linux 6.8.0-138-generic
+15 verbose node v22.23.2
+16 verbose npm  v10.9.8
+17 notice
+17 notice New major version of npm available! 10.9.8 -> 12.0.2
+17 notice Changelog: https://github.com/npm/cli/releases/tag/v12.0.2
+17 notice To update run: npm install -g npm@12.0.2
+17 notice  { force: true, [Symbol(proc-log.meta)]: true }
+18 verbose exit 1
+19 verbose code 1

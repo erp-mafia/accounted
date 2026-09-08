@@ -26,11 +26,18 @@ ALTER TABLE public.customers
 -- setting the flag, one changing the type) could still leave a stale true on a
 -- customer the rule cannot apply to. A later switch back to swedish_business
 -- would then zero-rate invoices without anyone opting in again.
+-- NOT VALID first, then VALIDATE: adding a CHECK in one step holds ACCESS
+-- EXCLUSIVE while it scans every row. NOT VALID is catalog-only and still
+-- enforces the rule on new and updated rows; VALIDATE then scans under
+-- SHARE UPDATE EXCLUSIVE, which does not block reads or writes. Same shape as
+-- chart_of_accounts_default_vat_treatment_check (20260815150300).
 ALTER TABLE public.customers
   DROP CONSTRAINT IF EXISTS customers_construction_reverse_charge_type_check;
 ALTER TABLE public.customers
   ADD CONSTRAINT customers_construction_reverse_charge_type_check
-  CHECK (NOT construction_reverse_charge OR customer_type = 'swedish_business');
+  CHECK (NOT construction_reverse_charge OR customer_type = 'swedish_business') NOT VALID;
+ALTER TABLE public.customers
+  VALIDATE CONSTRAINT customers_construction_reverse_charge_type_check;
 
 COMMENT ON COLUMN public.customers.construction_reverse_charge IS
   'Buyer accounts for VAT on construction services (ML 16 kap. 13 §). Honoured for customer_type swedish_business only.';
