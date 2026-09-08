@@ -215,6 +215,7 @@ describe('ArsredovisningK3PDF', () => {
   it('renders the jämförelseår column when previous_period is set', async () => {
     const data = makeMinimalK3Data()
     data.previous_period = {
+      id: 'fp-2024',
       name: '2024',
       period_start: '2024-01-01',
       period_end: '2024-12-31',

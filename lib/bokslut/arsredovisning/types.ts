@@ -73,6 +73,7 @@ export interface ArsredovisningData {
    *  Null for the company's first fiscal year, or when the previous year's
    *  trial balance could not be generated (a warning is emitted then). */
   previous_period: {
+    id: string
     name: string
     period_start: string
     period_end: string

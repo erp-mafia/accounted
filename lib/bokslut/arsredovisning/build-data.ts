@@ -202,6 +202,7 @@ export async function buildArsredovisningData(
   const previousPeriod =
     prevPeriodRow && previousTb
       ? {
+          id: prevPeriodRow.id,
           name: prevPeriodRow.name,
           period_start: prevPeriodRow.period_start,
           period_end: prevPeriodRow.period_end,

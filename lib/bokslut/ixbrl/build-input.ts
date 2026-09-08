@@ -342,7 +342,10 @@ export async function buildIxbrlInput(
     previousPeriodId ? getMedelantalOverride(supabase, companyId, previousPeriodId) : null,
   ])
   if (employeesError) {
-    medelantalAnstallda = extractMedelantal(pdfData.noter, null)
+    // The note already embeds the current year's override; last year's
+    // manual figure is still worth showing when only the employees read
+    // failed.
+    medelantalAnstallda = extractMedelantal(pdfData.noter, previousOverride)
   } else {
     const employees = (employeeRows ?? []) as Array<{
       employment_start: string
