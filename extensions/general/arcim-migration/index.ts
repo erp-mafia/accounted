@@ -65,6 +65,20 @@ import { resolveBrandByHost } from '@/lib/branding/resolve'
 const moduleLog = createLogger('extensions/arcim-migration')
 
 /**
+ * Wall-clock budget for one /migrate run.
+ *
+ * The dispatcher (app/api/extensions/ext/[...path]/route.ts) runs under
+ * maxDuration = 800, and a run that is still going when Vercel terminates
+ * the function never writes its terminal NDJSON line: the wizard reports a
+ * dropped connection over a job that half-landed. The orchestrator fits its
+ * budget-aware steps inside this deadline and keeps the rest of the ceiling
+ * for the unbudgeted tail (voucher links, reconciliation, party
+ * suggestions, the accept write). Self-hosted has no ceiling; the same
+ * budget keeps a run bounded there too.
+ */
+const MIGRATE_RUN_BUDGET_MS = 660_000
+
+/**
  * The one answer the unauthenticated OAuth callback gives for every state
  * failure: forged, unknown, expired, replayed, or pointing at a consent that no
  * longer exists. Distinguishing them would turn the callback into a probe for
@@ -1564,6 +1578,7 @@ export const arcimMigrationExtension: Extension = {
             importSupplierInvoices,
             importAssets,
             reconcileVouchers,
+            deadlineMs: Date.now() + MIGRATE_RUN_BUDGET_MS,
           }
 
           // Streaming mode (the migration wizard opts in via Accept): one

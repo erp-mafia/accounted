@@ -2,6 +2,12 @@ export interface ExistingCustomerMetadata {
   contact_person: string | null
   invoice_email_cc_addresses: string[] | null
   invoice_email_bcc_addresses: string[] | null
+  /**
+   * NULL on a row the invoice steps created as a minimal stub for a
+   * counterparty the register never delivered; the register row that later
+   * maps onto it by name brings the number.
+   */
+  org_number?: string | null
 }
 
 /**
@@ -13,6 +19,7 @@ export interface CustomerMetadataEnrichment {
   contact_person?: string
   invoice_email_cc_addresses?: string[]
   invoice_email_bcc_addresses?: string[]
+  org_number?: string
 }
 
 /**
@@ -30,7 +37,15 @@ export function buildCustomerMetadataEnrichment(
   const contactPerson = mapped.contact_person
   const cc = mapped.invoice_email_cc_addresses
   const bcc = mapped.invoice_email_bcc_addresses
+  const orgNumber = mapped.org_number
 
+  if (
+    existing.org_number === null
+    && typeof orgNumber === 'string'
+    && orgNumber.trim().length > 0
+  ) {
+    changes.org_number = orgNumber
+  }
   if (
     existing.contact_person === null
     && typeof contactPerson === 'string'
