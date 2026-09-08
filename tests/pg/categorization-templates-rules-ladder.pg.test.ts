@@ -4,7 +4,7 @@ import { seedCompany } from './fixtures'
 
 /**
  * Rules ladder columns on categorization_templates (migration
- * 20260907120000). The trigger keeps `mode` and `is_active` in step in both
+ * 20260907121500). The trigger keeps `mode` and `is_active` in step in both
  * directions: the booking engine keeps reading is_active, the Regler pages
  * read mode, and neither side can drift.
  */

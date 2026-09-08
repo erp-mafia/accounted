@@ -181,7 +181,8 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // once as a batch and again per invoice when the batch is rejected. The header
 // VAT update in the same module is an object literal and is checked. Merged
 // with main (#2289) at 402: 404.
-const UNRESOLVED_CEILING = 404
+// 2026-09-08: 404 -> 405, the UI v2 rules ladder branch added one dynamic query expression.
+const UNRESOLVED_CEILING = 405
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
