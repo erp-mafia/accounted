@@ -87,6 +87,11 @@ const PostSchema = z.object({
     .nullable()
     .optional(),
   parent_company_city: sanitizedText(100).nullable().optional(),
+  // ÅRL 5:20 §: manual medelantal anställda. Null clears the override and
+  // the note falls back to the FTE average over the employees table. Whole
+  // employees only (the K2 note and the iXBRL fact are integers); the cap
+  // matches the DB CHECK.
+  medelantal_anstallda_override: z.number().int().min(0).max(100_000).nullable().optional(),
   long_term_debt_over_five_years_confirmed: z.boolean().optional(),
   securities_pledged_confirmed: z.boolean().optional(),
   contingent_liabilities_confirmed: z.boolean().optional(),
