@@ -34,6 +34,7 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.platform }}
+    if: github.repository == 'erp-mafia/accounted'
     runs-on: ${{ matrix.runner }}
     strategy:
       # Publishing one architecture and silently dropping the other is worse
@@ -191,8 +192,49 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # tibbis fork: do not push to ghcr.io/erp-mafia/gnubok. Rebuild the live
+  # Ampere box from origin/main instead (same compose overlay as a manual
+  # deploy). Host key is pinned; SSH user/key/host live in repo secrets.
+  deploy-oracle:
+    name: Deploy Oracle
+    if: github.repository == 'tibbis/accounted'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Rebuild accounting.helle.cc from this commit
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${ORACLE_HOST:-}"
+          test -n "${ORACLE_USER:-}"
+          test -n "${ORACLE_SSH_KEY:-}"
+          install -d -m 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          printf '%s\n' "$ORACLE_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' \
+            '79.76.51.249 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILM+XyhzzRHB+A1a4jVa6SmFUDyBLOqMMjDG7aZxnGxO' \
+            > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes \
+            "${ORACLE_USER}@${ORACLE_HOST}" \
+            'set -euo pipefail
+             cd ~/accounted
+             git fetch origin main
+             git pull --ff-only origin main
+             export COMPOSE_FILE=docker-compose.yml:docker-compose.build.yml:docker-compose.caddy.yml:docker-compose.override.yml
+             docker compose up -d --build
+             docker compose exec -T app wget -qO- http://127.0.0.1:3000/api/health
+             echo
+             git rev-parse --short HEAD'
+
   merge:
     name: Merge, sign and scan
+    if: github.repository == 'erp-mafia/accounted'
     runs-on: ubuntu-latest
     needs: build
     permissions:

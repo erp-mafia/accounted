@@ -50,8 +50,9 @@ jobs:
     # gate in that case, so skip. schedule/workflow_dispatch carry no
     # workflow_run payload, so the `!= 'workflow_run'` arm lets them through.
     if: >-
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
+      github.repository == 'erp-mafia/accounted' &&
+      (github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success')
     permissions:
       contents: read
       # Pull the published image from GHCR.
@@ -102,7 +103,7 @@ jobs:
     # The lockfile does not change when an image is published, so the
     # workflow_run trigger is irrelevant here: run on the daily schedule and
     # on manual dispatch only.
-    if: github.event_name != 'workflow_run'
+    if: github.repository == 'erp-mafia/accounted' && github.event_name != 'workflow_run'
     permissions:
       contents: read
       # SARIF upload to the repo's "Security" tab.
