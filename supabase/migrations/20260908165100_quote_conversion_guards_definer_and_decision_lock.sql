@@ -1,4 +1,4 @@
--- Follow-up to 20260908152555_quote_source_conversion_guards (issue #2224).
+-- Follow-up to 20260908165000_quote_source_conversion_guards (issue #2224).
 --
 -- 1. The two source guards run their SELECT ... FOR UPDATE on the quote row
 --    as the invoker. Under RLS a FOR UPDATE also applies the UPDATE policy,

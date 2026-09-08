@@ -121,7 +121,7 @@ export async function convertToSalesOrder(
     },
   })
   if (!created.ok) {
-    // The database holds the atomic guards (migration 20260908152555): a
+    // The database holds the atomic guards (migration 20260908165000): a
     // second live order for the source, or a live converted invoice on the
     // quote, refuses the insert with a code even when the pre-checks above
     // raced with another conversion.

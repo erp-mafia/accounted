@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { getClient, getPool, withUserContext } from './setup'
 import { insertCompany, insertCompanyMember, seedCompany } from './fixtures'
 
-// pg-real coverage for migrations 20260908152555 and 20260908155231 (issue
+// pg-real coverage for migrations 20260908165000 and 20260908165100 (issue
 // #2224, offert -> kundorder): one live kundorder per source document, a
 // quote with a live converted invoice cannot get a live order, a quote with
 // a live order cannot get a live converted invoice, the quote decision is
@@ -90,7 +90,7 @@ async function insertConvertedInvoice(
   return id
 }
 
-describe('quote source conversion guards (20260908152555)', () => {
+describe('quote source conversion guards (20260908165000)', () => {
   it('allows one live kundorder per source and refuses a second one until the first is cancelled', async () => {
     const { userId, companyId } = await seedCompany()
     const customerId = await insertCustomer(companyId, userId)
@@ -190,7 +190,7 @@ describe('quote source conversion guards (20260908152555)', () => {
     })
   })
 
-  it('locks the quote decision in accepted while a live kundorder exists (20260908155231)', async () => {
+  it('locks the quote decision in accepted while a live kundorder exists (20260908165100)', async () => {
     const { userId, companyId } = await seedCompany()
     const customerId = await insertCustomer(companyId, userId)
     const quoteId = await insertSource(companyId, userId, customerId, 'quote')
@@ -214,7 +214,7 @@ describe('quote source conversion guards (20260908152555)', () => {
     expect(rows[0].quote_status).toBe('declined')
   })
 
-  it('still guards a non-active company: the row lock runs as definer, not under the caller RLS (20260908155231)', async () => {
+  it('still guards a non-active company: the row lock runs as definer, not under the caller RLS (20260908165100)', async () => {
     // One user, two companies, active company = A. The sales_orders insert
     // policy admits every membership, but invoices_update (and so a FOR
     // UPDATE under RLS) admits only the active company; without SECURITY
@@ -240,7 +240,7 @@ describe('quote source conversion guards (20260908152555)', () => {
     })
   })
 
-  it('refuses a source document from another company instead of inspecting it as definer (20260908155231)', async () => {
+  it('refuses a source document from another company instead of inspecting it as definer (20260908165100)', async () => {
     const { userId, companyId: companyA } = await seedCompany()
     const { userId: otherUser, companyId: companyB } = await seedCompany()
     const customerA = await insertCustomer(companyA, userId)

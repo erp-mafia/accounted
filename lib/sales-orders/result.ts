@@ -35,7 +35,7 @@ export function codeFromPgError(error: unknown): string | null {
   if (message.includes('SALES_ORDER_QUANTITY_BELOW_INVOICED')) return 'SALES_ORDER_QUANTITY_BELOW_INVOICED'
   if (message.includes('sales_order_items_delivered_within_ordered')) return 'SALES_ORDER_OVER_DELIVERED'
   if (message.includes('SALES_ORDER_ITEM_NOT_FOUND')) return 'SALES_ORDER_LINE_NOT_FOUND'
-  // Migration 20260908152555: one live kundorder per source document, and a
+  // Migration 20260908165000: one live kundorder per source document, and a
   // quote with a live converted invoice cannot get a live order. Raised by
   // the partial unique index and the source guard trigger when a concurrent
   // conversion slipped past the service pre-checks.

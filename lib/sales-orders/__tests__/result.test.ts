@@ -45,7 +45,7 @@ describe('codeFromPgError', () => {
     ).toBe('SALES_ORDER_HAS_INVOICES')
   })
 
-  it('maps the one-live-order-per-source index and the quote source guard (20260908152555)', () => {
+  it('maps the one-live-order-per-source index and the quote source guard (20260908165000)', () => {
     expect(
       codeFromPgError({
         code: '23505',
