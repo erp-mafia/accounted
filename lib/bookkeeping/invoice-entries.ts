@@ -12,6 +12,7 @@ import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { creditNatural } from './line-side'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -263,10 +264,12 @@ function generatePerRateLines(
         ? Math.round((rateSubtotalSek - allocated) * 100) / 100
         : Math.round(toSek(bucket.subtotal) * 100) / 100
       allocated = Math.round((allocated + credit) * 100) / 100
+      // A bucket that nets below zero (rabatt row, negative correction row)
+      // books as a debit of the absolute value: every line carries exactly
+      // one non-negative side (creditNatural), never a negative credit.
       lines.push({
         account_number: bucket.account,
-        debit_amount: 0,
-        credit_amount: credit,
+        ...creditNatural(credit),
         line_description: `Försäljning faktura ${invoiceTagText}`,
         dimensions: bucket.dimensions,
       })
@@ -277,8 +280,7 @@ function generatePerRateLines(
       const vatAccount = getOutputVatAccount(treatment)
       lines.push({
         account_number: vatAccount,
-        debit_amount: 0,
-        credit_amount: roundedVat,
+        ...creditNatural(roundedVat),
         line_description: `Utgående moms ${rate}% faktura ${invoiceTagText}`,
         dimensions: options?.defaultDimensions,
       })
@@ -483,9 +485,11 @@ export async function createInvoiceJournalEntry(
     ? generateRotRutLines(invoice.items, tag, invoice.currency, invoice.exchange_rate, defaultDimensions)
     : { lines: [], totalSek: 0 }
 
-  // Debit: Kundfordringar, balance guarantee: debit = sum of all credit
-  // lines MINUS the ROT/RUT total which goes to 1513 instead.
-  const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount, 0)
+  // Debit: Kundfordringar, balance guarantee: debit = NET of all revenue/VAT
+  // lines (a negative rabatt/avrundning row sits on the debit side after
+  // creditNatural, so it must subtract) MINUS the ROT/RUT total which goes
+  // to 1513 instead.
+  const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0)
   const debitAmount = isForeign
     ? Math.round(totalCredits * 100) / 100
     : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
@@ -738,11 +742,18 @@ export async function createCreditNoteJournalEntry(
       // cancelled/stornoed by the credit flow.
       { deferAccruals: true, defaultDimensions }
     )
+    // Every caller hands us items negated with -Math.abs (build-credit-note-
+    // item.ts), so generatePerRateLines lands every line on the debit side
+    // via creditNatural. Taking |net| as the debit reproduces the pre-existing
+    // output exactly (the old column swap would now flip them back). Known
+    // gap, unchanged by this commit: an original with a NEGATIVE row (rabatt,
+    // avrundning) is credited on the same side as the original instead of
+    // the opposite one, because -Math.abs erases the row's sign upstream.
     for (const line of creditLines) {
       debitLines.push({
         ...line,
-        debit_amount: Math.abs(line.credit_amount),
-        credit_amount: Math.abs(line.debit_amount),
+        debit_amount: Math.round(Math.abs(line.credit_amount - line.debit_amount) * 100) / 100,
+        credit_amount: 0,
         line_description: `Kreditfaktura ${tag}${lineSuffix}`,
       })
     }
@@ -893,7 +904,8 @@ export async function createInvoiceCashEntry(
 
   // Debit: Företagskonto, balance guarantee: debit = sum of credit lines
   // minus the ROT/RUT total which goes to 1513 instead.
-  const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount, 0)
+  // NET of the revenue/VAT lines: a negative row sits on the debit side.
+  const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0)
   const cashDebit = isForeign
     ? Math.round(totalCredits * 100) / 100
     : headerToSekOrThrow(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
