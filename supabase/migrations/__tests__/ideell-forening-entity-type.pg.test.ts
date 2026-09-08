@@ -4,7 +4,7 @@ import { insertAuthUser, insertCompany } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
 /**
- * 20260908110835_ideell_forening_entity_type.sql: the third legal form is
+ * 20260908143051_ideell_forening_entity_type.sql: the third legal form is
  * accepted by the CHECK constraints, the create RPCs and the chart seed, and
  * an unknown form still fails loud everywhere.
  */
