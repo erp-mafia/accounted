@@ -244,6 +244,11 @@ export default function JournalEntryList({
   const [loadFailed, setLoadFailed] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [count, setCount] = useState(0)
+  // Badge next to "Visa saknade underlag": the total of the last SUCCESSFUL
+  // filtered fetch, null otherwise. Borrowing `count` showed 0 on a failed
+  // first load and the whole ledger's total after a toggle (#2395); a badge
+  // with no honest source is hidden, not guessed.
+  const [missingCount, setMissingCount] = useState<number | null>(null)
   const [page, setPage] = useState(0)
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
   // Entries a customer invoice points at (registration link or payment row):
@@ -591,6 +596,7 @@ export default function JournalEntryList({
         // Surface the failure: stale rows (if any) stay on screen, the empty
         // case renders the error state below, and the toast covers refetches.
         setLoadFailed(true)
+        setMissingCount(null)
         toast({ title: t('load_failed_title'), variant: 'destructive' })
         setHasLoaded(true)
         return
@@ -601,6 +607,7 @@ export default function JournalEntryList({
       const loadedEntries = data || []
       setEntries(loadedEntries)
       setCount(total || 0)
+      setMissingCount(showMissingOnly && listMode === 'committed' ? total || 0 : null)
       if (preserveSelection) {
         // Reconcile with the refreshed page: rows that left it (recommitted
         // elsewhere, filtered out by the new data) must leave the selection
@@ -1282,15 +1289,16 @@ export default function JournalEntryList({
                   disabled={listMode === 'drafts'}
                   onCheckedChange={(on) => {
                     setShowMissingOnly(on)
+                    setMissingCount(null)
                     setPage(0)
                   }}
                 />
                 <Label htmlFor="missing-attachments" className="text-sm cursor-pointer">
                   {t('show_missing')}
                 </Label>
-                {showMissingOnly && (
+                {showMissingOnly && missingCount !== null && (
                   <Badge variant="secondary" className="text-xs tabular-nums">
-                    {count}
+                    {missingCount}
                   </Badge>
                 )}
               </div>

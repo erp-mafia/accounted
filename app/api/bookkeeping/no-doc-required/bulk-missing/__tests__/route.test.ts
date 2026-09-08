@@ -65,12 +65,14 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
   })
 
   // Queue order per candidate chunk mirrors resolveMissingUnderlagEntries:
-  // documents, SI references, SI payment-row references, exemptions, then the
+  // documents, SI references (registration FK, then payment FK), SI payment-row
+  // references, exemptions, then the
   // customer-invoice resolver (invoices by journal_entry_id, invoice_payments).
   it('dry_run counts only entries that are missing AND not exempt', async () => {
     enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) // candidates
     enqueue({ data: [{ journal_entry_id: 'a' }], error: null }) // a has a document
-    enqueue({ data: [], error: null }) // no SI references with docs
+    enqueue({ data: [], error: null }) // no SI references with docs (registration FK)
+    enqueue({ data: [], error: null }) // no SI references with docs (payment FK)
     enqueue({ data: [], error: null }) // no SI payment-row references
     enqueue({ data: [{ journal_entry_id: 'b' }], error: null }) // b already exempt
     enqueue({ data: [], error: null }) // no invoices pointing at the entries
@@ -103,6 +105,7 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
       ],
       error: null,
     })
+    enqueue({ data: [], error: null }) // no SI references via payment FK
     enqueue({
       data: [
         {
@@ -127,7 +130,8 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
     // c: genuinely missing
     enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) // candidates
     enqueue({ data: [], error: null }) // no direct documents
-    enqueue({ data: [], error: null }) // no SI references
+    enqueue({ data: [], error: null }) // no SI references (registration FK)
+    enqueue({ data: [], error: null }) // no SI references (payment FK)
     enqueue({ data: [], error: null }) // no SI payment-row references
     enqueue({ data: [], error: null }) // no exemptions
     enqueue({ data: [{ id: 'inv-1', journal_entry_id: 'a' }], error: null })
@@ -141,7 +145,8 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
   it('marks the missing entries and returns the count', async () => {
     enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) // candidates
     enqueue({ data: [], error: null }) // no documents
-    enqueue({ data: [], error: null }) // no SI references with docs
+    enqueue({ data: [], error: null }) // no SI references with docs (registration FK)
+    enqueue({ data: [], error: null }) // no SI references with docs (payment FK)
     enqueue({ data: [], error: null }) // no SI payment-row references
     enqueue({ data: [{ journal_entry_id: 'a' }], error: null }) // a already exempt
     enqueue({ data: [], error: null }) // no invoices pointing at the entries
