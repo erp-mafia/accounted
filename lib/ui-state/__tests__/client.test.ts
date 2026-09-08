@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   isPwaWorklistBadgeEnabled,
+  mergeUiStatePatch,
   persistUiState,
   rememberCreateMode,
   resolveInitialMode,
@@ -47,6 +48,35 @@ describe('isPwaWorklistBadgeEnabled', () => {
   it('is on only for an explicit true', () => {
     expect(isPwaWorklistBadgeEnabled({ pwa_worklist_badge: false })).toBe(false)
     expect(isPwaWorklistBadgeEnabled({ pwa_worklist_badge: true })).toBe(true)
+  })
+})
+
+describe('mergeUiStatePatch', () => {
+  it('keeps sibling create_mode surfaces when one surface is patched', () => {
+    const merged = mergeUiStatePatch(
+      { create_mode: { bookkeeping: 'mall', invoices: 'tomt' } },
+      { create_mode: { bookkeeping: 'assistent' } },
+    )
+    expect(merged.create_mode).toEqual({
+      bookkeeping: 'assistent',
+      invoices: 'tomt',
+    })
+  })
+
+  it('merges nested bags without wiping unrelated top-level keys', () => {
+    const merged = mergeUiStatePatch(
+      {
+        nav_collapsed: true,
+        nav_folds: { register: true, bokslut: false },
+        pwa_worklist_badge: true,
+      },
+      { nav_folds: { bokslut: true } },
+    )
+    expect(merged).toEqual({
+      nav_collapsed: true,
+      nav_folds: { register: true, bokslut: true },
+      pwa_worklist_badge: true,
+    })
   })
 })
 

@@ -13,6 +13,34 @@ export function isPwaWorklistBadgeEnabled(uiState: UserUiState | undefined | nul
 }
 
 /**
+ * Same nested-bag merge as POST /api/user/ui-state: shallow top-level patch
+ * plus per-key merges for nav_folds, create_mode, agent_panel, and
+ * trial_expired_ack so a partial write does not wipe siblings in the SWR cache.
+ */
+export function mergeUiStatePatch(
+  current: UserUiState | undefined | null,
+  patch: Partial<UserUiState>,
+): UserUiState {
+  const base = current ?? {}
+  return {
+    ...base,
+    ...patch,
+    ...(patch.nav_folds
+      ? { nav_folds: { ...base.nav_folds, ...patch.nav_folds } }
+      : {}),
+    ...(patch.create_mode
+      ? { create_mode: { ...base.create_mode, ...patch.create_mode } }
+      : {}),
+    ...(patch.agent_panel
+      ? { agent_panel: { ...base.agent_panel, ...patch.agent_panel } }
+      : {}),
+    ...(patch.trial_expired_ack
+      ? { trial_expired_ack: { ...base.trial_expired_ack, ...patch.trial_expired_ack } }
+      : {}),
+  }
+}
+
+/**
  * Fire-and-forget persistence of a partial user_preferences.ui_state patch
  * (nav collapse/folds, split-button last-used modes). Cosmetic preference
  * data: a lost write self-corrects on the next change, so failures are
@@ -26,7 +54,7 @@ export function persistUiState(patch: Partial<UserUiState>): void {
 export function applyUiStatePatch(patch: Partial<UserUiState>): Promise<Response> {
   void mutate(
     USER_UI_STATE_SWR_KEY,
-    (current: UserUiState | undefined) => ({ ...(current ?? {}), ...patch }),
+    (current: UserUiState | undefined) => mergeUiStatePatch(current, patch),
     { revalidate: false },
   ).catch(() => {})
   return fetch('/api/user/ui-state', {

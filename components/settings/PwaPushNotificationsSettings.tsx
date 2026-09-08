@@ -145,8 +145,12 @@ export function PwaPushNotificationsSettings() {
     if (!events) return
     const previous = events
     setEvents({ ...events, [key]: next })
-    const ok = await savePushEventSetting(key, next)
-    if (!ok) {
+    try {
+      const ok = await savePushEventSetting(key, next)
+      if (ok) return
+      setEvents(previous)
+      toast({ title: t('pwa_push_save_failed'), variant: 'destructive' })
+    } catch {
       setEvents(previous)
       toast({ title: t('pwa_push_save_failed'), variant: 'destructive' })
     }

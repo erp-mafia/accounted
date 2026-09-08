@@ -195,7 +195,7 @@ describe('exclusion and override tables', () => {
       overrides: { hosted: {}, 'self-hosted': {} },
     })
     expect(rendered).toContain(
-      'curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/x/cron',
+      'curl -sf --connect-timeout 10 --max-time 300 -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/x/cron',
     )
   })
 })
