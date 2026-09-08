@@ -881,3 +881,14 @@ describe('applySettlementAccount (bank-leg routing)', () => {
     expect(routed.credit_account).toBe('8310')
   })
 })
+
+describe('findMatchingTemplates with underlag text', () => {
+  it('finds the fuel template from a receipt line the bank text never carried', async () => {
+    const { findMatchingTemplates } = await import('../booking-templates')
+    const { makeTransaction } = await import('@/tests/helpers')
+    const tx = makeTransaction({ amount: -438.75, merchant_name: null, description: 'Kortköp K8781', mcc_code: null })
+    expect(findMatchingTemplates(tx, 'aktiebolag').find((m) => m.template.id === 'vehicle_fuel')).toBeUndefined()
+    const withDoc = findMatchingTemplates(tx, 'aktiebolag', 'Circle K Sverige AB Diesel 62,3 l')
+    expect(withDoc[0]?.template.id).toBe('vehicle_fuel')
+  })
+})

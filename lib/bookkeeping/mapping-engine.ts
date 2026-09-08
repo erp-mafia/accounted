@@ -21,6 +21,7 @@ import type {
   VatJournalLine,
 } from '@/types'
 import { createLogger } from '@/lib/logger'
+import { underlagSearchText, withUnderlagAsCounterparty, type UnderlagContext } from './underlag-context'
 
 const log = createLogger('mapping-engine')
 
@@ -83,7 +84,13 @@ export async function evaluateMappingRules(
   companyId: string,
   transaction: Transaction,
   entityType?: EntityType,
-  settlementAccount?: string
+  settlementAccount?: string,
+  /**
+   * What the matched underlag says. Tried after the bank text on both
+   * fallbacks: the counterparty templates on the invoice's supplier name, the
+   * keyword templates on the supplier and the line items.
+   */
+  underlag?: UnderlagContext | null,
 ): Promise<MappingResult> {
   const bankAccount = settlementAccount || '1930'
 
@@ -129,10 +136,10 @@ export async function evaluateMappingRules(
 
   if (error || !rules || rules.length === 0) {
     // Try counterparty templates before static template fallback
-    const counterpartyResult = await evaluateCounterpartyTemplates(supabase, companyId, transaction, entityType)
+    const counterpartyResult = await evaluateCounterpartyTemplates(supabase, companyId, transaction, entityType, underlag)
     if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount)
 
-    const templateResult = evaluateTemplateRules(transaction, entityType)
+    const templateResult = evaluateTemplateRules(transaction, entityType, underlag)
     if (templateResult) return applySettlementAccount(templateResult, bankAccount)
     return getDefaultResult(transaction, bankAccount)
   }
@@ -145,11 +152,11 @@ export async function evaluateMappingRules(
   }
 
   // Try counterparty templates before static template fallback
-  const counterpartyResult = await evaluateCounterpartyTemplates(supabase, companyId, transaction, entityType)
+  const counterpartyResult = await evaluateCounterpartyTemplates(supabase, companyId, transaction, entityType, underlag)
   if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount)
 
   // Try template-based matching before default fallback
-  const templateResult = evaluateTemplateRules(transaction, entityType)
+  const templateResult = evaluateTemplateRules(transaction, entityType, underlag)
   if (templateResult) return applySettlementAccount(templateResult, bankAccount)
 
   return getDefaultResult(transaction, bankAccount)
@@ -161,9 +168,19 @@ export async function evaluateMappingRules(
  */
 function evaluateTemplateRules(
   transaction: Transaction,
-  entityType?: EntityType
+  entityType?: EntityType,
+  underlag?: UnderlagContext | null,
 ): MappingResult | null {
-  const matches = findMatchingTemplates(transaction, entityType)
+  const bankMatches = findMatchingTemplates(transaction, entityType)
+  const extra = underlagSearchText(underlag)
+  // The document's words are searched alongside the bank text, and the
+  // stronger reading wins. When the document is what made the difference the
+  // result says so, so the proposal can show "Underlag" as its method.
+  const docMatches = extra ? findMatchingTemplates(transaction, entityType, extra) : []
+  const bankTop = bankMatches[0]?.confidence ?? 0
+  const docTop = docMatches[0]?.confidence ?? 0
+  const fromDocument = docTop > bankTop
+  const matches = fromDocument ? docMatches : bankMatches
   if (matches.length === 0 || matches[0].confidence < 0.3) return null
 
   const best = matches[0]
@@ -174,6 +191,7 @@ function evaluateTemplateRules(
   )
   // Override the confidence with the auto-match confidence (not 1.0)
   result.confidence = best.confidence
+  if (fromDocument) result.matched_on = 'underlag'
   return result
 }
 
@@ -186,20 +204,27 @@ async function evaluateCounterpartyTemplates(
   supabase: SupabaseClient,
   companyId: string,
   transaction: Transaction,
-  entityType?: EntityType
+  entityType?: EntityType,
+  underlag?: UnderlagContext | null,
 ): Promise<MappingResult | null> {
   try {
-    const match = await findCounterpartyTemplate(supabase, companyId, transaction)
-    if (!match) return null
+    const threshold = (source: string) => (source === 'auto_learned' ? 0.6 : 0.4)
+    const bankMatch = await findCounterpartyTemplate(supabase, companyId, transaction)
+    if (bankMatch && bankMatch.confidence >= threshold(bankMatch.template.source)) {
+      return buildMappingResultFromCounterpartyTemplate(bankMatch, transaction, entityType || 'enskild_firma')
+    }
 
-    const threshold = match.template.source === 'auto_learned' ? 0.6 : 0.4
-    if (match.confidence < threshold) return null
-
-    return buildMappingResultFromCounterpartyTemplate(
-      match,
-      transaction,
-      entityType || 'enskild_firma'
-    )
+    // The bank's name for the counterparty found nothing. The invoice's name
+    // for it is the key the company's supplier-invoice bookings were learned
+    // under, so a card charge from "K8781" can still meet the template for
+    // "Circle K Sverige AB".
+    if (!underlag?.supplierName) return null
+    const docView = withUnderlagAsCounterparty(transaction, underlag)
+    const docMatch = await findCounterpartyTemplate(supabase, companyId, docView)
+    if (!docMatch || docMatch.confidence < threshold(docMatch.template.source)) return null
+    const result = buildMappingResultFromCounterpartyTemplate(docMatch, transaction, entityType || 'enskild_firma')
+    result.matched_on = 'underlag'
+    return result
   } catch {
     // Non-critical: fall through to next fallback
     return null

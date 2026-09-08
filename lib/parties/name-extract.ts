@@ -96,6 +96,28 @@ const FORM_REGEXES = FORMS.map((f) => ({
   re: new RegExp(`(?:^|[\\s(])(${f.pattern})(?=$|[\\s.,;:)])`, f.caseSensitive ? 'u' : 'iu'),
 }))
 
+// Bank feeds shout: "HIGGSFIELD INC" must read as Inc. as surely as
+// "Higgsfield Inc." does. A shouted form is trusted only when the word before
+// it is shouted too, so a lowercase sentence that happens to contain "ltd" or
+// "inc" stays untouched. Forms whose uppercase spelling is also an ordinary
+// word (Oy, SpA, AS, AG) are left out on purpose.
+const SHOUTED: Array<[string, string]> = [
+  ['INC\\.?', 'Inc.'],
+  ['CORP\\.?', 'Corp.'],
+  ['LTD\\.?', 'Ltd'],
+  ['GMBH', 'GmbH'],
+  ['OYJ', 'Oyj'],
+  ['APS', 'ApS'],
+  ['KFT\\.?', 'Kft.'],
+  ['ZRT\\.?', 'Zrt.'],
+  ['LDA\\.?', 'Lda'],
+]
+const SHOUTED_REGEXES = SHOUTED.flatMap(([pattern, canonical]) => {
+  const spec = FORMS.find((f) => f.canonical === canonical)
+  if (!spec) return []
+  return [{ spec, re: new RegExp(`(?<=(?:^|[\\s(])[A-Z0-9&.'/-]{2,}\\s)(${pattern})(?=$|[\\s.,;:)])`, 'u') }]
+})
+
 // Country words as they appear in voucher text, Swedish and English.
 const COUNTRY_WORDS: Array<[RegExp, string]> = [
   [/\b(?:Sverige|Sweden)\b/iu, 'SE'],
@@ -200,7 +222,7 @@ function nameTokensBefore(before: string): string[] {
 
 function legalFormCandidate(segment: string, next: string | undefined, whole: string): NameCandidate | null {
   let best: { index: number; length: number; spec: FormSpec } | null = null
-  for (const { spec, re } of FORM_REGEXES) {
+  for (const { spec, re } of [...FORM_REGEXES, ...SHOUTED_REGEXES]) {
     const m = re.exec(segment)
     if (!m) continue
     const index = m.index + m[0].length - m[1]!.length

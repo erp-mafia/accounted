@@ -1797,7 +1797,13 @@ export function stripBankNoise(lowerText: string): string {
  */
 export function findMatchingTemplates(
   transaction: Transaction,
-  entityType?: EntityType
+  entityType?: EntityType,
+  /**
+   * Words from the underlag (supplier name, line items) to search alongside
+   * the bank text. A receipt that says "Diesel" finds the fuel template even
+   * when the bank line is "Kortköp K8781".
+   */
+  extraSearchText: string = '',
 ): TemplateMatch[] {
   const results: TemplateMatch[] = []
   const isExpense = transaction.amount < 0
@@ -1805,7 +1811,7 @@ export function findMatchingTemplates(
 
   const descLower = (transaction.description || '').toLowerCase()
   const merchantLower = (transaction.merchant_name || '').toLowerCase()
-  const rawSearchText = `${descLower} ${merchantLower}`
+  const rawSearchText = `${descLower} ${merchantLower} ${extraSearchText.toLowerCase()}`
   // Strip bank-method noise so e.g. "Överföring via internet" doesn't make
   // the matcher believe the merchant is "Internet" (→ 6230 telecom).
   const searchText = stripBankNoise(rawSearchText)

@@ -100,6 +100,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { simpleParser } from 'mailparser'
 import type { InboxChannelContext, InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { underlagContextFrom } from '@/lib/bookkeeping/underlag-context'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
 // Received-mail panel window (#2181): 30 days covers "the mail I sent last
@@ -3249,7 +3250,7 @@ export const invoiceInboxExtension: Extension = {
         // document instead of at the database.
         const { data: item, error: itemError } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id')
+          .select('id, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, extracted_data')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -3360,6 +3361,9 @@ export const invoiceInboxExtension: Extension = {
             tx as Transaction,
             entityType,
             settlementAccount,
+            // The document's supplier and line items reach the engine: this is
+            // the item's own reading, matched to this transaction.
+            underlagContextFrom(item.extracted_data as InvoiceExtractionResult | null),
           )
 
           // getDefaultResult is the engine's way of saying it has nothing: a

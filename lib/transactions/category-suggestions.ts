@@ -15,6 +15,7 @@ import type {
   VatTreatment,
   CategorizationTemplate,
 } from '@/types'
+import { underlagSearchText, type UnderlagContext } from '@/lib/bookkeeping/underlag-context'
 
 export interface SuggestedCategory {
   category: TransactionCategory
@@ -279,6 +280,8 @@ export interface SuggestedTemplate {
   // while the server books the expense net + 2641. Multi-line suggestions
   // carry their VAT inside line_pattern instead.
   vat_treatment?: VatTreatment | null
+  // What the suggestion was made on: the bank's text or the underlag.
+  matched_on?: 'bank_text' | 'underlag'
   // Learned {sie_dim_no: code} bag on counterparty suggestions: prefills the
   // review dialog's dimension picker (the server applies it at booking anyway;
   // surfacing it keeps the user in the loop).
@@ -341,7 +344,9 @@ export function getRecentlyUsedTemplates(
 export async function getSuggestedTemplates(
   transaction: Transaction,
   entityType?: EntityType,
-  mappingRules?: MappingRule[]
+  mappingRules?: MappingRule[],
+  /** The matched underlag's supplier and line items, searched alongside the bank text. */
+  underlag?: UnderlagContext | null,
 ): Promise<SuggestedTemplate[]> {
   const seen = new Set<string>()
   const results: SuggestedTemplate[] = []
@@ -358,12 +363,16 @@ export async function getSuggestedTemplates(
     }
   }
 
-  // 2. Keyword + MCC matching (always available, no API keys needed)
-  const keywordMatches = findMatchingTemplates(transaction, entityType)
+  // 2. Keyword + MCC matching (always available, no API keys needed). With an
+  //    underlag, its words are searched too, and a template only the document
+  //    found is marked as such.
+  const bankOnly = new Set(findMatchingTemplates(transaction, entityType).map((m) => m.template.id))
+  const keywordMatches = findMatchingTemplates(transaction, entityType, underlagSearchText(underlag))
   for (const m of keywordMatches) {
     if (!seen.has(m.template.id)) {
       seen.add(m.template.id)
       results.push({
+        ...(bankOnly.has(m.template.id) ? {} : { matched_on: 'underlag' as const }),
         template_id: m.template.id,
         name_sv: m.template.name_sv,
         name_en: m.template.name_en,

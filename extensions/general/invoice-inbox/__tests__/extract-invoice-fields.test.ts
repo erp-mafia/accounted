@@ -824,3 +824,14 @@ describe('stripOwnCompanyAsSupplier', () => {
     expect(result.prominentAmounts).toEqual([{ amount: 2500, label: 'Engångspris' }])
   })
 })
+
+describe('supplier country', () => {
+  it('keeps the country the model read, uppercased and two letters, and tolerates its absence', async () => {
+    const { ExtractionSchema } = await import('../lib/extract-invoice-fields')
+    const withCountry = ExtractionSchema.parse({ ...VALID_RESULT, supplier: { ...VALID_RESULT.supplier, country: ' us ' } })
+    expect(withCountry.supplier.country).toBe('US')
+    const without = ExtractionSchema.parse(VALID_RESULT)
+    expect(without.supplier.country).toBeNull()
+  })
+})
+
