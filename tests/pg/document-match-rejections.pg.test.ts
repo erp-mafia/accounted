@@ -97,3 +97,60 @@ describe('match_shadow_log (pg)', () => {
     ).rejects.toThrow(/check constraint/)
   })
 })
+
+describe('match_shadow_log is append-only (pg)', () => {
+  async function seedRow(companyId: string, docId: string, txId: string): Promise<string> {
+    const { rows } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.match_shadow_log
+         (company_id, run_id, trigger, document_id, transaction_id, confidence, decision, decided_by, reason, acted)
+       VALUES ($1, 'run-3', 'arrival', $2, $3, 0.9, 'propose', 'autonomy', 'not_earned', true)
+       RETURNING id`,
+      [companyId, docId, txId],
+    )
+    return rows[0]!.id
+  }
+
+  it('refuses to change a decision or delete a row, even as the owner', async () => {
+    const { userId, companyId } = await seedCompany()
+    const docId = await insertDocument(companyId, userId)
+    const txId = await insertTransaction({ companyId, userId, amount: -120 })
+    await seedRow(companyId, docId, txId)
+    await expect(
+      getPool().query(`UPDATE public.match_shadow_log SET decision = 'link' WHERE company_id = $1`, [companyId]),
+    ).rejects.toThrow(/append-only/)
+    await expect(getPool().query(`DELETE FROM public.match_shadow_log WHERE company_id = $1`, [companyId])).rejects.toThrow()
+    // A member has no update policy at all.
+    const asMember = await withUserContext(userId, (client) =>
+      client.query(`UPDATE public.match_shadow_log SET human_outcome = 'agree' WHERE company_id = $1`, [companyId]),
+    )
+    expect(asMember.rowCount).toBe(0)
+  })
+
+  it('records the human outcome once through the function, scoped to the caller\'s company', async () => {
+    const { userId, companyId } = await seedCompany()
+    const docId = await insertDocument(companyId, userId)
+    const txId = await insertTransaction({ companyId, userId, amount: -120 })
+    await seedRow(companyId, docId, txId)
+
+    const stamped = await withUserContext(userId, (client) =>
+      client.query<{ n: number }>(`SELECT public.record_match_shadow_outcome($1, $2, $3, NULL) AS n`, [companyId, docId, txId]),
+    )
+    expect(stamped.rows[0]!.n).toBe(1)
+    const { rows } = await getPool().query(`SELECT human_outcome FROM public.match_shadow_log WHERE company_id = $1`, [companyId])
+    expect(rows[0].human_outcome).toBe('agree')
+
+    // Second answer changes nothing: the outcome is set once.
+    const again = await withUserContext(userId, (client) =>
+      client.query<{ n: number }>(`SELECT public.record_match_shadow_outcome($1, $2, NULL, $3) AS n`, [companyId, docId, txId]),
+    )
+    expect(again.rows[0]!.n).toBe(0)
+
+    const stranger = await insertAuthUser()
+    await expect(
+      withUserContext(stranger, (client) =>
+        client.query(`SELECT public.record_match_shadow_outcome($1, $2, $3, NULL)`, [companyId, docId, txId]),
+      ),
+    ).rejects.toThrow(/not a member/)
+  })
+})
+

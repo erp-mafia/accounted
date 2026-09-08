@@ -48,9 +48,11 @@ export async function insertShadowRows(supabase: SupabaseClient, rows: ShadowRow
  * Close the loop: when a human links, approves or rejects a pair, stamp the
  * outcome on every open shadow row for that document.
  *
- * `agree` when the human landed on the transaction the matcher chose,
- * `disagree` when they chose another, `rejected` when they said no to the
- * matcher's pair. Rows that named no transaction (skips) are marked from the
+ * Goes through record_match_shadow_outcome, the one sanctioned write after
+ * insert: the table itself is append-only, and the function sets the
+ * outcome once. `agree` when the human landed on the transaction the
+ * matcher chose, `rejected` when they refused the matcher's pair, `disagree`
+ * otherwise. Rows that named no transaction (skips) are marked from the
  * human's choice alone: a skip followed by a manual match is a miss.
  */
 export async function recordShadowOutcome(
@@ -59,32 +61,11 @@ export async function recordShadowOutcome(
   documentId: string,
   outcome: { transactionId: string | null; rejectedTransactionId?: string | null },
 ): Promise<void> {
-  const { data: open, error } = await supabase
-    .from('match_shadow_log')
-    .select('id, transaction_id')
-    .eq('company_id', companyId)
-    .eq('document_id', documentId)
-    .is('human_outcome', null)
-    .limit(200)
-  if (error || !open || open.length === 0) return
-
-  const now = new Date().toISOString()
-  const updates = (open as Array<{ id: string; transaction_id: string | null }>).map((row) => {
-    let human_outcome: 'agree' | 'disagree' | 'rejected'
-    if (outcome.rejectedTransactionId && row.transaction_id === outcome.rejectedTransactionId) {
-      human_outcome = 'rejected'
-    } else if (outcome.transactionId && row.transaction_id === outcome.transactionId) {
-      human_outcome = 'agree'
-    } else {
-      human_outcome = 'disagree'
-    }
-    return supabase
-      .from('match_shadow_log')
-      .update({ human_outcome, outcome_at: now })
-      .eq('id', row.id)
+  const { error } = await supabase.rpc('record_match_shadow_outcome', {
+    p_company_id: companyId,
+    p_document_id: documentId,
+    p_transaction_id: outcome.transactionId,
+    p_rejected_transaction_id: outcome.rejectedTransactionId ?? null,
   })
-  const results = await Promise.all(updates)
-  for (const r of results) {
-    if (r.error) log.error('failed to record outcome', { message: r.error.message, documentId })
-  }
+  if (error) log.error('failed to record outcome', { message: error.message, documentId })
 }
