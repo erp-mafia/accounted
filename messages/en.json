@@ -810,6 +810,26 @@
     "empty_filtered": "No deadlines match the filter.",
     "confirm_done_title": "Mark as done?"
   },
+  "purchases_flow": {
+    "title": "Purchases",
+    "upload": "Upload a document",
+    "lane_receipts": "Receipts and documents",
+    "lane_invoices": "Supplier invoices",
+    "open_list": "Open the list",
+    "auto": "auto",
+    "r_missing": "Missing",
+    "r_incoming": "Received",
+    "r_read": "Read",
+    "r_linked": "Linked",
+    "r_booked": "Booked",
+    "receipts_note": "Received and Read happen without you. Linked happens on arrival when the document finds its bank transaction; what does not find its way waits in Att göra. Booked is when the transaction is booked with the document beside it. Missing is purchases on the bank that have no document yet.",
+    "invoices_note": "Registering, attesting and creating the payment file are your steps. Paid happens when the bank shows the payment, Reconciled when the account is signed off.",
+    "legend": "auto means the step happens without you",
+    "link_payment_files": "Payment files",
+    "link_suppliers": "Suppliers",
+    "retry": "Try again",
+    "load_failed": "The flow could not be read."
+  },
   "supplier_invoices": {
     "stage_incoming": "Received",
     "stage_registered": "Registered",
