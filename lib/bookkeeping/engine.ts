@@ -904,6 +904,7 @@ export async function replaceOpeningBalanceEntry(
     )
   }
 
+  assertLinesNonNegative(input.lines)
   const balance = validateBalance(input.lines)
   if (!balance.valid) {
     throw new JournalEntryNotBalancedError(
