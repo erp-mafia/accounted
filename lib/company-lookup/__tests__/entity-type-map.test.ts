@@ -44,3 +44,16 @@ describe('mapEntityType', () => {
     expect(mapEntityType(undefined)).toBeNull()
   })
 })
+
+describe('mapEntityType: ideell förening (issue #2072)', () => {
+  it('maps the registry spelling of ideell förening', () => {
+    expect(mapEntityType('Ideell förening')).toBe('ideell_forening')
+    expect(mapEntityType('ideell forening')).toBe('ideell_forening')
+  })
+
+  it('does not map other föreningar or stiftelser', () => {
+    expect(mapEntityType('Ekonomisk förening')).toBeNull()
+    expect(mapEntityType('Registrerat trossamfund')).toBeNull()
+    expect(mapEntityType('Stiftelse')).toBeNull()
+  })
+})

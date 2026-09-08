@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { getOpeningBalances } from '@/lib/reports/opening-balances'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
@@ -55,7 +56,7 @@ export async function planResultAppropriation(
     .select('entity_type')
     .eq('company_id', companyId)
     .maybeSingle()
-  const entityType = settings?.entity_type ?? 'aktiebolag'
+  const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
   if (entityType !== 'aktiebolag') return null
 
   // Idempotency: never plan a second omföring for a period that already has a

@@ -25,10 +25,24 @@ const ENSKILD_FIRMA_VALUES = new Set<string>([
   'enskild näringsidkare',
 ])
 
+/**
+ * Ideell förening (issue #2072). Most föreningar carry an 8-series org number
+ * issued by Skatteverket, so the Bolagsverket-backed lookup legitimately
+ * misses them; this arm matters for the registered ones and for BankID
+ * company roles. Ekonomisk förening, stiftelse and trossamfund are NOT
+ * mapped: different equity, tax form and regelverk.
+ */
+const IDEELL_FORENING_VALUES = new Set<string>([
+  'ideell förening',
+  'ideell forening',
+  'ideella föreningar',
+])
+
 export function mapEntityType(ticType: string | null | undefined): EntityType | null {
   if (!ticType) return null
   const normalized = ticType.trim().toLowerCase()
   if (AKTIEBOLAG_VALUES.has(normalized)) return 'aktiebolag'
   if (ENSKILD_FIRMA_VALUES.has(normalized)) return 'enskild_firma'
+  if (IDEELL_FORENING_VALUES.has(normalized)) return 'ideell_forening'
   return null
 }

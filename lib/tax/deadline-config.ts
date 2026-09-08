@@ -4,6 +4,7 @@
  */
 
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
+import { fiscalYearLockedToCalendar } from '@/lib/company/entity-type'
 import { isBankingDay } from './swedish-holidays'
 
 // Condition function type for determining if a deadline applies
@@ -562,7 +563,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     priority: 'normal',
     linkedReportType: null,
     generateDates: (year, settings) => {
-      const fyEndMonth = settings.entity_type === 'enskild_firma'
+      const fyEndMonth = fiscalYearLockedToCalendar(settings.entity_type)
         ? 12
         : (settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1)
       const results: DeadlineInstance[] = []

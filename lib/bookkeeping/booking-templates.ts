@@ -44,7 +44,7 @@ export interface BookingTemplate {
   name_en: string
   group: TemplateGroup
   direction: 'expense' | 'income' | 'transfer'
-  entity_applicability: 'all' | 'enskild_firma' | 'aktiebolag'
+  entity_applicability: 'all' | EntityType
   debit_account: string
   credit_account: string
   debit_account_ab?: string
@@ -1873,7 +1873,7 @@ function isBasisAccount(account: string): boolean {
 export function buildMappingResultFromTemplate(
   template: BookingTemplate,
   transaction: Transaction,
-  entityType: EntityType = 'enskild_firma'
+  entityType: EntityType
 ): MappingResult {
   const isExpense = transaction.amount < 0
   const isBusiness = !template.default_private

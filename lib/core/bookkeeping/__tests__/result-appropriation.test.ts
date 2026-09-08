@@ -163,8 +163,8 @@ describe('generateResultAppropriation', () => {
     expect(createJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('defaults missing company_settings to aktiebolag and posts', async () => {
-    results = [NO_EXISTING /* settings missing */, NO_EXISTING, PERIOD]
+  it('falls back to companies.entity_type when company_settings is missing and posts', async () => {
+    results = [NO_EXISTING /* settings missing */, AB /* companies fallback */, NO_EXISTING, PERIOD]
     mockOpeningBalance([{ account_number: '2099', debit: 0, credit: 5000 }])
 
     const entry = await generateResultAppropriation(makeClient() as never, 'c1', 'u1', 'p1')

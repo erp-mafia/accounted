@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { isEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
 import { useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
@@ -336,7 +337,7 @@ export default function ExpenseClaimsPage() {
   // firma egen insättning); the server resolves the same way and is the
   // authority. Outside a provider we fall back to AB's 2893.
   const entityType = useCompanyOptional()?.company?.entity_type ?? null
-  const ownerLiability = entityType === 'enskild_firma' ? '2018' : '2893'
+  const ownerLiability = isEntityType(entityType) ? ownerSettlementAccount(entityType, 'contribution') : '2893'
   const liabilityAccount = claimant === OWNER_VALUE ? ownerLiability : '2820'
   const parsedAmount = parseFloat(amount) || 0
   const parsedVat = parseFloat(vatAmount) || 0

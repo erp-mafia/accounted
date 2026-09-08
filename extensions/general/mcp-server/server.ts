@@ -1,4 +1,10 @@
 import { UUID_RE } from '@/lib/invariants/uuid'
+import {
+  ENTITY_TYPES,
+  ENTITY_TYPE_LABELS_SV,
+  parseEntityType,
+  resolveCompanyEntityType,
+} from '@/lib/company/entity-type'
 import { NextResponse, after } from 'next/server'
 import {
   TASKS_EXTENSION_ID,
@@ -1444,7 +1450,7 @@ async function categorizeTransactionCore(
     .eq('company_id', companyId)
     .single()
 
-  const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+  const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
 
   // Build mapping
   let mappingResult = buildMappingResultFromCategory(
@@ -3698,7 +3704,7 @@ export const tools: McpTool[] = [
 
       const askEverything = [
         'name',
-        'entity_type (enskild firma or aktiebolag)',
+        'entity_type (enskild_firma, aktiebolag or ideell_forening)',
         'f_skatt',
         'vat_registered (and moms_period if yes)',
         'accounting_method (accrual or cash)',
@@ -3745,7 +3751,7 @@ export const tools: McpTool[] = [
       }
       if (!entityType) {
         warnings.push(
-          `Legal form "${lookup.legalEntityType ?? 'unknown'}" is not supported for automatic setup: only enskild firma and aktiebolag can be created here.`
+          `Legal form "${lookup.legalEntityType ?? 'unknown'}" is not supported for automatic setup: only ${Object.values(ENTITY_TYPE_LABELS_SV).join(', ')} can be created here.`
         )
       }
 
@@ -3757,7 +3763,7 @@ export const tools: McpTool[] = [
       // accounting method are ALWAYS the user's answer.
       const vatIsFact = lookup.registration.vat === true
       const stillToAsk: string[] = []
-      if (!entityType) stillToAsk.push('entity_type (enskild firma or aktiebolag)')
+      if (!entityType) stillToAsk.push('entity_type (enskild_firma, aktiebolag or ideell_forening)')
       if (entityType === 'enskild_firma') {
         stillToAsk.push(
           'name: for enskild firma the verksamhetsnamn is freely choosable; suggest the registered name but let the user pick'
@@ -3850,7 +3856,7 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         name: { type: 'string', minLength: 1, maxLength: 200 },
-        entity_type: { type: 'string', enum: ['enskild_firma', 'aktiebolag'] },
+        entity_type: { type: 'string', enum: [...ENTITY_TYPES] },
         org_number: { type: 'string', description: '10 digits; required when VAT-registered' },
         vat_registered: { type: 'boolean' },
         moms_period: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'Required when vat_registered' },
@@ -17926,7 +17932,7 @@ export const tools: McpTool[] = [
         companyId,
         period,
         nextPeriod.id,
-        (settings.entity_type ?? 'aktiebolag') as EntityType,
+        parseEntityType(settings.entity_type),
       )
       if (assessment.collection.unknownVatTreatment.length > 0) {
         throw new Error(
@@ -17956,7 +17962,7 @@ export const tools: McpTool[] = [
       }
 
       const reversalDate = nextDay(period.period_end)
-      const entityType = (settings.entity_type ?? 'aktiebolag') as EntityType
+      const entityType = parseEntityType(settings.entity_type)
       const entries = [
         ...(assessment.lines.receivableLines.length > 0 &&
         !assessment.postings.receivableEntryId &&

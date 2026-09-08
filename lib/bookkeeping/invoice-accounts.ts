@@ -7,6 +7,7 @@
  */
 
 import type { EntityType, VatTreatment } from '@/types'
+import { byEntityType } from '@/lib/company/entity-type'
 
 /**
  * Stable code for the "foreign-currency customer invoice without a rate"
@@ -67,7 +68,11 @@ export function getRevenueAccount(vatTreatment: VatTreatment, entityType: Entity
     case 'export':
       return '3305' // Försäljning tjänst Export
     case 'exempt':
-      return entityType === 'aktiebolag' ? '3004' : '3100'
+      return byEntityType(entityType, {
+        aktiebolag: '3004',
+        enskild_firma: '3100',
+        ideell_forening: '3100',
+      })
     default:
       return '3001'
   }

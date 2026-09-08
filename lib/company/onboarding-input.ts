@@ -3,6 +3,12 @@ import { saneIsoDateSchema } from '@/lib/invariants/zod'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
+import {
+  ENTITY_TYPES,
+  defaultAccountingMethod,
+  fiscalYearLockedToCalendar,
+  isEntityTypeCreatable,
+} from '@/lib/company/entity-type'
 import type { CreateCompanyInput } from '@/lib/company/create-company'
 
 /**
@@ -25,7 +31,7 @@ import type { CreateCompanyInput } from '@/lib/company/create-company'
 export const CompanySetupSchema = z
   .object({
     name: z.string().trim().min(1).max(200),
-    entity_type: z.enum(['enskild_firma', 'aktiebolag']),
+    entity_type: z.enum(ENTITY_TYPES),
     org_number: z.string().trim().min(1).max(20).optional(),
     vat_registered: z.boolean(),
     moms_period: z.enum(['monthly', 'quarterly', 'yearly']).nullable().optional(),
@@ -59,6 +65,13 @@ export const CompanySetupSchema = z
     team_id: z.string().uuid().optional(),
   })
   .superRefine((value, ctx) => {
+    if (!isEntityTypeCreatable(value.entity_type)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['entity_type'],
+        message: `entity_type ${value.entity_type} is not enabled on this deployment yet.`,
+      })
+    }
     if (value.vat_registered && !value.moms_period) {
       ctx.addIssue({
         code: 'custom',
@@ -121,10 +134,10 @@ export type CompanySetupPlan =
  * left at this point is an invalid fiscal period (validatePeriodDuration).
  */
 export function planCompanySetup(setup: CompanySetup): CompanySetupPlan {
-  const isEf = setup.entity_type === 'enskild_firma'
+  const calendarYearOnly = fiscalYearLockedToCalendar(setup.entity_type)
   const firstYear = setup.first_fiscal_year
-  const startMonth = isEf ? 1 : (setup.fiscal_year_start_month ?? 1)
-  const accountingMethod = setup.accounting_method ?? (isEf ? 'cash' : 'accrual')
+  const startMonth = calendarYearOnly ? 1 : (setup.fiscal_year_start_month ?? 1)
+  const accountingMethod = setup.accounting_method ?? defaultAccountingMethod(setup.entity_type)
 
   const settings: Record<string, unknown> = {
     entity_type: setup.entity_type,
@@ -136,7 +149,7 @@ export function planCompanySetup(setup: CompanySetup): CompanySetupPlan {
     accounting_method: accountingMethod,
     f_skatt: setup.f_skatt,
     // Enskild firma is calendar-year by law, with or without a first year.
-    fiscal_year_start_month: isEf ? 1 : firstYear ? nextMonthAfter(firstYear.end) : startMonth,
+    fiscal_year_start_month: calendarYearOnly ? 1 : firstYear ? nextMonthAfter(firstYear.end) : startMonth,
     ...(setup.address_line1 ? { address_line1: setup.address_line1 } : {}),
     ...(setup.postal_code ? { postal_code: setup.postal_code } : {}),
     ...(setup.city ? { city: setup.city } : {}),

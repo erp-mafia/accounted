@@ -231,7 +231,7 @@ function signedLine(
 export function buildCutoffLines(
   receivables: CutoffReceivable[],
   payables: CutoffPayable[],
-  entityType: EntityType = 'aktiebolag',
+  entityType: EntityType,
 ): CutoffLines {
   const receivableLines: CreateJournalEntryLineInput[] = []
   const payableLines: CreateJournalEntryLineInput[] = []
@@ -959,7 +959,7 @@ export async function assessKontantmetodCutoff(
   companyId: string,
   period: { id: string; period_start: string; period_end: string },
   nextFiscalPeriodId: string,
-  entityType: EntityType = 'aktiebolag',
+  entityType: EntityType,
 ): Promise<KontantmetodCutoffAssessment> {
   const collection = sortedCutoffCollection(await collectKontantmetodCutoff(
     supabase,
@@ -1069,7 +1069,7 @@ export async function postKontantmetodCutoff(
     periodEnd: string
     receivables: CutoffReceivable[]
     payables: CutoffPayable[]
-    entityType?: EntityType
+    entityType: EntityType
     /** Refuse if any invoice lacked a vat_treatment (see CutoffCollection). */
     unknownVatTreatment?: string[]
     /** Refuse if any invoice carried moms on a zero-rate treatment. */

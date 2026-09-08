@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ENTITY_TYPES } from '@/lib/company/entity-type'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
@@ -191,7 +192,7 @@ function validateAccrualPeriod(
 // Enum schemas (matching types/index.ts)
 // ============================================================
 
-export const EntityTypeSchema = z.enum(['enskild_firma', 'aktiebolag'])
+export const EntityTypeSchema = z.enum(ENTITY_TYPES)
 
 export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
 

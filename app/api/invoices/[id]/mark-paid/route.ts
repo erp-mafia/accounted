@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -238,7 +239,7 @@ export const POST = withRouteContext(
       .single()
 
     const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+    const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
 
     // paymentAmountInInvoiceCurrency was resolved above, before the
     // duplicate-payment guard, so the guard comparison and the ledger math run
