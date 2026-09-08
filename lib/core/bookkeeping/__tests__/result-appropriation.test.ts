@@ -66,6 +66,26 @@ beforeEach(() => {
 })
 
 describe('generateResultAppropriation', () => {
+  it('posts Dr 2069 / Cr 2068 for an ideell förening profit', async () => {
+    results = [{ data: { entity_type: 'ideell_forening' }, error: null }, NO_EXISTING, PERIOD]
+    mockOpeningBalance([{ account_number: '2069', debit: 0, credit: 25000 }])
+
+    const entry = await generateResultAppropriation(makeClient() as never, 'c1', 'u1', 'p1')
+
+    expect(entry).toEqual(FAKE_ENTRY)
+    const input = vi.mocked(createJournalEntry).mock.calls[0][3] as {
+      description: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.description).toContain('2069 → 2068')
+    expect(input.lines).toContainEqual(
+      expect.objectContaining({ account_number: '2069', debit_amount: 25000, credit_amount: 0 })
+    )
+    expect(input.lines).toContainEqual(
+      expect.objectContaining({ account_number: '2068', debit_amount: 0, credit_amount: 25000 })
+    )
+  })
+
   it('posts Dr 2099 / Cr 2098 for a profit (AB)', async () => {
     results = [AB, NO_EXISTING, PERIOD]
     mockOpeningBalance([{ account_number: '2099', debit: 0, credit: 100000 }])

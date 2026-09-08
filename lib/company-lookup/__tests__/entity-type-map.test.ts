@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { mapEntityType } from '../entity-type-map'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { mapEntityType, mapSetupEntityType } from '../entity-type-map'
 
 describe('mapEntityType', () => {
   it('maps the exact AB codes and labels to aktiebolag', () => {
@@ -42,6 +42,20 @@ describe('mapEntityType', () => {
     expect(mapEntityType('')).toBeNull()
     expect(mapEntityType(null)).toBeNull()
     expect(mapEntityType(undefined)).toBeNull()
+  })
+})
+
+describe('mapSetupEntityType: only creatable forms are prefilled', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('maps ideell förening only when the creation flag is on', () => {
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
+    expect(mapSetupEntityType('Ideell förening')).toBeNull()
+    expect(mapSetupEntityType('Aktiebolag')).toBe('aktiebolag')
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
+    expect(mapSetupEntityType('Ideell förening')).toBe('ideell_forening')
   })
 })
 

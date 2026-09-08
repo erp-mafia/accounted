@@ -154,6 +154,29 @@ export function ownerSettlementAccount(
   })
 }
 
+/** Owner-side accounts a booking template may name in its base/AB columns. */
+const OWNER_SETTLEMENT_ACCOUNTS = new Set(['2013', '2018', '2893'])
+
+/**
+ * Resolve a booking template's account for the form. Templates carry a base
+ * (enskild firma) account and an optional `_ab` override; an ideell förening
+ * takes the base account (6991 for a course, 3100 for exempt revenue) except
+ * that any owner account becomes the member settlement account, since a
+ * förening has no egna uttag/insättningar and no delägarskuld.
+ */
+export function templateAccountForForm(
+  entityType: EntityType,
+  base: string | undefined,
+  abOverride: string | undefined,
+): string | undefined {
+  return byEntityType(entityType, {
+    enskild_firma: base,
+    aktiebolag: abOverride ?? base,
+    ideell_forening:
+      base && OWNER_SETTLEMENT_ACCOUNTS.has(base) ? ownerSettlementAccount('ideell_forening', 'withdrawal') : base,
+  })
+}
+
 /** Only an aktiebolag prepares an årsredovisning in Accounted today. */
 export function preparesArsredovisning(entityType: EntityType): boolean {
   return byEntityType(entityType, { enskild_firma: false, aktiebolag: true, ideell_forening: false })

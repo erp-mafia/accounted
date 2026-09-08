@@ -1,7 +1,7 @@
 import type { CompanySettings, EntityType, MomsPeriod } from '@/types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import type { CompanyLookupOutcome } from '@/lib/company-lookup/fetch-company-lookup'
-import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
+import { mapSetupEntityType } from '@/lib/company-lookup/entity-type-map'
 import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
 
 /**
@@ -265,7 +265,7 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
 
       if (outcome.status === 'found') {
         const lookup = outcome.result
-        const mapped = mapEntityType(lookup.legalEntityType)
+        const mapped = mapSetupEntityType(lookup.legalEntityType)
         const settings: Partial<CompanySettings> = {
           ...state.settings,
           entity_type: mapped ?? state.settings.entity_type,

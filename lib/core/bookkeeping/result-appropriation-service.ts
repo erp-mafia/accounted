@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { getOpeningBalances } from '@/lib/reports/opening-balances'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
@@ -18,9 +18,13 @@ export interface ResultAppropriationPlan {
   periodName: string
   /** entry_date for the omföring: the new period's first day. */
   periodStart: string
-  /** Net 2099 balance, credit-positive (a profit is > 0, a loss is < 0). */
+  /** The form's "årets resultat" account (AB 2099, ideell förening 2069). */
+  resultAccount: string
+  /** Where last year's result is carried (AB 2098, ideell förening 2068). */
+  priorResultAccount: string
+  /** Net result-account IB balance, credit-positive (a profit is > 0, a loss is < 0). */
   net: number
-  /** Absolute, öre-rounded amount that moves between 2099 and 2098. */
+  /** Absolute, öre-rounded amount that moves between the two accounts. */
   amount: number
   direction: 'profit' | 'loss'
   /** Balanced lines for the omföring verifikat. */
@@ -57,7 +61,13 @@ export async function planResultAppropriation(
     .eq('company_id', companyId)
     .maybeSingle()
   const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
-  if (entityType !== 'aktiebolag') return null
+  // Only forms that close into a dedicated "årets resultat" account carry it
+  // forward: AB 2099 -> 2098, ideell förening 2069 -> 2068. An enskild firma
+  // closes straight into 2010 and has nothing to reclassify.
+  const accounts = resultClosingAccounts(entityType)
+  if (!accounts.priorYearCarry) return null
+  const resultAccount = accounts.closing
+  const priorResultAccount = accounts.priorYearCarry
 
   // Idempotency: never plan a second omföring for a period that already has a
   // LIVE one. Deliberately posted-only: a reversed omföring is storno-cancelled
@@ -92,38 +102,38 @@ export async function planResultAppropriation(
   // aggregate of prior posted lines when none is set. credit − debit is positive
   // for a profit (2099 is credit-normal).
   const { balances } = await getOpeningBalances(supabase, companyId, period)
-  const ib2099 = balances.get(RESULT_ACCOUNT)
-  const net = ib2099 ? roundOre(ib2099.credit - ib2099.debit) : 0
+  const ibResult = balances.get(resultAccount)
+  const net = ibResult ? roundOre(ibResult.credit - ibResult.debit) : 0
   if (Math.abs(net) < ORE_TOLERANCE) return null
 
   const amount = roundOre(Math.abs(net))
   const lines: CreateJournalEntryLineInput[] =
     net > 0
       ? [
-          // Profit: move the credit balance off 2099 onto 2098.
+          // Profit: move the credit balance off the result account onto the carry.
           {
-            account_number: RESULT_ACCOUNT,
+            account_number: resultAccount,
             debit_amount: amount,
             credit_amount: 0,
             line_description: 'Omföring av föregående års resultat',
           },
           {
-            account_number: PRIOR_RESULT_ACCOUNT,
+            account_number: priorResultAccount,
             debit_amount: 0,
             credit_amount: amount,
             line_description: 'Föregående års resultat',
           },
         ]
       : [
-          // Loss: move the debit balance off 2099 onto 2098.
+          // Loss: move the debit balance off the result account onto the carry.
           {
-            account_number: PRIOR_RESULT_ACCOUNT,
+            account_number: priorResultAccount,
             debit_amount: amount,
             credit_amount: 0,
             line_description: 'Föregående års resultat',
           },
           {
-            account_number: RESULT_ACCOUNT,
+            account_number: resultAccount,
             debit_amount: 0,
             credit_amount: amount,
             line_description: 'Omföring av föregående års resultat',
@@ -134,6 +144,8 @@ export async function planResultAppropriation(
     periodId,
     periodName: period.name,
     periodStart: period.period_start,
+    resultAccount,
+    priorResultAccount,
     net,
     amount,
     direction: net > 0 ? 'profit' : 'loss',
@@ -179,7 +191,7 @@ export async function generateResultAppropriation(
   const entry = await createJournalEntry(supabase, companyId, userId, {
     fiscal_period_id: periodId,
     entry_date: plan.periodStart,
-    description: `Omföring av föregående års resultat (${RESULT_ACCOUNT} → ${PRIOR_RESULT_ACCOUNT})`,
+    description: `Omföring av föregående års resultat (${plan.resultAccount} → ${plan.priorResultAccount})`,
     source_type: 'result_appropriation',
     voucher_series: 'A',
     lines: plan.lines,

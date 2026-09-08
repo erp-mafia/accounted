@@ -31,8 +31,11 @@ import {
   type FirstYearEndOption,
 } from '@/lib/onboarding-journey/fiscal-options'
 import type { EntityType } from '@/types'
-import { creatableEntityTypes, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import { isEntityTypeCreatable, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
+
+/** Display order of the form picker (AB first, as before); flags filter it. */
+const FORM_PICKER_ORDER: EntityType[] = ['aktiebolag', 'enskild_firma', 'ideell_forening']
 
 /** i18n key per legal form for the picker chips and the summary card. */
 const FORM_LABEL_KEY: Record<EntityType, 'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening'> = {
@@ -429,7 +432,10 @@ export default function OnboardingJourney({
         return (
           <Question title={t('journey_form_title')} info={t('journey_form_info')}>
             <ChipRow
-              options={creatableEntityTypes().map((key) => ({ key, label: t(FORM_LABEL_KEY[key]) }))}
+              options={FORM_PICKER_ORDER.filter(isEntityTypeCreatable).map((key) => ({
+                key,
+                label: t(FORM_LABEL_KEY[key]),
+              }))}
               onPick={(k) => dispatch({ type: 'ENTITY_PICKED', entityType: k as EntityType })}
               {...flyProps}
             />
