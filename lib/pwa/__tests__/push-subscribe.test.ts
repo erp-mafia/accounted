@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchVapidPublicKey,
+  isInstalledWebApp,
   isPushApiSupported,
   sendTestPush,
   urlBase64ToUint8Array,
@@ -22,6 +23,30 @@ describe('isPushApiSupported', () => {
     vi.stubGlobal('window', {})
     vi.stubGlobal('navigator', {})
     expect(isPushApiSupported()).toBe(false)
+  })
+})
+
+describe('isInstalledWebApp', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('is true for display-mode standalone', () => {
+    vi.stubGlobal('window', {
+      matchMedia: (query: string) => ({
+        matches: query.includes('standalone'),
+      }),
+    })
+    vi.stubGlobal('navigator', {})
+    expect(isInstalledWebApp()).toBe(true)
+  })
+
+  it('is true for iOS navigator.standalone', () => {
+    vi.stubGlobal('window', {
+      matchMedia: () => ({ matches: false }),
+    })
+    vi.stubGlobal('navigator', { standalone: true })
+    expect(isInstalledWebApp()).toBe(true)
   })
 })
 
