@@ -48,3 +48,13 @@ describe('classifyKey on fee descriptions and authorities (prod 2026-09-03)', ()
     expect(classifyKey({ key: 'utlägg anthropic', acct: '5420' })).toBe('party')
   })
 })
+
+describe('classifyKey: brands the directory knows', () => {
+  it('reads a brand as a party even when the rest of the text is vocabulary', () => {
+    expect(classifyKey({ key: 'sj biljetter' })).toBe('party')
+    expect(classifyKey({ key: 'circle k diesel' })).toBe('party')
+    expect(classifyKey({ key: 'utlägg' })).toBe('category')
+    expect(classifyKey({ key: 'biljetter' })).toBe('category')
+  })
+})
+
