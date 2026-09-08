@@ -1,6 +1,7 @@
 import { searchCompaniesByName, searchCompanyByOrgNumber } from './tic-client'
 import type { TICCompanyDocument } from './tic-types'
 import type { CompanyLookupResult, CompanySearchHit } from '@/lib/company-lookup/types'
+import { normalizeOrgNumber, orgNumberKey } from '@/lib/invariants/org-number'
 
 /**
  * Shared org-number → CompanyLookupResult lookup, used by both the /lookup
@@ -122,10 +123,32 @@ export const COMPANY_SEARCH_LIMIT = 5
  */
 export async function searchCompaniesForLookup(query: string): Promise<CompanySearchHit[]> {
   const docs = await searchCompaniesByName(query, COMPANY_SEARCH_LIMIT)
-  const hits = docs.map((doc) => ({
-    orgNumber: doc.registrationNumber.replace(/[\s-]/g, ''),
-    result: mapDocumentToLookupResult(doc),
-  }))
+  const hits: CompanySearchHit[] = []
+  for (const doc of docs) {
+    const orgNumber = lensRegistrationToOrgNumber(doc.registrationNumber)
+    if (!orgNumber) continue
+    hits.push({ orgNumber, result: mapDocumentToLookupResult(doc) })
+  }
   // Stable: ceased companies sink below active ones but keep their rank.
   return [...hits.filter((h) => !h.result.isCeased), ...hits.filter((h) => h.result.isCeased)]
+}
+
+/**
+ * Lens `registrationNumber` → Accounted's 10-digit org number, or null when
+ * the document cannot become a valid one.
+ *
+ * The typed-orgnr path never stores Lens's number (it keeps what the user
+ * typed), so this is the first place a Lens identifier enters settings. Lens
+ * shapes: an AB is 10 digits or 16-prefixed 12; an enskild firma is 16
+ * digits, the century-prefixed personnummer plus a 4-digit serial
+ * (`2002011732750001` for personnummer `0201173275`, see
+ * searchCompanyByOrgNumber). createCompany refuses anything normalizeOrgNumber
+ * rejects, so a hit that does not reduce to a valid number is dropped here
+ * rather than dead-ending the journey at submit.
+ */
+export function lensRegistrationToOrgNumber(registrationNumber: string): string | null {
+  const digits = registrationNumber.replace(/\D/g, '')
+  const candidate = /^(18|19|20)\d{14}$/.test(digits) ? digits.slice(0, 12) : digits
+  const key = orgNumberKey(candidate)
+  return key && normalizeOrgNumber(key) ? key : null
 }

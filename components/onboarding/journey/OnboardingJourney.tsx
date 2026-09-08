@@ -11,6 +11,7 @@ import { parseStartMonthDay } from '@/lib/company/first-year-defaults'
 import { fetchCompanyLookup, fetchCompanySearch } from '@/lib/company-lookup/fetch-company-lookup'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { COMPANY_SEARCH_MIN_CHARS, type CompanySearchHit } from '@/lib/company-lookup/types'
+import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
 import { formatOrgNumber } from '@/lib/utils'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -188,6 +189,10 @@ export default function OnboardingJourney({
         shakeOrg()
         return
       }
+      // A previous orgnr's "you already have X" note must not sit above the
+      // chip row; the pick re-checks for the number it resolves to.
+      setDupName(null)
+      setDupElsewhere(false)
       dispatch({ type: 'SEARCH_SUBMITTED', query: trimmed })
       fetchCompanySearch(trimmed, { ticEnabled }).then((outcome) => {
         dispatch({ type: 'SEARCH_RESULT', outcome })
@@ -422,13 +427,18 @@ export default function OnboardingJourney({
               <>
                 <p className="jny-enterhint">{t('journey_search_pick')}</p>
                 <ChipRow
-                  options={state.searchHits.map((h) => ({
-                    key: h.orgNumber,
-                    label: h.result.companyName || formatOrgNumber(h.orgNumber),
-                    rec: h.result.companyName
-                      ? `${formatOrgNumber(h.orgNumber)}${h.result.address?.city ? ` · ${h.result.address.city}` : ''}`
-                      : undefined,
-                  }))}
+                  options={state.searchHits.map((h) => {
+                    // A sole trader's org number is their personnummer: the
+                    // chip names the form instead, never the number.
+                    const isSoleTrader = mapEntityType(h.result.legalEntityType) === 'enskild_firma'
+                    const ident = isSoleTrader ? t('journey_form_ef') : formatOrgNumber(h.orgNumber)
+                    const city = h.result.address?.city
+                    return {
+                      key: h.orgNumber,
+                      label: h.result.companyName || ident,
+                      rec: h.result.companyName ? `${ident}${city ? ` · ${city}` : ''}` : undefined,
+                    }
+                  })}
                   onPick={(k) => {
                     const hit = state.searchHits.find((h) => h.orgNumber === k)
                     if (hit) pickSearchHit(hit)

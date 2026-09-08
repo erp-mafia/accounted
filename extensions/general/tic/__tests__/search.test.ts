@@ -12,7 +12,7 @@ vi.mock('../lib/tic-client', () => ({
 
 import { ticExtension } from '../index'
 import { searchCompaniesByName } from '../lib/tic-client'
-import { searchCompaniesForLookup } from '../lib/lookup'
+import { lensRegistrationToOrgNumber, searchCompaniesForLookup } from '../lib/lookup'
 import { TICAPIError } from '../lib/tic-types'
 import type { TICCompanyDocument } from '../lib/tic-types'
 
@@ -62,18 +62,64 @@ describe('searchCompaniesForLookup', () => {
 
   it('sinks ceased companies below active ones without reordering otherwise', async () => {
     mockSearch.mockResolvedValue([
-      doc({ companyId: 1, registrationNumber: '1111111111', isCeased: true }),
-      doc({ companyId: 2, registrationNumber: '2222222222' }),
-      doc({ companyId: 3, registrationNumber: '3333333333', isCeased: true }),
-      doc({ companyId: 4, registrationNumber: '4444444444' }),
+      doc({ companyId: 1, registrationNumber: '5560000019', isCeased: true }),
+      doc({ companyId: 2, registrationNumber: '5560000027' }),
+      doc({ companyId: 3, registrationNumber: '5560000035', isCeased: true }),
+      doc({ companyId: 4, registrationNumber: '5560000043' }),
     ])
     const hits = await searchCompaniesForLookup('Testbrand')
     expect(hits.map((h) => h.orgNumber)).toEqual([
-      '2222222222',
-      '4444444444',
-      '1111111111',
-      '3333333333',
+      '5560000027',
+      '5560000043',
+      '5560000019',
+      '5560000035',
     ])
+  })
+
+  it("reduces a sole trader's 16-digit Lens number to the 10-digit personnummer form", async () => {
+    mockSearch.mockResolvedValue([
+      doc({
+        registrationNumber: '2002011732750001',
+        legalEntityType: 'EF',
+        names: [{ nameOrIdentifier: 'Alices Konsult', companyNamingType: 'name' }],
+      }),
+    ])
+    const hits = await searchCompaniesForLookup('Alices Konsult')
+    expect(hits).toHaveLength(1)
+    expect(hits[0].orgNumber).toBe('0201173275')
+    expect(hits[0].result.legalEntityType).toBe('EF')
+  })
+
+  it('drops a hit whose registration number cannot become a valid org number', async () => {
+    mockSearch.mockResolvedValue([
+      doc({ companyId: 1, registrationNumber: '5560000000' }),
+      doc({ companyId: 2, registrationNumber: '5560000027' }),
+    ])
+    const hits = await searchCompaniesForLookup('Testbrand')
+    expect(hits.map((h) => h.orgNumber)).toEqual(['5560000027'])
+  })
+})
+
+describe('lensRegistrationToOrgNumber', () => {
+  it('keeps a valid 10-digit organisationsnummer', () => {
+    expect(lensRegistrationToOrgNumber('5560360793')).toBe('5560360793')
+    expect(lensRegistrationToOrgNumber('556036-0793')).toBe('5560360793')
+  })
+
+  it('strips the 16 century prefix from a 12-digit organisationsnummer', () => {
+    expect(lensRegistrationToOrgNumber('165560360793')).toBe('5560360793')
+  })
+
+  it('strips century and serial from a 16-digit enskild firma number', () => {
+    expect(lensRegistrationToOrgNumber('2002011732750001')).toBe('0201173275')
+    expect(lensRegistrationToOrgNumber('1980010112310001')).toBe('8001011231')
+  })
+
+  it('returns null for a VAT-number shape, a bad check digit, or garbage', () => {
+    expect(lensRegistrationToOrgNumber('556036079301')).toBeNull()
+    expect(lensRegistrationToOrgNumber('5560360794')).toBeNull()
+    expect(lensRegistrationToOrgNumber('')).toBeNull()
+    expect(lensRegistrationToOrgNumber('abc')).toBeNull()
   })
 })
 
@@ -115,7 +161,7 @@ describe('TIC search route', () => {
   it('returns hits in /lookup shape on success', async () => {
     mockSearch.mockResolvedValue([
       doc({ registrationNumber: '5560360793' }),
-      doc({ companyId: 2, registrationNumber: '5591234567', names: [{ nameOrIdentifier: 'Testbrand Bygg AB', companyNamingType: 'name' }] }),
+      doc({ companyId: 2, registrationNumber: '5566778899', names: [{ nameOrIdentifier: 'Testbrand Bygg AB', companyNamingType: 'name' }] }),
     ])
     const res = await searchHandler(makeRequest('Testbrand'))
     expect(res.status).toBe(200)
