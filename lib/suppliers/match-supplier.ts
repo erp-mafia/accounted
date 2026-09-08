@@ -113,7 +113,10 @@ export async function matchSupplierByIdentity(
   // not run it, match too. Normalising in SQL is not possible through
   // PostgREST, so the scan happens here over the suppliers that have an
   // org_number at all: a small set even for companies with thousands of
-  // suppliers, and the same shape as the vat_number scan below.
+  // suppliers, and the same shape as the vat_number scan below. Archived
+  // suppliers are skipped: a register that holds the same number twice (an
+  // archived hyphenated row next to its live bare replacement) must resolve
+  // to the live one, not to whichever id sorts first.
   const orgKey = orgNumberKey(identity.orgNumber)
   if (orgKey) {
     try {
@@ -124,6 +127,7 @@ export async function matchSupplierByIdentity(
             .select('id, org_number')
             .eq('company_id', companyId)
             .not('org_number', 'is', null)
+            .is('archived_at', null)
             .order('id', { ascending: true })
             .range(from, to),
       )

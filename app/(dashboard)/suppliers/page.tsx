@@ -15,7 +15,8 @@ import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Lock, Truck } from 'lucide-react'
 import Link from 'next/link'
-import { cn } from '@/lib/utils'
+import { cn, formatOrgNumber } from '@/lib/utils'
+import { stripOrgNumberFormatting } from '@/lib/invariants/org-number'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { SuggestionsAttn } from '@/components/parties/SuggestionsAttn'
@@ -125,10 +126,15 @@ export default function SuppliersPage() {
     setIsCreating(false)
   }
 
+  // org_number is stored as 10 digits and shown as XXXXXX-XXXX, so the search
+  // compares without separators: '556677-88' finds '5566778899'.
+  const orgSearchTerm = stripOrgNumberFormatting(searchTerm)
   const filteredSuppliers = suppliers.filter((s) =>
     s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     s.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    s.org_number?.includes(searchTerm)
+    (orgSearchTerm !== '' && s.org_number
+      ? stripOrgNumberFormatting(s.org_number).includes(orgSearchTerm)
+      : false)
   )
   const visibleSuppliers = filteredSuppliers.slice(0, visibleCount)
 
@@ -248,7 +254,7 @@ export default function SuppliersPage() {
                         {supplier.email || ''}
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>
-                        {supplier.org_number || ''}
+                        {supplier.org_number ? formatOrgNumber(supplier.org_number) : ''}
                       </td>
                     </tr>
                   )

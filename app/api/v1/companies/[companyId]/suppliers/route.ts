@@ -144,7 +144,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       const term = filters.search
         .replace(/[,()]/g, '')
         .replace(/[%_\\]/g, '\\$&')
-      query = query.or(`name.ilike.%${term}%,org_number.ilike.${term}%`)
+      // org_number is stored without separators (#2391); a caller searching
+      // '556677-88' the way the examples show it must still find the row.
+      const orgTerm = term.replace(/[\s-]/g, '')
+      query = query.or(
+        orgTerm === ''
+          ? `name.ilike.%${term}%`
+          : `name.ilike.%${term}%,org_number.ilike.${orgTerm}%`,
+      )
     }
 
     if (decoded) {

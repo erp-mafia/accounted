@@ -59,6 +59,12 @@ describe('suppliers.org_number canonical backfill', () => {
       ['19800101-1231', '8001011231'],
       ['5560125790', '5560125790'],
       ['DK12345678', 'DK12345678'],
+      // A VAT number in the org field: orgnr + 01, last 10 digits are
+      // somebody else. Stays as typed.
+      ['556012579001', '556012579001'],
+      ['SE556012579001', 'SE556012579001'],
+      // Foreign 10-digit registration: the letters are the identity.
+      ['BE0123456789', 'BE0123456789'],
       ['12345', '12345'],
     ]
     const ids: string[] = []

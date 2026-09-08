@@ -879,12 +879,14 @@ describe('CreateSupplierSchema', () => {
     }
   })
 
-  it('stores a foreign registration number as typed', () => {
-    const result = CreateSupplierSchema.safeParse(
-      validSupplier({ supplier_type: 'eu_business', country: 'DK', org_number: 'DK12345678' }),
-    )
-    expect(result.success).toBe(true)
-    if (result.success) expect(result.data.org_number).toBe('DK12345678')
+  it('stores a foreign registration number or a VAT number as typed', () => {
+    for (const typed of ['DK12345678', 'BE0123456789', 'SE556677889901', '556677889901']) {
+      const result = CreateSupplierSchema.safeParse(
+        validSupplier({ supplier_type: 'eu_business', country: 'DK', org_number: typed }),
+      )
+      expect(result.success, typed).toBe(true)
+      if (result.success) expect(result.data.org_number).toBe(typed)
+    }
   })
 
   it('canonicalises org_number on update too', () => {

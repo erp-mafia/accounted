@@ -29,6 +29,7 @@ import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-mess
 import type { CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { normalizeVatNumber, isValidSwedishVatNumber } from '@/lib/vat/vat-number'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import {
   fetchCompanyInfoDirect,
   fetchCustomersDirect,
@@ -193,6 +194,14 @@ function getOrgNumberFromParty(party: PartyDto): string | null {
     null
   )
 }
+
+/**
+ * Dedup key for supplier org numbers: the register stores the 10-digit key
+ * (#2391) while a provider sends whatever spelling it holds ('556677-8899'),
+ * so the map is keyed by orgNumberKey on both sides; a value that is not a
+ * Swedish org number keys by itself, as before.
+ */
+const orgMapKey = (value: string): string => orgNumberKey(value) ?? value
 
 /**
  * Log a foreign-currency document that was imported WITHOUT a SEK conversion.
@@ -484,7 +493,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               .range(from, to)
         )
         for (const row of existingSuppliers) {
-          if (row.org_number) orgNumberToSupplierId.set(row.org_number, row.id)
+          if (row.org_number) orgNumberToSupplierId.set(orgMapKey(row.org_number), row.id)
           if (row.name) nameToSupplierId.set(row.name, row.id)
         }
 
@@ -509,7 +518,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           // (e.g. PostNord, IKANO BANK) aren't duplicated on every re-sync.
           const orgNumber = getOrgNumberFromParty(supplier.party)
           const existingSupplierId = orgNumber
-            ? orgNumberToSupplierId.get(orgNumber)
+            ? orgNumberToSupplierId.get(orgMapKey(orgNumber))
             : supplier.party.name
               ? nameToSupplierId.get(supplier.party.name)
               : undefined
@@ -520,7 +529,9 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             continue
           }
 
-          const pendingKey = (orgNumber ?? `name:${supplier.party.name?.toLowerCase() ?? ''}`).trim()
+          const pendingKey = (
+            orgNumber ? orgMapKey(orgNumber) : `name:${supplier.party.name?.toLowerCase() ?? ''}`
+          ).trim()
           if (pendingSupplierKeys.has(pendingKey)) {
             skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
             skipped++
@@ -552,7 +563,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             const providerId = batch[i].dto.id
             const newId = insertedRow.id as string
             supplierIdMap.set(providerId, newId)
-            if (insertedRow.org_number) orgNumberToSupplierId.set(insertedRow.org_number as string, newId)
+            if (insertedRow.org_number) orgNumberToSupplierId.set(orgMapKey(insertedRow.org_number as string), newId)
             if (insertedRow.name) nameToSupplierId.set(insertedRow.name as string, newId)
             imported++
           }
@@ -891,8 +902,8 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           const supplierOrgNumber = getOrgNumberFromParty(inv.supplier)
           let supplierId: string | null = null
 
-          if (supplierOrgNumber && orgNumberToSupplierId.has(supplierOrgNumber)) {
-            supplierId = orgNumberToSupplierId.get(supplierOrgNumber)!
+          if (supplierOrgNumber && orgNumberToSupplierId.has(orgMapKey(supplierOrgNumber))) {
+            supplierId = orgNumberToSupplierId.get(orgMapKey(supplierOrgNumber))!
           } else if (nameToSupplierId.has(inv.supplier.name)) {
             supplierId = nameToSupplierId.get(inv.supplier.name)!
           }
@@ -923,7 +934,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               country:
                 inv.supplier.postalAddress?.countryCode ||
                 (supplierType === 'swedish_business' ? 'SE' : null),
-              org_number: supplierOrgNumber,
+              org_number: supplierOrgNumber ? orgMapKey(supplierOrgNumber) : supplierOrgNumber,
             }
             stub = { key, row: minimalSupplier, waitingInvoiceIndices: [] }
             stubByKey.set(key, stub)
@@ -957,7 +968,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
                 continue
               }
               const newId = insertedRow.id as string
-              if (insertedRow.org_number) orgNumberToSupplierId.set(insertedRow.org_number as string, newId)
+              if (insertedRow.org_number) orgNumberToSupplierId.set(orgMapKey(insertedRow.org_number as string), newId)
               if (insertedRow.name) nameToSupplierId.set(insertedRow.name as string, newId)
               for (const idx of batch[i].waitingInvoiceIndices) {
                 resolved[idx] = { ...resolved[idx], supplierId: newId }

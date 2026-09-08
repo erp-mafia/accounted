@@ -43,6 +43,10 @@ function makeSupabase(rows: {
       calls.push({ column: `scan:${column}`, value: null })
       return self
     }
+    self.is = (column: string, value: unknown) => {
+      calls.push({ column: `is:${column}`, value })
+      return self
+    }
     self.order = () => self
     self.limit = () => self
     self.maybeSingle = () => {
@@ -170,6 +174,7 @@ describe('matchSupplierByIdentity', () => {
       ['5566778899', 'hyphen'],
       ['556677-8899', 'hyphen'],
       ['165566778899', 'hyphen'],
+      ['16556677-8899', 'hyphen'],
       ['556677 8899', 'hyphen'],
       ['800101-1231', 'twelve'],
       ['8001011231', 'twelve'],
@@ -183,6 +188,27 @@ describe('matchSupplierByIdentity', () => {
       expect(match, extracted).toEqual({ supplierId: expected, matchedOn: 'org_number' })
       expect(calls.some((c) => c.column === 'ilike:name'), extracted).toBe(false)
     }
+  })
+
+  it('scans live suppliers only', async () => {
+    const { supabase, calls } = makeSupabase({
+      withOrgNumber: [{ id: 'live', org_number: '5566778899' }],
+    })
+    await matchSupplierByIdentity(supabase, 'company-1', { orgNumber: '556677-8899' })
+    expect(calls).toContainEqual({ column: 'is:archived_at', value: null })
+  })
+
+  it('does not treat a VAT number or a foreign number as a Swedish org number', async () => {
+    // 556677889901 is orgnr + 01; its last 10 digits are somebody else.
+    const { supabase, calls } = makeSupabase({
+      withOrgNumber: [{ id: 'wrong', org_number: '6677889901' }],
+      byOrgNumber: null,
+    })
+    for (const value of ['SE556677889901', '556677889901', 'BE0123456789']) {
+      const match = await matchSupplierByIdentity(supabase, 'company-1', { orgNumber: value })
+      expect(match, value).toBeNull()
+    }
+    expect(calls.some((c) => c.column === 'scan:org_number')).toBe(false)
   })
 
   it('never matches junk in the register against a real org number', async () => {

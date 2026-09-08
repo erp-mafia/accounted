@@ -21,6 +21,13 @@ describe('CreateSupplierParamsSchema org_number', () => {
     }
   })
 
+  it('leaves a 12-digit value that is not a century form as typed', () => {
+    // A VAT number (orgnr + 01) passes the shape check but is not an identity
+    // the key may rewrite.
+    const parsed = CreateSupplierParamsSchema.parse({ name: 'Testbrand AB', org_number: '556677889901' })
+    expect(parsed.org_number).toBe('556677889901')
+  })
+
   it('still rejects a value that is not a Swedish org number', () => {
     expect(() =>
       CreateSupplierParamsSchema.parse({ name: 'Testbrand AB', org_number: 'DK12345678' }),

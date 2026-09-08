@@ -9,8 +9,13 @@
 -- rows written before that to the same form.
 --
 -- Scope:
---   * only rows whose digits form a 10- or 12-digit number; a foreign
---     registration number or an unrecognised value stays exactly as typed;
+--   * only rows that are a Swedish org number once separators are removed:
+--     10 digits, or 12 digits behind a century prefix (16 for organisations,
+--     18/19/20 for a personnummer). A 12-digit value behind any other prefix
+--     is a VAT number typed into the wrong field (556012579001 = orgnr + 01)
+--     whose last 10 digits belong to somebody else; a value with letters is
+--     a foreign registration number (BE0123456789). Both stay exactly as
+--     typed, as does anything else the rule does not recognise;
 --   * companies archived by a migration reset are immutable and skipped
 --     (company_migration_resets), the same rule as 20260904010000;
 --   * idempotent: a second run matches no row.
@@ -24,10 +29,11 @@
 -- index is a follow-up; the matcher does not depend on it.
 
 UPDATE public.suppliers s
-   SET org_number = right(regexp_replace(s.org_number, '\D', '', 'g'), 10)
+   SET org_number = right(regexp_replace(s.org_number, '[[:space:]-]', '', 'g'), 10)
  WHERE s.org_number IS NOT NULL
-   AND regexp_replace(s.org_number, '\D', '', 'g') ~ '^([0-9]{10}|[0-9]{12})$'
-   AND s.org_number <> right(regexp_replace(s.org_number, '\D', '', 'g'), 10)
+   AND regexp_replace(s.org_number, '[[:space:]-]', '', 'g')
+       ~ '^([0-9]{10}|(16|18|19|20)[0-9]{10})$'
+   AND s.org_number <> right(regexp_replace(s.org_number, '[[:space:]-]', '', 'g'), 10)
    AND NOT EXISTS (
      SELECT 1
        FROM public.company_migration_resets r
