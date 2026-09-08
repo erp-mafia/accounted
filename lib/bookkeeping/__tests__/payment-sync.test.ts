@@ -482,3 +482,40 @@ describe('syncInvoiceStatusFromPaymentEntry', () => {
     expect(tablesUpdated('transactions').length).toBe(2)
   })
 })
+
+describe('syncInvoiceStatusFromPaymentEntry: reclaimed ROT/RUT share (rot_rut_reclaim)', () => {
+  // 25 000 invoice, 7 500 deduction, Skatteverket refused 2 500 and the
+  // reclaim moved it onto the customer; customer paid 17 500 + 2 500. The
+  // storno of the 2 500 payment must leave 2 500 open, not 0 (#2397 R1).
+  it('keeps the refused share in the remaining after a payment storno', async () => {
+    const { supabase, updatePayload } = createRecordingSupabase([
+      { data: { amount: 2500 } }, // invoice_payments select amount
+      {
+        data: {
+          paid_amount: 20000,
+          total: 25000,
+          deduction_total: 7500,
+          deduction_reclaimed_total: 2500,
+          due_date: '2099-12-31',
+        },
+      }, // invoices select
+      { data: null }, // invoices update
+      { data: [] }, // invoice_payments select transaction_id
+      { data: null }, // invoice_payments delete
+      { data: null }, // transactions update
+    ])
+
+    await syncInvoiceStatusFromPaymentEntry(
+      supabase,
+      'co-1',
+      { id: 'entry-1', source_type: 'invoice_paid', source_id: 'invoice-1' } as JournalEntry,
+    )
+
+    expect(updatePayload('invoices')).toEqual({
+      status: 'partially_paid',
+      paid_at: null,
+      paid_amount: 17500,
+      remaining_amount: 2500,
+    })
+  })
+})

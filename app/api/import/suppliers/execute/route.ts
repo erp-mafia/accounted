@@ -3,7 +3,16 @@ import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { SupplierImportExecuteSchema } from '@/lib/api/schemas'
-import { normalizeOrgNumber, normalizeEmail } from '@/lib/import/shared/column-utils'
+import { normalizeEmail } from '@/lib/import/shared/column-utils'
+import { orgNumberKey } from '@/lib/invariants/org-number'
+
+/**
+ * Dedup key for an org number: the Swedish 10-digit key when the value is
+ * one (so a 12-digit CSV value finds the stored 10-digit row, #2391), else
+ * the value as typed, so BE0123456789 and FR0123456789 stay two suppliers.
+ */
+const orgDedupKey = (value: string | null): string | null =>
+  orgNumberKey(value) ?? (value?.trim() || null)
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -51,7 +60,7 @@ export const POST = withRouteContext(
       const byOrg = new Map<string, ExistingSupplier>()
       const byEmail = new Map<string, ExistingSupplier>()
       for (const s of existing) {
-        const org = normalizeOrgNumber(s.org_number)
+        const org = orgDedupKey(s.org_number)
         if (org) byOrg.set(org, s)
         const email = normalizeEmail(s.email)
         if (email) byEmail.set(email, s)
@@ -63,7 +72,7 @@ export const POST = withRouteContext(
       const errors: { row_index: number; name: string; reason: string }[] = []
 
       for (const row of rows) {
-        const orgKey = normalizeOrgNumber(row.org_number)
+        const orgKey = orgDedupKey(row.org_number)
         const emailKey = normalizeEmail(row.email)
         const match =
           (orgKey && byOrg.get(orgKey)) ||
@@ -79,7 +88,7 @@ export const POST = withRouteContext(
           const merged: Record<string, unknown> = {}
           if (row.name) merged.name = row.name
           if (row.supplier_type) merged.supplier_type = row.supplier_type
-          if (row.org_number) merged.org_number = row.org_number
+          if (row.org_number) merged.org_number = orgNumberKey(row.org_number) ?? row.org_number
           if (row.email) merged.email = row.email
           if (row.phone) merged.phone = row.phone
           if (row.address_line1) merged.address_line1 = row.address_line1
@@ -132,7 +141,8 @@ export const POST = withRouteContext(
             postal_code: row.postal_code,
             city: row.city,
             country: row.country || 'SE',
-            org_number: row.org_number,
+            // Stored as the 10-digit key like every other write path (#2391).
+            org_number: row.org_number ? (orgNumberKey(row.org_number) ?? row.org_number) : row.org_number,
             vat_number: row.vat_number,
             bankgiro: row.bankgiro,
             plusgiro: row.plusgiro,
@@ -156,7 +166,7 @@ export const POST = withRouteContext(
         }
         if (data) {
           created.push(data as Supplier)
-          const newOrg = normalizeOrgNumber(data.org_number)
+          const newOrg = orgDedupKey(data.org_number)
           if (newOrg) byOrg.set(newOrg, data as ExistingSupplier)
           const newEmail = normalizeEmail(data.email)
           if (newEmail) byEmail.set(newEmail, data as ExistingSupplier)
