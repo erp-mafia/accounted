@@ -358,7 +358,7 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
   },
   "invoice": {
     "invoiceNumber": string | null,    // include any suffix, e.g. "06655767-0007"
-    "invoiceDate": string | null,      // ISO date YYYY-MM-DD
+    "invoiceDate": string | null,      // ISO date YYYY-MM-DD: the invoice date, or on a receipt the purchase date printed on it
     "dueDate": string | null,          // ISO date YYYY-MM-DD
     "paymentReference": string | null, // OCR / payment reference
     "currency": string,                // ISO 4217 (SEK, USD, EUR, ...). Default "SEK" only if truly indeterminate.
@@ -399,6 +399,7 @@ Rules:
 - legibility: "good" = all key amounts and the merchant are readable. "partial" = some key fields are cut off, blurry, or unreadable. "unreadable" = the document is mostly illegible (too blurry/dark/small). Judge the IMAGE quality, not whether fields exist on the document.
 - payment: only for documents that show how payment was made. "card" for kort/VISA/Mastercard; cardLast4 only when a masked card number like ****1234 is printed. "invoice" means the document says it will be billed separately.
 - purchaseTime: the HH:MM time printed on a receipt. null when absent.
+- invoiceDate on receipts: the purchase date printed on the receipt (the "Datum"/"Date" line, usually right next to the time, or the date on the card slip). The field is NOT invoice-only: every receipt carries a date, so fill it whenever one is printed, and leave null only when no date is printed or it is unreadable.
 - Öresavrundning: Swedish receipts often show an "Avrundning"/"Öresavrundning" line. "total" is ALWAYS the amount actually paid AFTER rounding; put the rounding line in totals.roundingAmount (negative when rounded down). When present: subtotal + vatAmount + roundingAmount = total.
 - Currency: detect from the document (symbol $/€/kr or explicit code). Use the ISO 4217 code. Do NOT default to SEK if the document clearly shows another currency.
 - "total" is the amount the buyer must pay (look for "Att betala", "Total", "Amount paid", "Amount due", "Balance"). Prefer this over Subtotal.
