@@ -128,6 +128,28 @@ describe('zettle order-sync mapping', () => {
     )
   })
 
+  it('keeps line items and row-derived net when Zettle rounding drifts one öre per row', () => {
+    // 33.37 kr at 25%: Zettle net 26.70, re-derived tax 6.68, row sum 33.38.
+    const drifted = sale({
+      amount: 3337,
+      vatAmount: 667,
+      products: [
+        { quantity: '1', type: 'PRODUCT', name: 'Bulle', vatPercentage: 25, rowTaxableAmount: 2670 },
+      ],
+      payments: [{ type: 'IZETTLE_CARD', uuid: 'pay-2', amount: 3337 }],
+      groupedVatAmounts: { '25.0': 667 },
+    })
+    expect(mapLineItems(drifted)).toHaveLength(1)
+    // Net comes from the row (26.70), not tax / rate (26.68).
+    expect(buildVatBreakdown(drifted)).toEqual([{ rate: 25, net: 26.7, tax: 6.67 }])
+    // Two öre off on a single row is not rounding: drop the snapshot.
+    expect(mapLineItems(sale({ amount: 3340, products: drifted.products }))).toEqual([])
+  })
+
+  it('falls back to tax / rate when rows carry no net', () => {
+    expect(buildVatBreakdown(sale({ products: [] }))).toEqual([{ rate: 25, net: 100, tax: 25 }])
+  })
+
   it('converts minor units via fromMinor', () => {
     expect(fromMinor(12500)).toBe(125)
     expect(fromMinor(-50)).toBe(-0.5)

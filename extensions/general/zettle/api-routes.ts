@@ -6,6 +6,7 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { resolveOAuthOrigin } from '@/lib/auth/oauth-flows'
 import { isZettleConfigured } from './lib/credentials'
 import { buildAuthorizeUrl, disconnectApplication, refreshAccessToken } from './lib/oauth'
 import { refreshTokenOf } from './lib/credentials'
@@ -81,7 +82,7 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/connect',
-    handler: async (_request: Request, ctx?: ExtensionContext) => {
+    handler: async (request: Request, ctx?: ExtensionContext) => {
       const log = ctx?.log ?? console
       const auth = await requireUserAndCompany(ctx)
       if (auth instanceof NextResponse) return auth
@@ -120,6 +121,10 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
         .eq('status', 'pending')
 
       const oauthState = crypto.randomUUID()
+      // Remember the validated origin (app or brand domain) the merchant
+      // started on: Zettle redirects to the one registered callback URL, so
+      // the callback cannot see which brand the browser came from.
+      const returnOrigin = await resolveOAuthOrigin(request)
       const { data: created, error: insertError } = await auth.supabase
         .from('zettle_connections')
         .insert({
@@ -127,6 +132,7 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
           user_id: auth.userId,
           status: 'pending',
           oauth_state: oauthState,
+          return_origin: returnOrigin,
         })
         .select('id')
         .single()

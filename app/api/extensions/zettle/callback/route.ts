@@ -1,6 +1,8 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
+import { loadExtensions } from '@/lib/extensions/loader'
+import { extensionRegistry } from '@/lib/extensions/registry'
 import { eventBus } from '@/lib/events/bus'
 import { hashAuthCode } from '@/lib/auth/oauth-codes'
 import {
@@ -26,6 +28,16 @@ ensureInitialized()
  * user's browser to this URL directly.
  */
 export async function GET(request: Request) {
+  // Physical route: refuse (503) when the extension is not enabled instead
+  // of quietly activating connections for a feature the deployment turned off.
+  loadExtensions()
+  if (!extensionRegistry.get('zettle')) {
+    return NextResponse.json(
+      { error: 'Zettle extension is not enabled', code: 'EXTENSION_DISABLED' },
+      { status: 503 },
+    )
+  }
+
   const { searchParams } = new URL(request.url)
 
   const code = searchParams.get('code')
@@ -33,8 +45,14 @@ export async function GET(request: Request) {
   const error = searchParams.get('error')
   const errorDescription = searchParams.get('error_description')
 
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-  const returnUrl = `${baseUrl}/import?mode=zettle`
+  const appBase = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '')
+  // Return the browser to the origin the connect flow started on (validated
+  // at connect time: the app origin or a brand domain from the brands table).
+  // Zettle redirects to the one registered callback URL, so a white-label
+  // user would otherwise land on the canonical app domain.
+  const returnUrlFor = (origin: string | null | undefined) =>
+    `${(origin || appBase).replace(/\/$/, '')}/import?mode=zettle`
+  let returnUrl = returnUrlFor(null)
 
   if (error) {
     const errorMessage = errorDescription || error
@@ -48,11 +66,14 @@ export async function GET(request: Request) {
     if (state) {
       try {
         const supabase = await createServiceClient()
-        await supabase
+        const { data: denied } = await supabase
           .from('zettle_connections')
           .update({ status: 'error', error_message: errorMessage, oauth_state: null })
           .eq('oauth_state', state)
           .eq('status', 'pending')
+          .select('return_origin')
+          .maybeSingle()
+        returnUrl = returnUrlFor(denied?.return_origin)
       } catch (cleanupError) {
         console.error('[zettle] Failed to clean up pending connection:', cleanupError)
       }
@@ -72,10 +93,14 @@ export async function GET(request: Request) {
   try {
     const { data: pendingConnection, error: findError } = await supabase
       .from('zettle_connections')
-      .select('id, user_id, company_id')
+      .select('id, user_id, company_id, return_origin')
       .eq('oauth_state', state)
       .eq('status', 'pending')
       .single()
+
+    if (pendingConnection) {
+      returnUrl = returnUrlFor(pendingConnection.return_origin)
+    }
 
     if (findError || !pendingConnection) {
       console.error('[zettle] No pending connection for oauth_state', {

@@ -1252,6 +1252,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   webhooks: 'automation config with signing secrets',
   woocommerce_connections: 'WooCommerce connection state (encrypted API secrets)',
   shopify_connections: 'Shopify connection state (encrypted API secrets)',
+  zettle_connections: 'Zettle connection state (encrypted OAuth refresh token)',
 }
 
 /** Max parent ids per `IN (...)` chunk: keeps the PostgREST URL well under limits. */

@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { getPool, withUserContext } from './setup'
 import { randomUUID } from 'crypto'
-import { seedCompany } from './fixtures'
+import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
 
 const uniqueOrg = (label: string) => label + '-' + randomUUID()
 
 /**
- * Covers migration 20260908120000_zettle_connections:
+ * Covers migration 20260909100000_zettle_connections:
  *   1. RLS: members insert and read their own company's connection.
  *   2. One ACTIVE connection per company.
  *   3. One organization actively connected to at most one company.
@@ -115,5 +115,47 @@ describe('zettle_connections RLS', () => {
       [id],
     )
     expect(still.rows[0].status).toBe('active')
+  })
+})
+
+/**
+ * Covers migration 20260909100400_zettle_platform_parity:
+ *   1. webshop_orders / webshop_store_settings accept platform = 'zettle'.
+ *   2. The writer-role gate (20260902093000) is attached: a viewer cannot
+ *      connect a Zettle account even though RLS membership would let them.
+ */
+describe('zettle platform parity', () => {
+  it('lets webshop rows carry platform = zettle', async () => {
+    const { rows } = await getPool().query<{ conname: string; def: string }>(
+      `SELECT conname, pg_get_constraintdef(oid) AS def
+       FROM pg_constraint
+       WHERE conname IN ('webshop_orders_platform_check', 'webshop_store_settings_platform_check')
+       ORDER BY conname`,
+    )
+    expect(rows.map((r) => r.conname)).toEqual([
+      'webshop_orders_platform_check',
+      'webshop_store_settings_platform_check',
+    ])
+    for (const row of rows) {
+      expect(row.def).toContain("'zettle'")
+      expect(row.def).toContain("'shopify'")
+      expect(row.def).toContain("'woocommerce'")
+    }
+  })
+
+  it('refuses a viewer who tries to connect', async () => {
+    const { companyId } = await seedCompany()
+    const viewerId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: viewerId, role: 'viewer' })
+
+    await withUserContext(viewerId, async (client) => {
+      await expect(
+        client.query(
+          `INSERT INTO public.zettle_connections (company_id, user_id, organization_uuid, status)
+           VALUES ($1, $2, $3, 'pending')`,
+          [companyId, viewerId, uniqueOrg('viewer')],
+        ),
+      ).rejects.toThrow(/no write access to company/i)
+    })
   })
 })

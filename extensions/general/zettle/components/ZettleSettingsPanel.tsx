@@ -104,12 +104,16 @@ export default function ZettleSettingsPanel() {
         locale,
         timeoutMs: ZETTLE_CONNECT_TIMEOUT_MS,
       })
-      if (!result.ok || !result.data?.url) {
+      if (!result.ok) {
         toast({
           title: t('connect_failed_title'),
           description: failureDescription(result, failureCopy),
           variant: 'destructive',
         })
+        return
+      }
+      if (!result.data?.url) {
+        toast({ title: t('connect_failed_title'), variant: 'destructive' })
         return
       }
       window.location.href = result.data.url

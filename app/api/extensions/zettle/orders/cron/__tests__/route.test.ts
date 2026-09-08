@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const verifyCronSecret = vi.fn(() => null as unknown)
+const verifyCronSecret = vi.fn((..._args: unknown[]) => null as unknown)
 vi.mock('@/lib/auth/cron', () => ({
   verifyCronSecret: (...args: unknown[]) => verifyCronSecret(...args),
 }))
@@ -28,7 +28,7 @@ vi.mock('@/lib/supabase/service-client', () => ({
   })),
 }))
 
-const isZettleConfigured = vi.fn(() => true)
+const isZettleConfigured = vi.fn((..._args: unknown[]) => true)
 vi.mock('@/extensions/general/zettle/lib/credentials', () => ({
   isZettleConfigured: (...args: unknown[]) => isZettleConfigured(...args),
 }))

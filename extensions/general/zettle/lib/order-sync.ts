@@ -126,8 +126,34 @@ export function paymentMethodOf(payments: ZettlePayment[] | undefined): {
 }
 
 /**
- * Per-rate VAT from groupedVatAmounts (tax in minor units). Net derived as
- * tax / rate. Remainder against gross becomes a 0% bucket.
+ * Net per VAT rate summed from the product rows (Zettle's own öre rounding,
+ * rowTaxableAmount) plus the service charge. Null when any row lacks the
+ * fields, so the caller falls back to deriving net from the tax amount.
+ */
+function netByRateFromProducts(purchase: ZettlePurchase): Map<number, number> | null {
+  const netByRate = new Map<number, number>()
+  for (const product of purchase.products ?? []) {
+    const qty = Number.parseFloat(product.quantity)
+    if (!Number.isFinite(qty) || qty === 0) continue
+    if (typeof product.rowTaxableAmount !== 'number') return null
+    const rate = typeof product.vatPercentage === 'number' ? product.vatPercentage : 0
+    netByRate.set(rate, round((netByRate.get(rate) ?? 0) + fromMinor(product.rowTaxableAmount)))
+  }
+  const charge = purchase.serviceCharge
+  if (charge && typeof charge.amount === 'number') {
+    const rate = typeof charge.vatPercentage === 'number' ? charge.vatPercentage : 0
+    const gross = fromMinor(charge.amount)
+    const net = rate > 0 ? round(gross / (1 + rate / 100)) : gross
+    netByRate.set(rate, round((netByRate.get(rate) ?? 0) + net))
+  }
+  return netByRate.size > 0 ? netByRate : null
+}
+
+/**
+ * Per-rate VAT from groupedVatAmounts (tax in minor units). Net per rate is
+ * taken from the product rows when they carry it (matches what Zettle
+ * charged to the öre); otherwise derived as tax / rate. Remainder against
+ * gross becomes a 0% bucket.
  */
 export function buildVatBreakdown(purchase: ZettlePurchase): WebshopVatBreakdownLine[] {
   const total = fromMinor(Math.abs(purchase.amount))
@@ -136,14 +162,17 @@ export function buildVatBreakdown(purchase: ZettlePurchase): WebshopVatBreakdown
   const grouped = purchase.groupedVatAmounts
   if (!grouped || typeof grouped !== 'object') return []
 
+  const netFromRows = netByRateFromProducts(purchase)
   const buckets = new Map<number, { net: number; tax: number }>()
   for (const [rateKey, taxMinor] of Object.entries(grouped)) {
     if (typeof taxMinor !== 'number' || taxMinor === 0) continue
     const rate = Number.parseFloat(rateKey)
     if (!Number.isFinite(rate) || rate <= 0) return []
     const tax = fromMinor(Math.abs(taxMinor))
+    const rowNet = netFromRows?.get(rate)
+    const net = rowNet !== undefined ? Math.abs(rowNet) : round(tax / (rate / 100))
     const bucket = buckets.get(rate) ?? { net: 0, tax: 0 }
-    bucket.net = round(bucket.net + tax / (rate / 100))
+    bucket.net = round(bucket.net + net)
     bucket.tax = round(bucket.tax + tax)
     buckets.set(rate, bucket)
   }
@@ -204,11 +233,16 @@ export function mapLineItems(purchase: ZettlePurchase): WebshopOrderLineItem[] {
     })
   }
 
+  // Each row's tax is re-derived from Zettle's rounded net, so net + tax can
+  // sit one öre off the row's charged gross (33.37 kr at 25%: net 26.70,
+  // tax 6.68, sum 33.38). Allow that per row; anything larger means the
+  // rows do not describe this purchase and the snapshot is dropped.
   const total = fromMinor(Math.abs(purchase.amount))
   const covered = round(
     items.reduce((sum, i) => sum + Math.abs(i.total) + Math.abs(i.total_tax), 0),
   )
-  if (Math.abs(covered - total) > 0.005) return []
+  const tolerance = 0.005 + 0.01 * items.length
+  if (Math.abs(covered - total) > tolerance) return []
   return items
 }
 
