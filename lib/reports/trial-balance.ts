@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { roundOre } from '@/lib/money'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getOpeningBalances } from './opening-balances'
 import type { TrialBalanceRow } from '@/types'
@@ -16,7 +17,9 @@ import type { TrialBalanceRow } from '@/types'
  * period. The function rolls the IB forward from `period_start` to
  * `fromDate − 1` (so "opening" reflects the state at `fromDate`) and limits
  * period activity to `[fromDate, toDate]`. Defaults equal `period_start` and
- * `period_end`: identical to the no-options behaviour.
+ * `period_end`: identical to the no-options behaviour. Every row also carries
+ * `year_opening_*`, the balance at `period_start` before that roll-forward,
+ * so reports can print the Fortnox-style "Ing balans" next to "Ing saldo".
  *
  * When `dimensions` is passed (map of SIE dim number → object code, e.g.
  * `{"6":"P001"}`, AND across keys), both line queries filter with jsonb
@@ -297,6 +300,21 @@ export async function generateTrialBalance(
     ? new Map<string, { debit: number; credit: number }>()
     : obResult.balances
 
+  // Snapshot the fiscal-year-start figures BEFORE the roll-forward fold below,
+  // so each row can carry both the year opening balance ("Ing balans") and the
+  // window opening balance ("Ing saldo"). A Map copy, not a second read: the
+  // fallback path for a company without an OB entry is an RPC that aggregates
+  // every prior period, and paying for it twice per report is not worth two
+  // extra columns. Under a dimension filter openingBalances is empty by
+  // design, so the snapshot is empty too and the year columns read 0.
+  // The values are copied, not aliased: the fold below mutates the balance
+  // objects in place, so `new Map(openingBalances)` would roll forward into
+  // the snapshot as well and the two opening columns would never differ.
+  const yearOpeningBalances = new Map<string, { debit: number; credit: number }>()
+  for (const [accountNumber, balance] of openingBalances) {
+    yearOpeningBalances.set(accountNumber, { debit: balance.debit, credit: balance.credit })
+  }
+
   // Additively fold the roll-forward lines into openingBalances so the
   // downstream IB/period split stays correct without changing call sites.
   for (const line of priorLines) {
@@ -335,6 +353,7 @@ export async function generateTrialBalance(
   const rows: TrialBalanceRow[] = []
   for (const accountNumber of allAccountNumbers) {
     const opening = openingBalances.get(accountNumber) || { debit: 0, credit: 0 }
+    const yearOpening = yearOpeningBalances.get(accountNumber) || { debit: 0, credit: 0 }
     const periodActivity = periodBalances.get(accountNumber) || { debit: 0, credit: 0 }
     const accountInfo = accountMap.get(accountNumber) || {
       name: `Konto ${accountNumber}`,
@@ -345,12 +364,14 @@ export async function generateTrialBalance(
       account_number: accountNumber,
       account_name: accountInfo.name,
       account_class: accountInfo.class,
-      opening_debit: Math.round(opening.debit * 100) / 100,
-      opening_credit: Math.round(opening.credit * 100) / 100,
-      period_debit: Math.round(periodActivity.debit * 100) / 100,
-      period_credit: Math.round(periodActivity.credit * 100) / 100,
-      closing_debit: Math.round((opening.debit + periodActivity.debit) * 100) / 100,
-      closing_credit: Math.round((opening.credit + periodActivity.credit) * 100) / 100,
+      opening_debit: roundOre(opening.debit),
+      opening_credit: roundOre(opening.credit),
+      year_opening_debit: roundOre(yearOpening.debit),
+      year_opening_credit: roundOre(yearOpening.credit),
+      period_debit: roundOre(periodActivity.debit),
+      period_credit: roundOre(periodActivity.credit),
+      closing_debit: roundOre(opening.debit + periodActivity.debit),
+      closing_credit: roundOre(opening.credit + periodActivity.credit),
     })
   }
 

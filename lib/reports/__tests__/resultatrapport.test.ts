@@ -32,6 +32,8 @@ function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
     account_class: 3,
     opening_debit: 0,
     opening_credit: 0,
+    year_opening_debit: 0,
+    year_opening_credit: 0,
     period_debit: 0,
     period_credit: 0,
     closing_debit: 0,
@@ -83,7 +85,10 @@ describe('generateResultatrapport', () => {
     expect(report.groups[0].rows[0]).toEqual({
       account_number: '3001',
       account_name: 'Försäljning 25%',
+      // Full period: nothing precedes the window, so Ackumulerat = Period.
+      ytd_opening: 0,
       current_period: 100000,
+      ytd_closing: 100000,
       prior_period: 0,
     })
     // Expense rows shown as negative (credit - debit)
@@ -298,6 +303,156 @@ describe('generateResultatrapport', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       generateResultatrapport(q.supabase as any, 'company-1', 'missing')
     ).rejects.toThrow('Fiscal period not found')
+  })
+
+  // ── Ingående saldo / Ackumulerat ─────────────────────────────────
+  // The Balansrapport identity applied to a P&L year: fiscal-year activity
+  // before the window, plus the window, equals the year to date.
+
+  it('reports ytd_opening 0 and ytd_closing equal to the period over a full period', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        makeRow({ account_number: '3001', account_class: 3, closing_credit: 100000 }),
+        makeRow({ account_number: '5010', account_class: 5, closing_debit: 30000 }),
+      ])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+
+    for (const group of report.groups) {
+      for (const row of group.rows) {
+        expect(row.ytd_opening).toBe(0)
+        expect(row.ytd_closing).toBe(row.current_period)
+      }
+      expect(group.subtotal_ytd_opening).toBe(0)
+      expect(group.subtotal_ytd_closing).toBe(group.subtotal_current)
+    }
+    expect(report.net_result_ytd).toBe(report.net_result_current)
+    expect(report.fiscal_year).toEqual({ start: '2026-01-01', end: '2026-12-31' })
+  })
+
+  it('splits pre-window activity into ytd_opening for a narrowed window', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+      error: null,
+    })
+    // No prior-year candidates for the shifted window.
+    q.enqueue({ data: [], error: null })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        // Q1 booked 40 000 of revenue, Q2 another 60 000.
+        makeRow({
+          account_number: '3001',
+          account_name: 'Försäljning 25%',
+          account_class: 3,
+          opening_credit: 40000,
+          period_credit: 60000,
+          closing_credit: 100000,
+        }),
+        // Q1 booked 10 000 of rent, Q2 another 5 000.
+        makeRow({
+          account_number: '5010',
+          account_name: 'Lokalhyra',
+          account_class: 5,
+          opening_debit: 10000,
+          period_debit: 5000,
+          closing_debit: 15000,
+        }),
+      ])
+    )
+
+    const report = await generateResultatrapport(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      q.supabase as any,
+      'company-1',
+      'period-1',
+      { fromDate: '2026-04-01', toDate: '2026-06-30' }
+    )
+
+    const revenue = report.groups[0].rows[0]
+    expect(revenue.ytd_opening).toBe(40000)
+    expect(revenue.current_period).toBe(60000)
+    expect(revenue.ytd_closing).toBe(100000)
+
+    // Costs keep the credit-minus-debit sign, so every column is negative.
+    const rent = report.groups[1].rows[0]
+    expect(rent.ytd_opening).toBe(-10000)
+    expect(rent.current_period).toBe(-5000)
+    expect(rent.ytd_closing).toBe(-15000)
+
+    // The identity holds on rows, on subtotals and on the net result.
+    for (const group of report.groups) {
+      for (const row of group.rows) {
+        expect(row.ytd_opening + row.current_period).toBeCloseTo(row.ytd_closing, 2)
+      }
+      expect(group.subtotal_ytd_opening + group.subtotal_current).toBeCloseTo(
+        group.subtotal_ytd_closing,
+        2
+      )
+    }
+    expect(report.net_result_current).toBe(55000)
+    expect(report.net_result_ytd).toBe(85000)
+
+    // `period` is the window; `fiscal_year` stays the räkenskapsår.
+    expect(report.period).toEqual({ start: '2026-04-01', end: '2026-06-30' })
+    expect(report.fiscal_year).toEqual({ start: '2026-01-01', end: '2026-12-31' })
+  })
+
+  it('keeps an account with pre-window activity but nothing inside the window', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+      error: null,
+    })
+    q.enqueue({ data: [], error: null })
+
+    // Built literally, not via makeRow: that helper mirrors closing_* into an
+    // all-zero period_*, which is exactly the state under test here.
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        {
+          account_number: '6570',
+          account_name: 'Bankkostnader',
+          account_class: 6,
+          opening_debit: 2000,
+          opening_credit: 0,
+          year_opening_debit: 0,
+          year_opening_credit: 0,
+          period_debit: 0,
+          period_credit: 0,
+          closing_debit: 2000,
+          closing_credit: 0,
+        },
+      ])
+    )
+
+    const report = await generateResultatrapport(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      q.supabase as any,
+      'company-1',
+      'period-1',
+      { fromDate: '2026-04-01', toDate: '2026-06-30' }
+    )
+
+    // Dropping it would leave Ackumulerat short of the net result footer.
+    expect(report.groups[0].rows[0]).toEqual({
+      account_number: '6570',
+      account_name: 'Bankkostnader',
+      ytd_opening: -2000,
+      current_period: 0,
+      ytd_closing: -2000,
+      prior_period: 0,
+    })
+    expect(report.net_result_ytd).toBe(-2000)
   })
 
   it('compares a date range against the same window shifted one year back', async () => {

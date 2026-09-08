@@ -34,17 +34,27 @@ beforeEach(() => {
 })
 
 function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
-  return {
+  const row = {
     account_number: '1930',
     account_name: 'Bank',
     account_class: 1,
     opening_debit: 0,
     opening_credit: 0,
+    year_opening_debit: 0,
+    year_opening_credit: 0,
     period_debit: 0,
     period_credit: 0,
     closing_debit: 0,
     closing_credit: 0,
     ...overrides,
+  }
+  // Full-period default: with no narrowed window the trial balance rolls
+  // nothing forward, so the fiscal-year opening IS the window opening. Tests
+  // that narrow the window state year_opening_* explicitly.
+  return {
+    ...row,
+    year_opening_debit: overrides.year_opening_debit ?? row.opening_debit,
+    year_opening_credit: overrides.year_opening_credit ?? row.opening_credit,
   }
 }
 
@@ -121,10 +131,12 @@ describe('generateBalansrapport', () => {
     expect(assets.rows[1]).toEqual({
       account_number: '1930',
       account_name: 'Bank',
+      year_ib: 50000,
       ib: 50000,
       ub: 75000,
       period_change: 25000,
     })
+    expect(assets.subtotal_year_ib).toBe(60000)
     expect(assets.subtotal_ib).toBe(60000)
     expect(assets.subtotal_ub).toBe(87500)
 
@@ -133,6 +145,7 @@ describe('generateBalansrapport', () => {
     expect(equity.rows[0]).toEqual({
       account_number: '2099',
       account_name: 'Årets resultat',
+      year_ib: -52000,
       ib: -52000,
       ub: -72500,
       period_change: -20500,
@@ -386,10 +399,143 @@ describe('generateBalansrapport', () => {
     expect(report.groups[0].rows[0]).toEqual({
       account_number: '1510',
       account_name: 'Kundfordran (betald)',
+      year_ib: 10000,
       ib: 10000,
       ub: 0,
       period_change: -10000,
     })
+  })
+
+  // ── Fiscal-year opening column ───────────────────────────────────
+  // Fortnox prints four amount columns: Ing balans (fiscal-year start),
+  // Ing saldo (window start), Period, Utg balans. year_ib carries the first.
+
+  it('reports year_ib apart from ib when the window starts after period_start', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31' },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        makeRow({
+          account_number: '1930',
+          account_name: 'Bank',
+          account_class: 1,
+          // 40 000 at 2026-01-01, 50 000 by the window start, 75 000 at the end.
+          year_opening_debit: 40000,
+          opening_debit: 50000,
+          closing_debit: 75000,
+        }),
+      ])
+    )
+
+    const report = await generateBalansrapport(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      q.supabase as any,
+      'company-1',
+      'period-1',
+      { fromDate: '2026-04-01', toDate: '2026-12-31' }
+    )
+
+    expect(report.groups[0].rows[0]).toEqual({
+      account_number: '1930',
+      account_name: 'Bank',
+      year_ib: 40000,
+      ib: 50000,
+      ub: 75000,
+      period_change: 25000,
+    })
+    expect(report.groups[0].subtotal_year_ib).toBe(40000)
+    expect(report.groups[0].subtotal_ib).toBe(50000)
+    // The window is what `period` reports; `fiscal_year` keeps the räkenskapsår.
+    expect(report.period).toEqual({ start: '2026-04-01', end: '2026-12-31' })
+    expect(report.fiscal_year).toEqual({ start: '2026-01-01', end: '2026-12-31' })
+  })
+
+  it('keeps a row that was settled before the window but has a year IB', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31' },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        // Paid off in Q1, so both ib and ub are zero inside a Q2 window. It
+        // still opened the year at 10 000 and Fortnox prints that row.
+        makeRow({
+          account_number: '1510',
+          account_name: 'Kundfordran (betald)',
+          account_class: 1,
+          year_opening_debit: 10000,
+          year_opening_credit: 0,
+          opening_debit: 10000,
+          opening_credit: 10000,
+          closing_debit: 10000,
+          closing_credit: 10000,
+        }),
+      ])
+    )
+
+    const report = await generateBalansrapport(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      q.supabase as any,
+      'company-1',
+      'period-1',
+      { fromDate: '2026-04-01', toDate: '2026-06-30' }
+    )
+
+    expect(report.groups[0].rows).toHaveLength(1)
+    expect(report.groups[0].rows[0]).toEqual({
+      account_number: '1510',
+      account_name: 'Kundfordran (betald)',
+      year_ib: 10000,
+      ib: 0,
+      ub: 0,
+      period_change: 0,
+    })
+  })
+
+  it('still drops a row that is empty in every column', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31' },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        makeRow({ account_number: '1930', account_name: 'Bank', account_class: 1, closing_debit: 10000 }),
+        makeRow({ account_number: '1940', account_name: 'Inactive', account_class: 1 }),
+      ])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.groups[0].rows.map((r) => r.account_number)).toEqual(['1930'])
+  })
+
+  it('reports fiscal_year equal to period for a full-period report', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31' },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([makeRow({ account_number: '1930', account_class: 1, closing_debit: 10000 })])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.fiscal_year).toEqual({ start: '2026-01-01', end: '2026-12-31' })
+    expect(report.fiscal_year).toEqual(report.period)
+    // No roll-forward, so the two opening columns agree.
+    expect(report.groups[0].rows[0].year_ib).toBe(report.groups[0].rows[0].ib)
   })
 
   it('throws when fiscal period not found', async () => {

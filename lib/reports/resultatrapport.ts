@@ -21,9 +21,12 @@ const CLASS_LABELS: Record<number, string> = {
 /**
  * Resultatrapport: operational P&L report.
  *
- * Lists every account in classes 3-8 with current-period and prior-period
- * values side by side. Unlike Resultaträkning (formal, ÅRL Bilaga 2), this
- * keeps account numbers and is meant for ongoing reconciliation, not for
+ * Lists every account in classes 3-8 with the same opening + period = closing
+ * identity the Balansrapport uses, applied to a P&L year: `ytd_opening`
+ * ("Ingående saldo", fiscal-year activity before the window), `current_period`
+ * ("Period"), and `ytd_closing` ("Ackumulerat"), plus the prior fiscal year for
+ * comparison. Unlike Resultaträkning (formal, ÅRL Bilaga 2), this keeps
+ * account numbers and is meant for ongoing reconciliation, not for
  * årsbokslut/årsredovisning.
  *
  * Account 8999 is excluded: it's the year-end closing account that moves
@@ -173,6 +176,7 @@ export async function generateResultatrapport(
   const groups = buildGroups(currentRows, priorByAccount)
 
   const netResultCurrent = sumNet(currentRows)
+  const netResultYtd = currentRows.reduce((sum, r) => sum + ytdClosingAmount(r), 0)
   const netResultPrior = sumNet(priorRows)
 
   // Reconciliation aid for the header: which vouchers are actually in here.
@@ -196,8 +200,10 @@ export async function generateResultatrapport(
   return {
     groups,
     net_result_current: round2(netResultCurrent),
+    net_result_ytd: round2(netResultYtd),
     net_result_prior: round2(netResultPrior),
     period: { start: effectiveFromDate, end: effectiveToDate },
+    fiscal_year: { start: period.period_start, end: period.period_end },
     prior_period: priorPeriodInfo,
     ...(latestVouchers.length > 0 ? { latest_vouchers: latestVouchers } : {}),
   }
@@ -226,6 +232,31 @@ function filterPnl(rows: TrialBalanceRow[]): TrialBalanceRow[] {
  */
 function signedAmount(row: TrialBalanceRow): number {
   return row.period_credit - row.period_debit
+}
+
+/**
+ * Fiscal-year activity BEFORE the window ("Ingående saldo").
+ *
+ * `opening_*`, not `year_opening_*`: for a P&L account the fiscal-year opening
+ * balance is empty by construction (the OB entry carries classes 1-2 only), so
+ * everything the trial balance rolled into `opening_*` between period_start and
+ * fromDate is exactly the pre-window activity of this year. The year-end chain
+ * is already out of the picture via `closingEntry: 'exclude-all-year-end'`, so
+ * a resultatavslut posted inside the window cannot leak in here either. In the
+ * full-period case nothing is rolled forward and this reads 0.
+ */
+function ytdOpeningAmount(row: TrialBalanceRow): number {
+  return row.opening_credit - row.opening_debit
+}
+
+/**
+ * Fiscal-year activity THROUGH the window end ("Ackumulerat"). Same reasoning
+ * as ytdOpeningAmount: `closing_* = opening_* + period_*`, so this is the
+ * running year to date and `ytd_opening + current_period = ytd_closing` holds
+ * to the öre.
+ */
+function ytdClosingAmount(row: TrialBalanceRow): number {
+  return row.closing_credit - row.closing_debit
 }
 
 /**
@@ -270,21 +301,37 @@ function buildGroups(
       .sort((a, b) => a.account_number.localeCompare(b.account_number))
 
     const rows: ResultatrapportRow[] = []
+    let subtotalYtdOpening = 0
     let subtotalCurrent = 0
+    let subtotalYtdClosing = 0
     let subtotalPrior = 0
     for (const { account_number, name } of accountsInClass) {
       const cur = currentByAccount.get(account_number)
       const pr = priorByAccount.get(account_number)
       const currentAmount = cur ? signedAmount(cur) : 0
+      const ytdOpening = cur ? ytdOpeningAmount(cur) : 0
+      const ytdClosing = cur ? ytdClosingAmount(cur) : 0
       const priorAmount = pr ? signedAmount(pr) : 0
-      if (Math.abs(currentAmount) < 0.005 && Math.abs(priorAmount) < 0.005) continue
+      // An account with activity earlier in the year but none in the window
+      // still belongs on the report: its Ackumulerat column is non-zero.
+      if (
+        Math.abs(currentAmount) < 0.005 &&
+        Math.abs(ytdClosing) < 0.005 &&
+        Math.abs(priorAmount) < 0.005
+      ) {
+        continue
+      }
       rows.push({
         account_number,
         account_name: name,
+        ytd_opening: round2(ytdOpening),
         current_period: round2(currentAmount),
+        ytd_closing: round2(ytdClosing),
         prior_period: round2(priorAmount),
       })
+      subtotalYtdOpening += ytdOpening
       subtotalCurrent += currentAmount
+      subtotalYtdClosing += ytdClosing
       subtotalPrior += priorAmount
     }
 
@@ -294,7 +341,9 @@ function buildGroups(
       class: klass,
       class_label: CLASS_LABELS[klass],
       rows,
+      subtotal_ytd_opening: round2(subtotalYtdOpening),
       subtotal_current: round2(subtotalCurrent),
+      subtotal_ytd_closing: round2(subtotalYtdClosing),
       subtotal_prior: round2(subtotalPrior),
     })
   }

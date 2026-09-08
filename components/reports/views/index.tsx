@@ -733,7 +733,7 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
   }
 
   const hasPrior = data.prior_period !== null
-  const colCount = 4
+  const colCount = 6
 
   return (
     <div className="space-y-4">
@@ -759,9 +759,21 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                   <th className="text-left font-medium px-4 py-2">Kontonamn</th>
                   <th
                     className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                    title={`${data.fiscal_year.start} till ${data.period.start}`}
+                  >
+                    Ingående saldo
+                  </th>
+                  <th
+                    className="text-right font-medium px-4 py-2 w-32 tabular-nums"
                     title={`${data.period.start} till ${data.period.end}`}
                   >
-                    Innevarande
+                    Period
+                  </th>
+                  <th
+                    className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                    title={`${data.fiscal_year.start} till ${data.period.end}`}
+                  >
+                    Ackumulerat
                   </th>
                   <th
                     className="text-right font-medium px-4 py-2 w-32 tabular-nums"
@@ -789,7 +801,9 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                           <AccountNumber number={row.account_number} name={row.account_name} />
                         </td>
                         <td className="px-4 py-1.5">{row.account_name}</td>
+                        <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.ytd_opening)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.current_period)}</td>
+                        <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.ytd_closing)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
                           {hasPrior ? formatAmount(row.prior_period) : '-'}
                         </td>
@@ -799,7 +813,9 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                       <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">
                         Summa
                       </td>
+                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(group.subtotal_ytd_opening)}</td>
                       <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(group.subtotal_current)}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(group.subtotal_ytd_closing)}</td>
                       <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
                         {hasPrior ? formatAmount(group.subtotal_prior) : '-'}
                       </td>
@@ -814,12 +830,24 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
 
       <Card>
         <CardContent className="p-6">
-          <div className="grid gap-x-6 items-baseline grid-cols-[1fr_auto_auto]">
+          <div className="grid gap-x-6 items-baseline grid-cols-[1fr_auto_auto_auto]">
             <span className="text-sm font-medium">Beräknat resultat</span>
-            <span className={`font-display text-xl tabular-nums w-32 text-right ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}>
+            <span
+              className={`font-display text-xl tabular-nums w-32 text-right ${data.net_result_current >= 0 ? 'text-success' : 'text-destructive'}`}
+              title={`Period: ${data.period.start} till ${data.period.end}`}
+            >
               {formatAmount(data.net_result_current)} kr
             </span>
-            <span className="tabular-nums text-sm text-muted-foreground w-32 text-right">
+            <span
+              className="tabular-nums text-sm text-muted-foreground w-32 text-right"
+              title={`Ackumulerat: ${data.fiscal_year.start} till ${data.period.end}`}
+            >
+              {formatAmount(data.net_result_ytd)} kr
+            </span>
+            <span
+              className="tabular-nums text-sm text-muted-foreground w-32 text-right"
+              title={hasPrior ? `Föregående år: ${data.prior_period!.start} till ${data.prior_period!.end}` : undefined}
+            >
               {hasPrior ? `${formatAmount(data.net_result_prior)} kr` : '-'}
             </span>
           </div>
@@ -898,8 +926,24 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
                 <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
                   <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
                   <th className="text-left font-medium px-4 py-2">Kontonamn</th>
-                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">Ingående balans</th>
-                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">Förändring</th>
+                  <th
+                    className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                    title={`${data.fiscal_year.start}`}
+                  >
+                    Ingående balans
+                  </th>
+                  <th
+                    className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                    title={`${data.period.start}`}
+                  >
+                    Ingående saldo
+                  </th>
+                  <th
+                    className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                    title={`${data.period.start} till ${data.period.end}`}
+                  >
+                    Period
+                  </th>
                   <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">Utgående balans</th>
                 </tr>
               </thead>
@@ -907,7 +951,7 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
                 {data.groups.map((group) => (
                   <React.Fragment key={group.class}>
                     <tr className="bg-muted/30">
-                      <td colSpan={5} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
+                      <td colSpan={6} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
                         {group.class_label}
                       </td>
                     </tr>
@@ -921,6 +965,7 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
                           <AccountNumber number={row.account_number} name={row.account_name} />
                         </td>
                         <td className="px-4 py-1.5">{row.account_name}</td>
+                        <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.year_ib)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.ib)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(row.period_change)}</td>
                         <td className="px-4 py-1.5 text-right tabular-nums">{formatAmount(row.ub)}</td>
@@ -930,6 +975,7 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
                       <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">
                         Summa
                       </td>
+                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(group.subtotal_year_ib)}</td>
                       <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{formatAmount(group.subtotal_ib)}</td>
                       <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">
                         {formatAmount(group.subtotal_ub - group.subtotal_ib)}

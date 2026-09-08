@@ -17,6 +17,8 @@ describe('trialBalanceToCsv', () => {
         account_class: 1,
         opening_debit: 1000,
         opening_credit: 0,
+        year_opening_debit: 1000,
+        year_opening_credit: 0,
         period_debit: 500.5,
         period_credit: 200,
         closing_debit: 1300.5,

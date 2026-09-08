@@ -2205,6 +2205,9 @@ export interface TrialBalanceRow {
   period_credit: number
   closing_debit: number
   closing_credit: number
+  /** Opening balance at fiscal-year start (before any roll-forward to fromDate). Equals opening_* when the window starts at period_start. */
+  year_opening_debit: number
+  year_opening_credit: number
 }
 
 export interface IncomeStatementSection {
@@ -2280,7 +2283,11 @@ export interface LatestVoucherPerSeries {
 export interface ResultatrapportRow {
   account_number: string
   account_name: string
+  /** "Ingående saldo": fiscal-year activity before the window. 0 when the window starts at period_start. */
+  ytd_opening: number
   current_period: number
+  /** "Ackumulerat": fiscal-year activity through the window end. Equals ytd_opening + current_period. */
+  ytd_closing: number
   prior_period: number
 }
 
@@ -2288,15 +2295,21 @@ export interface ResultatrapportGroup {
   class: number
   class_label: string
   rows: ResultatrapportRow[]
+  subtotal_ytd_opening: number
   subtotal_current: number
+  subtotal_ytd_closing: number
   subtotal_prior: number
 }
 
 export interface ResultatrapportReport {
   groups: ResultatrapportGroup[]
   net_result_current: number
+  /** Net result accumulated from fiscal-year start through the window end. */
+  net_result_ytd: number
   net_result_prior: number
   period: { start: string; end: string }
+  /** The fiscal period's own bounds, regardless of any narrowed window. */
+  fiscal_year: { start: string; end: string }
   prior_period: { start: string; end: string } | null
   /** Omitted when the window holds no posted vouchers, or the report is dimension-filtered. */
   latest_vouchers?: LatestVoucherPerSeries[]
@@ -2338,6 +2351,9 @@ export interface DimensionPnlReport {
 export interface BalansrapportRow {
   account_number: string
   account_name: string
+  /** "Ing balans": balance at fiscal-year start. Equals `ib` when the window starts at period_start. */
+  year_ib: number
+  /** "Ing saldo": balance at the start of the reported window. */
   ib: number
   ub: number
   period_change: number
@@ -2347,6 +2363,7 @@ export interface BalansrapportGroup {
   class: number
   class_label: string
   rows: BalansrapportRow[]
+  subtotal_year_ib: number
   subtotal_ib: number
   subtotal_ub: number
 }
@@ -2358,6 +2375,8 @@ export interface BalansrapportReport {
   beraknat_resultat: number
   is_balanced: boolean
   period: { start: string; end: string }
+  /** The fiscal period's own bounds, regardless of any narrowed window. */
+  fiscal_year: { start: string; end: string }
   /** Present only when the underlying trial balance does not balance. */
   imbalance_diagnosis?: BalanceImbalanceDiagnosis
   /** Omitted when the window holds no posted vouchers. */

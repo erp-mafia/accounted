@@ -99,6 +99,8 @@ function buildTrialBalanceFromSIE(parsed: ParsedSIEFile): TrialBalanceRow[] {
       account_class: accountClass,
       opening_debit: Math.round(op.debit * 100) / 100,
       opening_credit: Math.round(op.credit * 100) / 100,
+      year_opening_debit: Math.round(op.debit * 100) / 100,
+      year_opening_credit: Math.round(op.credit * 100) / 100,
       period_debit: Math.round(pe.debit * 100) / 100,
       period_credit: Math.round(pe.credit * 100) / 100,
       closing_debit: Math.round((op.debit + pe.debit) * 100) / 100,
