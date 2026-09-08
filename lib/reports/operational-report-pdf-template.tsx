@@ -167,10 +167,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#1a1a1a',
   },
+  // Same 82pt cell as the table columns, so the same 9pt: at the page's 10pt
+  // the widest sv-SE amount is 90pt and overflows the cell.
   summaryAmount: {
     width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
+    fontSize: 9,
     color: '#1a1a1a',
   },
   summaryAmountMuted: {
@@ -185,7 +188,7 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     fontFamily: 'Courier',
     fontWeight: 'bold',
-    fontSize: 10,
+    fontSize: 9,
   },
   balanceVerdict: {
     flexDirection: 'row',
