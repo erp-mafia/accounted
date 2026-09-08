@@ -1,5 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import { z } from 'zod'
+import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
@@ -45,23 +44,26 @@ export interface MissingUnderlagEntry {
 
 /**
  * Sub-query failure. `userMessage` is already mapped through getErrorMessage()
- * (user-facing Swedish), never a raw driver message.
+ * (user-facing Swedish), never a raw driver message. `cause` is the raw
+ * PostgREST error for the server log: the mapped text alone hid a gateway 414
+ * behind "Något gick fel" for a whole evening of proxy-log reading (#2395).
  */
 export class MissingUnderlagQueryError extends Error {
-  constructor(public readonly userMessage: string) {
+  constructor(
+    public readonly userMessage: string,
+    public readonly cause: PostgrestError | unknown,
+  ) {
     super(userMessage)
   }
 }
 
-// Journal-entry ids are interpolated into the supplier-invoice .or() filter
-// string below, so they must be UUIDs. They originate from journal_entries.id
-// (DB-sourced, never request input), but this guard keeps the injection-safety
-// contract identical to /api/documents/counts.
-const uuidSchema = z.string().uuid()
-
-// 150 keeps the embedded id lists well under PostgREST's URL-length limit:
-// the supplier-invoice .or() below repeats the chunk twice (registration +
-// payment FK), so a larger chunk would risk truncating the GET filter.
+/**
+ * Ids per PostgREST .in() filter. Ids travel in the GET query string; 150
+ * UUIDs is about 5.6 KB, under the 8 KB header buffer that nginx/Kong ship
+ * with and that self-hosted Supabase inherits. Every lookup below carries the
+ * chunk exactly ONCE: a filter that repeats it (one .or() over two FK columns)
+ * doubles the URL and is answered 414 before PostgREST ever sees it (#2395).
+ */
 const LOOKUP_CHUNK = 150
 
 /**
@@ -169,20 +171,14 @@ export async function resolveMissingUnderlagEntries(
   const exempt = new Set<string>()
   for (let i = 0; i < candidateIds.length; i += LOOKUP_CHUNK) {
     const chunk = candidateIds.slice(i, i + LOOKUP_CHUNK)
-    // Only UUIDs reach the interpolated .or() string (the .in() array filters
-    // are already injection-safe); mirrors the guard in documents/counts.
-    const chunkInList = `(${chunk.filter((id) => uuidSchema.safeParse(id).success).join(',')})`
-    const [docRes, siRefRes, sipRefRes, exemptRes] = await Promise.all([
-      supabase
-        .from('document_attachments')
-        .select('journal_entry_id')
-        .eq('company_id', companyId)
-        .eq('is_current_version', true)
-        .in('journal_entry_id', chunk),
-      // BFL 5 kap 7 § hänvisning: an entry referenced by a supplier invoice
-      // whose source document is retained AND anchored to a journal entry
-      // is NOT missing underlag (only anchored docs sit behind the WORM
-      // deletion guards). Mirrors the verifikat_without_documents RPC.
+    // BFL 5 kap 7 § hänvisning: an entry referenced by a supplier invoice
+    // whose source document is retained AND anchored to a journal entry
+    // is NOT missing underlag (only anchored docs sit behind the WORM
+    // deletion guards). Mirrors the verifikat_without_documents RPC.
+    // One query per FK column, never one .or() over both: the chunk must
+    // appear once per URL (see LOOKUP_CHUNK), and a literal .in() keeps the
+    // filter resolvable for tests/schema/no-phantom-columns.test.ts.
+    const supplierInvoiceRefs = () =>
       supabase
         .from('supplier_invoices')
         .select(
@@ -190,9 +186,15 @@ export async function resolveMissingUnderlagEntries(
         )
         .eq('company_id', companyId)
         .not('document_id', 'is', null)
-        .or(
-          `registration_journal_entry_id.in.${chunkInList},payment_journal_entry_id.in.${chunkInList}`,
-        ),
+    const [docRes, siRegRes, siPayRes, sipRefRes, exemptRes] = await Promise.all([
+      supabase
+        .from('document_attachments')
+        .select('journal_entry_id')
+        .eq('company_id', companyId)
+        .eq('is_current_version', true)
+        .in('journal_entry_id', chunk),
+      supplierInvoiceRefs().in('registration_journal_entry_id', chunk),
+      supplierInvoiceRefs().in('payment_journal_entry_id', chunk),
       supabase
         .from('supplier_invoice_payments')
         .select(
@@ -206,13 +208,17 @@ export async function resolveMissingUnderlagEntries(
         .eq('company_id', companyId)
         .in('journal_entry_id', chunk),
     ])
-    for (const res of [docRes, siRefRes, sipRefRes, exemptRes]) {
-      if (res.error) throw new MissingUnderlagQueryError(getUserErrorMessage(res.error))
+    for (const res of [docRes, siRegRes, siPayRes, sipRefRes, exemptRes]) {
+      if (res.error) {
+        throw new MissingUnderlagQueryError(getUserErrorMessage(res.error), res.error)
+      }
     }
     for (const r of (docRes.data ?? []) as { journal_entry_id: string }[]) {
       withDoc.add(r.journal_entry_id)
     }
-    for (const r of (siRefRes.data ?? []) as unknown as {
+    // Both lookups return the same row shape; an invoice matched by both
+    // columns lands twice, harmlessly, in the set.
+    for (const r of [...(siRegRes.data ?? []), ...(siPayRes.data ?? [])] as unknown as {
       registration_journal_entry_id: string | null
       payment_journal_entry_id: string | null
       document: { journal_entry_id: string | null } | null
@@ -243,7 +249,7 @@ export async function resolveMissingUnderlagEntries(
     try {
       invoiceRefs = await getInvoiceReferencesForJournalEntries(supabase, companyId, chunk)
     } catch (err) {
-      throw new MissingUnderlagQueryError(getUserErrorMessage(err))
+      throw new MissingUnderlagQueryError(getUserErrorMessage(err), err)
     }
     for (const journalEntryId of invoiceRefs.keys()) withDoc.add(journalEntryId)
   }
