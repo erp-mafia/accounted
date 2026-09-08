@@ -240,6 +240,23 @@ describe('quote source conversion guards (20260908152555)', () => {
     })
   })
 
+  it('refuses a source document from another company instead of inspecting it as definer (20260908155231)', async () => {
+    const { userId, companyId: companyA } = await seedCompany()
+    const { userId: otherUser, companyId: companyB } = await seedCompany()
+    const customerA = await insertCustomer(companyA, userId)
+    const customerB = await insertCustomer(companyB, otherUser)
+    const quoteB = await insertSource(companyB, otherUser, customerB, 'quote')
+
+    await expect(insertOrder(companyA, userId, customerA, quoteB)).rejects.toThrow(
+      /SALES_ORDER_SOURCE_COMPANY_MISMATCH/,
+    )
+    await expect(insertConvertedInvoice(companyA, userId, customerA, quoteB)).rejects.toThrow(
+      /INVOICE_CONVERT_SOURCE_COMPANY_MISMATCH/,
+    )
+    // A cancelled row points nowhere live and is not inspected either way.
+    await expect(insertOrder(companyA, userId, customerA, quoteB, 'cancelled')).resolves.toBeTruthy()
+  })
+
   it('serializes a concurrent order + invoice conversion on the quote row so only the first lands', async () => {
     const { userId, companyId } = await seedCompany()
     const customerId = await insertCustomer(companyId, userId)

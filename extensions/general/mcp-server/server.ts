@@ -7233,7 +7233,7 @@ export const tools: McpTool[] = [
         actor,
         isQuote
           ? {
-              description: 'Once approved, the quote exists as an open offert with its OF-number. Record the customer decision with gnubok_set_quote_status; gnubok_convert_invoice creates the faktura from it (target order: a kundorder to deliver and invoice from).',
+              description: 'Once approved, the quote exists as an open offert with its OF-number. Record the customer decision with gnubok_set_quote_status; gnubok_convert_invoice creates the faktura (or, with target order, a kundorder) from it.',
               tool: 'gnubok_convert_invoice',
             }
           : {
@@ -7337,7 +7337,7 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         ...SALES_ORDER_SUMMARY_PROPS,
-        source_invoice_id: { type: ['string', 'null'], description: 'Proforma or quote (offert) the order was converted from, if any' },
+        source_invoice_id: { type: ['string', 'null'], description: 'Proforma or offert the order was converted from, if any' },
         your_reference: { type: ['string', 'null'] },
         our_reference: { type: ['string', 'null'] },
         notes: { type: ['string', 'null'] },
@@ -18473,7 +18473,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_convert_invoice',
     keywords: ['proforma', 'offert', 'quote', 'kundfaktura', 'kundorder', 'omvandla'],
     title: 'Convert Proforma or Quote to Invoice or Order',
-    description: 'Stage conversion of a proforma or quote (offert) to a real invoice (F-number, items copied) or, with target order, to a draft kundorder. Proforma is cancelled; the quote stays as accepted.',
+    description: 'Stage conversion of a proforma or quote (offert) to a real invoice (F-number, items copied) or, with target order, to a draft kundorder. Proforma is cancelled; the quote stays accepted.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -18482,7 +18482,7 @@ export const tools: McpTool[] = [
         target: {
           type: 'string',
           enum: ['invoice', 'order'],
-          description: 'invoice (default): create the faktura. order: create a draft kundorder to deliver and invoice from (offert -> order -> faktura).',
+          description: 'invoice (default) creates the faktura; order creates a draft kundorder to deliver and invoice from.',
         },
       },
       required: ['invoice_id'],
@@ -18582,7 +18582,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_set_quote_status',
     keywords: ['offert', 'quote', 'accepterad', 'avböjd', 'godkänn offert'],
     title: 'Set Quote Status',
-    description: 'Record the customer decision on a quote (offert): open, accepted or declined. Locked once invoiced or turned into a kundorder; expired is derived from valid_until.',
+    description: 'Record the customer decision on a quote (offert): open, accepted or declined. Locked once invoiced or ordered; expired is derived from valid_until.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
