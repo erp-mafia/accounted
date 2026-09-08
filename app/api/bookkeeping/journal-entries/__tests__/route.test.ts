@@ -25,6 +25,17 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
+const { mockLogError } = vi.hoisted(() => ({ mockLogError: vi.fn() }))
+vi.mock('@/lib/logger', () => {
+  const logger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: mockLogError,
+    child: (): unknown => logger,
+  }
+  return { createLogger: () => logger }
+})
+
 const mockCreateJournalEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
@@ -357,8 +368,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
   })
 
   describe('missing_underlag=true (the dashboard deep-link filter)', () => {
-    // Candidate ids must be UUID-shaped: the resolver interpolates them into
-    // the supplier-invoice .or() filter behind a UUID guard.
+    // UUID-shaped candidate ids, as journal_entries.id produces them.
     const E1 = '11111111-1111-4111-8111-111111111111'
     const E2 = '22222222-2222-4222-8222-222222222222'
     const E3 = '33333333-3333-4333-8333-333333333333'
@@ -374,7 +384,8 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     it('returns only entries without documents, exemption-aware, with the full-set count', async () => {
       enqueue({ data: [candidate(E1, 1), candidate(E2, 2), candidate(E3, 3)], error: null }) // candidates
       enqueue({ data: [{ journal_entry_id: E1 }], error: null }) // E1 has a document
-      enqueue({ data: [], error: null }) // no SI references
+      enqueue({ data: [], error: null }) // no SI references (registration FK)
+      enqueue({ data: [], error: null }) // no SI references (payment FK)
       enqueue({ data: [], error: null }) // no SI payment-row references
       enqueue({ data: [{ journal_entry_id: E3 }], error: null }) // E3 exempt
       enqueue({ data: [], error: null }) // no invoices pointing at the entries
@@ -414,7 +425,8 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       // Out of voucher order on purpose: default sort is series+number asc.
       enqueue({ data: [candidate(E3, 3), candidate(E1, 1), candidate(E2, 2)], error: null })
       enqueue({ data: [], error: null }) // no documents
-      enqueue({ data: [], error: null }) // no SI references
+      enqueue({ data: [], error: null }) // no SI references (registration FK)
+      enqueue({ data: [], error: null }) // no SI references (payment FK)
       enqueue({ data: [], error: null }) // no SI payment-row references
       enqueue({ data: [], error: null }) // no exemptions
       enqueue({ data: [], error: null }) // no invoices pointing at the entries
@@ -452,6 +464,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
         ],
         error: null,
       })
+      enqueue({ data: [], error: null }) // no SI references via payment FK
       enqueue({ data: [], error: null }) // no SI payment-row references
       enqueue({ data: [], error: null }) // no exemptions
       enqueue({ data: [], error: null }) // no invoices pointing at the entries
@@ -475,7 +488,8 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       // Accounted (invoice_payments row). E2: nothing points at it.
       enqueue({ data: [candidate(E1, 1), candidate(E2, 2)], error: null })
       enqueue({ data: [], error: null }) // no direct documents
-      enqueue({ data: [], error: null }) // no SI references
+      enqueue({ data: [], error: null }) // no SI references (registration FK)
+      enqueue({ data: [], error: null }) // no SI references (payment FK)
       enqueue({ data: [], error: null }) // no SI payment-row references
       enqueue({ data: [], error: null }) // no exemptions
       enqueue({ data: [], error: null }) // no direct invoice links
@@ -501,7 +515,8 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       enqueue({ data: [], error: null }) // candidates by description: none
       enqueue({ data: [candidate(E1, 209)], error: null }) // candidates by voucher label
       enqueue({ data: [], error: null }) // no documents
-      enqueue({ data: [], error: null }) // no SI references
+      enqueue({ data: [], error: null }) // no SI references (registration FK)
+      enqueue({ data: [], error: null }) // no SI references (payment FK)
       enqueue({ data: [], error: null }) // no SI payment-row references
       enqueue({ data: [], error: null }) // no exemptions
       enqueue({ data: [], error: null }) // no invoices pointing at the entries
@@ -523,6 +538,26 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       const eqCalls = findCalls('journal_entries', 'eq')
       expect(eqCalls).toContainEqual(['voucher_series', 'A'])
       expect(eqCalls).toContainEqual(['voucher_number', 209])
+    })
+
+    it('logs the driver error and answers with the Swedish text when a lookup fails (#2395)', async () => {
+      enqueue({ data: [candidate(E1, 1)], error: null }) // candidates
+      enqueue({ data: [], error: null }) // no documents
+      const driverError = { message: 'Request-URI Too Large', code: '414', details: null, hint: null }
+      enqueue({ data: null, error: driverError }) // SI by registration FK: gateway refused the URL
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { missing_underlag: 'true', exclude_draft: 'true' },
+      })
+      const { status, body } = await parseJsonResponse<{ error: string }>(await GET(request, { params: Promise.resolve({}) }))
+
+      expect(status).toBe(500)
+      expect(body.error).toBe('Verifikationerna kunde inte hämtas. Försök igen.')
+      // The operator gets the driver error; before this the log only carried
+      // the user text ("Något gick fel") and the 414 was invisible.
+      const call = mockLogError.mock.calls.find(([msg]) => msg === 'failed to resolve missing-underlag entries')
+      expect(call).toBeDefined()
+      expect(call![2]).toEqual({ cause: driverError })
     })
 
     it('is ignored for the drafts view', async () => {
