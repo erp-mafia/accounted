@@ -1,4 +1,5 @@
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
+import { matchSeedText } from './resolver/directory'
 
 /**
  * Pre-classifier for counterparty keys: routes a key before entity
@@ -90,6 +91,10 @@ export function classifyKey(input: { key: string; acct?: string | null }): Party
   if (BANK.test(k)) return 'bank'
   if (AUTHORITY.test(k)) return 'authority'
   if (INTERMEDIARY.test(k)) return 'intermediary'
+  // A brand the directory knows is a party however generic the rest of the
+  // text is: "sj biljetter" is SJ, not a category, even though "sj" is too
+  // short to count as content below and "biljetter" is vocabulary.
+  if (matchSeedText(k)) return 'party'
   const content = k
     .split(/\s+/)
     .filter((t) => t.length >= 3 && !/^\d+$/.test(t) && !/^k\d+$/.test(t) && !STOP.has(t))
