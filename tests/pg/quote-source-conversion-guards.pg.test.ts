@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { describe, it, expect } from 'vitest'
 import { getClient, getPool, withUserContext } from './setup'
-import { seedCompany } from './fixtures'
+import { insertCompany, insertCompanyMember, seedCompany } from './fixtures'
 
-// pg-real coverage for migration 20260908152555 (issue #2224, offert ->
-// kundorder): one live kundorder per source document, a quote with a live
-// converted invoice cannot get a live order, a quote with a live order
-// cannot get a live converted invoice, and the two conversions serialize
-// on the quote row so a concurrent pair cannot both land.
+// pg-real coverage for migrations 20260908152555 and 20260908155231 (issue
+// #2224, offert -> kundorder): one live kundorder per source document, a
+// quote with a live converted invoice cannot get a live order, a quote with
+// a live order cannot get a live converted invoice, the quote decision is
+// locked while an order lives, the guards run as definer so a non-active
+// company is still guarded, and the two conversions serialize on the quote
+// row so a concurrent pair cannot both land.
 
 async function insertCustomer(companyId: string, userId: string): Promise<string> {
   const id = randomUUID()
@@ -184,6 +186,56 @@ describe('quote source conversion guards (20260908152555)', () => {
     await withUserContext(userId, async (client) => {
       await expect(
         client.query(orderInsertSql(), [randomUUID(), companyId, userId, customerId, 'draft', quoteId]),
+      ).rejects.toThrow(/INVOICE_QUOTE_ALREADY_INVOICED/)
+    })
+  })
+
+  it('locks the quote decision in accepted while a live kundorder exists (20260908155231)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const customerId = await insertCustomer(companyId, userId)
+    const quoteId = await insertSource(companyId, userId, customerId, 'quote')
+    const orderId = await insertOrder(companyId, userId, customerId, quoteId)
+
+    await expect(
+      getPool().query(`UPDATE public.invoices SET quote_status = 'declined' WHERE id = $1`, [quoteId]),
+    ).rejects.toThrow(/INVOICE_QUOTE_ALREADY_ORDERED/)
+    await expect(
+      getPool().query(`UPDATE public.invoices SET quote_status = 'open' WHERE id = $1`, [quoteId]),
+    ).rejects.toThrow(/INVOICE_QUOTE_ALREADY_ORDERED/)
+    // Re-affirming accepted (what the conversions write) is not a decision change.
+    await getPool().query(`UPDATE public.invoices SET quote_status = 'accepted' WHERE id = $1`, [quoteId])
+
+    await getPool().query(`UPDATE public.sales_orders SET status = 'cancelled' WHERE id = $1`, [orderId])
+    await getPool().query(`UPDATE public.invoices SET quote_status = 'declined' WHERE id = $1`, [quoteId])
+    const { rows } = await getPool().query<{ quote_status: string }>(
+      'SELECT quote_status FROM public.invoices WHERE id = $1',
+      [quoteId],
+    )
+    expect(rows[0].quote_status).toBe('declined')
+  })
+
+  it('still guards a non-active company: the row lock runs as definer, not under the caller RLS (20260908155231)', async () => {
+    // One user, two companies, active company = A. The sales_orders insert
+    // policy admits every membership, but invoices_update (and so a FOR
+    // UPDATE under RLS) admits only the active company; without SECURITY
+    // DEFINER the guard saw no row for B and let the write through.
+    const { userId, companyId: companyA } = await seedCompany()
+    const companyB = await insertCompany({ createdBy: userId, name: 'Other AB' })
+    await insertCompanyMember({ companyId: companyB, userId, role: 'owner' })
+    await getPool().query(
+      `INSERT INTO public.user_preferences (user_id, active_company_id) VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
+      [userId, companyA],
+    )
+    const customerB = await insertCustomer(companyB, userId)
+    const quoteB = await insertSource(companyB, userId, customerB, 'quote')
+    await insertConvertedInvoice(companyB, userId, customerB, quoteB)
+
+    await withUserContext(userId, async (client) => {
+      const { rows } = await client.query<{ active: string }>('SELECT public.current_active_company_id()::text AS active')
+      expect(rows[0].active).toBe(companyA)
+      await expect(
+        client.query(orderInsertSql(), [randomUUID(), companyB, userId, customerB, 'draft', quoteB]),
       ).rejects.toThrow(/INVOICE_QUOTE_ALREADY_INVOICED/)
     })
   })

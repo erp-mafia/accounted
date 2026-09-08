@@ -8578,6 +8578,7 @@
     "def_notes": "Anteckningar",
     "def_source_invoice": "Skapad från",
     "source_proforma": "Proformafaktura",
+    "source_quote": "Offert {number}",
     "def_delivery": "Leverans",
     "def_invoicing": "Fakturering",
     "section_lines": "Orderrader",

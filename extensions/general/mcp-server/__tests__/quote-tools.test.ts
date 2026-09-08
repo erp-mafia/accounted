@@ -466,6 +466,17 @@ describe('gnubok_set_quote_status: concurrency and expiry', () => {
     ).rejects.toMatchObject({ code: 'INVOICE_QUOTE_CHANGED_CONCURRENTLY' })
   })
 
+  it('maps the decision guard trigger to INVOICE_QUOTE_ALREADY_ORDERED when a live kundorder locks the quote', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'q-1', document_type: 'quote', status: 'sent', quote_status: 'accepted', quote_decided_at: '2026-06-01T10:00:00Z', valid_until: '2026-12-31' }, error: null })
+    enqueue({ data: null, error: null }) // no converted invoice
+    enqueue({ data: null, error: { code: 'P0001', message: 'INVOICE_QUOTE_ALREADY_ORDERED: quote q-1 has a live kundorder' } })
+
+    await expect(
+      setQuoteStatus.execute({ invoice_id: 'q-1', status: 'declined' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_QUOTE_ALREADY_ORDERED' })
+  })
+
   it('writes a new valid_until with the decision and rejects a malformed one', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'q-1', document_type: 'quote', status: 'sent', quote_status: 'open', quote_decided_at: null, valid_until: '2026-01-31' }, error: null })

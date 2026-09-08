@@ -8578,6 +8578,7 @@
     "def_notes": "Notes",
     "def_source_invoice": "Created from",
     "source_proforma": "Proforma invoice",
+    "source_quote": "Quote {number}",
     "def_delivery": "Delivery",
     "def_invoicing": "Invoicing",
     "section_lines": "Order lines",
