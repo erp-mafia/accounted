@@ -19,8 +19,9 @@ import type { Invoice } from '@/types'
  *     invoice links back via converted_from_id. A quote has no due date, so
  *     the invoice gets invoice_date + the customer's payment terms (falling
  *     back to company_settings.invoice_default_days, then 30). A second
- *     conversion is refused while an active converted invoice exists; a
- *     declined quote must be re-accepted first.
+ *     conversion is refused while an active converted invoice exists or
+ *     while a live kundorder was created from the quote (invoice from the
+ *     order instead); a declined quote must be re-accepted first.
  *
  * Ordering: ensureInvoiceNumber() is the LAST side effect. The F-series
  * counter only advances after items are inserted and the source is updated,
@@ -35,6 +36,7 @@ export type ConvertToInvoiceFailureCode =
   | 'INVOICE_CONVERT_SOURCE_CHANGED'
   | 'INVOICE_CONVERT_QUOTE_DECLINED'
   | 'INVOICE_QUOTE_ALREADY_INVOICED'
+  | 'INVOICE_QUOTE_ALREADY_ORDERED'
 
 export type ConvertToInvoiceResult =
   | { ok: true; invoice: Invoice }
@@ -126,6 +128,22 @@ export async function convertToInvoice(params: {
     }
     if (existing) {
       return { ok: false, code: 'INVOICE_QUOTE_ALREADY_INVOICED' }
+    }
+
+    // A quote that became a kundorder is invoiced from the order (full or
+    // partial deliveries), never a second time from the quote. A cancelled
+    // order frees the quote again. Mirror of convertToSalesOrder's guard.
+    const { count: liveOrders, error: ordersError } = await supabase
+      .from('sales_orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .eq('source_invoice_id', sourceId)
+      .neq('status', 'cancelled')
+    if (ordersError) {
+      return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: ordersError }
+    }
+    if ((liveOrders ?? 0) > 0) {
+      return { ok: false, code: 'INVOICE_QUOTE_ALREADY_ORDERED' }
     }
 
     // 0 days is a real term (due on receipt); only a missing value falls

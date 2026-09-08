@@ -1,11 +1,13 @@
 /**
- * POST /api/invoices/[id]/convert-to-order: proforma -> draft kundorder.
+ * POST /api/invoices/[id]/convert-to-order: proforma or offert -> draft
+ * kundorder.
  *
- * Queue order: invoices select (proforma + items), sales_orders head count
- * (already converted?), then createSalesOrder (customers select,
+ * Queue order: invoices select (source + items), sales_orders head count
+ * (live order already?), for a quote the invoices converted_from_id lookup
+ * (live invoice already?), then createSalesOrder (customers select,
  * sales_orders insert, sales_order_items insert, generate number rpc,
  * sales_orders select, invoiced rpc), then the invoices compare-and-set
- * update that marks the proforma cancelled.
+ * update that marks the proforma cancelled or the quote accepted.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -306,6 +308,126 @@ describe('POST /api/invoices/[id]/convert-to-order', () => {
     expect(findCall('invoices', 'update')![0]).toEqual({ status: 'cancelled' })
     expect(findCall('invoices', 'neq')).toEqual(['status', 'cancelled'])
     expect(findCall('sales_orders', 'delete')).toBeUndefined()
+  })
+
+  describe('offert (quote) sources', () => {
+    function makeQuote(overrides: Record<string, unknown> = {}) {
+      return makeProforma({
+        document_type: 'quote',
+        status: 'sent',
+        invoice_number: 'OF-003',
+        valid_until: '2026-06-30',
+        due_date: '2026-06-30',
+        quote_status: 'open',
+        quote_decided_at: null,
+        ...overrides,
+      })
+    }
+
+    it('returns 409 INVOICE_CONVERT_QUOTE_DECLINED for a declined quote', async () => {
+      enqueue({ data: makeQuote({ quote_status: 'declined' }) })
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post())
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('INVOICE_CONVERT_QUOTE_DECLINED')
+      expect(findCall('sales_orders', 'insert')).toBeUndefined()
+    })
+
+    it('returns 409 SALES_ORDER_SOURCE_ALREADY_CONVERTED when a live order already points at the quote', async () => {
+      enqueue({ data: makeQuote({ quote_status: 'accepted' }) })
+      enqueue({ data: null, count: 1 })
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post())
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('SALES_ORDER_SOURCE_ALREADY_CONVERTED')
+      // A cancelled order frees the quote: the count excludes cancelled rows.
+      expect(findCalls('sales_orders', 'neq')).toContainEqual(['status', 'cancelled'])
+    })
+
+    it('returns 409 INVOICE_QUOTE_ALREADY_INVOICED when a live invoice was converted from the quote', async () => {
+      enqueue({ data: makeQuote({ quote_status: 'accepted' }) })
+      enqueue({ data: null, count: 0 })
+      enqueue({ data: { id: 'f1000000-0000-4000-8000-000000000009' } })
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post())
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_INVOICED')
+      expect(findCalls('invoices', 'eq')).toContainEqual(['converted_from_id', IDS.invoice])
+      expect(findCall('sales_orders', 'insert')).toBeUndefined()
+    })
+
+    it('creates a draft order from an open quote, marks the quote accepted (it stays) and answers 201', async () => {
+      enqueue({ data: makeQuote() })
+      enqueue({ data: null, count: 0 }) // no live order
+      enqueue({ data: null }) // no live converted invoice
+      enqueue({ data: makeOrderCustomer() })
+      enqueue({ data: { id: IDS.order } }) // sales_orders insert
+      enqueue({ data: null }) // sales_order_items insert
+      enqueue({ data: 'OR-1' }) // generate_sales_order_number
+      enqueue({ data: makeSalesOrder({ source_invoice_id: IDS.invoice, order_number: 'OR-1' }) })
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: IDS.invoice }] }) // quote CAS update
+
+      const { status, body } = await parseJsonResponse<{ data: SalesOrder; sales_order_id: string }>(await post())
+
+      expect(status).toBe(201)
+      expect(body.sales_order_id).toBe(IDS.order)
+      expect(body.data.source_invoice_id).toBe(IDS.invoice)
+      expect(findCall('sales_orders', 'insert')![0]).toMatchObject({
+        customer_id: IDS.customer,
+        source_invoice_id: IDS.invoice,
+        total: 1250,
+      })
+
+      // The quote is the customer's accepted agreement: it flips to accepted
+      // with a compare-and-set on the decision that was read, never cancelled.
+      const update = findCall('invoices', 'update')![0] as Record<string, unknown>
+      expect(update.quote_status).toBe('accepted')
+      expect(typeof update.quote_decided_at).toBe('string')
+      expect(update.status).toBeUndefined()
+      expect(findCalls('invoices', 'eq')).toContainEqual(['quote_status', 'open'])
+      expect(findCall('invoices', 'neq')).toEqual(['status', 'cancelled'])
+      expect(findCall('sales_orders', 'delete')).toBeUndefined()
+    })
+
+    it('keeps the original decision timestamp when an accepted quote becomes an order', async () => {
+      enqueue({ data: makeQuote({ quote_status: 'accepted', quote_decided_at: '2026-06-01T10:00:00Z' }) })
+      enqueue({ data: null, count: 0 })
+      enqueue({ data: null })
+      enqueue({ data: makeOrderCustomer() })
+      enqueue({ data: { id: IDS.order } })
+      enqueue({ data: null })
+      enqueue({ data: 'OR-1' })
+      enqueue({ data: makeSalesOrder({ source_invoice_id: IDS.invoice, order_number: 'OR-1' }) })
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: IDS.invoice }] })
+
+      const { status } = await parseJsonResponse(await post())
+
+      expect(status).toBe(201)
+      expect(findCall('invoices', 'update')![0]).toEqual({
+        quote_status: 'accepted',
+        quote_decided_at: '2026-06-01T10:00:00Z',
+      })
+      expect(findCalls('invoices', 'eq')).toContainEqual(['quote_status', 'accepted'])
+    })
+
+    it('removes the fresh order and answers 409 when the quote was decided or converted concurrently', async () => {
+      enqueue({ data: makeQuote() })
+      enqueue({ data: null, count: 0 })
+      enqueue({ data: null })
+      enqueue({ data: makeOrderCustomer() })
+      enqueue({ data: { id: IDS.order } })
+      enqueue({ data: null })
+      enqueue({ data: 'OR-1' })
+      enqueue({ data: makeSalesOrder({ source_invoice_id: IDS.invoice }) })
+      enqueue({ data: [] })
+      enqueue({ data: [] }) // CAS update matched nothing
+      enqueue({ data: null }) // order delete
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post())
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('SALES_ORDER_SOURCE_ALREADY_CONVERTED')
+      expect(findCall('sales_orders', 'delete')).toBeDefined()
+    })
   })
 
   it('removes the fresh order and answers 409 when the proforma was converted concurrently', async () => {

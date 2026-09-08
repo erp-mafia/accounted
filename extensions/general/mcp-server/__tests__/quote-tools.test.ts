@@ -238,6 +238,7 @@ describe('gnubok_convert_invoice: quotes', () => {
       error: null,
     })
     enqueue({ data: null, error: null }) // converted_from_id lookup
+    enqueue({ data: null, count: 0, error: null }) // live sales_orders count
     enqueue({ data: { id: 'op-convert' }, error: null }) // pending_operations insert
 
     const result = (await convertInvoice.execute(
@@ -248,11 +249,132 @@ describe('gnubok_convert_invoice: quotes', () => {
     )) as { staged: boolean; message: string; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
-    const row = findCall('pending_operations', 'insert')![0] as { title: string }
-    expect(row.title).toContain('Konvertera offert')
+    const row = findCall('pending_operations', 'insert')![0] as { title: string; params: Record<string, unknown> }
+    expect(row.title).toContain('Konvertera offert → faktura')
     expect(row.title).toContain('OF-003')
+    expect(row.params).toEqual({ invoice_id: 'q-1' })
     expect(result.preview.source_document_type).toBe('quote')
+    expect(result.preview.target).toBe('invoice')
     expect(String(result.preview.will)).toContain('accepted')
+  })
+
+  it('fails on a quote that already has a live kundorder with INVOICE_QUOTE_ALREADY_ORDERED', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'q-1', invoice_number: 'OF-003', document_type: 'quote', status: 'sent', quote_status: 'accepted', total: 2500, currency: 'SEK', customer: { name: 'Testbrand AB' } },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // no converted invoice
+    enqueue({ data: null, count: 1, error: null }) // one live sales order
+
+    await expect(
+      convertInvoice.execute({ invoice_id: 'q-1' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_QUOTE_ALREADY_ORDERED' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
+
+describe('gnubok_convert_invoice: target order (offert -> kundorder -> faktura)', () => {
+  const openQuote = { id: 'q-1', invoice_number: 'OF-003', document_type: 'quote', status: 'sent', quote_status: 'open', total: 2500, currency: 'SEK', customer: { name: 'Testbrand AB' } }
+
+  it('declares target as an enum of invoice and order', () => {
+    const props = convertInvoice.inputSchema.properties as Record<string, { enum?: string[] }>
+    expect(props.target.enum).toEqual(['invoice', 'order'])
+    expect(convertInvoice.inputSchema.required).toEqual(['invoice_id'])
+  })
+
+  it('rejects an unknown target before touching the database', async () => {
+    const { supabase, findCall } = createQueuedMockSupabase()
+    await expect(
+      convertInvoice.execute({ invoice_id: 'q-1', target: 'delivery_note' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/target must be invoice or order/)
+    expect(findCall('invoices', 'select')).toBeUndefined()
+  })
+
+  it('stages a quote -> kundorder conversion with target in the params and the order tools as next step', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: openQuote, error: null })
+    enqueue({ data: null, count: 0, error: null }) // no live sales order
+    enqueue({ data: null, error: null }) // no converted invoice
+    enqueue({ data: { id: 'op-convert' }, error: null })
+
+    const result = (await convertInvoice.execute(
+      { invoice_id: 'q-1', target: 'order' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown>; next?: { tool: string } }
+
+    expect(result.staged).toBe(true)
+    const row = findCall('pending_operations', 'insert')![0] as { title: string; params: Record<string, unknown>; operation_type: string }
+    expect(row.operation_type).toBe('convert_invoice')
+    expect(row.params).toEqual({ invoice_id: 'q-1', target: 'order' })
+    expect(row.title).toContain('Konvertera offert → kundorder')
+    expect(row.title).toContain('OF-003')
+    expect(result.preview.target).toBe('order')
+    expect(String(result.preview.will)).toContain('kundorder')
+    expect(String(result.preview.will)).toContain('accepted')
+    expect(result.next?.tool).toBe('gnubok_transition_sales_order')
+  })
+
+  it('stages a proforma -> kundorder conversion that cancels the proforma', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...openQuote, id: 'p-1', invoice_number: null, document_type: 'proforma', quote_status: null }, error: null })
+    enqueue({ data: null, count: 0, error: null })
+    enqueue({ data: { id: 'op-convert' }, error: null })
+
+    const result = (await convertInvoice.execute(
+      { invoice_id: 'p-1', target: 'order' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const row = findCall('pending_operations', 'insert')![0] as { title: string }
+    expect(row.title).toContain('Konvertera proforma → kundorder')
+    expect(String(result.preview.will)).toContain('cancel proforma')
+  })
+
+  it('refuses a declined quote with INVOICE_CONVERT_QUOTE_DECLINED', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...openQuote, quote_status: 'declined' }, error: null })
+    enqueue({ data: null, count: 0, error: null })
+
+    await expect(
+      convertInvoice.execute({ invoice_id: 'q-1', target: 'order' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_CONVERT_QUOTE_DECLINED' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('refuses a quote that already has a live order with SALES_ORDER_SOURCE_ALREADY_CONVERTED', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...openQuote, quote_status: 'accepted' }, error: null })
+    enqueue({ data: null, count: 1, error: null })
+
+    await expect(
+      convertInvoice.execute({ invoice_id: 'q-1', target: 'order' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'SALES_ORDER_SOURCE_ALREADY_CONVERTED' })
+  })
+
+  it('refuses a quote that already has a live invoice with INVOICE_QUOTE_ALREADY_INVOICED', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...openQuote, quote_status: 'accepted' }, error: null })
+    enqueue({ data: null, count: 0, error: null })
+    enqueue({ data: { id: 'inv-9' }, error: null })
+
+    await expect(
+      convertInvoice.execute({ invoice_id: 'q-1', target: 'order' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_QUOTE_ALREADY_INVOICED' })
+  })
+
+  it('refuses a regular invoice with SALES_ORDER_SOURCE_NOT_PROFORMA', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...openQuote, id: 'i-1', document_type: 'invoice', quote_status: null }, error: null })
+
+    await expect(
+      convertInvoice.execute({ invoice_id: 'i-1', target: 'order' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'SALES_ORDER_SOURCE_NOT_PROFORMA' })
   })
 })
 
