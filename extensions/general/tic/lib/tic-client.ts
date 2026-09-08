@@ -198,6 +198,32 @@ export async function searchCompanyByOrgNumber(
 }
 
 /**
+ * Free-text search for companies by name. Returns the ranked documents
+ * (at most `limit`), or an empty array when nothing matched.
+ *
+ * Same Typesense index as `searchCompanyByOrgNumber`, queried on the nested
+ * `names.nameOrIdentifier` field (verified live 2026-09-08; the bare `name`
+ * field is not indexed). The response documents carry the same shape as an
+ * org-number hit, so the caller can map them with the /lookup mapper and a
+ * picked hit never costs a second Lens call.
+ */
+export async function searchCompaniesByName(
+  query: string,
+  limit = 5
+): Promise<TICCompanyDocument[]> {
+  const trimmed = query.trim()
+  if (!trimmed) return []
+  const data = await ticApiFetch<TICCompanyResponse>(
+    `/search-public/companies?q=${encodeURIComponent(trimmed)}&query_by=names.nameOrIdentifier&per_page=${limit}`
+  )
+  if (!data || data.found === 0 || !data.hits?.length) return []
+  return data.hits
+    .map((hit) => hit.document)
+    .filter((doc): doc is TICCompanyDocument => Boolean(doc?.registrationNumber))
+    .slice(0, limit)
+}
+
+/**
  * Get bank accounts for a company. v2 narrows this endpoint to Bankgirot
  * numbers only (returns `Bankgironumber_Dto[]`); v1's IBAN / plusgiro
  * coverage is no longer available from this path.

@@ -8,8 +8,10 @@ import { createCompanyFromOnboarding } from '@/lib/company/actions'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 import { deriveFirstYearDefaults } from '@/lib/company/first-year-defaults'
 import { parseStartMonthDay } from '@/lib/company/first-year-defaults'
-import { fetchCompanyLookup } from '@/lib/company-lookup/fetch-company-lookup'
+import { fetchCompanyLookup, fetchCompanySearch } from '@/lib/company-lookup/fetch-company-lookup'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { COMPANY_SEARCH_MIN_CHARS, type CompanySearchHit } from '@/lib/company-lookup/types'
+import { formatOrgNumber } from '@/lib/utils'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useBranding } from '@/lib/branding/brand-context'
 import posthog from 'posthog-js'
@@ -145,30 +147,65 @@ export default function OnboardingJourney({
 
   // One lookup per confirmed orgnr: fired from the submit handler, never
   // from typing. The dup check (internal endpoint) rides along, advisory.
+  const shakeOrg = useCallback(() => {
+    setOrgShake(true)
+    window.setTimeout(() => setOrgShake(false), 400)
+  }, [])
+
+  const checkDuplicate = useCallback((orgNumber: string) => {
+    setDupName(null)
+    setDupElsewhere(false)
+    fetch(`/api/company/check-org-number?org_number=${encodeURIComponent(orgNumber)}`)
+      .then(async (res) => {
+        if (!res.ok) return
+        const { data } = await res.json()
+        setDupName(data?.companies?.[0]?.name ?? null)
+        setDupElsewhere(Boolean(data?.exists_elsewhere))
+      })
+      .catch(() => {})
+  }, [])
+
+  // The one field takes either an orgnr or a company name. Digits (with
+  // dashes/spaces) are always the orgnr path, so a mistyped number shakes
+  // instead of turning into a name search; anything else is a name.
   const submitOrg = useCallback(
     (raw: string) => {
-      const normalized = normalizeOrgNumber(raw)
-      if (normalized === null) {
-        setOrgShake(true)
-        window.setTimeout(() => setOrgShake(false), 400)
+      const trimmed = raw.trim()
+      const looksNumeric = /^[\d\s-]+$/.test(trimmed)
+      if (looksNumeric) {
+        if (normalizeOrgNumber(trimmed) === null) {
+          shakeOrg()
+          return
+        }
+        dispatch({ type: 'ORG_SUBMITTED', orgNumber: trimmed })
+        fetchCompanyLookup(trimmed, { ticEnabled }).then((outcome) => {
+          dispatch({ type: 'LOOKUP_RESULT', outcome })
+        })
+        checkDuplicate(trimmed)
         return
       }
-      setDupName(null)
-      setDupElsewhere(false)
-      dispatch({ type: 'ORG_SUBMITTED', orgNumber: raw })
-      fetchCompanyLookup(raw, { ticEnabled }).then((outcome) => {
-        dispatch({ type: 'LOOKUP_RESULT', outcome })
+      if (!ticEnabled || trimmed.length < COMPANY_SEARCH_MIN_CHARS) {
+        shakeOrg()
+        return
+      }
+      dispatch({ type: 'SEARCH_SUBMITTED', query: trimmed })
+      fetchCompanySearch(trimmed, { ticEnabled }).then((outcome) => {
+        dispatch({ type: 'SEARCH_RESULT', outcome })
+        if (outcome.status === 'found' && outcome.hits.length === 1) {
+          checkDuplicate(outcome.hits[0].orgNumber)
+        }
       })
-      fetch(`/api/company/check-org-number?org_number=${encodeURIComponent(raw)}`)
-        .then(async (res) => {
-          if (!res.ok) return
-          const { data } = await res.json()
-          setDupName(data?.companies?.[0]?.name ?? null)
-          setDupElsewhere(Boolean(data?.exists_elsewhere))
-        })
-        .catch(() => {})
     },
-    [ticEnabled],
+    [ticEnabled, shakeOrg, checkDuplicate],
+  )
+
+  const pickSearchHit = useCallback(
+    (hit: CompanySearchHit) => {
+      dispatch({ type: 'SEARCH_HIT_PICKED', hit })
+      setOrgInput(hit.orgNumber)
+      checkDuplicate(hit.orgNumber)
+    },
+    [checkDuplicate],
   )
 
   // BankID deep link: auto-submit the orgnr once on mount (the single
@@ -361,13 +398,15 @@ export default function OnboardingJourney({
                 ? t('journey_err_org_invalid')
                 : state.lookupNote === 'error'
                   ? t('journey_lookup_error')
-                  : undefined
+                  : state.lookupNote === 'nomatch'
+                    ? t('journey_search_nomatch')
+                    : undefined
             }
           >
             <div className={`jny-biginput${orgShake ? ' is-err' : ''}`} style={{ marginTop: 26 }}>
               <input
                 value={orgInput}
-                inputMode="numeric"
+                inputMode="text"
                 placeholder="556677-8899"
                 aria-label={t('step2_org_number_label')}
                 autoComplete="off"
@@ -379,9 +418,29 @@ export default function OnboardingJourney({
                 }}
               />
             </div>
-            <p className="jny-enterhint">
-              {t('journey_press')} <b>Enter</b>
-            </p>
+            {state.searchHits.length > 1 ? (
+              <>
+                <p className="jny-enterhint">{t('journey_search_pick')}</p>
+                <ChipRow
+                  options={state.searchHits.map((h) => ({
+                    key: h.orgNumber,
+                    label: h.result.companyName || formatOrgNumber(h.orgNumber),
+                    rec: h.result.companyName
+                      ? `${formatOrgNumber(h.orgNumber)}${h.result.address?.city ? ` · ${h.result.address.city}` : ''}`
+                      : undefined,
+                  }))}
+                  onPick={(k) => {
+                    const hit = state.searchHits.find((h) => h.orgNumber === k)
+                    if (hit) pickSearchHit(hit)
+                  }}
+                  {...flyProps}
+                />
+              </>
+            ) : (
+              <p className="jny-enterhint">
+                {t('journey_press')} <b>Enter</b>
+              </p>
+            )}
           </Question>
         )
 

@@ -1,6 +1,6 @@
-import { searchCompanyByOrgNumber } from './tic-client'
+import { searchCompaniesByName, searchCompanyByOrgNumber } from './tic-client'
 import type { TICCompanyDocument } from './tic-types'
-import type { CompanyLookupResult } from '@/lib/company-lookup/types'
+import type { CompanyLookupResult, CompanySearchHit } from '@/lib/company-lookup/types'
 
 /**
  * Shared org-number → CompanyLookupResult lookup, used by both the /lookup
@@ -109,4 +109,23 @@ export async function lookupCompanyByOrgNumber(
   const doc = await searchCompanyByOrgNumber(orgNumber)
   if (!doc) return null
   return mapDocumentToLookupResult(doc)
+}
+
+/** Maximum hits the onboarding chip row shows for a name search. */
+export const COMPANY_SEARCH_LIMIT = 5
+
+/**
+ * Free-text name search mapped to the same shape /lookup returns, one per
+ * hit, active companies first. Empty array means nothing matched. One Lens
+ * call per distinct query; a picked hit reuses its result, so the whole
+ * search-and-pick flow costs the same as an org-number lookup.
+ */
+export async function searchCompaniesForLookup(query: string): Promise<CompanySearchHit[]> {
+  const docs = await searchCompaniesByName(query, COMPANY_SEARCH_LIMIT)
+  const hits = docs.map((doc) => ({
+    orgNumber: doc.registrationNumber.replace(/[\s-]/g, ''),
+    result: mapDocumentToLookupResult(doc),
+  }))
+  // Stable: ceased companies sink below active ones but keep their rank.
+  return [...hits.filter((h) => !h.result.isCeased), ...hits.filter((h) => h.result.isCeased)]
 }
