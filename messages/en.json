@@ -649,6 +649,10 @@
     "install_app_hint_ios": "Open the share menu in Safari and choose \"Add to Home Screen\" to install {appName} as an app.",
     "install_app_hint_safari": "In Safari, choose File and then \"Add to Dock\" to install {appName} as an app.",
     "install_app_hint_generic": "Install {appName} as an app via the install icon in your browser's address bar (Chrome and Edge).",
+    "pwa_badge_label": "App icon badge",
+    "pwa_badge_description": "Shows how many to-dos you have on the home-screen icon when the app is installed. iPhone may also require notifications to be on.",
+    "pwa_badge_switch": "Show badge",
+    "pwa_badge_save_failed": "Could not save the setting",
     "legal_title": "Privacy & agreements",
     "legal_privacy": "Privacy policy",
     "legal_dpa": "Data Processing Agreement (DPA)"

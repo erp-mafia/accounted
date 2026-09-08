@@ -649,6 +649,10 @@
     "install_app_hint_ios": "Öppna delningsmenyn i Safari och välj \"Lägg till på hemskärmen\" för att installera {appName} som app.",
     "install_app_hint_safari": "Välj Arkiv och sedan \"Lägg till i Dock\" i Safari för att installera {appName} som app.",
     "install_app_hint_generic": "Installera {appName} som app via installationsikonen i webbläsarens adressfält (Chrome och Edge).",
+    "pwa_badge_label": "Siffra på appikonen",
+    "pwa_badge_description": "Visar hur många saker du har att göra på hemskärmen när appen är installerad. På iPhone kan notiser behöva vara påslagna.",
+    "pwa_badge_switch": "Visa siffra",
+    "pwa_badge_save_failed": "Kunde inte spara inställningen",
     "legal_title": "Sekretess och avtal",
     "legal_privacy": "Integritetspolicy",
     "legal_dpa": "Personuppgiftsbiträdesavtal (DPA)"

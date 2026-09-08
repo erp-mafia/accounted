@@ -33,6 +33,7 @@ import {
   resolveCockpitHref,
 } from '@/lib/company/home-domain'
 import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
+import { PwaWorklistBadge } from '@/components/pwa/PwaWorklistBadge'
 import type { AccountingFramework, EntityType, CompanyRole, Team, DashboardShell } from '@/types'
 import { parseEntityType } from '@/lib/company/entity-type'
 import {
@@ -219,6 +220,7 @@ export default async function DashboardLayout({
         }}
       >
         <SessionTimeoutController />
+        <PwaWorklistBadge />
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
@@ -378,6 +380,7 @@ export default async function DashboardLayout({
     return (
       <CompanyProvider value={companyContextValue}>
         <SessionTimeoutController />
+        <PwaWorklistBadge />
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
@@ -534,7 +537,8 @@ export default async function DashboardLayout({
         settings={settingsError ? undefined : settings}
       >
       <SessionTimeoutController />
-      <AgentSheetProvider
+      <PwaWorklistBadge />
+      <AgentSheetProvider>
         identity={{
           displayName: agentProfileIdentity?.display_name ?? null,
           avatarId: agentProfileIdentity?.avatar_id ?? null,

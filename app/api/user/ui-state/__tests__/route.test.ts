@@ -146,6 +146,18 @@ describe('POST /api/user/ui-state', () => {
     expect(body.data.ui_state).toEqual({ nav_collapsed: true })
   })
 
+  it('accepts pwa_worklist_badge and keeps sibling keys', async () => {
+    enqueue({ data: { ui_state: { nav_collapsed: true } } })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: { ui_state: { nav_collapsed: boolean; pwa_worklist_badge: boolean } }
+    }>(await POST(request({ pwa_worklist_badge: false })))
+
+    expect(status).toBe(200)
+    expect(body.data.ui_state).toEqual({ nav_collapsed: true, pwa_worklist_badge: false })
+  })
+
   it('returns 400 when a trial_expired_ack key is not a company UUID', async () => {
     const res = await POST(request({ trial_expired_ack: { 'not-a-uuid': new Date().toISOString() } }))
     expect(res.status).toBe(400)

@@ -196,6 +196,9 @@ export interface UserUiState {
   shell?: DashboardShell
   // Transaktioner column visibility in shell v2 (lib/transactions/columns-v2).
   tx_columns?: { hidden?: string[] }
+  // Home-screen PWA badge for Att göra. Omitted means on: the badge is the
+  // default, and a stored false is the opt-out.
+  pwa_worklist_badge?: boolean
 }
 
 export type DashboardShell = 'v1' | 'v2'
