@@ -54,9 +54,18 @@ export interface ZettleSyncSummary {
   frozenFlagged: number
   crossMarked: number
   errors: number
+  /** Sales imported unbookable (is_paid false) because the row model cannot express them yet. */
+  needsReview: number
+  /** Refunds of such sales, not imported at all. */
+  skippedUnsupported: number
   deadlineReached?: boolean
   revoked?: boolean
+  /** Another run holds the connection's sync claim; nothing was done. */
+  locked?: boolean
 }
+
+/** How long a sync claim lasts; longer than the cron's 300 s maxDuration. */
+const SYNC_LOCK_MS = 6 * 60 * 1000
 
 /** Minor units → major currency units. */
 export function fromMinor(amount: number): number {
@@ -110,6 +119,47 @@ const PAYMENT_TITLES: Record<string, string> = {
   GIFTCARD: 'Presentkort',
   STORE_CREDIT: 'Tillgodohavande',
   KLARNA: 'Klarna',
+}
+
+/**
+ * Purchases the v1 row model books wrong if treated as one paid sale to one
+ * payment account with revenue per VAT rate:
+ * - split_tender: several payment types; the whole gross would land on the
+ *   first type's account (and a card + invoice split would count as paid).
+ * - voucher_tender: paid with gift card / store credit; Zettle never settles
+ *   it, so 1686 would overstate the receivable.
+ * - giftcard_sale: a 0 %-rate voucher row is a liability (2421), not
+ *   momsfri försäljning on 3004 / ruta 42.
+ * - gratuity: tips are never a momsfri sale; the amount semantics are
+ *   unverified.
+ * Such sales are imported with is_paid = false (bookable only by hand);
+ * their refunds are not imported. Deterministic over guessing.
+ */
+export type ZettleUnsupportedReason =
+  | 'split_tender'
+  | 'voucher_tender'
+  | 'giftcard_sale'
+  | 'gratuity'
+
+const VOUCHER_TENDERS = new Set(['GIFTCARD', 'STORE_CREDIT'])
+
+export function unsupportedReason(purchase: ZettlePurchase): ZettleUnsupportedReason | null {
+  const payments = purchase.payments ?? []
+  const types = new Set(payments.map((p) => p.type).filter(Boolean))
+  if (types.size > 1) return 'split_tender'
+  if (payments.some((p) => VOUCHER_TENDERS.has(p.type))) return 'voucher_tender'
+  if ((purchase.products ?? []).some((p) => p.type === 'GIFTCARD')) return 'giftcard_sale'
+  if (payments.some((p) => typeof p.gratuityAmount === 'number' && p.gratuityAmount !== 0)) {
+    return 'gratuity'
+  }
+  return null
+}
+
+const NEEDS_REVIEW_TITLES: Record<ZettleUnsupportedReason, string> = {
+  split_tender: 'Delad betalning: bokför manuellt',
+  voucher_tender: 'Betalt med presentkort/tillgodohavande: bokför manuellt',
+  giftcard_sale: 'Presentkortsförsäljning: bokför manuellt',
+  gratuity: 'Dricks ingår: bokför manuellt',
 }
 
 export function paymentMethodOf(payments: ZettlePayment[] | undefined): {
@@ -265,6 +315,7 @@ export function mapPurchaseToWebshopRows(
       typeof purchase.vatAmount === 'number'
         ? fromMinor(purchase.vatAmount)
         : round(vat.reduce((s, b) => s + b.tax, 0))
+    const reason = unsupportedReason(purchase)
     return [
       {
         platform: 'zettle',
@@ -276,8 +327,10 @@ export function mapPurchaseToWebshopRows(
         external_id: zettlePurchaseExternalId(storeScope, uuid),
         platform_order_id: uuid,
         order_number: String(purchase.globalPurchaseNumber ?? purchase.purchaseNumber ?? uuid),
-        status: purchase.refunded ? 'refunded' : 'paid',
-        is_paid: true,
+        // is_paid = false keeps book-order / bulk-book from posting a row the
+        // model would book to the wrong accounts; the title says why.
+        status: reason ? 'needs_review' : purchase.refunded ? 'refunded' : 'paid',
+        is_paid: reason === null,
         order_date: date,
         paid_date: date,
         currency: purchase.currency.toUpperCase(),
@@ -291,7 +344,7 @@ export function mapPurchaseToWebshopRows(
         customer_orgnr: null,
         customer_country: purchase.country ?? null,
         payment_method: payment.method,
-        payment_method_title: payment.title,
+        payment_method_title: reason ? NEEDS_REVIEW_TITLES[reason] : payment.title,
         gateway_reference: purchase.payments?.[0]?.uuid ?? null,
         refunded_total: 0,
       },
@@ -299,6 +352,9 @@ export function mapPurchaseToWebshopRows(
   }
 
   if (purchaseQualifiesAsRefund(purchase)) {
+    // The booking guard only protects unpaid ORDER rows, so a refund of an
+    // unsupported sale is not imported at all rather than left bookable.
+    if (unsupportedReason(purchase) !== null) return []
     const amount = fromMinor(purchase.amount) // already negative typically
     const signedTotal = amount > 0 ? -amount : amount
     if (signedTotal === 0) return []
@@ -376,12 +432,37 @@ export async function syncZettlePurchases(
     frozenFlagged: 0,
     crossMarked: 0,
     errors: 0,
+    needsReview: 0,
+    skippedUnsupported: 0,
   }
   if (
     connection.status !== 'active' ||
     !connection.refresh_token_encrypted ||
     !connection.organization_uuid
   ) {
+    return summary
+  }
+
+  // Claim the connection before touching the rotating refresh token. Two
+  // runs (the 03:30 cron and "Synka nu", or two tabs) refreshing at once
+  // would make the loser's token a reused one, which Zettle answers with
+  // 400 invalid_grant and this code would read as a revocation.
+  const nowIso = new Date().toISOString()
+  const { data: claimed, error: claimError } = await supabase
+    .from('zettle_connections')
+    .update({ sync_lock_until: new Date(Date.now() + SYNC_LOCK_MS).toISOString() })
+    .eq('id', connection.id)
+    .eq('status', 'active')
+    .or(`sync_lock_until.is.null,sync_lock_until.lt.${nowIso}`)
+    .select('id')
+  if (claimError) {
+    throw new Error(`Failed to claim Zettle connection for sync: ${claimError.message}`)
+  }
+  if (!claimed || claimed.length === 0) {
+    summary.locked = true
+    log.info('sync already running for this connection; skipped', {
+      connectionId: connection.id,
+    })
     return summary
   }
 
@@ -441,7 +522,12 @@ export async function syncZettlePurchases(
       let pageMaxMs = 0
       let pageMinMs = Number.POSITIVE_INFINITY
       for (const purchase of page.purchases) {
-        if (purchaseQualifiesAsRefund(purchase)) summary.refundsFetched += 1
+        const isRefund = purchaseQualifiesAsRefund(purchase)
+        if (isRefund) summary.refundsFetched += 1
+        if (unsupportedReason(purchase) !== null) {
+          if (isRefund) summary.skippedUnsupported += 1
+          else if (purchaseQualifiesAsPaidSale(purchase)) summary.needsReview += 1
+        }
         const ts = purchaseTimestampIso(purchase)
         if (ts) {
           const ms = Date.parse(ts)
@@ -528,6 +614,11 @@ export async function syncZettlePurchases(
       return summary
     }
     throw err
+  } finally {
+    await supabase
+      .from('zettle_connections')
+      .update({ sync_lock_until: null })
+      .eq('id', connection.id)
   }
 
   log.info('zettle purchase sync done', {

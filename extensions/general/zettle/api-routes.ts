@@ -200,6 +200,12 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
           undefined,
           Date.now() + 240_000,
         )
+        if (summary.locked) {
+          return NextResponse.json(
+            { error: 'En synkronisering pågår redan. Försök igen om en stund.' },
+            { status: 409 },
+          )
+        }
         return NextResponse.json({ success: true, transactions: summary })
       } catch (error) {
         log.error('[zettle] Manual sync failed', {

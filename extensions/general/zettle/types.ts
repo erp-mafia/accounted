@@ -14,6 +14,8 @@ export interface ZettleConnection {
   oauth_state: string | null
   /** Validated app or brand origin the connect flow started on; the callback returns there. */
   return_origin: string | null
+  /** Sync claim held by a running cron/manual sync; null or past = free. */
+  sync_lock_until: string | null
   status: 'pending' | 'active' | 'revoked' | 'error'
   currency: string | null
   /** Opt-in: nightly purchase-feed cron (the manual sync button ignores it). */

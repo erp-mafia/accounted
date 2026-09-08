@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// Each test re-imports the route after vi.resetModules(); the cold import
+// exceeds the 5 s default under a loaded CI shard.
+vi.setConfig({ testTimeout: 30_000 })
+
 const verifyCronSecret = vi.fn((..._args: unknown[]) => null as unknown)
 vi.mock('@/lib/auth/cron', () => ({
   verifyCronSecret: (...args: unknown[]) => verifyCronSecret(...args),

@@ -166,6 +166,8 @@ describe('zettle extension routes', () => {
       frozenFlagged: 0,
       crossMarked: 0,
       errors: 0,
+      needsReview: 0,
+      skippedUnsupported: 0,
     })
     const { supabase, enqueue } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })

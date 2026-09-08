@@ -27,6 +27,10 @@ create table public.zettle_connections (
   -- Validated origin the connect flow started on (app origin or a brand
   -- domain from the brands table); the callback returns the browser there.
   return_origin            text,
+  -- Sync claim: set by the run that holds the connection (cron or manual
+  -- sync), so two runs never refresh the rotating token concurrently (a
+  -- reused refresh token comes back 400 and would flip the row to revoked).
+  sync_lock_until          timestamptz,
   status                   text not null default 'pending'
                              check (status in ('pending', 'active', 'revoked', 'error')),
   currency                 text,
