@@ -18,6 +18,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { Font, pdf } from '@react-pdf/renderer'
 import layoutDocument from '@react-pdf/layout'
 import {
+  DRAFT_WATERMARK_COLOR,
   DRAFT_WATERMARK_FONT_SIZE_PT,
   DRAFT_WATERMARK_OPACITY,
   DRAFT_WATERMARK_ROTATION_DEG,
@@ -236,7 +237,12 @@ describe('draft watermark', () => {
     const wrapper = elements(overlay!).find((el) => containsText(el, 'UTKAST') && el !== overlay)
     const wrapperStyle = styleOf(wrapper!)
     expect(wrapperStyle.opacity).toBe(DRAFT_WATERMARK_OPACITY)
-    expect(wrapperStyle.opacity).toBeLessThan(0.3)
+    // Faint enough to stay background, dark enough to survive a greyscale
+    // print: the composited grey on white must land between 70% and 85%.
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(DRAFT_WATERMARK_COLOR.slice(i, i + 2), 16))
+    const composited = 255 - DRAFT_WATERMARK_OPACITY * (255 - (0.2126 * r + 0.7152 * g + 0.0722 * b))
+    expect(composited / 255).toBeGreaterThan(0.7)
+    expect(composited / 255).toBeLessThan(0.85)
     expect(wrapperStyle.transform).toBe(`rotate(${DRAFT_WATERMARK_ROTATION_DEG}deg)`)
     const word = elements(wrapper!).find((el) => el.props.children === 'UTKAST')
     expect(styleOf(word!).fontSize).toBe(DRAFT_WATERMARK_FONT_SIZE_PT)

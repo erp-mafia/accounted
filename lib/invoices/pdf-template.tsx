@@ -142,10 +142,15 @@ export const HEADING_MIN_PRESENCE_AHEAD = 40
  * Draft watermark geometry (#2437). One word ("UTKAST" / "DRAFT"), bold,
  * diagonal and faint, centred on every page. The font size keeps the widest
  * word ("UTKAST", 6 glyphs with letter spacing) inside the 595pt A4 width
- * once rotated; the opacity keeps the invoice underneath fully legible.
+ * once rotated. The colour and opacity are a balance: the invoice underneath
+ * must stay legible, and the word must survive a monochrome print or a
+ * greyscale scan, because a numbered draft otherwise carries every field of
+ * a real faktura (title, number, OCR). #4b5563 at 0.3 composites to about
+ * 79% brightness on white: clearly grey on paper, still background.
  */
 export const DRAFT_WATERMARK_FONT_SIZE_PT = 96
-export const DRAFT_WATERMARK_OPACITY = 0.14
+export const DRAFT_WATERMARK_OPACITY = 0.3
+export const DRAFT_WATERMARK_COLOR = '#4b5563'
 export const DRAFT_WATERMARK_ROTATION_DEG = -35
 
 type PdfLang = 'sv' | 'en'
@@ -672,7 +677,7 @@ function createStyles(branding?: InvoiceBranding) {
     draftWatermarkText: {
       fontSize: DRAFT_WATERMARK_FONT_SIZE_PT,
       fontWeight: 'bold',
-      color: '#6b7280',
+      color: DRAFT_WATERMARK_COLOR,
       letterSpacing: 6,
     },
     cancelledBanner: {
