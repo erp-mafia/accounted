@@ -656,6 +656,31 @@ describe('salary entries: dimensions propagation (PR8)', () => {
   })
 })
 
+describe('salary entries: negative avgifter keep one non-negative side', () => {
+  it('books a negative avgifter month as 7510 K / 2731 D instead of a negative debit', async () => {
+    // Full-month unpaid leave plus a manual deduction pushes gross below zero;
+    // avgifter follow (31,42 % of -2 000 = -628,40). The old builder emitted
+    // 7510 D -628,40, which the engine now refuses; the side must flip.
+    const run = makeRun([
+      makeEmployee({ employee_id: 'a', gross_salary: -2000, avgifter_amount: -628.4, avgifter_basis: undefined }),
+    ])
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const avgifter = entryByDescription('Arbetsgivaravgifter')
+
+    const expense = linesOn(avgifter, '7510')
+    expect(expense).toHaveLength(1)
+    expect(expense[0]).toMatchObject({ debit_amount: 0, credit_amount: 628.4 })
+    const liability = linesOn(avgifter, '2731')
+    expect(liability).toHaveLength(1)
+    expect(liability[0]).toMatchObject({ debit_amount: 628.4, credit_amount: 0 })
+    for (const l of avgifter.lines) {
+      expect(l.debit_amount).toBeGreaterThanOrEqual(0)
+      expect(l.credit_amount).toBeGreaterThanOrEqual(0)
+    }
+    assertBalanced(avgifter)
+  })
+})
+
 describe('salary entries: kostnadsersättning (#2331)', () => {
   const claimLine = (amount: number, account: string | null = '2820') => ({
     item_type: 'expense_reimbursement',

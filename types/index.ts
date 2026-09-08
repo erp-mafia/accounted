@@ -1038,7 +1038,7 @@ export interface SalesOrder {
   /** OR-<n>, allocated at creation by generate_sales_order_number. */
   order_number: string | null
   status: SalesOrderStatus
-  /** Proforma the order was converted from, if any. */
+  /** Proforma or quote (offert) the order was converted from, if any. */
   source_invoice_id: string | null
   order_date: string
   requested_delivery_date: string | null
@@ -4071,6 +4071,12 @@ export interface KPIPreferences {
   visibleKpis: string[]
   kpiOrder: string[]
   accountOverrides: Record<string, string[]>
+  /**
+   * The month-by-month table (income, expenses, net) under the panes. A
+   * boolean rather than a KPI_DEFINITIONS id on purpose: every stored row
+   * already carries a complete kpiOrder, which would hide a new id (#2196).
+   */
+  showMonthlyTable: boolean
 }
 
 // ============================================================

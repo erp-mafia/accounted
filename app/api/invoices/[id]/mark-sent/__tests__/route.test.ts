@@ -609,8 +609,8 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     expect(status).toBe(200)
     // The in-memory invoice still reads 'draft' after the DB status flip
     // (it's never re-fetched). We must override it before render or
-    // pdf-template.tsx prints the "UTKAST: inte en giltig faktura" banner
-    // on the archived underlag.
+    // pdf-template.tsx prints the "UTKAST" watermark on the archived
+    // underlag.
     expect(vi.mocked(InvoicePDF)).toHaveBeenCalledTimes(1)
     const renderArgs = vi.mocked(InvoicePDF).mock.calls[0][0]
     expect(renderArgs.invoice.status).toBe('sent')
