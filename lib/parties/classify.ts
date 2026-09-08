@@ -29,7 +29,7 @@ const STOP = new Set([
 // Generic words voucher text uses for a category without a counterpart.
 // Geographic tokens are deliberately absent: "taxi stockholm" reads as a party
 // to the founder, "taxiresor och parkering" does not.
-const GENERIC = [
+export const GENERIC_WORDS = [
   'inköp', 'inkp', 'kvitto', 'kvitton', 'fika', 'diesel', 'bensin', 'bränsle', 'försäkring', 'telefon', 'mobil', 'hyra',
   'lokalhyra', 'frakt', 'hosting', 'julklapp', 'frimärken', 'utlägg', 'hotell', 'resa', 'resor', 'resekostnader',
   'registreringsavgift', 'registeringsavgift', 'tillsynsavgift', 'årsavgift', 'medlemsavgift', 'serviceavgift', 'anmälningsavgift', 'expeditionsavgift',
@@ -53,7 +53,7 @@ const GENERIC = [
 let vocabCache: Set<string> | null = null
 function vocab(): Set<string> {
   if (vocabCache) return vocabCache
-  const v = new Set<string>(GENERIC)
+  const v = new Set<string>(GENERIC_WORDS)
   for (const a of BAS_REFERENCE) {
     if (a.account_class < 4) continue
     for (const t of a.account_name.toLowerCase().split(/[^a-zåäöé]+/)) if (t.length >= 3) v.add(t)
