@@ -2212,27 +2212,66 @@ export interface TrialBalanceRow {
   year_opening_credit: number
 }
 
+export interface IncomeStatementRow {
+  account_number: string
+  account_name: string
+  /** Activity in the reported window. Unchanged meaning: the report's headline figure. */
+  amount: number
+  /** "Ingående saldo": fiscal-year activity before the window. 0 when the window starts at period_start. */
+  ytd_opening: number
+  /** "Ackumulerat": fiscal-year activity through the window end. Equals ytd_opening + amount. */
+  ytd_closing: number
+}
+
 export interface IncomeStatementSection {
   title: string
-  rows: { account_number: string; account_name: string; amount: number }[]
+  rows: IncomeStatementRow[]
   subtotal: number
+  subtotal_ytd_opening: number
+  subtotal_ytd_closing: number
 }
 
 export interface IncomeStatementReport {
   revenue_sections: IncomeStatementSection[]
   total_revenue: number
+  total_revenue_ytd_opening: number
+  total_revenue_ytd_closing: number
   expense_sections: IncomeStatementSection[]
   total_expenses: number
+  total_expenses_ytd_opening: number
+  total_expenses_ytd_closing: number
   financial_sections: IncomeStatementSection[]
   total_financial: number
+  total_financial_ytd_opening: number
+  total_financial_ytd_closing: number
   net_result: number
+  net_result_ytd_opening: number
+  net_result_ytd_closing: number
   period: { start: string; end: string }
+  /** The fiscal period's own bounds, regardless of any narrowed window. */
+  fiscal_year: { start: string; end: string }
+}
+
+export interface BalanceSheetRow {
+  account_number: string
+  account_name: string
+  /** Closing balance at the window end, in the section's normal-balance sign. Unchanged meaning. */
+  amount: number
+  /** "Ingående balans": balance at fiscal-year start. Equals `ib` when the window starts at period_start. */
+  year_ib: number
+  /** "Ingående saldo": balance at the start of the reported window. */
+  ib: number
+  /** Movement inside the window. Equals `amount - ib`. */
+  period_change: number
 }
 
 export interface BalanceSheetSection {
   title: string
-  rows: { account_number: string; account_name: string; amount: number }[]
+  rows: BalanceSheetRow[]
   subtotal: number
+  subtotal_year_ib: number
+  subtotal_ib: number
+  subtotal_period_change: number
 }
 
 /**
@@ -2263,9 +2302,17 @@ export interface BalanceImbalanceDiagnosis {
 export interface BalanceSheetReport {
   asset_sections: BalanceSheetSection[]
   total_assets: number
+  total_assets_year_ib: number
+  total_assets_ib: number
+  total_assets_period_change: number
   equity_liability_sections: BalanceSheetSection[]
   total_equity_liabilities: number
+  total_equity_liabilities_year_ib: number
+  total_equity_liabilities_ib: number
+  total_equity_liabilities_period_change: number
   period: { start: string; end: string }
+  /** The fiscal period's own bounds, regardless of any narrowed window. */
+  fiscal_year: { start: string; end: string }
   /** Present only when the report does not balance. */
   imbalance_diagnosis?: BalanceImbalanceDiagnosis
 }

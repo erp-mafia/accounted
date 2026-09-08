@@ -81,7 +81,9 @@ import type { DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import type {
   TrialBalanceRow,
   IncomeStatementReport,
+  IncomeStatementSection,
   BalanceSheetReport,
+  BalanceSheetSection,
   ResultatrapportReport,
   BalansrapportReport,
   DimensionPnlReport,
@@ -493,6 +495,26 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
     )
   }
 
+  const columns: StatementAmountColumn<IncomeStatementColumnKey>[] = [
+    {
+      key: 'ytd_opening',
+      label: 'Ingående saldo',
+      title: `${data.fiscal_year.start} till ${data.period.start}`,
+      muted: true,
+    },
+    {
+      key: 'amount',
+      label: 'Period',
+      title: `${data.period.start} till ${data.period.end}`,
+    },
+    {
+      key: 'ytd_closing',
+      label: 'Ackumulerat',
+      title: `${data.fiscal_year.start} till ${data.period.end}`,
+      muted: true,
+    },
+  ]
+
   return (
     <div className="space-y-4">
       <ReportExportMenu
@@ -513,9 +535,17 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
         </CardHeader>
         <CardContent className="p-0">
           <ReportSectionTable
-            sections={data.revenue_sections}
+            sections={data.revenue_sections.map(incomeStatementSectionColumns)}
+            columns={columns}
             onNavigateToAccount={onNavigateToAccount}
-            footer={{ label: 'Summa rörelseintäkter', amount: data.total_revenue }}
+            footer={{
+              label: 'Summa rörelseintäkter',
+              amounts: {
+                ytd_opening: data.total_revenue_ytd_opening,
+                amount: data.total_revenue,
+                ytd_closing: data.total_revenue_ytd_closing,
+              },
+            }}
           />
         </CardContent>
       </Card>
@@ -527,10 +557,19 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
         </CardHeader>
         <CardContent className="p-0">
           <ReportSectionTable
-            sections={data.expense_sections}
+            sections={data.expense_sections.map(incomeStatementSectionColumns)}
+            columns={columns}
             negate
             onNavigateToAccount={onNavigateToAccount}
-            footer={{ label: 'Summa rörelsekostnader', amount: data.total_expenses, negate: true }}
+            footer={{
+              label: 'Summa rörelsekostnader',
+              amounts: {
+                ytd_opening: data.total_expenses_ytd_opening,
+                amount: data.total_expenses,
+                ytd_closing: data.total_expenses_ytd_closing,
+              },
+              negate: true,
+            }}
           />
         </CardContent>
       </Card>
@@ -553,9 +592,17 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
           </CardHeader>
           <CardContent className="p-0">
             <ReportSectionTable
-              sections={data.financial_sections}
+              sections={data.financial_sections.map(incomeStatementSectionColumns)}
+              columns={columns}
               onNavigateToAccount={onNavigateToAccount}
-              footer={{ label: 'Summa finansiella poster', amount: data.total_financial }}
+              footer={{
+                label: 'Summa finansiella poster',
+                amounts: {
+                  ytd_opening: data.total_financial_ytd_opening,
+                  amount: data.total_financial,
+                  ytd_closing: data.total_financial_ytd_closing,
+                },
+              }}
             />
           </CardContent>
         </Card>
@@ -621,6 +668,32 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
 
   const isBalanced = Math.abs(data.total_assets - data.total_equity_liabilities) < 0.01
 
+  const columns: StatementAmountColumn<BalanceSheetColumnKey>[] = [
+    {
+      key: 'year_ib',
+      label: 'Ingående balans',
+      title: data.fiscal_year.start,
+      muted: true,
+    },
+    {
+      key: 'ib',
+      label: 'Ingående saldo',
+      title: data.period.start,
+      muted: true,
+    },
+    {
+      key: 'period_change',
+      label: 'Period',
+      title: `${data.period.start} till ${data.period.end}`,
+      muted: true,
+    },
+    {
+      key: 'amount',
+      label: 'Utgående balans',
+      title: data.period.end,
+    },
+  ]
+
   return (
     <div className="space-y-4">
       <ReportExportMenu
@@ -637,9 +710,18 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
         </CardHeader>
         <CardContent className="p-0">
           <ReportSectionTable
-            sections={data.asset_sections}
+            sections={data.asset_sections.map(balanceSheetSectionColumns)}
+            columns={columns}
             onNavigateToAccount={onNavigateToAccount}
-            footer={{ label: 'Summa tillgångar', amount: data.total_assets }}
+            footer={{
+              label: 'Summa tillgångar',
+              amounts: {
+                year_ib: data.total_assets_year_ib,
+                ib: data.total_assets_ib,
+                period_change: data.total_assets_period_change,
+                amount: data.total_assets,
+              },
+            }}
           />
         </CardContent>
       </Card>
@@ -651,9 +733,18 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
         </CardHeader>
         <CardContent className="p-0">
           <ReportSectionTable
-            sections={data.equity_liability_sections}
+            sections={data.equity_liability_sections.map(balanceSheetSectionColumns)}
+            columns={columns}
             onNavigateToAccount={onNavigateToAccount}
-            footer={{ label: 'Summa eget kapital och skulder', amount: data.total_equity_liabilities }}
+            footer={{
+              label: 'Summa eget kapital och skulder',
+              amounts: {
+                year_ib: data.total_equity_liabilities_year_ib,
+                ib: data.total_equity_liabilities_ib,
+                period_change: data.total_equity_liabilities_period_change,
+                amount: data.total_equity_liabilities,
+              },
+            }}
           />
         </CardContent>
       </Card>
@@ -1030,17 +1121,70 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
   )
 }
 
-function ReportSectionTable({
+/**
+ * One amount column of a formal statement table. `key` names the field to
+ * read on every row and subtotal; `title` is the tooltip naming the date
+ * range the column covers; `muted` greys the column so the emphasised one
+ * (Utgående balans / Period) reads first.
+ */
+interface StatementAmountColumn<K extends string> {
+  key: K
+  label: string
+  title?: string
+  muted?: boolean
+}
+
+type IncomeStatementColumnKey = 'ytd_opening' | 'amount' | 'ytd_closing'
+type BalanceSheetColumnKey = 'year_ib' | 'ib' | 'period_change' | 'amount'
+
+/**
+ * The report JSON names a section's subtotals per column (`subtotal`,
+ * `subtotal_ytd_opening`, …); the table reads them by the same key as the
+ * rows. These two adapters do that renaming and nothing else.
+ */
+function incomeStatementSectionColumns(section: IncomeStatementSection) {
+  return {
+    title: section.title,
+    rows: section.rows,
+    subtotals: {
+      ytd_opening: section.subtotal_ytd_opening,
+      amount: section.subtotal,
+      ytd_closing: section.subtotal_ytd_closing,
+    },
+  }
+}
+
+function balanceSheetSectionColumns(section: BalanceSheetSection) {
+  return {
+    title: section.title,
+    rows: section.rows,
+    subtotals: {
+      year_ib: section.subtotal_year_ib,
+      ib: section.subtotal_ib,
+      period_change: section.subtotal_period_change,
+      amount: section.subtotal,
+    },
+  }
+}
+
+function ReportSectionTable<K extends string>({
   sections,
+  columns,
   negate,
   onNavigateToAccount,
   footer,
 }: {
-  sections: { title: string; rows: { account_number: string; account_name: string; amount: number }[]; subtotal: number }[]
+  sections: {
+    title: string
+    rows: ({ account_number: string; account_name: string } & Record<K, number>)[]
+    subtotals: Record<K, number>
+  }[]
+  /** Amount columns, left to right. One `<th>` and one cell per entry. */
+  columns: StatementAmountColumn<K>[]
   negate?: boolean
   onNavigateToAccount?: (account: string) => void
   /** Report total, rendered as the table's tfoot (e.g. "Summa tillgångar"). */
-  footer?: { label: string; amount: number; negate?: boolean }
+  footer?: { label: string; amounts: Record<K, number>; negate?: boolean }
 }) {
   const fmt = (amount: number, neg?: boolean) =>
     neg ? `-${formatAmount(amount)}` : formatAmount(amount)
@@ -1049,17 +1193,38 @@ function ReportSectionTable({
     return <p className="p-6 pt-0 text-sm text-muted-foreground">Inga poster.</p>
   }
 
+  // No " kr" on the body cells: with several amount columns the unit repeats
+  // once per row per column and crowds out the figures. The footer line keeps
+  // it, so the unit is still stated on the table.
+  const amountCell = (muted?: boolean) =>
+    `px-4 py-1.5 text-right tabular-nums w-32 whitespace-nowrap${muted ? ' text-muted-foreground' : ''}`
+
   // One table with group-band rows (design.md tabular rules), matching the
   // Resultatrapport/Balansrapport idiom, instead of one boxed sub-table per
   // section with a repeated title line.
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm min-w-[400px]">
+        <thead>
+          <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
+            <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
+            <th className="text-left font-medium px-4 py-2">Kontonamn</th>
+            {columns.map((col) => (
+              <th
+                key={col.key}
+                className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                title={col.title}
+              >
+                {col.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
         <tbody>
           {sections.map((section) => (
             <React.Fragment key={section.title}>
               <tr className="bg-muted/30">
-                <td colSpan={3} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
+                <td colSpan={columns.length + 2} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
                   {section.title}
                 </td>
               </tr>
@@ -1071,14 +1236,20 @@ function ReportSectionTable({
                 >
                   <td className="px-4 py-1.5 w-20"><AccountNumber number={row.account_number} name={row.account_name} /></td>
                   <td className="px-4 py-1.5">{row.account_name}</td>
-                  <td className="px-4 py-1.5 text-right tabular-nums w-32 whitespace-nowrap">
-                    {fmt(row.amount, negate)} kr
-                  </td>
+                  {columns.map((col) => (
+                    <td key={col.key} className={amountCell(col.muted)}>
+                      {fmt(row[col.key], negate)}
+                    </td>
+                  ))}
                 </tr>
               ))}
               <tr className="border-b font-medium">
                 <td colSpan={2} className="px-4 py-1.5 text-right text-muted-foreground">Summa</td>
-                <td className="px-4 py-1.5 text-right tabular-nums whitespace-nowrap">{fmt(section.subtotal, negate)} kr</td>
+                {columns.map((col) => (
+                  <td key={col.key} className={amountCell(col.muted)}>
+                    {fmt(section.subtotals[col.key], negate)}
+                  </td>
+                ))}
               </tr>
             </React.Fragment>
           ))}
@@ -1087,7 +1258,14 @@ function ReportSectionTable({
           <tfoot>
             <tr className="font-medium">
               <td colSpan={2} className="px-4 py-2">{footer.label}</td>
-              <td className="px-4 py-2 text-right tabular-nums whitespace-nowrap">{fmt(footer.amount, footer.negate)} kr</td>
+              {columns.map((col) => (
+                <td
+                  key={col.key}
+                  className={`px-4 py-2 text-right tabular-nums w-32 whitespace-nowrap${col.muted ? ' text-muted-foreground' : ''}`}
+                >
+                  {fmt(footer.amounts[col.key], footer.negate)} kr
+                </td>
+              ))}
             </tr>
           </tfoot>
         )}

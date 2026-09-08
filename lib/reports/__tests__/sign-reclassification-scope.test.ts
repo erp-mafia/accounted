@@ -34,9 +34,15 @@ import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateBalanceSheet } from '../balance-sheet'
 import { mapTrialBalancesToK2 } from '@/lib/bokslut/ixbrl/k2-mapper'
 import { CLOSED_ROWS, EXPECTED, PRE_CLOSING_ROWS, rowsForMode } from './closed-year-fixture'
+import { createFixedRowSupabase } from '@/tests/helpers'
 
 const COMPANY_ID = 'company-1'
 const PERIOD_ID = 'period-1'
+// generateBalanceSheet reads the fiscal period bounds for its header even when
+// the trial balance is mocked.
+const FISCAL_PERIOD = { period_start: '2025-01-01', period_end: '2025-12-31' }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const supabase = createFixedRowSupabase(FISCAL_PERIOD) as any
 
 function findRow(
   sections: Array<{ title: string; rows: Array<{ account_number: string; amount: number }> }>,
@@ -78,8 +84,7 @@ describe('statutory surfaces reclassify by sign', () => {
 
 describe('account-oriented surfaces deliberately do NOT reclassify', () => {
   it('Balansräkning keeps konto 1630 under its own BAS heading', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const report = await generateBalanceSheet({} as any, COMPANY_ID, PERIOD_ID)
+    const report = await generateBalanceSheet(supabase, COMPANY_ID, PERIOD_ID)
 
     const taxAccount = findRow(report.asset_sections, '1630')
     expect(taxAccount).not.toBeNull()
@@ -90,8 +95,7 @@ describe('account-oriented surfaces deliberately do NOT reclassify', () => {
   })
 
   it('Balansräkning keeps konto 2641 under Moms och punktskatter', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const report = await generateBalanceSheet({} as any, COMPANY_ID, PERIOD_ID)
+    const report = await generateBalanceSheet(supabase, COMPANY_ID, PERIOD_ID)
 
     const inputVat = findRow(report.equity_liability_sections, '2641')
     expect(inputVat).not.toBeNull()
@@ -101,8 +105,7 @@ describe('account-oriented surfaces deliberately do NOT reclassify', () => {
   })
 
   it('and still ties out, because nothing moved across the split', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const report = await generateBalanceSheet({} as any, COMPANY_ID, PERIOD_ID)
+    const report = await generateBalanceSheet(supabase, COMPANY_ID, PERIOD_ID)
 
     expect(report.total_assets).toBe(report.total_equity_liabilities)
   })

@@ -104,16 +104,18 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       end: range.toDate ?? period.period.period_end,
     }
 
-    const { groups, summary } = buildIncomeStatementPdfModel(report)
+    const { columns, groups, summary } = buildIncomeStatementPdfModel(report)
 
     let pdfBuffer: Buffer
     try {
       pdfBuffer = await renderToBuffer(
         FinancialStatementPDF({
           title: 'Resultaträkning',
+          columns,
           groups,
           summary,
           period: report.period,
+          fiscalYear: report.fiscal_year,
           company: company as CompanySettings,
           generatedAt: new Date().toISOString(),
         }),

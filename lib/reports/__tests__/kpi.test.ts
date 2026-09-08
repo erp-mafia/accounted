@@ -18,12 +18,21 @@ function makeIncomeStatement(
   return {
     revenue_sections: [],
     total_revenue: 100000,
+    total_revenue_ytd_opening: 0,
+    total_revenue_ytd_closing: 100000,
     expense_sections: [],
     total_expenses: 60000,
+    total_expenses_ytd_opening: 0,
+    total_expenses_ytd_closing: 60000,
     financial_sections: [],
     total_financial: 0,
+    total_financial_ytd_opening: 0,
+    total_financial_ytd_closing: 0,
     net_result: 40000,
+    net_result_ytd_opening: 0,
+    net_result_ytd_closing: 40000,
     period: { start: '2025-01-01', end: '2025-12-31' },
+    fiscal_year: { start: '2025-01-01', end: '2025-12-31' },
     ...overrides,
   }
 }
@@ -54,13 +63,21 @@ describe('calculateGrossMargin', () => {
       expense_sections: [
         {
           title: 'Varor och material',
-          rows: [{ account_number: '4010', account_name: 'Inköp', amount: 80000 }],
+          rows: [
+            { account_number: '4010', account_name: 'Inköp', amount: 80000, ytd_opening: 0, ytd_closing: 80000 },
+          ],
           subtotal: 80000,
+          subtotal_ytd_opening: 0,
+          subtotal_ytd_closing: 80000,
         },
         {
           title: 'Lokalkostnader',
-          rows: [{ account_number: '5010', account_name: 'Hyra', amount: 20000 }],
+          rows: [
+            { account_number: '5010', account_name: 'Hyra', amount: 20000, ytd_opening: 0, ytd_closing: 20000 },
+          ],
           subtotal: 20000,
+          subtotal_ytd_opening: 0,
+          subtotal_ytd_closing: 20000,
         },
       ],
     })
@@ -79,8 +96,12 @@ describe('calculateGrossMargin', () => {
       expense_sections: [
         {
           title: 'Lokalkostnader',
-          rows: [{ account_number: '5010', account_name: 'Hyra', amount: 10000 }],
+          rows: [
+            { account_number: '5010', account_name: 'Hyra', amount: 10000, ytd_opening: 0, ytd_closing: 10000 },
+          ],
           subtotal: 10000,
+          subtotal_ytd_opening: 0,
+          subtotal_ytd_closing: 10000,
         },
       ],
     })
