@@ -53,7 +53,7 @@ const BulkMissingSchema = z.object({
  */
 export const POST = withRouteContext(
   'journal_entry.bulk_missing_no_document_required',
-  async (request, { supabase, companyId, user }) => {
+  async (request, { supabase, companyId, user, log }) => {
     const validation = await validateBody(request, BulkMissingSchema)
     if (!validation.success) return validation.response
 
@@ -81,6 +81,8 @@ export const POST = withRouteContext(
       if (err instanceof MissingUnderlagQueryError) {
         // userMessage is already mapped through getErrorMessage() in the
         // resolver: user-facing Swedish, never a raw driver message.
+        // The driver error goes to the log, same as the list route (#2395).
+        log.error('failed to resolve missing-underlag entries', err, { cause: err.cause })
         return NextResponse.json({ error: err.userMessage }, { status: 400 })
       }
       throw err
