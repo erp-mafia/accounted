@@ -35,7 +35,7 @@ export {
 
 export {
   stripOrgNumberFormatting,
-
+  orgNumberKey,
   isOrgNumberShaped,
   normalizeOrgNumber,
   isValidOrgNumber,

@@ -64,6 +64,10 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',
   match_transaction_invoice: 'medium',
+  // Skatteverkets ROT/RUT utbetalning matched to its begäran: one bank row
+  // booked debit 19xx / credit 1513 and linked. Storno-reversible like the
+  // other bank-row matches, so the same tier as match_transaction_invoice.
+  settle_rot_rut_payout: 'medium',
   // Link an existing posted verifikat as payment for an invoice. Reversible by
   // deleting the invoice_payments row and reverting invoice status; no journal
   // entry is created or modified. Sits next to match_transaction_invoice

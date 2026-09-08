@@ -533,6 +533,7 @@ function invoiceOutstandingAmount(invoice: Invoice): number {
     remaining_amount?: number | null
     paid_amount?: number | null
     deduction_total?: number | null
+    deduction_reclaimed_total?: number | null
   }
   // A payment is being booked, so a stored 0 cannot mean "settled": rows
   // written by paths that bypass buildInvoiceWriteData (imports, sandbox seed,
@@ -544,7 +545,11 @@ function invoiceOutstandingAmount(invoice: Invoice): number {
   }
   const paid = typeof inv.paid_amount === 'number' ? inv.paid_amount : 0
   const deduction = typeof inv.deduction_total === 'number' ? inv.deduction_total : 0
-  return roundOre(invoice.total - paid - deduction)
+  // A refused deduction (rot_rut_reclaim) is the customer's again: same
+  // formula as invoiceCustomerShare and the SQL INSERT guard.
+  const reclaimed =
+    typeof inv.deduction_reclaimed_total === 'number' ? inv.deduction_reclaimed_total : 0
+  return roundOre(invoice.total - paid - deduction + reclaimed)
 }
 
 /**

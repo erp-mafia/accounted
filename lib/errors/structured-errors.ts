@@ -1033,6 +1033,62 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Beloppet stämmer inte med de valda utläggen. Välj de utlägg som överföringen täcker.',
     message_en: 'The amount does not match the selected expense claims. Pick the claims this transfer covers.',
   },
+  // Reclaim: Skatteverkets avslag booked back onto the customer
+  ROT_RUT_RECLAIM_NO_BESLUT: {
+    httpStatus: 400,
+    message_sv:
+      'Skatteverkets beslut är inte registrerat för begäran. Importera beslutsfilen eller registrera beslutet först.',
+    message_en:
+      "Skatteverket's decision is not recorded for this request. Import the decision file or record the decision first.",
+  },
+  ROT_RUT_RECLAIM_NOTHING_REFUSED: {
+    httpStatus: 400,
+    message_sv: 'Skatteverket beviljade hela begäran: det finns inget nekat belopp att bokföra.',
+    message_en: 'Skatteverket approved the whole request: there is no refused amount to book.',
+  },
+  ROT_RUT_RECLAIM_ALREADY_DONE: {
+    httpStatus: 409,
+    message_sv: 'Det nekade beloppet är redan bokfört för den här begäran.',
+    message_en: 'The refused amount has already been booked for this request.',
+  },
+  ROT_RUT_RECLAIM_SPLIT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv:
+      'Beslutet är registrerat som en totalsumma för flera fakturor. Importera Skatteverkets beslutsfil så att det nekade beloppet kan fördelas per faktura.',
+    message_en:
+      "The decision was recorded as one total for several invoices. Import Skatteverket's decision file so the refused amount can be split per invoice.",
+  },
+  ROT_RUT_RECLAIM_INVOICE_NOT_BOOKED: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan har ingen verifikation, så det finns ingen fordran på konto 1513 att flytta. Bokför fakturan först.',
+    message_en:
+      'The invoice has no voucher, so there is no receivable on account 1513 to move. Book the invoice first.',
+  },
+  ROT_RUT_RECLAIM_INVOICE_NOT_OPEN: {
+    httpStatus: 400,
+    message_sv: 'Fakturan är makulerad eller krediterad och kan inte öppnas igen för det nekade beloppet.',
+    message_en: 'The invoice is cancelled or credited and cannot be reopened for the refused amount.',
+  },
+  ROT_RUT_RECLAIM_CURRENCY: {
+    httpStatus: 400,
+    message_sv: 'Det nekade beloppet kan bara bokföras för fakturor i SEK.',
+    message_en: 'The refused amount can only be booked for invoices in SEK.',
+  },
+  ROT_RUT_RECLAIM_INVOICE_REREQUESTED: {
+    httpStatus: 409,
+    message_sv:
+      'Minst en faktura i begäran ingår i en senare begäran som inte är avslagen. Det nekade beloppet kan inte bokföras på kunden när Skatteverket prövar fakturan igen.',
+    message_en:
+      'At least one invoice in this request is part of a later request that is not rejected. The refused amount cannot be booked onto the customer while Skatteverket is reviewing the invoice again.',
+  },
+  ROT_RUT_RECLAIM_RACE: {
+    httpStatus: 409,
+    message_sv:
+      'Det nekade beloppet hann redan bokföras av en annan åtgärd. Verifikationen som skapades kan inte kopplas: kontrollera bokföringen på konto 1513 och 1510.',
+    message_en:
+      'The refused amount was already booked by another action. The voucher that was created could not be attached: check the bookkeeping on accounts 1513 and 1510.',
+  },
   ROT_RUT_FILE_CREATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Filen kunde inte skapas.',
@@ -1074,6 +1130,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Fakturan har redan krediterats.',
     message_en: 'Invoice has already been credited.',
+  },
+  INVOICE_CREDIT_ROT_RUT_RECLAIMED: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan har ett nekat ROT/RUT-avdrag bokfört som kundfordran. Makulera den bokningen (verifikationen med nekat avdrag) innan fakturan krediteras, annars stämmer inte kreditfakturans fördelning mellan konto 1510 och 1513.',
+    message_en:
+      'The invoice carries a refused ROT/RUT deduction booked as a customer receivable. Reverse that voucher before crediting the invoice, otherwise the credit note splits 1510 and 1513 wrongly.',
   },
   INVOICE_CREDIT_NOT_SENT: {
     httpStatus: 400,

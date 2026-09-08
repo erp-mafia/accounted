@@ -17,6 +17,7 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
+import { ToastAction } from '@/components/ui/toast'
 import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntryReviewContent'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
@@ -48,7 +49,15 @@ interface SendInvoiceDialogProps {
   invoice: InvoiceWithRelations
   /** 'email' sends via email, 'manual' marks as sent without email */
   mode: 'email' | 'manual'
-  onSuccess: () => void
+  /** `partial`: the document is sent but a follow-up step (PDF archive,
+   *  periodisering, delivery history) failed and the toast says so. */
+  onSuccess: (result?: { partial: boolean }) => void
+  /**
+   * Follow-up offered on the manual mark-sent toast (#2399): the user who
+   * marks an invoice as sent by hand usually wants the issued PDF next, to
+   * mail it themselves. Omitted when the caller already downloads it.
+   */
+  manualSuccessAction?: { label: string; onClick: () => void }
 }
 
 export default function SendInvoiceDialog({
@@ -57,6 +66,7 @@ export default function SendInvoiceDialog({
   invoice,
   mode,
   onSuccess,
+  manualSuccessAction,
 }: SendInvoiceDialogProps) {
   const { toast } = useToast()
   const supabase = createClient()
@@ -386,7 +396,7 @@ export default function SendInvoiceDialog({
       }
       const data = await response.json()
 
-      onSuccess()
+      onSuccess({ partial: !!data.partial })
 
       if (mode === 'email') {
         onOpenChange(false)
@@ -431,6 +441,20 @@ export default function SendInvoiceDialog({
               : shouldBookOnIssue
                 ? t('mark_success_voucher_created')
                 : undefined,
+          // A partial success asks the user to check the bookkeeping first;
+          // the PDF offer would pull attention away from that.
+          ...(manualSuccessAction && !data.partial
+            ? {
+                action: (
+                  <ToastAction
+                    altText={manualSuccessAction.label}
+                    onClick={manualSuccessAction.onClick}
+                  >
+                    {manualSuccessAction.label}
+                  </ToastAction>
+                ),
+              }
+            : {}),
         })
       }
     } catch (error) {

@@ -73,21 +73,33 @@ function makeMock(opts: {
   const supplierByNameResult = { data: opts.supplierByName ?? null, error: null }
   const insertResult = { data: opts.pendingInsert ?? { id: 'op-1' }, error: null }
 
-  // suppliers lookups distinguish by query method: org_number → .eq() chain ending in maybeSingle()
-  // name → .ilike() chain ending in maybeSingle().
-  // We stub by tracking the most recent .eq vs .ilike call. Simpler: return
-  // org-result first, name-result second (the tool falls through).
-  let supplierLookupCall = 0
+  // suppliers lookups distinguish by query method: the org_number and
+  // vat_number scans and the candidate search are awaited list queries
+  // (served by supplierList); the exact org_number lookup for a non-Swedish
+  // value is an .eq() chain ending in maybeSingle() and the name lookup an
+  // .ilike() chain ending in maybeSingle(). The last filter method decides
+  // which single-row result maybeSingle() serves.
+  let lastFilter: 'eq' | 'ilike' = 'eq'
   const supplierChain = (): unknown =>
     new Proxy(
       {},
       {
         get(_t, prop) {
-          if (prop === 'maybeSingle') {
-            return () => {
-              supplierLookupCall++
-              return Promise.resolve(supplierLookupCall === 1 ? supplierByOrgResult : supplierByNameResult)
+          if (prop === 'eq') {
+            return (column: string) => {
+              if (column !== 'company_id') lastFilter = 'eq'
+              return supplierChain()
             }
+          }
+          if (prop === 'ilike') {
+            return () => {
+              lastFilter = 'ilike'
+              return supplierChain()
+            }
+          }
+          if (prop === 'maybeSingle') {
+            return () =>
+              Promise.resolve(lastFilter === 'ilike' ? supplierByNameResult : supplierByOrgResult)
           }
           if (prop === 'single') {
             return () =>
@@ -99,7 +111,7 @@ function makeMock(opts: {
           }
           if (prop === 'then') {
             return (resolve: (v: unknown) => void) =>
-              resolve(opts.supplierList ? { data: opts.supplierList, error: null } : supplierByOrgResult)
+              resolve({ data: opts.supplierList ?? [], error: null })
           }
           return () => supplierChain()
         },
@@ -297,7 +309,9 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
         created_supplier_invoice_id: null,
         document_id: 'doc-2',
       },
-      supplierByOrg: { id: 'supplier-org-lookup' },
+      // The register holds the form's hyphenated spelling; the extracted
+      // value is bare digits (#2391).
+      supplierList: [{ id: 'supplier-org-lookup', name: 'Acme AB', org_number: '556677-8899' }],
     })
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
     const result = (await tool.execute(

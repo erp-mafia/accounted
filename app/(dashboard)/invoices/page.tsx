@@ -34,6 +34,13 @@ import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { matchesInvoiceSearch } from '@/lib/invoices/invoice-search'
 import {
+  INVOICE_LIST_TABS,
+  isUnsentNumberedInvoice,
+  matchesInvoiceListTab,
+  parseInvoiceListTab,
+  type InvoiceListTab,
+} from '@/lib/invoices/invoice-list-tabs'
+import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
   type InvoiceRegisterCoverage,
@@ -96,49 +103,20 @@ const INITIAL_VISIBLE_ROWS = 100
 
 const CREATE_MODES = ['faktura', 'aterkommande', 'sjalvfaktura'] as const
 
-// Main views (concept seg) and the low-frequency views behind "Fler …".
-const SEG_TABS = ['all', 'unpaid', 'overdue', 'draft'] as const
-const MORE_TABS = ['paid', 'proforma', 'quote', 'delivery_note', 'credit', 'cancelled'] as const
-const ALL_TABS = [...SEG_TABS, ...MORE_TABS]
-type ListTab = (typeof SEG_TABS)[number] | (typeof MORE_TABS)[number]
-
-// The one status predicate: both the visible rows and the per-view counts in
-// the ContextPicker go through it, so the annotation always matches what the
-// view will show.
-function matchesListTab(invoice: Invoice, tab: ListTab): boolean {
-  const isCreditNote = !!invoice.credited_invoice_id
-  const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
-  return (
-    (tab === 'all' && invoice.status !== 'cancelled') ||
-    (tab === 'unpaid' &&
-      ['sent', 'overdue'].includes(invoice.status) &&
-      !isCreditNote &&
-      docType === 'invoice') ||
-    (tab === 'overdue' &&
-      invoice.status === 'overdue' &&
-      !isCreditNote &&
-      docType === 'invoice') ||
-    (tab === 'draft' &&
-      invoice.status === 'draft' &&
-      docType === 'invoice' &&
-      !isCreditNote) ||
-    (tab === 'paid' && invoice.status === 'paid') ||
-    (tab === 'credit' && isCreditNote) ||
-    (tab === 'proforma' && docType === 'proforma' && invoice.status !== 'cancelled') ||
-    (tab === 'quote' && docType === 'quote' && invoice.status !== 'cancelled') ||
-    (tab === 'delivery_note' &&
-      docType === 'delivery_note' &&
-      invoice.status !== 'cancelled') ||
-    (tab === 'cancelled' && invoice.status === 'cancelled')
-  )
-}
+// The status views and their one predicate live in lib/invoices/invoice-list-tabs:
+// the visible rows, the per-view counts in the ContextPicker and the status
+// sections all go through it, so the annotation always matches what the view
+// will show.
+const ALL_TABS = INVOICE_LIST_TABS
+type ListTab = InvoiceListTab
+const matchesListTab = matchesInvoiceListTab
 
 // Row grouping: sections in the table body. 'none' (the flat list) is the
 // default; the other modes are opt-in via ?group= and mirror the
 // supplier-invoices layout (payment queue as its own section).
 const GROUP_MODES = ['status', 'customer', 'month', 'none'] as const
 type GroupMode = (typeof GROUP_MODES)[number]
-const STATUS_SECTION_ORDER = ['drafts', 'awaiting', 'settled'] as const
+const STATUS_SECTION_ORDER = ['drafts', 'unsent', 'awaiting', 'settled'] as const
 /** Sentinel bucket for rows with no customer or no date. Not a display
  *  string: the header renders t('group_unknown') for it. */
 const UNKNOWN_GROUP_KEY = 'unknown'
@@ -149,11 +127,12 @@ const GROUP_LABEL_KEYS: Record<GroupMode, string> = {
   none: 'group_none',
 }
 
-type StatusGroup = 'drafts' | 'awaiting' | 'settled'
+type StatusGroup = (typeof STATUS_SECTION_ORDER)[number]
 /** Sections reuse the tab predicates so the two can never drift: what the
- *  Utkast and Obetalda tabs show is what the sections bucket. */
+ *  Utkast, Ej skickade and Obetalda tabs show is what the sections bucket. */
 function statusGroupOf(invoice: Invoice): StatusGroup {
   if (matchesListTab(invoice, 'draft')) return 'drafts'
+  if (matchesListTab(invoice, 'unsent')) return 'unsent'
   if (matchesListTab(invoice, 'unpaid')) return 'awaiting'
   return 'settled'
 }
@@ -177,6 +156,7 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   all: 'tab_all',
   unpaid: 'tab_unpaid',
   overdue: 'tab_overdue',
+  unsent: 'tab_unsent',
   draft: 'tab_draft',
   paid: 'tab_paid',
   proforma: 'tab_proforma',
@@ -269,11 +249,7 @@ export default function InvoicesPage() {
   const [activeTab, setActiveTab] = useState<ListTab>(() => {
     // Deep links from the worklist and older bookmarks: ?status= / ?tab=.
     const param = searchParams.get('status') ?? searchParams.get('tab')
-    const alias: Record<string, ListTab> = { drafts: 'draft' }
-    const candidate = param ? (alias[param] ?? (param as ListTab)) : null
-    return candidate && ALL_TABS.includes(candidate as never)
-      ? (candidate as ListTab)
-      : 'all'
+    return parseInvoiceListTab(param) ?? 'all'
   })
   const [groupMode, setGroupMode] = useState<GroupMode>(() => {
     const param = searchParams.get('group')
@@ -355,8 +331,6 @@ export default function InvoicesPage() {
     )
   const closeRotRutPayout = () =>
     router.replace(invoicesUrl((p) => p.delete('rot-rut')), { scroll: false })
-  const openRotRutPayout = () =>
-    router.push(invoicesUrl((p) => p.set('rot-rut', '1')), { scroll: false })
 
   // Begäran om utbetalning (Lag 2009:194 8 §) only concerns companies selling
   // ROT/RUT-eligible work to consumers, so the action stays out of the header
@@ -503,6 +477,7 @@ export default function InvoicesPage() {
     const count = meta?.count ?? 0
     if (groupMode === 'status') {
       if (key === 'drafts') return t('section_drafts', { count })
+      if (key === 'unsent') return t('section_unsent', { count })
       if (key === 'awaiting') return t('section_awaiting', { count })
       return t('section_settled', { count })
     }
@@ -737,10 +712,7 @@ export default function InvoicesPage() {
     if (quoteStatus === 'accepted') return { label: t('quote_status_accepted') }
     if (quoteStatus === 'open') return { label: t('quote_status_open') }
     if (invoice.status === 'draft') {
-      const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
-      const isUnsent =
-        !!invoice.invoice_number && docType === 'invoice' && !isCreditNote && !invoice.is_self_billed
-      return isUnsent
+      return isUnsentNumberedInvoice(invoice)
         ? { label: t('status_unsent'), exception: true, variant: 'outline' }
         : { label: t('status_draft'), exception: true, variant: 'secondary' }
     }
@@ -771,12 +743,13 @@ export default function InvoicesPage() {
         <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <div className="flex flex-wrap items-center gap-2">
           {showRotRutAction && (
+            // The ROT/RUT overview (begäran, beslut, utbetalning, nekat
+            // belopp) has its own page; the file dialog still opens from
+            // ?rot-rut=1 here for existing links and the Att göra rows.
             <Button
               type="button"
               variant="outline"
-              onClick={openRotRutPayout}
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              onClick={() => router.push('/invoices/rot-rut')}
             >
               <FileDown className="mr-2 h-4 w-4" />
               {t('rot_rut_payout_action')}
@@ -921,8 +894,10 @@ export default function InvoicesPage() {
         ) : (
           <DataListEmpty
             icon={<ReceiptText className="h-6 w-6" />}
-            title={t('no_category_title')}
-            description={t('no_category_description')}
+            title={t(activeTab === 'unsent' ? 'no_unsent_title' : 'no_category_title')}
+            description={t(
+              activeTab === 'unsent' ? 'no_unsent_description' : 'no_category_description',
+            )}
           />
         )
       ) : (

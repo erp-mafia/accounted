@@ -104,6 +104,7 @@ export type RotRutBlockerCode =
   | 'PRICE_BELOW_MINIMUM'
   | 'DEDUCTION_EXCEEDS_PAYMENT'
   | 'ZERO_DEDUCTION'
+  | 'DEDUCTION_RECLAIMED'
 
 export interface RotRutBlocker {
   invoice_id: string
@@ -188,6 +189,19 @@ export function evaluateInvoiceForFile(
   const items = invoice.items ?? []
   const typeLines = items.filter((i) => isDeductionLine(i, type))
   const otherType: DeductionType = type === 'rot' ? 'rut' : 'rot'
+
+  // Skatteverket refused (part of) this invoice's deduction and the refused
+  // share was booked back onto the customer (rot_rut_reclaim). The buyer now
+  // pays it, so a new begäran for the same kronor would claim from
+  // Skatteverket what the customer already owes: a double collection. The
+  // invoice becomes requestable again only when the reclaim voucher is
+  // reversed (syncRotRutReclaimAfterReversal clears the column).
+  if ((invoice.deduction_reclaimed_total ?? 0) > 0) {
+    return block(
+      'DEDUCTION_RECLAIMED',
+      'Skatteverket har nekat avdraget och det nekade beloppet är bokfört som kundfordran. Fakturan kan inte begäras igen så länge den bokningen står.',
+    )
+  }
   const otherLines = items.filter((i) => isDeductionLine(i, otherType))
 
   if (typeLines.length === 0) {

@@ -57,6 +57,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
@@ -233,6 +234,13 @@ import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
 import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
+import { computeRefusedShares } from '@/lib/invoices/rot-rut-reclaim'
+import {
+  expectedRotRutPayoutAmount,
+  isMatchableRotRutPayoutRequest,
+  OPEN_ROT_RUT_PAYOUT_STATUSES,
+  type RotRutPayoutRequestCandidate,
+} from '@/lib/invoices/rot-rut-payout-matching'
 import {
   CreateInvoiceFromSalesOrderSchema,
   CreateSalesOrderSchema,
@@ -17219,6 +17227,297 @@ export const tools: McpTool[] = [
         warnings: result.file.warnings,
         upload_url: uploadUrl,
       }
+    },
+  },
+
+  {
+    name: 'gnubok_list_rot_rut_payout_requests',
+    keywords: ['rotavdrag', 'rutavdrag', 'begäran om utbetalning', 'skatteverket', '1513', 'husavdrag'],
+    title: 'List Rot/Rut Payout Requests',
+    description:
+      'List ROT/RUT begäran om utbetalning: status, requested and decided amounts, expected payout, settlement and reclaim vouchers, refused share per invoice. Use to see what Skatteverket owes on 1513 and which begäran a bank row settles (gnubok_settle_rot_rut_payout).',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        deduction_type: { type: 'string', enum: ['rot', 'rut'] },
+        status: {
+          type: 'string',
+          enum: ['generated', 'submitted', 'paid', 'partially_paid', 'rejected', 'cancelled'],
+        },
+        open_only: {
+          type: 'boolean',
+          description: 'Only begäran without a settlement voucher (what a Skatteverket bank row can still settle)',
+        },
+        limit: { type: 'number', description: 'Max results (default 50, max 100)' },
+        offset: { type: 'integer', minimum: 0, description: 'Number of results to skip (default 0)' },
+      },
+    },
+    outputSchema: paginatedSchema('payout_requests', {
+      type: 'object',
+      properties: {
+        request_id: { type: 'string' },
+        name: { type: 'string', description: 'NamnPaBegaran as shown in Skatteverkets e-tjänst' },
+        deduction_type: { type: 'string', enum: ['rot', 'rut'] },
+        status: { type: 'string' },
+        requested_total: { type: 'number' },
+        decided_total: { type: ['number', 'null'], description: 'Godkänt belopp per Skatteverkets beslut; null until recorded' },
+        decided_at: { type: ['string', 'null'] },
+        expected_payout: { type: 'number', description: 'decided_total when recorded, else requested_total: what the bank row must equal' },
+        settlement_journal_entry_id: { type: ['string', 'null'], description: 'Voucher that booked Skatteverkets utbetalning (debit 19xx / credit 1513)' },
+        refused_total: { type: 'number', description: 'Share Skatteverket refused (requested minus decided), 0 until a beslut is recorded' },
+        reclaim_journal_entry_id: { type: ['string', 'null'], description: 'Voucher that moved the refused share back onto the customers (debit 1510 / credit 1513); null while still to book' },
+        refused_needs_reclaim: { type: 'boolean', description: 'True when a refused share exists, no reclaim voucher is booked yet, and no invoice of the begäran is re-requested in a later live begäran (book it in the dashboard, Fakturor > ROT/RUT)' },
+        skv_referensnummer: { type: ['string', 'null'] },
+        created_at: { type: 'string' },
+        submitted_at: { type: ['string', 'null'] },
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              item_id: { type: 'string' },
+              invoice_id: { type: 'string' },
+              invoice_number: { type: ['string', 'null'] },
+              requested_amount: { type: 'number' },
+              decided_amount: { type: ['number', 'null'] },
+              reclaimed_amount: { type: ['number', 'null'] },
+            },
+          },
+        },
+      },
+    }),
+    annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only: a READ reachable through gnubok_call_tool, and ROT/RUT
+    // begäran are a niche flow (a few companies, a few rows a month), so it
+    // does not earn a slot in the default tools/list payload budget.
+    catalogVisibility: 'search',
+    async execute(args, companyId, _userId, supabase) {
+      const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
+      const offset = Math.max(0, Math.floor(Number(args.offset) || 0))
+      const deductionType = args.deduction_type as string | undefined
+      const status = args.status as string | undefined
+      const openOnly = args.open_only === true
+
+      let query = supabase
+        .from('rot_rut_payout_requests')
+        .select(
+          'id, name, deduction_type, status, requested_total, decided_total, decided_at, settlement_journal_entry_id, reclaim_journal_entry_id, skv_referensnummer, created_at, submitted_at, items:rot_rut_payout_request_items(id, invoice_id, requested_amount, decided_amount, reclaimed_amount, invoice:invoices(invoice_number))',
+          { count: 'exact' },
+        )
+        .eq('company_id', companyId)
+      if (deductionType === 'rot' || deductionType === 'rut') query = query.eq('deduction_type', deductionType)
+      if (status) query = query.eq('status', status)
+      if (openOnly) {
+        query = query.in('status', [...OPEN_ROT_RUT_PAYOUT_STATUSES]).is('settlement_journal_entry_id', null)
+      }
+
+      const { data, error, count } = await query
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(offset, offset + limit)
+      if (error) throw dbError(error)
+
+      type Row = {
+        id: string
+        name: string
+        deduction_type: 'rot' | 'rut'
+        status: string
+        requested_total: number | string
+        decided_total: number | string | null
+        decided_at: string | null
+        settlement_journal_entry_id: string | null
+        reclaim_journal_entry_id: string | null
+        skv_referensnummer: string | null
+        created_at: string
+        submitted_at: string | null
+        items: Array<{
+          id: string
+          invoice_id: string
+          requested_amount: number | string
+          decided_amount: number | string | null
+          reclaimed_amount: number | string | null
+          invoice: { invoice_number: string | null } | null
+        }> | null
+      }
+      const rows = ((data ?? []) as unknown as Row[])
+      const pageRows = rows.slice(0, limit)
+      // An invoice re-requested in a later live begäran keeps its refused
+      // share at Skatteverket: the reclaim service refuses it, so the list
+      // must not advertise it either (one query for the whole page).
+      const rerequestedByRequest = new Map<string, Set<string>>()
+      const pageInvoiceIds = [...new Set(pageRows.flatMap((row) => (row.items ?? []).map((item) => item.invoice_id)))]
+      if (pageInvoiceIds.length > 0) {
+        const { data: siblings, error: siblingsError } = await supabase
+          .from('rot_rut_payout_request_items')
+          .select('invoice_id, request_id, request:rot_rut_payout_requests!inner(id, status, company_id)')
+          .eq('request.company_id', companyId)
+          .in('invoice_id', pageInvoiceIds)
+          .not('request.status', 'in', '("cancelled","rejected")')
+        if (siblingsError) throw dbError(siblingsError)
+        for (const row of pageRows) {
+          const own = new Set((row.items ?? []).map((item) => item.invoice_id))
+          const hits = new Set<string>()
+          for (const sibling of (siblings ?? []) as Array<{ invoice_id: string; request_id: string }>) {
+            if (sibling.request_id !== row.id && own.has(sibling.invoice_id)) hits.add(sibling.invoice_id)
+          }
+          rerequestedByRequest.set(row.id, hits)
+        }
+      }
+      const payoutRequests = pageRows.map((row) => {
+        const items = row.items ?? []
+        const refused = computeRefusedShares(row, items)
+        const refusedTotal = refused.ok ? refused.total : 0
+        const rerequested = rerequestedByRequest.get(row.id)?.size ?? 0
+        return {
+          request_id: row.id,
+          name: row.name,
+          deduction_type: row.deduction_type,
+          status: row.status,
+          requested_total: Number(row.requested_total),
+          decided_total: row.decided_total == null ? null : Number(row.decided_total),
+          decided_at: row.decided_at,
+          expected_payout: expectedRotRutPayoutAmount(row),
+          settlement_journal_entry_id: row.settlement_journal_entry_id,
+          refused_total: refusedTotal,
+          reclaim_journal_entry_id: row.reclaim_journal_entry_id,
+          refused_needs_reclaim: refusedTotal > 0 && !row.reclaim_journal_entry_id && rerequested === 0,
+          skv_referensnummer: row.skv_referensnummer,
+          created_at: row.created_at,
+          submitted_at: row.submitted_at,
+          items: items.map((item) => ({
+            item_id: item.id,
+            invoice_id: item.invoice_id,
+            invoice_number: item.invoice?.invoice_number ?? null,
+            requested_amount: Number(item.requested_amount),
+            decided_amount: item.decided_amount == null ? null : Number(item.decided_amount),
+            reclaimed_amount: item.reclaimed_amount == null ? null : Number(item.reclaimed_amount),
+          })),
+        }
+      })
+
+      const hasMore = count == null ? rows.length > limit : offset + payoutRequests.length < count
+      const total = count ?? offset + payoutRequests.length + (hasMore ? 1 : 0)
+      return {
+        payout_requests: payoutRequests,
+        count: payoutRequests.length,
+        total_count: total,
+        has_more: hasMore,
+        ...(hasMore ? { next_offset: offset + payoutRequests.length } : {}),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_settle_rot_rut_payout',
+    keywords: ['rotavdrag', 'rutavdrag', 'utbetalning skatteverket', '1513', 'matcha utbetalning'],
+    title: 'Settle Rot/Rut Payout from Bank Row',
+    description:
+      'Match 1 income bank tx from Skatteverket to the ROT/RUT begäran it pays (several when one transfer covers several: their payouts must sum to the row). Books debit 19xx / credit 1513, links the row. List begäran via gnubok_list_rot_rut_payout_requests first. Stages.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        transaction_id: { type: 'string' },
+        request_ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+      },
+      required: ['transaction_id', 'request_ids'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: ANNOTATIONS_STAGED_WRITE,
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = args.transaction_id as string
+      const rawIds = Array.isArray(args.request_ids) ? (args.request_ids as unknown[]) : []
+      const requestIds = [...new Set(rawIds.filter((id): id is string => typeof id === 'string' && id.length > 0))]
+      if (!transactionId || requestIds.length === 0) {
+        throw codedError('VALIDATION_ERROR', 'transaction_id and request_ids are required')
+      }
+      if (requestIds.length > 10) {
+        throw codedError('VALIDATION_ERROR', 'request_ids: at most 10 begäran per transfer')
+      }
+
+      const { data: transaction, error: txError } = await supabase
+        .from('transactions')
+        .select('id, description, merchant_name, amount, currency, date, journal_entry_id, transaction_voucher_links(journal_entry_id, role)')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .single()
+      if (txError || !transaction) throw registryError('TX_CATEGORIZE_TX_NOT_FOUND')
+      if (!(transaction.amount > 0)) throw registryError('ROT_RUT_MATCH_NOT_INCOME')
+      if ((transaction.currency || 'SEK').toUpperCase() !== 'SEK') throw registryError('ROT_RUT_MATCH_CURRENCY')
+      // Same predicate as the commit writer: a live pointer OR a bank_line
+      // junction row (samlingsverifikat) means the row is already booked.
+      if (
+        hasBankLineJunctionRow(
+          (transaction as { transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null })
+            .transaction_voucher_links,
+        ) ||
+        (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id))
+      ) {
+        throw registryError('ROT_RUT_MATCH_TX_ALREADY_LINKED')
+      }
+
+      const { data: requestRows, error: reqError } = await supabase
+        .from('rot_rut_payout_requests')
+        .select('id, name, deduction_type, status, requested_total, decided_total, settlement_journal_entry_id')
+        .eq('company_id', companyId)
+        .in('id', requestIds)
+      if (reqError) throw dbError(reqError)
+      const requests = (requestRows ?? []) as Array<RotRutPayoutRequestCandidate & { name: string }>
+      const missing = requestIds.filter((id) => !requests.some((r) => r.id === id))
+      if (missing.length > 0) throw registryError('ROT_RUT_REQUEST_NOT_FOUND')
+      const blocked = requests.find((r) => !isMatchableRotRutPayoutRequest(r))
+      if (blocked) {
+        throw Object.assign(
+          new Error(
+            `Begäran "${blocked.name}" är ${blocked.settlement_journal_entry_id ? 'redan bokförd som utbetald' : blocked.status} och kan inte matchas.`,
+          ),
+          { code: 'ROT_RUT_SETTLE_INVALID_STATE' },
+        )
+      }
+
+      // Same rule the commit enforces (settleRotRutPayoutRequestSet): the
+      // bundle must equal the decided sums to the öre. Refuse at stage so the
+      // approver never sees an op that can only fail.
+      const expectedTotal = roundOre(requests.reduce((sum, r) => sum + expectedRotRutPayoutAmount(r), 0))
+      const txAmount = roundOre(transaction.amount)
+      if (Math.abs(txAmount - expectedTotal) > 0.005) {
+        throw Object.assign(
+          new Error(
+            `Transaktionen är ${txAmount} kr men ${requestIds.length === 1 ? 'begäran väntar' : 'de valda begäran väntar tillsammans'} ${expectedTotal} kr. Skatteverket betalar exakt beslutade belopp: välj de begäran som summerar till transaktionen, eller registrera beslutet först.`,
+          ),
+          { code: requestIds.length === 1 ? 'ROT_RUT_SETTLE_AMOUNT_EXCEEDS' : 'ROT_RUT_SETTLE_SET_AMOUNT' },
+        )
+      }
+
+      const txDesc = transaction.merchant_name || transaction.description || transactionId
+      // Booking order: largest first, as the matcher offers them.
+      const ordered = [...requests].sort((a, b) => expectedRotRutPayoutAmount(b) - expectedRotRutPayoutAmount(a))
+
+      return stagePendingOperation(supabase, companyId, userId, 'settle_rot_rut_payout',
+        `ROT/RUT-utbetalning: ${txDesc} → ${ordered.map((r) => r.name).join(', ')}`,
+        { transaction_id: transactionId, request_ids: ordered.map((r) => r.id) },
+        {
+          transaction_description: txDesc,
+          transaction_amount: transaction.amount,
+          transaction_currency: transaction.currency,
+          transaction_date: transaction.date,
+          expected_total: expectedTotal,
+          requests: ordered.map((r) => ({
+            request_id: r.id,
+            name: r.name,
+            deduction_type: r.deduction_type,
+            status: r.status,
+            expected_payout: expectedRotRutPayoutAmount(r),
+          })),
+        },
+        actor,
+        {
+          description: 'After approval the transfer is booked debit 19xx / credit 1513 (one leg per begäran), every begäran is marked paid and the row is linked. Verify with gnubok_list_rot_rut_payout_requests.',
+          tool: 'gnubok_list_rot_rut_payout_requests',
+        },
+        { dateForPeriodCheck: transaction.date },
+      )
     },
   },
 
