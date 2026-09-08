@@ -40,6 +40,8 @@ describe('agent ground rules: bookkeeping heuristics it owns', () => {
     expect(text).toContain('Vägra ALDRIG att ange kontonummer')
     expect(text).toContain('ge konkreta BAS-kontonummer')
     expect(text).toContain('gnubok_list_accounts')
+    // A failed chart lookup is reported, not papered over with an unchecked number.
+    expect(text).toContain('inte är kontrollerat mot deras kontoplan')
     // Names still win when a staged operation's approval card shows the accounts.
     expect(text).toContain('godkännandekortet visar konton')
   })
