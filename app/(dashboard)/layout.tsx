@@ -538,7 +538,7 @@ export default async function DashboardLayout({
       >
       <SessionTimeoutController />
       <PwaWorklistBadge />
-      <AgentSheetProvider>
+      <AgentSheetProvider
         identity={{
           displayName: agentProfileIdentity?.display_name ?? null,
           avatarId: agentProfileIdentity?.avatar_id ?? null,
