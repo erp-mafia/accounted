@@ -61,18 +61,15 @@ export const GET = withCronContext('cron.zettle_order_sync', async (_request, ct
     connectionId: string
     inserted: number
     updated: number
-    status: 'synced' | 'revoked' | 'error'
+    status: 'synced' | 'revoked' | 'locked' | 'error'
   }> = []
 
-  let offset = 0
-  let scanned = 0
-  let hadCandidates = false
-
-  while (
-    results.length < MAX_SYNCED &&
-    scanned < MAX_CANDIDATES_SCANNED &&
-    Date.now() < deadlineMs
-  ) {
+  // Snapshot the candidate list BEFORE syncing any of it. Each sync moves its
+  // row's last_order_synced_at to "now" (to the tail of this ordering), so
+  // paging with a live offset would re-fetch already-synced rows on page 2
+  // and never reach the eligible rows that slid into the gap.
+  const candidates: ZettleConnection[] = []
+  for (let offset = 0; offset < MAX_CANDIDATES_SCANNED; offset += CANDIDATE_PAGE_SIZE) {
     const { data: page, error: connError } = await supabase
       .from('zettle_connections')
       .select('*')
@@ -90,53 +87,57 @@ export const GET = withCronContext('cron.zettle_order_sync', async (_request, ct
     }
 
     if (!page || page.length === 0) break
-    hadCandidates = true
-
-    for (const connection of page as ZettleConnection[]) {
-      scanned += 1
-      if (Date.now() >= deadlineMs) {
-        ctx.log.info('time budget reached', { processedSoFar: results.length, scanned })
-        break
-      }
-      if (results.length >= MAX_SYNCED) break
-
-      if (!(await hasCapability(supabase, connection.company_id, CAPABILITY.zettle_sync))) {
-        ctx.log.info('skip: capability not entitled', { companyId: connection.company_id })
-        continue
-      }
-
-      try {
-        const summary = await syncZettlePurchases(supabase, connection, ctx.log, deadlineMs)
-        if (summary.deadlineReached) {
-          ctx.log.info('connection stopped early on time budget; remaining rows resume next run', {
-            connectionId: connection.id,
-          })
-        }
-        results.push({
-          connectionId: connection.id,
-          inserted: summary.inserted,
-          updated: summary.updated,
-          status: summary.revoked ? 'revoked' : 'synced',
-        })
-      } catch (error) {
-        ctx.log.error('zettle purchase sync failed for connection', error as Error, {
-          connectionId: connection.id,
-          companyId: connection.company_id,
-        })
-        results.push({
-          connectionId: connection.id,
-          inserted: 0,
-          updated: 0,
-          status: 'error',
-        })
-      }
-    }
-
-    offset += page.length
+    candidates.push(...(page as ZettleConnection[]))
     if (page.length < CANDIDATE_PAGE_SIZE) break
   }
 
-  if (!hadCandidates) {
+  let scanned = 0
+  for (const connection of candidates) {
+    if (results.length >= MAX_SYNCED) break
+    if (Date.now() >= deadlineMs) {
+      ctx.log.info('time budget reached', { processedSoFar: results.length, scanned })
+      break
+    }
+    scanned += 1
+
+    if (!(await hasCapability(supabase, connection.company_id, CAPABILITY.zettle_sync))) {
+      ctx.log.info('skip: capability not entitled', { companyId: connection.company_id })
+      continue
+    }
+
+    try {
+      const summary = await syncZettlePurchases(supabase, connection, ctx.log, deadlineMs)
+      if (summary.locked) {
+        // A manual sync holds the claim; it will advance the cursor itself.
+        results.push({ connectionId: connection.id, inserted: 0, updated: 0, status: 'locked' })
+        continue
+      }
+      if (summary.deadlineReached) {
+        ctx.log.info('connection stopped early on time budget; remaining rows resume next run', {
+          connectionId: connection.id,
+        })
+      }
+      results.push({
+        connectionId: connection.id,
+        inserted: summary.inserted,
+        updated: summary.updated,
+        status: summary.revoked ? 'revoked' : 'synced',
+      })
+    } catch (error) {
+      ctx.log.error('zettle purchase sync failed for connection', error as Error, {
+        connectionId: connection.id,
+        companyId: connection.company_id,
+      })
+      results.push({
+        connectionId: connection.id,
+        inserted: 0,
+        updated: 0,
+        status: 'error',
+      })
+    }
+  }
+
+  if (candidates.length === 0) {
     return NextResponse.json({
       message: 'No connections with transaction sync enabled',
       processed: 0,

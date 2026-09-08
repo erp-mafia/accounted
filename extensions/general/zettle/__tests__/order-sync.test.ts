@@ -6,6 +6,7 @@ import {
   mapPurchaseToWebshopRows,
   purchaseQualifiesAsPaidSale,
   purchaseQualifiesAsRefund,
+  unsupportedReason,
   zettlePurchaseExternalId,
   zettleStoreScope,
 } from '../lib/order-sync'
@@ -148,6 +149,54 @@ describe('zettle order-sync mapping', () => {
 
   it('falls back to tax / rate when rows carry no net', () => {
     expect(buildVatBreakdown(sale({ products: [] }))).toEqual([{ rate: 25, net: 100, tax: 25 }])
+  })
+
+  it('imports sales the row model cannot book as unpaid needs_review rows', () => {
+    const conn = { id: 'conn-1', organization_name: 'Caféet' }
+    const split = mapPurchaseToWebshopRows(conn, 'org-1', sale({
+      payments: [
+        { type: 'IZETTLE_CARD', uuid: 'p1', amount: 7500 },
+        { type: 'IZETTLE_CASH', uuid: 'p2', amount: 5000 },
+      ],
+    }))
+    expect(split[0]).toMatchObject({
+      is_paid: false,
+      status: 'needs_review',
+      payment_method_title: 'Delad betalning: bokför manuellt',
+    })
+    // Card + unpaid invoice split must not count as paid either.
+    expect(unsupportedReason(sale({
+      payments: [{ type: 'IZETTLE_CARD', amount: 5000 }, { type: 'IZETTLE_INVOICE', amount: 7500 }],
+    }))).toBe('split_tender')
+    expect(unsupportedReason(sale({ payments: [{ type: 'GIFTCARD', amount: 12500 }] }))).toBe(
+      'voucher_tender',
+    )
+    expect(unsupportedReason(sale({
+      products: [{ quantity: '1', type: 'GIFTCARD', name: 'Presentkort', vatPercentage: 0, rowTaxableAmount: 12500 }],
+    }))).toBe('giftcard_sale')
+    expect(unsupportedReason(sale({
+      payments: [{ type: 'IZETTLE_CARD', amount: 12500, gratuityAmount: 1000 }],
+    }))).toBe('gratuity')
+    // Two card payments go to the same account: still one tender.
+    expect(unsupportedReason(sale({
+      payments: [{ type: 'IZETTLE_CARD', amount: 6000 }, { type: 'IZETTLE_CARD', amount: 6500 }],
+    }))).toBeNull()
+    expect(unsupportedReason(sale())).toBeNull()
+  })
+
+  it('does not import a refund of an unsupported sale', () => {
+    const rows = mapPurchaseToWebshopRows(
+      { id: 'conn-1', organization_name: 'Caféet' },
+      'org-1',
+      sale({
+        purchaseUUID1: '33333333-3333-3333-3333-333333333333',
+        refund: true,
+        amount: -12500,
+        refundsPurchaseUUID1: '11111111-1111-1111-1111-111111111111',
+        payments: [{ type: 'GIFTCARD', amount: -12500 }],
+      }),
+    )
+    expect(rows).toEqual([])
   })
 
   it('converts minor units via fromMinor', () => {
