@@ -229,6 +229,28 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/quote-status', () => {
     expect(body.error.details.invoice_number).toBe('2026-0042')
   })
 
+  it('returns 409 INVOICE_QUOTE_ALREADY_ORDERED when the decision guard refuses because a live kundorder exists', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: MEMBER,
+        invoices: [
+          { data: { ...OPEN_QUOTE, quote_status: 'accepted' }, error: null },
+          { data: null, error: null }, // no converted invoice
+          { data: null, error: { code: 'P0001', message: `INVOICE_QUOTE_ALREADY_ORDERED: quote ${QUOTE_ID} has a live kundorder` } },
+        ],
+      }),
+    )
+
+    const res = await setQuoteStatus(
+      makeRequest({ status: 'declined' }),
+      detailParams(COMPANY_ID, QUOTE_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_ORDERED')
+  })
+
   it('records the decision and returns the effective status', async () => {
     const calls: RecordedCall[] = []
     const decidedAt = '2026-09-02T09:14:33.000Z'

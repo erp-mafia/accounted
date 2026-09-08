@@ -7,6 +7,7 @@ import {
 } from '@/lib/bookkeeping/dimension-resolver'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { creditNatural, debitNatural } from '@/lib/bookkeeping/line-side'
 import { SALARY_ACCOUNTS, getLineItemAccount, isTaxFreeReimbursementType } from './account-mapping'
 import {
   computeDeclaredAvgifterWithOverrides,
@@ -499,8 +500,7 @@ async function createAvgifterEntry(
   const lines: CreateJournalEntryLineInput[] = [
     ...buckets.map((bucket): CreateJournalEntryLineInput => ({
       account_number: SALARY_ACCOUNTS.AVGIFTER_EXPENSE,
-      debit_amount: bucket.amount,
-      credit_amount: 0,
+      ...debitNatural(bucket.amount),
       line_description: `${desc}: Arbetsgivaravgifter`,
       dimensions: bucket.dimensions,
     })),
@@ -511,8 +511,7 @@ async function createAvgifterEntry(
       ? [
           {
             account_number: SALARY_ACCOUNTS.AVGIFTER_LIABILITY,
-            debit_amount: 0,
-            credit_amount: liabilityAvgifter,
+            ...creditNatural(liabilityAvgifter),
             line_description: `${desc}: Arbetsgivaravgifter`,
           } satisfies CreateJournalEntryLineInput,
         ]
@@ -575,15 +574,13 @@ async function createVacationEntry(
     lines.push(
       ...buckets.map((bucket): CreateJournalEntryLineInput => ({
         account_number: SALARY_ACCOUNTS.VACATION_ACCRUAL_EXPENSE,
-        debit_amount: bucket.amount,
-        credit_amount: 0,
+        ...debitNatural(bucket.amount),
         line_description: `${desc}: Semesteravsättning`,
         dimensions: bucket.dimensions,
       })),
       {
         account_number: SALARY_ACCOUNTS.VACATION_ACCRUAL_LIABILITY,
-        debit_amount: 0,
-        credit_amount: creditTotal,
+        ...creditNatural(creditTotal),
         line_description: `${desc}: Semesteravsättning`,
       }
     )
@@ -595,15 +592,13 @@ async function createVacationEntry(
     lines.push(
       ...buckets.map((bucket): CreateJournalEntryLineInput => ({
         account_number: SALARY_ACCOUNTS.VACATION_AVGIFTER_EXPENSE,
-        debit_amount: bucket.amount,
-        credit_amount: 0,
+        ...debitNatural(bucket.amount),
         line_description: `${desc}: Sociala avgifter på semester`,
         dimensions: bucket.dimensions,
       })),
       {
         account_number: SALARY_ACCOUNTS.VACATION_AVGIFTER_LIABILITY,
-        debit_amount: 0,
-        credit_amount: creditTotal,
+        ...creditNatural(creditTotal),
         line_description: `${desc}: Sociala avgifter på semester`,
       }
     )
@@ -654,15 +649,13 @@ async function createPensionEntry(
   const lines: CreateJournalEntryLineInput[] = [
     ...pensionBuckets.map((bucket): CreateJournalEntryLineInput => ({
       account_number: SALARY_ACCOUNTS.PENSION_EXPENSE,
-      debit_amount: bucket.amount,
-      credit_amount: 0,
+      ...debitNatural(bucket.amount),
       line_description: `${desc}: Pensionsförsäkringspremier`,
       dimensions: bucket.dimensions,
     })),
     {
       account_number: SALARY_ACCOUNTS.PENSION_LIABILITY,
-      debit_amount: 0,
-      credit_amount: pensionCredit,
+      ...creditNatural(pensionCredit),
       line_description: `${desc}: Pensionsförsäkringspremier`,
     },
   ]
@@ -673,15 +666,13 @@ async function createPensionEntry(
     lines.push(
       ...slpBuckets.map((bucket): CreateJournalEntryLineInput => ({
         account_number: SALARY_ACCOUNTS.SLP_EXPENSE,
-        debit_amount: bucket.amount,
-        credit_amount: 0,
+        ...debitNatural(bucket.amount),
         line_description: `${desc}: Särskild löneskatt 24,26%`,
         dimensions: bucket.dimensions,
       })),
       {
         account_number: SALARY_ACCOUNTS.SLP_LIABILITY,
-        debit_amount: 0,
-        credit_amount: slpCredit,
+        ...creditNatural(slpCredit),
         line_description: `${desc}: Särskild löneskatt 24,26%`,
       }
     )

@@ -236,3 +236,51 @@ describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
     expect(period.rows[0]!.opening_balances_set).toBe(false)
   })
 })
+
+describe('engine.pg: journal_entry_lines_amounts_non_negative', () => {
+  it('rejects a line with a negative debit_amount', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
+
+    await expect(
+      getPool().query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount)
+         VALUES ($1, '3740', -0.25, 0)`,
+        [entryId],
+      ),
+    ).rejects.toThrow(/journal_entry_lines_amounts_non_negative/)
+  })
+
+  it('rejects a line with a negative credit_amount', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
+
+    await expect(
+      getPool().query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount)
+         VALUES ($1, '3004', 0, -0.5)`,
+        [entryId],
+      ),
+    ).rejects.toThrow(/journal_entry_lines_amounts_non_negative/)
+  })
+
+  it('accepts the same amounts on the opposite side', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
+
+    await getPool().query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount)
+       VALUES ($1, '3740', 0, 0.25),
+              ($1, '6110', 0.25, 0)`,
+      [entryId],
+    )
+    const rows = await getPool().query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM public.journal_entry_lines WHERE journal_entry_id = $1`,
+      [entryId],
+    )
+    expect(rows.rows[0]!.n).toBe('2')
+  })
+})

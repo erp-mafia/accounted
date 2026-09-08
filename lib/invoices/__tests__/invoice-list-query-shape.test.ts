@@ -15,4 +15,10 @@ describe('invoice list query shape', () => {
     expect(source).toContain('.range(from, to)')
     expect(source).toContain('dedupeBy: (invoice) => invoice.id')
   })
+
+  it('embeds the begäran behind each invoice for the ROT/RUT column and filter (#2426)', () => {
+    expect(source).toContain(
+      'rot_rut_items:rot_rut_payout_request_items(request:rot_rut_payout_requests(id, status, created_at))',
+    )
+  })
 })
