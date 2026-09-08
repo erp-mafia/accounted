@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { aliasPatterns, type RuleMode, type RuleRow } from './model'
+import { aliasPatterns, postgrestFilterValue, type RuleMode, type RuleRow } from './model'
 
 /**
  * Regler data access (UI v2 PR 5). The rows are categorization_templates;
@@ -96,7 +96,7 @@ export async function listRuleMatches(
   const patterns = aliasPatterns(rule)
   if (patterns.length === 0) return []
   const yearStart = `${now.getFullYear()}-01-01`
-  const orFilter = patterns.map((p) => `description.ilike.%${p}%`).join(',')
+  const orFilter = patterns.map((p) => `description.ilike.${postgrestFilterValue(`%${p}%`)}`).join(',')
   const { data, error } = await supabase
     .from('transactions')
     .select('id, date, description, amount, currency, journal_entry_id')
