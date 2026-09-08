@@ -11,7 +11,7 @@ vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: { get: (...args: unknown[]) => registryGet(...args) },
 }))
 
-const limitResult = vi.fn()
+const rangeResult = vi.fn()
 vi.mock('@/lib/supabase/service-client', () => ({
   createServiceRoleClient: vi.fn(() => ({
     from: () => ({
@@ -19,7 +19,7 @@ vi.mock('@/lib/supabase/service-client', () => ({
         eq: () => ({
           eq: () => ({
             order: () => ({
-              limit: (...args: unknown[]) => limitResult(...args),
+              range: (...args: unknown[]) => rangeResult(...args),
             }),
           }),
         }),
@@ -57,7 +57,7 @@ beforeEach(() => {
   registryGet.mockReturnValue({ id: 'zettle' })
   isZettleConfigured.mockReturnValue(true)
   hasCapability.mockResolvedValue(true)
-  limitResult.mockResolvedValue({ data: [CONNECTION], error: null })
+  rangeResult.mockResolvedValue({ data: [CONNECTION], error: null })
   syncZettlePurchases.mockResolvedValue({
     fetched: 2,
     refundsFetched: 0,
@@ -87,5 +87,27 @@ describe('GET /api/extensions/zettle/orders/cron', () => {
     const body = await res.json()
     expect(body.processed).toBe(1)
     expect(body.inserted).toBe(2)
+  })
+
+  it('pages past a front of non-entitled connections so entitled ones still sync', async () => {
+    // Old limit(50) before hasCapability starved eligible rows behind 50 skips.
+    const notEntitled = Array.from({ length: 50 }, (_, i) => ({
+      id: `skip-${i}`,
+      company_id: `co-skip-${i}`,
+    }))
+    const entitled = { id: 'conn-entitled', company_id: 'company-entitled' }
+    rangeResult.mockResolvedValue({ data: [...notEntitled, entitled], error: null })
+    hasCapability.mockImplementation(async (_sb: unknown, companyId: string) => {
+      return companyId === 'company-entitled'
+    })
+
+    const res = await callRoute()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.processed).toBe(1)
+    expect(syncZettlePurchases).toHaveBeenCalledTimes(1)
+    expect(syncZettlePurchases.mock.calls[0][1]).toMatchObject(entitled)
+    // Skips must not touch last_order_synced_at (purchase recovery cursor).
+    expect(rangeResult).toHaveBeenCalledWith(0, 99)
   })
 })

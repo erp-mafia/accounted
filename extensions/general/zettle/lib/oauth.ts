@@ -61,6 +61,9 @@ async function postToken(body: URLSearchParams): Promise<ZettleTokenPair> {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
       body: body.toString(),
+      // Node fetch can replay POST bodies across 307/308 redirects, including
+      // cross-origin. Refuse redirects so client_secret never leaves oauth.zettle.com.
+      redirect: 'error',
     },
     { timeoutMs: OAUTH_TIMEOUT_MS, description: 'Zettle token exchange' },
   )

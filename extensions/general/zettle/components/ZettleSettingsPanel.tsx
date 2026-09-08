@@ -79,9 +79,11 @@ export default function ZettleSettingsPanel() {
     if (connected === 'true') {
       toast({ title: t('connected_toast_title'), description: t('connected_toast_description') })
     } else if (error) {
+      // searchParams.get already returns the decoded value; decoding again
+      // throws URIError when the message contains a literal % character.
       toast({
         title: t('connect_failed_title'),
-        description: decodeURIComponent(error),
+        description: error,
         variant: 'destructive',
       })
     }

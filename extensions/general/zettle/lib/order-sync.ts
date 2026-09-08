@@ -364,11 +364,23 @@ export async function syncZettlePurchases(
   try {
     const tokens = await refreshAccessToken(refreshTokenOf(connection))
     // Rotate the refresh token immediately (Zettle invalidates the old one).
+    // The write must succeed before we continue: losing the new token leaves
+    // only a dead refresh token for the next run and forces a reconnect.
     const encrypted = encryptCredential(tokens.refresh_token)
-    await supabase
+    const { error: rotateError } = await supabase
       .from('zettle_connections')
       .update({ refresh_token_encrypted: encrypted, error_message: null })
       .eq('id', connection.id)
+    if (rotateError) {
+      log.error('failed to persist rotated Zettle refresh token', rotateError, {
+        connectionId: connection.id,
+        message: rotateError.message,
+        code: rotateError.code,
+      })
+      throw new Error(
+        `Failed to persist rotated Zettle refresh token: ${rotateError.message}`,
+      )
+    }
     connection.refresh_token_encrypted = encrypted
 
     for (;;) {

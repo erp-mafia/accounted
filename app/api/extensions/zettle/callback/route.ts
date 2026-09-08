@@ -117,6 +117,9 @@ export async function GET(request: Request) {
     const tokens = await exchangeCodeForTokens(code)
     const userSelf = await fetchUserSelf(tokens.access_token)
 
+    // Require the row still be the original pending state. POST /connect can
+    // invalidate this row between lookup and activate; filtering only by id
+    // would revive the abandoned flow and attach the wrong Zettle org.
     const { data: updatedConnection, error: updateError } = await supabase
       .from('zettle_connections')
       .update({
@@ -130,16 +133,16 @@ export async function GET(request: Request) {
         transaction_sync_enabled: true,
       })
       .eq('id', pendingConnection.id)
+      .eq('status', 'pending')
+      .eq('oauth_state', state)
       .select('id, company_id, user_id, organization_uuid')
-      .single()
+      .maybeSingle()
 
-    if (updateError || !updatedConnection) {
-      const isConflict = updateError?.code === '23505'
+    if (updateError) {
+      const isConflict = updateError.code === '23505'
       console.error('[zettle] Failed to activate connection', {
         connectionId: pendingConnection.id,
-        error: updateError
-          ? { message: updateError.message, code: updateError.code }
-          : null,
+        error: { message: updateError.message, code: updateError.code },
       })
       await supabase
         .from('zettle_connections')
@@ -152,10 +155,20 @@ export async function GET(request: Request) {
           refresh_token_encrypted: null,
         })
         .eq('id', pendingConnection.id)
+        .eq('status', 'pending')
       return NextResponse.redirect(
         `${returnUrl}&zettle_error=${encodeURIComponent(
           isConflict ? 'account_already_connected' : 'activation_failed',
         )}`,
+      )
+    }
+
+    if (!updatedConnection) {
+      console.error('[zettle] Pending connection invalidated before activation', {
+        connectionId: pendingConnection.id,
+      })
+      return NextResponse.redirect(
+        `${returnUrl}&zettle_error=${encodeURIComponent('invalid_state')}`,
       )
     }
 
