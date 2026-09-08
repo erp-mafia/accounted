@@ -212,6 +212,15 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       description: 'Recalculate the lines so totals are equal before retrying.',
     },
   },
+  JOURNAL_LINE_NEGATIVE_AMOUNT: {
+    httpStatus: 400,
+    message_sv: 'En verifikationsrad har ett negativt belopp. Boka beloppet på motsatt sida i stället.',
+    message_en: 'A journal line has a negative amount. Book it on the opposite side instead.',
+    remediation: {
+      description:
+        'Every line carries one non-negative side: move a negative debit to credit_amount (and vice versa) before retrying.',
+    },
+  },
   FISCAL_PERIOD_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Räkenskapsperioden kunde inte hittas.',
