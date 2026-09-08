@@ -184,7 +184,9 @@ export const paymentBooksRevenueAndVat = env.test(
     expect(lines[2]?.account_number).toBe("3001");
     expect(lines[2]?.credit).toBe(LINE.subtotal);
     expect(lines[0]?.status).toBe("posted");
-    expect(lines[0]?.voucher_series).toBe("A");
+    // Customer payments book into series C (Inbetalningar från kunder) since the
+    // standard verifikationsserier landed (#2336, #2358).
+    expect(lines[0]?.voucher_series).toBe("C");
 
     const balance = await ctx.svc.supabase.sql<{ diff: string }>`
       select (sum(debit_amount) - sum(credit_amount))::text as diff

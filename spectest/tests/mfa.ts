@@ -44,7 +44,8 @@ export const enrolMfa = env.test(
       waitUntil: "load",
       timeout: 20000,
     });
-    await expect(b.getByRole("link", { name: "Hem", exact: true }).first()).toBeVisible();
+    // The sidebar's first item is "Hem" in the v1 shell and "Att göra" in v2.
+    await expect(b.getByRole("link", { name: /^(Hem|Att göra)$/ }).first()).toBeVisible();
 
     const factors = await ctx.svc.supabase.sql<{
       status: string;
@@ -94,7 +95,8 @@ export const signInWithMfa = env.test(
       timeout: 20000,
     });
     // Really inside the app, not on a half-rendered redirect.
-    await expect(b.getByRole("link", { name: "Hem", exact: true }).first()).toBeVisible();
+    // The sidebar's first item is "Hem" in the v1 shell and "Att göra" in v2.
+    await expect(b.getByRole("link", { name: /^(Hem|Att göra)$/ }).first()).toBeVisible();
 
     return ctx.parent;
   },
