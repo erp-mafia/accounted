@@ -204,10 +204,12 @@ export default function OnboardingJourney({
     [ticEnabled, shakeOrg, checkDuplicate],
   )
 
+  // The field keeps the name the user typed: writing the picked number into
+  // it would print a sole trader's personnummer in plain text on Back, the
+  // one thing the chip row avoids. Back re-searches the name instead.
   const pickSearchHit = useCallback(
     (hit: CompanySearchHit) => {
       dispatch({ type: 'SEARCH_HIT_PICKED', hit })
-      setOrgInput(hit.orgNumber)
       checkDuplicate(hit.orgNumber)
     },
     [checkDuplicate],
