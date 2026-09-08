@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
+import type { Metadata } from 'next'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
@@ -24,6 +25,7 @@ import { getAiStatus } from '@/lib/ai'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getBranding } from '@/lib/branding/service'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
+import { getRequestAppName } from '@/lib/branding/request-brand'
 import { resolveBrandDomainBounce } from '@/lib/auth/brand-signup-gate'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { resolveBrandsForTeams } from '@/lib/branding/team-brands'
@@ -32,6 +34,7 @@ import {
   isCompanyHomedOnHost,
   resolveCockpitHref,
 } from '@/lib/company/home-domain'
+import { getCompanyDisplayName } from '@/lib/company/context'
 import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
 import { PwaWorklistBadge } from '@/components/pwa/PwaWorklistBadge'
 import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
@@ -63,6 +66,25 @@ const MAIN_PANEL_CLASS =
   'md:min-h-0 md:ml-[var(--nav-w)] md:mt-[10px] md:mr-[var(--agent-dock-w)] md:h-[calc(100vh-20px)] ' +
   'md:overflow-y-auto md:rounded-xl md:border md:border-border ' +
   'md:transition-[margin-left,margin-right] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)]'
+
+/**
+ * Browser tab: `Accounted | Företagsnamn` when a company is active.
+ * Manifest / home-screen short name stays the product brand only.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const appName = await getRequestAppName()
+  try {
+    const { supabase, user } = await getDashboardAuthContext()
+    if (!user) return { title: appName }
+    const companyId = await getDashboardCompanyId()
+    if (!companyId) return { title: appName }
+    const companyName = await getCompanyDisplayName(supabase, companyId)
+    if (!companyName) return { title: appName }
+    return { title: `${appName} | ${companyName}` }
+  } catch {
+    return { title: appName }
+  }
+}
 
 export default async function DashboardLayout({
   children,
