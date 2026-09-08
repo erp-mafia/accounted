@@ -652,6 +652,7 @@ export default function JournalEntryList({
       // surfacing as a non-OK response, or the list stays dimmed forever.
       if (!isCurrent()) return
       setLoadFailed(true)
+      setMissingCount(null)
       setHasLoaded(true)
       toast({ title: t('load_failed_title'), variant: 'destructive' })
     } finally {

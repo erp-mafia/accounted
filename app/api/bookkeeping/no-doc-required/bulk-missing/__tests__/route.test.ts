@@ -8,6 +8,17 @@ vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn() }))
 vi.mock('@/lib/auth/require-write', () => ({ requireWritePermission: vi.fn() }))
 
+const { mockLogError } = vi.hoisted(() => ({ mockLogError: vi.fn() }))
+vi.mock('@/lib/logger', () => {
+  const logger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: mockLogError,
+    child: (): unknown => logger,
+  }
+  return { createLogger: () => logger }
+})
+
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
@@ -156,6 +167,20 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
     const { status, body } = await parseJsonResponse<{ data: { exempted: number } }>(res)
     expect(status).toBe(200)
     expect(body.data.exempted).toBe(2) // b and c
+  })
+
+  it('logs the driver error and answers with the mapped text when a lookup fails (#2395)', async () => {
+    enqueue({ data: [{ id: 'a' }], error: null }) // candidates
+    enqueue({ data: [], error: null }) // no documents
+    const driverError = { message: 'Request-URI Too Large', code: '414', details: null, hint: null }
+    enqueue({ data: null, error: driverError }) // SI by registration FK: gateway refused the URL
+    const res = await POST(makeReq({ dry_run: true }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(400)
+    expect(typeof body.error).toBe('string')
+    const call = mockLogError.mock.calls.find(([msg]) => msg === 'failed to resolve missing-underlag entries')
+    expect(call).toBeDefined()
+    expect(call![2]).toEqual({ cause: driverError })
   })
 
   it('short-circuits to 0 when no candidates match the filters', async () => {
