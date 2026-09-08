@@ -15,6 +15,7 @@ import { Loader2, Lock, X } from 'lucide-react'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getCountryOptions, normalizeCountryCode } from '@/lib/vat/country-codes'
+import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
 import { registryFormFill, type RegistryFormField } from '@/lib/parties/registry-form-fill'
 import { useRegistryAutofill } from '@/components/parties/use-registry-autofill'
 import { RegistryAutofillNote } from '@/components/parties/RegistryAutofillNote'
@@ -105,7 +106,9 @@ export default function SupplierForm({
       postal_code: initialData?.postal_code || '',
       city: initialData?.city || '',
       country: normalizeCountryCode(initialData?.country) ?? initialData?.country ?? 'SE',
-      org_number: initialData?.org_number || '',
+      // Stored as 10 digits, shown as XXXXXX-XXXX (the placeholder's shape);
+      // the API canonicalises what the user submits.
+      org_number: formatOrgNumberDisplay(initialData?.org_number),
       vat_number: initialData?.vat_number || '',
       bankgiro: initialData?.bankgiro || '',
       plusgiro: initialData?.plusgiro || '',
