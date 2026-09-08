@@ -152,6 +152,7 @@ export const supplierInvoiceReview = defineAgentIntent<
   },
 
   tools: [
+    'gnubok_list_accounts',
     'gnubok_get_supplier_ledger',
     'gnubok_query_journal',
     'gnubok_get_document_content',

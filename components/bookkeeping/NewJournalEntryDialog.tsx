@@ -7,6 +7,8 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogVeil,
+  useDashShellInert,
 } from '@/components/ui/dialog'
 import JournalEntryForm, { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
@@ -60,15 +62,29 @@ export default function NewJournalEntryDialog({
 }: Props) {
   const t = useTranslations('bookkeeping')
   const activeSkvPrefill = copyPrefill ? null : (skvPrefill ?? null)
+  // Page modality by hand: the shell behind the veil goes inert while the
+  // agent sheet stays live. See useDashShellInert in components/ui/dialog.tsx.
+  useDashShellInert(open)
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+      <DialogVeil />
       <DialogContent
         // Wide: the konteringsrader table (konto, radtext, debet, kredit,
         // saldo) is the point of this dialog, and at 3xl the amount columns
         // were squeezed against the account search. Capped at 6xl so it stays
-        // a dialog on an ultrawide screen.
-        className="sm:max-w-5xl lg:max-w-6xl max-h-[95dvh] sm:max-h-[92vh] overflow-y-auto"
+        // a dialog on an ultrawide screen, and at the space left of a docked
+        // agent sheet so the right-hand amount columns never end up under it
+        // (--agent-sheet-w is docked-only; with the sheet closed this is
+        // exactly 5xl/6xl).
+        className="sm:max-w-[min(64rem,calc(100vw-var(--agent-sheet-w,0px)))] lg:max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[95dvh] sm:max-h-[92vh] overflow-y-auto"
+        // Non-modal so the docked agent sheet (fixed z-[60], portaled outside
+        // this dialog) stays scrollable and typeable while a verifikat is being
+        // typed: a modal Radix dialog locks wheel/touch scroll and pointer
+        // events on everything outside its content, which froze the sheet at
+        // whatever scroll position it had when the dialog opened. Same
+        // convention as TransactionBookingDialog and NewInvoiceDialog.
+        //
         // A half-typed verifikat must survive an accidental backdrop click or a
         // stray Escape (easy to hit across multiple windows/screens, or when you
         // only meant to dismiss a combobox dropdown). Closing is explicit: the

@@ -48,6 +48,7 @@ export const vatReview = defineAgentIntent<VatReviewArgs, CapturedVatReview>({
   // Agent reads the actual Rutor via the tool; we don't capture them server-
   // side because the report is large and version-sensitive.
   tools: [
+    'gnubok_list_accounts',
     'gnubok_get_vat_report',
     'gnubok_vat_close_check',
     'gnubok_query_journal',

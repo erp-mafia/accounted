@@ -70,6 +70,7 @@ export const invoiceDraft = defineAgentIntent<InvoiceDraftArgs, CapturedInvoiceD
   },
 
   tools: [
+    'gnubok_list_accounts',
     'gnubok_list_customers',
     'gnubok_create_customer',
     'gnubok_load_skill',
