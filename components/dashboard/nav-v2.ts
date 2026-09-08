@@ -90,7 +90,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     ],
   },
   {
-    href: '/supplier-invoices',
+    href: '/purchases',
     labelKey: 'v2_purchases',
     icon: Wallet,
     sub: [
