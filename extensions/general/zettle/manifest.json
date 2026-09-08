@@ -1,0 +1,23 @@
+{
+  "id": "zettle",
+  "sector": "general",
+  "exportName": "zettleExtension",
+  "entryPoint": "@/extensions/general/zettle",
+  "workspace": null,
+  "requiredEnvVars": [
+    "ZETTLE_CLIENT_ID",
+    "ZETTLE_CLIENT_SECRET",
+    "ZETTLE_CREDENTIALS_ENCRYPTION_KEY"
+  ],
+  "optionalEnvVars": [],
+  "npmDependencies": [],
+  "definition": {
+    "name": "Zettle",
+    "category": "import",
+    "icon": "CreditCard",
+    "dataPattern": "manual",
+    "hasOwnData": true,
+    "description": "Hämta betalda köp och återbetalningar från Zettle till Ordersidan",
+    "longDescription": "Anslut ditt Zettle-konto så hämtas betalda köp och återbetalningar automatiskt varje natt till Ordersidan, med belopp, betalsätt, moms per sats och radunderlag. Inget bokförs automatiskt: du bokför varje köp själv från Ordersidan."
+  }
+}

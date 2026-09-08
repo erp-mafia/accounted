@@ -295,6 +295,14 @@ describe('POST /api/company/[id]/delete', () => {
         client_secret_encrypted: null,
       })
     )
+    expect(updateSpies.zettle_connections).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'revoked',
+        disconnected_at: expect.any(String),
+        refresh_token_encrypted: null,
+        oauth_state: null,
+      })
+    )
     expect(updateSpies.stripe_connections).toHaveBeenCalledWith(
       expect.objectContaining({
         status: 'revoked',
@@ -324,6 +332,7 @@ describe('POST /api/company/[id]/delete', () => {
     for (const table of [
       'woocommerce_connections',
       'shopify_connections',
+      'zettle_connections',
       'stripe_connections',
     ]) {
       expect(insertSpy).toHaveBeenCalledWith(
@@ -368,6 +377,9 @@ describe('POST /api/company/[id]/delete', () => {
     )
     expect(insertSpy).toHaveBeenCalledWith(
       expect.objectContaining({ table_name: 'shopify_connections' }),
+    )
+    expect(insertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ table_name: 'zettle_connections' }),
     )
   })
 })

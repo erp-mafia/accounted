@@ -1778,7 +1778,7 @@ export const BookTransactionSchema = z
 
 // ── Webshop orders (Orders page) ──────────────────────────────
 
-export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify'])
+export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify', 'zettle'])
 
 export const WebshopOrdersListQuerySchema = z.object({
   platform: WebshopPlatformSchema.optional(),
