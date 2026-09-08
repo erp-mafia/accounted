@@ -10,6 +10,7 @@ import {
   fetchPushEventSettings,
   fetchVapidPublicKey,
   getExistingPushSubscription,
+  isInstalledWebApp,
   isPushApiSupported,
   savePushEventSetting,
   sendTestPush,
@@ -32,15 +33,18 @@ const EVENT_ROWS: Array<{
   { key: 'missingUnderlagEnabled', label: 'pwa_push_event_missingUnderlagEnabled', help: 'pwa_push_event_missingUnderlagEnabled_help' },
 ]
 
+type PushUnavailableReason = 'unsupported' | 'not_installed' | 'no_vapid'
+
 /**
  * Konto: subscribe this browser to Web Push, plus per-event opt-outs.
- * Hidden when the extension is off, VAPID is missing, or the browser
- * cannot receive pushes (typical for a Safari tab that is not installed).
+ * Always shows the group after load: when push cannot run, an explanation
+ * row is shown instead of hiding the section (which looked like "VAPID
+ * missing" on iPhone).
  */
 export function PwaPushNotificationsSettings() {
   const t = useTranslations('settings')
   const { toast } = useToast()
-  const [available, setAvailable] = useState(false)
+  const [unavailable, setUnavailable] = useState<PushUnavailableReason | null>(null)
   const [vapidKey, setVapidKey] = useState<string | null>(null)
   const [subscribed, setSubscribed] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -52,14 +56,27 @@ export function PwaPushNotificationsSettings() {
     let active = true
     ;(async () => {
       try {
-        const key = await fetchVapidPublicKey()
-        if (!active) return
-        if (!key || !isPushApiSupported()) {
-          setAvailable(false)
+        if (!isPushApiSupported()) {
+          if (!active) return
+          // On iOS, PushManager only exists in the home-screen app. A Safari
+          // tab reports the same "unsupported" surface; steer users to install.
+          setUnavailable(isInstalledWebApp() ? 'unsupported' : 'not_installed')
           return
         }
+
+        const key = await fetchVapidPublicKey()
+        if (!active) return
+        if (!key) {
+          setUnavailable('no_vapid')
+          return
+        }
+
         setVapidKey(key)
-        setAvailable(true)
+        setUnavailable(null)
+
+        // Subscription probe must not gate the UI: iOS can leave the worker
+        // uncontrolled on first launch; getExistingPushSubscription times out
+        // and returns null instead of hanging.
         const [existing, settings] = await Promise.all([
           getExistingPushSubscription(),
           fetchPushEventSettings(),
@@ -68,7 +85,7 @@ export function PwaPushNotificationsSettings() {
         setSubscribed(!!existing)
         setEvents(settings)
       } catch {
-        if (active) setAvailable(false)
+        if (active) setUnavailable('unsupported')
       } finally {
         if (active) setLoading(false)
       }
@@ -135,7 +152,23 @@ export function PwaPushNotificationsSettings() {
     }
   }
 
-  if (loading || !available) return null
+  if (loading) return null
+
+  if (unavailable) {
+    const help =
+      unavailable === 'not_installed'
+        ? t('pwa_push_unavailable_not_installed')
+        : unavailable === 'no_vapid'
+          ? t('pwa_push_unavailable_no_vapid')
+          : t('pwa_push_unavailable_unsupported')
+    return (
+      <SettingsGroup label={t('pwa_push_group')} help={help}>
+        <SettingsRow label={t('pwa_push_label')} help={help}>
+          <span className="text-sm text-muted-foreground">{t('pwa_push_unavailable')}</span>
+        </SettingsRow>
+      </SettingsGroup>
+    )
+  }
 
   return (
     <SettingsGroup label={t('pwa_push_group')}>

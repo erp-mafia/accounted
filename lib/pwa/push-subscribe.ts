@@ -38,8 +38,15 @@ export function isPushApiSupported(): boolean {
   )
 }
 
+/** True when this document runs as an installed home-screen / standalone app. */
+export function isInstalledWebApp(): boolean {
+  if (typeof window === 'undefined') return false
+  if (window.matchMedia('(display-mode: standalone)').matches) return true
+  return (navigator as Navigator & { standalone?: boolean }).standalone === true
+}
+
 export async function fetchVapidPublicKey(): Promise<string | null> {
-  const res = await fetch(PUSH_SUBSCRIBE_PATH)
+  const res = await fetch(PUSH_SUBSCRIBE_PATH, { credentials: 'same-origin' })
   if (!res.ok) return null
   const body = (await res.json()) as { vapidPublicKey?: unknown }
   return typeof body.vapidPublicKey === 'string' && body.vapidPublicKey.length > 0
@@ -47,10 +54,40 @@ export async function fetchVapidPublicKey(): Promise<string | null> {
     : null
 }
 
+const SW_READY_TIMEOUT_MS = 8_000
+
+/**
+ * Register /sw.js if needed and wait until it can control this page.
+ * iOS home-screen PWAs often open before the worker controls the client;
+ * awaiting `ready` without a timeout hangs forever and used to hide the
+ * entire Push settings group.
+ */
+export async function ensurePushServiceWorker(): Promise<ServiceWorkerRegistration> {
+  if (!('serviceWorker' in navigator)) {
+    throw new Error('unsupported')
+  }
+  let registration = await navigator.serviceWorker.getRegistration('/')
+  if (!registration) {
+    registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' })
+  }
+  const ready = navigator.serviceWorker.ready
+  const timedOut = new Promise<never>((_, reject) => {
+    window.setTimeout(() => reject(new Error('sw-timeout')), SW_READY_TIMEOUT_MS)
+  })
+  return Promise.race([ready, timedOut])
+}
+
 export async function getExistingPushSubscription(): Promise<PushSubscription | null> {
   if (!isPushApiSupported()) return null
-  const registration = await navigator.serviceWorker.ready
-  return registration.pushManager.getSubscription()
+  try {
+    // Probe only: do not register or wait for control. Init used to hang on
+    // `ready` and hide the whole Push settings group on iOS first launch.
+    const registration = await navigator.serviceWorker.getRegistration('/')
+    if (!registration) return null
+    return registration.pushManager.getSubscription()
+  } catch {
+    return null
+  }
 }
 
 async function persistSubscription(subscription: PushSubscription): Promise<void> {
@@ -68,10 +105,12 @@ async function persistSubscription(subscription: PushSubscription): Promise<void
 
 export async function subscribeToPush(vapidPublicKey: string): Promise<void> {
   if (!isPushApiSupported()) throw new Error('unsupported')
+  // Ask permission before any other await: iOS drops the user-gesture if we
+  // spend it on service-worker registration first.
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') throw new Error('permission-denied')
 
-  const registration = await navigator.serviceWorker.ready
+  const registration = await ensurePushServiceWorker()
   let subscription = await registration.pushManager.getSubscription()
   if (!subscription) {
     subscription = await registration.pushManager.subscribe({
