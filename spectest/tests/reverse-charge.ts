@@ -51,8 +51,11 @@ async function createEuCustomer(
   await b.locator("#name").fill(name);
   await b.locator("#email").fill(GERMAN_CUSTOMER.email);
   // The country defaults to Sweden and is never reconciled against the
-  // customer type or the VAT prefix (#2025), so set it explicitly.
-  await b.locator("#country").fill(country);
+  // customer type or the VAT prefix (#2025), so set it explicitly. Since
+  // #2241 the field is a select of ISO countries, labelled in Swedish.
+  const countryLabel: Record<string, string> = { Germany: "Tyskland", Sweden: "Sverige" };
+  await b.locator("#country").click();
+  await b.getByRole("option", { name: countryLabel[country] ?? country, exact: true }).click();
   // The VAT field only renders for a foreign business customer, which is the
   // first thing this proves.
   await b.locator("#vat_number").fill(vatNumber);
