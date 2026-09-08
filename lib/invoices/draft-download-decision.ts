@@ -3,8 +3,9 @@ import type { Invoice } from '@/types'
 /**
  * What "Ladda ner PDF" should do for a document that is not yet issued.
  *
- * The renderer watermarks every status='draft' document "UTKAST". That
- * stamp is correct: an unbooked invoice is not issued. The
+ * The renderer watermarks every status='draft' document "UTKAST" ("DRAFT"
+ * on an English document). That stamp is correct: an unbooked invoice is
+ * not issued. The
  * problem (#2399) is that nothing said so before the file was on disk, and
  * the stamped PDF was mailed to customers by mistake. So the download asks
  * first, and offers the path that produces the real document.
