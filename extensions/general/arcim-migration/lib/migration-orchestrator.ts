@@ -920,7 +920,9 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
 
           // Need to create a minimal supplier: dedupe the same way as customers.
-          const key = (supplierOrgNumber ?? `name:${inv.supplier.name.toLowerCase()}`).trim()
+          const key = (
+            supplierOrgNumber ? orgMapKey(supplierOrgNumber) : `name:${inv.supplier.name.toLowerCase()}`
+          ).trim()
           let stub = stubByKey.get(key)
           if (!stub) {
             const supplierType = inferTypeFromParty(inv.supplier)

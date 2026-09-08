@@ -3,16 +3,16 @@ import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { SupplierImportExecuteSchema } from '@/lib/api/schemas'
-import { normalizeOrgNumber as digitsOfOrgNumber, normalizeEmail } from '@/lib/import/shared/column-utils'
+import { normalizeEmail } from '@/lib/import/shared/column-utils'
 import { orgNumberKey } from '@/lib/invariants/org-number'
 
 /**
  * Dedup key for an org number: the Swedish 10-digit key when the value is
  * one (so a 12-digit CSV value finds the stored 10-digit row, #2391), else
- * the digits as before.
+ * the value as typed, so BE0123456789 and FR0123456789 stay two suppliers.
  */
 const orgDedupKey = (value: string | null): string | null =>
-  orgNumberKey(value) ?? digitsOfOrgNumber(value)
+  orgNumberKey(value) ?? (value?.trim() || null)
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'

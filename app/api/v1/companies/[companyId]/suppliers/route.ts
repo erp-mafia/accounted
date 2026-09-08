@@ -81,7 +81,7 @@ registerEndpoint({
           name: 'Office Depot AB',
           supplier_type: 'swedish_business',
           email: 'invoices@officedepot.example',
-          org_number: '556677-8899',
+          org_number: '5566778899',
           vat_number: 'SE556677889901',
           default_payment_terms: 30,
           default_currency: 'SEK',
@@ -289,7 +289,9 @@ registerEndpoint({
         name: 'Office Depot AB',
         supplier_type: 'swedish_business',
         email: 'invoices@officedepot.example',
-        org_number: '556677-8899',
+        // Stored and returned as the 10-digit key; the request above shows
+        // the accepted hyphenated input.
+        org_number: '5566778899',
         bankgiro: '123-4567',
         default_expense_account: '5410',
         default_payment_terms: 30,

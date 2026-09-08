@@ -15,8 +15,8 @@ import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Lock, Truck } from 'lucide-react'
 import Link from 'next/link'
-import { cn, formatOrgNumber } from '@/lib/utils'
-import { stripOrgNumberFormatting } from '@/lib/invariants/org-number'
+import { cn } from '@/lib/utils'
+import { formatOrgNumberDisplay, stripOrgNumberFormatting } from '@/lib/invariants/org-number'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { SuggestionsAttn } from '@/components/parties/SuggestionsAttn'
@@ -254,7 +254,7 @@ export default function SuppliersPage() {
                         {supplier.email || ''}
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>
-                        {supplier.org_number ? formatOrgNumber(supplier.org_number) : ''}
+                        {formatOrgNumberDisplay(supplier.org_number)}
                       </td>
                     </tr>
                   )
