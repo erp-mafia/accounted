@@ -284,11 +284,34 @@ describe('POST /api/invoices/[id]/convert', () => {
       expect(mockSupabase.rpc).not.toHaveBeenCalled()
     })
 
+    it('refuses while a live kundorder was created from the quote (invoice from the order instead)', async () => {
+      // 1. fetch quote
+      enqueue({ data: baseQuote, error: null })
+      // 2. no converted invoice
+      enqueue({ data: null, error: null })
+      // 3. one live sales order with source_invoice_id = quote
+      enqueue({ data: null, count: 1, error: null })
+
+      const response = await POST(
+        createMockRequest('/api/invoices/q-1/convert', { method: 'POST' }),
+        createMockRouteParams({ id: 'q-1' })
+      )
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_ORDERED')
+      expect(findCalls('sales_orders', 'eq')).toContainEqual(['source_invoice_id', 'q-1'])
+      expect(findCall('invoices', 'insert')).toBeUndefined()
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    })
+
     it('creates the invoice with a due date from the customer terms, marks the quote accepted and keeps it', async () => {
       // 1. fetch quote
       enqueue({ data: baseQuote, error: null })
       // 2. no existing conversion
       enqueue({ data: null, error: null })
+      // 2b. no live sales order from the quote
+      enqueue({ data: null, count: 0, error: null })
       // 3. insert invoice
       enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null })
       // 4. insert items
@@ -351,6 +374,7 @@ describe('POST /api/invoices/[id]/convert', () => {
       mockFetchExchangeRate.mockResolvedValue({ rate: 11.45, date: '2026-07-28' })
       enqueue({ data: eurQuote, error: null }) // fetch quote
       enqueue({ data: null, error: null }) // no existing conversion
+      enqueue({ data: null, count: 0, error: null }) // no live sales order
       enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null })
       enqueue({ data: null, error: null }) // items
       enqueue({ data: [{ id: 'q-eur' }], error: null }) // quote -> accepted
@@ -377,6 +401,7 @@ describe('POST /api/invoices/[id]/convert', () => {
       mockFetchExchangeRate.mockResolvedValue(null)
       enqueue({ data: eurQuote, error: null })
       enqueue({ data: null, error: null })
+      enqueue({ data: null, count: 0, error: null }) // no live sales order
 
       const response = await POST(
         createMockRequest('/api/invoices/q-eur/convert', { method: 'POST' }),
@@ -393,6 +418,7 @@ describe('POST /api/invoices/[id]/convert', () => {
   it('maps the one-live-conversion unique index violation to INVOICE_QUOTE_ALREADY_INVOICED', async () => {
     enqueue({ data: { ...baseProforma, id: 'q-1', document_type: 'quote', status: 'sent', quote_status: 'open', customer: { default_payment_terms: 30 } }, error: null })
     enqueue({ data: null, error: null }) // existence check passed (race)
+    enqueue({ data: null, count: 0, error: null }) // no live sales order
     enqueue({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_invoices_one_live_conversion"' } })
 
     const response = await POST(
@@ -403,6 +429,23 @@ describe('POST /api/invoices/[id]/convert', () => {
 
     expect(status).toBe(409)
     expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_INVOICED')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('maps the converted-source guard trigger (a kundorder went live meanwhile) to INVOICE_QUOTE_ALREADY_ORDERED', async () => {
+    enqueue({ data: { ...baseProforma, id: 'q-1', document_type: 'quote', status: 'sent', quote_status: 'accepted', customer: { default_payment_terms: 30 } }, error: null })
+    enqueue({ data: null, error: null }) // no converted invoice
+    enqueue({ data: null, count: 0, error: null }) // no live order at pre-check time (race)
+    enqueue({ data: null, error: { code: 'P0001', message: 'INVOICE_QUOTE_ALREADY_ORDERED: quote q-1 has a live kundorder' } })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/q-1/convert', { method: 'POST' }),
+      createMockRouteParams({ id: 'q-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_ORDERED')
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
