@@ -151,7 +151,12 @@ export async function correctEntry(
      */
     allowDeepChain?: boolean
   }
-): Promise<{ reversal: JournalEntry; corrected: JournalEntry; documentRelinkError?: string }> {
+): Promise<{
+  reversal: JournalEntry
+  corrected: JournalEntry
+  transactionRelinkError?: string
+  documentRelinkError?: string
+}> {
   // Validate the corrected lines are balanced
   const balance = validateBalance(correctedLines)
   if (!balance.valid) {
@@ -457,10 +462,15 @@ export async function correctEntry(
   // live representation of the affärshändelse, so the transaction row should
   // keep reading as booked against it (and stay correctable/uncategorizable),
   // and the underlag should travel with it. Best-effort: the correction_of_id
-  // chain preserves traceability even if either relink fails, but a document
-  // relink failure is surfaced on the result so the caller can warn instead
-  // of silently stranding underlag on the reversed entry.
-  await relinkTransactionsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
+  // chain preserves traceability even if either relink fails, but a relink
+  // failure is surfaced on the result so the caller can warn instead of
+  // silently stranding a bank row or underlag on the reversed entry.
+  const transactionRelinkError = await relinkTransactionsToEntry(
+    supabase,
+    companyId,
+    originalEntryId,
+    correctedEntry!.id
+  )
   const documentRelinkError = await relinkDocumentsToEntry(
     supabase,
     userId,
@@ -484,6 +494,7 @@ export async function correctEntry(
   const result = {
     reversal: finalReversal as JournalEntry,
     corrected: finalCorrected as JournalEntry,
+    ...(transactionRelinkError ? { transactionRelinkError } : {}),
     ...(documentRelinkError ? { documentRelinkError } : {}),
   }
 
@@ -610,25 +621,55 @@ export async function recordateEntry(
  * Re-point every bank transaction from one entry to another. Used when a
  * verifikation is corrected so the transaction row keeps reading as booked
  * against the live (corrected) entry instead of the reversed original.
- * Failures are logged, not thrown: the correction chain stays traceable.
+ *
+ * A bank row has two anchors and both must follow the correction: the
+ * pointer column (transactions.journal_entry_id, the 1:1 case) and the
+ * transaction_voucher_links junction (bulk-book writes a bank_line row beside
+ * the pointer for N=1 and as the ONLY anchor for a samlingsverifikat with
+ * N>1; 1:N splits and residual bookings anchor through it too). Every junction
+ * reader (is_transaction_booked(), fetchJunctionLinkedTxIds, the bulk_book
+ * RPC, the reconciliation bridge) treats a surviving link as an anchor, so a
+ * link left on the reversed original keeps the row double-anchored: a later
+ * storno of the correction releases the pointer while the stale link keeps
+ * the row out of Att bokföra (#2364, the split #2061 fixed on the storno
+ * path). The links are re-pointed, not deleted: for a samlingsverifikat the
+ * junction is the only anchor, and deleting it would push rows the corrected
+ * verifikat still explains back into the worklist. role and allocated_amount
+ * describe the bank row's share of the affärshändelse and are unchanged by
+ * the correction.
+ *
+ * Failures are logged, not thrown (the correction chain stays traceable),
+ * but the message is returned so correctEntry can surface a warning.
  */
 async function relinkTransactionsToEntry(
   supabase: SupabaseClient,
   companyId: string,
   fromEntryId: string,
   toEntryId: string
-): Promise<void> {
-  const { error } = await supabase
+): Promise<string | undefined> {
+  const { error: pointerError } = await supabase
     .from('transactions')
     .update({ journal_entry_id: toEntryId })
     .eq('company_id', companyId)
     .eq('journal_entry_id', fromEntryId)
-  if (error) {
+  if (pointerError) {
     console.error(
       `[storno] relinkTransactionsToEntry: failed to move transactions ${fromEntryId} → ${toEntryId}:`,
-      error.message
+      pointerError.message
     )
   }
+  const { error: junctionError } = await supabase
+    .from('transaction_voucher_links')
+    .update({ journal_entry_id: toEntryId })
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', fromEntryId)
+  if (junctionError) {
+    console.error(
+      `[storno] relinkTransactionsToEntry: failed to move voucher links ${fromEntryId} → ${toEntryId}:`,
+      junctionError.message
+    )
+  }
+  return pointerError?.message ?? junctionError?.message
 }
 
 /**
