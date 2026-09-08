@@ -399,6 +399,61 @@ export async function closePeriod(
   return updated as FiscalPeriod
 }
 
+/** Max journal_entry ids per `.in()` filter: keeps the request URL short. */
+const RESULT_LINE_CHECK_CHUNK_SIZE = 100
+
+interface PeriodLedgerShape {
+  /** Number of journal entries dated inside the period, any source_type. */
+  entryCount: number
+  /** Whether any of their lines sits on a result account (BAS class 3-8). */
+  hasResultLines: boolean
+}
+
+/**
+ * How much bookkeeping the period holds and whether any of it sits on a
+ * result account (BAS class 3-8), i.e. whether a bokslutsverifikat would
+ * have anything to transfer. An existence check, not a fetch: entries are
+ * read id-only, and lines are head-counted per id chunk with early exit, so
+ * a natively bookkept year answers on its first chunk. Two-step by design;
+ * see lib/bookkeeping/entry-lines.ts for why the `journal_entries!inner`
+ * embed is avoided. Throws on any query error so the caller fails closed.
+ */
+async function inspectPeriodLedger(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<PeriodLedgerShape> {
+  const entries = await fetchAllRows<{ id: string }>(
+    ({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select('id')
+        .eq('company_id', companyId)
+        .gte('entry_date', periodStart)
+        .lte('entry_date', periodEnd)
+        .order('id', { ascending: true })
+        .range(from, to),
+    { dedupeBy: (e) => e.id },
+  )
+  for (let i = 0; i < entries.length; i += RESULT_LINE_CHECK_CHUNK_SIZE) {
+    const chunk = entries.slice(i, i + RESULT_LINE_CHECK_CHUNK_SIZE).map((e) => e.id)
+    const { count, error } = await supabase
+      .from('journal_entry_lines')
+      .select('id', { count: 'exact', head: true })
+      .in('journal_entry_id', chunk)
+      // Account numbers are strings, so these are text comparisons on the
+      // BAS class digit: classes 3-8 sort at or above '3' and below '9';
+      // classes 1-2 (balance sheet) sort below '3', class 9 (interna
+      // poster, never transferred by a bokslut) at or above '9'.
+      .gte('account_number', '3')
+      .lt('account_number', '9')
+    if (error) throw error
+    if ((count ?? 0) > 0) return { entryCount: entries.length, hasResultLines: true }
+  }
+  return { entryCount: entries.length, hasResultLines: false }
+}
+
 /**
  * Mark a fiscal period as closed in a previous bookkeeping system
  * ("klarmarkera"). Imported historical years (SIE) arrive with
@@ -454,10 +509,20 @@ export async function markPeriodClosedExternally(
 
   // Klarmarkera exists for MIGRATED years. A period bookkept natively in
   // Accounted must go through the real year-end: closing it without a
-  // bokslutsverifikat leaves 3xxx-8xxx untransferred (BFL 5-6 kap) with no
-  // clean way back once locked. "Migrated" is read from the ledger itself:
-  // the period either contains SIE-imported verifikat (source_type='import')
-  // or no verifikat at all (year closed elsewhere and never imported here).
+  // bokslutsverifikat leaves 3xxx-8xxx untransferred and the next year
+  // without IB (BFL 5-6 kap), with no clean way back once locked.
+  // "Migrated" is read from the ledger itself. The period passes when it
+  // contains SIE-imported verifikat (source_type='import'), or when it holds
+  // no verifikat at all (year closed elsewhere, never imported here), or
+  // when its native verifikat touch balance-sheet accounts only AND the
+  // next period already carries its IB. That third leg is the migrated
+  // first year whose SIE import failed and whose owner re-keyed the opening
+  // voucher (1930/2081 aktiekapital) by hand: nothing for a bokslut to
+  // transfer, the balances already continue into the next year, and the
+  // normal year-end refuses on exactly that IB (NEXT_PERIOD_HAS_IB). Until
+  // this leg existed the year could not be closed by any path. A native
+  // balance-sheet-only year whose next period lacks IB stays refused: there
+  // the normal year-end works and is what carries the balances forward.
   const { count: importedCount, error: importedError } = await supabase
     .from('journal_entries')
     .select('id', { count: 'exact', head: true })
@@ -469,19 +534,29 @@ export async function markPeriodClosedExternally(
     throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
   }
   if ((importedCount ?? 0) === 0) {
-    const { count: totalCount, error: totalError } = await supabase
-      .from('journal_entries')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .gte('entry_date', period.period_start)
-      .lte('entry_date', period.period_end)
-    if (totalError) {
+    let ledger: PeriodLedgerShape
+    try {
+      ledger = await inspectPeriodLedger(
+        supabase,
+        companyId,
+        period.period_start,
+        period.period_end,
+      )
+    } catch {
       throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
     }
-    if ((totalCount ?? 0) > 0) {
+    if (ledger.hasResultLines) {
       throw new Error(
-        'Perioden innehåller bokföring skapad i Accounted och inga importerade verifikat. Använd det vanliga årsbokslutet i stället.'
+        'Perioden innehåller resultatkonton (3000-8999) bokförda i Accounted och inga importerade verifikat. Använd det vanliga årsbokslutet i stället, så att årets resultat förs över.'
       )
+    }
+    if (ledger.entryCount > 0) {
+      const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
+      if (!nextPeriod?.opening_balance_entry_id) {
+        throw new Error(
+          'Perioden innehåller bokföring skapad i Accounted och nästa räkenskapsår saknar ingående balanser. Använd det vanliga årsbokslutet i stället, så förs balanserna över.'
+        )
+      }
     }
   }
 

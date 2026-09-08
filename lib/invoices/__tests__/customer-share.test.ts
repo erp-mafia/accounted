@@ -85,3 +85,26 @@ describe('invoiceCustomerOutstanding', () => {
     }
   })
 })
+
+describe('invoiceCustomerShare with a reclaimed deduction (rot_rut_reclaim)', () => {
+  it('adds the refused share back onto the customer', () => {
+    // Skatteverket refused 2 500 of the 7 500: the customer owes 17 500 + 2 500.
+    expect(invoiceCustomerShare({ ...rot, deduction_reclaimed_total: 2500 })).toBe(20000)
+    // Full avslag: the whole invoice is the customer's again.
+    expect(invoiceCustomerShare({ ...rot, deduction_reclaimed_total: 7500 })).toBe(25000)
+  })
+
+  it('treats null, undefined and zero reclaimed as nothing reclaimed', () => {
+    expect(invoiceCustomerShare({ ...rot, deduction_reclaimed_total: null })).toBe(17500)
+    expect(invoiceCustomerShare({ ...rot, deduction_reclaimed_total: undefined })).toBe(17500)
+    expect(invoiceCustomerShare({ ...rot, deduction_reclaimed_total: 0 })).toBe(17500)
+  })
+
+  it('never reclaims more than the deduction (CHECK twin)', () => {
+    expect(invoiceCustomerShare({ ...rot, deduction_reclaimed_total: 9000 })).toBe(25000)
+  })
+
+  it('feeds the outstanding: customer paid their share, refused share is open', () => {
+    expect(invoiceCustomerOutstanding({ ...rot, deduction_reclaimed_total: 2500 }, 17500)).toBe(2500)
+  })
+})

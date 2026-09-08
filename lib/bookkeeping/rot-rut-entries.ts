@@ -132,3 +132,78 @@ export async function createRotRutPayoutEntry(
     ],
   })
 }
+
+/**
+ * Reclaim voucher for the share of a begäran Skatteverket refused.
+ *
+ * The 1513 fordran booked at issue was never paid by Skatteverket, so it is
+ * the buyer's again (HUSFL 2009:194; swedish-invoice-compliance section 8:
+ * "SKV denies: Debit 1510, Credit 1513"):
+ *
+ *   Debit  1510 Kundfordringar               [refused share, per invoice]
+ *   Credit 1513 Skattereduktion rot/rut      [refused share, per invoice]
+ *
+ * One voucher per begäran (source_id = request id, guarded by the partial
+ * unique index journal_entries_rot_rut_reclaim_live_unique), one 1510 and one
+ * 1513 leg per invoice so the kundreskontra can be read per faktura.
+ */
+export interface RotRutReclaimLeg {
+  invoiceId: string
+  invoiceNumber: string | null
+  /** The refused share for this invoice (kr). */
+  amount: number
+}
+
+export async function createRotRutReclaimEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  params: {
+    requestId: string
+    requestName: string
+    deductionType: 'rot' | 'rut'
+    bookingDate: string
+    /** One leg per invoice with a refused share; at least one, all > 0. */
+    legs: RotRutReclaimLeg[]
+  },
+): Promise<JournalEntry> {
+  const legs = params.legs
+    .map((leg) => ({ ...leg, amount: roundOre(leg.amount) }))
+    .filter((leg) => leg.amount > 0)
+  if (legs.length === 0) {
+    throw new Error('A rot/rut reclaim voucher needs at least one refused share')
+  }
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, params.bookingDate)
+  if (!fiscalPeriodId) {
+    throw new Error(`No open fiscal period found for booking date ${params.bookingDate}`)
+  }
+
+  const label = params.deductionType === 'rut' ? 'RUT' : 'ROT'
+  const description = `Nekat ${label}-avdrag från Skatteverket (${params.requestName})`
+  const legDescription = (leg: RotRutReclaimLeg) =>
+    `Nekat ${label}-avdrag faktura ${leg.invoiceNumber ?? leg.invoiceId}`
+
+  const input: CreateJournalEntryInput = {
+    fiscal_period_id: fiscalPeriodId,
+    entry_date: params.bookingDate,
+    description,
+    source_type: 'rot_rut_reclaim',
+    source_id: params.requestId,
+    lines: [
+      ...legs.map((leg) => ({
+        account_number: '1510',
+        debit_amount: leg.amount,
+        credit_amount: 0,
+        line_description: legDescription(leg),
+      })),
+      ...legs.map((leg) => ({
+        account_number: '1513',
+        debit_amount: 0,
+        credit_amount: leg.amount,
+        line_description: legDescription(leg),
+      })),
+    ],
+  }
+
+  return createJournalEntry(supabase, companyId, userId, input)
+}

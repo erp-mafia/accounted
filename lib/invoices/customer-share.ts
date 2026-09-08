@@ -12,8 +12,14 @@
  * drifted (#2248: the kontantmetod cut-off compared payments against the
  * gross total). It now lives here and in exactly one SQL twin:
  *
- *   invoices_remaining_amount_guard (migration 20260817191708)
- *   remaining_amount = GREATEST(0, ROUND(total - paid_amount - deduction_total, 2))
+ *   invoices_derive_remaining_amount (migrations 20260817191708, 20260907160000)
+ *   remaining_amount = GREATEST(0, ROUND(total - paid_amount - deduction_total
+ *                                        + deduction_reclaimed_total, 2))
+ *
+ * deduction_reclaimed_total is the part of the deduction Skatteverket refused
+ * and that a rot_rut_reclaim voucher moved back onto the customer (debit 1510
+ * / credit 1513): from then on it IS the customer's to pay, while the invoice
+ * document keeps the deduction it was issued with.
  *
  * Change both or neither. The guard floors at zero because it persists the
  * column; the functions here return the signed value and each writer applies
@@ -32,10 +38,18 @@ export interface CustomerShareInvoice {
    * Null, undefined and 0 all mean "no deduction".
    */
   deduction_total?: number | null
+  /**
+   * The part of the deduction Skatteverket refused and that was booked back
+   * onto the customer (rot_rut_reclaim). Positive magnitude, never above the
+   * deduction (CHECK invoices_deduction_reclaimed_total_check). Null,
+   * undefined and 0 all mean "nothing reclaimed".
+   */
+  deduction_reclaimed_total?: number | null
 }
 
 /**
- * What the customer owes on the invoice: total minus the ROT/RUT deduction.
+ * What the customer owes on the invoice: total minus the ROT/RUT deduction,
+ * plus whatever part of that deduction Skatteverket later refused.
  *
  * The deduction follows the sign of the total, so a credited ROT invoice
  * (total -25 000, deduction_total 7 500) owes the customer -17 500 back and
@@ -47,7 +61,9 @@ export function invoiceCustomerShare(invoice: CustomerShareInvoice): number {
   // `!(x > 0)` also catches NaN: a non-numeric deduction reads as none rather
   // than poisoning every downstream amount.
   if (!(deduction > 0)) return invoice.total
-  return roundOre(invoice.total - Math.sign(invoice.total) * deduction)
+  const reclaimedRaw = Math.abs(invoice.deduction_reclaimed_total ?? 0)
+  const reclaimed = reclaimedRaw > 0 ? Math.min(reclaimedRaw, deduction) : 0
+  return roundOre(invoice.total - Math.sign(invoice.total) * (deduction - reclaimed))
 }
 
 /**

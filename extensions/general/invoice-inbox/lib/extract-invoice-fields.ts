@@ -17,6 +17,7 @@ import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { InvoiceExtractionResult } from '@/types'
 import { getAiService, readAiConfig, extractJsonObject } from '@/lib/ai'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
 
@@ -234,21 +235,15 @@ export function promoteSingleProminentAmount(
   }
 }
 
-/** Digits only; the comparable core of an org/VAT number. */
+/** Digits only; the comparable core of a VAT number. */
 const digitsOf = (value: string | null | undefined): string => (value ?? '').replace(/\D/g, '')
 
 /**
  * Canonical 10-digit form of a Swedish organisation number, or '' when the
- * input is not one. The 12-digit century-prefixed forms denote the same
- * identity: "16" for organisations, "19"/"20" for personnummer-form numbers
- * (enskild firma stores the owner's personnummer as org number). Junk that is
- * not 10 digits after trimming never matches anything.
+ * input is not one: the same key the supplier matcher compares through
+ * (lib/invariants/org-number.ts). Junk never matches anything.
  */
-function toOrg10(digits: string): string {
-  const trimmed =
-    digits.length === 12 && /^(16|19|20)/.test(digits) ? digits.slice(2) : digits
-  return trimmed.length === 10 ? trimmed : ''
-}
+const toOrg10 = (value: string | null | undefined): string => orgNumberKey(value) ?? ''
 
 /**
  * Never present the receiving company as its own supplier.
@@ -268,8 +263,8 @@ export function stripOwnCompanyAsSupplier(
   own: OwnCompanyIdentity | undefined
 ): InvoiceExtractionResult {
   if (!own) return data
-  const ownOrg10 = toOrg10(digitsOf(own.orgNumber))
-  const extractedOrg10 = toOrg10(digitsOf(data.supplier.orgNumber))
+  const ownOrg10 = toOrg10(own.orgNumber)
+  const extractedOrg10 = toOrg10(data.supplier.orgNumber)
   const extractedVat = digitsOf(data.supplier.vatNumber)
   const orgHit = ownOrg10 !== '' && extractedOrg10 !== '' && extractedOrg10 === ownOrg10
   const vatHit = ownOrg10 !== '' && extractedVat === `${ownOrg10}01`

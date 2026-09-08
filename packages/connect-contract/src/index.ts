@@ -10,8 +10,9 @@ import { z } from 'zod'
  * lookup, the migration sources.
  *
  * Everything here is shape, never behaviour: constants, Zod schemas and the
- * TypeScript types inferred from them. Both sides validate with the same
- * schemas so they cannot drift apart. The package is MIT so that anyone may
+ * TypeScript types inferred from them, plus the one normalizer that keeps a
+ * provider field on that shape (normalizeBankTransactionCode). Both sides
+ * validate with the same schemas so they cannot drift apart. The package is MIT so that anyone may
  * implement either side of it: a self-hosted ledger talking to Accounted
  * Connect, or an alternative connector service talking to the open ledger.
  *
@@ -19,7 +20,7 @@ import { z } from 'zod'
  * breaking change is a new operation or family name, never a changed one.
  */
 
-export const CONTRACT_VERSION = '2026-09-03'
+export const CONTRACT_VERSION = '2026-09-08'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -151,6 +152,49 @@ export const normalizedBankTransactionSchema = z.object({
   proprietary_bank_transaction_code: z.string().nullable(),
 })
 export type NormalizedBankTransaction = z.infer<typeof normalizedBankTransactionSchema>
+
+/**
+ * Enable Banking sends `bank_transaction_code` (and, in principle,
+ * `proprietary_bank_transaction_code`) as an object
+ * `{ description, code, sub_code }`, not as the string both sides declared.
+ * Swedish ASPSPs leave `code` null and put the only signal in `description`
+ * ("Card purchase", "Swish", "Kortköp/uttag"). The wire field is a string, so
+ * every producer (the Connect service and a ledger's direct Enable Banking
+ * path) flattens with this one rule before the value reaches
+ * `normalizedBankTransactionSchema` or a ledger column:
+ *
+ *   object with `code`  -> `code`, or `code/sub_code` when a sub-code exists
+ *   object without code -> `description`
+ *   string              -> trimmed as is
+ *   anything else       -> null
+ *
+ * Shared here rather than copied per producer so the two sides cannot drift:
+ * the 2026-09-03 outage was exactly that drift (Connect forwarded the object,
+ * the ledger rejected it, and the direct path had been storing the object's
+ * JSON text since 2026-08-09).
+ */
+export function normalizeBankTransactionCode(input: unknown): string | null {
+  if (typeof input === 'string') {
+    const trimmed = input.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const record = input as Record<string, unknown>
+    const text = (key: string): string | null => {
+      const value = record[key]
+      if (typeof value !== 'string') return null
+      const trimmed = value.trim()
+      return trimmed.length > 0 ? trimmed : null
+    }
+    const code = text('code')
+    if (code) {
+      const subCode = text('sub_code')
+      return subCode ? `${code}/${subCode}` : code
+    }
+    return text('description')
+  }
+  return null
+}
 
 export const bankSyncResponseSchema = z.object({
   transactions: z.array(normalizedBankTransactionSchema),

@@ -1457,6 +1457,12 @@ export interface Invoice {
   deduction_total?: number
   deduction_personnummer_encrypted?: string | null
   deduction_personnummer_last4?: string | null
+  // The part of `deduction_total` Skatteverket refused and that was moved
+  // back onto the customer by a rot_rut_reclaim voucher (debit 1510 / credit
+  // 1513). The document keeps its printed deduction; the customer share is
+  // total - deduction_total + deduction_reclaimed_total (customer-share.ts).
+  // NOT NULL DEFAULT 0 in the schema; optional here for legacy fixtures.
+  deduction_reclaimed_total?: number
 
   // Default dimensions bag ({sie_dim_no: code}) applied to every journal line
   // generated from this invoice (issuance, payment, credit); item-level
@@ -1836,6 +1842,10 @@ export type JournalEntrySourceType =
   | 'webshop_order'
   | 'expense_claim'
   | 'expense_payout'
+  // Skatteverket refused (part of) a ROT/RUT begäran: the refused share moves
+  // from 1513 back onto the customer (debit 1510 / credit 1513) and the
+  // invoice reopens for that amount. lib/invoices/rot-rut-reclaim.ts.
+  | 'rot_rut_reclaim'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -2554,6 +2564,10 @@ export type PendingOperationType =
   // Semesterårsavslut: rolls vacation balances into the next year and may
   // post a 2920/2940 drift-adjustment verifikation (Phase 3).
   | 'vacation_year_close'
+  // Match an income bank row to the ROT/RUT begäran Skatteverket paid with it
+  // (one or several, #2239): one voucher debit 19xx / credit 1513 per begäran,
+  // the row linked, every begäran marked settled (gnubok_settle_rot_rut_payout).
+  | 'settle_rot_rut_payout'
 // 'failed_partial' (issue #842, DB CHECK widened in 20260722134114): terminal
 // state for ops whose executor posted an irreversible side-effect (voucher,
 // credit note) and then failed a later step. Not re-committable, not pending

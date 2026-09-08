@@ -35,6 +35,16 @@ describe('deriveTransactionLabel', () => {
     ).toBe('Uttag')
   })
 
+  it('reads the combined Swedish channel wording "Kortköp/uttag" as a card purchase, not a withdrawal', () => {
+    // Enable Banking's flattened code description for ordinary card purchases
+    // at SEB/Swedbank. The card rule must win over the UTTAG keyword.
+    expect(deriveTransactionLabel({ bankTransactionCode: 'Kortköp/uttag' })).toBe('Kortköp')
+    expect(deriveTransactionLabel({ bankTransactionCode: 'Card purchase' })).toBe('Kortköp')
+    // A bare withdrawal wording still labels as Uttag.
+    expect(deriveTransactionLabel({ bankTransactionCode: 'ATM WITHDRAWAL' })).toBe('Uttag')
+    expect(deriveTransactionLabel({ bankTransactionCode: 'Uttag' })).toBe('Uttag')
+  })
+
   it('uses the bare PMNT domain + direction as a last generic resort', () => {
     expect(deriveTransactionLabel({ bankTransactionCode: 'PMNT', isCredit: true })).toBe('Inbetalning')
     expect(deriveTransactionLabel({ bankTransactionCode: 'PMNT', isCredit: false })).toBe('Betalning')

@@ -710,3 +710,40 @@ describe('proposePaymentLines: ROT/RUT-avdrag (fakturamodellen)', () => {
     expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '12500' })
   })
 })
+
+describe('proposePaymentLines: ROT/RUT invoice reopened by a reclaim (rot_rut_reclaim)', () => {
+  it('proposes the reopened remaining as a plain 1510 clearing', () => {
+    // 25 000 invoice, 7 500 deduction, customer paid 17 500, Skatteverket
+    // refused 2 500 and the reclaim voucher moved it onto 1510.
+    const lines = proposePaymentLines({
+      invoice: {
+        ...makeInvoiceInput({ total: 25000 }),
+        deduction_total: 7500,
+        deduction_reclaimed_total: 2500,
+        paid_amount: 17500,
+        remaining_amount: 2500,
+      },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '2500' })
+    expect(lines[1]).toMatchObject({ account_number: '1510', credit_amount: '2500' })
+  })
+
+  it('leaves a ROT/RUT invoice without a reclaim on the legacy customer-share proposal', () => {
+    const lines = proposePaymentLines({
+      invoice: {
+        ...makeInvoiceInput({ total: 25000 }),
+        deduction_total: 7500,
+        paid_amount: 0,
+        remaining_amount: 17500,
+      },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+    })
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '17500' })
+    expect(lines[1]).toMatchObject({ account_number: '1510', credit_amount: '17500' })
+  })
+})
