@@ -241,6 +241,11 @@ export async function convertToInvoice(params: {
     if ((invoiceError as { code?: string }).code === '23505') {
       return { ok: false, code: isQuote ? 'INVOICE_QUOTE_ALREADY_INVOICED' : 'INVOICE_CONVERT_SOURCE_CHANGED' }
     }
+    // invoices_converted_source_guard (migration 20260908152555): a kundorder
+    // from the quote became live between the pre-check and this insert.
+    if (String((invoiceError as { message?: string }).message ?? '').includes('INVOICE_QUOTE_ALREADY_ORDERED')) {
+      return { ok: false, code: 'INVOICE_QUOTE_ALREADY_ORDERED' }
+    }
     return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: invoiceError }
   }
 

@@ -409,6 +409,40 @@ describe('POST /api/invoices/[id]/convert-to-order', () => {
       expect(findCalls('invoices', 'eq')).toContainEqual(['quote_status', 'accepted'])
     })
 
+    it('maps the one-live-order index violation on the header insert to 409 SALES_ORDER_SOURCE_ALREADY_CONVERTED', async () => {
+      enqueue({ data: makeQuote({ quote_status: 'accepted' }) })
+      enqueue({ data: null, count: 0 }) // pre-check passed (race)
+      enqueue({ data: null })
+      enqueue({ data: makeOrderCustomer() })
+      enqueue({
+        data: null,
+        error: { code: '23505', message: 'duplicate key value violates unique constraint "uq_sales_orders_one_live_per_source"' },
+      })
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post())
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('SALES_ORDER_SOURCE_ALREADY_CONVERTED')
+      expect(findCall('invoices', 'update')).toBeUndefined()
+    })
+
+    it('maps the source guard trigger on the header insert to 409 INVOICE_QUOTE_ALREADY_INVOICED', async () => {
+      enqueue({ data: makeQuote({ quote_status: 'accepted' }) })
+      enqueue({ data: null, count: 0 })
+      enqueue({ data: null }) // pre-check passed (race)
+      enqueue({ data: makeOrderCustomer() })
+      enqueue({
+        data: null,
+        error: { code: 'P0001', message: `INVOICE_QUOTE_ALREADY_INVOICED: quote ${IDS.invoice} has a live converted invoice` },
+      })
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post())
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_INVOICED')
+      expect(findCall('invoices', 'update')).toBeUndefined()
+    })
+
     it('removes the fresh order and answers 409 when the quote was decided or converted concurrently', async () => {
       enqueue({ data: makeQuote() })
       enqueue({ data: null, count: 0 })

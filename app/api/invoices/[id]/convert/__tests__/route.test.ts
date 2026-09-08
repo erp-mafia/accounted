@@ -432,6 +432,23 @@ describe('POST /api/invoices/[id]/convert', () => {
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
+  it('maps the converted-source guard trigger (a kundorder went live meanwhile) to INVOICE_QUOTE_ALREADY_ORDERED', async () => {
+    enqueue({ data: { ...baseProforma, id: 'q-1', document_type: 'quote', status: 'sent', quote_status: 'accepted', customer: { default_payment_terms: 30 } }, error: null })
+    enqueue({ data: null, error: null }) // no converted invoice
+    enqueue({ data: null, count: 0, error: null }) // no live order at pre-check time (race)
+    enqueue({ data: null, error: { code: 'P0001', message: 'INVOICE_QUOTE_ALREADY_ORDERED: quote q-1 has a live kundorder' } })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/q-1/convert', { method: 'POST' }),
+      createMockRouteParams({ id: 'q-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_ORDERED')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('removes the orphan invoice and refuses when the proforma was cancelled concurrently (0-row compare-and-set)', async () => {
     // 1. fetch proforma
     enqueue({ data: baseProforma, error: null })

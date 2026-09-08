@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, InvoiceItem, SalesOrder } from '@/types'
 import { createSalesOrder } from './write'
-import { fail, failDb, type ServiceResult } from './result'
+import { codeFromPgError, fail, failDb, type ServiceResult } from './result'
 
 /**
  * Proforma or offert (quote) -> kundorder: the "Skapa order" action on both.
@@ -120,12 +120,24 @@ export async function convertToSalesOrder(
       items,
     },
   })
-  if (!created.ok) return created
+  if (!created.ok) {
+    // The database holds the atomic guards (migration 20260908152555): a
+    // second live order for the source, or a live converted invoice on the
+    // quote, refuses the insert with a code even when the pre-checks above
+    // raced with another conversion.
+    if ('dbError' in created) {
+      const code = codeFromPgError(created.dbError)
+      if (code) return fail(code)
+    }
+    return created
+  }
 
-  // Compare-and-set so a concurrent convert (to invoice or to order), cancel
-  // or quote decision cannot both succeed; on a lost race the fresh draft
-  // order is removed again. Literal payloads on purpose: the phantom-column
-  // schema guard can only check object literals.
+  // Compare-and-set so a concurrent cancel or quote decision cannot both
+  // succeed; on a lost race the fresh draft order is removed again. (A
+  // concurrent conversion is refused by the database at the insert above:
+  // for an already-accepted quote this accepted -> accepted update would
+  // not notice it.) Literal payloads on purpose: the phantom-column schema
+  // guard can only check object literals.
   const { data: marked, error: markError } = isQuote
     ? await supabase
         .from('invoices')

@@ -35,6 +35,12 @@ export function codeFromPgError(error: unknown): string | null {
   if (message.includes('SALES_ORDER_QUANTITY_BELOW_INVOICED')) return 'SALES_ORDER_QUANTITY_BELOW_INVOICED'
   if (message.includes('sales_order_items_delivered_within_ordered')) return 'SALES_ORDER_OVER_DELIVERED'
   if (message.includes('SALES_ORDER_ITEM_NOT_FOUND')) return 'SALES_ORDER_LINE_NOT_FOUND'
+  // Migration 20260908152555: one live kundorder per source document, and a
+  // quote with a live converted invoice cannot get a live order. Raised by
+  // the partial unique index and the source guard trigger when a concurrent
+  // conversion slipped past the service pre-checks.
+  if (message.includes('uq_sales_orders_one_live_per_source')) return 'SALES_ORDER_SOURCE_ALREADY_CONVERTED'
+  if (message.includes('INVOICE_QUOTE_ALREADY_INVOICED')) return 'INVOICE_QUOTE_ALREADY_INVOICED'
   // RESTRICT FKs: a line or order that a (possibly cancelled) invoice still
   // references cannot be removed; the derived invoiced quantity is 0 for a
   // cancelled invoice, so the service pre-checks let the delete through and

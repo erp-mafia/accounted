@@ -45,6 +45,18 @@ describe('codeFromPgError', () => {
     ).toBe('SALES_ORDER_HAS_INVOICES')
   })
 
+  it('maps the one-live-order-per-source index and the quote source guard (20260908152555)', () => {
+    expect(
+      codeFromPgError({
+        code: '23505',
+        message: 'duplicate key value violates unique constraint "uq_sales_orders_one_live_per_source"',
+      }),
+    ).toBe('SALES_ORDER_SOURCE_ALREADY_CONVERTED')
+    expect(
+      codeFromPgError({ code: 'P0001', message: 'INVOICE_QUOTE_ALREADY_INVOICED: quote q-1 has a live converted invoice' }),
+    ).toBe('INVOICE_QUOTE_ALREADY_INVOICED')
+  })
+
   it('returns null for anything else (the raw error is surfaced instead)', () => {
     expect(codeFromPgError({ message: 'null value in column "description"', code: '23502' })).toBeNull()
     expect(codeFromPgError(new Error('connection reset'))).toBeNull()

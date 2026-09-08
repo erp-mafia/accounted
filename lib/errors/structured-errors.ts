@@ -1674,6 +1674,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Underlaget har redan en kundorder.',
     message_en: 'The source document already has a sales order.',
   },
+  SALES_ORDER_INVOICE_FX_RATE_UNAVAILABLE: {
+    httpStatus: 502,
+    message_sv:
+      'Kunde inte hämta växelkursen från Riksbanken för leverans-/fakturadatumet. Fakturan har inte skapats: en gissad kurs får inte bokföras. Försök igen om en stund.',
+    message_en:
+      'Could not fetch the Riksbanken exchange rate for the delivery/invoice date. No invoice was created: a guessed rate must not be booked. Try again shortly.',
+  },
   // POST /api/invoices/{id}/peppol/send. The Access Point is an environment
   // decision (PEPPOL_TRANSPORT_PROVIDER + adapter credentials); the product
   // never pretends to send when no adapter is switched on.
