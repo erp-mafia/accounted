@@ -113,7 +113,9 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       })
     } catch (err) {
       if (err instanceof MissingUnderlagQueryError) {
-        log.error('failed to resolve missing-underlag entries', err)
+        // err.message is the user-facing Swedish text; the driver error is
+        // what an operator needs (a gateway 414 hid behind it in #2395).
+        log.error('failed to resolve missing-underlag entries', err, { cause: err.cause })
         return NextResponse.json(
           { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
           { status: 500 }

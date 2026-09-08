@@ -2,6 +2,7 @@ import type { TransactionCategory, MappingResult, VatJournalLine, Transaction, E
 import { getVatRate, generateReverseChargeLines } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
 import { roundOre } from '@/lib/money'
+import { byEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
 
 /**
  * Maps TransactionCategory to BAS accounts for journal entry creation
@@ -32,11 +33,8 @@ interface CategoryAccountMapping {
 // Default bank account - typically 1930 (Företagskonto/checkkonto)
 const BANK_ACCOUNT = '1930'
 
-// Private/owner transaction accounts by entity type
-const PRIVATE_ACCOUNTS: Record<EntityType, string> = {
-  enskild_firma: '2013',  // Övriga egna uttag
-  aktiebolag: '2893',     // Skuld till aktieägare/delägare
-}
+// Private/owner transaction accounts live in lib/company/entity-type.ts
+// (ownerSettlementAccount): EF 2013/2018, AB 2893, ideell förening 2890.
 
 // Single source of truth for category -> expense account mapping
 const EXPENSE_ACCOUNTS: Record<string, string> = {
@@ -67,9 +65,15 @@ const INCOME_ACCOUNTS: Record<string, string> = {
  * Get the expense account for a category, with entity-specific overrides.
  * Education (expense_education) differs: AB uses 7610, EF uses 6991.
  */
-function getExpenseAccount(category: string, entityType: EntityType = 'enskild_firma'): string {
+function getExpenseAccount(category: string, entityType: EntityType): string {
   if (category === 'expense_education') {
-    return entityType === 'aktiebolag' ? '7610' : '6991'
+    // 7610 is a personnel cost: only a form with employees by default books
+    // education there; the others take the general external-cost account.
+    return byEntityType(entityType, {
+      aktiebolag: '7610',
+      enskild_firma: '6991',
+      ideell_forening: '6991',
+    })
   }
   return EXPENSE_ACCOUNTS[category] || '6991'
 }
@@ -108,19 +112,14 @@ export function getCategoryAccountMapping(
   category: TransactionCategory,
   amount: number,
   isBusiness: boolean,
-  entityType: EntityType = 'enskild_firma',
+  entityType: EntityType,
   vatTreatment?: VatTreatment
 ): CategoryAccountMapping {
   // Private/owner transactions use entity-specific accounts
   // EF: 2013 for withdrawals (uttag), 2018 for deposits (insättningar)
-  // AB: 2893 for both directions
+  // AB: 2893 for both directions; ideell förening: 2890 (no owner)
   if (!isBusiness) {
-    let privateAccount: string
-    if (entityType === 'enskild_firma') {
-      privateAccount = amount < 0 ? '2013' : '2018'
-    } else {
-      privateAccount = PRIVATE_ACCOUNTS[entityType] || PRIVATE_ACCOUNTS.enskild_firma
-    }
+    const privateAccount = ownerSettlementAccount(entityType, amount < 0 ? 'withdrawal' : 'contribution')
     return {
       debitAccount: amount < 0 ? privateAccount : BANK_ACCOUNT,
       creditAccount: amount < 0 ? BANK_ACCOUNT : privateAccount,
@@ -241,7 +240,7 @@ export function buildMappingResultFromCategory(
   category: TransactionCategory,
   transaction: Transaction,
   isBusiness: boolean,
-  entityType: EntityType = 'enskild_firma',
+  entityType: EntityType,
   vatTreatment?: VatTreatment,
   vatAmountOverride?: number | null
 ): MappingResult {
@@ -404,10 +403,10 @@ export function getExpenseAccountForCategory(category: TransactionCategory): str
  */
 export function getDefaultAccountForCategory(
   category: TransactionCategory,
-  entityType: EntityType = 'enskild_firma'
+  entityType: EntityType
 ): string {
   if (category === 'private') {
-    return PRIVATE_ACCOUNTS[entityType] || PRIVATE_ACCOUNTS.enskild_firma
+    return ownerSettlementAccount(entityType, 'withdrawal')
   }
 
   if (category.startsWith('expense_')) {

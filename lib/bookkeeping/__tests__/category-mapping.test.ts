@@ -13,20 +13,20 @@ import type { TransactionCategory, VatTreatment } from '@/types'
 describe('getCategoryAccountMapping', () => {
   describe('income_products uses correct account', () => {
     it('maps income_products to 3001 (25% moms)', () => {
-      const result = getCategoryAccountMapping('income_products', 1000, true)
+      const result = getCategoryAccountMapping('income_products', 1000, true, 'enskild_firma')
       expect(result.creditAccount).toBe('3001')
     })
 
     it('income_products matches income_services account', () => {
-      const products = getCategoryAccountMapping('income_products', 1000, true)
-      const services = getCategoryAccountMapping('income_services', 1000, true)
+      const products = getCategoryAccountMapping('income_products', 1000, true, 'enskild_firma')
+      const services = getCategoryAccountMapping('income_services', 1000, true, 'enskild_firma')
       expect(products.creditAccount).toBe(services.creditAccount)
     })
   })
 
   describe('expense_office maps to 6110 (Kontorsförbrukning)', () => {
     it('maps expense_office to 6110 (not 5010 Lokalhyra)', () => {
-      const result = getCategoryAccountMapping('expense_office', -500, true)
+      const result = getCategoryAccountMapping('expense_office', -500, true, 'enskild_firma')
       expect(result.debitAccount).toBe('6110')
     })
   })
@@ -42,9 +42,16 @@ describe('getCategoryAccountMapping', () => {
       expect(result.debitAccount).toBe('7610')
     })
 
-    it('defaults to 6991 when no entityType provided', () => {
-      const result = getCategoryAccountMapping('expense_education', -500, true)
+    it('uses 6991 for an ideell förening (no personnel cost assumed)', () => {
+      const result = getCategoryAccountMapping('expense_education', -500, true, 'ideell_forening')
       expect(result.debitAccount).toBe('6991')
+    })
+
+    it('settles a private förening transaction on 2890, never an owner account', () => {
+      const out = getCategoryAccountMapping('private', -500, false, 'ideell_forening')
+      expect(out.debitAccount).toBe('2890')
+      const inn = getCategoryAccountMapping('private', 500, false, 'ideell_forening')
+      expect(inn.creditAccount).toBe('2890')
     })
   })
 })
@@ -63,17 +70,21 @@ describe('getExpenseAccountForCategory', () => {
 
 describe('getDefaultAccountForCategory', () => {
   it('returns expense account for expense categories', () => {
-    expect(getDefaultAccountForCategory('expense_equipment')).toBe('5410')
-    expect(getDefaultAccountForCategory('expense_software')).toBe('5420')
-    expect(getDefaultAccountForCategory('expense_travel')).toBe('5890')
-    expect(getDefaultAccountForCategory('expense_office')).toBe('6110')
-    expect(getDefaultAccountForCategory('expense_bank_fees')).toBe('6570')
+    expect(getDefaultAccountForCategory('expense_equipment', 'enskild_firma')).toBe('5410')
+    expect(getDefaultAccountForCategory('expense_software', 'enskild_firma')).toBe('5420')
+    expect(getDefaultAccountForCategory('expense_travel', 'enskild_firma')).toBe('5890')
+    expect(getDefaultAccountForCategory('expense_office', 'enskild_firma')).toBe('6110')
+    expect(getDefaultAccountForCategory('expense_bank_fees', 'enskild_firma')).toBe('6570')
   })
 
   it('returns income account for income categories', () => {
-    expect(getDefaultAccountForCategory('income_services')).toBe('3001')
-    expect(getDefaultAccountForCategory('income_products')).toBe('3001')
-    expect(getDefaultAccountForCategory('income_other')).toBe('3999')
+    expect(getDefaultAccountForCategory('income_services', 'enskild_firma')).toBe('3001')
+    expect(getDefaultAccountForCategory('income_products', 'enskild_firma')).toBe('3001')
+    expect(getDefaultAccountForCategory('income_other', 'enskild_firma')).toBe('3999')
+  })
+
+  it('returns the member settlement account for an ideell förening', () => {
+    expect(getDefaultAccountForCategory('private', 'ideell_forening')).toBe('2890')
   })
 
   it('returns private account for enskild firma', () => {
@@ -90,7 +101,7 @@ describe('getDefaultAccountForCategory', () => {
   })
 
   it('returns fallback for uncategorized', () => {
-    expect(getDefaultAccountForCategory('uncategorized')).toBe('6991')
+    expect(getDefaultAccountForCategory('uncategorized', 'enskild_firma')).toBe('6991')
   })
 })
 
@@ -340,7 +351,7 @@ describe('buildMappingResultFromCategory returns non-empty accounts', () => {
   it.each(allCategories)('returns non-empty debit_account and credit_account for "%s"', (category) => {
     const tx = makeTransaction({ amount: category.startsWith('income') ? 1000 : -1000 })
     const isBusiness = category !== 'private'
-    const result = buildMappingResultFromCategory(category, tx, isBusiness)
+    const result = buildMappingResultFromCategory(category, tx, isBusiness, 'enskild_firma')
 
     expect(result.debit_account).toBeTruthy()
     expect(result.credit_account).toBeTruthy()
@@ -380,14 +391,14 @@ describe('representation VAT (reduced 12%, ML 13 kap 24-25 §§)', () => {
   })
 
   it('getCategoryAccountMapping has vatTreatment: reduced_12 for representation', () => {
-    const result = getCategoryAccountMapping('expense_representation', -500, true)
+    const result = getCategoryAccountMapping('expense_representation', -500, true, 'enskild_firma')
     expect(result.vatTreatment).toBe('reduced_12')
     expect(result.vatDebitAccount).toBe('2641')
   })
 
   it('buildMappingResultFromCategory generates 12% VAT line for representation', () => {
     const tx = makeTransaction({ amount: -500 })
-    const result = buildMappingResultFromCategory('expense_representation', tx, true)
+    const result = buildMappingResultFromCategory('expense_representation', tx, true, 'enskild_firma')
     expect(result.vat_lines).toHaveLength(1)
     expect(result.vat_lines[0].account_number).toBe('2641')
   })
@@ -421,7 +432,7 @@ describe('income account resolves by VAT treatment', () => {
   })
 
   it('defaults to 3001 when no vatTreatment provided', () => {
-    const result = getCategoryAccountMapping('income_services', 1000, true)
+    const result = getCategoryAccountMapping('income_services', 1000, true, 'enskild_firma')
     expect(result.creditAccount).toBe('3001')
   })
 })
@@ -454,19 +465,19 @@ describe('private transaction accounts by entity type and direction', () => {
 
 describe('incoming expense refund (positive amount, expense category)', () => {
   it('getCategoryAccountMapping swaps accounts: bank debited, expense account credited', () => {
-    const result = getCategoryAccountMapping('expense_software', 500, true)
+    const result = getCategoryAccountMapping('expense_software', 500, true, 'enskild_firma')
     expect(result.debitAccount).toBe('1930')
     expect(result.creditAccount).toBe('5420')
   })
 
   it('getCategoryAccountMapping sets vatCreditAccount 2641 and clears vatDebitAccount for refund', () => {
-    const result = getCategoryAccountMapping('expense_software', 500, true)
+    const result = getCategoryAccountMapping('expense_software', 500, true, 'enskild_firma')
     expect(result.vatDebitAccount).toBeNull()
     expect(result.vatCreditAccount).toBe('2641')
   })
 
   it('VAT-exempt expense refund (bank_fees) has no VAT accounts', () => {
-    const result = getCategoryAccountMapping('expense_bank_fees', 100, true)
+    const result = getCategoryAccountMapping('expense_bank_fees', 100, true, 'enskild_firma')
     expect(result.debitAccount).toBe('1930')
     expect(result.creditAccount).toBe('6570')
     expect(result.vatDebitAccount).toBeNull()
@@ -475,7 +486,7 @@ describe('incoming expense refund (positive amount, expense category)', () => {
 
   it('buildMappingResultFromCategory generates credit line on 2641 for expense refund', () => {
     const tx = makeTransaction({ amount: 1000 })
-    const result = buildMappingResultFromCategory('expense_software', tx, true)
+    const result = buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma')
     expect(result.vat_lines).toHaveLength(1)
     expect(result.vat_lines[0].account_number).toBe('2641')
     expect(result.vat_lines[0].credit_amount).toBe(200)
@@ -484,19 +495,19 @@ describe('incoming expense refund (positive amount, expense category)', () => {
 
   it('buildMappingResultFromCategory uses återföring description for expense refund VAT', () => {
     const tx = makeTransaction({ amount: 1000 })
-    const result = buildMappingResultFromCategory('expense_software', tx, true)
+    const result = buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma')
     expect(result.vat_lines[0].description).toBe('Återföring ingående moms 25%')
   })
 
   it('buildMappingResultFromCategory generates no VAT line for VAT-exempt expense refund', () => {
     const tx = makeTransaction({ amount: 100 })
-    const result = buildMappingResultFromCategory('expense_bank_fees', tx, true)
+    const result = buildMappingResultFromCategory('expense_bank_fees', tx, true, 'enskild_firma')
     expect(result.vat_lines).toHaveLength(0)
   })
 
   it('buildMappingResultFromCategory maps debit/credit correctly (bank debited, expense credited)', () => {
     const tx = makeTransaction({ amount: 1250 })
-    const result = buildMappingResultFromCategory('expense_software', tx, true)
+    const result = buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma')
     expect(result.debit_account).toBe('1930')
     expect(result.credit_account).toBe('5420')
   })
@@ -545,24 +556,26 @@ describe('category default → leaf account guarantee', () => {
   ]
 
   it.each(categoriesUnderGuard)('%s default does not resolve to a gruppkonto', (category) => {
-    const target = getDefaultAccountForCategory(category)
-    expect(groupAccountNumbers.has(target)).toBe(false)
+    for (const entityType of ['enskild_firma', 'aktiebolag', 'ideell_forening'] as const) {
+      const target = getDefaultAccountForCategory(category, entityType)
+      expect(groupAccountNumbers.has(target)).toBe(false)
+    }
   })
 
   it('uncategorized positive amount does not credit a gruppkonto', () => {
-    const result = getCategoryAccountMapping('uncategorized', 1000, true)
+    const result = getCategoryAccountMapping('uncategorized', 1000, true, 'enskild_firma')
     expect(groupAccountNumbers.has(result.creditAccount)).toBe(false)
   })
 
   it('expense_telecom resolves to 6230 (Datakommunikation, leaf)', () => {
-    expect(getDefaultAccountForCategory('expense_telecom')).toBe('6230')
+    expect(getDefaultAccountForCategory('expense_telecom', 'enskild_firma')).toBe('6230')
   })
 
   it('expense_travel resolves to 5890 (Övriga resekostnader, leaf)', () => {
-    expect(getDefaultAccountForCategory('expense_travel')).toBe('5890')
+    expect(getDefaultAccountForCategory('expense_travel', 'enskild_firma')).toBe('5890')
   })
 
   it('income_other resolves to 3999 (Övriga rörelseintäkter, leaf)', () => {
-    expect(getDefaultAccountForCategory('income_other')).toBe('3999')
+    expect(getDefaultAccountForCategory('income_other', 'enskild_firma')).toBe('3999')
   })
 })

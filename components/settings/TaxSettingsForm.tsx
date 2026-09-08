@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { useState } from 'react'
+import { byEntityType, isEntityType } from '@/lib/company/entity-type'
 import { Switch } from '@/components/ui/switch'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
@@ -83,7 +84,13 @@ export function TaxSettingsForm({
         {/* Entity type: read-only. Changing it is a support operation. */}
         <SettingsRow label={t('entity_form_heading')} help={t('entity_form_help')}>
           <span className="text-sm">
-            {settings.entity_type === 'aktiebolag' ? t('entity_aktiebolag') : t('entity_enskild_firma')}
+            {isEntityType(settings.entity_type)
+              ? byEntityType(settings.entity_type, {
+                  aktiebolag: t('entity_aktiebolag'),
+                  enskild_firma: t('entity_enskild_firma'),
+                  ideell_forening: t('entity_ideell_forening'),
+                })
+              : ''}
           </span>
         </SettingsRow>
 

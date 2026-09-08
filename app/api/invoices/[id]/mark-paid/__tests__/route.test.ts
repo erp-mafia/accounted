@@ -371,6 +371,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
 
     // Fetch invoice
     enqueue({ data: invoice, error: null })
+    // No customer: the duplicate guard skips straight to the settings read
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
     const unbalancedLines = [
       { account_number: '1920', debit_amount: 12500, credit_amount: 0 },
@@ -627,6 +629,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     const invoice = makeInvoice({ id: 'inv-1', status: 'sent', total: 12500 })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
     const overpayLines = [
       { account_number: '1930', debit_amount: 15000, credit_amount: 0 },
@@ -722,6 +725,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
       method: 'POST',
@@ -752,6 +756,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
     // Bank 90 000 exceeds the 86 800 customer share even after the 1513
     // exclusion: the overpayment guard must still fire.

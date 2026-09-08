@@ -304,13 +304,14 @@ describe('POST /items/:id/suggest-booking', () => {
     )
   })
 
-  it('falls back to enskild firma when no entity type is stored', async () => {
+  it('resolves the form from companies when the settings row has none', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueue({
       data: { id: 'item-1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null },
     })
     mock.enqueue({ data: transaction() })
-    mock.enqueue({ data: null })
+    mock.enqueue({ data: null }) // company_settings: no row
+    mock.enqueue({ data: { entity_type: 'enskild_firma' } }) // companies fallback (never a guessed default)
     await route.handler(req(), buildCtx(mock.supabase))
     expect(evaluateMappingRules).toHaveBeenCalledWith(
       expect.anything(), 'company-1', expect.anything(), 'enskild_firma', expect.anything(),

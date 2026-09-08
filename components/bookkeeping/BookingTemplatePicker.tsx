@@ -17,6 +17,13 @@ import { TEMPLATE_CATEGORY_LABELS, SCOPE_LABELS, getTemplateScope, applyTemplate
 import type { BookingTemplateCategory, EntityType } from '@/types'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
+// Statutory short forms, kept in Swedish in both locales.
+const ENTITY_SHORT_LABELS: Record<EntityType, string> = {
+  enskild_firma: 'EF',
+  aktiebolag: 'AB',
+  ideell_forening: 'Förening',
+}
+
 interface Props {
   onApply: (lines: FormLine[], description: string, category?: BookingTemplateCategory) => void
   entityType?: EntityType
@@ -188,8 +195,7 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
                         <ScopeIcon className="h-3 w-3 shrink-0" />
                         <span>
                           {SCOPE_LABELS[scope]}
-                          {t.entity_type !== 'all' &&
-                            ` · ${t.entity_type === 'enskild_firma' ? 'EF' : 'AB'}`}
+                          {t.entity_type !== 'all' && ` · ${ENTITY_SHORT_LABELS[t.entity_type] ?? t.entity_type}`}
                         </span>
                       </div>
                       {t.description && (

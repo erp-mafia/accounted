@@ -52,6 +52,7 @@ function makeSupabase(opts: {
   antalAktier?: number | null
   agmDate?: string | null
   previousPeriodId?: string | null
+  medelantalOverride?: number | null
 }): ChainableMock {
   const from = vi.fn((table: string) => {
     if (table === 'fiscal_periods') {
@@ -124,14 +125,16 @@ function makeSupabase(opts: {
             eq: () => ({
               maybeSingle: () =>
                 Promise.resolve({
-                  data: opts.agmDate
-                    ? {
-                        agm_date: opts.agmDate,
-                        description: null,
-                        important_events: null,
-                        resultatdisposition: null,
-                      }
-                    : null,
+                  data:
+                    opts.agmDate || opts.medelantalOverride != null
+                      ? {
+                          agm_date: opts.agmDate ?? null,
+                          description: null,
+                          important_events: null,
+                          resultatdisposition: null,
+                          medelantal_anstallda_override: opts.medelantalOverride ?? null,
+                        }
+                      : null,
                   error: null,
                 }),
             }),
@@ -286,6 +289,32 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockFetchAllRows.mockResolvedValue([])
   plantStandardReports()
+})
+
+describe('buildArsredovisningData: medelantal anställda override (ÅRL 5:20 §)', () => {
+  it.each(['k2', 'k3'] as const)(
+    '%s: without an override the note reports no employees',
+    async (framework) => {
+      const supabase = makeSupabase({ accountingFramework: framework })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Medelantal anställda')
+      expect(note?.body).toContain('inte haft några anställda')
+      expect(data.disclosures.medelantal_anstallda_override).toBeNull()
+    },
+  )
+
+  it.each(['k2', 'k3'] as const)(
+    '%s: a manual figure on the narrative replaces the computed note',
+    async (framework) => {
+      const supabase = makeSupabase({ accountingFramework: framework, medelantalOverride: 1 })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Medelantal anställda')
+      expect(note?.body).toBe('Under räkenskapsåret har medeltalet anställda uppgått till 1.')
+      expect(data.disclosures.medelantal_anstallda_override).toBe(1)
+    },
+  )
 })
 
 describe('buildArsredovisningData: K3', () => {

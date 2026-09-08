@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
 import { validateBody } from '@/lib/api/validate'
@@ -39,7 +40,12 @@ export const POST = withRouteContext('mapping_rules.evaluate', async (request, c
   }
 
   try {
-    const result = await evaluateMappingRules(supabase, companyId, transaction)
+    const result = await evaluateMappingRules(
+      supabase,
+      companyId,
+      transaction,
+      await resolveCompanyEntityType(supabase, companyId),
+    )
     return NextResponse.json({ data: result })
   } catch (err) {
     return NextResponse.json(

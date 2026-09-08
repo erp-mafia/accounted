@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
 import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
@@ -412,7 +413,7 @@ export const POST = withRouteContext(
       .single()
 
     const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+    const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
 
     // Debit the cash account THIS transaction actually belongs to, never a
     // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the

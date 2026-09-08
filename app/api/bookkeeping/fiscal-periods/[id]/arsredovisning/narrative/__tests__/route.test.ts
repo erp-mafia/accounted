@@ -140,6 +140,34 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
     expect(body.data.parent_company_org_number).toBe('CHE-123.456.789')
   })
 
+  it('returns 400 for a fractional or negative medelantal anställda override', async () => {
+    setupSupabase()
+    expect((await POST(postReq({ medelantal_anstallda_override: 1.5 }), idParams)).status).toBe(400)
+    setupSupabase()
+    expect((await POST(postReq({ medelantal_anstallda_override: -1 }), idParams)).status).toBe(400)
+  })
+
+  it('saves a whole-number medelantal anställda override and lets null clear it', async () => {
+    const { enqueue } = setupSupabase()
+    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: null }) // no registrerad submission
+    enqueue({ data: { ...narrativeRow, medelantal_anstallda_override: 1 } }) // upsert
+    enqueue({ data: null }) // clear narrative confirmation
+    const { status, body } = await parseJsonResponse<{
+      data: typeof narrativeRow & { medelantal_anstallda_override: number | null }
+    }>(await POST(postReq({ medelantal_anstallda_override: 1 }), idParams))
+    expect(status).toBe(200)
+    expect(body.data.medelantal_anstallda_override).toBe(1)
+
+    const cleared = setupSupabase()
+    cleared.enqueue({ data: { id: 'period-1' } })
+    cleared.enqueue({ data: null })
+    cleared.enqueue({ data: { ...narrativeRow, medelantal_anstallda_override: null } })
+    cleared.enqueue({ data: null })
+    const res = await POST(postReq({ medelantal_anstallda_override: null }), idParams)
+    expect(res.status).toBe(200)
+  })
+
   it('returns 400 when the payload contains an unknown field', async () => {
     setupSupabase()
     const res = await POST(

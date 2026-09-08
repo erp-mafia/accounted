@@ -1,5 +1,6 @@
 import type { ComposerInputs } from './inputs'
 import type { AtomSelection } from './schemas'
+import { ENTITY_TYPE_LABELS_SV, isEntityType } from '@/lib/company/entity-type'
 
 // Deterministic atom selection used when the Opus call times out or fails.
 //
@@ -108,9 +109,7 @@ function buildFallbackQuestions(inputs: ComposerInputs): string[] {
 export function fallbackNarrative(inputs: ComposerInputs): string {
   const parts: string[] = []
   const name = inputs.companyName || 'företaget'
-  const isAB = inputs.entityType === 'aktiebolag'
-  const isEF = inputs.entityType === 'enskild_firma'
-  const form = isAB ? 'aktiebolag' : isEF ? 'enskild firma' : null
+  const form = isEntityType(inputs.entityType) ? ENTITY_TYPE_LABELS_SV[inputs.entityType].toLowerCase() : null
 
   if (inputs.userIsConfirmedDirector) {
     if (form) {

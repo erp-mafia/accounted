@@ -714,7 +714,7 @@ describe('validateYearEndReadiness: kontantmetoden cut-off gate', () => {
     const expected = buildCutoffLines([{
       id: 'inv-1', reference: 'F-1', vatTreatment: 'standard_25',
       outstanding: 1250, vat: 250,
-    }], [])
+    }], [], 'aktiebolag')
     const markers = [
       {
         id: 'cutoff', company_id: 'company-1', fiscal_period_id: 'fp-1',

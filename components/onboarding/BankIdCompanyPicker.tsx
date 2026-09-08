@@ -8,7 +8,8 @@ import { Loader2 } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { switchCompany } from '@/lib/company/actions'
-import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
+import { mapEntityType, mapSetupEntityType } from '@/lib/company-lookup/entity-type-map'
+import { ENTITY_TYPE_LABELS_SV, isEntityType } from '@/lib/company/entity-type'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import { getBranding } from '@/lib/branding/service'
 import '@/components/onboarding/journey/journey.css'
@@ -55,15 +56,13 @@ type SetupState = { kind: 'idle' } | { kind: 'opening'; companyId: string }
 // terms: kept in Swedish in both locales.
 function humanEntityType(t: string | null | undefined): string {
   if (!t) return ''
-  if (t === 'aktiebolag') return 'Aktiebolag'
-  if (t === 'enskild_firma') return 'Enskild firma'
+  if (isEntityType(t)) return ENTITY_TYPE_LABELS_SV[t]
   return t
 }
 
 function humanTicEntityType(t: string): string {
   const mapped = mapEntityType(t)
-  if (mapped === 'aktiebolag') return 'Aktiebolag'
-  if (mapped === 'enskild_firma') return 'Enskild firma'
+  if (mapped) return ENTITY_TYPE_LABELS_SV[mapped]
   if (t.toLowerCase().includes('handelsbolag') || t.toLowerCase() === 'hb') return 'Handelsbolag'
   if (t.toLowerCase().includes('kommanditbolag') || t.toLowerCase() === 'kb') return 'Kommanditbolag'
   return t
@@ -183,7 +182,7 @@ export default function BankIdCompanyPicker({
           const cleaned = role.companyRegistrationNumber.replace(/[\s-]/g, '')
           const position = positionLabel(role)
           const entityLabel = humanTicEntityType(role.legalEntityType)
-          const mappable = mapEntityType(role.legalEntityType) !== null
+          const mappable = mapSetupEntityType(role.legalEntityType) !== null
           const metaParts = [entityLabel, position].filter(Boolean)
           if (!mappable) metaParts.push(t('setup_manually'))
           if (status === 'exists') {

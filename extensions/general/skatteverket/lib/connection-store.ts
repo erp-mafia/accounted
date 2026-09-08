@@ -1,4 +1,5 @@
 import { type SupabaseClient } from '@supabase/supabase-js'
+import { parseEntityType } from '@/lib/company/entity-type'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { toRedovisare12 } from '@/lib/invariants/org-number'
@@ -298,7 +299,7 @@ export async function findContestedOrgNumbers(): Promise<Set<string>> {
     if (!row.org_number || archivedIds.has(row.company_id)) continue
     let redovisare: string
     try {
-      redovisare = toRedovisare12(row.org_number, row.entity_type === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag')
+      redovisare = toRedovisare12(row.org_number, parseEntityType(row.entity_type))
     } catch {
       continue
     }

@@ -57,6 +57,10 @@ function makeSupabase(handlers: {
       b.single.mockResolvedValue(handlers.period)
     } else if (table === 'company_settings') {
       b.maybeSingle.mockResolvedValue(handlers.settings)
+    } else if (table === 'companies') {
+      // Canonical NOT NULL fallback read by resolveCompanyEntityType when the
+      // settings row is missing; never a guessed default.
+      b.maybeSingle.mockResolvedValue({ data: { entity_type: 'aktiebolag' }, error: null })
     } else if (table === 'cash_accounts') {
       // The aggregator resolves 1930 to its cash_accounts row so the bank total
       // is scoped to that account (#1290).
@@ -292,7 +296,7 @@ describe('buildBokslutReadinessReport', () => {
     ).rejects.toThrow(/not found/i)
   })
 
-  it('defaults to aktiebolag when company_settings is missing', async () => {
+  it('falls back to companies.entity_type when company_settings is missing', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const supabase = makeSupabase({

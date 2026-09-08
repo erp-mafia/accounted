@@ -27,6 +27,7 @@ import {
 } from '@/lib/bookkeeping/currency-revaluation'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
 import { assessKontantmetodCutoff } from './kontantmetod-cutoff'
+import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import type {
   YearEndValidation,
   YearEndBlocker,
@@ -368,7 +369,7 @@ export async function validateYearEndReadiness(
           companyId,
           period,
           nextPeriod.id,
-          settings.entity_type ?? 'aktiebolag',
+          await resolveCompanyEntityType(supabase, companyId, settings.entity_type),
         )
         const invalidCount =
           assessment.collection.unknownVatTreatment.length +
@@ -465,12 +466,8 @@ export async function previewYearEndClosing(
     .eq('company_id', companyId)
     .single()
 
-  const entityType = settings?.entity_type ?? 'aktiebolag'
-  const closingAccount = entityType === 'enskild_firma' ? '2010' : '2099'
-  const closingAccountName =
-    entityType === 'enskild_firma'
-      ? 'Eget kapital'
-      : 'Årets resultat'
+  const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+  const { closing: closingAccount, closingName: closingAccountName } = resultClosingAccounts(entityType)
 
   // Get trial balance for individual account balances in class 3-8
   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' })
