@@ -238,6 +238,7 @@ import type {
   JournalEntrySourceType,
   FiscalPeriod,
 } from '@/types'
+import { recordShadowOutcome } from '@/lib/underlag/shadow-log'
 
 const log = createLogger('pending-operations/commit')
 
@@ -4063,6 +4064,11 @@ async function commitAttachDocumentToTransaction(
       console.error('[commitAttach] Failed to append rättelse event:', logErr)
     }
   }
+
+  // The human approved this pairing and everything it implied has been
+  // written: the matcher's shadow rows for the document get their answer.
+  // Last, so a failure above marks the operation failed rather than agreed.
+  await recordShadowOutcome(supabase, companyId, documentId, { transactionId: txId })
 
   return {
     data: {

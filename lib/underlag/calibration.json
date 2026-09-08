@@ -1,0 +1,54 @@
+{
+  "generated_at": "2026-09-08T09:53:16.617Z",
+  "source": "pending_operations attach_document_to_transaction, committed vs rejected, all companies, re-scored with the current matcher",
+  "bins": [
+    {
+      "lo": 0.6,
+      "hi": 0.65,
+      "n": 20,
+      "precision": 1
+    },
+    {
+      "lo": 0.65,
+      "hi": 0.7,
+      "n": 45,
+      "precision": 1
+    },
+    {
+      "lo": 0.7,
+      "hi": 0.75,
+      "n": 38,
+      "precision": 0.8947368421052632
+    },
+    {
+      "lo": 0.75,
+      "hi": 0.8,
+      "n": 22,
+      "precision": 0.8636363636363636
+    },
+    {
+      "lo": 0.8,
+      "hi": 0.85,
+      "n": 38,
+      "precision": 0.9736842105263158
+    },
+    {
+      "lo": 0.85,
+      "hi": 0.9,
+      "n": 46,
+      "precision": 1
+    },
+    {
+      "lo": 0.9,
+      "hi": 0.95,
+      "n": 45,
+      "precision": 0.9777777777777777
+    },
+    {
+      "lo": 0.95,
+      "hi": 1,
+      "n": 72,
+      "precision": 0.9861111111111112
+    }
+  ]
+}

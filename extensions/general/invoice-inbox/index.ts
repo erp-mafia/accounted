@@ -100,6 +100,8 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { simpleParser } from 'mailparser'
 import type { InboxChannelContext, InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { recordMatchRejection } from '@/lib/underlag/rejections'
+import { recordShadowOutcome } from '@/lib/underlag/shadow-log'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
 // Received-mail panel window (#2181): 30 days covers "the mail I sent last
@@ -1313,6 +1315,13 @@ export const invoiceInboxExtension: Extension = {
           body.transaction_id,
         )
 
+        // The human's answer to whatever the matcher logged for this document.
+        if (inboxItem?.document_id) {
+          await recordShadowOutcome(ctx.supabase, ctx.companyId, inboxItem.document_id, {
+            transactionId: body.transaction_id,
+          })
+        }
+
         return NextResponse.json({ data: updated })
       },
     },
@@ -1363,6 +1372,19 @@ export const invoiceInboxExtension: Extension = {
           if (txUpdateError) {
             console.error('[invoice-inbox/unmatch-transaction] tx.document_id clear failed:', txUpdateError)
           }
+          // A manual unmatch is a "no" to this pair, and the matcher must not
+          // propose it again. It also answers the shadow log.
+          await recordMatchRejection(ctx.supabase, {
+            companyId: ctx.companyId,
+            userId: ctx.userId,
+            documentId: existing.document_id,
+            transactionId: existing.matched_transaction_id,
+            source: 'unmatch',
+          })
+          await recordShadowOutcome(ctx.supabase, ctx.companyId, existing.document_id, {
+            transactionId: null,
+            rejectedTransactionId: existing.matched_transaction_id,
+          })
         }
 
         return NextResponse.json({ data: updated })

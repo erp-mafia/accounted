@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { recordMatchRejection } from '@/lib/underlag/rejections'
+import { recordShadowOutcome } from '@/lib/underlag/shadow-log'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const RejectBodySchema = z.object({
@@ -21,7 +23,7 @@ const RejectBodySchema = z.object({
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'pending_operation.reject',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, user }, { params }) => {
     const { id } = await params
 
     // Body is optional: accept empty/missing body without rejecting the request.
@@ -50,7 +52,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data: op, error: fetchError } = await supabase
       .from('pending_operations')
-      .select('id, status')
+      .select('id, status, operation_type, params')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -115,6 +117,23 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         },
         { status: 409 },
       )
+    }
+
+    // A rejected underlag pairing is a durable "no" for the matcher, from any
+    // surface that proposed it, and the answer the shadow log was waiting for.
+    const opParams = (op.params ?? {}) as { transaction_id?: string; document_id?: string }
+    if (op.operation_type === 'attach_document_to_transaction' && opParams.transaction_id && opParams.document_id) {
+      await recordMatchRejection(supabase, {
+        companyId,
+        userId: user.id,
+        documentId: opParams.document_id,
+        transactionId: opParams.transaction_id,
+        source: 'proposal_rejected',
+      })
+      await recordShadowOutcome(supabase, companyId, opParams.document_id, {
+        transactionId: null,
+        rejectedTransactionId: opParams.transaction_id,
+      })
     }
 
     return NextResponse.json({ data: { id, status: 'rejected' } })

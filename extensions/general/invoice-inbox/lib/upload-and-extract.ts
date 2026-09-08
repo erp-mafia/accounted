@@ -13,6 +13,7 @@ import type { InvoiceExtractionResult } from '@/types'
 import { PDFDocument } from 'pdf-lib'
 import path from 'node:path'
 import { escapeHtml } from '@/lib/email/user-text'
+import { runArrivalMatch } from '@/lib/underlag/arrival-match'
 
 // Verdicts decidable before touching the file. `ai_unconfigured` is the
 // deployment-level "no AI backend" state (self-host without a key), distinct
@@ -574,6 +575,22 @@ export async function processArchivedDocument(
     skipped: skipReason ?? extraction.skipped ?? null,
   })
 
+  // Match at arrival: the document has just been read, so pair it with its
+  // bank transaction now rather than when someone opens a picker. Skipped
+  // when the caller already knew the transaction. Best-effort: the upload has
+  // succeeded, and a matching failure must not turn it into an error.
+  if (!matchedTransactionId && !skipExtraction) {
+    try {
+      await runArrivalMatch(supabase, companyId, {
+        trigger: 'arrival',
+        inboxItemIds: [inbox.id],
+        actorUserId: userId,
+      })
+    } catch (err) {
+      console.error('[invoice-inbox] arrival match failed:', err)
+    }
+  }
+
   try {
     await appendProcessingHistory({
       companyId,
@@ -717,6 +734,19 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
         model,
         skipped: skipReason,
       })
+
+      // Same arrival match as the synchronous path, once the row has flipped
+      // to received with its fields.
+      if (!extractionSkipped) {
+        try {
+          await runArrivalMatch(supabase, job.companyId, {
+            trigger: 'arrival',
+            inboxItemIds: [job.itemId],
+          })
+        } catch (err) {
+          console.error('[invoice-inbox] deferred arrival match failed:', err)
+        }
+      }
 
       try {
         await appendProcessingHistory({
