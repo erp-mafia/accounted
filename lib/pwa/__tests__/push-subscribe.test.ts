@@ -4,6 +4,7 @@ import {
   isInstalledWebApp,
   isPushApiSupported,
   sendTestPush,
+  unsubscribeFromPush,
   urlBase64ToUint8Array,
 } from '@/lib/pwa/push-subscribe'
 
@@ -91,5 +92,50 @@ describe('sendTestPush', () => {
   it('returns no_subscriptions on 409', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 409 }))
     await expect(sendTestPush()).resolves.toBe('no_subscriptions')
+  })
+})
+
+describe('unsubscribeFromPush', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('re-persists the endpoint when browser unsubscribe fails', async () => {
+    const unsubscribe = vi.fn().mockRejectedValue(new Error('browser-fail'))
+    const subscription = {
+      endpoint: 'https://push.example/sub',
+      unsubscribe,
+      toJSON: () => ({
+        endpoint: 'https://push.example/sub',
+        keys: { p256dh: 'p', auth: 'a' },
+      }),
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('window', {
+      matchMedia: () => ({ matches: true }),
+      PushManager: function PushManager() {},
+      Notification: function Notification() {},
+      setTimeout,
+    })
+    vi.stubGlobal('navigator', {
+      serviceWorker: {
+        getRegistration: vi.fn().mockResolvedValue({
+          pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) },
+        }),
+      },
+      standalone: true,
+    })
+    vi.stubGlobal('PushManager', function PushManager() {})
+    vi.stubGlobal('Notification', function Notification() {})
+
+    await expect(unsubscribeFromPush()).rejects.toThrow('browser-fail')
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'DELETE' })
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST' })
   })
 })

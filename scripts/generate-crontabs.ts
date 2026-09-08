@@ -51,7 +51,8 @@ const MOUNTED_BY: Record<CrontabVariant, string> = {
  * environment in docker-compose.yml. Not a template literal on purpose: the
  * `${...}` must reach the file verbatim.
  */
-const CURL_PREFIX = 'curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}'
+const CURL_PREFIX =
+  'curl -sf --connect-timeout 10 --max-time 300 -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}'
 
 /**
  * Paths in vercel.json deliberately NOT emitted into the Docker crontabs, each

@@ -138,7 +138,14 @@ export async function unsubscribeFromPush(): Promise<void> {
     body: JSON.stringify({ endpoint }),
   })
   if (!res.ok && res.status !== 404) throw new Error('unsubscribe-failed')
-  await subscription.unsubscribe()
+  try {
+    await subscription.unsubscribe()
+  } catch (error) {
+    // Server row is already gone. Re-persist so delivery keeps working and
+    // the Konto switch can stay "on" after the caller restores UI state.
+    await persistSubscription(subscription).catch(() => undefined)
+    throw error
+  }
 }
 
 export async function fetchPushEventSettings(): Promise<PushEventSettings | null> {
