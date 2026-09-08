@@ -21,6 +21,7 @@ const UpdateKPIPreferencesSchema = z.object({
   visibleKpis: z.array(z.string()).optional(),
   kpiOrder: z.array(z.string()).optional(),
   accountOverrides: z.record(z.string(), z.array(z.string())).optional(),
+  showMonthlyTable: z.boolean().optional(),
 })
 
 export const GET = withRouteContext('kpi.preferences.get', async (_request, { supabase, companyId }) => {

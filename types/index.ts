@@ -4071,6 +4071,12 @@ export interface KPIPreferences {
   visibleKpis: string[]
   kpiOrder: string[]
   accountOverrides: Record<string, string[]>
+  /**
+   * The month-by-month table (income, expenses, net) under the panes. A
+   * boolean rather than a KPI_DEFINITIONS id on purpose: every stored row
+   * already carries a complete kpiOrder, which would hide a new id (#2196).
+   */
+  showMonthlyTable: boolean
 }
 
 // ============================================================

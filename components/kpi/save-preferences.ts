@@ -72,7 +72,10 @@ export function readPreferencesBody(body: unknown): KPIPreferences | null {
     !Array.isArray(candidate.kpiOrder) ||
     !overrides ||
     typeof overrides !== 'object' ||
-    Array.isArray(overrides)
+    Array.isArray(overrides) ||
+    // Both routes merge defaults before answering, so the flag is always a
+    // boolean from this server; anything else is not a preferences object.
+    typeof candidate.showMonthlyTable !== 'boolean'
   ) {
     return null
   }
@@ -81,6 +84,7 @@ export function readPreferencesBody(body: unknown): KPIPreferences | null {
     visibleKpis: candidate.visibleKpis,
     kpiOrder: candidate.kpiOrder,
     accountOverrides: overrides,
+    showMonthlyTable: candidate.showMonthlyTable,
   }
 }
 
