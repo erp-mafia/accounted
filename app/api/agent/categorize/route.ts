@@ -7,7 +7,8 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getAiStatus } from '@/lib/ai'
 import { gatherCandidates } from '@/lib/agent/categorize/candidates'
-import { gatherUnderlag } from '@/lib/agent/categorize/underlag'
+import { gatherUnderlag, gatherUnderlagExtractions } from '@/lib/agent/categorize/underlag'
+import { ensureCounterpartyProfile } from '@/lib/parties/profile'
 import { selectAccount } from '@/lib/agent/categorize/select-account'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { EntityType, Transaction } from '@/types'
@@ -108,22 +109,37 @@ export const POST = withRouteContext(
           (tx as { document_id?: string | null }).document_id,
         ))
 
-      const candidates = await gatherCandidates(supabase, companyId, tx as Transaction)
+      // The counterparty profile: cached per company and key, read once at
+      // first sight from the document's text when there is one. It gives the
+      // selector the country, what they sell and the VAT posture, and the
+      // candidate slate a typical account with the lowest weight.
+      const t = tx as Transaction
+      const rawText = t.merchant_name || t.original_description || t.description || ''
+      const stored = await ensureCounterpartyProfile(supabase, companyId, {
+        rawText,
+        bankTexts: [t.merchant_name, t.original_description, t.description].filter((s): s is string => !!s),
+        documents: await gatherUnderlagExtractions(supabase, companyId, t.id, (tx as { document_id?: string | null }).document_id),
+        userId: user.id,
+      })
+      const profile = stored?.profile ?? null
+
+      const candidates = await gatherCandidates(supabase, companyId, t, 8, profile)
       const selection = await selectAccount({
         transaction: {
-          merchantName: (tx as Transaction).merchant_name,
-          description: (tx as Transaction).description,
-          amount: (tx as Transaction).amount,
-          date: (tx as Transaction).date,
-          currency: (tx as Transaction).currency,
+          merchantName: t.merchant_name,
+          description: t.description,
+          amount: t.amount,
+          date: t.date,
+          currency: t.currency,
         },
         underlag,
+        counterparty: profile,
         candidates,
         entityType: ((company?.entity_type as EntityType | undefined) ?? 'enskild_firma'),
         vatRegistered: settings?.vat_registered ?? false,
         samples: parsed.data.samples,
       })
-      return NextResponse.json({ data: { ...selection, candidates } })
+      return NextResponse.json({ data: { ...selection, candidates, counterparty: stored } })
     } catch (err) {
       return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
     }

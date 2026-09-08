@@ -120,3 +120,46 @@ function renderExtraction(ex: Record<string, unknown>, label: string): string {
   const head = `${label}: ${parts.join(', ') || 'utläst underlag'}.`
   return items.length ? `${head} Rader: ${items.map((d) => `"${d}"`).join('; ')}.` : head
 }
+
+/**
+ * The same sources as gatherUnderlag, as structured extractions rather than
+ * text: what the counterparty profile reads its evidence from. Best-effort,
+ * empty on any failure.
+ */
+export async function gatherUnderlagExtractions(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionId: string,
+  documentId?: string | null,
+): Promise<Array<{ documentId: string | null; extraction: Record<string, unknown> | null }>> {
+  try {
+    const [inboxRes, docRes] = await Promise.all([
+      supabase
+        .from('invoice_inbox_items')
+        .select('document_id, extracted_data')
+        .eq('company_id', companyId)
+        .eq('matched_transaction_id', transactionId)
+        .limit(3),
+      documentId
+        ? supabase
+            .from('document_attachments')
+            .select('id, extracted_data')
+            .eq('id', documentId)
+            .eq('company_id', companyId)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+    ])
+    const out: Array<{ documentId: string | null; extraction: Record<string, unknown> | null }> = []
+    const doc = (docRes as { data: { id: string; extracted_data?: Record<string, unknown> | null } | null }).data
+    if (doc?.extracted_data) out.push({ documentId: doc.id, extraction: doc.extracted_data })
+    for (const it of ((inboxRes as { data: unknown }).data ?? []) as Array<{ document_id: string | null; extracted_data: Record<string, unknown> | null }>) {
+      if (!it.extracted_data) continue
+      if (it.document_id && out.some((o) => o.documentId === it.document_id)) continue
+      out.push({ documentId: it.document_id, extraction: it.extracted_data })
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+

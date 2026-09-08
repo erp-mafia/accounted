@@ -17,6 +17,7 @@ import { coreKey } from './ledger-key'
 import { isScbConfigured } from './scb/config'
 import { getObservedParties, type ObservedParty } from './observed'
 import type { SuggestionReason } from './suggest'
+import { fetchProfilesForAliasKeys, type StoredProfile } from './profile'
 
 export type RegisterView = 'suggested' | 'observed'
 export type PartyRole = 'supplier' | 'customer'
@@ -412,6 +413,8 @@ export interface Dossier {
   decisions: PartyDecision[]
   vouchers: PartyVoucher[]
   similar: Array<{ id: string; displayName: string; orgNumber: string | null; status: string }>
+  /** What the model read about this counterparty, when a profile exists for one of its keys. */
+  profile: StoredProfile | null
 }
 
 /**
@@ -438,7 +441,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
   }
   if (p.archived_at) return null
 
-  const [facts, identities, decisions, customer, supplier, observed] = await Promise.all([
+  const [facts, identities, decisions, customer, supplier, observed, profiles] = await Promise.all([
     supabase
       .from('party_facts')
       .select('id, field, value, rank, source, reference, fetched_at, recorded_at')
@@ -462,6 +465,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
     supabase.from('customers').select('id').eq('company_id', companyId).eq('party_id', partyId).limit(1).maybeSingle(),
     supabase.from('suppliers').select('id').eq('company_id', companyId).eq('party_id', partyId).limit(1).maybeSingle(),
     getObservedParties(supabase, companyId, { limit: 5000 }),
+    fetchProfilesForAliasKeys(supabase, companyId, p.alias_keys),
   ])
   for (const r of [facts, identities, decisions]) if (r.error) throw new Error(`dossier read failed: ${r.error.message}`)
 
@@ -546,6 +550,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       fetchedAt: (f.fetched_at as string | null) ?? null,
       recordedAt: f.recorded_at as string,
     })),
+    profile: profiles[0] ?? null,
     identities: ((identities.data ?? []) as Array<Record<string, unknown>>).map((i) => ({
       id: i.id as string,
       scheme: i.scheme as string,

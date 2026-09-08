@@ -19,7 +19,12 @@ vi.mock('@/lib/ai', () => ({ getAiStatus: () => aiStatus() }))
 const gatherCandidates = vi.fn()
 vi.mock('@/lib/agent/categorize/candidates', () => ({ gatherCandidates: (...a: unknown[]) => gatherCandidates(...a) }))
 const gatherUnderlag = vi.fn()
-vi.mock('@/lib/agent/categorize/underlag', () => ({ gatherUnderlag: (...a: unknown[]) => gatherUnderlag(...a) }))
+vi.mock('@/lib/agent/categorize/underlag', () => ({
+  gatherUnderlag: (...a: unknown[]) => gatherUnderlag(...a),
+  gatherUnderlagExtractions: vi.fn().mockResolvedValue([]),
+}))
+const ensureCounterpartyProfile = vi.fn()
+vi.mock('@/lib/parties/profile', () => ({ ensureCounterpartyProfile: (...a: unknown[]) => ensureCounterpartyProfile(...a) }))
 const selectAccount = vi.fn()
 vi.mock('@/lib/agent/categorize/select-account', () => ({ selectAccount: (...a: unknown[]) => selectAccount(...a) }))
 
@@ -58,6 +63,7 @@ beforeEach(() => {
   aiStatus.mockReturnValue({ configured: true })
   gatherCandidates.mockResolvedValue([{ account: '5410', label: 'Material', vatTreatment: 'standard_25', source: 'counterparty_template', confidence: 0.9 }])
   gatherUnderlag.mockResolvedValue('Kvitto: Biltema, totalt 499 SEK.')
+  ensureCounterpartyProfile.mockResolvedValue(null)
   selectAccount.mockResolvedValue({
     account: '5410', category: null, vatTreatment: 'standard_25', reverseCharge: false,
     confidence: 0.86, modelConfidence: 'high', agreement: 1, reasoning: 'r',
@@ -86,7 +92,7 @@ describe('POST /api/agent/categorize', () => {
   it('uses the active company without a membership round trip when no override is given', async () => {
     const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))
     expect(res.status).toBe(200)
-    expect(gatherCandidates).toHaveBeenCalledWith(expect.anything(), 'company-1', expect.anything())
+    expect(gatherCandidates).toHaveBeenCalledWith(expect.anything(), 'company-1', expect.anything(), 8, null)
   })
   it('429 when rate limited', async () => {
     checkRate.mockResolvedValue({ ok: false })
@@ -138,3 +144,36 @@ describe('POST /api/agent/categorize', () => {
     )
   })
 })
+
+describe('POST /api/agent/categorize with a counterparty profile', () => {
+  it('hands the cached profile to the slate and the selector and returns it', async () => {
+    const stored = {
+      id: 'prof-1',
+      counterparty_key: 'higgsfield inc',
+      ledger_key: 'higgsfield inc',
+      party_id: null,
+      source_kind: 'document',
+      model: 'test-model',
+      confidence: 'high',
+      evidence: [{ field: 'country', quote: 'United States', document_id: 'doc-1' }],
+      profile: { name: 'Higgsfield Inc.', country: 'US', kind: 'company', sells: 'AI-videogenerering', industry: null, typical_account: '5420', recurrence: 'monthly', vat_posture: 'reverse_charge_non_eu' },
+    }
+    ensureCounterpartyProfile.mockResolvedValueOnce(stored)
+    requireAuthMock.mockResolvedValue({
+      user: { id: 'user-1' },
+      supabase: makeSupabase({ tx: { id: 'tx-1', merchant_name: null, description: 'HIGGSFIELD INC', original_description: 'HIGGSFIELD INC Kortköp' } }),
+      error: null,
+    })
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { data: { counterparty: { id: string } | null } }
+    expect(json.data.counterparty?.id).toBe('prof-1')
+    expect(gatherCandidates).toHaveBeenCalledWith(expect.anything(), 'company-1', expect.anything(), 8, stored.profile)
+    expect(selectAccount).toHaveBeenCalledWith(expect.objectContaining({ counterparty: stored.profile }))
+    const ensureInput = ensureCounterpartyProfile.mock.calls[0][2] as { rawText: string; userId: string; bankTexts: string[] }
+    expect(ensureInput.rawText).toBe('HIGGSFIELD INC Kortköp')
+    expect(ensureInput.bankTexts).toEqual(['HIGGSFIELD INC Kortköp', 'HIGGSFIELD INC'])
+    expect(ensureInput.userId).toBe('user-1')
+  })
+})
+
