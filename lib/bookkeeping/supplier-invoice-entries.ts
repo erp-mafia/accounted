@@ -17,7 +17,7 @@ import {
 } from './dimension-resolver'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { debitNatural } from './line-side'
+import { creditNatural, debitNatural } from './line-side'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExpenseClaimLineInput } from '@/lib/expenses/expense-claims-service'
 import type {
@@ -252,10 +252,11 @@ export async function createSupplierInvoiceRegistrationEntry(
   // For reverse charge, intermediate credits (2614/2624/2634) already exist, so we subtract them
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+  // An invoice whose rows net below zero (a leverantörskreditfaktura keyed in
+  // as an invoice) books 2440 on the debit side instead of a negative credit.
   lines.push({
     account_number: '2440',
-    debit_amount: 0,
-    credit_amount: Math.round((totalDebits - totalCredits) * 100) / 100,
+    ...creditNatural(totalDebits - totalCredits),
     line_description: desc,
     dimensions: defaultDimensions,
     ...buildCurrencyMetadata(invoice.currency, isForeign ? invoice.total : undefined, invoice.exchange_rate),
@@ -541,8 +542,7 @@ export async function createSupplierInvoiceCashEntry(
   const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   lines.push({
     account_number: creditAccount,
-    debit_amount: 0,
-    credit_amount: Math.round((totalDebits - totalCredits) * 100) / 100,
+    ...creditNatural(totalDebits - totalCredits),
     line_description: desc,
     dimensions: defaultDimensions,
   })
@@ -668,8 +668,7 @@ export function buildSupplierInvoicePrivatelyPaidLines(
   const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   lines.push({
     account_number: liabilityAccount,
-    debit_amount: 0,
-    credit_amount: roundOre(totalDebits - totalCredits),
+    ...creditNatural(totalDebits - totalCredits),
     line_description: description,
     dimensions: defaultDimensions,
   })

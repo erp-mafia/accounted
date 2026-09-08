@@ -396,6 +396,7 @@ export function isBookkeepingError(err: unknown): boolean {
   return (
     err instanceof AccountsNotInChartError ||
     err instanceof JournalEntryNotBalancedError ||
+    err instanceof JournalLineNegativeAmountError ||
     err instanceof FiscalPeriodNotFoundError ||
     err instanceof EntryDateOutsideFiscalPeriodError ||
     err instanceof JournalEntryNotFoundError ||
@@ -468,6 +469,23 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
             totalDebit: err.totalDebit,
             totalCredit: err.totalCredit,
             kind: err.kind,
+          },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof JournalLineNegativeAmountError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: {
+            accountNumber: err.accountNumber,
+            debitAmount: err.debitAmount,
+            creditAmount: err.creditAmount,
           },
         },
       },
