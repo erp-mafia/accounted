@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { SettingsGroup, SettingsRow } from '@/components/settings/SettingsRows'
+import { SettingsGroup, SettingsRow, SettingsRowEnd } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import {
   fetchPushEventSettings,
@@ -11,6 +12,7 @@ import {
   getExistingPushSubscription,
   isPushApiSupported,
   savePushEventSetting,
+  sendTestPush,
   subscribeToPush,
   unsubscribeFromPush,
   type PushEventSettingKey,
@@ -43,6 +45,7 @@ export function PwaPushNotificationsSettings() {
   const [subscribed, setSubscribed] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
   const [events, setEvents] = useState<PushEventSettings | null>(null)
 
   useEffect(() => {
@@ -101,6 +104,26 @@ export function PwaPushNotificationsSettings() {
     }
   }
 
+  async function handleTestPush() {
+    setTesting(true)
+    try {
+      const result = await sendTestPush()
+      if (result === 'sent') {
+        toast({ title: t('pwa_push_test_sent') })
+        return
+      }
+      toast({
+        title:
+          result === 'no_subscriptions'
+            ? t('pwa_push_test_no_subscription')
+            : t('pwa_push_test_failed'),
+        variant: 'destructive',
+      })
+    } finally {
+      setTesting(false)
+    }
+  }
+
   async function handleEventChange(key: PushEventSettingKey, next: boolean) {
     if (!events) return
     const previous = events
@@ -126,6 +149,19 @@ export function PwaPushNotificationsSettings() {
         <label htmlFor="pwa-push-subscribe" className="cursor-pointer text-sm">
           {t('pwa_push_switch')}
         </label>
+      </SettingsRow>
+      <SettingsRow label={t('pwa_push_test_label')} help={t('pwa_push_test_help')}>
+        <SettingsRowEnd>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void handleTestPush()}
+            disabled={!subscribed || saving || testing}
+          >
+            {testing ? t('pwa_push_test_sending') : t('pwa_push_test')}
+          </Button>
+        </SettingsRowEnd>
       </SettingsRow>
       {events
         ? EVENT_ROWS.map((row) => (

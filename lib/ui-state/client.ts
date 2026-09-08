@@ -4,10 +4,12 @@ import type { UserUiState } from '@/types'
 export const USER_UI_STATE_SWR_KEY = 'user-ui-state'
 
 /**
- * Att göra PWA badge is on unless the user stored an explicit false.
+ * Att göra PWA badge is off until the user stores an explicit true.
+ * A missing key must not set the icon badge: that path never asks for
+ * notification permission, so iOS shows nothing.
  */
 export function isPwaWorklistBadgeEnabled(uiState: UserUiState | undefined | null): boolean {
-  return uiState?.pwa_worklist_badge !== false
+  return uiState?.pwa_worklist_badge === true
 }
 
 /**

@@ -188,8 +188,8 @@ export interface UserUiState {
   // (companyId -> ISO timestamp of the ack). Lives on the user so each
   // member of a company sees the notice once.
   trial_expired_ack?: Record<string, string>
-  // Home-screen PWA badge for Att göra. Omitted means on: the badge is the
-  // default, and a stored false is the opt-out.
+  // Home-screen PWA badge for Att göra. Omitted means off: turning it on
+  // is what requests notification permission on iOS.
   pwa_worklist_badge?: boolean
 }
 

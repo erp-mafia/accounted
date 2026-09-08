@@ -16,8 +16,9 @@ import {
 import type { UserUiState } from '@/types'
 
 /**
- * Per-user opt-out for the installed PWA Att göra badge. Default on.
- * Lives on Konto next to "Installera som app".
+ * Per-user opt-in for the installed PWA Att göra badge. Default off
+ * until the key has been stored, so the first enable can ask for
+ * notification permission. Lives on Konto next to "Installera som app".
  */
 export function PwaWorklistBadgeToggle() {
   const t = useTranslations('settings')

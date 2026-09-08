@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { ApiRouteDefinition, ExtensionContext } from '@/lib/extensions/types'
 import { requireAuth } from '@/lib/auth/require-auth'
-import { getVapidPublicKey } from './notification-sender'
+import { getVapidPublicKey, sendTestPushToUser } from './notification-sender'
 import { getSettings, saveSettings } from './index'
 
 async function userIdFrom(ctx?: ExtensionContext): Promise<string | null> {
@@ -223,6 +223,34 @@ async function handleUpdateSettings(
 }
 
 // ============================================================
+// /test: POST: send one push to this user's stored subscriptions
+// ============================================================
+
+async function handlePostTest(
+  _request: Request,
+  ctx?: ExtensionContext
+): Promise<Response> {
+  const userId = await userIdFrom(ctx)
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!getVapidPublicKey()) {
+    return NextResponse.json(
+      { error: 'Push notifications not configured' },
+      { status: 500 }
+    )
+  }
+  const { createClient } = await import('@/lib/supabase/server')
+  const supabase = await createClient()
+  const result = await sendTestPushToUser(supabase, userId)
+  if (!result.sent) {
+    const status = result.reason === 'no_subscriptions' ? 409 : 500
+    return NextResponse.json({ error: result.reason ?? 'send_failed' }, { status })
+  }
+  return NextResponse.json({ success: true })
+}
+
+// ============================================================
 // Route definitions
 // ============================================================
 
@@ -256,5 +284,11 @@ export const pushNotificationsApiRoutes: ApiRouteDefinition[] = [
     path: '/settings',
     skipCompanyContext: true,
     handler: handleUpdateSettings,
+  },
+  {
+    method: 'POST',
+    path: '/test',
+    skipCompanyContext: true,
+    handler: handlePostTest,
   },
 ]

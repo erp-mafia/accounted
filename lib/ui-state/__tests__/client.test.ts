@@ -39,12 +39,12 @@ describe('persistUiState', () => {
 })
 
 describe('isPwaWorklistBadgeEnabled', () => {
-  it('defaults on when the key is missing', () => {
-    expect(isPwaWorklistBadgeEnabled(undefined)).toBe(true)
-    expect(isPwaWorklistBadgeEnabled({})).toBe(true)
+  it('defaults off when the key is missing', () => {
+    expect(isPwaWorklistBadgeEnabled(undefined)).toBe(false)
+    expect(isPwaWorklistBadgeEnabled({})).toBe(false)
   })
 
-  it('is off only for an explicit false', () => {
+  it('is on only for an explicit true', () => {
     expect(isPwaWorklistBadgeEnabled({ pwa_worklist_badge: false })).toBe(false)
     expect(isPwaWorklistBadgeEnabled({ pwa_worklist_badge: true })).toBe(true)
   })
