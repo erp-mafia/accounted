@@ -6,6 +6,7 @@
 
 export const PUSH_SUBSCRIBE_PATH = '/api/extensions/ext/push-notifications/subscribe'
 export const PUSH_SETTINGS_PATH = '/api/extensions/ext/push-notifications/settings'
+export const PUSH_TEST_PATH = '/api/extensions/ext/push-notifications/test'
 
 export type PushEventSettingKey =
   | 'periodLockedEnabled'
@@ -115,6 +116,15 @@ export async function fetchPushEventSettings(): Promise<PushEventSettings | null
     receiptMatchedEnabled: data.receiptMatchedEnabled !== false,
     missingUnderlagEnabled: data.missingUnderlagEnabled !== false,
   }
+}
+
+export async function sendTestPush(): Promise<
+  'sent' | 'no_subscriptions' | 'failed'
+> {
+  const res = await fetch(PUSH_TEST_PATH, { method: 'POST' })
+  if (res.ok) return 'sent'
+  if (res.status === 409) return 'no_subscriptions'
+  return 'failed'
 }
 
 export async function savePushEventSetting(

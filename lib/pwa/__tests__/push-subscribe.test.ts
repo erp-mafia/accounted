@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchVapidPublicKey,
   isPushApiSupported,
+  sendTestPush,
   urlBase64ToUint8Array,
 } from '@/lib/pwa/push-subscribe'
 
@@ -49,5 +50,21 @@ describe('fetchVapidPublicKey', () => {
       }),
     )
     await expect(fetchVapidPublicKey()).resolves.toBe('synthetic-public')
+  })
+})
+
+describe('sendTestPush', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('returns sent on 200', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }))
+    await expect(sendTestPush()).resolves.toBe('sent')
+  })
+
+  it('returns no_subscriptions on 409', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 409 }))
+    await expect(sendTestPush()).resolves.toBe('no_subscriptions')
   })
 })

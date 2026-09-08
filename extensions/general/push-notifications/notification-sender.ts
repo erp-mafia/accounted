@@ -172,6 +172,41 @@ export async function sendNotificationToUser(
   }
 }
 
+/**
+ * Konto "Skicka test": same web-push path as live events, but skips quiet
+ * hours, event opt-outs, and notification_log. A test that vanished because
+ * it was 21:01 would look like a broken subscribe.
+ */
+export async function sendTestPushToUser(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<{ sent: boolean; reason?: string }> {
+  try {
+    const subscriptions = await getUserSubscriptions(supabase, userId)
+    if (subscriptions.length === 0) {
+      return { sent: false, reason: 'no_subscriptions' }
+    }
+
+    const result = await sendPushToMultiple(subscriptions, {
+      title: 'Testnotis',
+      body: 'Så här ser en push från Accounted ut.',
+      tag: 'pwa-push-test',
+      data: { url: '/settings/account', type: 'test' },
+    })
+
+    if (result.goneSubscriptions.length > 0) {
+      await disableGoneSubscriptions(supabase, result.goneSubscriptions)
+    }
+
+    return result.successful > 0
+      ? { sent: true }
+      : { sent: false, reason: 'send_failed' }
+  } catch (error) {
+    console.error(`[push-notifications] sendTestPushToUser failed for ${userId}:`, error)
+    return { sent: false, reason: 'error' }
+  }
+}
+
 // ============================================================
 // Internal helpers
 // ============================================================
