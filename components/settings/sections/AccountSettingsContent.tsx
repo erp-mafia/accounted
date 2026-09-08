@@ -12,6 +12,7 @@ import { SecuritySettings } from '@/components/settings/SecuritySettings'
 import { EmailDigestToggle } from '@/components/settings/EmailDigestToggle'
 import { InstallAppSection } from '@/components/settings/InstallAppSection'
 import { PwaWorklistBadgeToggle } from '@/components/settings/PwaWorklistBadgeToggle'
+import { PwaPushNotificationsSettings } from '@/components/settings/PwaPushNotificationsSettings'
 import { CalendarFeedSettings } from '@/components/settings/CalendarFeedSettings'
 import { AccountDangerZone } from '@/components/settings/AccountDangerZone'
 import {
@@ -383,6 +384,7 @@ export function AccountSettingsContent() {
 
       {/* Notifications: daily "nytt att bokfora" email digest opt-in */}
       <EmailDigestToggle />
+      <PwaPushNotificationsSettings />
 
       {/* Calendar feed (extension-gated) */}
       {hasCalendarExtension && <CalendarFeedSettings />}

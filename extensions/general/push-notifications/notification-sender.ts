@@ -62,7 +62,8 @@ export interface NotificationPayload {
  * Get the public VAPID key for client-side subscription.
  */
 export function getVapidPublicKey(): string | null {
-  return vapidPublicKey || null
+  if (!vapidPublicKey || vapidPublicKey.startsWith('__')) return null
+  return vapidPublicKey
 }
 
 /**

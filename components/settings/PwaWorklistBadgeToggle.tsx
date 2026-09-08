@@ -33,6 +33,9 @@ export function PwaWorklistBadgeToggle() {
     setOptimistic(next)
     setSaving(true)
     if (!next) void syncAppBadge(0)
+    else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      void Notification.requestPermission()
+    }
     try {
       const res = await applyUiStatePatch({ pwa_worklist_badge: next })
       if (!res.ok) throw new Error('save failed')
