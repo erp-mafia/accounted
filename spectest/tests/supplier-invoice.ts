@@ -119,7 +119,8 @@ export const registerSupplierInvoice = env.test(
     expect(lines[2]?.account_number).toBe("5010");
     expect(lines[2]?.debit).toBe(INVOICE.net);
     expect(lines[0]?.source_type).toBe("supplier_invoice_registered");
-    expect(lines[0]?.voucher_series).toBe("A");
+    // Supplier invoices book into series D (Leverantörsfakturor) since the standard verifikationsserier (#2336, #2358).
+    expect(lines[0]?.voucher_series).toBe("D");
     expect(lines[0]?.voucher_number).toBe(1);
 
     const invoice = await ctx.svc.supabase.sql<{

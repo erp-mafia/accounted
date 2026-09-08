@@ -175,7 +175,8 @@ export const sendInvoiceAndBookIt = env.test(
     expect(lines[2]?.account_number).toBe("3001");
     expect(lines[2]?.credit).toBe("15000");
     expect(lines[0]?.status).toBe("posted");
-    expect(lines[0]?.voucher_series).toBe("A");
+    // Customer invoices book into series B (Kundfakturor) since the standard verifikationsserier (#2336, #2358).
+    expect(lines[0]?.voucher_series).toBe("B");
 
     const balance = await ctx.svc.supabase.sql<{ diff: string }>`
       select (sum(debit_amount) - sum(credit_amount))::text as diff
