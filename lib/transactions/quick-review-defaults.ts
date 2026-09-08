@@ -2,7 +2,7 @@ import {
   getDefaultAccountForCategory,
   getDefaultVatTreatmentForCategory,
 } from '@/lib/bookkeeping/category-mapping'
-import type { TransactionCategory, VatTreatment } from '@/types'
+import type { EntityType, TransactionCategory, VatTreatment } from '@/types'
 
 /**
  * The template shape the transaction review dialog actually reads.
@@ -60,12 +60,13 @@ export function resolveQuickReviewDefaults(
   template: ReviewTemplate | null | undefined,
   templateId: string | undefined,
   category: TransactionCategory | null | undefined,
+  entityType: EntityType,
 ): QuickReviewDefaults {
   const useTemplateDefaults = !templateId && !!template
 
   const account =
     (useTemplateDefaults ? template.debit_account : undefined) ||
-    (category ? getDefaultAccountForCategory(category) : '') ||
+    (category ? getDefaultAccountForCategory(category, entityType) : '') ||
     ''
 
   const vat: VatTreatment | 'none' = useTemplateDefaults

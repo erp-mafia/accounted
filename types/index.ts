@@ -1,5 +1,7 @@
-// Entity types
-export type EntityType = 'enskild_firma' | 'aktiebolag'
+// Entity types (legal forms). Every form-dependent fact goes through
+// lib/company/entity-type.ts (byEntityType): adding a member here must
+// fail compilation there until each site has an answer for it.
+export type EntityType = 'enskild_firma' | 'aktiebolag' | 'ideell_forening'
 
 // Swedish accounting framework. K2 (BFNAR 2016:10) is the default simplified
 // ruleset for smaller AB; K3 (BFNAR 2012:1) is the principles-based ruleset

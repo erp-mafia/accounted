@@ -21,6 +21,9 @@
  */
 
 /** BFNAR 2016:10: the K2 accrual simplification ceiling, in SEK. */
+import type { EntityType } from '@/types'
+import { simplifiedYearEndRegelverk } from '@/lib/company/entity-type'
+
 export const K2_ACCRUAL_THRESHOLD_SEK = 5000
 
 export interface AccrualAmountInput {
@@ -86,7 +89,8 @@ export function shouldShowK2AccrualHint(input: AccrualAmountInput): boolean {
  * and correct for every aktiebolag.
  */
 export function accrualHintKey(
-  entityType?: 'enskild_firma' | 'aktiebolag' | null,
+  entityType?: EntityType | null,
 ): 'k1_hint' | 'k2_hint' {
-  return entityType === 'enskild_firma' ? 'k1_hint' : 'k2_hint'
+  if (!entityType) return 'k2_hint'
+  return simplifiedYearEndRegelverk(entityType) === 'K1' ? 'k1_hint' : 'k2_hint'
 }

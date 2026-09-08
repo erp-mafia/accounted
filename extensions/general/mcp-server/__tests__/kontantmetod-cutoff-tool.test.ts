@@ -78,7 +78,7 @@ beforeEach(() => {
   } as never)
   vi.mocked(assessKontantmetodCutoff).mockResolvedValue({
     collection,
-    lines: buildCutoffLines(collection.receivables, collection.payables),
+    lines: buildCutoffLines(collection.receivables, collection.payables, 'aktiebolag'),
     postings: {
       complete: false, hasAny: false, receivableEntryId: null,
       receivableReversalId: null, payableEntryId: null, payableReversalId: null,
@@ -140,7 +140,7 @@ describe('gnubok_post_kontantmetod_cutoff', () => {
     expect(result.preview.entries.map((entry) => entry.entry_date)).toEqual([
       '2026-12-31', '2027-01-01', '2026-12-31', '2027-01-01',
     ])
-    expect(result.preview.entries[0]?.lines).toEqual(buildCutoffLines(collection.receivables, []).receivableLines)
+    expect(result.preview.entries[0]?.lines).toEqual(buildCutoffLines(collection.receivables, [], 'aktiebolag').receivableLines)
     expect(supabase.inserts).toHaveLength(1)
     expect(supabase.inserts[0]).toMatchObject({
       operation_type: 'post_kontantmetod_cutoff',
@@ -168,7 +168,7 @@ describe('gnubok_post_kontantmetod_cutoff', () => {
 
     vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce({
       collection: { ...collection, unknownVatTreatment: ['F-9'] },
-      lines: buildCutoffLines([], []),
+      lines: buildCutoffLines([], [], 'aktiebolag'),
       postings: { complete: false, hasAny: false, receivableEntryId: null, receivableReversalId: null, payableEntryId: null, payableReversalId: null, missing: [], duplicates: [] },
     })
     await expect(tool.execute(
@@ -177,7 +177,7 @@ describe('gnubok_post_kontantmetod_cutoff', () => {
 
     vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce({
       collection,
-      lines: buildCutoffLines(collection.receivables, collection.payables),
+      lines: buildCutoffLines(collection.receivables, collection.payables, 'aktiebolag'),
       postings: { complete: true, hasAny: true, receivableEntryId: 'je-1', receivableReversalId: 'je-2', payableEntryId: 'je-3', payableReversalId: 'je-4', missing: [], duplicates: [] },
     })
     await expect(tool.execute(
@@ -186,7 +186,7 @@ describe('gnubok_post_kontantmetod_cutoff', () => {
 
     vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce({
       collection: { receivables: [], payables: [], unknownVatTreatment: [], strayVatOnZeroRate: [] },
-      lines: buildCutoffLines([], []),
+      lines: buildCutoffLines([], [], 'aktiebolag'),
       postings: { complete: true, hasAny: false, receivableEntryId: null, receivableReversalId: null, payableEntryId: null, payableReversalId: null, missing: [], duplicates: [] },
     })
     await expect(tool.execute(

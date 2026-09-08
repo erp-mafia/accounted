@@ -142,4 +142,10 @@ describe('toRedovisare12', () => {
     // Skatteverket reject it with its own message. See the module docblock.
     expect(toRedovisare12('5560125791', 'aktiebolag')).toBe('165560125791')
   })
+
+  it('prefixes 16 for an ideell förening like every other juridisk person', () => {
+    // 8-series org numbers are issued by Skatteverket to föreningar; they
+    // must never be read as a personnummer century.
+    expect(toRedovisare12('814400-9464', 'ideell_forening')).toBe('168144009464')
+  })
 })

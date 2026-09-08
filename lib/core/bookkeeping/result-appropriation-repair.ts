@@ -171,7 +171,9 @@ export function classifyHistoricalResultRepair(
     reason: Exclude<HistoricalResultRepairReason, 'ready'>,
   ): HistoricalResultRepairAssessment => ({ ...base, status, reason, plan: null })
 
-  if ((snapshot.entityType ?? 'aktiebolag') !== 'aktiebolag') {
+  // An unknown form is NOT assumed to be an aktiebolag: the repair only ever
+  // applies to the 2099 -> 2098 chain, so anything else is skipped.
+  if (snapshot.entityType !== 'aktiebolag') {
     return finish('skipped', 'non_aktiebolag')
   }
   if (snapshot.isClosed) return finish('skipped', 'period_closed')
@@ -276,7 +278,7 @@ export async function assessHistoricalResultRepair(
   }
 
   if (
-    (baseSnapshot.entityType ?? 'aktiebolag') !== 'aktiebolag' ||
+    baseSnapshot.entityType !== 'aktiebolag' ||
     baseSnapshot.isClosed ||
     baseSnapshot.lockedAt ||
     baseSnapshot.existingPostedAppropriation ||

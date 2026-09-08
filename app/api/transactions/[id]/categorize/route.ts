@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
@@ -273,7 +274,7 @@ export const POST = withRouteContext(
       .eq('company_id', companyId)
       .single()
 
-    const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+    const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
     const fiscalYearStartMonth: number = settings?.fiscal_year_start_month ?? 1
 
     let finalCategory: TransactionCategory

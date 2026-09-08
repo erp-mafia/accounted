@@ -26,10 +26,15 @@
 -- corrects the label the picker handed out before anything was booked on it.
 -- No row is deleted; bookings key on account_number, never on the label.
 --
--- The migration runs in one transaction (Supabase CLI wraps it). The SHARE
--- lock below makes the "no journal lines" check and the rename atomic against
+-- Explicit transaction block: the CI replay (psql -f per file) and the
+-- Supabase branch runner both execute statements in autocommit, where a bare
+-- LOCK TABLE is refused ("can only be used in transaction blocks"); that is
+-- how 20260908113353 failed on main and blocked the prod queue. The SHARE
+-- lock makes the "no journal lines" check and the rename atomic against
 -- concurrent postings: inserts on journal_entry_lines wait the few
 -- milliseconds this takes, reads are unaffected.
+
+BEGIN;
 
 LOCK TABLE public.journal_entry_lines IN SHARE MODE;
 
@@ -95,3 +100,5 @@ UPDATE public.chart_of_accounts a
           WHERE e.company_id = a.company_id
             AND l.account_number = a.account_number
        );
+
+COMMIT;

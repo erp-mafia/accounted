@@ -14,6 +14,7 @@ import {
   generateInputVatLine,
 } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
+import { templateAccountForForm } from '@/lib/company/entity-type'
 
 // ============================================================
 // Types
@@ -44,7 +45,7 @@ export interface BookingTemplate {
   name_en: string
   group: TemplateGroup
   direction: 'expense' | 'income' | 'transfer'
-  entity_applicability: 'all' | 'enskild_firma' | 'aktiebolag'
+  entity_applicability: 'all' | EntityType
   debit_account: string
   credit_account: string
   debit_account_ab?: string
@@ -1873,18 +1874,15 @@ function isBasisAccount(account: string): boolean {
 export function buildMappingResultFromTemplate(
   template: BookingTemplate,
   transaction: Transaction,
-  entityType: EntityType = 'enskild_firma'
+  entityType: EntityType
 ): MappingResult {
   const isExpense = transaction.amount < 0
   const isBusiness = !template.default_private
 
-  // Resolve entity-specific accounts
-  let debitAccount = template.debit_account
-  let creditAccount = template.credit_account
-  if (entityType === 'aktiebolag') {
-    if (template.debit_account_ab) debitAccount = template.debit_account_ab
-    if (template.credit_account_ab) creditAccount = template.credit_account_ab
-  }
+  // Resolve entity-specific accounts (EF base, AB override, förening: base
+  // with owner accounts translated to the member settlement account).
+  const debitAccount = templateAccountForForm(entityType, template.debit_account, template.debit_account_ab)!
+  const creditAccount = templateAccountForForm(entityType, template.credit_account, template.credit_account_ab)!
 
   // Always work in SEK. For non-SEK transactions, resolve the SEK-equivalent
   // (via amount_sek or amount * exchange_rate); for SEK rows this is a no-op.

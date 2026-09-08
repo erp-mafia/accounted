@@ -85,6 +85,7 @@ describe('buildCounterpartySuggestion', () => {
       },
       undefined,
       'expense_other',
+      'enskild_firma',
     )
     expect(account).toBe('6570')
     expect(() => account.startsWith('2')).not.toThrow()
