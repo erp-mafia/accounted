@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ExpensePayoutDue, SuggestedMatch } from './types'
+import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 import type { WorklistCounts } from './types'
 import {
   countDeadlinesNeedingAction,
@@ -8,6 +8,7 @@ import {
   countOverdueInvoices,
   countPendingOperations,
   countReconciliationDue,
+  countSkattekontoPaymentDue,
   countSuggestedMatches,
   countSupplierInvoicesAwaitingApproval,
   countUnbookedSkattekontoRows,
@@ -39,6 +40,12 @@ export interface GetWorklistCountsOptions {
    * a second scan of expense_claims.
    */
   expensePayoutsDue?: ExpensePayoutDue[] | Promise<ExpensePayoutDue[]>
+  /**
+   * The next uncovered skattekonto charge the caller is already fetching
+   * (Hem renders it as one Betala row): the count is 1 or 0 from that value
+   * instead of a second scan. Pass null for "nothing to pay in".
+   */
+  skattekontoPaymentDue?: SkattekontoPaymentDue | null | Promise<SkattekontoPaymentDue | null>
 }
 
 export async function getWorklistCounts(
@@ -58,6 +65,7 @@ export async function getWorklistCounts(
     pendingOperations,
     reconciliationDue,
     expensePayout,
+    skattekontoPaymentDue,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -74,6 +82,9 @@ export async function getWorklistCounts(
     options.expensePayoutsDue
       ? Promise.resolve(options.expensePayoutsDue).then((p) => p.length)
       : countExpensePayoutsDue(supabase, companyId),
+    options.skattekontoPaymentDue !== undefined
+      ? Promise.resolve(options.skattekontoPaymentDue).then((p) => (p ? 1 : 0))
+      : countSkattekontoPaymentDue(supabase, companyId),
   ])
 
   return {
@@ -89,6 +100,7 @@ export async function getWorklistCounts(
       pending_operations: pendingOperations,
       reconciliation_due: reconciliationDue,
       expense_payout: expensePayout,
+      skattekonto_payment_due: skattekontoPaymentDue,
     },
     total:
       bookTransaction +
@@ -100,6 +112,7 @@ export async function getWorklistCounts(
       deadlineAction +
       pendingOperations +
       reconciliationDue +
-      expensePayout,
+      expensePayout +
+      skattekontoPaymentDue,
   }
 }

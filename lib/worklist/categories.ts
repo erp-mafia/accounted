@@ -27,7 +27,9 @@ import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/invoices/matchable-statuses'
-import type { ExpensePayoutDue, SuggestedMatch } from './types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
+import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 
 // Canonical home is lib/worklist/types.ts (dependency-free, client-safe);
 // re-exported here so existing server-side imports keep working.
@@ -721,6 +723,113 @@ export async function countExpensePayoutsDue(
   companyId: string,
 ): Promise<number> {
   return (await listExpensePayoutsDue(supabase, companyId)).length
+}
+
+/**
+ * Where the skatteverket extension caches the saldo it last fetched. Core
+ * reads the row directly (never imports `@/extensions/*`); the same row the
+ * reconciliation engine and the OCR resolver read.
+ */
+const SKATTEVERKET_EXTENSION_ID = 'skatteverket'
+const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
+
+/**
+ * The next skattekonto charge the balance does not cover, or null.
+ *
+ * Server-side twin of the /skattekonto page's "Nästa dragning" math: the
+ * earliest due date on or after today among Skatteverket's upcoming rows
+ * (ignored rows included, Skatteverket draws them regardless of our flag),
+ * the sum drawn that day, and the shortfall against the last synced saldo.
+ * Nothing to pay in (no upcoming charge, or a saldo that covers it) is null,
+ * so the Att göra row only appears when money actually has to move.
+ *
+ * Soft-fails to null with a logged error, like every other category.
+ */
+export async function listSkattekontoPaymentDue(
+  supabase: SupabaseClient,
+  companyId: string,
+  today: string = todayIsoStockholm(),
+): Promise<SkattekontoPaymentDue | null> {
+  type UpcomingRow = {
+    transaktionsdatum: string
+    forfallodatum: string | null
+    belopp_skatteverket: number | string
+  }
+  const [rowsRes, snapshotRes] = await Promise.all([
+    supabase
+      .from('skattekonto_transactions')
+      .select('transaktionsdatum, forfallodatum, belopp_skatteverket')
+      .eq('company_id', companyId)
+      .eq('status', 'upcoming'),
+    supabase
+      .from('extension_data')
+      .select('value')
+      .eq('company_id', companyId)
+      .eq('extension_id', SKATTEVERKET_EXTENSION_ID)
+      .eq('key', BALANCE_SNAPSHOT_KEY)
+      .maybeSingle(),
+  ])
+  if (rowsRes.error) {
+    logAndZero('skattekonto_payment_due', companyId, rowsRes.error)
+    return null
+  }
+
+  const dueOf = (r: UpcomingRow) => r.forfallodatum ?? r.transaktionsdatum
+  const upcoming = ((rowsRes.data ?? []) as UpcomingRow[]).filter((r) => dueOf(r) >= today)
+  const due = upcoming.map(dueOf).sort()[0]
+  if (!due) return null
+  const rows = upcoming.filter((r) => dueOf(r) === due)
+  const charge = roundOre(Math.abs(rows.reduce((sum, r) => sum + Number(r.belopp_skatteverket), 0)))
+  if (charge <= 0) return null
+
+  // A failed snapshot read is "balance unknown", never "balance zero": the
+  // full charge is then the honest amount to show.
+  const snapshotValue = snapshotRes.error ? null : (snapshotRes.data?.value as
+    | { saldo?: { saldoSkatteverket?: unknown } }
+    | null
+    | undefined)
+  const rawBalance = Number(snapshotValue?.saldo?.saldoSkatteverket)
+  const balance = snapshotValue && Number.isFinite(rawBalance) ? roundOre(rawBalance) : null
+  if (balance !== null && balance >= charge) return null
+  const amount = balance === null ? charge : roundOre(charge - balance)
+
+  const { data: company, error: companyError } = await supabase
+    .from('companies')
+    .select('org_number, entity_type')
+    .eq('id', companyId)
+    .maybeSingle()
+  if (companyError) logAndZero('skattekonto_payment_due', companyId, companyError)
+  // Same collapse as the tax-payment file route: companies.entity_type is
+  // NOT NULL with a CHECK, and only enskild firma builds its redovisare from
+  // a personnummer. Without an org number there is no reference to derive;
+  // the row still shows, the user reads the OCR off Skatteverket instead.
+  let ocr: string | null = null
+  const orgNumber = (company as { org_number?: string | null; entity_type?: string | null } | null)?.org_number
+  if (orgNumber) {
+    try {
+      ocr = await resolveSkattekontoOcr(
+        supabase,
+        companyId,
+        orgNumber,
+        company?.entity_type === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag',
+      )
+    } catch (err) {
+      log.warn('worklist skattekonto_payment_due: OCR could not be derived', {
+        companyId,
+        reason: (err as { message?: string })?.message,
+      })
+    }
+  }
+
+  return { due, charge, balance, amount, count: rows.length, ocr, bankgiro: SKATTEKONTO_BANKGIRO }
+}
+
+/** 1 when a skattekonto charge needs a payment in (see listSkattekontoPaymentDue), else 0. */
+export async function countSkattekontoPaymentDue(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<number> {
+  return (await listSkattekontoPaymentDue(supabase, companyId)) ? 1 : 0
 }
 
 /**
