@@ -813,6 +813,26 @@
     "empty_filtered": "Inga deadlines matchar filtret.",
     "confirm_done_title": "Markera som klar?"
   },
+  "purchases_flow": {
+    "title": "Inköp",
+    "upload": "Ladda upp underlag",
+    "lane_receipts": "Kvitton och underlag",
+    "lane_invoices": "Leverantörsfakturor",
+    "open_list": "Öppna listan",
+    "auto": "auto",
+    "r_missing": "Saknas",
+    "r_incoming": "Inkommet",
+    "r_read": "Läst",
+    "r_linked": "Kopplat",
+    "r_booked": "Bokfört",
+    "receipts_note": "Inkommet och Läst sker utan dig. Kopplat sker vid ankomst när underlaget hittar sin banktransaktion; det som inte hittar fram ligger i Att göra. Bokfört är när transaktionen bokförs med underlaget bredvid. Saknas är köp på banken som ännu inte har något underlag.",
+    "invoices_note": "Registrera, attestera och skapa betalfil är dina steg. Betald sker när banken visar betalningen, Avstämd när kontot stäms av.",
+    "legend": "auto betyder att steget sker utan dig",
+    "link_payment_files": "Betalfiler",
+    "link_suppliers": "Leverantörer",
+    "retry": "Försök igen",
+    "load_failed": "Flödet kunde inte läsas."
+  },
   "supplier_invoices": {
     "stage_incoming": "Inkommen",
     "stage_registered": "Registrerad",
