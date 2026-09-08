@@ -18,7 +18,7 @@ import { isScbConfigured } from './scb/config'
 import { getObservedParties, type ObservedParty } from './observed'
 import type { SuggestionReason } from './suggest'
 
-export type RegisterView = 'suggested' | 'observed'
+export type RegisterView = 'suggested' | 'observed' | 'all'
 export type PartyRole = 'supplier' | 'customer'
 export type RegisterPeriod = '12m' | 'all'
 
@@ -353,7 +353,8 @@ export async function getRegister(
   const byMoney = (a: RegisterRow, b: RegisterRow) =>
     (b.stats?.expenseSek ?? 0) + (b.stats?.revenueSek ?? 0) - ((a.stats?.expenseSek ?? 0) + (a.stats?.revenueSek ?? 0)) ||
     a.displayName.localeCompare(b.displayName, 'sv')
-  const selected = (view === 'suggested' ? suggestedRows : []).filter((r) => matches(q, r.displayName, r.orgNumber)).sort(byMoney)
+  // 'all' is the flat counterpart list: every live party, confirmed or not.
+  const selected = (view === 'all' ? rows : view === 'suggested' ? suggestedRows : []).filter((r) => matches(q, r.displayName, r.orgNumber)).sort(byMoney)
   const observedSelected =
     view === 'observed'
       ? observedRows
