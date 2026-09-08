@@ -25,7 +25,7 @@ import {
   type AnlaggningAsset,
 } from './anlaggningstillgangar-note'
 import { computeAssetNoteFigures, loadPostedSchedules } from './asset-note-figures'
-import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
+import { resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
 import type {
   ArsredovisningData,
   EgenKapitalRow,
@@ -449,6 +449,7 @@ export async function buildArsredovisningData(
       parent_company_name: narrative?.parent_company_name ?? null,
       parent_company_org_number: narrative?.parent_company_org_number ?? null,
       parent_company_city: narrative?.parent_company_city ?? null,
+      medelantal_anstallda_override: narrative?.medelantal_anstallda_override ?? null,
       confirmations: {
         long_term_debt_over_five_years:
           narrative?.long_term_debt_over_five_years_confirmed ?? false,
@@ -759,7 +760,11 @@ async function buildK2Noter(
   // ÅRL 5:20 § requires the note for AB regardless of value: "0" must be
   // disclosed as "Inga anställda". For enskild firma the disclosure is
   // discretionary, so we still skip when medelantal === 0 there.
-  const medelantal = computeMedelantalAnstallda(
+  // A manual figure on arsredovisning_narratives wins over the FTE average:
+  // salary booked without a Löner employee record (hand-booked, SIE import)
+  // otherwise reads as "inga anställda" although the owner drew salary.
+  const medelantal = resolveMedelantalAnstallda(
+    narrative?.medelantal_anstallda_override,
     (employeesResult.data ?? []) as Array<{
       employment_start: string
       employment_end: string | null
@@ -1157,10 +1162,12 @@ async function buildK3Noter(
     )
   }
 
-  // 5. Medelantal anställda: FTE-weighted average per ÅRL 5:20 §. The note is
+  // 5. Medelantal anställda: FTE-weighted average per ÅRL 5:20 §, or the
+  // manual figure on arsredovisning_narratives when set. The note is
   // statutory for AB regardless of value (disclose "0" explicitly); for non-AB
   // entities we still skip when there are no employees.
-  const medelantal = computeMedelantalAnstallda(
+  const medelantal = resolveMedelantalAnstallda(
+    narrative?.medelantal_anstallda_override,
     (employeesResult.data ?? []) as Array<{
       employment_start: string
       employment_end: string | null

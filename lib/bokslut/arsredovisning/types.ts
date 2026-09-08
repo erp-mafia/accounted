@@ -155,6 +155,10 @@ export interface ArsredovisningData {
     parent_company_name: string | null
     parent_company_org_number: string | null
     parent_company_city: string | null
+    /** ÅRL 5:20 §: manual medelantal anställda. Null means "computed from
+     *  the employees table"; the note and the iXBRL fact already reflect
+     *  whichever won. */
+    medelantal_anstallda_override: number | null
     confirmations: {
       long_term_debt_over_five_years: boolean
       securities_pledged: boolean

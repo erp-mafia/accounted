@@ -42,6 +42,10 @@ export interface NarrativeOverrides {
   parent_company_name: string | null
   parent_company_org_number: string | null
   parent_company_city: string | null
+  /** ÅRL 5:20 §: manual medelantal anställda. Null → computed as an FTE
+   *  average over the employees table. A whole number replaces the computed
+   *  value in the note and the iXBRL fact for this period. */
+  medelantal_anstallda_override: number | null
   long_term_debt_over_five_years_confirmed: boolean
   securities_pledged_confirmed: boolean
   contingent_liabilities_confirmed: boolean
@@ -70,6 +74,7 @@ export interface NarrativeRow {
   parent_company_name: string | null
   parent_company_org_number: string | null
   parent_company_city: string | null
+  medelantal_anstallda_override: number | null
   long_term_debt_over_five_years_confirmed: boolean
   securities_pledged_confirmed: boolean
   contingent_liabilities_confirmed: boolean
@@ -85,7 +90,31 @@ const TABLE = 'arsredovisning_narratives'
 // of API responses. GDPR Art.25.2 / ISO A.8.3 data-minimization: callers
 // only need the narrative content + last-updated timestamp.
 const NARRATIVE_API_COLUMNS =
-  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, updated_at'
+  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, medelantal_anstallda_override, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, updated_at'
+
+/**
+ * The medelantal anställda override alone, for a period other than the one
+ * being built (the iXBRL note shows the jämförelseår in the same table, so
+ * last year's manual figure must win there too). Null when no row or no
+ * override; errors are swallowed because a missing jämförelsetal must never
+ * block the current year's document.
+ */
+export async function getMedelantalOverride(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<number | null> {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select('medelantal_anstallda_override')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
+    .maybeSingle()
+  if (error || !data) return null
+  const value = (data as { medelantal_anstallda_override: number | null })
+    .medelantal_anstallda_override
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
 
 /**
  * Load persisted narrative overrides for a fiscal period. Returns null when
