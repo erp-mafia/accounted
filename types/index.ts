@@ -2088,6 +2088,9 @@ export interface MappingResult {
   // generated entry: from a counterparty template's line pattern or an
   // explicit categorize param (dimensions PR7). Bank/VAT lines stay untagged.
   dimensions?: Record<string, string>
+  // What the match was made on: the bank's text (default) or the underlag's
+  // supplier and line items. Shown as the proposal's method.
+  matched_on?: 'bank_text' | 'underlag'
 }
 
 // VAT journal line (auto-generated)
@@ -3955,6 +3958,8 @@ export interface InvoiceExtractionResult {
     orgNumber: string | null
     vatNumber: string | null
     address: string | null
+    /** ISO 3166-1 alpha-2 read off the address or the VAT prefix; absent on older extractions. */
+    country?: string | null
     bankgiro: string | null
     plusgiro: string | null
   }

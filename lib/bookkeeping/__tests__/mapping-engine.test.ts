@@ -952,3 +952,57 @@ describe('mapping-engine', () => {
     })
   })
 })
+
+describe('evaluateMappingRules with an underlag', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('keys the counterparty templates on the invoice supplier when the bank text finds nothing', async () => {
+    const { evaluateMappingRules } = await import('../mapping-engine')
+    const { findCounterpartyTemplate, buildMappingResultFromCounterpartyTemplate } = await import('../counterparty-templates')
+    const { findMatchingTemplates } = await import('../booking-templates')
+    vi.mocked(findMatchingTemplates).mockReturnValue([])
+    vi.mocked(findCounterpartyTemplate)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ template: { source: 'user_approved' }, confidence: 0.95 } as never)
+    vi.mocked(buildMappingResultFromCounterpartyTemplate).mockReturnValue({
+      rule: null, debit_account: '5611', credit_account: '1930', risk_level: 'LOW', confidence: 0.95,
+      requires_review: false, default_private: false, vat_lines: [], description: 'Circle K',
+    } as never)
+    mockResult({ data: [], error: null })
+
+    const tx = makeTransaction({ amount: -438.75, merchant_name: null, description: 'Kortköp K8781' })
+    const result = await evaluateMappingRules(mockSupabase as never, 'company-1', tx, 'aktiebolag', undefined, {
+      supplierName: 'Circle K Sverige AB', supplierCountry: 'SE', lineDescriptions: ['Diesel'], merchantCategory: 'fuel', documentKind: 'receipt',
+    })
+    expect(result.debit_account).toBe('5611')
+    expect(result.matched_on).toBe('underlag')
+    const secondCall = vi.mocked(findCounterpartyTemplate).mock.calls[1]
+    expect((secondCall[2] as { merchant_name: string | null }).merchant_name).toBe('Circle K Sverige AB')
+  })
+
+  it('lets the document\'s words win the keyword templates and says so', async () => {
+    const { evaluateMappingRules } = await import('../mapping-engine')
+    const { findCounterpartyTemplate } = await import('../counterparty-templates')
+    const { findMatchingTemplates, buildMappingResultFromTemplate } = await import('../booking-templates')
+    vi.mocked(findCounterpartyTemplate).mockResolvedValue(null)
+    vi.mocked(findMatchingTemplates)
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ template: { id: 'vehicle_fuel' }, confidence: 0.6 } as never])
+    vi.mocked(buildMappingResultFromTemplate).mockReturnValue({
+      rule: null, debit_account: '5611', credit_account: '1930', risk_level: 'LOW', confidence: 1,
+      requires_review: false, default_private: false, vat_lines: [], description: 'Drivmedel',
+    } as never)
+    mockResult({ data: [], error: null })
+
+    const tx = makeTransaction({ amount: -438.75, merchant_name: null, description: 'Kortköp K8781' })
+    const result = await evaluateMappingRules(mockSupabase as never, 'company-1', tx, 'aktiebolag', undefined, {
+      supplierName: null, supplierCountry: null, lineDescriptions: ['Diesel 62,3 l'], merchantCategory: null, documentKind: 'receipt',
+    })
+    expect(result.debit_account).toBe('5611')
+    expect(result.confidence).toBe(0.6)
+    expect(result.matched_on).toBe('underlag')
+    expect(vi.mocked(findMatchingTemplates).mock.calls[1][2]).toBe('Diesel 62,3 l')
+  })
+})

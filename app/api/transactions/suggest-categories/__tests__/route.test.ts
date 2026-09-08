@@ -241,3 +241,40 @@ describe('POST /api/transactions/suggest-categories', () => {
     expect(loadCounterLegTopologyMock).not.toHaveBeenCalled()
   })
 })
+
+describe('POST /api/transactions/suggest-categories with a matched underlag', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    loadCounterLegTopologyMock.mockResolvedValue(topology([]))
+  })
+
+  it('keys the counterparty template on the invoice supplier and marks the suggestion', async () => {
+    enqueue({ data: [{ id: TX_ID, amount: -438.75, currency: 'SEK', description: 'Kortköp K8781', merchant_name: null }] })
+    enqueue({ data: [] }) // mapping_rules
+    enqueue({ data: [] }) // historical transactions
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({
+      data: [{
+        matched_transaction_id: TX_ID,
+        extracted_data: { supplier: { name: 'Circle K Sverige AB' }, lineItems: [{ description: 'Diesel 62,3 l' }] },
+      }],
+    }) // invoice_inbox_items matched to the batch
+    findCounterpartyTemplatesBatchMock
+      .mockResolvedValueOnce(new Map())
+      .mockResolvedValueOnce(new Map([[TX_ID, { template: makeTemplate({ debit_account: '5611', credit_account: '1930' }), confidence: 0.9 }]]))
+
+    const response = await POST(request(), emptyParams)
+    const { status, body } = await parseJsonResponse<Body>(response)
+
+    expect(status).toBe(200)
+    const suggestions = body.template_suggestions[TX_ID] ?? []
+    const cp = suggestions.find((s) => s.template_id?.startsWith('counterparty:')) as (typeof suggestions)[number] & { matched_on?: string }
+    expect(cp).toBeDefined()
+    expect(cp.matched_on).toBe('underlag')
+    const secondBatch = findCounterpartyTemplatesBatchMock.mock.calls[1][2] as Array<{ merchant_name: string | null }>
+    expect(secondBatch[0].merchant_name).toBe('Circle K Sverige AB')
+    expect(suggestions.some((s) => s.template_id === 'vehicle_fuel')).toBe(true)
+  })
+})

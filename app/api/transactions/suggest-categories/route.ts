@@ -3,7 +3,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { getSuggestedCategories, getSuggestedTemplates, buildMerchantHistory, merchantHistoryFor, buildCounterpartySuggestion, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { findCounterpartyTemplatesBatch } from '@/lib/bookkeeping/counterparty-templates'
 import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
-import type { Transaction, EntityType, CategorizationTemplate } from '@/types'
+import type { Transaction, EntityType, CategorizationTemplate, InvoiceExtractionResult } from '@/types'
+import { underlagContextFrom, withUnderlagAsCounterparty, type UnderlagContext } from '@/lib/bookkeeping/underlag-context'
 
 /**
  * POST /api/transactions/suggest-categories
@@ -63,8 +64,21 @@ export const POST = withRouteContext(
       .single()
     const entityType = (settings?.entity_type as EntityType) || undefined
 
+    // The underlag each transaction already carries, from either door: the
+    // inbox item matched to it, or the document pinned to the row. Its
+    // supplier and line items are searched alongside the bank text below.
+    const underlagByTx = await loadUnderlagContexts(supabase, companyId, transactions as Transaction[])
+
     // Batch counterparty template matching (1 DB query, in-memory matching)
     const counterpartyMatches = await findCounterpartyTemplatesBatch(supabase, companyId, transactions as Transaction[])
+    // A second pass keyed on the invoice's supplier name, for the rows the
+    // bank's text found nothing for. Marked so the row can say "Underlag".
+    const docKeyed = (transactions as Transaction[])
+      .filter((tx) => !counterpartyMatches.has(tx.id) && underlagByTx.get(tx.id)?.supplierName)
+      .map((tx) => withUnderlagAsCounterparty(tx, underlagByTx.get(tx.id)))
+    const docMatches = docKeyed.length > 0
+      ? await findCounterpartyTemplatesBatch(supabase, companyId, docKeyed)
+      : new Map<string, { template: CategorizationTemplate; confidence: number }>()
 
     // Generate initial suggestions for each transaction
     const suggestions: Record<string, SuggestedCategory[]> = {}
@@ -80,7 +94,12 @@ export const POST = withRouteContext(
           (tx as Transaction).original_description ?? (tx as Transaction).description,
         )
       )
-      template_suggestions[tx.id] = await getSuggestedTemplates(tx as Transaction, entityType, mappingRules || undefined)
+      template_suggestions[tx.id] = await getSuggestedTemplates(
+        tx as Transaction,
+        entityType,
+        mappingRules || undefined,
+        underlagByTx.get(tx.id) ?? null,
+      )
     }
 
     // Inject counterparty template matches as top suggestions. A learned
@@ -147,12 +166,15 @@ export const POST = withRouteContext(
     }
 
     for (const tx of transactions) {
-      const cpMatch = counterpartyMatches.get(tx.id)
+      const bankMatch = counterpartyMatches.get(tx.id)
+      const docMatch = bankMatch ? undefined : docMatches.get(tx.id)
+      const cpMatch = bankMatch ?? docMatch
       if (!cpMatch) continue
       const template = await guardLearnedTemplate(cpMatch.template, tx as Transaction)
       if (!template) continue
 
       const cpSuggestion = buildCounterpartySuggestion(template, cpMatch.confidence)
+      if (docMatch) cpSuggestion.matched_on = 'underlag'
 
       const existing = template_suggestions[tx.id] || []
       template_suggestions[tx.id] = [cpSuggestion, ...existing]
@@ -162,3 +184,44 @@ export const POST = withRouteContext(
     return NextResponse.json({ suggestions, template_suggestions })
   },
 )
+
+/**
+ * One underlag context per transaction that has one. Reads are best-effort:
+ * a failure here leaves the proposal as it was, computed from the bank text.
+ */
+async function loadUnderlagContexts(
+  supabase: Parameters<typeof findCounterpartyTemplatesBatch>[0],
+  companyId: string,
+  transactions: Transaction[],
+): Promise<Map<string, UnderlagContext>> {
+  const out = new Map<string, UnderlagContext>()
+  const ids = transactions.map((t) => t.id)
+  if (ids.length === 0) return out
+
+  const { data: items } = await supabase
+    .from('invoice_inbox_items')
+    .select('matched_transaction_id, extracted_data')
+    .eq('company_id', companyId)
+    .in('matched_transaction_id', ids)
+  for (const row of (items ?? []) as Array<{ matched_transaction_id: string; extracted_data: InvoiceExtractionResult | null }>) {
+    const ctx = underlagContextFrom(row.extracted_data)
+    if (ctx && !out.has(row.matched_transaction_id)) out.set(row.matched_transaction_id, ctx)
+  }
+
+  const pinned = transactions.filter((t) => t.document_id && !out.has(t.id))
+  if (pinned.length > 0) {
+    const { data: docs } = await supabase
+      .from('document_attachments')
+      .select('id, extracted_data')
+      .eq('company_id', companyId)
+      .in('id', pinned.map((t) => t.document_id as string))
+    const byDoc = new Map(
+      ((docs ?? []) as Array<{ id: string; extracted_data: InvoiceExtractionResult | null }>).map((d) => [d.id, d.extracted_data]),
+    )
+    for (const tx of pinned) {
+      const ctx = underlagContextFrom(byDoc.get(tx.document_id as string) ?? null)
+      if (ctx) out.set(tx.id, ctx)
+    }
+  }
+  return out
+}

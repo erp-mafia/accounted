@@ -87,3 +87,20 @@ describe('extractVatNumbers', () => {
     expect(extractVatNumbers('DELBETALNING SEKRETESS')).toEqual([])
   })
 })
+
+describe('shouted legal forms', () => {
+  it('reads an all-caps Inc. as a US company', () => {
+    const c = extractNameCandidates('HIGGSFIELD INC 535 MISSION STREET')
+    expect(c[0]).toMatchObject({ name: 'HIGGSFIELD Inc.', legalForm: 'Inc.', country: 'US', foreign: true, source: 'legal_form' })
+  })
+
+  it('leaves a lowercase word alone', () => {
+    const c = extractNameCandidates('lunch inc dricks')
+    expect(c.find((x) => x.source === 'legal_form')).toBeUndefined()
+  })
+
+  it('needs a shouted word in front of the form', () => {
+    const c = extractNameCandidates('Higgsfield INC')
+    expect(c.find((x) => x.source === 'legal_form')).toBeUndefined()
+  })
+})

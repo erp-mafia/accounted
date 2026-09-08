@@ -122,6 +122,8 @@ export const ExtractionSchema = z.object({
     orgNumber: z.string().nullable(),
     vatNumber: z.string().nullable(),
     address: z.string().nullable(),
+    // Older model outputs and agent-supplied extractions may omit it.
+    country: z.string().nullish().transform((v) => (v ? v.trim().toUpperCase().slice(0, 2) : null)),
     bankgiro: z.string().nullable(),
     plusgiro: z.string().nullable(),
   }),
@@ -358,6 +360,7 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
     "orgNumber": string | null,    // 10 digits, no hyphen, only when issued by a Swedish entity
     "vatNumber": string | null,    // ISO format, e.g. "SE556012579001" or "DE123456789"
     "address": string | null,      // multi-line allowed
+    "country": string | null,      // ISO 3166-1 alpha-2 from the address or the VAT prefix, e.g. "US", "DE"; null when unknown
     "bankgiro": string | null,     // Swedish bankgiro, with hyphen, e.g. "991-2346"
     "plusgiro": string | null      // Swedish plusgiro, with hyphen, e.g. "12345-6"
   },
@@ -595,6 +598,7 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
         orgNumber: nullable('string'),
         vatNumber: nullable('string'),
         address: nullable('string'),
+        country: nullable('string'),
         bankgiro: nullable('string'),
         plusgiro: nullable('string'),
       },

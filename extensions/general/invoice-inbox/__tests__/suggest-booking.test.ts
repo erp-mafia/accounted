@@ -301,6 +301,8 @@ describe('POST /items/:id/suggest-booking', () => {
       expect.objectContaining({ id: 'tx-1' }),
       'aktiebolag',
       expect.anything(),
+      // No extraction on the fixture item: the engine gets no underlag context.
+      null,
     )
   })
 
@@ -313,7 +315,7 @@ describe('POST /items/:id/suggest-booking', () => {
     mock.enqueue({ data: null })
     await route.handler(req(), buildCtx(mock.supabase))
     expect(evaluateMappingRules).toHaveBeenCalledWith(
-      expect.anything(), 'company-1', expect.anything(), 'enskild_firma', expect.anything(),
+      expect.anything(), 'company-1', expect.anything(), 'enskild_firma', expect.anything(), null,
     )
   })
 
