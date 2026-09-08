@@ -3599,7 +3599,7 @@
     "wa_participants_label": "Deltagare",
     "wa_purpose_label": "Syfte",
     "wa_note_label": "Anteckning",
-    "wa_question_unanswered": "En fråga från chatten blev obesvarad. Komplettera uppgifterna här innan du bokför.",
+    "wa_question_unanswered": "Chattens fråga fick inget svar. Fyll i det som saknas här.",
     "wa_question_badge": "Fråga obesvarad"
   },
   "inbox_custom_domain": {

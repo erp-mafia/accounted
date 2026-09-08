@@ -2559,12 +2559,6 @@ function InboxRow({
   // Staged upload: the row is real (that IS the "mottaget" ack) but the
   // deferred AI extraction is still in flight. The realtime refetch flips it.
   const isExtracting = status === 'processing'
-  // A chat question the sender never answered (48h TTL hit): the missing
-  // info should be completed here instead. Quiet hint, not a status: the
-  // item still books normally. Booked items drop the reminder.
-  const hasUnansweredQuestion =
-    !isBooked && item.channel_context?.pending_question?.status === 'moved_to_app'
-
   const receivedMeta = (
     <span className="truncate">
       {timeAgo(item.email_received_at ?? item.created_at)}
@@ -2671,11 +2665,6 @@ function InboxRow({
                 <>
                   {item.extraction_skipped && (
                     <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
-                  )}
-                  {hasUnansweredQuestion && (
-                    <Badge variant="outline" className="font-normal text-attn border-attn/40">
-                      {t('wa_question_badge')}
-                    </Badge>
                   )}
                 </>
               )}
@@ -3349,7 +3338,7 @@ function FieldsRail({
             </div>
           )}
           {waUnanswered && (
-            <AttnLine className="pt-1">{t('wa_question_unanswered')}</AttnLine>
+            <p className="pt-1 text-muted-foreground">{t('wa_question_unanswered')}</p>
           )}
         </div>
       )}
