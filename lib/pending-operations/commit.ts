@@ -3130,7 +3130,7 @@ async function commitSendInvoice(
 
   // Override `status` to 'sent' on the in-memory copy. The DB flip happens
   // after email delivery (line ~625); rendering with the stale 'draft' status
-  // would stamp the customer's PDF with "UTKAST: inte en giltig faktura".
+  // would stamp the customer's PDF with "UTKAST".
   const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company as CompanySettings,

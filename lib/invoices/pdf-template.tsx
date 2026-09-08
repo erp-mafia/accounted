@@ -138,6 +138,21 @@ export function fitsOnOnePage(text: string | null | undefined, budgetPt: number)
  */
 export const HEADING_MIN_PRESENCE_AHEAD = 40
 
+/**
+ * Draft watermark geometry (#2437). One word ("UTKAST" / "DRAFT"), bold,
+ * diagonal and faint, centred on every page. The font size keeps the widest
+ * word ("UTKAST", 6 glyphs with letter spacing) inside the 595pt A4 width
+ * once rotated. The colour and opacity are a balance: the invoice underneath
+ * must stay legible, and the word must survive a monochrome print or a
+ * greyscale scan, because a numbered draft otherwise carries every field of
+ * a real faktura (title, number, OCR). #4b5563 at 0.3 composites to about
+ * 79% brightness on white: clearly grey on paper, still background.
+ */
+export const DRAFT_WATERMARK_FONT_SIZE_PT = 96
+export const DRAFT_WATERMARK_OPACITY = 0.3
+export const DRAFT_WATERMARK_COLOR = '#4b5563'
+export const DRAFT_WATERMARK_ROTATION_DEG = -35
+
 type PdfLang = 'sv' | 'en'
 
 // Customer-facing labels. Statutory chapter references (ML 17 kap 24§, ML 3 kap.)
@@ -155,11 +170,7 @@ const LABELS = {
     cancelledTitle: 'MAKULERAD: inte en giltig faktura',
     cancelledWithNumber: (n: string) => `Faktura ${n} har makulerats. Numret behålls i serien för att hålla nummerföljden obruten enligt ML 17 kap 24§, men dokumentet är inte ett giltigt fakturaunderlag.`,
     cancelledNoNumber: 'Detta utkast har makulerats och är inte ett giltigt fakturaunderlag.',
-    draftTitle: 'UTKAST: inte en giltig faktura',
-    draftTitleQuote: 'UTKAST',
-    draftTextQuote: 'Detta är ett utkast av offerten.',
-    draftWithNumber: 'Detta är ett utkast. Markera fakturan som skickad eller skicka via systemet för att göra den giltig som fakturaunderlag.',
-    draftNoNumber: 'Denna faktura saknar löpnummer och kan inte användas som fakturaunderlag enligt ML 17 kap 24§. Skicka fakturan via systemet för att tilldela ett nummer.',
+    draftWatermark: 'UTKAST',
     paidTitle: 'BETALD',
     paidBannerText: (date: string, amount: string) => `Betald ${date} · ${amount}`,
     paidBannerNoDate: (amount: string) => `Betald · ${amount}`,
@@ -253,11 +264,7 @@ const LABELS = {
     cancelledTitle: 'VOID: not a valid invoice',
     cancelledWithNumber: (n: string) => `Invoice ${n} has been voided. The number is retained in the sequence to keep the numbering unbroken (ML 17 kap 24§, Swedish VAT Act), but this document is not a valid invoice.`,
     cancelledNoNumber: 'This draft has been voided and is not a valid invoice.',
-    draftTitle: 'DRAFT: not a valid invoice',
-    draftTitleQuote: 'DRAFT',
-    draftTextQuote: 'This is a draft of the quote.',
-    draftWithNumber: 'This is a draft. Mark the invoice as sent, or send it via the system, to make it a valid invoice.',
-    draftNoNumber: 'This invoice has no serial number and cannot be used as a valid invoice under ML 17 kap 24§ (Swedish VAT Act). Send the invoice via the system to assign a number.',
+    draftWatermark: 'DRAFT',
     paidTitle: 'PAID',
     paidBannerText: (date: string, amount: string) => `Paid ${date} · ${amount}`,
     paidBannerNoDate: (amount: string) => `Paid · ${amount}`,
@@ -643,34 +650,35 @@ function createStyles(branding?: InvoiceBranding) {
     creditNoteTitle: {
       color: '#721c24',
     },
-    // Draft stamp: lives in the page's top margin (page padding is 40pt; the
-    // stamp is at most about 32pt tall when the English no-number text wraps
-    // to two lines) and is taken out of the flow, so a draft previews exactly
-    // as the final invoice will print. `fixed` repeats it on every page. It
-    // used to be a full-size banner in the flow, which pushed the whole
-    // document down and made the preview lie about page breaks.
-    draftBanner: {
+    // Draft watermark (#2437): one word, diagonal and faint, across the whole
+    // page, the way a stamp marks a paper document. The overlay is absolutely
+    // positioned over the page box and taken out of the flow, so a draft
+    // previews exactly as the final invoice will print; `fixed` repeats it
+    // on every page. It replaced a yellow banner in the top margin, which
+    // read as UI chrome on a document (and, before that, a banner in the
+    // flow that pushed the whole document down).
+    draftWatermark: {
       position: 'absolute',
-      top: 5,
-      left: 40,
-      right: 40,
-      paddingVertical: 2,
-      paddingHorizontal: 8,
-      backgroundColor: '#fff3cd',
-      borderWidth: 1,
-      borderColor: '#856404',
-      borderRadius: 3,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
-    draftBannerTitle: {
-      fontSize: 9,
+    // Rotation and opacity sit on a padded wrapper so the word turns about
+    // the centre of its own box and the Text keeps a plain type style.
+    draftWatermarkWord: {
+      transform: `rotate(${DRAFT_WATERMARK_ROTATION_DEG}deg)`,
+      opacity: DRAFT_WATERMARK_OPACITY,
+      paddingVertical: 24,
+      paddingHorizontal: 24,
+    },
+    draftWatermarkText: {
+      fontSize: DRAFT_WATERMARK_FONT_SIZE_PT,
       fontWeight: 'bold',
-      color: '#856404',
-      textAlign: 'center',
-    },
-    draftBannerText: {
-      fontSize: 7,
-      color: '#856404',
-      textAlign: 'center',
+      color: DRAFT_WATERMARK_COLOR,
+      letterSpacing: 6,
     },
     cancelledBanner: {
       marginBottom: 16,
@@ -973,6 +981,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // recomputation of the deduction-aware total; the fallback to the amount to
   // pay covers legacy rows marked paid before paid_amount was recorded.
   const paidState = resolvePdfPaidState(invoice, docType, isCreditNote, amountToPay.toPay)
+  // Draft watermark (#2437): genuine drafts, plus the corrupt-state case of a
+  // non-cancelled invoice that somehow lacks a number. Cancelled wins (the
+  // MAKULERAD banner below), and the interactive preview has its own title.
+  const isDraftMarked =
+    invoice.status !== 'cancelled' && !isPreview && (invoice.status === 'draft' || !invoice.invoice_number)
 
   // Optional branding banner text. Rendered only when the company has set
   // invoice_header_text: invisible chrome by default, so the byte-equivalence
@@ -994,8 +1007,8 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         {/* Status banner: cancelled takes precedence over draft so a cancelled
             row that lacks a number (legacy un-numbered draft that was later
             cancelled) still surfaces as MAKULERAD rather than UTKAST. The draft
-            banner only shows for genuine drafts and for the corrupt-state case
-            of a non-cancelled invoice that somehow lacks a number. */}
+            watermark only shows for genuine drafts and for the corrupt-state
+            case of a non-cancelled invoice that somehow lacks a number. */}
         {invoice.status === 'cancelled' ? (
           <View style={styles.cancelledBanner}>
             <Text style={styles.cancelledBannerTitle}>{L.cancelledTitle}</Text>
@@ -1005,18 +1018,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 : L.cancelledNoNumber}
             </Text>
           </View>
-        ) : isPreview ? null : (invoice.status === 'draft' || !invoice.invoice_number) ? (
-          <View style={styles.draftBanner} fixed>
-            <Text style={styles.draftBannerTitle}>{isQuote ? L.draftTitleQuote : L.draftTitle}</Text>
-            <Text style={styles.draftBannerText} hyphenationCallback={wrapFullWidthWords}>
-              {isQuote
-                ? L.draftTextQuote
-                : invoice.invoice_number
-                  ? L.draftWithNumber
-                  : L.draftNoNumber}
-            </Text>
-          </View>
-        ) : paidState?.kind === 'paid' && (
+        ) : isPreview || isDraftMarked ? null : paidState?.kind === 'paid' && (
           // BETALD stamp (#1693): the re-rendered copy of a settled faktura
           // doubles as the betalningsbekräftelse the customer can be handed.
           // partially_paid gets no banner, only the Betalt / Att betala rows.
@@ -1608,6 +1610,19 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             ].filter(Boolean).join(' · ')}
           </Text>
         </View>
+
+        {/* Draft watermark (#2437), deliberately the LAST child of the page:
+            react-pdf paints children in document order and `fixed` does not
+            hoist, so anything emitted after it with a backgroundColor (the
+            customer box, the payment section, notice boxes) would paint over
+            the word. Absolute + fixed keeps it out of the flow on every page. */}
+        {isDraftMarked && (
+          <View style={styles.draftWatermark} fixed>
+            <View style={styles.draftWatermarkWord}>
+              <Text style={styles.draftWatermarkText}>{L.draftWatermark}</Text>
+            </View>
+          </View>
+        )}
       </Page>
     </Document>
   )
