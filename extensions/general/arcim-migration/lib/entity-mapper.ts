@@ -10,6 +10,7 @@ import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import type { Currency, CustomerType, ExchangeRate, SupplierType, VatTreatment } from '@/types'
 import type {
@@ -59,6 +60,11 @@ function getOrgNumber(party: PartyDto): string | null {
   const seOrg = party.identifications?.find(i => i.schemeId === 'SE:ORGNR')
   if (seOrg) return seOrg.id
   return party.legalEntity?.companyId || null
+}
+
+function canonicalSupplierOrgNumber(value: string | null): string | null {
+  if (!value) return null
+  return orgNumberKey(value) ?? value
 }
 
 const EU_COUNTRIES = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'EL', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SI', 'SK']
@@ -633,7 +639,9 @@ export function mapSupplier(dto: SupplierDto, userId: string, companyId: string)
     email: dto.party.contact?.email || null,
     phone: dto.party.contact?.telephone || null,
     ...addr,
-    org_number: getOrgNumber(dto.party),
+    // suppliers.org_number holds the 10-digit key (#2391); a provider sends
+    // its own spelling ('556677-8899').
+    org_number: canonicalSupplierOrgNumber(getOrgNumber(dto.party)),
     vat_number: dto.vatNumber || null,
     bankgiro: dto.bankGiro || null,
     plusgiro: dto.plusGiro || null,

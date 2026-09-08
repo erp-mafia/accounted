@@ -9,6 +9,7 @@ import {
   fiscalYearSchema,
 } from '@/lib/invariants/zod'
 import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
@@ -1211,6 +1212,17 @@ function emptyStringAsUndefined<T extends z.ZodTypeAny>(inner: T) {
   )
 }
 
+/**
+ * suppliers.org_number is stored as the 10-digit key (#2391): the form asks
+ * for XXXXXX-XXXX and the AI extractor emits bare digits, and the matcher
+ * compares through the same key, so storage is canonical whatever the caller
+ * typed. Only Swedish-shaped input (10 or 12 digits once separators are
+ * stripped) is rewritten; a foreign registration number or an unrecognised
+ * value is stored as typed, because eu_business and non_eu_business
+ * suppliers keep their home-registry number in this column.
+ */
+const supplierOrgNumber = z.string().transform((v) => orgNumberKey(v) ?? v.trim())
+
 export const CreateSupplierSchema = z.object({
   name: z.string().min(1, 'Supplier name is required'),
   supplier_type: SupplierTypeSchema,
@@ -1221,7 +1233,7 @@ export const CreateSupplierSchema = z.object({
   postal_code: z.string().optional(),
   city: z.string().optional(),
   country: CountryCodeSchema,
-  org_number: z.string().optional(),
+  org_number: supplierOrgNumber.optional(),
   vat_number: z.string().optional(),
   bankgiro: z.string().optional(),
   plusgiro: z.string().optional(),
