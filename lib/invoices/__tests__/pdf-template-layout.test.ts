@@ -13,6 +13,7 @@
  * - A description with line breaks keeps them.
  */
 import { describe, expect, it } from 'vitest'
+import { inflateSync } from 'node:zlib'
 import type { ReactElement, ReactNode } from 'react'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { Font, pdf } from '@react-pdf/renderer'
@@ -128,6 +129,27 @@ function sentInvoice() {
 /** Number of pages in a rendered PDF (pdfkit writes one /Type /Page per page). */
 function pageCount(buffer: Buffer): number {
   return (buffer.toString('latin1').match(/\/Type\s*\/Page\b/g) ?? []).length
+}
+
+/** Every deflated content stream in a rendered PDF, as PDF operator text. */
+function contentStreams(buffer: Buffer): string[] {
+  const s = buffer.toString('latin1')
+  const out: string[] = []
+  let idx = 0
+  for (;;) {
+    const start = s.indexOf('stream\n', idx)
+    if (start < 0) break
+    const dataStart = start + 'stream\n'.length
+    const end = s.indexOf('endstream', dataStart)
+    if (end < 0) break
+    try {
+      out.push(inflateSync(buffer.subarray(dataStart, end)).toString('latin1'))
+    } catch {
+      // Not a deflated stream (font program, image): skip.
+    }
+    idx = end + 'endstream'.length
+  }
+  return out
 }
 
 // The laid-out node tree react-pdf hands to the painter: every node carries
@@ -274,6 +296,40 @@ describe('draft watermark', () => {
     expect(pages.length).toBeGreaterThan(1)
     for (const page of pages) {
       expect(textOf(page)).toContain('UTKAST')
+    }
+  })
+
+  it('is painted last on every page, so no opaque box can cover the word', { timeout: 30_000 }, async () => {
+    // react-pdf paints children in document order and `fixed` does not hoist:
+    // an overlay emitted before the payment box (opaque #f8f9fa, full content
+    // width) is painted underneath it and the word disappears on exactly the
+    // page that carries totals, bankgiro and OCR. Skeptic finding on #2437.
+    const items = Array.from({ length: 22 }, (_, i) =>
+      makeItem({ sort_order: i, id: `item-${i}`, description: `Rad ${i + 1}` }),
+    )
+    const tree = InvoicePDF({ invoice: draftInvoice(), customer, items, company })
+    const page = elements(tree).find((el) => el.props.size === 'A4')
+    const pageChildren = (page!.props.children as ReactNode[]).flat().filter(
+      (c) => c !== null && c !== undefined && typeof c !== 'boolean',
+    )
+    const last = pageChildren[pageChildren.length - 1] as AnyElement
+    expect(last.props.fixed).toBe(true)
+    expect(containsText(last, 'UTKAST')).toBe(true)
+
+    // And in the actual PDF: within each page's content stream the watermark
+    // glyph run comes after the last rectangle fill.
+    const buffer = await renderToBuffer(tree)
+    expect(pageCount(buffer)).toBeGreaterThan(1)
+    const streams = contentStreams(buffer)
+    // U T K A S T as WinAnsi glyph codes, letter-spaced, in one TJ array.
+    const watermarkRun = /\[<55>[^\]<]*<54>[^\]<]*<4b>[^\]<]*<41>[^\]<]*<53>[^\]<]*<54>[^\]<]*\]\s*TJ/
+    const pagesWithWord = streams.filter((s) => watermarkRun.test(s))
+    expect(pagesWithWord.length).toBe(pageCount(buffer))
+    for (const s of pagesWithWord) {
+      const wordAt = s.search(watermarkRun)
+      const lastFill = Math.max(s.lastIndexOf(' re\nf'), s.lastIndexOf(' re\n'))
+      expect(lastFill).toBeGreaterThan(-1)
+      expect(wordAt).toBeGreaterThan(lastFill)
     }
   })
 

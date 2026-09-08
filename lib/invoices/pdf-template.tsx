@@ -981,6 +981,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // recomputation of the deduction-aware total; the fallback to the amount to
   // pay covers legacy rows marked paid before paid_amount was recorded.
   const paidState = resolvePdfPaidState(invoice, docType, isCreditNote, amountToPay.toPay)
+  // Draft watermark (#2437): genuine drafts, plus the corrupt-state case of a
+  // non-cancelled invoice that somehow lacks a number. Cancelled wins (the
+  // MAKULERAD banner below), and the interactive preview has its own title.
+  const isDraftMarked =
+    invoice.status !== 'cancelled' && !isPreview && (invoice.status === 'draft' || !invoice.invoice_number)
 
   // Optional branding banner text. Rendered only when the company has set
   // invoice_header_text: invisible chrome by default, so the byte-equivalence
@@ -1013,13 +1018,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 : L.cancelledNoNumber}
             </Text>
           </View>
-        ) : isPreview ? null : (invoice.status === 'draft' || !invoice.invoice_number) ? (
-          <View style={styles.draftWatermark} fixed>
-            <View style={styles.draftWatermarkWord}>
-              <Text style={styles.draftWatermarkText}>{L.draftWatermark}</Text>
-            </View>
-          </View>
-        ) : paidState?.kind === 'paid' && (
+        ) : isPreview || isDraftMarked ? null : paidState?.kind === 'paid' && (
           // BETALD stamp (#1693): the re-rendered copy of a settled faktura
           // doubles as the betalningsbekräftelse the customer can be handed.
           // partially_paid gets no banner, only the Betalt / Att betala rows.
@@ -1611,6 +1610,19 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             ].filter(Boolean).join(' · ')}
           </Text>
         </View>
+
+        {/* Draft watermark (#2437), deliberately the LAST child of the page:
+            react-pdf paints children in document order and `fixed` does not
+            hoist, so anything emitted after it with a backgroundColor (the
+            customer box, the payment section, notice boxes) would paint over
+            the word. Absolute + fixed keeps it out of the flow on every page. */}
+        {isDraftMarked && (
+          <View style={styles.draftWatermark} fixed>
+            <View style={styles.draftWatermarkWord}>
+              <Text style={styles.draftWatermarkText}>{L.draftWatermark}</Text>
+            </View>
+          </View>
+        )}
       </Page>
     </Document>
   )
