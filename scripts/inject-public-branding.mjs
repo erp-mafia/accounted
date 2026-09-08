@@ -20,7 +20,7 @@ import { join } from 'node:path'
 const TEMPLATE_PATH = join(process.cwd(), 'public', 'sw.template.js')
 const OUTPUT_PATH = join(process.cwd(), 'public', 'sw.js')
 const PLACEHOLDER = '__NEXT_PUBLIC_BRANDING_APP_NAME__'
-const value = process.env.NEXT_PUBLIC_BRANDING_APP_NAME || 'Gnubok'
+const value = process.env.NEXT_PUBLIC_BRANDING_APP_NAME || 'Accounted'
 
 if (!existsSync(TEMPLATE_PATH)) {
   console.log(`[inject-public-branding] ${TEMPLATE_PATH} not found, skipping`)
