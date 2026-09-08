@@ -222,6 +222,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (updateError) {
       // trg_invoices_quote_decision_guard: a conversion landed between the
       // read above and this write, so the decision is locked in accepted.
+      if ((updateError as { message?: string }).message?.includes('INVOICE_QUOTE_ALREADY_ORDERED')) {
+        return v1ErrorResponseFromCode('INVOICE_QUOTE_ALREADY_ORDERED', ctx.log, {
+          requestId: ctx.requestId,
+        })
+      }
       if ((updateError as { message?: string }).message?.includes('INVOICE_QUOTE_ALREADY_INVOICED')) {
         return v1ErrorResponseFromCode('INVOICE_QUOTE_ALREADY_INVOICED', ctx.log, {
           requestId: ctx.requestId,

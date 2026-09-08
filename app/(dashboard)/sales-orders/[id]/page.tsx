@@ -97,12 +97,27 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
   // Invoices created from this order (GET /api/invoices?sales_order_id=).
   const [invoices, setInvoices] = useState<Invoice[]>([])
 
+  // The source document (proforma or offert) the order was created from:
+  // only its type and number, for the "Skapad från" row.
+  const [sourceDoc, setSourceDoc] = useState<{ document_type: string; invoice_number: string | null } | null>(null)
+
   const fetchOrder = useCallback(async () => {
     try {
       const res = await fetch(`/api/sales-orders/${id}`)
       if (!res.ok) throw new Error('load failed')
       const { data } = await res.json()
       setOrder(data as SalesOrder)
+      const sourceId = (data as SalesOrder).source_invoice_id
+      if (sourceId) {
+        const sourceRes = await fetch(`/api/invoices/${sourceId}`).catch(() => null)
+        const sourceJson = sourceRes?.ok ? await sourceRes.json().catch(() => null) : null
+        const source = (sourceJson?.data ?? sourceJson) as { document_type?: string; invoice_number?: string | null } | null
+        setSourceDoc(
+          source?.document_type ? { document_type: source.document_type, invoice_number: source.invoice_number ?? null } : null,
+        )
+      } else {
+        setSourceDoc(null)
+      }
     } catch {
       toast({ title: t('load_failed_title'), variant: 'destructive' })
       router.push('/sales-orders')
@@ -316,7 +331,9 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
         {order.source_invoice_id && (
           <DefRow label={t('def_source_invoice')}>
             <Link href={`/invoices/${order.source_invoice_id}`} className="hover:underline">
-              {t('source_proforma')}
+              {sourceDoc?.document_type === 'quote'
+                ? t('source_quote', { number: sourceDoc.invoice_number ?? '' })
+                : t('source_proforma')}
             </Link>
           </DefRow>
         )}
