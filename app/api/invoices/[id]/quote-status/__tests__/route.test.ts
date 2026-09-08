@@ -108,6 +108,19 @@ describe('POST /api/invoices/[id]/quote-status', () => {
     expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_INVOICED')
   })
 
+  it('maps the decision guard trigger to 409 INVOICE_QUOTE_ALREADY_ORDERED when a live kundorder locks the quote', async () => {
+    enqueue({ data: { ...quoteRow, quote_status: 'accepted' }, error: null })
+    enqueue({ data: null, error: null }) // no converted invoice
+    enqueue({ data: null, error: { code: 'P0001', message: 'INVOICE_QUOTE_ALREADY_ORDERED: quote q-1 has a live kundorder' } })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await post({ status: 'declined' }),
+    )
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_ORDERED')
+  })
+
   it('records an acceptance with a decided_at timestamp', async () => {
     enqueue({ data: quoteRow, error: null })
     enqueue({ data: null, error: null })

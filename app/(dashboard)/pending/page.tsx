@@ -900,7 +900,7 @@ export default function PendingOperationsPage() {
                 showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
               const isSelected = selectedIds.has(op.id)
               const isAgent = op.actor_type && op.actor_type !== 'user'
-              const warningSentence = singleActionWarning(op.operation_type)
+              const warningSentence = singleActionWarning(op.operation_type, op.params)
               const showHighRiskWarning =
                 op.risk_level === 'high' && warningSentence && op.status === 'pending'
 
@@ -1148,10 +1148,10 @@ export default function PendingOperationsPage() {
                     <p className="mt-0.5 whitespace-pre-wrap text-xs leading-snug">{detailOp.params.notes}</p>
                   </div>
                 )}
-                {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type) && (
+                {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type, detailOp.params) && (
                   <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
                     <p className="text-xs leading-snug text-muted-foreground">
-                      {singleActionWarning(detailOp.operation_type)}
+                      {singleActionWarning(detailOp.operation_type, detailOp.params)}
                     </p>
                   </div>
                 )}
@@ -1229,7 +1229,7 @@ export default function PendingOperationsPage() {
         open={showCommitDialog}
         onOpenChange={setShowCommitDialog}
         title={selectedOp?.title || t('approve_operation_title')}
-        warningText={selectedOp ? singleActionWarning(selectedOp.operation_type) : ''}
+        warningText={selectedOp ? singleActionWarning(selectedOp.operation_type, selectedOp.params) : ''}
         confirmLabel={t('approve')}
         isSubmitting={isCommitting}
         onConfirm={handleCommit}

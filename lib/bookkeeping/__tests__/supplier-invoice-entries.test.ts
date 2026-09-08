@@ -1900,6 +1900,97 @@ describe('buildSupplierInvoicePrivatelyPaidLines', () => {
   })
 })
 
+describe('negative item rows (öresavrundning, rabatt) keep one non-negative side', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  // Prod case: 16 000 + 45 at 25 % = 20 056,25; the supplier bills 20 056,00
+  // and the user adds a -0,25 avrundning row on 3740. The old generator
+  // booked 3740 as debit -0,25, which the verifikat page hid.
+  const roundingItems = [
+    makeItem({ id: 'i1', line_total: 16000, account_number: '6110', vat_rate: 0.25, vat_amount: 4000 }),
+    makeItem({ id: 'i2', line_total: 45, account_number: '3540', vat_rate: 0.25, vat_amount: 11.25 }),
+    makeItem({ id: 'i3', line_total: -0.25, account_number: '3740', vat_rate: 0, vat_amount: 0 }),
+  ]
+
+  it('registration entry books the -0,25 row as credit 0,25 on 3740 and 2440 at the billed total', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 16044.75, vat_amount: 4011.25, total: 20056 })
+
+    await createSupplierInvoiceRegistrationEntry(null as never, 'company-1', 'user-1', invoice, roundingItems, 'swedish_business')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const rounding = findByAccount(input.lines, '3740')
+    expect(rounding).toHaveLength(1)
+    expect(rounding[0].debit_amount).toBe(0)
+    expect(rounding[0].credit_amount).toBe(0.25)
+    expect(findByAccount(input.lines, '2641')[0].debit_amount).toBe(4011.25)
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(20056)
+    for (const l of input.lines) {
+      expect(l.debit_amount).toBeGreaterThanOrEqual(0)
+      expect(l.credit_amount).toBeGreaterThanOrEqual(0)
+    }
+    assertBalanced(input)
+  })
+
+  it('cash-method entry books the -0,25 row as a credit and 1930 at the billed total', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 16044.75, vat_amount: 4011.25, total: 20056 })
+
+    await createSupplierInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, roundingItems, '2026-06-10', 'swedish_business')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const rounding = findByAccount(input.lines, '3740')
+    expect(rounding[0].debit_amount).toBe(0)
+    expect(rounding[0].credit_amount).toBe(0.25)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(20056)
+    for (const l of input.lines) {
+      expect(l.debit_amount).toBeGreaterThanOrEqual(0)
+      expect(l.credit_amount).toBeGreaterThanOrEqual(0)
+    }
+    assertBalanced(input)
+  })
+})
+
+describe('a supplier invoice that nets below zero books its anchor on the debit side', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  const items = [
+    makeItem({ id: 'i1', line_total: 100, account_number: '6110', vat_rate: 0, vat_amount: 0 }),
+    makeItem({ id: 'i2', line_total: -400, account_number: '6110', vat_rate: 0, vat_amount: 0 }),
+  ]
+
+  it('registration: 6110 K 300 / 2440 D 300', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: -300, vat_amount: 0, total: -300 })
+    await createSupplierInvoiceRegistrationEntry(null as never, 'company-1', 'user-1', invoice, items, 'swedish_business')
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '6110')[0]).toMatchObject({ debit_amount: 0, credit_amount: 300 })
+    expect(findByAccount(input.lines, '2440')[0]).toMatchObject({ debit_amount: 300, credit_amount: 0 })
+    assertBalanced(input)
+  })
+
+  it('cash method: 1930 D 300', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: -300, vat_amount: 0, total: -300 })
+    await createSupplierInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, items, '2026-06-10', 'swedish_business')
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '1930')[0]).toMatchObject({ debit_amount: 300, credit_amount: 0 })
+    assertBalanced(input)
+  })
+
+  it('privately paid: liability D 300', () => {
+    const invoice = makeSupplierInvoice({ subtotal: -300, vat_amount: 0, total: -300 })
+    const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', 'Utlägg')
+    const liability = lines.filter((l) => l.account_number === '2893')
+    expect(liability[0]).toMatchObject({ debit_amount: 300, credit_amount: 0 })
+    const totalDebit = lines.reduce((s, l) => s + l.debit_amount, 0)
+    const totalCredit = lines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.round(totalDebit * 100)).toBe(Math.round(totalCredit * 100))
+  })
+})
+
 describe('largestExpenseAccount', () => {
   it('picks the account of the largest line by magnitude, first line on a tie', () => {
     const items = [

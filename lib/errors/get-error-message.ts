@@ -481,6 +481,10 @@ export function getErrorMessage(
         return 'Verifikationen balanserar inte. Kontrollera att debet och kredit är lika stora.'
       }
 
+      if (structured.code === 'JOURNAL_LINE_NEGATIVE_AMOUNT') {
+        return 'En verifikationsrad har ett negativt belopp. Boka beloppet på motsatt sida i stället.'
+      }
+
       if (structured.code === 'FISCAL_PERIOD_NOT_FOUND') {
         return 'Räkenskapsperioden kunde inte hittas.'
       }
