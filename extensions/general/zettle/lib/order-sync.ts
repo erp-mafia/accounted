@@ -453,7 +453,7 @@ export async function syncZettlePurchases(
     .update({ sync_lock_until: new Date(Date.now() + SYNC_LOCK_MS).toISOString() })
     .eq('id', connection.id)
     .eq('status', 'active')
-    .or(`sync_lock_until.is.null,sync_lock_until.lt.${nowIso}`)
+    .lt('sync_lock_until', nowIso)
     .select('id')
   if (claimError) {
     throw new Error(`Failed to claim Zettle connection for sync: ${claimError.message}`)
@@ -617,7 +617,7 @@ export async function syncZettlePurchases(
   } finally {
     await supabase
       .from('zettle_connections')
-      .update({ sync_lock_until: null })
+      .update({ sync_lock_until: new Date(0).toISOString() })
       .eq('id', connection.id)
   }
 

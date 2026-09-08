@@ -24,7 +24,7 @@ const connection: ZettleConnection = {
   refresh_token_encrypted: 'enc:old',
   oauth_state: null,
   return_origin: null,
-  sync_lock_until: null,
+  sync_lock_until: '1970-01-01T00:00:00.000Z',
   status: 'active',
   currency: 'SEK',
   transaction_sync_enabled: true,
