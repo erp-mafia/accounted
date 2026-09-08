@@ -8369,6 +8369,14 @@
     "skattekonto_primary": "Connect Skatteverket"
   },
   "reconciliation": {
+    "v2_verdict_diff": "Off by {amount}: {explanations}.",
+    "v2_verdict_diff_plain": "Off by {amount}.",
+    "v2_verdict_ok_bank": "The bank and the books agree.",
+    "v2_verdict_ok_skv": "Skatteverket and the books agree.",
+    "v2_verdict_ok_manual": "The specification and the books agree.",
+    "v2_verdict_unexplained": "Unexplained {amount}.",
+    "v2_show_bridge": "Show the bridge",
+    "v2_hide_bridge": "Hide the bridge",
     "v2_side_external_bank": "Bank statement",
     "v2_side_external_skv": "Skatteverket",
     "v2_side_ledger": "Accounted",

@@ -8369,6 +8369,14 @@
     "skattekonto_primary": "Anslut Skatteverket"
   },
   "reconciliation": {
+    "v2_verdict_diff": "Skiljer {amount}: {explanations}.",
+    "v2_verdict_diff_plain": "Skiljer {amount}.",
+    "v2_verdict_ok_bank": "Banken och bokföringen stämmer.",
+    "v2_verdict_ok_skv": "Skatteverket och bokföringen stämmer.",
+    "v2_verdict_ok_manual": "Specifikationen och bokföringen stämmer.",
+    "v2_verdict_unexplained": "Oförklarat {amount}.",
+    "v2_show_bridge": "Visa bryggan",
+    "v2_hide_bridge": "Dölj bryggan",
     "v2_side_external_bank": "Kontoutdrag",
     "v2_side_external_skv": "Skatteverket",
     "v2_side_ledger": "Accounted",

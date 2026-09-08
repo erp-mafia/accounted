@@ -52,8 +52,7 @@ export function PairsHead({ externalLabel }: { externalLabel: string }) {
       <th className={cn(TH_CLASS, '!pl-0 w-[96px]')}>{t('col_date')}</th>
       <th className={cn(TH_CLASS, 'w-[30%]')}>{externalLabel}</th>
       <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
-      <th className={cn(TH_CLASS, 'w-8 text-center')} aria-hidden="true"></th>
-      <th className={cn(TH_CLASS, 'w-[96px]')}>{t('col_date')}</th>
+      <th className={cn(TH_CLASS, 'w-[96px] pl-6')}>{t('col_date')}</th>
       <th className={TH_CLASS}>{t('v2_side_ledger')}</th>
       <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
       <th className={cn(TH_CLASS, '!pr-0 w-[150px]')} aria-hidden="true"></th>
@@ -170,21 +169,9 @@ export function PairRow({
     ledgerText = <Chip>{t('v2_chip_ignored')}</Chip>
   } else if (item.bucket === 'upcoming') {
     ledgerText = <Chip>{t('bucket_upcoming')}</Chip>
-  } else {
-    ledgerText = <Chip>{t('v2_chip_not_booked')}</Chip>
   }
-
-  // ---- the sign between the sides -------------------------------------------
-  const sign =
-    item.bucket === 'matched'
-      ? '='
-      : item.bucket === 'proposed'
-        ? '≈'
-        : item.bucket === 'ignored' || item.bucket === 'upcoming'
-          ? '·'
-          : '≠'
-  const signTone =
-    item.bucket === 'matched' ? 'text-success' : item.bucket === 'proposed' ? 'text-foreground' : 'text-warning'
+  // A bank row with nothing on the ledger side says so by being empty: the
+  // group header above it already reads "saknas i bokföringen".
 
   // ---- actions: one button, the rest behind the menu -----------------------
   const openHref = item.item_type === 'transaction' ? `/transactions?highlight=${item.item_id}` : null
@@ -245,10 +232,7 @@ export function PairRow({
       <td className={cn(TD_CLASS, NUM)} data-ph-mask>
         {external ? money(item.amount) : ''}
       </td>
-      <td className={cn(TD_CLASS, 'text-center', signTone)} aria-label={t(`v2_sign_${item.bucket}`)}>
-        <span aria-hidden>{sign}</span>
-      </td>
-      <td className={cn(TD_CLASS, DATE)}>{ledgerDate ? formatDate(ledgerDate) : ''}</td>
+      <td className={cn(TD_CLASS, DATE, 'pl-6')}>{ledgerDate ? formatDate(ledgerDate) : ''}</td>
       <td className={cn(TD_CLASS, 'max-w-0')}>{ledgerText}</td>
       <td className={cn(TD_CLASS, NUM)} data-ph-mask>
         {ledgerAmount != null ? money(ledgerAmount) : ''}
