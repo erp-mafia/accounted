@@ -868,6 +868,33 @@ describe('CreateSupplierSchema', () => {
       expect(result.data.email).toBeUndefined()
     }
   })
+
+  // #2391: the form asks for XXXXXX-XXXX, the extractor emits bare digits;
+  // storage is the 10-digit key so the matcher's exact key finds the row.
+  it('stores a Swedish org number as its 10-digit key whatever the caller typed', () => {
+    for (const typed of ['556677-8899', '5566778899', '556677 8899', '165566778899']) {
+      const result = CreateSupplierSchema.safeParse(validSupplier({ org_number: typed }))
+      expect(result.success, typed).toBe(true)
+      if (result.success) expect(result.data.org_number).toBe('5566778899')
+    }
+  })
+
+  it('stores a foreign registration number as typed', () => {
+    const result = CreateSupplierSchema.safeParse(
+      validSupplier({ supplier_type: 'eu_business', country: 'DK', org_number: 'DK12345678' }),
+    )
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.org_number).toBe('DK12345678')
+  })
+
+  it('canonicalises org_number on update too', () => {
+    const result = UpdateSupplierSchema.safeParse({ org_number: '556677-8899' })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.org_number).toBe('5566778899')
+    const untouched = UpdateSupplierSchema.safeParse({ name: 'Renamed AB' })
+    expect(untouched.success).toBe(true)
+    if (untouched.success) expect(untouched.data.org_number).toBeUndefined()
+  })
 })
 
 // ============================================================

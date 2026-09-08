@@ -10,6 +10,7 @@
  * fuzzy scores never auto-resolve.
  */
 
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { vatNumbersMatch } from '@/lib/suppliers/match-supplier'
 
 export type SupplierRow = {
@@ -58,23 +59,10 @@ export function normalizeSupplierName(raw: string): string {
   return s
 }
 
-function digitsOnly(s: string): string {
-  return s.replace(/\D/g, '')
-}
-
-/**
- * Canonical 10-digit key for a Swedish org number. Orgnr is exactly 10
- * significant digits; enskild firma uses the owner's personnummer, which
- * appears in both 10-digit (YYMMDDXXXX) and 12-digit (YYYYMMDDXXXX) forms:
- * the last 10 digits are the same identifier. Anything else is not a Swedish
- * org number and must not fuzzy-match.
- */
-export function orgNumberKey(raw: string): string | null {
-  const d = digitsOnly(raw)
-  if (d.length === 10) return d
-  if (d.length === 12) return d.slice(-10)
-  return null
-}
+// The key moved to lib/invariants/org-number.ts (#2391) so the exact matcher,
+// the write schemas and this fuzzy pass share one rule; re-exported for the
+// existing importers.
+export { orgNumberKey }
 
 /**
  * Similarity in [0, 1]. Exact normalized match = 1; containment

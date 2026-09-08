@@ -12,6 +12,22 @@ import { describe, it, expect } from 'vitest'
 import { CreateSupplierParamsSchema } from '../create-supplier'
 import { generateReverseChargeBasisLines } from '@/lib/bookkeeping/vat-entries'
 
+describe('CreateSupplierParamsSchema org_number', () => {
+  // #2391: the staged path stores the same 10-digit key as the dashboard.
+  it('stores the 10-digit key for every accepted spelling', () => {
+    for (const typed of ['556677-8899', '5566778899', '165566778899', ' 556677-8899 ']) {
+      const parsed = CreateSupplierParamsSchema.parse({ name: 'Testbrand AB', org_number: typed })
+      expect(parsed.org_number, typed).toBe('5566778899')
+    }
+  })
+
+  it('still rejects a value that is not a Swedish org number', () => {
+    expect(() =>
+      CreateSupplierParamsSchema.parse({ name: 'Testbrand AB', org_number: 'DK12345678' }),
+    ).toThrow(/org number/)
+  })
+})
+
 describe('CreateSupplierParamsSchema vat_number', () => {
   it('accepts an EU business supplier with no VAT number (below its national threshold)', () => {
     const parsed = CreateSupplierParamsSchema.parse({

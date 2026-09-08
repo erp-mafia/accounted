@@ -58,6 +58,32 @@ export function isOrgNumberShaped(raw: string | null | undefined): boolean {
 }
 
 /**
+ * Lenient identity key for a Swedish org number: the 10 significant digits,
+ * or null when the input is not org-number shaped.
+ *
+ * Strips everything that is not a digit (hyphens, spaces, a stray "SE"),
+ * keeps 10 digits as they are and takes the last 10 of a 12-digit
+ * century-prefixed form ("16" for organisations, "19"/"20" for the
+ * personnummer an enskild firma uses). No Luhn check on purpose: this key
+ * answers "do these two strings denote the same counterparty", and two rows
+ * holding the same mistyped number are still one supplier. Use
+ * {@link normalizeOrgNumber} where a number is accepted into the system as
+ * valid; use this where existing values are compared or canonicalised.
+ *
+ * `suppliers.org_number` is stored in this form: the supplier matcher, the
+ * write schemas (web, v1, MCP) and the extractor's self-invoice guard all go
+ * through it, so a hyphenated register entry and a bare extracted number
+ * meet (#2391).
+ */
+export function orgNumberKey(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const digits = raw.replace(/\D/g, '')
+  if (digits.length === 10) return digits
+  if (digits.length === 12) return digits.slice(-10)
+  return null
+}
+
+/**
  * Normalize an org number to Accounted's canonical 10-digit storage form.
  *
  * Accepts hyphen/space-formatted input in either of the two shapes Swedish

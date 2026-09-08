@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   normalizeOrgNumber,
+  orgNumberKey,
   isValidOrgNumber,
   isOrgNumberShaped,
   hasInvalidOrgNumberCheckDigit,
@@ -57,6 +58,32 @@ describe('shape versus check digit', () => {
     expect(hasInvalidOrgNumberCheckDigit('55601')).toBe(false)
     // A valid number is neither.
     expect(hasInvalidOrgNumberCheckDigit(AB_10)).toBe(false)
+  })
+})
+
+describe('orgNumberKey', () => {
+  it('reduces every spelling of the same identity to 10 digits', () => {
+    expect(orgNumberKey(AB_10)).toBe(AB_10)
+    expect(orgNumberKey('556012-5790')).toBe(AB_10)
+    expect(orgNumberKey('556012 5790')).toBe(AB_10)
+    expect(orgNumberKey('165560125790')).toBe(AB_10)
+    expect(orgNumberKey('16556012-5790')).toBe(AB_10)
+    expect(orgNumberKey('SE5560125790')).toBe(AB_10)
+    expect(orgNumberKey('19800101-1231')).toBe(EF_10)
+  })
+
+  it('does not check the Luhn digit: two rows with the same mistyped number are one supplier', () => {
+    expect(orgNumberKey('5560125791')).toBe('5560125791')
+    expect(normalizeOrgNumber('5560125791')).toBeNull()
+  })
+
+  it('returns null for anything not org-number shaped', () => {
+    expect(orgNumberKey('DK12345678')).toBeNull()
+    expect(orgNumberKey('12345')).toBeNull()
+    expect(orgNumberKey('12345678901')).toBeNull()
+    expect(orgNumberKey('')).toBeNull()
+    expect(orgNumberKey(null)).toBeNull()
+    expect(orgNumberKey(undefined)).toBeNull()
   })
 })
 
