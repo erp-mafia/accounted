@@ -2,6 +2,7 @@
 
 import useSWR from 'swr'
 import { createClient } from '@/lib/supabase/client'
+import { USER_UI_STATE_SWR_KEY } from '@/lib/ui-state/client'
 import type { UserUiState } from '@/types'
 
 /**
@@ -14,7 +15,7 @@ import type { UserUiState } from '@/types'
  * empty state: the UI falls back to its defaults.
  */
 export function useUiState() {
-  const { data } = useSWR<UserUiState>('user-ui-state', async () => {
+  const { data } = useSWR<UserUiState>(USER_UI_STATE_SWR_KEY, async () => {
     const supabase = createClient()
     const { data: row } = await supabase
       .from('user_preferences')

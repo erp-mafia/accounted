@@ -3,7 +3,12 @@
  * silent failure, and last-used split-button mode resolution.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { persistUiState, rememberCreateMode, resolveInitialMode } from '../client'
+import {
+  isPwaWorklistBadgeEnabled,
+  persistUiState,
+  rememberCreateMode,
+  resolveInitialMode,
+} from '../client'
 
 const fetchMock = vi.fn()
 
@@ -30,6 +35,18 @@ describe('persistUiState', () => {
   it('swallows network failures', () => {
     fetchMock.mockRejectedValue(new Error('offline'))
     expect(() => persistUiState({ nav_collapsed: false })).not.toThrow()
+  })
+})
+
+describe('isPwaWorklistBadgeEnabled', () => {
+  it('defaults on when the key is missing', () => {
+    expect(isPwaWorklistBadgeEnabled(undefined)).toBe(true)
+    expect(isPwaWorklistBadgeEnabled({})).toBe(true)
+  })
+
+  it('is off only for an explicit false', () => {
+    expect(isPwaWorklistBadgeEnabled({ pwa_worklist_badge: false })).toBe(false)
+    expect(isPwaWorklistBadgeEnabled({ pwa_worklist_badge: true })).toBe(true)
   })
 })
 

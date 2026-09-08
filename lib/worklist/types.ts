@@ -2,10 +2,11 @@
  * Worklist: the unified "Att göra" pending-work model.
  *
  * One source of truth for what the user still has to do, shared by the
- * dashboard "Att göra" section, the sidebar badges, and (eventually) the
- * MCP list tools. Every surface that shows a pending-work count MUST read
- * it from lib/worklist so the numbers can never diverge: divergent counts
- * are exactly the "vampire transactions" problem this module exists to fix.
+ * dashboard "Att göra" section, the sidebar badges, the installed PWA
+ * home-screen badge, and (eventually) the MCP list tools. Every surface
+ * that shows a pending-work count MUST read it from lib/worklist so the
+ * numbers can never diverge: divergent counts are exactly the "vampire
+ * transactions" problem this module exists to fix.
  *
  * Each category documents its "done" condition: the status field or link
  * whose write makes an item drop out of the count, everywhere, at once.
