@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   aliasPatterns,
+  postgrestFilterValue,
   hitsUntilAuto,
   ruleCategoryAccount,
   ruleDirection,
@@ -69,3 +70,16 @@ describe('rules model', () => {
     expect(patterns.every((p) => !/[(),*%]/.test(p))).toBe(true)
   })
 })
+
+describe('postgrestFilterValue', () => {
+  it('quotes the value so reserved characters read as text', () => {
+    expect(postgrestFilterValue('%booking.com%')).toBe('"%booking.com%"')
+    expect(postgrestFilterValue('%Nunnan (Bageriet), Visby%')).toBe('"%Nunnan (Bageriet), Visby%"')
+  })
+
+  it('escapes quotes and backslashes inside the value', () => {
+    expect(postgrestFilterValue('a"b')).toBe('"a\\"b"')
+    expect(postgrestFilterValue('a\\b')).toBe('"a\\\\b"')
+  })
+})
+
