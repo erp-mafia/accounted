@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { seedCompany } from '@/tests/pg/fixtures'
+import { insertPostedJournalEntry, seedCompany } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
 /**
- * pg-real coverage for 20260908110045_backfill_bas2026_retired_12xx_labels.sql
+ * pg-real coverage for 20260908111134_backfill_bas2026_retired_12xx_labels.sql
  * (#2413).
  *
  * The backfill renames 1249/1259/1269 only where the chart carries the
@@ -16,11 +16,13 @@ import { getPool } from '@/tests/pg/setup'
  *   - an old-BAS chart (1240 "Bilar och andra transportmedel") is untouched
  *   - a user-renamed contra account is untouched
  *   - a contra account without its head is untouched
+ *   - a contra account with journal lines (old-BAS SIE import re-labelled by
+ *     the catalog on create) is untouched
  *   - idempotent (re-run is a no-op)
  */
 
 const BACKFILL_SQL = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20260908110045_backfill_bas2026_retired_12xx_labels.sql'),
+  join(process.cwd(), 'supabase/migrations/20260908111134_backfill_bas2026_retired_12xx_labels.sql'),
   'utf8',
 )
 
@@ -115,6 +117,34 @@ describe('backfill_bas2026_retired_12xx_labels', () => {
     await insertAccounts(userId, companyId, [
       ['1249', 'Ack. avskrivningar på bilar och andra transportmedel'],
     ])
+
+    await runBackfill()
+
+    expect((await names(companyId))['1249']).toBe(
+      'Ack. avskrivningar på bilar och andra transportmedel',
+    )
+  })
+
+  it('leaves a contra account with journal lines alone, even under a free head', async () => {
+    // lib/import/account-sync.ts creates missing accounts with the catalog
+    // name when the SIE #KONTO names are not carried, so an old-BAS vehicle
+    // chart can hold the exact pair with real depreciation booked on 1249.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    await insertAccounts(userId, companyId, [
+      ['1240', FREE_MASKINER],
+      ['1249', 'Ack. avskrivningar på bilar och andra transportmedel'],
+      ['7832', 'Avskrivningar på inventarier'],
+    ])
+    await insertPostedJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      sourceType: 'import',
+      lines: [
+        { accountNumber: '7832', debitAmount: 2500, creditAmount: 0 },
+        { accountNumber: '1249', debitAmount: 0, creditAmount: 2500 },
+      ],
+    })
 
     await runBackfill()
 

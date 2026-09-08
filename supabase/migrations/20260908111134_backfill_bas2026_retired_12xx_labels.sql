@@ -17,6 +17,13 @@
 -- company's head account (1240/1250/1260) carries the BAS 2026 free label.
 -- A chart imported from an older BAS (1240 "Bilar och andra transportmedel")
 -- is internally consistent and is left alone, as is every user rename.
+--
+-- Third guard: the contra account has no journal lines. A SIE import whose
+-- #KONTO names were not carried creates BOTH rows from the catalog
+-- (lib/import/account-sync.ts create pass), so an old-BAS vehicle chart can
+-- hold exactly the pair above with years of "Avskrivningar bil" postings on
+-- 1249. A label with history is the user's to change; this backfill only
+-- corrects the label the picker handed out before anything was booked on it.
 -- No row is deleted; bookings key on account_number, never on the label.
 
 UPDATE public.chart_of_accounts a
@@ -32,6 +39,12 @@ UPDATE public.chart_of_accounts a
           WHERE h.company_id = a.company_id
             AND h.account_number = '1240'
             AND h.account_name = '(Fritt konto för Maskiner och andra tekniska anläggningar)'
+       )
+   AND NOT EXISTS (
+         SELECT 1 FROM public.journal_entry_lines l
+           JOIN public.journal_entries e ON e.id = l.journal_entry_id
+          WHERE e.company_id = a.company_id
+            AND l.account_number = a.account_number
        );
 
 UPDATE public.chart_of_accounts a
@@ -47,6 +60,12 @@ UPDATE public.chart_of_accounts a
           WHERE h.company_id = a.company_id
             AND h.account_number = '1250'
             AND h.account_name = '(Fritt konto för Inventarier, verktyg och installationer)'
+       )
+   AND NOT EXISTS (
+         SELECT 1 FROM public.journal_entry_lines l
+           JOIN public.journal_entries e ON e.id = l.journal_entry_id
+          WHERE e.company_id = a.company_id
+            AND l.account_number = a.account_number
        );
 
 UPDATE public.chart_of_accounts a
@@ -62,4 +81,10 @@ UPDATE public.chart_of_accounts a
           WHERE h.company_id = a.company_id
             AND h.account_number = '1260'
             AND h.account_name = '(Fritt konto för Inventarier, verktyg och installationer)'
+       )
+   AND NOT EXISTS (
+         SELECT 1 FROM public.journal_entry_lines l
+           JOIN public.journal_entries e ON e.id = l.journal_entry_id
+          WHERE e.company_id = a.company_id
+            AND l.account_number = a.account_number
        );
