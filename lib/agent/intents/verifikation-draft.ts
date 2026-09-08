@@ -79,6 +79,7 @@ export const verifikationDraft = defineAgentIntent<
   },
 
   tools: [
+    'gnubok_list_accounts',
     'gnubok_get_trial_balance',
     'gnubok_query_journal',
     'gnubok_create_voucher',
@@ -308,7 +309,7 @@ export const verifikationDraft = defineAgentIntent<
     lines.push('Arbetssätt:')
     lines.push('1. UNDERLAG FÖRST. Saknas underlaget i sammanhanget ovan: leta i Dokumentinkorgen med gnubok_list_inbox_items (och gnubok_list_unmatched_documents). Läs det relevanta underlaget med gnubok_get_inbox_item / gnubok_get_document_content och dra fram datum, belopp, moms och motpart INNAN du föreslår konton. Användaren ser ofta inte underlagets innehåll själv: det är just det du hjälper till med.')
     lines.push('2. Föreslå rätt BAS-konton utifrån underlaget och beskrivningen. Syns en motpart: kolla historiken med gnubok_query_journal({ text: "<motpartens namn>", limit: 5 }) och följ tidigare mönster.')
-    lines.push('3. Säkerställ att debet = kredit. Förklara varje rad kort (i kategori-/kontonamn, inte kontonummer).')
+    lines.push('3. Säkerställ att debet = kredit. Förklara varje rad kort. Stagear du verifikationen räcker kategori-/kontonamn, kortet visar kontonumren. Färdigställer användaren ett utkast själv i formuläret: ange kontonummer och kontonamn per rad, hämtade från kontoplanen (gnubok_list_accounts).')
     lines.push('4. Är detta egentligen en kund-/leverantörsfaktura eller en bankrad? Be användaren matcha den istället: direktbokning skapar dubbletter.')
     lines.push('5. Skapa verifikationen:')
     lines.push('   • NY verifikation (inget utkast visas ovan): staga via gnubok_create_voucher när allt stämmer. Ligger underlaget i Dokumentinkorgen: skicka med inbox_item_id så kvittot kopplas till verifikationen automatiskt vid godkännande.')

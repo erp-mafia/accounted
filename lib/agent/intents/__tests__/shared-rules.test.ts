@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { renderAgentGroundRules, AGENT_GROUND_RULES } from '../shared-rules'
+import { generalHelp } from '../general-help'
+import { invoiceDraft } from '../invoice-draft'
+import { vatReview } from '../vat-review'
+import { supplierInvoiceReview } from '../supplier-invoice-review'
+import { bokslutStep } from '../bokslut-step'
+import { verifikationDraft } from '../verifikation-draft'
 
 // AGENT_GROUND_RULES is rendered into the first user message of the bookkeeping
 // intents that inject it (general.help, vat-review, invoice-draft,
 // supplier_invoice.review, bokslut.step, verifikation.draft). It owns the
-// bookkeeping-specific HEURISTICS: underlag-first, no BAS numbers in chat,
+// bookkeeping-specific HEURISTICS: underlag-first, account numbers on request,
 // counterparty history, representation, known-counterparty defaults.
 //
 // The cross-cutting EPISTEMICS rules (load before quoting a rate; don't infer
@@ -17,12 +23,33 @@ import { renderAgentGroundRules, AGENT_GROUND_RULES } from '../shared-rules'
 const text = renderAgentGroundRules()
 
 describe('agent ground rules: bookkeeping heuristics it owns', () => {
-  it('keeps underlag-first, no-BAS-in-chat, history, representation, known counterparties', () => {
+  it('keeps underlag-first, account numbers, history, representation, known counterparties', () => {
     expect(text).toContain('UNDERLAG FÖRST')
-    expect(text).toContain('INGA BAS-KONTONUMMER')
+    expect(text).toContain('KONTONUMMER')
     expect(text).toContain('KOLLA HISTORIK FÖRST')
     expect(text).toContain('REPRESENTATION')
     expect(text).toContain('KÄNDA MOTPARTER')
+  })
+
+  // Production feedback 2026-09-08: a user booking by hand asked for the
+  // accounts behind a proposal and was refused under the old flat ban, then
+  // told his earlier (number-giving) conversations never happened. The rule
+  // now hands out numbers on request and forbids the refusal outright.
+  it('gives BAS account numbers on request instead of banning them', () => {
+    expect(text).not.toContain('INGA BAS-KONTONUMMER')
+    expect(text).toContain('Vägra ALDRIG att ange kontonummer')
+    expect(text).toContain('ge konkreta BAS-kontonummer')
+    expect(text).toContain('gnubok_list_accounts')
+    // A failed chart lookup is reported, not papered over with an unchecked number.
+    expect(text).toContain('inte är kontrollerat mot deras kontoplan')
+    // Names still win when a staged operation's approval card shows the accounts.
+    expect(text).toContain('godkännandekortet visar konton')
+  })
+
+  it('every intent that renders the rules can read the chart of accounts', () => {
+    for (const intent of [generalHelp, invoiceDraft, vatReview, supplierInvoiceReview, bokslutStep, verifikationDraft]) {
+      expect(intent.tools, intent.id).toContain('gnubok_list_accounts')
+    }
   })
 
   it('still renders as a non-trivial joined block', () => {

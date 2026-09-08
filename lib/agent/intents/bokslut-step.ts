@@ -66,6 +66,7 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
   },
 
   tools: [
+    'gnubok_list_accounts',
     'gnubok_year_end_readiness',
     'gnubok_post_kontantmetod_cutoff',
     'gnubok_list_fiscal_periods',
