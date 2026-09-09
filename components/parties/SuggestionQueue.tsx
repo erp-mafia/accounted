@@ -7,8 +7,9 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
+import { HelpPopover } from '@/components/ui/help-popover'
 import type { PartyRole, RegisterRow } from '@/lib/parties/register'
-import { cn, formatCurrency } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
 import { AccountChip } from './AccountChip'
 import { AccountNub } from './AccountNub'
 import { isDuplicateCandidate, reasonText, rolesLabel } from './format'
@@ -135,7 +136,6 @@ export function SuggestionQueue({
                 )}
               </th>
               <th className={TH_CLASS}>{t('th_name')}</th>
-              <th className={TH_CLASS}>{t('th_why')}</th>
               <th className={TH_CLASS}>{t('th_becomes')}</th>
               <th className={TH_CLASS}>{t('th_account')}</th>
               <th className={`${TH_CLASS} text-right`}>{t('th_revenue')}</th>
@@ -167,40 +167,29 @@ export function SuggestionQueue({
                         {t('chip_duplicate')}
                       </Badge>
                     ) : null}
-                  </td>
-                  <td className={cn(td, 'min-w-[16rem] max-w-[28rem] text-muted-foreground', dense && 'max-w-[24rem]')}>
-                    {dense ? (
-                      <span className="inline-block max-w-[20rem] truncate align-bottom" title={reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}>
-                        {reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}
-                      </span>
-                    ) : (
-                      reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)
-                    )}
-                    {isForeign(row) && dense ? (
+                    {isForeign(row) ? (
                       <span
                         className="ml-1.5 inline-flex items-center rounded-full border border-border px-1.5 text-[10.5px] text-foreground"
                         title={t('row_foreign', { country: regionName(row.country as string, locale) })}
                       >
                         {row.country}
                       </span>
-                    ) : isForeign(row) ? (
-                      <>
-                        {' · '}
-                        <span className="text-foreground">{t('row_foreign', { country: regionName(row.country as string, locale) })}</span>
-                      </>
-                    ) : onFind && !row.orgNumber && row.kind !== 'person' ? (
-                      <>
-                        {' · '}
+                    ) : null}
+                    <HelpPopover className="ml-1.5 align-middle">
+                      <p>{reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}</p>
+                      {isForeign(row) ? (
+                        <p className="mt-2 text-muted-foreground">{t('row_foreign', { country: regionName(row.country as string, locale) })}</p>
+                      ) : onFind && !row.orgNumber && row.kind !== 'person' ? (
                         <button
                           type="button"
-                          className="text-foreground underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="mt-2 text-foreground underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           onClick={() => onFind(row)}
                           disabled={!canWrite}
                         >
                           {t('pick_registry')}
                         </button>
-                      </>
-                    ) : null}
+                      ) : null}
+                    </HelpPopover>
                   </td>
                   <td className={`${td} whitespace-nowrap`}>
                     <DropdownMenu>
@@ -226,7 +215,7 @@ export function SuggestionQueue({
                     </DropdownMenu>
                   </td>
                   <td className={td}>
-                    {dense ? <AccountChip account={row.stats?.dominantAccount ?? null} /> : <AccountNub account={row.stats?.dominantAccount ?? null} />}
+                    {dense ? <AccountChip account={row.stats?.dominantAccount ?? null} name={row.stats?.dominantAccountName ?? null} /> : <AccountNub account={row.stats?.dominantAccount ?? null} />}
                   </td>
                   <td className={`${td} text-right tabular-nums`}>{row.stats?.revenueSek ? formatCurrency(row.stats.revenueSek) : ''}</td>
                   <td className={`${td} text-right tabular-nums`}>{row.stats?.expenseSek ? formatCurrency(row.stats.expenseSek) : ''}</td>

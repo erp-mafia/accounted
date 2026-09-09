@@ -2,11 +2,11 @@
 
 import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Check, Minus, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
-import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { cn } from '@/lib/utils'
@@ -30,6 +30,8 @@ interface AttGoraV2Props {
   expiringBankConnections: ExpiringBankConnection[]
   hasActiveBankConnection: boolean
   setup: AttGoraSetupFlags | null
+  /** An MCP client (Claude) holds a key for this company: the task button can hand the work over. */
+  claudeConnected: boolean
   /** The first-run checklist (server component), shown in the middle pane for Kom igång tasks. */
   checklist: ReactNode
   /** Degraded-state notice line (server component), shown above the panes. */
@@ -51,13 +53,13 @@ export default function AttGoraV2({
   expiringBankConnections,
   hasActiveBankConnection,
   setup,
+  claudeConnected,
   checklist,
   notices,
 }: AttGoraV2Props) {
   const t = useTranslations('att_gora_v2')
   const { toast } = useToast()
   const hasAi = useCapability(CAPABILITY.ai)
-  const { openAgentSheet } = useAgentSheet()
   const params = useSearchParams()
 
   const [counts, setCounts] = useState(worklist.counts)
@@ -268,23 +270,35 @@ export default function AttGoraV2({
               task={selected}
               ctx={ctx}
               assistant={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    openAgentSheet({
-                      intentId: 'general.help',
-                      seedUserMessage: t('fix_seed', {
-                        task: t(`task_${selected.id}`),
-                        brief: assistantLine(selected),
-                        lagrum: t(`lagrum_${selected.id}`),
-                      }),
-                    })
-                  }
-                >
-                  <Sparkles className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-                  {t('fix_with_assistant')}
-                </Button>
+                claudeConnected ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      window.open(
+                        `https://claude.ai/new?q=${encodeURIComponent(
+                          t('fix_seed', {
+                            task: t(`task_${selected.id}`),
+                            brief: assistantLine(selected),
+                            lagrum: t(`lagrum_${selected.id}`),
+                          }),
+                        )}`,
+                        '_blank',
+                        'noopener,noreferrer',
+                      )
+                    }
+                  >
+                    <Sparkles className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                    {t('fix_with_claude')}
+                  </Button>
+                ) : (
+                  <Button asChild variant="outline" size="sm">
+                    <Link href="/settings/api">
+                      <Sparkles className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                      {t('connect_claude_first')}
+                    </Link>
+                  </Button>
+                )
               }
             />
           ) : null}

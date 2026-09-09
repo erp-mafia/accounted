@@ -107,6 +107,7 @@ export async function HemV2Section({
       expiringBankConnections={expiringBankConnections}
       hasActiveBankConnection={hasActiveBankConnection}
       setup={setup}
+      claudeConnected={hasMcpKey}
       checklist={checklist}
       notices={notices}
     />
