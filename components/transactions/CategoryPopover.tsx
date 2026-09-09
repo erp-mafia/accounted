@@ -37,17 +37,23 @@ export function CategoryPopover({
 }) {
   const t = useTranslations('tx_template_picker')
   const panelRef = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null)
 
   useLayoutEffect(() => {
     if (!anchor) return
     const place = () => {
       const r = anchor.getBoundingClientRect()
-      const height = Math.min(MAX_HEIGHT, panelRef.current?.offsetHeight ?? MAX_HEIGHT)
-      const below = r.bottom + GAP
-      const top = below + height <= window.innerHeight - MARGIN ? below : Math.max(MARGIN, r.top - GAP - height)
+      // Below the anchor when there is room for a useful list, else above;
+      // the panel shrinks to the side it lands on instead of covering the
+      // anchor, so it works from a button low in a tall form too.
+      const spaceBelow = window.innerHeight - MARGIN - (r.bottom + GAP)
+      const spaceAbove = r.top - GAP - MARGIN
+      const useBelow = spaceBelow >= Math.min(MAX_HEIGHT, 320) || spaceBelow >= spaceAbove
+      const maxHeight = Math.max(160, Math.min(MAX_HEIGHT, useBelow ? spaceBelow : spaceAbove))
+      const height = Math.min(maxHeight, panelRef.current?.offsetHeight ?? maxHeight)
+      const top = useBelow ? r.bottom + GAP : Math.max(MARGIN, r.top - GAP - height)
       const left = Math.max(MARGIN, Math.min(r.left, window.innerWidth - WIDTH - MARGIN))
-      setPos({ top, left })
+      setPos({ top, left, maxHeight })
     }
     place()
     window.addEventListener('scroll', place, true)
@@ -80,7 +86,7 @@ export function CategoryPopover({
             top: pos?.top ?? -9999,
             left: pos?.left ?? -9999,
             width: WIDTH,
-            maxHeight: MAX_HEIGHT,
+            maxHeight: pos?.maxHeight ?? MAX_HEIGHT,
             visibility: pos ? 'visible' : 'hidden',
           }}
         >
