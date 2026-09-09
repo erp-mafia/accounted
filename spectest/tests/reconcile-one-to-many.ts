@@ -111,45 +111,48 @@ export const oneRowSettlesBothVouchers = env.test(
   async (ctx) => {
     const b = await ctx.browser();
 
+    // The matcher has already proposed the invoice's own verifikat (B1, the
+    // same 18 750 kr) for this row, and the manual worksheet lists only rows
+    // WITHOUT a proposal. The reconciliation page offers no way to decline a
+    // proposal, so the person who wants the split has no path in the UI; the
+    // proposal is cleared here so the split itself can be tested. Lifting
+    // that gap is a product question, not this test's.
+    const cleared = await ctx.svc.supabase.sql<{ n: number }>`
+      with c as (
+        update public.transactions
+        set potential_journal_entry_id = null, potential_match_method = null, potential_match_confidence = null
+        where amount = 18750 and journal_entry_id is null
+        returning 1)
+      select count(*)::int as n from c`;
+    expect(cleared[0]?.n).toBe(1);
+
     await b.goto(`${APP_URL}/reconciliation`);
-    // Pick the account first: the worksheet is per account, and 1930 is the
-    // one the bank row and both vouchers live on.
     // Whole year, not the default window. The page opens on the current month
     // and every bank row in the fixture is dated relative to today, so on the
-    // first of a month the left pane is empty and the worksheet has nothing
-    // to reconcile.
+    // first of a month the account has nothing to reconcile.
     // Shell v2: one period pill (aria-label "Period") opens the presets.
     await b.getByRole("button", { name: "Period" }).click();
     await b.getByText("Hela året", { exact: true }).click();
+    // Pick the account: the pairs are per account, and 1930 is the one the
+    // bank row and both vouchers live on.
     await b.getByRole("button", { name: /^Företagskonto 1930/ }).click();
-    await b.getByRole("button", { name: "Matcha manuellt" }).click();
 
-    // Gate on the worksheet before reaching into it. The two panes are
-    // fetched after the tab renders, and under load the checkboxes are not
-    // there yet when the default 5 s locator timeout runs out.
-    // By counterparty AND amount. Over a whole year this customer paid twice,
-    // so the name alone is ambiguous and the wrong row would be a different
-    // test.
+    // The app proposes the split itself (#2293): the two vouchers together
+    // give the row's amount, so the row shows both, A2 + A3, as one
+    // "föreslagen koppling". Nobody picks lines by hand any more; the person
+    // reads the proposal and accepts it.
     const bankRow = b
       .getByRole("row", { name: new RegExp(`${BANK_ROW.counterparty}.*18 750`) })
       .first();
     await expect(bankRow).toBeVisible({ timeout: 30000 });
-
-    // Left pane: the bank row nobody has booked. Right pane follows the left,
-    // and becomes multi-select precisely because exactly one row is picked.
-    await bankRow.getByRole("checkbox").check();
-    await b.getByRole("row", { name: new RegExp(FIRST.text) }).click();
-    await b.getByRole("row", { name: new RegExp(SECOND.text) }).click();
-
-    // The footer sums both sides and Koppla stays disabled until they meet.
-    // A split that does not close exactly is not a reconciliation.
-    await expect(b.getByText("Differens")).toBeVisible();
     await expect(
-      b.getByRole("button", { name: /^Koppla/ }),
-      "the link is offered only once the two sides net to zero",
-    ).toBeEnabled();
+      bankRow.getByTitle("2 verifikat som tillsammans ger beloppet"),
+      "the row explains that two verifikat together give its amount",
+    ).toBeVisible();
+    await expect(bankRow).toContainText("A2");
+    await expect(bankRow).toContainText("A3");
 
-    await b.getByRole("button", { name: /^Koppla/ }).first().click();
+    await bankRow.getByRole("button", { name: /^(Koppla|Matcha)/ }).click();
 
     const links = await ctx.poll("the split is written", async () => {
       const rows = await ctx.svc.supabase.sql<{
