@@ -57,18 +57,27 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
   const load = useCallback(async () => {
     try {
       const qs = new URLSearchParams({ date_from: window.from, date_to: window.to, limit: String(LIMIT) })
-      const [extRes, ledRes] = await Promise.all([
+      // The left pane is every bank row still open, whether or not the
+      // matcher has a proposal for it: the proposal is a suggestion, and
+      // manual mode exists for the person who wants to decide otherwise.
+      const [extRes, propRes, ledRes] = await Promise.all([
         fetch(`${base}/items?bucket=unmatched_external&${qs.toString()}`),
+        fetch(`${base}/items?bucket=proposed&${qs.toString()}`),
         fetch(`${base}/items?bucket=unmatched_ledger&${qs.toString()}`),
       ])
       setLoadError(false)
-      if (!extRes.ok || !ledRes.ok) {
+      if (!extRes.ok || !propRes.ok || !ledRes.ok) {
         setLoadError(true)
         return
       }
       const ext = (await extRes.json()).data as { items: ReconciliationItem[] }
+      const prop = (await propRes.json()).data as { items: ReconciliationItem[] }
       const led = (await ledRes.json()).data as { items: ReconciliationItem[] }
-      setExternal(ext.items)
+      const seen = new Set<string>()
+      const open = [...ext.items, ...prop.items]
+        .filter((i) => (seen.has(i.item_id) ? false : (seen.add(i.item_id), true)))
+        .sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
+      setExternal(open)
       setLedger(led.items)
     } catch {
       setLoadError(true)

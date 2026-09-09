@@ -2026,7 +2026,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           />
 
           {activeStep === 1 && (
-            <section className="mx-auto max-w-3xl space-y-3">
+            <section className="report-narrow mx-auto max-w-3xl space-y-3">
               <VatChecksCard
               checks={checks}
               periodType={periodType}
@@ -2045,7 +2045,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
 
           {activeStep === 2 && (
             <section className="space-y-3">
-              <div className="mx-auto max-w-2xl">
+              <div className="report-narrow mx-auto max-w-2xl">
             <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
               <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Momsdeklaration · {data.period.start} till {data.period.end}
@@ -2241,7 +2241,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           )}
 
           {activeStep === 3 && (
-            <section className="mx-auto max-w-3xl space-y-3">
+            <section className="report-narrow mx-auto max-w-3xl space-y-3">
               <VatBookingCard
               checksBlocked={checksBlocked}
               proposal={settlement.proposal}
@@ -2790,27 +2790,30 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
   return (
     <div className="space-y-4">
       <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, dateRange, dimensionFilter)}` }]} />
-      {/* Account range filter: flat toolbar on the panel, no box */}
-      <div className="flex flex-wrap items-end gap-4">
+      {/* Account range filter: flat toolbar on the panel, no box. In v2 the
+          labels go (field-label) and the placeholders say what the fields are. */}
+      <div className="flex flex-wrap items-end gap-3">
         <div>
-          <Label htmlFor="gl-account-from">Konto från</Label>
+          <Label htmlFor="gl-account-from" className="field-label">Konto från</Label>
           <Input
             id="gl-account-from"
             type="text"
             value={accountFrom}
             onChange={(e) => setAccountFrom(e.target.value)}
-            placeholder="t.ex. 1510"
+            placeholder="Från konto"
+            aria-label="Konto från"
             className="mt-1 w-32"
           />
         </div>
         <div>
-          <Label htmlFor="gl-account-to">Konto till</Label>
+          <Label htmlFor="gl-account-to" className="field-label">Konto till</Label>
           <Input
             id="gl-account-to"
             type="text"
             value={accountTo}
             onChange={(e) => setAccountTo(e.target.value)}
-            placeholder="t.ex. 1519"
+            placeholder="Till konto"
+            aria-label="Konto till"
             className="mt-1 w-32"
           />
         </div>
