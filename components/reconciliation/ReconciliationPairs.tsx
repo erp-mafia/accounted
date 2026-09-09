@@ -154,12 +154,15 @@ export function PairRow({
       </span>
     )
   } else if (item.linked_journal_entry_id) {
+    const linked = item.linked_entry ?? null
     ledgerAmount = item.amount
+    ledgerDate = linked?.entry_date ?? null
     ledgerText = (
-      <span className="flex items-center gap-2">
-        <Link href={`/bookkeeping/${item.linked_journal_entry_id}`} className={QUIET_LINK_CLASS} data-ph-mask>
-          {item.linked_journal_entry_id.slice(0, 8)}
+      <span className="flex min-w-0 items-center gap-2">
+        <Link href={`/bookkeeping/${item.linked_journal_entry_id}`} className={cn(QUIET_LINK_CLASS, 'shrink-0')} data-ph-mask>
+          {(linked ? voucherOf(linked) : null) ?? item.linked_journal_entry_id.slice(0, 8)}
         </Link>
+        {linked?.description ? <span className="truncate text-muted-foreground">{linked.description}</span> : null}
         {item.link_problem === 'entry_draft' && <Chip>{t('chip_draft')}</Chip>}
         {item.link_problem === 'entry_reversed' && <Chip>{t('chip_reversed')}</Chip>}
         {item.link_problem === 'entry_missing' && <Chip>{t('chip_missing')}</Chip>}

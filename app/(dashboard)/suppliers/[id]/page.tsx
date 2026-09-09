@@ -199,7 +199,7 @@ export default function SupplierDetailPage() {
     : [{ currency: supplier.default_currency || 'SEK', total_outstanding: 0, total_paid: 0 }]
 
   return (
-    <div className="max-w-3xl space-y-8 stagger-enter">
+    <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type/org kicker, quiet actions right */}
       <div>
         <Link
@@ -282,6 +282,8 @@ export default function SupplierDetailPage() {
         </div>
       </div>
 
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start lg:gap-x-12">
+      <div className="space-y-8">
       {partyId && party.dossier ? (
         <PartyFactsSection
           partyId={partyId}
@@ -359,6 +361,8 @@ export default function SupplierDetailPage() {
         </DefRow>
       </DetailSection>
 
+      </div>
+      <div className="space-y-8">
       <DetailSection
         kicker={t('invoices_section_title')}
         aside={
@@ -437,6 +441,8 @@ export default function SupplierDetailPage() {
             </>
           )}
       </DetailSection>
+      </div>
+      </div>
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 

@@ -227,7 +227,7 @@ export default function CustomerDetailPage({
   if (!customer) return null
 
   return (
-    <div className="max-w-2xl space-y-8 stagger-enter">
+    <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type kicker, quiet actions right */}
       <div>
         <Link
@@ -272,6 +272,8 @@ export default function CustomerDetailPage({
         </div>
       </div>
 
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start lg:gap-x-12">
+      <div className="space-y-8">
       <DetailSection kicker={t('section_contact')}>
         <DefRow label={t('def_email')}>
           {customer.email ? (
@@ -388,6 +390,8 @@ export default function CustomerDetailPage({
         </DetailSection>
       )}
 
+      </div>
+      <div className="space-y-8">
       <DetailSection
         kicker={t('section_invoices')}
         aside={
@@ -438,6 +442,8 @@ export default function CustomerDetailPage({
           <p className="text-sm text-muted-foreground">{t('no_invoices')}</p>
         )}
       </DetailSection>
+      </div>
+      </div>
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
