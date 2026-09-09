@@ -60,7 +60,7 @@ describe('composeCounterparts', () => {
     const out = composeCounterparts({
       parties: [
         party({ id: 'p1', displayName: 'Anthropic', country: 'US' }),
-        party({ id: 'p2', displayName: 'Visma Spcs AB', status: 'suggested', stats: { occurrences: 3, expenseSek: 900, revenueSek: 0, firstSeen: '2026-01-01', lastSeen: '2026-06-01', cadenceDays: null, rhythm: null, dominantAccount: '5420', dominantShare: 1, variants: [] } }),
+        party({ id: 'p2', displayName: 'Visma Spcs AB', status: 'suggested', stats: { occurrences: 3, expenseSek: 900, revenueSek: 0, firstSeen: '2026-01-01', lastSeen: '2026-06-01', cadenceDays: null, rhythm: null, dominantAccount: '5420', dominantAccountName: 'Programvaror', dominantShare: 1, variants: [] } }),
       ],
       aliases: [alias({ alias_key: anthropicKey, party_id: 'p1', display_name: 'Anthropic', what: 'AI-assistent (Claude), SaaS' })],
       bank,

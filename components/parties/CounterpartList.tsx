@@ -10,6 +10,7 @@ import type { PartyRole } from '@/lib/parties/register'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { AccountChip } from './AccountChip'
 import { BrandMark } from './BrandMark'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { reasonText } from './format'
 import { regionName } from './SuggestionQueue'
 
@@ -69,7 +70,7 @@ export function CounterpartList({
           {rows.map((row) => {
             const whyKey = !row.partyId && row.source ? WHY_KEY[row.source as keyof typeof WHY_KEY] : undefined
             const why = row.status === 'suggested' && row.reason ? reasonText(t, row.reason, row.rhythm, row.orgNumber) : whyKey ? t(whyKey) : null
-            const detail = [row.what, row.rail ? t('cp_via', { rail: row.rail }) : null, row.country && row.country !== 'SE' ? regionName(row.country, locale) : null, why]
+            const detail = [row.what, row.rail ? t('cp_via', { rail: row.rail }) : null, row.country && row.country !== 'SE' ? regionName(row.country, locale) : null]
               .filter(Boolean)
               .join(' · ')
             const chip =
@@ -98,13 +99,18 @@ export function CounterpartList({
                             {chip}
                           </span>
                         ) : null}
+                        {why ? (
+                          <HelpPopover className="shrink-0">
+                            <p>{why}</p>
+                          </HelpPopover>
+                        ) : null}
                       </div>
                       {detail ? <div className="truncate text-[12px] text-muted-foreground">{detail}</div> : null}
                     </div>
                   </div>
                 </td>
                 <td className={TD_CLASS}>
-                  <AccountChip account={row.account} />
+                  <AccountChip account={row.account} name={row.accountName} />
                 </td>
                 <td className={`${TD_CLASS} text-right tabular-nums text-muted-foreground`}>{row.count || ''}</td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>{money(row.inSek)}</td>

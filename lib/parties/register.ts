@@ -11,6 +11,7 @@
  * dossier; the user sees them as suppliers and customers.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { coreKey } from './ledger-key'
@@ -36,6 +37,8 @@ export interface LedgerStats {
   cadenceDays: number | null
   rhythm: ObservedParty['rhythm']
   dominantAccount: string | null
+  /** The BAS name of that account, so a chip never shows a bare number. */
+  dominantAccountName: string | null
   dominantShare: number | null
   variants: string[]
 }
@@ -113,6 +116,7 @@ export function statsFrom(o: ObservedParty): LedgerStats {
     cadenceDays: o.cadence_days,
     rhythm: o.rhythm,
     dominantAccount: o.dominant_account_number,
+    dominantAccountName: o.dominant_account_number ? (getBASReference(o.dominant_account_number)?.account_name ?? null) : null,
     dominantShare: o.dominant_account_share,
     variants: o.variants ?? [],
   }

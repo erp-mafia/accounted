@@ -35,6 +35,7 @@ export interface CounterpartRow {
   defaultRoles: PartyRole[]
   orgNumber: string | null
   account: string | null
+  accountName: string | null
   count: number
   inSek: number
   outSek: number
@@ -191,6 +192,7 @@ export function composeCounterparts(input: {
       defaultRoles: p.defaultRoles,
       orgNumber: p.orgNumber,
       account: ledger?.dominantAccount ?? null,
+      accountName: ledger?.dominantAccountName ?? null,
       count: useBank ? bank.count : (ledger?.occurrences ?? 0),
       inSek: useBank ? bank.inSek : roundOre(ledger?.revenueSek ?? 0),
       outSek: useBank ? bank.outSek : roundOre(ledger?.expenseSek ?? 0),
@@ -249,6 +251,7 @@ export function composeCounterparts(input: {
       defaultRoles: bank.inSek > bank.outSek ? ['customer'] : ['supplier'],
       orgNumber: null,
       account: null,
+      accountName: null,
       count: bank.count,
       inSek: bank.inSek,
       outSek: bank.outSek,
