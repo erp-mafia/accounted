@@ -1348,7 +1348,7 @@ function VatStepper({
 
   return (
     <div
-      className="mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
+      className="report-narrow mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
       role="tablist"
       aria-label="Momsdeklarationens steg"
     >

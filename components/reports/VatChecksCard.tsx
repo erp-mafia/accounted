@@ -7,9 +7,6 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import {
   DataList,
-  DataListMeta,
-  DataListMetaSeparator,
-  DataListPrimary,
   DataListRow,
 } from '@/components/ui/data-list'
 import {
@@ -411,7 +408,7 @@ export function VatChecksCard({
                   <p className="text-xs text-muted-foreground">Kräver skrivbehörighet.</p>
                 )}
 
-                <DataList>
+                <DataList className="rounded-none border-0 bg-transparent">
                   {visibleGaps.map((gap) => {
                     const sel = classificationFor(gap)
                     const expanded = expandedId === gap.entryId
@@ -421,6 +418,7 @@ export function VatChecksCard({
                         key={gap.entryId}
                         expanded={expanded}
                         onClick={() => setExpandedId(expanded ? null : gap.entryId)}
+                        rowClassName="items-center px-1 py-[9px]"
                         trailing={
                           <>
                             <span className="text-sm tabular-nums text-muted-foreground">
@@ -463,7 +461,7 @@ export function VatChecksCard({
                           </>
                         }
                         expandedContent={
-                          <div className="space-y-3">
+                          <div className="space-y-3 px-1">
                             <p className="text-sm tabular-nums">
                               {gap.rcOutputAccount} har {formatAmount(gap.rcOutputAmount)} kr
                               fiktiv moms: saknar basbelopp{' '}
@@ -512,18 +510,13 @@ export function VatChecksCard({
                           </div>
                         }
                       >
-                        <DataListPrimary>
-                          Verifikation {gap.voucherSeries}-{gap.voucherNumber}
-                        </DataListPrimary>
-                        <DataListMeta>
-                          <span className="tabular-nums">{formatDate(gap.entryDate)}</span>
-                          {gap.description && (
-                            <>
-                              <DataListMetaSeparator />
-                              <span className="truncate">{gap.description}</span>
-                            </>
-                          )}
-                        </DataListMeta>
+                        <div className="flex min-w-0 items-baseline gap-4 text-[13px]">
+                          <span className="w-16 shrink-0 tabular-nums">
+                            {gap.voucherSeries}-{gap.voucherNumber}
+                          </span>
+                          <span className="w-24 shrink-0 tabular-nums text-muted-foreground">{formatDate(gap.entryDate)}</span>
+                          {gap.description && <span className="min-w-0 truncate text-muted-foreground">{gap.description}</span>}
+                        </div>
                         {/* Always visible: a failed korrigering must not hide
                             its reason behind the collapsed expansion. */}
                         {rowError && (

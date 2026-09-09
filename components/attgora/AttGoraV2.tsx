@@ -1,7 +1,6 @@
 'use client'
 
 import { useMemo, useState, type ReactNode } from 'react'
-import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Check, Minus, Sparkles } from 'lucide-react'
@@ -16,7 +15,6 @@ import {
   buildAttGoraTasks,
   firstOpenTask,
   openTaskTotal,
-  ATT_GORA_TASK_HREF,
   type AttGoraGroup,
   type AttGoraSetupFlags,
   type AttGoraTask,
@@ -152,6 +150,10 @@ export default function AttGoraV2({
   }
 
   const total = openTaskTotal(groups)
+  // Progress is counted in tasks, not items: "4 av 9 klara" is a race a
+  // person can win this month; 325 items is a pile.
+  const taskTotal = allTasks.length
+  const taskDone = allTasks.filter((x) => x.state === 'done').length
 
   const depDone = (id: AttGoraTaskId) => allTasks.find((x) => x.id === id)?.state === 'done'
 
@@ -168,7 +170,7 @@ export default function AttGoraV2({
           renders nothing and must not leave a second line 16px below. */}
       <div
         className={cn(
-          '-mx-4 -mb-8 grid md:-mx-6 md:grid-cols-[250px_minmax(0,1fr)] xl:grid-cols-[250px_minmax(0,1fr)_256px]',
+          '-mx-4 -mb-8 grid md:-mx-6 md:grid-cols-[250px_minmax(0,1fr)]',
           'first:-mt-4 md:first:h-[calc(100vh-108px)]',
           '[&:not(:first-child)]:border-t [&:not(:first-child)]:border-border/60 md:[&:not(:first-child)]:h-[calc(100vh-124px)]',
         )}
@@ -178,12 +180,33 @@ export default function AttGoraV2({
           aria-label={t('tree_label')}
           className="border-b border-border/60 px-2 py-3 md:overflow-y-auto md:border-b-0 md:border-r"
         >
-          <div className="flex items-center justify-between px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+          <div className="flex items-center justify-between px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
             <span>{t('tree_heading')}</span>
             <span className="tabular-nums" data-ph-mask>
               {total > 0 ? t('sub_open', { count: total }) : t('sub_done')}
             </span>
           </div>
+          {/* The bar fills as tasks close; the line under it names the score. */}
+          {taskTotal > 0 && (
+            <div className="mb-3 px-3" data-ph-mask>
+              <div
+                className="h-1 w-full overflow-hidden rounded-full bg-secondary"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={taskTotal}
+                aria-valuenow={taskDone}
+                aria-label={t('progress_aria', { done: taskDone, total: taskTotal })}
+              >
+                <div
+                  className={cn('h-full rounded-full transition-[width] duration-500', taskDone === taskTotal ? 'bg-success' : 'bg-foreground')}
+                  style={{ width: `${Math.round((taskDone / taskTotal) * 100)}%` }}
+                />
+              </div>
+              <div className="mt-1.5 text-[11px] tabular-nums text-muted-foreground">
+                {taskDone === taskTotal ? t('progress_all_done') : t('progress_line', { done: taskDone, total: taskTotal })}
+              </div>
+            </div>
+          )}
           {groups.map((g) => (
             <div key={g.id} className="mb-3">
               <div className="px-3 py-1 text-[12.5px] font-medium">
@@ -235,88 +258,38 @@ export default function AttGoraV2({
           ))}
         </aside>
 
-        {/* Detail */}
+        {/* Detail. One action for the assistant lives in the pane header:
+            it opens the sheet with a task-specific brief, the way a person
+            would hand the pile to a colleague. Deadline and lagrum sit in
+            the pane's own help instead of a third column. */}
         <section className="min-w-0 md:overflow-y-auto" aria-live="polite">
-          {selected ? <TaskPane task={selected} ctx={ctx} /> : null}
-        </section>
-
-        {/* Right pane */}
-        <aside className="hidden border-l border-border/60 xl:block xl:overflow-y-auto">
-          {selected && (
-            <>
-              <RightSection title={t('details')} status={selected.state === 'done' ? t('sub_done') : t('state_open')}>
-                <dl className="grid grid-cols-[78px_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
-                  <dt className="text-muted-foreground">{t('deadline')}</dt>
-                  <dd>{selected.id === 'deadline_action' ? t('deadline_in_list') : t('deadline_ongoing')}</dd>
-                  <dt className="text-muted-foreground">{t('lagrum')}</dt>
-                  <dd>{t(`lagrum_${selected.id}`)}</dd>
-                </dl>
-              </RightSection>
-              {/* Only when there are any: "Inga beroenden" was a section saying nothing. */}
-              {selected.deps.length > 0 && (
-              <RightSection title={t('deps')} status={String(selected.deps.length)}>
-                {selected.deps.map((d) => (
-                    <div key={d} className="flex items-center gap-2 py-0.5 text-[12.5px]">
-                      <span
-                        className={cn(
-                          'flex h-[14px] w-[14px] items-center justify-center rounded-full border',
-                          depDone(d) ? 'border-success/60 text-success' : 'border-border',
-                        )}
-                        aria-hidden
-                      >
-                        {depDone(d) && <Check className="h-2 w-2" />}
-                      </span>
-                      {allTasks.some((x) => x.id === d) ? (
-                        <button type="button" className="underline underline-offset-2" onClick={() => setSelectedId(d)}>
-                          {t(`task_${d}`)}
-                        </button>
-                      ) : (
-                        <Link href={ATT_GORA_TASK_HREF[d]} className="underline underline-offset-2">
-                          {t(`task_${d}`)}
-                        </Link>
-                      )}
-                    </div>
-                  ))}
-              </RightSection>
-              )}
-              <RightSection title={t('assistant')}>
-                <div className="rounded-lg border border-border px-3 py-2.5 text-[12.5px] text-foreground/80">
-                  <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
-                    <Sparkles className="h-3.5 w-3.5" aria-hidden />
-                    Accounted
-                  </div>
-                  {assistantLine(selected)}
-                </div>
+          {selected ? (
+            <TaskPane
+              task={selected}
+              ctx={ctx}
+              assistant={
                 <Button
                   variant="outline"
                   size="sm"
-                  className="mt-3"
                   onClick={() =>
                     openAgentSheet({
                       intentId: 'general.help',
-                      seedUserMessage: t('ask_seed', { task: t(`task_${selected.id}`) }),
+                      seedUserMessage: t('fix_seed', {
+                        task: t(`task_${selected.id}`),
+                        brief: assistantLine(selected),
+                        lagrum: t(`lagrum_${selected.id}`),
+                      }),
                     })
                   }
                 >
-                  {t('ask_assistant')}
+                  <Sparkles className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                  {t('fix_with_assistant')}
                 </Button>
-              </RightSection>
-            </>
-          )}
-        </aside>
+              }
+            />
+          ) : null}
+        </section>
       </div>
-    </div>
-  )
-}
-
-function RightSection({ title, status, children }: { title: string; status?: string; children: ReactNode }) {
-  return (
-    <div className="border-b border-border/60 px-4 pb-4 pt-3.5">
-      <div className="mb-2 flex items-center text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-        {title}
-        {status && <span className="ml-auto normal-case tracking-normal text-[11px]">{status}</span>}
-      </div>
-      {children}
     </div>
   )
 }
