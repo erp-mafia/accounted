@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import {
   DataList,
@@ -316,7 +317,10 @@ export function VatChecksCard({
                 ) : (
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
                 )}
-                <div>{c.message}</div>
+                <div className="flex min-w-0 items-start gap-1.5">
+                  <span>{c.message}</span>
+                  {c.detail ? <HelpPopover className="mt-0.5">{c.detail}</HelpPopover> : null}
+                </div>
               </div>
             ))}
           </div>
