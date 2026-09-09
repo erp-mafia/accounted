@@ -19,7 +19,7 @@ import type { ModelReading, ReadingKind } from './model-reading'
 import type { DirectoryKind } from './directory-seed'
 
 export type AliasBand = 'link' | 'tentative' | 'nil'
-export type AliasSource = 'anchor' | 'directory' | 'document' | 'model' | 'rule' | 'person'
+export type AliasSource = 'anchor' | 'ledger' | 'directory' | 'document' | 'model' | 'rule' | 'person'
 export type AliasKind = ReadingKind
 
 export const LINK_THRESHOLD = 0.8
@@ -55,9 +55,18 @@ export interface IdentityHit {
   name: string
 }
 
+/** A party of the company's own whose vouchers carry this text already. */
+export interface LedgerHit {
+  partyId: string
+  name: string
+  /** A confirmed party is a person's decision; a suggestion is the ledger grouping's. */
+  confirmed: boolean
+}
+
 export interface PlanInput {
   pre: Precleaned
   identity?: IdentityHit | null
+  ledger?: LedgerHit | null
   directory?: DirectoryHit | null
   document?: DocumentHit | null
   /** Candidates offered to the model, by id, so a pick resolves to a party. */
@@ -151,7 +160,18 @@ export function planAlias(input: PlanInput): AliasDecision {
     }
   }
 
-  // 3. A giro number or the directory settles the brand, before the
+  // 3. The company booked this text before, under a party of its own: what
+  // it decided then outranks every reading, and keeps one row per
+  // counterpart instead of a reading beside the party. A suggested party
+  // (the ledger grouping's own, not a person's) is skipped when the
+  // classifier says the text names no counterpart, so a salary line never
+  // lands on a "Lön Jakob" suggestion.
+  if (input.ledger && (input.ledger.confirmed || !NO_COUNTERPART_LABELS.has(pre.label))) {
+    const l = input.ledger
+    return { ...b, partyId: l.partyId, displayName: l.name, what: null, kind: pre.label === 'authority' ? 'authority' : 'merchant', source: 'ledger', confidence: l.confirmed ? 0.96 : 0.9, band: 'link', model: null, verified: false, needsVerify: false }
+  }
+
+  // 4. A giro number or the directory settles the brand, before the
   // classifier's label: "SJ biljetter" is a category by its words and SJ by
   // its brand, and "Skatt lön" to Skatteverket's giro is Skatteverket.
   if (input.directory) {
@@ -173,12 +193,12 @@ export function planAlias(input: PlanInput): AliasDecision {
     }
   }
 
-  // 4. The classifier says the text names no counterpart at all.
+  // 5. The classifier says the text names no counterpart at all.
   if (NO_COUNTERPART_LABELS.has(pre.label)) {
     return { ...b, partyId: null, displayName: null, what: null, kind: kindForLabel(pre.label), source: 'anchor', confidence: 0.9, band: 'nil', model: null, verified: false, needsVerify: false }
   }
 
-  // 5. A legal-form name written in the text ("Dustin Sverige AB").
+  // 6. A legal-form name written in the text ("Dustin Sverige AB").
   if (pre.legalName) {
     return {
       ...b,
@@ -196,7 +216,7 @@ export function planAlias(input: PlanInput): AliasDecision {
     }
   }
 
-  // 6. The model's reading, with the candidate it picked when it picked one.
+  // 7. The model's reading, with the candidate it picked when it picked one.
   const m = input.model
   if (m && (m.counterpart || m.pick)) {
     const picked = m.pick ? input.candidatesById?.get(m.pick) ?? null : null
@@ -228,12 +248,12 @@ export function planAlias(input: PlanInput): AliasDecision {
     }
   }
 
-  // 7. Only the rail was named: the rail is what the company sees.
+  // 8. Only the rail was named: the rail is what the company sees.
   if (pre.rail && !pre.subMerchant) {
     return { ...b, partyId: null, displayName: pre.rail, what: null, kind: 'rail', source: 'anchor', confidence: 0.8, band: 'link', model: null, verified: false, needsVerify: false }
   }
 
-  // 8. Nothing named. The cleansed text shows, muted.
+  // 9. Nothing named. The cleansed text shows, muted.
   return {
     ...b,
     partyId: null,

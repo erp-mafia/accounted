@@ -35,6 +35,7 @@ describe('counterparty_aliases (pg)', () => {
     await expect(insertAlias(companyId, 'anthropic')).rejects.toThrow(/duplicate key/)
     await getPool().query(`UPDATE public.counterparty_aliases SET superseded_at = now() WHERE company_id = $1 AND alias_key = 'anthropic'`, [companyId])
     await expect(insertAlias(companyId, 'anthropic', { source: 'person', confidence: 1, band: 'link' })).resolves.toBeTruthy()
+    await expect(insertAlias(companyId, 'webhallen', { source: 'ledger', confidence: 0.96, band: 'link' })).resolves.toBeTruthy()
   })
 
   it('rejects a kind, source or band outside the vocabulary', async () => {

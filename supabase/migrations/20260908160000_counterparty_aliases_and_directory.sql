@@ -30,7 +30,8 @@ CREATE TABLE public.counterparty_aliases (
   rail          text CHECK (length(rail) <= 80),
   country       char(2),
   what          text CHECK (length(what) <= 120),
-  source        text NOT NULL CHECK (source IN ('anchor', 'directory', 'document', 'model', 'rule', 'person')),
+  -- ledger: the company booked this text before, under a party of its own.
+  source        text NOT NULL CHECK (source IN ('anchor', 'ledger', 'directory', 'document', 'model', 'rule', 'person')),
   confidence    numeric(4,3) NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
   -- link: shown as the counterpart. tentative: shown with "läst ur texten"
   -- and a one-click "inte samma". nil: nothing named, the cleansed text shows.

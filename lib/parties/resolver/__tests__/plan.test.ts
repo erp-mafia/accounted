@@ -37,6 +37,23 @@ describe('planAlias', () => {
     expect(d.displayName).toBeNull()
   })
 
+  it('links a text the company booked before to its own party, after a document and before the directory', () => {
+    const pre = preclean('Webhallen Oktober')
+    const ledger = { partyId: 'p-web', name: 'Webhallen Sverige AB', confirmed: true }
+    const d = planAlias({ pre, ledger, directory: { name: 'Webhallen', kind: 'merchant', confidence: 0.95 } })
+    expect(d).toMatchObject({ partyId: 'p-web', displayName: 'Webhallen Sverige AB', source: 'ledger', band: 'link', confidence: 0.96 })
+    const doc = planAlias({ pre, ledger, document: { supplierName: 'Webhallen Sverige AB', partyId: 'p-web' } })
+    expect(doc.source).toBe('document')
+    const suggested = planAlias({ pre, ledger: { ...ledger, confirmed: false } })
+    expect(suggested).toMatchObject({ partyId: 'p-web', source: 'ledger', confidence: 0.9, band: 'link' })
+  })
+
+  it('keeps a salary line off a suggested party, but not off a confirmed one', () => {
+    const pre = preclean('Lön Jakob Juni Överföring via internet')
+    expect(planAlias({ pre, ledger: { partyId: 'p-j', name: 'Lön Jakob', confirmed: false } })).toMatchObject({ band: 'nil', partyId: null })
+    expect(planAlias({ pre, ledger: { partyId: 'p-j', name: 'Jakob Wennberg', confirmed: true } })).toMatchObject({ partyId: 'p-j', source: 'ledger' })
+  })
+
   it('lets a document outrank the directory and the model', () => {
     const d = planAlias({
       pre: preclean('Hotel at Booking.com K3667 Kortköp/uttag'),

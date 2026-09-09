@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { ledgerKey } from '@/lib/parties/ledger-key'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { candidatesFor, groupStrings, resolveCompanyCounterparts, resolverMode } from '../run'
 
@@ -98,6 +99,21 @@ describe('resolveCompanyCounterparts', () => {
     expect(byName['Kortköp 260828 KRONANS APOTEK AB']).toMatchObject({ source: 'directory', display_name: 'Kronans Apotek', band: 'link', company_id: COMPANY })
     expect(byName['SQSP  WORKSP']).toMatchObject({ source: 'directory', display_name: 'Squarespace', party_id: 'p-sq', band: 'link' })
     expect(byName['Lön Jakob Juni Överföring via internet']).toMatchObject({ kind: 'payroll', band: 'nil', display_name: null })
+  })
+
+  it('links a text the company booked before to its own party, without the model', async () => {
+    mock.enqueue({ data: [{ id: 't1', original_description: 'Kontorsplatser Oktober', description: 'Kontorsplatser Oktober', amount: -12000, currency: 'SEK', merchant_name: null }] })
+    mock.enqueue({ data: [] }) // live aliases
+    mock.enqueue({ data: [] }) // document hits
+    mock.enqueue({ data: [{ id: 'p-k', display_name: 'Kontorsplatser i Stockholm AB', alias_keys: [ledgerKey('Kontorsplatser Oktober')], status: 'confirmed' }] })
+    mock.enqueue({ data: [] }) // giro numbers
+    mock.enqueue({ data: [] }) // directory table: the seed does not know the text
+    mock.enqueue({ data: null }) // insert
+    const summary = await resolveCompanyCounterparts(mock.supabase as unknown as SupabaseClient, COMPANY, { useModel: false })
+    expect(summary.bySource.ledger).toBe(1)
+    expect(summary.modelLines).toBe(0)
+    const inserted = mock.findCall('counterparty_aliases', 'insert')?.[0] as Array<Record<string, unknown>>
+    expect(inserted[0]).toMatchObject({ party_id: 'p-k', display_name: 'Kontorsplatser i Stockholm AB', source: 'ledger', band: 'link' })
   })
 
   it('returns early when every string already has a live alias', async () => {
