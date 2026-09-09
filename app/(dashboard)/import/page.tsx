@@ -2326,11 +2326,14 @@ const WooCommercePanel = getSettingsPanel('woocommerce')
 // And for the Shopify order feed: same category as the WooCommerce feed above.
 const ShopifyPanel = getSettingsPanel('shopify')
 
+// And for the Zettle purchase feed: same category as the Shopify feed above.
+const ZettlePanel = getSettingsPanel('zettle')
+
 // ============================================================
 // Import Page with Selection Cards
 // ============================================================
 
-type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'bank' | 'skattekonto' | 'sie' | 'underlag' | 'csv_data' | 'migration'
+type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'zettle' | 'bank' | 'skattekonto' | 'sie' | 'underlag' | 'csv_data' | 'migration'
 
 export default function ImportPage() {
   const { isSandbox, role } = useCompany()
@@ -2366,7 +2369,7 @@ export default function ImportPage() {
     // Manual file-import modes (bank file, CSV/Excel, SIE) stay reachable.
     const allowedModes = isSandbox
       ? ['bank', 'skattekonto', 'sie', 'underlag', 'csv_data']
-      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'bank', 'skattekonto', 'sie', 'underlag', 'csv_data', 'migration']
+      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'zettle', 'bank', 'skattekonto', 'sie', 'underlag', 'csv_data', 'migration']
     if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
@@ -2441,6 +2444,8 @@ export default function ImportPage() {
   const woocommerceDisabled = isSandbox
   const hasShopifyExtension = ENABLED_EXTENSION_IDS.has('shopify')
   const shopifyDisabled = isSandbox
+  const hasZettleExtension = ENABLED_EXTENSION_IDS.has('zettle')
+  const zettleDisabled = isSandbox
 
   return (
     <div className="space-y-8">
@@ -2515,6 +2520,16 @@ export default function ImportPage() {
                     chips={<LogoChip src="/logos/shopify.svg" name="Shopify" />}
                     disabled={shopifyDisabled}
                     onClick={() => setMode('shopify')}
+                  />
+                )}
+                {hasZettleExtension && (
+                  <ImportRow
+                    title={t('zettle_title')}
+                    sub={t('zettle_description')}
+                    chip={<BetaChip label={t('badge_beta')} />}
+                    chips={<LogoChip src="/logos/zettle.svg" name="Zettle" />}
+                    disabled={zettleDisabled}
+                    onClick={() => setMode('zettle')}
                   />
                 )}
                 {hasMigrationExtension && (
@@ -2753,6 +2768,21 @@ export default function ImportPage() {
               <p className="mb-1 font-medium">{t('shopify_not_enabled_title')}</p>
               <p className="max-w-md text-sm text-muted-foreground">
                 {t('shopify_not_enabled_description')}
+              </p>
+            </CardContent>
+          </Card>
+        )
+      )}
+      {mode === 'zettle' && (
+        hasZettleExtension && ZettlePanel ? (
+          <ZettlePanel />
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <ShoppingBag className="mb-4 h-10 w-10 text-muted-foreground/40" />
+              <p className="mb-1 font-medium">{t('zettle_not_enabled_title')}</p>
+              <p className="max-w-md text-sm text-muted-foreground">
+                {t('zettle_not_enabled_description')}
               </p>
             </CardContent>
           </Card>

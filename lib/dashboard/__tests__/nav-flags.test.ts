@@ -70,6 +70,7 @@ describe('getDashboardNavFlags', () => {
       'shopify_connections',
       'webshop_orders',
       'woocommerce_connections',
+      'zettle_connections',
     ])
   })
 
