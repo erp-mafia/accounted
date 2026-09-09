@@ -123,10 +123,10 @@
 .jny-biginput.is-err { animation: jnyShake 340ms var(--ease-out); }
 @keyframes jnyShake { 0%, 100% { transform: none; } 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
 /* Search-as-you-type picker under the orgnr field: an 8px surface on the
-   page, 4px rows inset inside it (the radius ladder), flat hover. */
+   page, 4px rows inset inside it (the radius ladder), flat hover. In flow
+   (the step scrolls, so a floated list would be clipped to the field). */
 .jny-suggest {
-  position: absolute; left: 0; right: 0; top: 100%; z-index: 20;
-  margin: 8px 0 0; padding: 4px; list-style: none;
+  max-width: 360px; margin: 10px auto 0; padding: 4px; list-style: none;
   background: hsl(var(--background));
   border: 1px solid hsl(var(--border));
   border-radius: 8px;
@@ -143,8 +143,6 @@
 .jny-suggest li.is-inactive .jny-sug-name { color: hsl(var(--muted-foreground)); }
 .jny-sug-name { font-weight: 400; }
 .jny-sug-sub { font-size: 11.5px; color: hsl(var(--muted-foreground)); font-variant-numeric: tabular-nums; }
-.jny-suggest-more { padding: 8px 12px 6px; font-size: 11.5px; color: hsl(var(--muted-foreground)); cursor: default; }
-.jny-suggest-more:hover { background: none; }
 .jny-enterhint { font-size: 11.5px; color: hsl(var(--muted-foreground)); margin-top: 10px; }
 .jny-enterhint b { border: 1px solid hsl(var(--border)); border-radius: 5px; padding: 1px 6px; font-weight: 400; }
 

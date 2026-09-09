@@ -167,7 +167,16 @@ export async function fetchCompanySuggestions(
       return { status: 'error' }
     }
   }
-  if (res.status === 503) return { status: 'disabled' }
+  // Only the route's own "no SCB credentials here" switches the picker off
+  // for the session; an infrastructure 503 is transient like any other.
+  if (res.status === 503) {
+    try {
+      const body = (await res.json()) as { error?: { code?: unknown } }
+      if (body?.error?.code === 'SCB_NOT_CONFIGURED') return { status: 'disabled' }
+    } catch {
+      // Non-JSON 503: transient.
+    }
+  }
   return { status: 'error' }
 }
 

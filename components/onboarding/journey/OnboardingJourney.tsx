@@ -162,6 +162,10 @@ export default function OnboardingJourney({
   const [suggestActive, setSuggestActive] = useState(-1)
   // Set once the environment answers 503: stops every further call.
   const suggestDisabled = useRef(!companySearchEnabled)
+  // The text the user last confirmed (Enter, or a picked row): the picker
+  // does not reopen for it, so the #2421 chip row or the nomatch note
+  // stands alone until the text changes.
+  const lastConfirmed = useRef<string | null>(null)
 
   const station = stationOfStep(state.step)
   const entity = state.settings.entity_type
@@ -233,6 +237,7 @@ export default function OnboardingJourney({
       // chip row; the pick re-checks for the number it resolves to.
       setDupName(null)
       setDupElsewhere(false)
+      lastConfirmed.current = trimmed
       dispatch({ type: 'SEARCH_SUBMITTED', query: trimmed })
       fetchCompanySearch(trimmed, { ticEnabled }).then((outcome) => {
         dispatch({ type: 'SEARCH_RESULT', outcome })
@@ -258,15 +263,22 @@ export default function OnboardingJourney({
   // Search-as-you-type: SCB per debounced keystroke while the text is a
   // name of three or more characters. A newer keystroke aborts the request
   // in flight, and a response for text the user has since left is dropped,
-  // so the list never lags behind the field. Costs no TIC.
+  // so the list never lags behind the field. Costs no TIC. Quiet while the
+  // Enter path shows its chip row and for text already confirmed.
   useEffect(() => {
-    if (suggestDisabled.current || state.step !== 'orgnr' || state.lookupPending) {
+    const query = orgInput.trim()
+    if (
+      suggestDisabled.current ||
+      state.step !== 'orgnr' ||
+      state.lookupPending ||
+      state.searchHits.length > 0 ||
+      query === lastConfirmed.current
+    ) {
       setSuggestions([])
       setSuggestTruncated(false)
       setSuggestActive(-1)
       return
     }
-    const query = orgInput.trim()
     if (query.length < COMPANY_SEARCH_MIN_CHARS || looksLikeOrgNumber(query)) {
       setSuggestions([])
       setSuggestTruncated(false)
@@ -288,17 +300,18 @@ export default function OnboardingJourney({
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [orgInput, state.step, state.lookupPending])
+  }, [orgInput, state.step, state.lookupPending, state.searchHits.length])
 
   // A picked suggestion is an orgnr the user confirmed: the same single TIC
   // lookup as Enter on a typed number, plus the advisory dup check. The
   // field shows the company's name, never its number (a sole trader's is
-  // their personnummer); Back re-suggests from the name.
+  // their personnummer); on Back the name stands until the user edits it.
   const pickSuggestion = useCallback(
     (suggestion: CompanySuggestion) => {
       setSuggestions([])
       setSuggestTruncated(false)
       setSuggestActive(-1)
+      lastConfirmed.current = suggestion.name.trim()
       setOrgInput(suggestion.name)
       setDupName(null)
       setDupElsewhere(false)
@@ -553,10 +566,18 @@ export default function OnboardingJourney({
                 aria-expanded={suggestions.length > 0}
                 aria-controls="jny-suggest-list"
                 aria-activedescendant={suggestActive >= 0 ? `jny-suggest-${suggestActive}` : undefined}
-                onChange={(e) => setOrgInput(e.target.value)}
+                onChange={(e) => {
+                  // A highlight belongs to the rows for the previous text.
+                  setSuggestActive(-1)
+                  setOrgInput(e.target.value)
+                }}
                 onKeyDown={onOrgKeyDown}
               />
-              {suggestions.length > 0 ? (
+            </div>
+            {/* In flow, not floated: the step scrolls (overflow-y: auto), so an
+                absolutely positioned list would be clipped to the field. */}
+            {suggestions.length > 0 ? (
+              <>
                 <ul id="jny-suggest-list" role="listbox" aria-label={t('journey_suggest_label')} className="jny-suggest">
                   {suggestions.map((s, i) => {
                     // A sole trader's org number is their personnummer:
@@ -585,15 +606,13 @@ export default function OnboardingJourney({
                       </li>
                     )
                   })}
-                  {suggestTruncated ? (
-                    <li role="presentation" className="jny-suggest-more">
-                      {t('journey_suggest_more')}
-                    </li>
-                  ) : null}
                 </ul>
-              ) : null}
-            </div>
-            {state.searchHits.length > 1 ? (
+                {suggestTruncated ? <p className="jny-enterhint">{t('journey_suggest_more')}</p> : null}
+              </>
+            ) : suggestTruncated ? (
+              // SCB counted a flood for a short prefix and sent no rows.
+              <p className="jny-enterhint">{t('journey_suggest_more')}</p>
+            ) : state.searchHits.length > 1 ? (
               <>
                 <p className="jny-enterhint">{t('journey_search_pick')}</p>
                 <ChipRow

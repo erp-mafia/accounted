@@ -310,6 +310,31 @@ describe('journeyReducer: search-as-you-type pick (SCB row, TIC on pick)', () =>
     expect(s.lookupNote).toBe('none')
   })
 
+  it('editing the number after a missed pick drops the pick\'s name and form', () => {
+    const s = run(
+      initJourney(),
+      { type: 'SUGGESTION_PICKED', suggestion: suggestion({ name: 'Alpha AB' }) },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+      { type: 'NOTFOUND_EDIT' },
+      { type: 'ORG_SUBMITTED', orgNumber: '2222222222' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'error' } },
+    )
+    expect(s.settings.company_name).toBeUndefined()
+    expect(s.settings.entity_type).toBeUndefined()
+    expect(s.step).toBe('form')
+  })
+
+  it('editing the number keeps a BankID prefill, which was never about the number', () => {
+    const s = run(
+      initJourney({ initialOrgNumber: '1111111111', initialEntityType: 'aktiebolag', initialLegalName: 'Roles AB' }),
+      { type: 'ORG_SUBMITTED', orgNumber: '1111111111' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+      { type: 'NOTFOUND_EDIT' },
+    )
+    expect(s.settings.company_name).toBe('Roles AB')
+    expect(s.settings.entity_type).toBe('aktiebolag')
+  })
+
   it('is ignored off the orgnr step and while submitting', () => {
     const later = run(
       initJourney(),

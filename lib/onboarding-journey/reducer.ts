@@ -406,8 +406,15 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
     case 'NOTFOUND_EDIT':
     case 'CEASED_EDIT': {
       // Back to the orgnr question; the fresh submit re-runs the single lookup.
+      // The abandoned number's name and form go with it (a picked SCB row or
+      // a ceased lookup put them there); BankID's CompanyRoles prefill stays,
+      // it was never about this number.
       return go(state, 'orgnr', {
-        settings: { ...state.settings, org_number: undefined },
+        settings: {
+          ...state.settings,
+          org_number: undefined,
+          ...(state.viaPrefill ? {} : { company_name: undefined, entity_type: undefined }),
+        },
         ticLookup: null,
         lookupRan: false,
         lookupNote: 'none',

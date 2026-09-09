@@ -46,9 +46,11 @@ describe('fetchCompanySuggestions', () => {
     expect(await fetchCompanySuggestions('Testbrand')).toEqual({ status: 'error' })
   })
 
-  it('maps 503 to disabled and every other failure to error', async () => {
+  it('maps the not-configured 503 to disabled and every other failure to error', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(503, { error: { code: 'SCB_NOT_CONFIGURED' } }))
     expect(await fetchCompanySuggestions('Testbrand')).toEqual({ status: 'disabled' })
+    fetchMock.mockResolvedValueOnce(new Response('Service Unavailable', { status: 503 }))
+    expect(await fetchCompanySuggestions('Testbrand')).toEqual({ status: 'error' })
     fetchMock.mockResolvedValueOnce(jsonResponse(502, { error: { code: 'SCB_LOOKUP_FAILED' } }))
     expect(await fetchCompanySuggestions('Testbrand')).toEqual({ status: 'error' })
     fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: { code: 'UNAUTHORIZED' } }))
