@@ -86,8 +86,9 @@ describe('GET /api/rules/[id]', () => {
     expect(status).toBe(200)
     expect(body.data.rule.id).toBe(RULE_ID)
     expect(body.data.matches.map((m) => m.id)).toEqual(['tx-1'])
-    // The alias filter is built from sanitised names only.
-    expect(findCalls('transactions', 'or')[0]).toEqual(['description.ilike.%google cloud emea%'])
+    // The alias filter is built from sanitised names only, each value quoted
+    // so a comma or a parenthesis in a name cannot reshape the filter.
+    expect(findCalls('transactions', 'or')[0]).toEqual(['description.ilike."%google cloud emea%"'])
   })
 })
 
