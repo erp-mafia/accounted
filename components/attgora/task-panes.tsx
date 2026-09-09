@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useState, type ReactNode, createContext, useContext } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { useTranslations } from 'next-intl'
@@ -51,14 +51,21 @@ function useList<T>(url: string | null) {
 
 /* ---------- primitives ---------- */
 
+/** The assistant action the pane header shows beside "Öppna …", set once by TaskPane. */
+const PaneAssistantContext = createContext<ReactNode>(null)
+
 export function PaneHeader({ title, sub, action }: { title: string; sub?: ReactNode; action?: ReactNode }) {
+  const assistant = useContext(PaneAssistantContext)
   return (
     <div className="flex flex-wrap items-end justify-between gap-3 px-6 pt-5 pb-3">
       <div>
         <h2 className="font-display text-lg leading-6">{title}</h2>
         {sub && <p className="mt-1 text-[12.5px] text-muted-foreground">{sub}</p>}
       </div>
-      {action}
+      <div className="flex flex-wrap items-center gap-2">
+        {assistant}
+        {action}
+      </div>
     </div>
   )
 }
@@ -659,7 +666,11 @@ function SetupPane({ task, ctx }: { task: AttGoraTask; ctx: TaskPaneContext }) {
   )
 }
 
-export function TaskPane({ task, ctx }: { task: AttGoraTask; ctx: TaskPaneContext }) {
+export function TaskPane({ task, ctx, assistant }: { task: AttGoraTask; ctx: TaskPaneContext; assistant?: ReactNode }) {
+  return <PaneAssistantContext.Provider value={assistant ?? null}>{paneFor(task, ctx)}</PaneAssistantContext.Provider>
+}
+
+function paneFor(task: AttGoraTask, ctx: TaskPaneContext) {
   switch (task.id) {
     case 'setup_bank':
     case 'setup_import':
