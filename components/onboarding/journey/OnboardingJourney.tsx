@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -8,9 +8,17 @@ import { createCompanyFromOnboarding } from '@/lib/company/actions'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 import { deriveFirstYearDefaults } from '@/lib/company/first-year-defaults'
 import { parseStartMonthDay } from '@/lib/company/first-year-defaults'
-import { fetchCompanyLookup, fetchCompanySearch } from '@/lib/company-lookup/fetch-company-lookup'
+import {
+  fetchCompanyLookup,
+  fetchCompanySearch,
+  fetchCompanySuggestions,
+} from '@/lib/company-lookup/fetch-company-lookup'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { COMPANY_SEARCH_MIN_CHARS, type CompanySearchHit } from '@/lib/company-lookup/types'
+import {
+  COMPANY_SEARCH_MIN_CHARS,
+  type CompanySearchHit,
+  type CompanySuggestion,
+} from '@/lib/company-lookup/types'
 import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
 import { formatOrgNumber } from '@/lib/utils'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -61,11 +69,21 @@ import './journey.css'
  * wizard sends today.
  *
  * TIC budget: fetchCompanyLookup fires exactly once per confirmed orgnr
- * (Enter, or the auto-submitted BankID deep link). No debounce-per-key,
- * no roster prefetch. The advisory dup check is an internal endpoint.
+ * (Enter, the auto-submitted BankID deep link, or a picked suggestion).
+ * The search-as-you-type picker under the field is SCB (free), never TIC.
+ * The advisory dup check is an internal endpoint.
  */
 
 const STATION_FRACS = [0.07, 0.285, 0.5, 0.715, 0.93]
+
+/** Keystroke-to-search delay for the SCB picker: long enough to skip the
+ *  middle of a word, short enough to feel live. */
+const SUGGEST_DEBOUNCE_MS = 300
+
+/** Digits, spaces and dashes only: the orgnr path, never a name search. */
+function looksLikeOrgNumber(raw: string): boolean {
+  return /^[\d\s-]+$/.test(raw.trim())
+}
 
 const LOG = '[onboarding-journey]'
 function logError(message: string, extra?: Record<string, unknown>) {
@@ -101,6 +119,9 @@ interface OnboardingJourneyProps {
    *  likely landed here by mistake (lost invite cookie), so the first
    *  question carries a "join via the link in the email" hint. */
   hasPendingInvite?: boolean
+  /** SCB credentials exist in this environment: the orgnr field suggests
+   *  companies while a name is typed. Off: the field is orgnr-or-Enter. */
+  companySearchEnabled?: boolean
 }
 
 export default function OnboardingJourney({
@@ -110,6 +131,7 @@ export default function OnboardingJourney({
   initialEntityType,
   initialLegalName,
   hasPendingInvite = false,
+  companySearchEnabled = false,
 }: OnboardingJourneyProps) {
   const router = useRouter()
   const t = useTranslations('onboarding')
@@ -133,6 +155,17 @@ export default function OnboardingJourney({
   const [monogram, setMonogram] = useState<string | null>(null)
   const [dupName, setDupName] = useState<string | null>(null)
   const [dupElsewhere, setDupElsewhere] = useState(false)
+  // The SCB picker: rows for the current text, whether SCB cut the list,
+  // and the keyboard-highlighted row (-1: none, Enter runs the Enter path).
+  const [suggestions, setSuggestions] = useState<CompanySuggestion[]>([])
+  const [suggestTruncated, setSuggestTruncated] = useState(false)
+  const [suggestActive, setSuggestActive] = useState(-1)
+  // Set once the environment answers 503: stops every further call.
+  const suggestDisabled = useRef(!companySearchEnabled)
+  // The text the user last confirmed (Enter, or a picked row): the picker
+  // does not reopen for it, so the #2421 chip row or the nomatch note
+  // stands alone until the text changes.
+  const lastConfirmed = useRef<string | null>(null)
 
   const station = stationOfStep(state.step)
   const entity = state.settings.entity_type
@@ -204,6 +237,7 @@ export default function OnboardingJourney({
       // chip row; the pick re-checks for the number it resolves to.
       setDupName(null)
       setDupElsewhere(false)
+      lastConfirmed.current = trimmed
       dispatch({ type: 'SEARCH_SUBMITTED', query: trimmed })
       fetchCompanySearch(trimmed, { ticEnabled }).then((outcome) => {
         dispatch({ type: 'SEARCH_RESULT', outcome })
@@ -224,6 +258,103 @@ export default function OnboardingJourney({
       checkDuplicate(hit.orgNumber)
     },
     [checkDuplicate],
+  )
+
+  // Search-as-you-type: SCB per debounced keystroke while the text is a
+  // name of three or more characters. A newer keystroke aborts the request
+  // in flight, and a response for text the user has since left is dropped,
+  // so the list never lags behind the field. Costs no TIC. Quiet while the
+  // Enter path shows its chip row and for text already confirmed.
+  useEffect(() => {
+    const query = orgInput.trim()
+    if (
+      suggestDisabled.current ||
+      state.step !== 'orgnr' ||
+      state.lookupPending ||
+      state.searchHits.length > 0 ||
+      query === lastConfirmed.current
+    ) {
+      setSuggestions([])
+      setSuggestTruncated(false)
+      setSuggestActive(-1)
+      return
+    }
+    if (query.length < COMPANY_SEARCH_MIN_CHARS || looksLikeOrgNumber(query)) {
+      setSuggestions([])
+      setSuggestTruncated(false)
+      setSuggestActive(-1)
+      return
+    }
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      fetchCompanySuggestions(query, { signal: controller.signal }).then((outcome) => {
+        if (controller.signal.aborted) return
+        if (outcome.status === 'disabled') suggestDisabled.current = true
+        const rows = outcome.status === 'found' ? outcome.suggestions : []
+        setSuggestions(rows)
+        setSuggestTruncated(outcome.status === 'found' || outcome.status === 'empty' ? outcome.truncated : false)
+        setSuggestActive(-1)
+      })
+    }, SUGGEST_DEBOUNCE_MS)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [orgInput, state.step, state.lookupPending, state.searchHits.length])
+
+  // A picked suggestion is an orgnr the user confirmed: the same single TIC
+  // lookup as Enter on a typed number, plus the advisory dup check. The
+  // field shows the company's name, never its number (a sole trader's is
+  // their personnummer); on Back the name stands until the user edits it.
+  const pickSuggestion = useCallback(
+    (suggestion: CompanySuggestion) => {
+      setSuggestions([])
+      setSuggestTruncated(false)
+      setSuggestActive(-1)
+      lastConfirmed.current = suggestion.name.trim()
+      setOrgInput(suggestion.name)
+      setDupName(null)
+      setDupElsewhere(false)
+      dispatch({ type: 'SUGGESTION_PICKED', suggestion })
+      fetchCompanyLookup(suggestion.orgNumber, { ticEnabled }).then((outcome) => {
+        dispatch({ type: 'LOOKUP_RESULT', outcome })
+      })
+      checkDuplicate(suggestion.orgNumber)
+    },
+    [ticEnabled, checkDuplicate],
+  )
+
+  const onOrgKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLInputElement>) => {
+      if (state.lookupPending) return
+      const open = suggestions.length > 0
+      if (open && e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSuggestActive((i) => (i + 1) % suggestions.length)
+        return
+      }
+      if (open && e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSuggestActive((i) => (i <= 0 ? suggestions.length - 1 : i - 1))
+        return
+      }
+      if (open && e.key === 'Escape') {
+        e.preventDefault()
+        setSuggestions([])
+        setSuggestActive(-1)
+        return
+      }
+      if (e.key === 'Enter') {
+        const active = suggestActive >= 0 ? suggestions[suggestActive] : undefined
+        if (active) {
+          e.preventDefault()
+          pickSuggestion(active)
+          return
+        }
+        submitOrg(orgInput)
+      }
+    },
+    [state.lookupPending, suggestions, suggestActive, pickSuggestion, submitOrg, orgInput],
   )
 
   // BankID deep link: auto-submit the orgnr once on mount (the single
@@ -409,7 +540,7 @@ export default function OnboardingJourney({
       case 'orgnr':
         return (
           <Question
-            title={t('journey_orgnr_title')}
+            title={companySearchEnabled || ticEnabled ? t('journey_company_title') : t('journey_orgnr_title')}
             sub={hasPendingInvite ? t('journey_pending_invite_note') : undefined}
             attn={
               state.serverError === 'org_number_invalid'
@@ -425,18 +556,63 @@ export default function OnboardingJourney({
               <input
                 value={orgInput}
                 inputMode="text"
-                placeholder="556677-8899"
+                placeholder={companySearchEnabled || ticEnabled ? t('journey_company_placeholder') : '556677-8899'}
                 aria-label={t('step2_org_number_label')}
                 autoComplete="off"
                 autoFocus
                 disabled={state.lookupPending}
-                onChange={(e) => setOrgInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !state.lookupPending) submitOrg(orgInput)
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={suggestions.length > 0}
+                aria-controls="jny-suggest-list"
+                aria-activedescendant={suggestActive >= 0 ? `jny-suggest-${suggestActive}` : undefined}
+                onChange={(e) => {
+                  // A highlight belongs to the rows for the previous text.
+                  setSuggestActive(-1)
+                  setOrgInput(e.target.value)
                 }}
+                onKeyDown={onOrgKeyDown}
               />
             </div>
-            {state.searchHits.length > 1 ? (
+            {/* In flow, not floated: the step scrolls (overflow-y: auto), so an
+                absolutely positioned list would be clipped to the field. */}
+            {suggestions.length > 0 ? (
+              <>
+                <ul id="jny-suggest-list" role="listbox" aria-label={t('journey_suggest_label')} className="jny-suggest">
+                  {suggestions.map((s, i) => {
+                    // A sole trader's org number is their personnummer:
+                    // the row names the form instead, never the number.
+                    const isSoleTrader = mapEntityType(s.legalEntityType) === 'enskild_firma'
+                    const ident = isSoleTrader ? t('journey_form_ef') : formatOrgNumber(s.orgNumber)
+                    const sub = [ident, s.city, s.active ? null : t('journey_suggest_inactive')]
+                      .filter(Boolean)
+                      .join(' · ')
+                    return (
+                      <li
+                        key={s.orgNumber}
+                        id={`jny-suggest-${i}`}
+                        role="option"
+                        aria-selected={i === suggestActive}
+                        className={`${i === suggestActive ? 'is-active' : ''}${s.active ? '' : ' is-inactive'}`}
+                        onMouseEnter={() => setSuggestActive(i)}
+                        // mousedown, not click: the input's blur must not close the list first.
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          pickSuggestion(s)
+                        }}
+                      >
+                        <span className="jny-sug-name">{s.name}</span>
+                        <span className="jny-sug-sub">{sub}</span>
+                      </li>
+                    )
+                  })}
+                </ul>
+                {suggestTruncated ? <p className="jny-enterhint">{t('journey_suggest_more')}</p> : null}
+              </>
+            ) : suggestTruncated ? (
+              // SCB counted a flood for a short prefix and sent no rows.
+              <p className="jny-enterhint">{t('journey_suggest_more')}</p>
+            ) : state.searchHits.length > 1 ? (
               <>
                 <p className="jny-enterhint">{t('journey_search_pick')}</p>
                 <ChipRow
