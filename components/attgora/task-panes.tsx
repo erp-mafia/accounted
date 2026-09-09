@@ -153,7 +153,7 @@ function TransactionsPane({ task }: { task: AttGoraTask }) {
       ) : (
         rows.map((r) => (
           <Row key={r.id} href={`/transactions?highlight=${r.id}`}>
-            <Cell muted className="w-16 shrink-0">
+            <Cell muted className="w-20 shrink-0 tabular-nums">
               {formatDate(r.date)}
             </Cell>
             <Cell>{r.description}</Cell>
@@ -191,7 +191,7 @@ function MatchesPane({ task, ctx }: { task: AttGoraTask; ctx: TaskPaneContext })
           const busy = ctx.confirmingId === m.transaction_id
           return (
             <Row key={m.transaction_id}>
-              <Cell muted className="w-16 shrink-0">
+              <Cell muted className="w-20 shrink-0 tabular-nums">
                 {formatDate(m.transaction_date)}
               </Cell>
               <Cell>
@@ -276,7 +276,7 @@ function InboxPane({ task }: { task: AttGoraTask }) {
       ) : (
         rows.map((r) => (
           <Row key={r.id} href={task.href}>
-            <Cell muted className="w-16 shrink-0">
+            <Cell muted className="w-20 shrink-0 tabular-nums">
               {formatDate(r.created_at)}
             </Cell>
             <Cell muted className="w-20 shrink-0">
@@ -491,7 +491,7 @@ function PendingOpsPane({ task, ctx }: { task: AttGoraTask; ctx: TaskPaneContext
       ) : (
         rows.map((r) => (
           <Row key={r.id}>
-            <Cell muted className="w-16 shrink-0">
+            <Cell muted className="w-20 shrink-0 tabular-nums">
               {formatDate(r.created_at)}
             </Cell>
             <Cell>
