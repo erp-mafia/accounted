@@ -6988,7 +6988,7 @@
       "ask_seed": "Hjälp mig med: {task}",
     "fix_with_claude": "Gör det här i Claude",
     "connect_claude_first": "Anslut Claude först",
-    "fix_seed": "Använd Accounted-connectorn. Hjälp mig med uppgiften {task}. {brief} Lagrum: {lagrum}. Gå igenom det som väntar, föreslå vad som ska göras med varje post och säg vad du behöver av mig för att göra klart.",
+    "fix_seed": "Jag använder Accounted och connectorn är ansluten. Uppgift: {task}. {brief} Lagrum: {lagrum}. Gör så här: hämta det som väntar via connectorn, föreslå konto och moms för varje post med en rad om varför, genomför det som är säkert och lista det du behöver från mig. Fråga innan du bokför något du är osäker på, och avsluta med vad som återstår.",
     "progress_aria": "{done} av {total} uppgifter klara",
     "progress_line": "{done} av {total} klara",
     "progress_all_done": "Allt klart. Snyggt.",

@@ -69,7 +69,7 @@ export function ReconciliationTable({ accounts, onSelect, footer }: Reconciliati
             </span>
           </button>
         </td>
-        <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
+        <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground sm:table-cell')}>
           {a.kind === 'manual'
             ? tAcc('source_manual')
             : `${tAcc(`source_${a.source.type}`)} · ${synced ? t('rail_synced', { date: formatDate(synced) }) : t('rail_never_synced')}`}
@@ -113,7 +113,7 @@ export function ReconciliationTable({ accounts, onSelect, footer }: Reconciliati
           <thead>
             <tr>
               <th className={cn(TH_CLASS, '!pl-0 w-full')}>{t('v2_th_account')}</th>
-              <th className={TH_CLASS}>{t('v2_th_source')}</th>
+              <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('v2_th_source')}</th>
               <th className={TH_CLASS}>{t('v2_th_open')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{t('v2_th_unexplained')}</th>
               <th className={TH_CLASS}>{t('v2_th_signed_off')}</th>
