@@ -401,7 +401,6 @@ function SuggestionsPage() {
         onConfirmSelected={() => setConfirmOpen(true)}
         onDismiss={(row) => void dismiss([row.id])}
         onOpen={setDossierId}
-        onFind={scbEnabled ? (row) => setPicker({ partyId: row.id, name: row.displayName }) : undefined}
       />
     )
   }

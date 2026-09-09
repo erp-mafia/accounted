@@ -1208,7 +1208,7 @@ export default function SupplierInvoiceDetailPage() {
             </Link>
           </DefRow>
         )}
-        {shell === 'v2' && showBankEntered && (
+        {shell === 'v2' && showBankEntered && !lifecycle?.batch && (
           <DefRow label={t('bank_entered_label')}>
             <label className={cn('inline-flex select-none items-center gap-2', canWrite && !isProcessing ? 'cursor-pointer' : 'cursor-default', processingAction === 'bank_entered' && 'opacity-50')}>
               <Checkbox

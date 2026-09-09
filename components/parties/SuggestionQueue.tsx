@@ -7,12 +7,11 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
-import { HelpPopover } from '@/components/ui/help-popover'
 import type { PartyRole, RegisterRow } from '@/lib/parties/register'
 import { formatCurrency } from '@/lib/utils'
 import { AccountChip } from './AccountChip'
 import { AccountNub } from './AccountNub'
-import { isDuplicateCandidate, reasonText, rolesLabel } from './format'
+import { isDuplicateCandidate, rolesLabel } from './format'
 
 /**
  * The queue in front of Leverantörer and Kunder. Every row states why it is
@@ -45,7 +44,6 @@ export function SuggestionQueue({
   onConfirmSelected,
   onDismiss,
   onOpen,
-  onFind,
   dense = false,
 }: {
   rows: RegisterRow[]
@@ -61,7 +59,6 @@ export function SuggestionQueue({
   onDismiss: (row: RegisterRow) => void
   onOpen: (id: string) => void
   /** Open the SCB picker for a row without an org number; undefined hides the link. */
-  onFind?: (row: RegisterRow) => void
   /**
    * Shell v2: one line per row, the selection actions in a floating bar that
    * appears with the first tick, and the near-duplicate hint as a muted
@@ -148,7 +145,16 @@ export function SuggestionQueue({
               const checked = selected.has(row.id)
               const current = roles(row)
               return (
-                <tr key={row.id} className="group transition-colors duration-150 hover:bg-secondary/35">
+                <tr
+                  key={row.id}
+                  className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                  onClick={(e) => {
+                    // The row opens the dossier; its own controls (checkbox,
+                    // role menu, dismiss) keep their click.
+                    if ((e.target as HTMLElement).closest('button, [role=checkbox], [role=menu], a, input')) return
+                    onOpen(row.id)
+                  }}
+                >
                   <td className={`${td} w-8`}>
                     <Checkbox checked={checked} onCheckedChange={() => onToggle(row.id)} aria-label={row.displayName} disabled={!canWrite} />
                   </td>
@@ -176,21 +182,6 @@ export function SuggestionQueue({
                         {row.country}
                       </span>
                     ) : null}
-                    <HelpPopover className="shrink-0">
-                      <p>{reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}</p>
-                      {isForeign(row) ? (
-                        <p className="mt-2 text-muted-foreground">{t('row_foreign', { country: regionName(row.country as string, locale) })}</p>
-                      ) : onFind && !row.orgNumber && row.kind !== 'person' ? (
-                        <button
-                          type="button"
-                          className="mt-2 text-foreground underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          onClick={() => onFind(row)}
-                          disabled={!canWrite}
-                        >
-                          {t('pick_registry')}
-                        </button>
-                      ) : null}
-                    </HelpPopover>
                     </div>
                   </td>
                   <td className={`${td} whitespace-nowrap`}>
