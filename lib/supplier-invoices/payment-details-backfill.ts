@@ -89,8 +89,20 @@ export async function backfillSupplierPaymentDetails(
     .eq('company_id', companyId)
     .maybeSingle()
   if (error || !existing) return {}
-  const plan = planSupplierPaymentBackfill(existing as SupplierPaymentColumns, clean)
+  const current = existing as SupplierPaymentColumns
+  const plan = planSupplierPaymentBackfill(current, clean)
   if (Object.keys(plan).length === 0) return {}
-  const { error: updateError } = await supabase.from('suppliers').update(plan).eq('id', supplierId).eq('company_id', companyId)
+  // Literal keys, so the phantom-column guard can read the payload: every
+  // column is written, the untouched ones with the value they already hold.
+  const { error: updateError } = await supabase
+    .from('suppliers')
+    .update({
+      bankgiro: plan.bankgiro ?? current.bankgiro ?? null,
+      plusgiro: plan.plusgiro ?? current.plusgiro ?? null,
+      iban: plan.iban ?? current.iban ?? null,
+      bic: plan.bic ?? current.bic ?? null,
+    })
+    .eq('id', supplierId)
+    .eq('company_id', companyId)
   return updateError ? {} : plan
 }
