@@ -20,6 +20,23 @@ const ATOM_LABEL_SV: Record<string, string> = {
   'swedish-year-end-closing': 'Bokslut',
 }
 
+/** The same names keyed by the atoms' English titles, for ids in another shape than the skill folders. */
+const ATOM_LABEL_BY_TITLE: Record<string, string> = {
+  'Swedish Accounting Compliance': ATOM_LABEL_SV['swedish-accounting-compliance'],
+  'Swedish VAT': ATOM_LABEL_SV['swedish-vat'],
+  'Swedish Payroll': ATOM_LABEL_SV['swedish-payroll'],
+  'Swedish Invoice Compliance': ATOM_LABEL_SV['swedish-invoice-compliance'],
+  'Swedish E Invoicing': ATOM_LABEL_SV['swedish-e-invoicing'],
+  'Swedish Financial Reporting': ATOM_LABEL_SV['swedish-financial-reporting'],
+  'Swedish Asset Accounting': ATOM_LABEL_SV['swedish-asset-accounting'],
+  'Swedish Project Accounting': ATOM_LABEL_SV['swedish-project-accounting'],
+  'Swedish SIE Import Export': ATOM_LABEL_SV['swedish-sie-import-export'],
+  'Swedish SRU Filing': ATOM_LABEL_SV['swedish-sru-filing'],
+  'Swedish Tax Planning': ATOM_LABEL_SV['swedish-tax-planning'],
+  'Swedish Year End Closing': ATOM_LABEL_SV['swedish-year-end-closing'],
+}
+
 export function atomLabel(atom: { id: string; title: string }): string {
-  return ATOM_LABEL_SV[atom.id] ?? atom.title
+  const byId = ATOM_LABEL_SV[atom.id] ?? ATOM_LABEL_SV[atom.id.replace(/_/g, '-')]
+  return byId ?? ATOM_LABEL_BY_TITLE[atom.title.trim()] ?? atom.title
 }
