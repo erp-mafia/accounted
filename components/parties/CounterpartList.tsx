@@ -10,7 +10,6 @@ import type { PartyRole } from '@/lib/parties/register'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { AccountChip } from './AccountChip'
 import { BrandMark } from './BrandMark'
-import { HelpPopover } from '@/components/ui/help-popover'
 import { reasonText } from './format'
 import { regionName } from './SuggestionQueue'
 
@@ -70,13 +69,22 @@ export function CounterpartList({
           {rows.map((row) => {
             const whyKey = !row.partyId && row.source ? WHY_KEY[row.source as keyof typeof WHY_KEY] : undefined
             const why = row.status === 'suggested' && row.reason ? reasonText(t, row.reason, row.rhythm, row.orgNumber) : whyKey ? t(whyKey) : null
-            const detail = [row.what, row.rail ? t('cp_via', { rail: row.rail }) : null, row.country && row.country !== 'SE' ? regionName(row.country, locale) : null]
+            // A reading with no party has no dossier to open, so its why stays on the line.
+            const detail = [row.what, row.rail ? t('cp_via', { rail: row.rail }) : null, row.country && row.country !== 'SE' ? regionName(row.country, locale) : null, row.partyId ? null : why]
               .filter(Boolean)
               .join(' · ')
             const chip =
               row.status === 'suggested' ? t('cp_status_suggested') : row.status === 'read' ? t('cp_status_read') : row.status === 'tentative' ? t('cp_status_tentative') : null
             return (
-              <tr key={row.id} className="group transition-colors duration-150 hover:bg-secondary/35">
+              <tr
+                key={row.id}
+                className={cn('group transition-colors duration-150 hover:bg-secondary/35', row.partyId && 'cursor-pointer')}
+                onClick={(e) => {
+                  if (!row.partyId) return
+                  if ((e.target as HTMLElement).closest('button, [role=checkbox], [role=menu], a, input')) return
+                  onOpen(row)
+                }}
+              >
                 <td className={`${TD_CLASS} min-w-[260px]`}>
                   <div className="flex items-start gap-2.5">
                     <BrandMark name={row.name} className="mt-0.5" />
@@ -98,11 +106,6 @@ export function CounterpartList({
                           >
                             {chip}
                           </span>
-                        ) : null}
-                        {why ? (
-                          <HelpPopover className="shrink-0">
-                            <p>{why}</p>
-                          </HelpPopover>
                         ) : null}
                       </div>
                       {detail ? <div className="truncate text-[12px] text-muted-foreground">{detail}</div> : null}

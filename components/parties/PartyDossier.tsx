@@ -14,7 +14,7 @@ import { formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
 import { AccountNub } from './AccountNub'
 import { registryFacts, registryLabel, registryValue } from './RegistryFacts'
 import { regionName } from './SuggestionQueue'
-import { formatPaymentIdentity, rhythmLabel, roleLabel } from './format'
+import { formatPaymentIdentity, reasonText, rhythmLabel, roleLabel } from './format'
 import type { MergeCandidate } from './MergeDialog'
 import { displayNameFromVoucherText } from '@/lib/parties/ledger-key'
 
@@ -155,6 +155,11 @@ export function PartyDossier({
             <div className="space-y-8">
               <div className="space-y-3">
                 {subtitle ? <p className="text-[13px] text-muted-foreground">{subtitle}</p> : null}
+                {suggested && p.reason ? (
+                  <p className="text-[13px] text-muted-foreground">
+                    {t('dossier_why', { reason: reasonText(t, p.reason, stats?.rhythm ?? null, p.orgNumber) })}
+                  </p>
+                ) : null}
                 <div className="flex items-center gap-2">
                   {primaryRole ? (
                     <Button type="button" size="sm" onClick={() => onPromote(p.id, [primaryRole])} disabled={!canWrite || busy}>

@@ -8796,6 +8796,7 @@
     "merge_none": "No similar ones found.",
     "merge_search_placeholder": "Search a supplier or customer to merge with",
     "dossier_kicker_suggested": "Suggestion",
+    "dossier_why": "Suggested because: {reason}",
     "dossier_seen": "Seen {count} times",
     "dossier_last": "last {date}",
     "dossier_variants": "{count} name variants",

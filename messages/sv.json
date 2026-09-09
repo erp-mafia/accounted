@@ -8796,6 +8796,7 @@
     "merge_none": "Inga liknande hittade.",
     "merge_search_placeholder": "Sök leverantör eller kund att slå ihop med",
     "dossier_kicker_suggested": "Förslag",
+    "dossier_why": "Föreslås för att: {reason}",
     "dossier_seen": "Sedd {count} gånger",
     "dossier_last": "senast {date}",
     "dossier_variants": "{count} namnvarianter",
