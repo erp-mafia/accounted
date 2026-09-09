@@ -248,3 +248,104 @@ describe('executeSIEImport: account name sync wiring', () => {
     expect(result.accountsCreated).toBeUndefined()
   })
 })
+
+// Regression for 2026-09-09: the account insert timed out, executeSIEImport
+// returned through the early `return result` after syncMappedAccounts, and
+// the sie_imports row it had just created stayed 'pending'. That row holds
+// the (company_id, file_hash) slot in the partial unique index, so the user's
+// retry 40 s later failed on the index with a message that named the retired
+// brand and a button that does not exist.
+describe('executeSIEImport: pending import record on early exit', () => {
+  function importWith(mock: ReturnType<typeof createQueuedMockSupabase>) {
+    return executeSIEImport(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      makeParsedFile(),
+      makeMappings(),
+      {
+        filename: 'bokio.se',
+        fileContent: '#dummy',
+        createFiscalPeriod: false,
+        importOpeningBalances: false,
+        importTransactions: true,
+      }
+    )
+  }
+
+  it('closes the pending record as failed when the create pass aborts', async () => {
+    mockSync.mockResolvedValue({
+      created: 0,
+      renamed: 0,
+      renamedAccounts: [],
+      renameFailed: 0,
+      error: 'canceling statement due to statement timeout',
+    })
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: null }, // checkDuplicateImport: no prior import
+      { data: null }, // cleanupStaleImportRecords
+      { data: { id: 'imp-1' } }, // createPendingImportRecord insert
+      { data: null }, // finalizeImportRecord update
+    ])
+
+    const result = await importWith(mock)
+
+    expect(result.success).toBe(false)
+    expect(result.importId).toBe('imp-1')
+    const updates = mock.findCalls('sie_imports', 'update')
+    expect(updates).toHaveLength(1)
+    expect(updates[0][0]).toMatchObject({
+      status: 'failed',
+      imported_at: null,
+      transactions_count: 0,
+      error_message: expect.stringContaining('statement timeout'),
+    })
+  })
+
+  it('closes the pending record as failed when the file has no fiscal year', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: null },
+      { data: null },
+      { data: { id: 'imp-2' } },
+      { data: null },
+    ])
+
+    const result = await importWith(mock)
+
+    expect(result.errors).toContain('No fiscal year defined in the SIE file')
+    const updates = mock.findCalls('sie_imports', 'update')
+    expect(updates).toHaveLength(1)
+    expect(updates[0][0]).toMatchObject({ status: 'failed' })
+  })
+
+  it('explains a held file-hash slot in Swedish, without the retired brand or a missing button', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: null }, // checkDuplicateImport
+      { data: null }, // cleanupStaleImportRecords
+      {
+        data: null,
+        error: {
+          code: '23505',
+          message:
+            'duplicate key value violates unique constraint "sie_imports_company_id_file_hash_active_idx"',
+        },
+      },
+    ])
+
+    const result = await importWith(mock)
+
+    expect(result.success).toBe(false)
+    expect(result.importId).toBeNull()
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0]).toMatch(
+      /^Importen misslyckades: Samma SIE-fil håller redan på att importeras/
+    )
+    expect(result.errors[0]).toMatch(/Vänta några minuter och försök igen/)
+    expect(result.errors[0]).not.toMatch(/gnubok|Ersätt import|Fortnox/)
+    // No row was created, so there is nothing to close.
+    expect(mock.findCalls('sie_imports', 'update')).toHaveLength(0)
+  })
+})
