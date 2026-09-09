@@ -289,7 +289,10 @@ function CounterpartsPage() {
           <Skeleton className="h-9 w-full" />
         </div>
       ) : rows.length === 0 ? (
-        <EmptyState title={debounced ? t('cp_empty_search') : t('cp_empty')} />
+        <EmptyState
+          title={debounced ? t('cp_empty_search') : t('cp_empty_title')}
+          description={debounced ? t('empty_search_description') : t('cp_empty')}
+        />
       ) : (
         <CounterpartList
           rows={rows}
