@@ -125,9 +125,12 @@ function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: Libra
   // ones list the business legs (the cost/revenue accounts) so the user can
   // recognise the template at a glance, and carry an "opens editor" badge.
   const businessLines = raw.lines.filter((l) => l.type === 'business')
+  // The leg that says what the template is about: a result account (3xxx to
+  // 8xxx) before a balance one, so a salary template reads 7010, not 2710.
+  const shownLine = businessLines.find((l) => /^[3-8]/.test(l.account)) ?? businessLines[0] ?? raw.lines[0]
   const vatLabelKey = converted ? getVatLabelKey(converted) : null
   if (dense) {
-    const account = converted ? categoryAccount(converted.debit_account, converted.credit_account) : (businessLines[0]?.account ?? raw.lines[0]?.account ?? null)
+    const account = converted ? categoryAccount(converted.debit_account, converted.credit_account) : (shownLine?.account ?? null)
     return <DenseRow hue={templateGroupHue(libraryTemplateGroup(raw))} name={raw.name} account={account} note={vatLabelKey ? t(vatLabelKey) : null} selected={selected} onClick={onClick} />
   }
 
