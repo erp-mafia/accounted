@@ -153,9 +153,10 @@ export function SuggestionQueue({
                     <Checkbox checked={checked} onCheckedChange={() => onToggle(row.id)} aria-label={row.displayName} disabled={!canWrite} />
                   </td>
                   <td className={`${td} max-w-[22rem]`}>
+                    <div className="flex min-w-0 items-center gap-1.5">
                     <button
                       type="button"
-                      className="block max-w-full truncate text-left font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="min-w-0 truncate text-left font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onClick={() => onOpen(row.id)}
                       aria-label={t('open_dossier', { name: row.displayName })}
                       title={row.displayName}
@@ -163,19 +164,19 @@ export function SuggestionQueue({
                       {row.displayName}
                     </button>
                     {!dense && isDuplicateCandidate(row) ? (
-                      <Badge variant="warning" className="ml-2">
+                      <Badge variant="warning" className="shrink-0">
                         {t('chip_duplicate')}
                       </Badge>
                     ) : null}
                     {isForeign(row) ? (
                       <span
-                        className="ml-1.5 inline-flex items-center rounded-full border border-border px-1.5 text-[10.5px] text-foreground"
+                        className="inline-flex shrink-0 items-center rounded-full border border-border px-1.5 text-[10.5px] text-foreground"
                         title={t('row_foreign', { country: regionName(row.country as string, locale) })}
                       >
                         {row.country}
                       </span>
                     ) : null}
-                    <HelpPopover className="ml-1.5 align-middle">
+                    <HelpPopover className="shrink-0">
                       <p>{reasonText(t, row.reason, row.stats?.rhythm ?? null, row.orgNumber)}</p>
                       {isForeign(row) ? (
                         <p className="mt-2 text-muted-foreground">{t('row_foreign', { country: regionName(row.country as string, locale) })}</p>
@@ -190,6 +191,7 @@ export function SuggestionQueue({
                         </button>
                       ) : null}
                     </HelpPopover>
+                    </div>
                   </td>
                   <td className={`${td} whitespace-nowrap`}>
                     <DropdownMenu>
