@@ -128,9 +128,9 @@ describe('getTemplatesByMcc', () => {
 })
 
 describe('getTemplateGroups', () => {
-  it('returns all 17 groups', () => {
+  it('returns all 20 groups', () => {
     const groups = getTemplateGroups()
-    expect(groups).toHaveLength(17)
+    expect(groups).toHaveLength(20)
     for (const g of groups) {
       expect(g.group).toBeTruthy()
       expect(g.label_sv).toBeTruthy()

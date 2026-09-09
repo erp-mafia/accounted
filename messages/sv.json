@@ -3195,6 +3195,14 @@
     "new_btn": "Ny transaktion"
   },
   "tx_template_picker": {
+    "group_goods": "Varor & material",
+    "group_tax": "Skatt & moms",
+    "group_closing": "Bokslut",
+    "picker_title": "Välj mall",
+    "amount_label": "Totalbelopp inkl. moms",
+    "apply": "Använd",
+    "use_template": "Använd mall",
+    "standard_templates": "Standardmallar",
     "group_premises": "Lokalkostnader",
     "group_vehicle": "Fordon",
     "group_it_software": "IT & Programvara",

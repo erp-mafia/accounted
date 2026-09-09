@@ -28,7 +28,6 @@ import type { ProposalLine, ProposalLinesInput } from '@/lib/bookkeeping/proposa
 import type { ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
 import { resolveExplicitVat } from '@/lib/transactions/quick-review-defaults'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import JournalEntryPreview from './JournalEntryPreview'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
@@ -638,14 +637,6 @@ export default function QuickReviewDialog({
               </button>
             )}
           </div>
-          {/* Only when there IS a single debit/credit pair to show: a
-              multi-line counterparty pattern has none, and a template that
-              never carried accounts would render "D:  → K: ". */}
-          {!hasCounterpartyPattern && entityAccounts.debitAccount && entityAccounts.creditAccount && (
-            <p className="mt-1.5 text-xs font-mono text-muted-foreground">
-              D: {formatAccountWithName(entityAccounts.debitAccount)} → K: {formatAccountWithName(entityAccounts.creditAccount)}
-            </p>
-          )}
         </div>
 
         {/* Template special rules */}
