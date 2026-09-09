@@ -10,7 +10,12 @@ import type { PartyRole } from '@/lib/parties/register'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { AccountNub } from './AccountNub'
 import { BrandMark } from './BrandMark'
+import { reasonText } from './format'
 import { regionName } from './SuggestionQueue'
+
+// What named a reading, in the row's own words. A model reading says
+// nothing here: its chip ("läst ur texten") already does.
+const WHY_KEY = { document: 'cp_why_document', directory: 'cp_why_directory', anchor: 'cp_why_anchor' } as const
 
 function money(n: number): string {
   return n ? formatCurrency(n) : ''
@@ -62,7 +67,9 @@ export function CounterpartList({
         </thead>
         <tbody className="stagger-enter">
           {rows.map((row) => {
-            const detail = [row.what, row.rail ? t('cp_via', { rail: row.rail }) : null, row.country && row.country !== 'SE' ? regionName(row.country, locale) : null]
+            const whyKey = !row.partyId && row.source ? WHY_KEY[row.source as keyof typeof WHY_KEY] : undefined
+            const why = row.status === 'suggested' && row.reason ? reasonText(t, row.reason, row.rhythm, row.orgNumber) : whyKey ? t(whyKey) : null
+            const detail = [row.what, row.rail ? t('cp_via', { rail: row.rail }) : null, row.country && row.country !== 'SE' ? regionName(row.country, locale) : null, why]
               .filter(Boolean)
               .join(' · ')
             const chip =

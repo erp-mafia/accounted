@@ -60,6 +60,7 @@ describe('displayNameFromVoucherText drops trailing months and initials', () => 
   it('keeps the company, drops when and who', async () => {
     const { displayNameFromVoucherText } = await import('../ledger-key')
     expect(displayNameFromVoucherText('KjellCo Oktober')).toBe('KjellCo')
+    expect(displayNameFromVoucherText('Kontorsplatser j')).toBe('Kontorsplatser')
     expect(displayNameFromVoucherText('Resend Jul Överföring via internet')).toBe('Resend')
     expect(displayNameFromVoucherText('Supabase JW Maj')).toBe('Supabase')
     expect(displayNameFromVoucherText('Visma Spcs AB')).toBe('Visma Spcs AB')

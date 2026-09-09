@@ -251,7 +251,9 @@ export function PartyDossier({
                       value={p.displayName}
                       note={variantNote}
                     />
-                    <Row label={t('fact_legal_name')} value={legalName ?? <span className="text-muted-foreground">{t('fact_missing')}</span>} note={legalName ? docsFor('legal_name') : undefined} />
+                    {legalName && legalName.trim().toLowerCase() === p.displayName.trim().toLowerCase() ? null : (
+                      <Row label={t('fact_legal_name')} value={legalName ?? <span className="text-muted-foreground">{t('fact_missing')}</span>} note={legalName ? docsFor('legal_name') : undefined} />
+                    )}
                     <Row
                       label={t('fact_org')}
                       value={p.orgNumber ? formatOrgNumber(p.orgNumber) : <span className="text-muted-foreground">{t('fact_missing')}</span>}

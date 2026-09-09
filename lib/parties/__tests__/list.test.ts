@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { aliasKeyOf, bankStatsByKey, composeCounterparts, type AliasRecord } from '../list'
+import type { SuggestionReason } from '@/lib/parties/suggest'
 import type { RegisterRow } from '../register'
 
 function party(over: Partial<RegisterRow> & { id: string; displayName: string }): RegisterRow {
@@ -36,6 +37,15 @@ describe('bankStatsByKey', () => {
 })
 
 describe('composeCounterparts', () => {
+  it('shows a suggestion by its company name and carries the ledger reason', () => {
+    const out = composeCounterparts({
+      parties: [party({ id: 'p9', displayName: 'Kontorsplatser j', status: 'suggested', reason: { occurrences: 3 } as SuggestionReason })],
+      aliases: [],
+      bank: new Map(),
+    })
+    expect(out.rows[0]).toMatchObject({ name: 'Kontorsplatser', status: 'suggested', reason: { occurrences: 3 }, source: null })
+  })
+
   const anthropicKey = aliasKeyOf({ original_description: 'ANTHROPIC* CLAUDE SUB', description: null, merchant_name: null })
   const bank = bankStatsByKey([
     { amount: -200, amount_sek: null, date: '2026-08-01', original_description: 'ANTHROPIC* CLAUDE SUB', description: null, merchant_name: null },

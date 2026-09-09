@@ -104,18 +104,19 @@ export function displayNameFromVoucherText(raw: string): string {
 const LEGAL_FORM_TOKENS = new Set(['AB', 'HB', 'KB', 'EF', 'AS', 'SA', 'NV', 'BV', 'SE', 'OY', 'AG', 'SL', 'SP', 'SRL', 'SPA'])
 
 /**
- * "KjellCo Oktober", "Resend Jul", "Supabase JW Maj": a trailing month or a
- * one- or two-letter initial says when and who, not which company. Same rule
+ * "KjellCo Oktober", "Resend Jul", "Supabase JW Maj", "Kontorsplatser j": a
+ * trailing month or a one- or two-letter initial says when and who, not
+ * which company. Same rule
  * as the bank-side key, minus the legal forms ("Visma Spcs AB" keeps its AB).
  * Always keeps at least one token.
  */
-function stripTrailingWhenAndWho(s: string): string {
+export function stripTrailingWhenAndWho(s: string): string {
   const tokens = s.trim().split(/\s+/).filter(Boolean)
   while (tokens.length > 1) {
     const last = tokens[tokens.length - 1]!
     if (LEGAL_FORM_TOKENS.has(last.toUpperCase().replace(/\./g, ''))) break
     const isMonth = TRAILING_MONTH_TOKENS.has(last.toLowerCase())
-    const isInitials = /^[A-ZÅÄÖ]{1,2}$/.test(last)
+    const isInitials = /^[A-ZÅÄÖ]{1,2}$/.test(last) || /^[a-zåäö]$/.test(last)
     if (!isMonth && !isInitials) break
     tokens.pop()
   }

@@ -12,7 +12,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
-import { getRegister, type PartyRole, type RegisterPeriod, type RegisterRow } from './register'
+import { stripTrailingWhenAndWho } from './ledger-key'
+import { getRegister, type LedgerStats, type PartyRole, type RegisterPeriod, type RegisterRow } from './register'
+import type { SuggestionReason } from './suggest'
 import { matchSeedText } from './resolver/directory'
 import { isScbConfigured } from './scb/config'
 
@@ -39,6 +41,11 @@ export interface CounterpartRow {
   lastSeen: string | null
   aliasKeys: string[]
   statsSource: 'bank' | 'ledger' | 'none'
+  /** Why a suggestion is here: the ledger's own reasons (org number in a document, vouchers, rhythm). */
+  reason: SuggestionReason | null
+  rhythm: LedgerStats['rhythm'] | null
+  /** The rung that named a reading (document, directory, ledger, anchor, model), so the row can say so. */
+  source: string | null
 }
 
 export interface CounterpartList {
@@ -167,10 +174,13 @@ export function composeCounterparts(input: {
     // directory knows the brand behind it, the brand is the name. A confirmed
     // record keeps the name the person gave it.
     const seedName = p.status === 'suggested' && seed && seed.name.toLowerCase() !== p.displayName.toLowerCase() ? seed.name : null
+    // A suggestion stored before the month and initial strip ("Resend Jul",
+    // "Kontorsplatser j") shows its company name; the stored row is untouched.
+    const shownName = seedName ?? (p.status === 'suggested' ? stripTrailingWhenAndWho(p.displayName) : p.displayName)
     rows.push({
       id: p.id,
       partyId: p.id,
-      name: seedName ?? p.displayName,
+      name: shownName,
       what: known?.what ?? seed?.what ?? null,
       kind: known?.kind ?? (p.kind === 'person' ? 'person' : 'merchant'),
       rail: known?.rail ?? null,
@@ -187,6 +197,9 @@ export function composeCounterparts(input: {
       lastSeen: useBank ? bank.lastSeen : (ledger?.lastSeen ?? null),
       aliasKeys: keys,
       statsSource: useBank ? 'bank' : ledger ? 'ledger' : 'none',
+      reason: p.status === 'suggested' ? p.reason : null,
+      rhythm: ledger?.rhythm ?? null,
+      source: known?.source ?? null,
     })
   }
 
@@ -242,6 +255,9 @@ export function composeCounterparts(input: {
       lastSeen: bank.lastSeen,
       aliasKeys: keys,
       statsSource: bank.count ? 'bank' : 'none',
+      reason: null,
+      rhythm: null,
+      source: known.source,
     })
   }
 
