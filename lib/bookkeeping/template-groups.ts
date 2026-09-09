@@ -109,7 +109,11 @@ export function libraryTemplateGroup(t: { category: BookingTemplateCategory; lin
       break
   }
   const lines = Array.isArray(t.lines) ? t.lines : []
-  const business = lines.find((l) => l.type === 'business') ?? lines.find((l) => l.type !== 'vat') ?? lines[0]
+  const business =
+    lines.find((l) => l.type === 'business' && /^[3-8]/.test(l.account ?? '')) ??
+    lines.find((l) => l.type === 'business') ??
+    lines.find((l) => l.type !== 'vat') ??
+    lines[0]
   return groupForAccount(business?.account) ?? (t.category === 'financial' ? 'bank_finance' : 'financial')
 }
 
