@@ -692,7 +692,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const allMobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = cockpitMode
     ? cockpitNavItems.map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
     : [
-        { href: '/', labelKey: 'home', icon: Home },
+        // The phone bar names the page the way the sidebar does: Att göra in v2.
+        { href: '/', labelKey: shell === 'v2' ? 'v2_todo' : 'home', icon: Home },
         { href: '/chat', labelKey: 'assistant', icon: Sparkles },
         { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight },
       ]
