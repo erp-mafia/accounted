@@ -907,6 +907,25 @@ input[type="number"] {
 [data-shell="v2"] .page-header-desc {
   display: none;
 }
+/* A detail page's facts line (counterparty, dates, org number) stays in the
+   bar, inline after the title, instead of vanishing like a description. */
+[data-shell="v2"] .page-header-lead:has(.page-header-meta) {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+[data-shell="v2"] .page-header-meta {
+  margin: 0;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-shell="v2"] .page-header-meta > * {
+  display: inline;
+}
 [data-shell="v2"] .page-header-action {
   width: auto;
 }
