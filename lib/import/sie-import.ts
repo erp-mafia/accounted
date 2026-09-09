@@ -2010,8 +2010,14 @@ async function createPendingImportRecord(
       pgMessage.includes('sie_imports_company_id_file_hash_active_idx')
 
     if (hitsActiveIdx) {
+      // A 'completed' row is caught by checkDuplicateImport before we get
+      // here, so the slot holder is a 'pending' row younger than the
+      // five-minute cleanup gate: the same file is being imported in another
+      // tab, or an attempt died seconds ago without closing its row. Say so
+      // and name the way out. The previous text pointed at an "Ersätt import"
+      // button the import history has never had.
       throw new Error(
-        'En tidigare SIE-import för samma fil finns redan i gnubok. Öppna importhistoriken och välj "Ersätt import" på den befintliga raden, eller använd Fortnox-synkningen för att hämta uppdaterad data automatiskt.'
+        'Samma SIE-fil håller redan på att importeras, eller så avbröts en import av den för mindre än fem minuter sedan. Vänta några minuter och försök igen. Står filen som importerad i importhistoriken, ångra den importen där först.'
       )
     }
 
@@ -2288,6 +2294,11 @@ export async function executeSIEImport(
   // result.journalEntryIds because that also holds opening_balance entries.
   const importTypedEntryIds: string[] = []
 
+  // True once the sie_imports row created by createPendingImportRecord has
+  // been finalized (completed or failed). The finally block below closes it
+  // on every other exit.
+  let importRecordClosed = false
+
   const onExistingPeriod = options.onExistingPeriod ?? 'block'
   const updateAccountNames = options.updateAccountNames ?? true
 
@@ -2456,7 +2467,7 @@ export async function executeSIEImport(
         // (company_id, file_hash) slot until it is undone; agents reported
         // being stuck here without knowing undo-then-retry is the path.
         result.errors.push(
-          `Den här filen har redan importerats ${duplicate.imported_at ? new Date(duplicate.imported_at).toLocaleDateString('sv-SE') : 'vid okänt datum'} (import ${duplicate.id}, ${duplicate.transactions_count} verifikat). Ångra den importen först (Ångra import i webbappen, eller gnubok_undo_sie_import via MCP) och importera sedan igen.`
+          `Den här filen har redan importerats ${duplicate.imported_at ? new Date(duplicate.imported_at).toLocaleDateString('sv-SE') : 'vid okänt datum'} (import ${duplicate.id}, ${duplicate.transactions_count} verifikat). Ångra den importen först (Ångra import i webbappen, eller accounted_undo_sie_import via MCP) och importera sedan igen.`
         )
         return result
       }
@@ -2542,7 +2553,7 @@ export async function executeSIEImport(
       )
       if (periodDuplicate) {
         result.errors.push(
-          `En SIE-import för ett överlappande räkenskapsår (${periodDuplicate.fiscal_year_start} till ${periodDuplicate.fiscal_year_end}) finns redan (import ${periodDuplicate.id}, ${periodDuplicate.transactions_count} verifikat). Ångra den importen först (Ångra import i webbappen, eller gnubok_undo_sie_import via MCP) och importera sedan igen.`
+          `En SIE-import för ett överlappande räkenskapsår (${periodDuplicate.fiscal_year_start} till ${periodDuplicate.fiscal_year_end}) finns redan (import ${periodDuplicate.id}, ${periodDuplicate.transactions_count} verifikat). Ångra den importen först (Ångra import i webbappen, eller accounted_undo_sie_import via MCP) och importera sedan igen.`
         )
         return result
       }
@@ -3216,6 +3227,7 @@ export async function executeSIEImport(
       options.fileContent,
       documentation
     )
+    importRecordClosed = true
 
     // Populate counterparty templates from voucher patterns (non-blocking)
     if (result.success && parsed.vouchers.length > 0) {
@@ -3273,11 +3285,20 @@ export async function executeSIEImport(
 
   } catch (error) {
     result.errors.push(
-      `Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      `Importen misslyckades: ${error instanceof Error ? error.message : 'Unknown error'}`
     )
-
-    // Mark the pending import as failed if we created one
-    if (result.importId) {
+  } finally {
+    // Close the pending sie_imports row on every exit that did not reach the
+    // normal finalize: a thrown error, and every early `return result` after
+    // createPendingImportRecord (account sync failure, missing fiscal year,
+    // overlapping import, vouchers outside the year, ...). Those early
+    // returns used to leave the row in 'pending'. A pending row holds the
+    // (company_id, file_hash) slot in the partial unique index, so a retry
+    // inside the five-minute cleanup gate failed on the index instead of on
+    // the real error: on 2026-09-09 a user whose account insert timed out
+    // retried 40 s later and was told the file "already existed".
+    if (result.importId && !importRecordClosed) {
+      importRecordClosed = true
       try {
         await finalizeImportRecord(
           supabase,
