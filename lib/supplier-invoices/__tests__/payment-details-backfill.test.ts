@@ -60,7 +60,7 @@ describe('backfillSupplierPaymentDetails', () => {
     enqueue({ data: null })
     const written = await backfillSupplierPaymentDetails(supabase as never, 'company-1', 'sup-1', { bankgiro: '5050-1055' })
     expect(written).toEqual({ bankgiro: '5050-1055' })
-    expect(findCall('suppliers', 'update')?.[0]).toEqual({ bankgiro: '5050-1055' })
+    expect(findCall('suppliers', 'update')?.[0]).toEqual({ bankgiro: '5050-1055', plusgiro: null, iban: null, bic: null })
   })
 
   it('touches nothing when the details are invalid or already there', async () => {

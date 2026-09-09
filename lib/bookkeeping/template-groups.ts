@@ -1,6 +1,7 @@
 import type { BookingTemplateCategory, BookingTemplateLibraryLine } from '@/types'
 import type { TemplateGroup } from './booking-templates'
 import { isReverseChargeVatAccount } from './vat-entries'
+import { isAccountNumber } from '@/lib/invariants/account-number'
 
 /**
  * One vocabulary for every place a person picks how something books: the
@@ -53,7 +54,7 @@ const PRIVATE_ACCOUNTS = new Set(['2010', '2011', '2012', '2013', '2017', '2018'
  */
 export function groupForAccount(account: string | null | undefined): TemplateGroup | null {
   const a = (account ?? '').trim()
-  if (!/^\d{4}$/.test(a)) return null
+  if (!isAccountNumber(a)) return null
   const n = Number(a)
   if (a === '1630' || a === '2650' || a.startsWith('25') || a.startsWith('27')) return 'tax'
   if (PRIVATE_ACCOUNTS.has(a)) return 'private_transfers'
@@ -123,7 +124,7 @@ export function libraryTemplateGroup(t: { category: BookingTemplateCategory; lin
  * the historical filing so existing rows and their group stay stable.
  */
 export function deriveLibraryCategory(lines: BookingTemplateLibraryLine[]): BookingTemplateCategory {
-  const accounts = (Array.isArray(lines) ? lines : []).map((l) => (l.account ?? '').trim()).filter((a) => /^\d{4}$/.test(a))
+  const accounts = (Array.isArray(lines) ? lines : []).map((l) => (l.account ?? '').trim()).filter((a) => isAccountNumber(a))
   if (accounts.length === 0) return 'other'
   const nonVat = accounts.filter((a) => !a.startsWith('26'))
   if (accounts.includes('2650') && nonVat.length === 0) return 'vat'
