@@ -1,5 +1,6 @@
 {
   "common": {
+    "undo": "Ångra",
     "active_company": "Aktivt företag",
     "open_in_new_tab": "Öppna i ny flik",
     "update_available": "En ny version finns tillgänglig.",

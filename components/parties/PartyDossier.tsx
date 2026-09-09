@@ -16,6 +16,7 @@ import { registryFacts, registryLabel, registryValue } from './RegistryFacts'
 import { regionName } from './SuggestionQueue'
 import { formatPaymentIdentity, rhythmLabel, roleLabel } from './format'
 import type { MergeCandidate } from './MergeDialog'
+import { displayNameFromVoucherText } from '@/lib/parties/ledger-key'
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{children}</h2>
@@ -100,7 +101,7 @@ export function PartyDossier({
   // The variants are voucher texts; show them as names, once each, and only
   // the ones that differ from the display name.
   const variantNote = (() => {
-    if (!stats || stats.variants.length < 2) return undefined
+    if (!p || !stats || stats.variants.length < 2) return undefined
     const shown = p.displayName.trim().toLowerCase()
     const names = [...new Set(stats.variants.map((v) => displayNameFromVoucherText(v)))].filter((n) => n.trim().toLowerCase() !== shown)
     return names.length ? t('dossier_seen_as', { names: names.slice(0, 3).join(', ') }) : undefined
