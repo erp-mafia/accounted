@@ -4939,6 +4939,10 @@
     "expense_registered_description": "Skulden till {name} finns nu i Att göra. Ankomstnummer: {number}"
   },
   "supplier_invoice_detail": {
+    "line_account_edit": "Byt konto på raden",
+    "line_account_changed": "Konto ändrat",
+    "line_account_changed_corrected": "Konto ändrat, registreringsverifikatet rättat",
+    "line_account_change_failed": "Kunde inte byta konto",
     "strip_registered_unbooked": "{date} · skuld inte bokförd än",
     "strip_skipped": "–",
     "strip_incoming": "{date}",
