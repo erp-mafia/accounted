@@ -4936,6 +4936,10 @@
     "expense_registered_description": "The debt to {name} is now in To do. Arrival number: {number}"
   },
   "supplier_invoice_detail": {
+    "line_account_edit": "Change the line's account",
+    "line_account_changed": "Account changed",
+    "line_account_changed_corrected": "Account changed, registration voucher corrected",
+    "line_account_change_failed": "Could not change the account",
     "strip_registered_unbooked": "{date} · liability not booked yet",
     "strip_skipped": "–",
     "strip_incoming": "{date}",

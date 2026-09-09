@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { AttnLine } from '@/components/ui/attn-line'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AUTO_STAGES, SUPPLIER_INVOICE_STAGES, type SupplierInvoiceStage } from '@/lib/supplier-invoices/stages'
 
@@ -71,8 +72,11 @@ function Lane({
   const t = useTranslations('purchases_flow')
   return (
     <section className="space-y-2">
-      <div className="flex items-baseline justify-between gap-4">
-        <h2 className="text-[13px] font-medium">{title}</h2>
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="flex items-center gap-1.5 text-[13px] font-medium">
+          {title}
+          <HelpPopover>{note}</HelpPopover>
+        </h2>
         <Link href={href} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
           {t('open_list')}
         </Link>
@@ -94,7 +98,6 @@ function Lane({
           </Link>
         ))}
       </div>
-      <p className="max-w-[78ch] text-[12.5px] text-muted-foreground">{note}</p>
     </section>
   )
 }

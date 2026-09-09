@@ -43,6 +43,7 @@ import { getDisplayTotal } from '@/lib/invoices/rounding'
 import {
   canApproveSupplierInvoice,
   canMarkSupplierInvoiceBankEntered,
+  isUnsettledSupplierInvoiceStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
@@ -97,6 +98,64 @@ const EXCEPTION_STATUS_VARIANTS: Record<string, 'secondary' | 'outline' | 'warni
   disputed: 'warning',
   credited: 'secondary',
   reversed: 'secondary',
+}
+
+
+/**
+ * The account of one invoice line, editable in place the way a category chip
+ * is on a transaction. Committing moves the line and corrects the
+ * registration verifikat inline; the server refuses what the period lock
+ * refuses, and the cell falls back to the old account.
+ */
+function InlineAccountCell({
+  item,
+  editable,
+  accounts,
+  label,
+  onCommit,
+}: {
+  item: { id: string; account_number: string }
+  editable: boolean
+  accounts: React.ComponentProps<typeof AccountCombobox>['accounts']
+  label: string
+  onCommit: (itemId: string, account: string) => Promise<void>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(item.account_number)
+  if (!editable) return <AccountNumber number={item.account_number} />
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="-mx-1 rounded-sm px-1 transition-colors duration-150 hover:bg-secondary/60"
+        aria-label={label}
+        onClick={() => {
+          setValue(item.account_number)
+          setEditing(true)
+        }}
+      >
+        <AccountNumber number={item.account_number} />
+      </button>
+    )
+  }
+  return (
+    <div
+      className="w-[240px]"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') setEditing(false)
+      }}
+    >
+      <AccountCombobox
+        value={value}
+        accounts={accounts}
+        onChange={setValue}
+        onCommit={(n) => {
+          setEditing(false)
+          if (n !== item.account_number) void onCommit(item.id, n)
+        }}
+      />
+    </div>
+  )
 }
 
 export default function SupplierInvoiceDetailPage() {
@@ -578,6 +637,25 @@ export default function SupplierInvoiceDetailPage() {
     )
   }
 
+  const lineAccountEditable = canWrite && isUnsettledSupplierInvoiceStatus(invoice.status) && !isEditingLines
+  async function changeLineAccount(itemId: string, account: string) {
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}/items/${itemId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_number: account }),
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok || body?.error) {
+        toast({ title: t('line_account_change_failed'), description: getErrorMessage(body, { statusCode: res.status, context: 'supplier_invoice' }), variant: 'destructive' })
+        return
+      }
+      toast({ title: t(body?.data?.corrected ? 'line_account_changed_corrected' : 'line_account_changed') })
+      void fetchInvoice()
+    } catch (err) {
+      toast({ title: t('line_account_change_failed'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
+    }
+  }
   const items = (invoice.items || []) as SupplierInvoiceItem[]
   const payments = (invoice.payments || []) as SupplierInvoicePayment[]
   const creditedOriginal =
@@ -1025,7 +1103,9 @@ export default function SupplierInvoiceDetailPage() {
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
                   {formatCurrency(item.unit_price, invoice.currency)}
                 </td>
-                <td className={TD_CLASS}><AccountNumber number={item.account_number} /></td>
+                <td className={TD_CLASS}>
+                  <InlineAccountCell item={item} editable={lineAccountEditable} accounts={accounts} label={t('line_account_edit')} onCommit={changeLineAccount} />
+                </td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{Math.round(item.vat_rate * 100)}%</td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
                   {formatCurrency(item.line_total, invoice.currency)}
