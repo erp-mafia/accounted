@@ -116,7 +116,6 @@ describe('generateDimensionPnl', () => {
         tbRow({ account_number: '3001', account_class: 3, closing_credit: 1000 }),
         tbRow({ account_number: '4010', account_name: 'Inköp', account_class: 4, closing_debit: 400 }),
         tbRow({ account_number: '1930', account_name: 'Bank', account_class: 1, closing_debit: 900 }),
-        tbRow({ account_number: '8999', account_name: 'Årets resultat', account_class: 8, closing_debit: 600 }),
       ]),
     )
 
@@ -146,10 +145,41 @@ describe('generateDimensionPnl', () => {
     }
 
     expect(report.net_per_column).toEqual([200, 300, 100])
-    // net_total = resultatrapport semantics over classes 3-8 excl 8999:
-    // +1000 (3001) − 400 (4010) = 600. 1930 (class 1) and 8999 excluded.
+    // net_total = resultatrapport semantics over classes 3-8:
+    // +1000 (3001) − 400 (4010) = 600. 1930 (class 1) excluded.
     expect(report.net_total).toBe(600)
     expect(report.period).toEqual({ start: '2026-01-01', end: '2026-12-31' })
+  })
+
+  it('lists a booked 8999 in the untagged bucket and nets it into net_total (#2455)', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: PERIOD, error: null }],
+      dimensions: [{ data: { id: 'dim-6', sie_dim_no: 6, name: 'Projekt' }, error: null }],
+      dimension_values: [{ data: [{ code: 'P001', name: 'Villa Almgren' }], error: null }],
+      journal_entry_lines: [
+        {
+          data: [
+            { id: 'l1', account_number: '3001', debit_amount: 0, credit_amount: 1000, dimensions: { '6': 'P001' } },
+          ],
+          error: null,
+        },
+      ],
+    }
+    mockTrialBalance.mockResolvedValue(
+      tb([
+        tbRow({ account_number: '3001', account_class: 3, closing_credit: 1000 }),
+        // Manual omföring of årets resultat: 8999 debit, never dimension-tagged.
+        tbRow({ account_number: '8999', account_name: 'Årets resultat', account_class: 8, closing_debit: 1000 }),
+      ]),
+    )
+
+    const report = await generateDimensionPnl(supabase, 'company-1', 'period-1', '6')
+
+    const row8999 = report.groups.flatMap((g) => g.rows).find((r) => r.account_number === '8999')
+    expect(row8999?.total).toBe(-1000)
+    // Same scope as resultatrapport: the omföring zeroes the result.
+    expect(report.net_total).toBe(0)
+    expect(report.net_per_column).toEqual([1000, -1000])
   })
 
   it('drops the untagged column when every krona is tagged', async () => {
