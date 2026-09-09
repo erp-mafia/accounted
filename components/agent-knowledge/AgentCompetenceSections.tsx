@@ -1,5 +1,7 @@
 'use client'
 
+import { atomLabel } from '@/lib/agent-context/atom-labels'
+
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Pin, ArrowUpRight } from 'lucide-react'
@@ -47,7 +49,7 @@ export function CompetenceCard({ competence }: { competence: AgentCompetence }) 
                       className={a.active ? '' : 'text-muted-foreground'}
                       title={a.description}
                     >
-                      {a.title}
+                      {atomLabel(a)}
                       {!a.active && tier !== 'horizontal' && (
                         <span className="ml-1.5 opacity-70">· {t('badge_dormant')}</span>
                       )}

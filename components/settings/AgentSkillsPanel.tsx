@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 import type { AtomTier as Tier } from '@/lib/agent-context/agent-competence'
+import { atomLabel } from '@/lib/agent-context/atom-labels'
 
 interface AtomMeta {
   id: string
@@ -248,10 +249,9 @@ export function AgentSkillsPanel() {
                       aria-expanded={isOpen}
                       className="group flex w-full items-baseline gap-3 py-3 text-left"
                     >
-                      <span className={cn('shrink-0 text-[13.5px] font-medium', dormant ? 'text-muted-foreground' : 'text-foreground')}>
-                        {atom.title}
+                      <span className={cn('min-w-0 flex-1 truncate text-[13.5px] font-medium', dormant ? 'text-muted-foreground' : 'text-foreground')}>
+                        {atomLabel(atom)}
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">{atom.description}</span>
                       {tier !== 'horizontal' && (
                         <span className={cn('shrink-0 text-[11.5px]', dormant ? 'rounded-full border border-border px-2 py-px text-muted-foreground' : 'text-muted-foreground')}>
                           {dormant ? 'Vilande' : 'Aktiv'}

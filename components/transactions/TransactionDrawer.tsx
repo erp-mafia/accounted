@@ -270,6 +270,9 @@ export function TransactionDrawer({
           )}
         </div>
 
+        {/* Only when there is a fact to show: a heading over nothing reads as
+            something missing. */}
+        {(accountLabel || originalName || transaction.original_description || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
         <div className="px-5 py-3">
           <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_details')}</p>
           <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
@@ -303,6 +306,7 @@ export function TransactionDrawer({
           {isPreMigration && <p className="mt-3 text-[12px] text-muted-foreground">{t('pre_migration_foldout')}</p>}
           {extra ? <div className="mt-3">{extra}</div> : null}
         </div>
+        )}
       </div>
     </aside>,
     document.body,
