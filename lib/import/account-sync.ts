@@ -243,18 +243,27 @@ export async function syncMappedAccounts(
     // One statement per chunk (see INSERT_CHUNK_SIZE). A chunk that fails
     // leaves the earlier ones committed, which is safe: the next attempt reads
     // the chart again and only inserts what is still missing.
+    //
+    // ON CONFLICT (company_id, account_number) DO NOTHING: a concurrent import
+    // (or the replace flow) can create an account between our read and this
+    // write. With a plain INSERT that duplicate rolled back the whole
+    // statement while the caller treated "duplicate" as success, silently
+    // dropping every other account in it. Rows the conflict skipped are not
+    // returned, so `created` counts exactly what landed, chunk by chunk (the
+    // audit_log trigger on chart_of_accounts stays the per-row source of
+    // truth for behandlingshistoriken).
     for (let i = 0; i < inserts.length; i += INSERT_CHUNK_SIZE) {
       const chunk = inserts.slice(i, i + INSERT_CHUNK_SIZE)
-      const { error: insertError } = await supabase.from('chart_of_accounts').insert(chunk)
-      // A duplicate means a concurrent import (or the replace flow) created the
-      // account between our read and write: the account exists, which is all
-      // this pass guarantees.
-      if (insertError && !insertError.message.includes('duplicate')) {
+      const { data: insertedRows, error: insertError } = await supabase
+        .from('chart_of_accounts')
+        .upsert(chunk, { onConflict: 'company_id,account_number', ignoreDuplicates: true })
+        .select('account_number')
+      if (insertError) {
         result.error = insertError.message
         return result
       }
+      result.created += insertedRows?.length ?? 0
     }
-    result.created = missing.length
   }
 
   const existingVatUpdates = [...vatDefaults]

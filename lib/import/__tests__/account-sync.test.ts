@@ -32,6 +32,12 @@ function buildCapturingSupabase(opts?: {
   insertError?: { message: string } | null
   /** Zero-based index of the insert statement that should fail (default: all). */
   insertErrorOnBatch?: number
+  /**
+   * Account numbers that already exist at write time although the read pass
+   * did not see them (a concurrent import): the upsert's ON CONFLICT DO
+   * NOTHING skips them, and PostgREST does not return skipped rows.
+   */
+  conflictAccounts?: string[]
   updateError?: { message: string } | null
   selectError?: { message: string } | null
 }) {
@@ -70,14 +76,35 @@ function buildCapturingSupabase(opts?: {
             }),
           }),
         }),
-        insert: (rows: Array<Record<string, unknown>>) => {
+        upsert: (
+          rows: Array<Record<string, unknown>>,
+          upsertOpts: { onConflict?: string; ignoreDuplicates?: boolean }
+        ) => {
+          if (
+            upsertOpts?.onConflict !== 'company_id,account_number' ||
+            upsertOpts?.ignoreDuplicates !== true
+          ) {
+            throw new Error(`Unexpected upsert options: ${JSON.stringify(upsertOpts)}`)
+          }
           const batchIndex = insertBatches.length
           insertBatches.push(rows.length)
           const failsThisBatch =
-            opts?.insertErrorOnBatch === undefined || opts.insertErrorOnBatch === batchIndex
-          if (!failsThisBatch) return Promise.resolve({ error: null })
-          inserts.push(...rows)
-          return Promise.resolve({ error: opts?.insertError ?? null })
+            opts?.insertError != null &&
+            (opts.insertErrorOnBatch === undefined || opts.insertErrorOnBatch === batchIndex)
+          const conflicts = new Set(opts?.conflictAccounts ?? [])
+          const landed = rows.filter((r) => !conflicts.has(String(r.account_number)))
+          return {
+            select: () => {
+              if (failsThisBatch) {
+                return Promise.resolve({ data: null, error: opts?.insertError ?? null })
+              }
+              inserts.push(...landed)
+              return Promise.resolve({
+                data: landed.map((r) => ({ account_number: r.account_number })),
+                error: null,
+              })
+            },
+          }
         },
         update: (payload: Record<string, unknown>) => {
           const filters: Record<string, string> = {}
@@ -289,9 +316,13 @@ describe('syncMappedAccounts: create pass', () => {
     expect(inserts[0].account_name).toBe('Konto 1932')
   })
 
-  it('swallows duplicate-key insert errors (concurrent import race)', async () => {
-    const { supabase } = buildCapturingSupabase({
-      insertError: { message: 'duplicate key value violates unique constraint' },
+  it('absorbs a concurrent import race through ON CONFLICT DO NOTHING', async () => {
+    // A plain INSERT raised a duplicate-key error here, which the old code
+    // swallowed while the whole statement had rolled back. The write is now an
+    // ignore-duplicates upsert (the mock refuses any other shape), so the
+    // race surfaces as a skipped row, never as an error.
+    const { supabase, insertBatches } = buildCapturingSupabase({
+      conflictAccounts: ['1930'],
     })
 
     const result = await run(supabase, [
@@ -299,6 +330,8 @@ describe('syncMappedAccounts: create pass', () => {
     ])
 
     expect(result.error).toBeNull()
+    expect(result.created).toBe(0)
+    expect(insertBatches).toEqual([1])
   })
 
   it('returns a fatal error for non-duplicate insert failures', async () => {
@@ -556,6 +589,25 @@ describe('syncMappedAccounts: chunked create pass', () => {
     expect(insertBatches).toEqual([3])
   })
 
+  it('counts only the rows the conflict clause let through', async () => {
+    // The read pass saw neither account, but 1930 was created by a concurrent
+    // import before our write: ON CONFLICT DO NOTHING skips it and the count
+    // must not claim it.
+    const { supabase, inserts, insertBatches } = buildCapturingSupabase({
+      conflictAccounts: ['1930'],
+    })
+
+    const result = await run(supabase, [
+      mapping({ sourceAccount: '1930', targetAccount: '1930', sourceName: 'Företagskonto' }),
+      mapping({ sourceAccount: '6110', targetAccount: '6110', sourceName: 'Kontorsmateriel' }),
+    ])
+
+    expect(result.error).toBeNull()
+    expect(insertBatches).toEqual([2])
+    expect(result.created).toBe(1)
+    expect(inserts.map((r) => r.account_number)).toEqual(['6110'])
+  })
+
   it('stops at the first failing statement and reports its error', async () => {
     const { supabase, insertBatches } = buildCapturingSupabase({
       insertError: { message: 'canceling statement due to statement timeout' },
@@ -565,8 +617,9 @@ describe('syncMappedAccounts: chunked create pass', () => {
     const result = await run(supabase, fullChart(INSERT_CHUNK_SIZE * 3))
 
     expect(result.error).toBe('canceling statement due to statement timeout')
-    expect(result.created).toBe(0)
-    // First chunk committed, second failed, third never sent.
+    // First chunk committed, second failed, third never sent: the count
+    // reports what actually landed in chart_of_accounts.
+    expect(result.created).toBe(INSERT_CHUNK_SIZE)
     expect(insertBatches).toEqual([INSERT_CHUNK_SIZE, INSERT_CHUNK_SIZE])
   })
 })
