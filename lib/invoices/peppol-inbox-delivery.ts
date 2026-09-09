@@ -57,6 +57,9 @@ export function peppolDocumentToExtraction(document: PeppolInboundDocument): Inv
   const sign: 1 | -1 = document.documentType === 'CreditNote' ? -1 : 1
   const bankgiro = document.paymentMeans.map((m) => m.bankgiro).find((v): v is string => !!v) ?? null
   const plusgiro = document.paymentMeans.map((m) => m.plusgiro).find((v): v is string => !!v) ?? null
+  const iban = document.paymentMeans.map((m) => m.iban).find((v): v is string => !!v) ?? null
+  // The branch id next to an IBAN is the BIC; next to a giro it is SE:BANKGIRO or a BBAN marker.
+  const bic = document.paymentMeans.map((m) => (m.iban && m.branchId && /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(m.branchId.toUpperCase()) ? m.branchId.toUpperCase() : null)).find((v): v is string => !!v) ?? null
   const paymentReference = document.paymentMeans.map((m) => m.paymentId).find((v): v is string => !!v) ?? null
   const supplier = document.supplier
   const addressParts = [
@@ -88,6 +91,8 @@ export function peppolDocumentToExtraction(document: PeppolInboundDocument): Inv
       address: addressParts.length ? addressParts.join(', ') : null,
       bankgiro: formatGiro(bankgiro),
       plusgiro: formatGiro(plusgiro),
+      iban,
+      bic,
     },
     invoice: {
       invoiceNumber: document.documentId || null,

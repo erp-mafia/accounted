@@ -59,6 +59,7 @@ import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCount
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
 import { validateDeductionLines } from '@/lib/invoices/rot-rut-rules'
@@ -13647,6 +13648,13 @@ export const tools: McpTool[] = [
         )
       }
       const supplierDefaultExpenseAccount = resolvedSupplier.default_expense_account ?? null
+
+      // The scan read the supplier's giro or IBAN with everything else: a
+      // supplier that lacks them takes them now, so the staged invoice can
+      // go into a betalfil once approved. A write, so never on a dry run.
+      if (!dryRun) {
+        await backfillSupplierPaymentDetails(supabase, companyId, supplierId, supplierExt as SupplierPaymentDetails | null)
+      }
 
       // Assemble core invoice fields
       const currency = (invoiceExt?.currency as string) || 'SEK'

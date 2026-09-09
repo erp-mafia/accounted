@@ -3831,7 +3831,7 @@ function FieldsRail({
 
 export function emptyExtraction(): InvoiceExtractionResult {
   return {
-    supplier: { name: null, orgNumber: null, vatNumber: null, address: null, bankgiro: null, plusgiro: null },
+    supplier: { name: null, orgNumber: null, vatNumber: null, address: null, bankgiro: null, plusgiro: null, iban: null, bic: null },
     invoice: { invoiceNumber: null, invoiceDate: null, dueDate: null, paymentReference: null, currency: 'SEK' },
     lineItems: [],
     totals: { subtotal: null, vatAmount: null, total: null },
@@ -3848,6 +3848,8 @@ type FieldKey =
   | 'supplier.vatNumber'
   | 'supplier.bankgiro'
   | 'supplier.plusgiro'
+  | 'supplier.iban'
+  | 'supplier.bic'
   | 'invoice.invoiceNumber'
   | 'invoice.paymentReference'
   | 'invoice.invoiceDate'
@@ -3872,6 +3874,8 @@ const FIELD_DEFS: FieldDef[] = [
   { key: 'totals.vatAmount', label: 'Moms', type: 'number', inputMode: 'decimal' },
   { key: 'supplier.bankgiro', label: 'Bankgiro', type: 'text' },
   { key: 'supplier.plusgiro', label: 'Plusgiro', type: 'text' },
+  { key: 'supplier.iban', label: 'IBAN', type: 'text' },
+  { key: 'supplier.bic', label: 'BIC', type: 'text' },
   { key: 'invoice.invoiceNumber', label: 'Fakturanr', type: 'text' },
   { key: 'invoice.paymentReference', label: 'OCR/Referens', type: 'text' },
   { key: 'invoice.invoiceDate', label: 'Fakturadatum', type: 'date' },
