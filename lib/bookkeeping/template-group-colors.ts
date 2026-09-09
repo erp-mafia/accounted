@@ -28,6 +28,9 @@ const HUE_BY_GROUP: Record<TemplateGroup, TemplateHue> = {
   financial: 'slate',
   professional_services: 'violet',
   private_transfers: 'slate',
+  goods: 'amber',
+  tax: 'slate',
+  closing: 'slate',
 }
 
 export function templateGroupHue(group: TemplateGroup | null | undefined): TemplateHue {
