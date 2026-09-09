@@ -149,9 +149,9 @@ export const approveForPayment = env.test(
     const b = await ctx.browser();
 
     await b.goto(`${APP_URL}/supplier-invoices`);
-    await b.getByRole("button", { name: "Godkänn", exact: true }).click();
+    await b.getByRole("button", { name: "Attestera", exact: true }).click();
 
-    await expect(b.getByText("Godkänd")).toBeVisible({ timeout: 20000 });
+    await expect(b.getByText("Attesterad").first()).toBeVisible({ timeout: 20000 });
 
     const invoice = await ctx.svc.supabase.sql<{ status: string }>`
       select status from public.supplier_invoices`;
