@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { coreKey, displayNameFromVoucherText } from '../ledger-key'
 import type { ObservedParty } from '../observed'
-import { buildSuggestions, suggestPartiesForCompany, type ExistingParty, type LedgerKeyEvidence } from '../suggest'
+import { planDuplicateMerges, buildSuggestions, suggestPartiesForCompany, type ExistingParty, type LedgerKeyEvidence } from '../suggest'
 
 function observed(over: Partial<ObservedParty> & { key: string }): ObservedParty {
   return {
@@ -249,7 +249,7 @@ describe('suggestPartiesForCompany', () => {
       apply: { created: 1, attached: 0, identities: 0, facts: 2 },
     })
     const summary = await suggestPartiesForCompany(client, 'co', 'user')
-    expect(summary).toEqual({ observed: 2, suggested: 1, skipped: 1, created: 1, attached: 0, identities: 0, facts: 2 })
+    expect(summary).toEqual({ observed: 2, suggested: 1, skipped: 1, created: 1, attached: 0, identities: 0, facts: 2, merged: 0 })
     const applyCall = rpc.mock.calls.find((c) => c[0] === 'apply_party_suggestions')!
     const args = applyCall[1] as unknown as { p_company_id: string; p_user_id: string; p_items: Array<{ key: string }> }
     expect(args.p_company_id).toBe('co')
@@ -289,3 +289,28 @@ describe('similarAmong', () => {
     expect(m.get('f')!.map((s) => s.id)).toEqual(['g'])
   })
 })
+
+describe('planDuplicateMerges', () => {
+  it('folds exact namesakes into the one with an org number, then a confirmed one, then the oldest', () => {
+    const plans = planDuplicateMerges([
+      { id: 'a', display_name: 'The Intelligence Company AB (publ)', org_number: null, status: 'suggested', created_at: '2026-06-01' },
+      { id: 'b', display_name: 'The Intelligence Company AB (publ) ', org_number: null, status: 'suggested', created_at: '2026-07-01' },
+      { id: 'c', display_name: 'the intelligence company ab (publ)', org_number: '5594871682', status: 'confirmed', created_at: '2026-08-01' },
+      { id: 'd', display_name: 'Anthropic PBC', org_number: null, status: 'suggested', created_at: '2026-05-01' },
+      { id: 'e', display_name: 'Anthropic PBC', org_number: null, status: 'suggested', created_at: '2026-06-01' },
+      { id: 'f', display_name: 'Anthropic, PBC', org_number: null, status: 'suggested', created_at: '2026-06-02' },
+    ])
+    expect(plans).toEqual([
+      { survivorId: 'c', mergedIds: ['a', 'b'] },
+      { survivorId: 'd', mergedIds: ['e'] },
+    ])
+  })
+
+  it('leaves namesakes with two different org numbers alone', () => {
+    expect(planDuplicateMerges([
+      { id: 'a', display_name: 'Kontoret AB', org_number: '5560000001', status: 'confirmed', created_at: '2026-01-01' },
+      { id: 'b', display_name: 'Kontoret AB', org_number: '5560000002', status: 'confirmed', created_at: '2026-02-01' },
+    ])).toEqual([])
+  })
+})
+

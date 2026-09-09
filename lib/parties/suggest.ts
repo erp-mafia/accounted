@@ -371,12 +371,50 @@ export interface SuggestSummary {
   attached: number
   identities: number
   facts: number
+  /** Live parties folded into a namesake by the exact-name merge. */
+  merged: number
 }
 
 /**
  * Run the pipeline for one company and persist the result. Safe to re-run:
  * apply_party_suggestions is idempotent.
  */
+/**
+ * Live parties that are the same counterpart written the same way, and which
+ * of them survives. Exact name only, after trim and case: "The Intelligence
+ * Company AB (publ)" three times is one company, never a judgement call. The
+ * survivor is the one with an org number, then a confirmed one, then the
+ * oldest, so nothing a person recorded is lost.
+ */
+export interface DuplicateCandidate {
+  id: string
+  display_name: string
+  org_number: string | null
+  status: 'suggested' | 'confirmed'
+  created_at: string
+}
+
+export function planDuplicateMerges(parties: DuplicateCandidate[]): Array<{ survivorId: string; mergedIds: string[] }> {
+  const groups = new Map<string, DuplicateCandidate[]>()
+  for (const p of parties) {
+    const k = p.display_name.trim().toLowerCase().replace(/\s+/g, ' ')
+    if (k.length < 2) continue
+    groups.set(k, [...(groups.get(k) ?? []), p])
+  }
+  const plans: Array<{ survivorId: string; mergedIds: string[] }> = []
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    // Two different org numbers with one name are two companies: leave them.
+    const orgs = new Set(group.map((p) => p.org_number).filter((o): o is string => !!o))
+    if (orgs.size > 1) continue
+    const rank = (p: DuplicateCandidate) => (p.org_number ? 0 : p.status === 'confirmed' ? 1 : 2)
+    const sorted = [...group].sort((a, b) => rank(a) - rank(b) || a.created_at.localeCompare(b.created_at))
+    const survivor = sorted[0]!
+    plans.push({ survivorId: survivor.id, mergedIds: sorted.slice(1).map((p) => p.id) })
+  }
+  return plans
+}
+
 export async function suggestPartiesForCompany(
   supabase: SupabaseClient,
   companyId: string,
@@ -413,6 +451,7 @@ export async function suggestPartiesForCompany(
     attached: 0,
     identities: 0,
     facts: 0,
+    merged: 0,
   }
   const chunk = Math.max(1, options.chunkSize ?? 200)
   for (let i = 0; i < items.length; i += chunk) {
@@ -427,6 +466,30 @@ export async function suggestPartiesForCompany(
     summary.attached += r.attached ?? 0
     summary.identities += r.identities ?? 0
     summary.facts += r.facts ?? 0
+  }
+  // The same name written the same way is one counterpart: fold the copies
+  // into the survivor the way a person would with Slå ihop, undoable in the
+  // same way (merge_parties records a decision).
+  const live = await fetchAllRows<DuplicateCandidate>(({ from, to }) =>
+    supabase
+      .from('parties')
+      .select('id, display_name, org_number, status, created_at')
+      .eq('company_id', companyId)
+      .is('merged_into', null)
+      .is('archived_at', null)
+      .order('created_at', { ascending: true })
+      .range(from, to),
+  )
+  for (const plan of planDuplicateMerges(live)) {
+    const { error } = await supabase.rpc('merge_parties', {
+      p_company_id: companyId,
+      p_user_id: userId,
+      p_survivor: plan.survivorId,
+      p_merged: plan.mergedIds,
+      p_note: 'Samma namn',
+    })
+    if (error) throw new Error(`merge_parties failed: ${error.message}`)
+    summary.merged += plan.mergedIds.length
   }
   return summary
 }

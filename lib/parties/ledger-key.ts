@@ -1,4 +1,4 @@
-import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { normalizeCounterpartyName, TRAILING_MONTH_TOKENS } from '@/lib/bookkeeping/counterparty-templates'
 
 /**
  * Legibility key for a voucher description: the identity string an observed
@@ -96,7 +96,30 @@ export function displayNameFromVoucherText(raw: string): string {
     .replace(/\s+/g, ' ')
     .replace(/^[,\s]+|[,\s]+$/g, '')
     .trim()
-  return cleaned.length >= 2 ? cleaned : raw.trim()
+  const named = stripTrailingWhenAndWho(cleaned)
+  return named.length >= 2 ? named : cleaned.length >= 2 ? cleaned : raw.trim()
+}
+
+// Legal forms that look like initials but name the company: never stripped.
+const LEGAL_FORM_TOKENS = new Set(['AB', 'HB', 'KB', 'EF', 'AS', 'SA', 'NV', 'BV', 'SE', 'OY', 'AG', 'SL', 'SP', 'SRL', 'SPA'])
+
+/**
+ * "KjellCo Oktober", "Resend Jul", "Supabase JW Maj": a trailing month or a
+ * one- or two-letter initial says when and who, not which company. Same rule
+ * as the bank-side key, minus the legal forms ("Visma Spcs AB" keeps its AB).
+ * Always keeps at least one token.
+ */
+function stripTrailingWhenAndWho(s: string): string {
+  const tokens = s.trim().split(/\s+/).filter(Boolean)
+  while (tokens.length > 1) {
+    const last = tokens[tokens.length - 1]!
+    if (LEGAL_FORM_TOKENS.has(last.toUpperCase().replace(/\./g, ''))) break
+    const isMonth = TRAILING_MONTH_TOKENS.has(last.toLowerCase())
+    const isInitials = /^[A-ZÅÄÖ]{1,2}$/.test(last)
+    if (!isMonth && !isInitials) break
+    tokens.pop()
+  }
+  return tokens.join(' ')
 }
 
 const LEGACY_AP_PREFIX = /^(levfakt|levfkt|leverantörsfaktura från|leverantörsfaktura|levbet|faktura|kvitto|utgift)\s+/

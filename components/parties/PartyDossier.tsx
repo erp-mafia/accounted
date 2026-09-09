@@ -97,6 +97,14 @@ export function PartyDossier({
 
   const p = dossier?.party
   const stats = p?.stats ?? null
+  // The variants are voucher texts; show them as names, once each, and only
+  // the ones that differ from the display name.
+  const variantNote = (() => {
+    if (!stats || stats.variants.length < 2) return undefined
+    const shown = p.displayName.trim().toLowerCase()
+    const names = [...new Set(stats.variants.map((v) => displayNameFromVoucherText(v)))].filter((n) => n.trim().toLowerCase() !== shown)
+    return names.length ? t('dossier_seen_as', { names: names.slice(0, 3).join(', ') }) : undefined
+  })()
   const suggested = p?.status === 'suggested'
   const kicker = p ? (suggested ? t('dossier_kicker_suggested') : roleLabel(t, p.roles)) : ''
   const subtitle = stats
@@ -241,7 +249,7 @@ export function PartyDossier({
                     <Row
                       label={t('fact_name')}
                       value={p.displayName}
-                      note={stats && stats.variants.length > 1 ? stats.variants.slice(0, 3).join(', ') : undefined}
+                      note={variantNote}
                     />
                     <Row label={t('fact_legal_name')} value={legalName ?? <span className="text-muted-foreground">{t('fact_missing')}</span>} note={legalName ? docsFor('legal_name') : undefined} />
                     <Row

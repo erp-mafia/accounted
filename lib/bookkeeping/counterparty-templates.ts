@@ -32,7 +32,7 @@ const log = createLogger('counterparty-templates')
  * trailing period label on a bank-feed description ("Ngrok Mars", "Spotify
  * januari") rather than as part of the merchant's identity.
  */
-const TRAILING_MONTH_TOKENS = new Set([
+export const TRAILING_MONTH_TOKENS = new Set([
   'jan', 'feb', 'mar', 'apr', 'maj', 'may', 'jun', 'jul', 'aug', 'sep', 'sept',
   'okt', 'oct', 'nov', 'dec',
   'januari', 'februari', 'mars', 'april', 'juni', 'juli', 'augusti',
@@ -50,7 +50,7 @@ const TRAILING_MONTH_TOKENS = new Set([
  * all-caps initials (so 3-letter brands like SEB/ICA and any lowercased word
  * survive), and always keeps at least one core token (never strips to empty).
  */
-function stripTrailingNoiseTokens(s: string): string {
+export function stripTrailingNoiseTokens(s: string): string {
   const tokens = s.trim().split(/\s+/).filter(Boolean)
   while (tokens.length > 1) {
     const last = tokens[tokens.length - 1]

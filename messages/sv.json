@@ -8722,6 +8722,7 @@
     "unsigned": "Ej signerad"
   },
   "parties": {
+    "dossier_seen_as": "Sett som {names}",
     "title": "Förslag från bokföringen",
     "help": "Motparter som dina verifikat och underlag pekar ut men som inte finns bland dina leverantörer och kunder. Förslagen skapas från bokföringen; Uppdatera förslag hämtar det som tillkommit sedan sist. Lägg upp så läggs de upp med uppgifterna från underlagen. Ingenting bokförs, och det går att ångra i 30 dagar.",
     "summary": "{suggested} förslag · {observed} bara i bokföringen",
