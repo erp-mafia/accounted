@@ -31,7 +31,9 @@ import { formatDate, cn } from '@/lib/utils'
 import Link from 'next/link'
 import { AccountNumber } from '@/components/ui/account-number'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
+import dynamic from 'next/dynamic'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+const PaymentFileDialog = dynamic(() => import('@/components/supplier-invoices/PaymentFileDialog'), { ssr: false })
 import { AccountChip } from '@/components/ui/account-chip'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
@@ -181,7 +183,7 @@ export default function SupplierInvoiceDetailPage() {
   const shell = useShell()
   const routeParams = useParams()
   const invoiceIdParam = typeof routeParams.id === 'string' ? routeParams.id : ''
-  const { data: lifecycle } = useSWR<InvoiceLifecycle | null>(
+  const { data: lifecycle, mutate: mutateLifecycle } = useSWR<InvoiceLifecycle | null>(
     shell === 'v2' && invoiceIdParam ? `/api/supplier-invoices/lifecycle?ids=${invoiceIdParam}` : null,
     async (url: string) => {
       const res = await fetch(url)
@@ -228,6 +230,7 @@ export default function SupplierInvoiceDetailPage() {
       journal_entry_id?: string | null
     }> | null
   >(null)
+  const [isFileDialogOpen, setIsFileDialogOpen] = useState(false)
   const [markPaidPreview, setMarkPaidPreview] = useState<MarkPaidPreview | null>(null)
   const [markPaidPreviewFailed, setMarkPaidPreviewFailed] = useState(false)
   const [isEditingLines, setIsEditingLines] = useState(false)
@@ -756,6 +759,15 @@ export default function SupplierInvoiceDetailPage() {
     }
   }
   const canMarkPaid = ['approved', 'overdue', 'partially_paid'].includes(invoice.status)
+  // After attest the next step is the betalfil to the bank, so that is the
+  // header's one primary while the invoice is attested and in no open file.
+  // Markera betald stays for the person who paid by hand, as a secondary.
+  const canAddToFile =
+    shell === 'v2' &&
+    !invoice.is_credit_note &&
+    ['approved', 'overdue'].includes(invoice.status) &&
+    !!invoice.approved_at &&
+    !lifecycle?.batch
   // "Inlagd i banken" (#2220) sits on the same rows as Markera som betald:
   // it is the step right before it. Viewers see the bock only when it is set.
   const showBankEntered =
@@ -836,7 +848,7 @@ export default function SupplierInvoiceDetailPage() {
               </Badge>
             )}
           </div>
-          <p className="page-header-meta mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
+          <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
         </div>
 
         <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
@@ -872,10 +884,17 @@ export default function SupplierInvoiceDetailPage() {
               {t('approve')}
             </Button>
           )}
+          {canAddToFile && (
+            <Button onClick={() => setIsFileDialogOpen(true)} disabled={isProcessing || !canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
+              {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('add_to_payment_file')}
+            </Button>
+          )}
           {/* The bock (#2220): "I have entered this payment in the bank".
               A labelled checkbox rather than a button, because it is a fact
-              the user records, not an action that posts anything. */}
-          {showBankEntered && (
+              the user records, not an action that posts anything. In v2 it
+              sits in the Betalning section, where the fact belongs. */}
+          {showBankEntered && shell !== 'v2' && (
             <label
               className={cn(
                 'inline-flex h-9 select-none items-center gap-2 px-2 text-[13px]',
@@ -899,7 +918,7 @@ export default function SupplierInvoiceDetailPage() {
               step (an aged-but-unattested invoice can have both). */}
           {canMarkPaid && (
             <Button
-              variant={canApprove ? 'outline' : 'default'}
+              variant={canApprove || canAddToFile ? 'outline' : 'default'}
               onClick={() => setIsPayDialogOpen(true)}
               disabled={isProcessing || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1182,6 +1201,28 @@ export default function SupplierInvoiceDetailPage() {
       {/* Payment: paid / remaining always, plus the payment events once any
           exist, so a partly paid invoice exposes what is still open. */}
       <DetailSection kicker={t('payment_section')}>
+        {shell === 'v2' && lifecycle?.batch && (
+          <DefRow label={t('payment_file_label')}>
+            <Link href="/supplier-invoices/payment-files" className="hover:underline underline-offset-4">
+              {t('payment_file_created', { date: formatDate(lifecycle.batch.created_at) })}
+            </Link>
+          </DefRow>
+        )}
+        {shell === 'v2' && showBankEntered && (
+          <DefRow label={t('bank_entered_label')}>
+            <label className={cn('inline-flex select-none items-center gap-2', canWrite && !isProcessing ? 'cursor-pointer' : 'cursor-default', processingAction === 'bank_entered' && 'opacity-50')}>
+              <Checkbox
+                checked={!!invoice.bank_entered_at}
+                disabled={isProcessing || !canWrite}
+                onCheckedChange={(value) => void handleBankEntered(value === true)}
+                aria-label={t('bank_entered_aria')}
+              />
+              <span className="text-muted-foreground">
+                {invoice.bank_entered_at ? formatDate(invoice.bank_entered_at) : t('bank_entered_hint')}
+              </span>
+            </label>
+          </DefRow>
+        )}
         <DefRow label={t('paid_label')}>
           <span className="tabular-nums">{formatCurrency(invoice.paid_amount, invoice.currency)}</span>
         </DefRow>
@@ -1264,6 +1305,20 @@ export default function SupplierInvoiceDetailPage() {
         </DetailSection>
       )}
 
+      {isFileDialogOpen && (
+        <PaymentFileDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setIsFileDialogOpen(false)
+          }}
+          invoiceIds={[invoice.id]}
+          invoiceLabelById={new Map([[invoice.id, title]])}
+          onCreated={() => {
+            setIsFileDialogOpen(false)
+            void mutateLifecycle()
+          }}
+        />
+      )}
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
       {/* Pay Dialog */}
