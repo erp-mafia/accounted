@@ -217,7 +217,7 @@ export default function SupplierDetailPage() {
         <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="page-header-lead min-w-0">
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>
-            <p className="page-header-desc mt-1 text-sm text-muted-foreground">
+            <p className="page-header-meta mt-1 text-sm text-muted-foreground">
               {supplierTypeLabels[supplier.supplier_type]}
               {supplier.org_number ? ` · ${t('kicker_org', { number: formatOrgNumber(supplier.org_number) })}` : ''}
             </p>

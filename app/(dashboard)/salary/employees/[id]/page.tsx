@@ -313,7 +313,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
               {employee.first_name} {employee.last_name}
             </h1>
-            <p className="page-header-desc mt-1 text-sm text-muted-foreground">
+            <p className="page-header-meta mt-1 text-sm text-muted-foreground">
               <span className="tabular-nums">{employee.personnummer_masked}</span>
               {' · '}
               {t(EMPLOYMENT_LABEL_KEYS[employee.employment_type])}
