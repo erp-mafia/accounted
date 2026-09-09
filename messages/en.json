@@ -2608,7 +2608,14 @@
     "confidence_label": "Confidence",
     "last_seen_label": "Last used",
     "aliases_label": "Aliases",
-    "delete_button": "Delete template"
+    "delete_button": "Delete template",
+    "rename_button": "Rename",
+    "rename_label": "New name",
+    "rename_save": "Save",
+    "rename_cancel": "Cancel",
+    "toast_renamed": "Template renamed",
+    "toast_rename_failed": "Could not rename the template",
+    "toast_duplicate_name": "A template with this name already exists"
   },
   "settings_tax_form": {
     "entity_form_heading": "Company form",

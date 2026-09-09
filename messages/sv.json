@@ -2608,7 +2608,14 @@
     "confidence_label": "Säkerhet",
     "last_seen_label": "Senast använd",
     "aliases_label": "Alias",
-    "delete_button": "Ta bort mall"
+    "delete_button": "Ta bort mall",
+    "rename_button": "Byt namn",
+    "rename_label": "Nytt namn",
+    "rename_save": "Spara",
+    "rename_cancel": "Avbryt",
+    "toast_renamed": "Mallen döptes om",
+    "toast_rename_failed": "Kunde inte byta namn på mallen",
+    "toast_duplicate_name": "Det finns redan en mall med det här namnet"
   },
   "settings_tax_form": {
     "entity_form_heading": "Företagsform",

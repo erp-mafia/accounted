@@ -520,6 +520,9 @@ describe('counterparty-templates', () => {
       const chain = {
         select: () => chain,
         eq: () => chain,
+        contains: () => chain,
+        order: () => chain,
+        limit: () => chain,
         maybeSingle: async () => ({ data: null, error: null }),
         insert: async (payload: Record<string, unknown>) => {
           inserted.push(payload)
@@ -710,15 +713,45 @@ describe('counterparty-templates', () => {
       expect(supabase.from).toHaveBeenCalledWith('categorization_templates')
     })
 
-    it('does DB lookup when existingTemplate is undefined', async () => {
+    it('does DB lookup by name, then by alias, when existingTemplate is undefined', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
-      enqueue({ data: null }) // select returns null
+      enqueue({ data: null }) // select by name returns null
+      enqueue({ data: null }) // select by alias returns null
       enqueue({ data: null }) // insert
 
       await insertOrUpdateTemplate(supabase as never, 'user-1', baseParams)
 
-      // Two calls: select + insert
-      expect(supabase.from).toHaveBeenCalledTimes(2)
+      // Three calls: select by name + select by alias + insert
+      expect(supabase.from).toHaveBeenCalledTimes(3)
+    })
+
+    it('re-approval lands on a renamed template through its alias, not as a new row', async () => {
+      // A user rename moves the bank-derived key into counterparty_aliases.
+      // The learn path derives its key from the bank description, so without
+      // the alias leg every later approval would insert a duplicate.
+      const { supabase, enqueue, findCall, calls } = createQueuedMockSupabase()
+      const renamed = makeCategorizationTemplate({
+        id: 'renamed-1',
+        counterparty_name: 'spotify',
+        counterparty_aliases: ['spotify ab stockholm 4471 kortköp', 'spotify ab stockholm 4471'],
+        debit_account: '6200',
+        credit_account: '1930',
+        occurrence_count: 5,
+      })
+      enqueue({ data: null }) // select by name: nothing under the old key
+      enqueue({ data: renamed }) // select by alias: the renamed row
+      enqueue({ data: null }) // update
+
+      await insertOrUpdateTemplate(supabase as never, 'user-1', {
+        ...baseParams,
+        counterpartyName: 'spotify ab stockholm 4471',
+      })
+
+      const aliasFilter = findCall('categorization_templates', 'contains')
+      expect(aliasFilter).toEqual(['counterparty_aliases', ['spotify ab stockholm 4471']])
+      expect(calls.some((c) => c.method === 'insert')).toBe(false)
+      const payload = findCall('categorization_templates', 'update')?.[0] as { occurrence_count: number }
+      expect(payload.occurrence_count).toBe(6)
     })
   })
 

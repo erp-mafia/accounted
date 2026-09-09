@@ -753,6 +753,38 @@ export interface TemplateUpsertParams {
 }
 
 /**
+ * Find the template that owns a learned key: by counterparty_name first,
+ * then by alias. A user rename moves the old key into counterparty_aliases
+ * (PATCH /api/settings/counterparty-templates), so the alias leg is what
+ * keeps re-approvals landing on the renamed row instead of inserting a
+ * second template under the bank-derived name.
+ */
+async function findTemplateByKey(
+  supabase: SupabaseClient,
+  companyId: string,
+  counterpartyName: string
+): Promise<CategorizationTemplate | null> {
+  const { data: byName } = await supabase
+    .from('categorization_templates')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('counterparty_name', counterpartyName)
+    .maybeSingle()
+  if (byName) return byName as CategorizationTemplate
+
+  const { data: byAlias } = await supabase
+    .from('categorization_templates')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .contains('counterparty_aliases', [counterpartyName])
+    .order('occurrence_count', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return (byAlias as CategorizationTemplate | null) ?? null
+}
+
+/**
  * Low-level insert-or-update for a counterparty template.
  *
  * - existingTemplate undefined → DB lookup by (companyId, counterpartyName)
@@ -781,13 +813,7 @@ export async function insertOrUpdateTemplate(
   // Resolve existing template
   let existing: CategorizationTemplate | null = null
   if (existingTemplate === undefined) {
-    const { data } = await supabase
-      .from('categorization_templates')
-      .select('*')
-      .eq('company_id', companyId)
-      .eq('counterparty_name', params.counterpartyName)
-      .maybeSingle()
-    existing = data as CategorizationTemplate | null
+    existing = await findTemplateByKey(supabase, companyId, params.counterpartyName)
   } else {
     existing = existingTemplate
   }
@@ -1370,10 +1396,18 @@ export async function populateTemplatesFromSieVouchers(
     .eq('company_id', companyId)
     .eq('is_active', true)
 
+  // Keyed by counterparty_name, then by alias: a renamed template keeps its
+  // old bank-derived key as an alias (see findTemplateByKey), and a SIE
+  // re-import must update that row rather than insert a duplicate.
   const templateMap = new Map<string, CategorizationTemplate>()
   if (existingTemplates) {
     for (const t of existingTemplates) {
       templateMap.set(t.counterparty_name, t as CategorizationTemplate)
+    }
+    for (const t of existingTemplates) {
+      for (const alias of (t.counterparty_aliases as string[] | null) || []) {
+        if (!templateMap.has(alias)) templateMap.set(alias, t as CategorizationTemplate)
+      }
     }
   }
 
