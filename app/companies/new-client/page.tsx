@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
 import OnboardingJourney from '@/components/onboarding/journey/OnboardingJourney'
+import { isScbConfigured } from '@/lib/parties/scb/config'
 import { getByraMembership } from '@/lib/clients/fetch-client-overview'
 
 export const dynamic = 'force-dynamic'
@@ -36,7 +37,7 @@ export default async function NewClientCompanyPage() {
   return (
     <div className="min-h-screen bg-background">
       <OnboardingBackdrop />
-      <OnboardingJourney teamId={membership.teamId} mode="add" />
+      <OnboardingJourney teamId={membership.teamId} mode="add" companySearchEnabled={isScbConfigured()} />
     </div>
   )
 }

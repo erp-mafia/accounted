@@ -1,5 +1,5 @@
 import { COMPANY_SEARCH_MIN_CHARS } from './types'
-import type { CompanyLookupResult, CompanySearchHit } from './types'
+import type { CompanyLookupResult, CompanySearchHit, CompanySuggestion } from './types'
 import { normalizeOrgNumber } from './normalize-org-number'
 
 /**
@@ -119,6 +119,65 @@ export async function fetchCompanySearch(
   }
 
   return mapFailure(res)
+}
+
+export type CompanySuggestOutcome =
+  | { status: 'found'; suggestions: CompanySuggestion[]; truncated: boolean }
+  | { status: 'empty'; truncated: boolean }
+  | { status: 'disabled' }
+  | { status: 'error' }
+  | { status: 'aborted' }
+
+/**
+ * Search-as-you-type for the journey's orgnr field: SCB's företagsregister
+ * via the core route, never TIC. Free, so the caller may fire it per
+ * debounced keystroke; the AbortSignal drops the superseded request. A
+ * 503 (SCB not configured in this environment) is `disabled` so the field
+ * quietly stays an orgnr-or-Enter field; every other failure is `error`
+ * and the picker just does not appear. Never throws.
+ */
+export async function fetchCompanySuggestions(
+  query: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<CompanySuggestOutcome> {
+  const trimmed = query.trim()
+  if (trimmed.length < COMPANY_SEARCH_MIN_CHARS) return { status: 'disabled' }
+
+  let res: Response
+  try {
+    res = await fetch(`/api/company/search?q=${encodeURIComponent(trimmed)}`, { signal: opts.signal })
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') return { status: 'aborted' }
+    return { status: 'error' }
+  }
+  if (opts.signal?.aborted) return { status: 'aborted' }
+
+  if (res.ok) {
+    try {
+      const { data } = (await res.json()) as {
+        data: { suggestions: CompanySuggestion[]; truncated: boolean }
+      }
+      if (!data || !Array.isArray(data.suggestions)) return { status: 'error' }
+      const suggestions = data.suggestions.filter(
+        (h) => h && typeof h.orgNumber === 'string' && typeof h.name === 'string',
+      )
+      const truncated = data.truncated === true
+      return suggestions.length > 0 ? { status: 'found', suggestions, truncated } : { status: 'empty', truncated }
+    } catch {
+      return { status: 'error' }
+    }
+  }
+  // Only the route's own "no SCB credentials here" switches the picker off
+  // for the session; an infrastructure 503 is transient like any other.
+  if (res.status === 503) {
+    try {
+      const body = (await res.json()) as { error?: { code?: unknown } }
+      if (body?.error?.code === 'SCB_NOT_CONFIGURED') return { status: 'disabled' }
+    } catch {
+      // Non-JSON 503: transient.
+    }
+  }
+  return { status: 'error' }
 }
 
 /** Shared non-ok mapping: dispatcher misses degrade silently, only the TIC
