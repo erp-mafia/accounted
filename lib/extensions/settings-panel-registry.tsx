@@ -25,6 +25,9 @@ const SETTINGS_PANELS: Record<string, ComponentType> = {
   shopify: dynamic(
     () => import('@/extensions/general/shopify/components/ShopifySettingsPanel')
   ),
+  zettle: dynamic(
+    () => import('@/extensions/general/zettle/components/ZettleSettingsPanel')
+  ),
 }
 
 /**
