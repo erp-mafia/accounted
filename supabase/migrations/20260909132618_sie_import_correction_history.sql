@@ -76,6 +76,8 @@ COMMENT ON COLUMN public.journal_entry_rattelse_log.external_signature IS
 -- verifikat page keys on id and interleaves on sort_order, so imported rows
 -- get a fresh id and the same field set. Amounts are what the caller sends
 -- (already rounded to öre by the importer); currency is the import's SEK.
+-- `signature` is the SIE `sign` of that row: who removed/added it in the
+-- source system, kept per line so distinct correctors are not collapsed.
 -- VOLATILE because of gen_random_uuid().
 
 CREATE OR REPLACE FUNCTION public.sie_correction_snapshots(
@@ -97,7 +99,8 @@ AS $$
         'credit_amount', round(COALESCE((r.value->>'credit_amount')::numeric, 0), 2),
         'currency', 'SEK',
         'line_description', NULLIF(btrim(COALESCE(r.value->>'line_description', '')), ''),
-        'sort_order', COALESCE((r.value->>'sort_order')::integer, r.ord::integer - 1)
+        'sort_order', COALESCE((r.value->>'sort_order')::integer, r.ord::integer - 1),
+        'signature', NULLIF(btrim(COALESCE(r.value->>'signature', '')), '')
       )
       ORDER BY r.ord
     ),
@@ -141,6 +144,7 @@ DECLARE
   v_corrections jsonb;
   v_struck jsonb;
   v_added jsonb;
+  v_sie_import_id uuid;
   v_jwt_role text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
 BEGIN
   IF p_entries IS NULL OR jsonb_typeof(p_entries) <> 'array' THEN
@@ -321,6 +325,20 @@ BEGIN
                        THEN v_corrections->'added' ELSE '[]'::jsonb END;
 
       IF jsonb_array_length(v_struck) > 0 OR jsonb_array_length(v_added) > 0 THEN
+        -- Provenance is caller-supplied JSON, so verify it before it becomes
+        -- WORM audit trail: the import id must be this company's own
+        -- sie_imports row (a foreign or fabricated id fails closed, never
+        -- silently nulled). A malformed uuid string raises on the cast, which
+        -- rolls the whole import back like every other payload defect.
+        v_sie_import_id := NULLIF(btrim(COALESCE(v_entry->>'sieImportId', '')), '')::uuid;
+        IF v_sie_import_id IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM public.sie_imports si
+          WHERE si.id = v_sie_import_id AND si.company_id = p_company_id
+        ) THEN
+          RAISE EXCEPTION 'sie import % does not belong to company %', v_sie_import_id, p_company_id
+            USING ERRCODE = '42501';
+        END IF;
+
         INSERT INTO public.journal_entry_rattelse_log (
           company_id,
           journal_entry_id,
@@ -340,11 +358,7 @@ BEGIN
           public.sie_correction_snapshots(v_entry_id, v_added),
           NULL,
           'sie_import',
-          CASE
-            WHEN v_entry ? 'sieImportId' AND NULLIF(v_entry->>'sieImportId', '') IS NOT NULL
-            THEN (v_entry->>'sieImportId')::uuid
-            ELSE NULL
-          END,
+          v_sie_import_id,
           NULLIF(btrim(COALESCE(v_corrections->>'signature', '')), '')
         );
       END IF;

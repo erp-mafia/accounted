@@ -405,6 +405,7 @@ describe('rattelseEvent', () => {
     expect(ev.details[0]).toContain('Strukna rader i källsystemet (1): 5010 D 1')
     expect(ev.details[1]).toContain('Tillagda rader i källsystemet (1): 6540 D 1')
     expect(ev.details[2]).toBe('Signatur i källsystemet: EL')
+    expect(ev.details[3]).toContain('registrering vid SIE-import')
   })
 
   it('describes metadata changes', () => {

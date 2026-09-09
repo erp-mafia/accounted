@@ -730,6 +730,7 @@ export function rattelseEvent(
     if (struck.length > 0) details.push(`Strukna rader i källsystemet (${struck.length}): ${struck.map(describeLine).join('; ')}`)
     if (added.length > 0) details.push(`Tillagda rader i källsystemet (${added.length}): ${added.map(describeLine).join('; ')}`)
     if (row.external_signature) details.push(`Signatur i källsystemet: ${row.external_signature}`)
+    details.push('Tidpunkt = registrering vid SIE-import; rättelsedatum saknas i SIE-formatet')
     return {
       id: `rattelse:${row.id}`,
       occurred_at: toIso(row.created_at)!,

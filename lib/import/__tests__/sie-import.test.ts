@@ -1260,8 +1260,8 @@ describe('importVouchers: per-voucher series preservation', () => {
     // stamped with the import id and the source-system signature.
     expect(entries[1].sieImportId).toBe('import-42')
     expect(entries[1].corrections).toEqual({
-      struck: [{ account_number: '1510', debit_amount: 1200, credit_amount: 0, line_description: 'Fel konto', sort_order: 0 }],
-      added: [{ account_number: '3001', debit_amount: 1200, credit_amount: 0, line_description: null, sort_order: 0 }],
+      struck: [{ account_number: '1510', debit_amount: 1200, credit_amount: 0, line_description: 'Fel konto', sort_order: 0, signature: 'EL' }],
+      added: [{ account_number: '3001', debit_amount: 1200, credit_amount: 0, line_description: null, sort_order: 0, signature: 'EL' }],
       signature: 'EL',
     })
   })
@@ -1284,7 +1284,7 @@ describe('importVouchers: per-voucher series preservation', () => {
     expect(result.created).toBe(1)
     const entries = rpcCalls.find((c) => c.name === 'import_sie_journal_entries')!.args.p_entries as Array<Record<string, unknown>>
     expect(entries[0].corrections).toEqual({
-      struck: [{ account_number: '9999', debit_amount: 0, credit_amount: 1000, line_description: null, sort_order: 0 }],
+      struck: [{ account_number: '9999', debit_amount: 0, credit_amount: 1000, line_description: null, sort_order: 0, signature: null }],
       added: [],
       signature: null,
     })

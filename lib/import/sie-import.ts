@@ -1361,6 +1361,8 @@ export async function importVouchers(
     credit_amount: number
     line_description: string | null
     sort_order: number
+    /** SIE `sign` of this row: who removed/added it in the source system. */
+    signature: string | null
   }
 
   // History keeps the source account when it is unmapped: the row is audit
@@ -1376,6 +1378,7 @@ export async function importVouchers(
         credit_amount: line.amount < 0 ? Math.round(Math.abs(line.amount) * 100) / 100 : 0,
         line_description: line.description || null,
         sort_order: index,
+        signature: line.signature?.trim() || null,
       }))
 
   const preparedVouchers: PreparedVoucher[] = []
@@ -1550,7 +1553,8 @@ export async function importVouchers(
       const added = toCorrectionSnapshots(voucher.corrections.added)
       if (struck.length > 0 || added.length > 0) {
         // SIE 4B: `sign` on #BTRANS/#RTRANS names who removed or added the row.
-        // One signature per rättelse row in the log; the first one wins.
+        // Each snapshot keeps its own; this voucher-level summary is the first
+        // one, for the log row's external_signature column.
         const signature =
           [...voucher.corrections.struck, ...voucher.corrections.added]
             .map((line) => line.signature?.trim())

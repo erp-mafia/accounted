@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
 import { seedCompany } from '@/tests/pg/fixtures'
 
+// A completed sie_imports row the correction history can point at.
+async function insertSieImport(companyId: string, userId: string): Promise<string> {
+  const { rows } = await getPool().query<{ id: string }>(
+    `INSERT INTO public.sie_imports (company_id, user_id, filename, file_hash, sie_type, status)
+     VALUES ($1, $2, 'fixture.se', md5(gen_random_uuid()::text), 4, 'completed')
+     RETURNING id`,
+    [companyId, userId],
+  )
+  return rows[0]!.id
+}
+
 describe('import_sie_journal_entries RPC', () => {
   it('rolls back the journal entry header when a line insert fails', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
@@ -193,7 +204,7 @@ describe('import_sie_journal_entries RPC', () => {
   // source='sie_import'. The ledger insert is unchanged.
   it('writes source-system correction history to the rättelselogg without touching the lines', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
-    const sieImportId = '3f9c1d2e-8a4b-4c6d-9e0f-1a2b3c4d5e6f'
+    const sieImportId = await insertSieImport(companyId, userId)
 
     const payload = [
       {
@@ -207,10 +218,10 @@ describe('import_sie_journal_entries RPC', () => {
         sieImportId,
         corrections: {
           struck: [
-            { account_number: '5010', debit_amount: 1200, credit_amount: 0, line_description: 'Lokalhyra', sort_order: 0 },
+            { account_number: '5010', debit_amount: 1200, credit_amount: 0, line_description: 'Lokalhyra', sort_order: 0, signature: 'EL' },
           ],
           added: [
-            { account_number: '6540', debit_amount: 1200, credit_amount: 0, line_description: 'IT', sort_order: 0 },
+            { account_number: '6540', debit_amount: 1200, credit_amount: 0, line_description: 'IT', sort_order: 0, signature: 'AB' },
           ],
           signature: 'EL',
         },
@@ -290,14 +301,63 @@ describe('import_sie_journal_entries RPC', () => {
       line_description: 'Lokalhyra',
       sort_order: 0,
       currency: 'SEK',
+      signature: 'EL',
     })
     expect(typeof log.struck_lines[0]!.id).toBe('string')
-    expect(log.added_lines[0]).toMatchObject({ account_number: '6540', debit_amount: 1200 })
+    // Per-line signatures survive: the added row names a different corrector.
+    expect(log.added_lines[0]).toMatchObject({ account_number: '6540', debit_amount: 1200, signature: 'AB' })
 
     // The log stays WORM for imported rows too.
     await expect(
       getPool().query(`DELETE FROM public.journal_entry_rattelse_log WHERE company_id = $1`, [companyId]),
     ).rejects.toThrow(/oföränderlig/)
+  })
+
+  it('rejects correction history whose sie_import_id belongs to another company', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const other = await seedCompany()
+    const foreignImportId = await insertSieImport(other.companyId, other.userId)
+
+    const payload = [
+      {
+        sourceId: 'A1',
+        series: 'A',
+        date: '2026-03-01',
+        description: 'Foreign provenance',
+        sourceSeries: 'A',
+        sourceNumber: 1,
+        sourceType: 'import',
+        sieImportId: foreignImportId,
+        corrections: {
+          struck: [{ account_number: '5010', debit_amount: 100, credit_amount: 0, line_description: null, sort_order: 0 }],
+          added: [],
+          signature: null,
+        },
+        lines: [
+          { account_number: '6540', debit_amount: 100, credit_amount: 0, currency: 'SEK', line_description: null, sort_order: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 100, currency: 'SEK', line_description: null, sort_order: 1 },
+        ],
+      },
+    ]
+
+    await expect(
+      getPool().query(
+        `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+        [companyId, userId, fiscalPeriodId, JSON.stringify(payload)],
+      ),
+    ).rejects.toThrow(/does not belong to company/)
+
+    // Fail closed: the whole import rolled back, nothing posted, no log row.
+    const posted = await getPool().query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM public.journal_entries WHERE company_id = $1`,
+      [companyId],
+    )
+    expect(posted.rows[0]!.count).toBe('0')
+    const logs = await getPool().query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM public.journal_entry_rattelse_log WHERE company_id = $1`,
+      [companyId],
+    )
+    expect(logs.rows[0]!.count).toBe('0')
   })
 
   it('rejects an imported history row that claims an actor (provenance check)', async () => {
