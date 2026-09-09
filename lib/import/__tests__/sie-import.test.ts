@@ -1220,6 +1220,78 @@ describe('importVouchers: per-voucher series preservation', () => {
     expect((importCalls[0].args.p_entries as Array<{ series: string }>).map((e) => e.series)).toEqual(['B', 'B', 'C', 'V'])
   })
 
+  it('sends #BTRANS/#RTRANS history as corrections on the RPC payload, never as lines (#2427)', async () => {
+    const { supabase, rpcCalls } = buildCapturingSupabase()
+    const corrected = {
+      ...makeVoucher('A', 7, [
+        { account: '3001', amount: 1200 },
+        { account: '1510', amount: -1200 },
+      ]),
+      corrections: {
+        struck: [{ account: '1510', amount: 1200, description: 'Fel konto', signature: 'EL' }],
+        added: [{ account: '3001', amount: 1200, signature: 'EL' }],
+      },
+    }
+    const parsed = makeParsedFile({ vouchers: [makeVoucher('A', 6), corrected] })
+
+    const result = await importVouchers(
+      supabase,
+      'company-1',
+      'user-1',
+      'period-1',
+      parsed,
+      baseMap,
+      'A',
+      'import-42',
+    )
+
+    expect(result.created).toBe(2)
+    const importCalls = rpcCalls.filter((c) => c.name === 'import_sie_journal_entries')
+    expect(importCalls).toHaveLength(1)
+    const entries = importCalls[0].args.p_entries as Array<Record<string, unknown>>
+
+    // The plain voucher carries no history keys at all.
+    expect(entries[0]).not.toHaveProperty('corrections')
+    expect(entries[0]).not.toHaveProperty('sieImportId')
+
+    // The corrected voucher: lines are the #TRANS rows only ...
+    expect(entries[1].lines).toHaveLength(2)
+    // ... and the history rides alongside, debit/credit split like lines,
+    // stamped with the import id and the source-system signature.
+    expect(entries[1].sieImportId).toBe('import-42')
+    expect(entries[1].corrections).toEqual({
+      struck: [{ account_number: '1510', debit_amount: 1200, credit_amount: 0, line_description: 'Fel konto', sort_order: 0 }],
+      added: [{ account_number: '3001', debit_amount: 1200, credit_amount: 0, line_description: null, sort_order: 0 }],
+      signature: 'EL',
+    })
+  })
+
+  it('keeps the source account on history rows whose account is unmapped', async () => {
+    const { supabase, rpcCalls } = buildCapturingSupabase()
+    const corrected = {
+      ...makeVoucher('A', 1),
+      corrections: {
+        struck: [{ account: '9999', amount: -1000 }],
+        added: [],
+      },
+    }
+    const parsed = makeParsedFile({ vouchers: [corrected] })
+
+    const result = await importVouchers(supabase, 'company-1', 'user-1', 'period-1', parsed, baseMap, 'A')
+
+    // The voucher itself (mapped #TRANS rows) still imports; only history
+    // references the unmapped account, verbatim, as the source showed it.
+    expect(result.created).toBe(1)
+    const entries = rpcCalls.find((c) => c.name === 'import_sie_journal_entries')!.args.p_entries as Array<Record<string, unknown>>
+    expect(entries[0].corrections).toEqual({
+      struck: [{ account_number: '9999', debit_amount: 0, credit_amount: 1000, line_description: null, sort_order: 0 }],
+      added: [],
+      signature: null,
+    })
+    // No import record in this call: the id is null, not absent.
+    expect(entries[0].sieImportId).toBeNull()
+  })
+
   it('falls back to defaultSeries when source voucher has empty series (SIE4I)', async () => {
     const { supabase, journalEntryInserts } = buildCapturingSupabase()
     const parsed = makeParsedFile({

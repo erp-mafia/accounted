@@ -375,6 +375,38 @@ describe('rattelseEvent', () => {
     expect(ev.details[1]).toContain('6550 D 1')
   })
 
+  it('labels imported SIE correction history apart from a rättelse made here (#2427)', () => {
+    const ev = rattelseEvent(
+      {
+        id: 'r3',
+        journal_entry_id: 'entry-1',
+        rattelse_type: 'lines',
+        old_description: null,
+        new_description: null,
+        old_entry_date: null,
+        new_entry_date: null,
+        struck_lines: [{ account_number: '5010', debit_amount: 1200, credit_amount: 0 }],
+        added_lines: [{ account_number: '6540', debit_amount: 1200, credit_amount: 0 }],
+        actor: null,
+        created_at: '2026-03-11T08:00:00Z',
+        source: 'sie_import',
+        sie_import_id: 'import-1',
+        external_signature: 'EL',
+      },
+      new Map([['entry-1', baseEntry]]),
+    )
+    expect(ev).toMatchObject({
+      code: 'journal_entry.imported_correction_history',
+      event: 'Rättelsehistorik från källsystemet (SIE-import)',
+      object: 'A12',
+      actor: { type: 'system', user_id: null, actor_label: 'SIE-import' },
+      source: 'rattelse_log',
+    })
+    expect(ev.details[0]).toContain('Strukna rader i källsystemet (1): 5010 D 1')
+    expect(ev.details[1]).toContain('Tillagda rader i källsystemet (1): 6540 D 1')
+    expect(ev.details[2]).toBe('Signatur i källsystemet: EL')
+  })
+
   it('describes metadata changes', () => {
     const ev = rattelseEvent(
       {

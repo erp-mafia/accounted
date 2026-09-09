@@ -12,6 +12,9 @@ import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik
  * the struck_lines snapshots here. Each row also carries `actor_label`, the
  * actor's profile label, so the page can say who struck a line without the
  * reader opening a log panel; the raw `actor` uuid is kept unchanged.
+ * Rows with source='sie_import' are correction history carried by the
+ * imported SIE file (#BTRANS/#RTRANS, #2427): no actor, `external_signature`
+ * names who corrected in the source system.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.rattelse_log',
@@ -36,7 +39,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data, error } = await supabase
       .from('journal_entry_rattelse_log')
-      .select('id, rattelse_type, old_description, new_description, old_entry_date, new_entry_date, struck_lines, added_lines, actor, created_at')
+      .select('id, rattelse_type, old_description, new_description, old_entry_date, new_entry_date, struck_lines, added_lines, actor, created_at, source, external_signature')
       .eq('company_id', companyId)
       .eq('journal_entry_id', id)
       .order('created_at', { ascending: false })
