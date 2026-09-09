@@ -20,6 +20,40 @@ import { SEK_TX_COUNT, EUR_TRANSACTIONS } from "../fakes/enable-banking-data";
 /** Everything the consent imported, derived so a fixture change cannot rot it. */
 const TOTAL_TX = SEK_TX_COUNT + EUR_TRANSACTIONS.length;
 
+type Browser = Awaited<ReturnType<Parameters<Parameters<typeof env.test>[2]>[0]["browser"]>>;
+
+/**
+ * Shell v2 books from the row: the category chip opens the template picker
+ * as a popover anchored to the row, and choosing a template opens the review.
+ * The row's own "Bokför" pill skips the picker when a proposal exists, so
+ * the chip is the deterministic way to a named template. Returns the review
+ * dialog, which the caller reads before it books.
+ */
+export async function chooseTemplate(b: Browser, rowText: string, search: string, template: RegExp, account: string) {
+  const row = b.locator("tr").filter({ hasText: rowText }).first();
+  // Gate on the row before reaching into it: the page header renders first,
+  // and under load the fetch behind the table takes a while.
+  await expect(row).toBeVisible({ timeout: 45000 });
+  // The chip reads "Välj kategori" until something is chosen and the
+  // proposal's label when there is one, so it is found by shape, not text.
+  await row.locator('button[class*="max-w-[16rem]"]').click({ timeout: 20000 });
+  const picker = b.getByRole("dialog").last();
+  await picker.getByPlaceholder(/Sök mall/).fill(search);
+  // A template row ends with its account; a group heading does not, so the
+  // account keeps the click off a heading that happens to share the word.
+  await picker.getByRole("button", { name: template }).filter({ hasText: account }).first().click();
+  return reviewDialog(b);
+}
+
+/** The review before the booking: the dialog titled "Granska bokföring". */
+export async function reviewDialog(b: Browser) {
+  const review = b.getByRole("dialog").filter({ hasText: "Granska bokföring" });
+  // Nothing is posted before the user has seen the entry. That review step
+  // is what makes the booking a decision rather than a side effect.
+  await expect(review.getByText("Granska verifikationen innan du bokför")).toBeVisible();
+  return review;
+}
+
 export const bookTransaction = env.test(
   "book a bank transaction into the ledger",
   { dependsOn: connectBank },
@@ -30,31 +64,14 @@ export const bookTransaction = env.test(
 
     // The skattekonto payment: a real Swedish operation with no VAT, so the
     // expected entry is exactly two lines and there is nothing to argue about.
-    const row = b
-      .locator("tr")
-      .filter({ hasText: "Inbetalning skattekonto 16556677-8899" })
-      .first();
-    // Gate on the row before reaching into it: the page header renders first,
-    // and under load the fetch behind the table takes a while.
-    await expect(row).toBeVisible({ timeout: 45000 });
-    await row
-      .getByRole("button", { name: "Bokför", exact: true })
-      .click({ timeout: 20000 });
-
     // The template picker offers BAS-mapped templates. Insättning skattekonto
     // is D 1630 / K 1930.
-    await b
-      .getByRole("button", { name: /Insättning skattekonto/ })
-      .first()
-      .click();
-
-    // Nothing is posted before the user has seen the entry. That review step
-    // is what makes the booking a decision rather than a side effect.
-    const review = b.getByRole("dialog");
-    await expect(b.getByText("Granska verifikationen innan du bokför")).toBeVisible();
+    const review = await chooseTemplate(b, "Inbetalning skattekonto 16556677-8899", "skattekonto", /Insättning skattekonto/, "1630");
     await expect(review).toContainText("D: 1630 Skattekonto → K: 1930 Företagskonto");
 
-    await review.getByRole("button", { name: "Bokför", exact: true }).click();
+    // The button says "Bokför utan underlag" when no receipt is attached:
+    // still the booking, with the missing underlag named rather than hidden.
+    await review.getByRole("button", { name: /^Bokför/ }).click();
 
     // Read this booking's own verifikat back once it exists. The POST is in
     // flight when the click resolves, so poll rather than race it.
@@ -80,9 +97,11 @@ export const bookTransaction = env.test(
 
     expect(lines).toHaveLength(2);
     expect(lines[0]?.voucher_series).toBe("A");
-    // A2, not A1: the invoice took the first number. Sequential numbering
-    // across different sources is the property under test.
-    expect(lines[0]?.voucher_number).toBe(2);
+    // A1: the invoice booked in its own series (B1, standard
+    // verifikationsserier since #2336), so this is the first entry in A.
+    // Sequential numbering within a series is the property under test; the
+    // series split itself is asserted by the invoice and supplier tests.
+    expect(lines[0]?.voucher_number).toBe(1);
     // Posted, not draft: a draft would leave the transaction looking booked
     // while nothing had actually entered the ledger.
     expect(lines[0]?.status).toBe("posted");
@@ -129,13 +148,8 @@ export const lockedPeriodRefusesBooking = env.test(
     await ctx.svc.supabase.sql`update public.fiscal_periods set locked_at = now()`;
 
     await b.goto(`${APP_URL}/transactions`);
-    const row = b.locator("tr").filter({ hasText: "Frakt" }).first();
-    await row.getByRole("button", { name: "Bokför", exact: true }).click();
-    await b
-      .getByRole("button", { name: /Konsulttjänster/ })
-      .first()
-      .click();
-    await b.getByRole("dialog").getByRole("button", { name: "Bokför", exact: true }).click();
+    const review = await chooseTemplate(b, "Frakt", "Konsulttjänster", /Konsulttjänster/, "6550");
+    await review.getByRole("button", { name: /^Bokför/ }).click();
 
     // The user is told, in Swedish, what happened and why. A silent failure
     // here would leave them believing the transaction was booked.

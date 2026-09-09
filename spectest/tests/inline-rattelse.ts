@@ -15,7 +15,7 @@
  * to be edited, which this test checks with the service role: not even a
  * privileged connection may rewrite the audit trail.
  *
- * Forks from the booked bank transaction, A2: 1630 Skattekonto D 43 120 /
+ * Forks from the booked bank transaction, A1: 1630 Skattekonto D 43 120 /
  * 1930 Företagskonto K 43 120. The correction is the everyday one: the wrong
  * template was picked, and the payment was a supplier payment rather than a
  * transfer to the tax account, so the debit moves from 1630 to 2440.
@@ -46,7 +46,7 @@ export const strikeAndReplaceALine = env.test(
     const entryId = entry[0]!.id.unwrap();
     await b.goto(`${APP_URL}/bookkeeping/${entryId}`);
 
-    await expect(b.getByText("Verifikat A2")).toBeVisible({ timeout: 20000 });
+    await expect(b.getByText("Verifikat A1")).toBeVisible({ timeout: 20000 });
 
     // Promoted to a visible button rather than hidden behind the ⋯ menu
     // (#1554). A correction track nobody can find is a correction track that
@@ -117,7 +117,7 @@ export const strikeAndReplaceALine = env.test(
     expect(lines[1]?.account_number).toBe(RIGHT_ACCOUNT);
     expect(lines[1]?.debit).toBe(AMOUNT);
 
-    // Still one verifikat, still A2. This is what separates the inline track
+    // Still one verifikat, still A1. This is what separates the inline track
     // from storno: no new voucher number is consumed, so the series does not
     // grow a pair of entries for a typo.
     const entries = await ctx.svc.supabase.sql<{
@@ -128,7 +128,7 @@ export const strikeAndReplaceALine = env.test(
       select voucher_number, status,
              (select count(*)::int from public.journal_entries) as n
       from public.journal_entries where id = ${entryId}::uuid`;
-    expect(entries[0]?.voucher_number).toBe(2);
+    expect(entries[0]?.voucher_number).toBe(1);
     expect(entries[0]?.status).toBe("posted");
     expect(entries[0]?.n, "no storno pair was created for an inline rättelse").toBe(2);
 
@@ -215,7 +215,7 @@ export const theRattelseIsLoggedAndImmutable = env.test(
     // the person reading the books rather than only to someone with SQL.
     const entry = await ctx.svc.supabase.sql<{ id: string }>`
       select id::text as id from public.journal_entries
-      where voucher_number = 2`;
+      where voucher_series = 'A' and voucher_number = 1`;
     await b.goto(`${APP_URL}/bookkeeping/${entry[0]!.id.unwrap()}`);
     await expect(b.getByText("Rättelsehistorik")).toBeVisible({ timeout: 20000 });
     await expect(b.getByText("Rader strukna och ersatta")).toBeVisible();
@@ -234,7 +234,7 @@ export const inlineRattelseWillNotBreakTheBankLink = env.test(
       select id::text as id from public.journal_entries
       where description = 'Inbetalning skattekonto 16556677-8899'`;
     await b.goto(`${APP_URL}/bookkeeping/${entry[0]!.id.unwrap()}`);
-    await expect(b.getByText("Verifikat A2")).toBeVisible({ timeout: 20000 });
+    await expect(b.getByText("Verifikat A1")).toBeVisible({ timeout: 20000 });
 
     await b.getByRole("button", { name: "Stryk rader i verifikatet" }).click();
     const dialog = b.getByRole("dialog");

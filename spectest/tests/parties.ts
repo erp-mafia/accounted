@@ -176,10 +176,11 @@ export const foreignIsNotSearched = env.test(
 
     // The queue says so on the row itself; no search is offered there.
     const framerRow = b.getByRole("row", { name: /Framer B\.V\./ });
-    await expect(framerRow).toContainText("Utländskt bolag (Nederländerna), finns inte i SCB");
+    // The dense row shows the country as a chip whose title carries the sentence.
+    await expect(framerRow.getByTitle("Utländskt bolag (Nederländerna), finns inte i SCB")).toBeVisible();
     await expect(framerRow.getByRole("button", { name: "Hitta i företagsregistret" })).toHaveCount(0);
     // The Irish one has no legal form in the text; the country word is enough.
-    await expect(b.getByRole("row", { name: /Anthropic Ireland/ })).toContainText("Utländskt bolag (Irland), finns inte i SCB");
+    await expect(b.getByRole("row", { name: /Anthropic Ireland/ }).getByTitle("Utländskt bolag (Irland), finns inte i SCB")).toBeVisible();
 
     // From the dossier the search is still reachable, and it explains instead of searching.
     await b.getByRole("button", { name: "Öppna Framer B.V.", exact: true }).click();
@@ -303,7 +304,7 @@ export const promoteToSuppliers = env.test(
     }
 
     // The queue is empty now, and says so instead of showing a blank table.
-    await expect(b.getByText(/^0 förslag/)).toBeVisible();
+    await expect(b.getByText("Inga förslag just nu")).toBeVisible();
 
     // The supplier page shows what the register knows, where people look
     // for it: legal name, org number, VAT number and the SCB facts under one

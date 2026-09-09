@@ -81,9 +81,11 @@ export const twoRowsSettleTheOneVoucher = env.test(
     // and every bank row in the fixture is dated relative to today, so on the
     // first of a month the left pane is empty and the worksheet has nothing
     // to reconcile.
-    await b.getByRole("button", { name: "Hela året" }).click();
+    // Shell v2: one period pill (aria-label "Period") opens the presets.
+    await b.getByRole("button", { name: "Period" }).click();
+    await b.getByText("Hela året", { exact: true }).click();
     await b.getByRole("button", { name: /^Företagskonto 1930/ }).click();
-    await b.getByRole("tab", { name: "Matcha manuellt" }).click();
+    await b.getByRole("button", { name: "Matcha manuellt" }).click();
 
     // Gate on the worksheet before reaching into it. The two panes are
     // fetched after the tab renders, and under load the checkboxes are not

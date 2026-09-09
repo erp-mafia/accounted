@@ -357,9 +357,11 @@ export const euSaleLandsInRuta39AndTheEuList = env.test(
     // to be listed per buyer in the periodiska sammanställningen, which is
     // reconciled against ruta 39, so the same 15 000 has to appear there under
     // the buyer's VAT number.
+    // Since #2241 the row carries the ISO country code and the VAT number
+    // without its prefix, the way the file to Skatteverket is written.
     await b.goto(`${APP_URL}/reports/periodisk-sammanstallning`);
     await expect(
-      b.getByRole("row", { name: /GERMANY 811234567 15 000/ }),
+      b.getByRole("row", { name: /DE 811234567 15 000/ }),
       "the buyer is listed by country and VAT number, which is what Skatteverket reconciles",
     ).toBeVisible({ timeout: 25000 });
 
@@ -448,21 +450,9 @@ export const theEuListFilesAnIsoCountryCode = env.test(
 );
 
 /**
- * RED ON PURPOSE, pinning #2025.
- *
- * The customer form defaults country to Sweden and never reconciles it against
- * the customer type or the VAT number's prefix, so an "EU-företag" with a
- * German VAT number and country Sweden saves without complaint. The invoice
- * editor then locks the rate to 0 % on that record, because
- * getAvailableVatRates asks only whether the number validated, not where the
- * buyer is. The contradiction surfaces at the periodiska sammanställningen,
- * after the invoice is sent and the verifikat posted.
- *
- * The assertion is deliberately the weakest useful one: the record must not be
- * storable in that state. Where the guard lives, the form or the API, is the
- * fix's business.
- *
- * Delete this comment and keep the test when #2025 is fixed.
+ * #2025: an EU business with land Sverige used to be storable and unlocked a
+ * 0 % invoice that only the periodiska sammanställningen objected to. The
+ * form refuses the combination now, in Swedish, before anything is saved.
  */
 export const euCustomerCannotBeSwedish = env.test(
   "an EU customer cannot be saved with Sweden as its country (#2025)",
@@ -474,27 +464,16 @@ export const euCustomerCannotBeSwedish = env.test(
     // pasted in, country left on its default.
     await createEuCustomer(b, GERMAN_CUSTOMER.name, GERMAN_CUSTOMER.vatNumber, "Sweden");
 
-    // Wait for the save to settle before reading. The company already has one
-    // customer from the invoice test, so two rows means the write landed;
-    // reading straight after the click passes for the wrong reason.
-    //
-    // When the guard lands the save is refused instead, this poll times out,
-    // and the test should be rewritten to assert the refusal the form shows.
-    const saved = await ctx.poll("the save settles", async () => {
-      const rows = await ctx.svc.supabase.sql<{
-        name: string;
-        customer_type: string;
-        country: string | null;
-      }>`
-        select name, customer_type, country from public.customers
-        order by created_at`;
-      return rows.unwrap().length === 2 ? rows : null;
-    });
-
-    expect(
-      saved[1]?.country,
+    // The form says what is wrong and what to do, next to the field.
+    await expect(
+      b.getByText(/Ett EU-företag kan inte ha landet Sverige/),
       "an EU business in Sweden is a contradiction that unlocks a 0 % invoice",
-    ).not.toBe("Sweden");
+    ).toBeVisible();
+
+    // And nothing was saved: still the one customer the invoice test created.
+    const rows = await ctx.svc.supabase.sql<{ n: number }>`
+      select count(*)::int as n from public.customers`;
+    expect(rows[0]?.n).toBe(1);
 
     return ctx.parent;
   },

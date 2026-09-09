@@ -15,6 +15,7 @@
 import { expect } from "@specific.dev/spectest";
 import { env, APP_URL } from "../index";
 import { connectBank } from "./bank";
+import { reviewDialog } from "./booking";
 
 const RESTAURANT = "Kortköp RESTAURANG STRANDV";
 
@@ -25,25 +26,21 @@ export const representationSurfacesItsCap = env.test(
     const b = await ctx.browser();
 
     await b.goto(`${APP_URL}/transactions`);
-    const row = b.locator("tr").filter({ hasText: RESTAURANT }).first();
-    await expect(row).toBeVisible({ timeout: 45000 });
-    await row.getByRole("button", { name: "Bokför", exact: true }).click({
-      timeout: 20000,
-    });
 
     // The merchant category code carries it: mcc 5812 is a restaurant, and
     // the representation template lists 5812 among the codes it answers to.
     // Nothing else about "RESTAURANG STRANDV" would tell the app what kind of
-    // expense this is.
-    await b
-      .getByRole("button", { name: /[Rr]epresentation/ })
-      .first()
-      .click();
+    // expense this is. In shell v2 that proposal sits on the row as its
+    // category chip, and the row's Bokför goes straight to the review with it.
+    const row = b.locator("tr").filter({ hasText: RESTAURANT }).first();
+    await expect(row).toBeVisible({ timeout: 45000 });
+    await expect(row.locator('button[class*="max-w-[16rem]"]')).toHaveText(/[Rr]epresentation/);
+    await row.getByRole("button", { name: "Bokför", exact: true }).click({ timeout: 20000 });
+    const review = await reviewDialog(b);
 
     // The rule, before the booking rather than after it. Both numbers matter
     // and neither is derivable from the amount: 300 kr is the base the VAT
     // may be claimed on, 46 kr the schablon when food and alcohol are mixed.
-    const review = b.getByRole("dialog");
     await expect(
       review,
       "the cap is stated where the decision is made, not filed in a template",

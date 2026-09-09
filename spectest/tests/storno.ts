@@ -22,15 +22,15 @@ export const stornoReversesTheEntry = env.test(
 
     // Straight to the bank booking's verifikat by id. Navigating the list is
     // a different thing that can break, and mixing it in here would make a
-    // storno failure read as a routing failure. Not `limit 1`: A1 is the
-    // invoice, and stornoing that would be a different test.
+    // storno failure read as a routing failure. Not `limit 1`: the invoice
+    // (B1) is also a posted entry, and stornoing that would be a different test.
     const entry = await ctx.svc.supabase.sql<{ id: string }>`
       select id::text as id from public.journal_entries
       where description = 'Inbetalning skattekonto 16556677-8899'`;
     const entryId = entry[0]!.id.unwrap();
     await b.goto(`${APP_URL}/bookkeeping/${entryId}`);
 
-    await expect(b.getByText("Verifikat A2")).toBeVisible({ timeout: 20000 });
+    await expect(b.getByText("Verifikat A1")).toBeVisible({ timeout: 20000 });
 
     await b.getByRole("button", { name: "Fler alternativ" }).click();
     await b.getByRole("menuitem", { name: "Återför (storno)" }).click();
@@ -68,14 +68,14 @@ export const stornoReversesTheEntry = env.test(
 
     // The original survives, marked as reversed and pointing at its storno.
     // A missing row here would mean the entry was deleted, which BFL forbids.
-    expect(lines[0]?.voucher_number).toBe(2);
+    expect(lines[0]?.voucher_number).toBe(1);
     expect(lines[0]?.status).toBe("reversed");
     expect(lines[0]?.was_reversed).toBe(true);
     expect(lines[0]?.is_storno).toBe(false);
 
     // The storno is its own posted verifikat, numbered next in the series,
     // and it points back at what it cancels.
-    expect(lines[2]?.voucher_number).toBe(3);
+    expect(lines[2]?.voucher_number).toBe(2);
     expect(lines[2]?.status).toBe("posted");
     expect(lines[2]?.is_storno).toBe(true);
 
