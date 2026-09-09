@@ -2,7 +2,7 @@
  * Counterpart resolver, the run: for one company, every distinct transaction
  * string without a live alias goes through the ladder and gets one.
  *
- *   pre-pass  ->  document  ->  directory  ->  legal name  ->  model  ->  verify  ->  alias row
+ *   pre-pass  ->  document  ->  booked before  ->  directory  ->  legal name  ->  model  ->  verify  ->  alias row
  *
  * The model sees only what the earlier rungs left, each line with the
  * register parties that resemble it as candidates, so a reading lands on an
@@ -18,10 +18,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { GENERIC_WORDS } from '@/lib/parties/classify'
+import { ledgerKey } from '@/lib/parties/ledger-key'
 import { preclean, type Precleaned } from './preclean'
 import { lookupDirectory, promoteIfShared } from './directory'
 import { readCounterparts, readerAvailable, verifyCounterparts, type ModelReading, type ReaderCandidate, type ReaderLine } from './model-reading'
-import { planAlias, type AliasDecision, type DocumentHit, type IdentityHit, type RegisterMatch } from './plan'
+import { planAlias, type AliasDecision, type DocumentHit, type IdentityHit, type LedgerHit, type RegisterMatch } from './plan'
 
 const log = createLogger('parties.resolver')
 
@@ -75,6 +76,12 @@ interface Group {
   /** Signed sum, so the group's direction is the majority direction. */
   amountNet: number
   currency: string
+  /**
+   * ledger_key() of the text a booking of these rows carries (the bank text,
+   * and the description when the bank rewrote it), so a party whose
+   * vouchers already hold this text is found without a model.
+   */
+  ledgerKeys: string[]
 }
 
 interface PartyRow {
@@ -111,7 +118,8 @@ export function groupStrings(rows: TxRow[]): Map<string, Group> {
     if (raw.length < 2) continue
     const pre = preclean(raw)
     const key = pre.aliasKey
-    const g = groups.get(key) ?? { raw, pre, txIds: [], count: 0, amountAbs: 0, amountNet: 0, currency: r.currency || 'SEK' }
+    const g = groups.get(key) ?? { raw, pre, txIds: [], count: 0, amountAbs: 0, amountNet: 0, currency: r.currency || 'SEK', ledgerKeys: [] }
+    for (const k of [ledgerKey(raw), ledgerKey(r.description)]) if (k && !g.ledgerKeys.includes(k)) g.ledgerKeys.push(k)
     g.txIds.push(r.id)
     g.count += 1
     g.amountAbs += Math.abs(Number(r.amount) || 0)
@@ -229,6 +237,17 @@ async function loadPartyGiros(supabase: SupabaseClient, companyId: string): Prom
   return out
 }
 
+/** Parties by the ledger keys their vouchers carry; a confirmed party wins a shared key. */
+function partyByLedgerKey(parties: PartyRow[]): Map<string, PartyRow> {
+  const m = new Map<string, PartyRow>()
+  for (const p of parties) {
+    for (const k of p.alias_keys ?? []) {
+      if (!m.has(k) || p.status === 'confirmed') m.set(k, p)
+    }
+  }
+  return m
+}
+
 function partyByName(parties: PartyRow[]): Map<string, string> {
   const m = new Map<string, string>()
   for (const p of parties) {
@@ -272,6 +291,7 @@ export async function resolveCompanyCounterparts(supabase: SupabaseClient, compa
     loadPartyGiros(supabase, companyId),
   ])
   const byName = partyByName(parties)
+  const byLedgerKey = partyByLedgerKey(parties)
   const nameById = new Map(parties.map((p) => [p.id, p.display_name]))
 
   // Rungs one to four, per string.
@@ -289,7 +309,9 @@ export async function resolveCompanyCounterparts(supabase: SupabaseClient, compa
       const name = partyId ? nameById.get(partyId) : undefined
       if (partyId && name) identity = { partyId, name }
     }
-    const decision = planAlias({ pre: group.pre, identity, document: doc, directory: dirHit })
+    const booked = group.ledgerKeys.map((k) => byLedgerKey.get(k)).find((p): p is PartyRow => !!p) ?? null
+    const ledger: LedgerHit | null = booked ? { partyId: booked.id, name: booked.display_name, confirmed: booked.status === 'confirmed' } : null
+    const decision = planAlias({ pre: group.pre, identity, document: doc, directory: dirHit, ledger })
     const candidates = candidatesFor(group.pre.text, parties)
     firstPass.set(group.pre.aliasKey, { group, decision, candidates })
     const needsModel = decision.band === 'nil' && decision.source === 'anchor' && (group.pre.label === 'party' || group.pre.label === 'unsure' || group.pre.label === 'authority' || group.pre.label === 'bank' || group.pre.label === 'intermediary')
