@@ -9,6 +9,7 @@ import { ChevronLeft } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ReportBodyLoading, ReportPageLoading } from '@/components/reports/ReportLoading'
+import { REPORT_TOOLBAR_SLOT_ID } from '@/components/reports/ReportExportMenu'
 import { useCompany } from '@/contexts/CompanyContext'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
@@ -143,9 +144,11 @@ function FocusedReportInner({
         />
       )}
 
-      {/* Only when a filter renders: an empty row would still take the
-          stack's gap and push a standalone page's header down. */}
-      {(showRange || showDim) && (
+      {/* v1: only when a filter renders, an empty row would still take the
+          stack's gap. v2: one toolbar row per report, the pickers on the
+          left and the report's Exportera on the right (ReportExportMenu
+          portals into the slot), so no report spends a row on one button. */}
+      {(showRange || showDim || (v2 && !isStandalone)) && (
         <div className={v2 ? 'flex flex-wrap items-center gap-x-6 gap-y-3' : 'contents'}>
           {showRange && selectedPeriodBounds && (
             <ReportDateRange
@@ -156,6 +159,7 @@ function FocusedReportInner({
             />
           )}
           {showDim && <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />}
+          {v2 && !isStandalone && <div id={REPORT_TOOLBAR_SLOT_ID} className="ml-auto flex items-center gap-2" />}
         </div>
       )}
 

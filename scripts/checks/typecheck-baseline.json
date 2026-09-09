@@ -1,5 +1,5 @@
 {
-  "totalErrors": 535,
+  "totalErrors": 533,
   "perFile": {
     "app/api/assets/__tests__/id.test.ts": 9,
     "app/api/auth/email-hook/__tests__/route.test.ts": 1,
@@ -41,7 +41,7 @@
     "app/api/settings/eu-trade-signal/__tests__/route.test.ts": 3,
     "app/api/settings/ku-signal/__tests__/route.test.ts": 4,
     "app/api/settings/rot-rut-signal/__tests__/route.test.ts": 4,
-    "app/api/supplier-invoices/__tests__/route.test.ts": 41,
+    "app/api/supplier-invoices/__tests__/route.test.ts": 39,
     "app/api/supplier-invoices/payment-batches/__tests__/route.test.ts": 12,
     "app/api/tax-assessment-notices/__tests__/route.test.ts": 5,
     "app/api/transactions/bulk-book/__tests__/route.test.ts": 16,
