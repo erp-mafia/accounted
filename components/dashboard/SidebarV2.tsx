@@ -21,6 +21,8 @@ interface SidebarV2Props {
   /** Byrå members inside a company: the pinned route back to the cockpit. */
   backLink?: ReactNode
   userBlock: ReactNode
+  /** The icon for a row; the nav uses it to show the agent's own face on Assistent. */
+  renderIcon?: (item: NavV2Item, className: string) => ReactNode
 }
 
 /**
@@ -46,6 +48,7 @@ export function SidebarV2({
   brand,
   backLink,
   userBlock,
+  renderIcon,
 }: SidebarV2Props) {
   const countBubble = (n: number) => (
     <span
@@ -60,16 +63,13 @@ export function SidebarV2({
     const enabled = isEnabled(item.href) && !item.comingSoon
     const badge = badgeFor(item.href)
     const Icon = item.icon
+    const iconClass = cn(
+      'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
+      active ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground',
+    )
     const content = (
       <>
-        {!opts?.sub && Icon && (
-          <Icon
-            className={cn(
-              'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
-              active ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground',
-            )}
-          />
-        )}
+        {!opts?.sub && Icon && (renderIcon ? renderIcon(item, iconClass) : <Icon className={iconClass} />)}
         <span className="flex-1 truncate">{label(item.labelKey)}</span>
         {item.betaBadge ? (
           <span className="ml-auto rounded-full bg-muted/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground/70">

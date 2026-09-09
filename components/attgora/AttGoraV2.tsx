@@ -4,7 +4,8 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Check, Minus, Sparkles } from 'lucide-react'
+import { Check, Minus } from 'lucide-react'
+import { ClaudeMark } from '@/components/icons/ClaudeMark'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -288,13 +289,13 @@ export default function AttGoraV2({
                       )
                     }
                   >
-                    <Sparkles className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                    <ClaudeMark className="mr-1.5 h-3.5 w-3.5" />
                     {t('fix_with_claude')}
                   </Button>
                 ) : (
                   <Button asChild variant="outline" size="sm">
                     <Link href="/settings/api">
-                      <Sparkles className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                      <ClaudeMark className="mr-1.5 h-3.5 w-3.5" />
                       {t('connect_claude_first')}
                     </Link>
                   </Button>

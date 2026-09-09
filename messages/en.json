@@ -6988,7 +6988,7 @@
       "ask_seed": "Help me with: {task}",
     "fix_with_claude": "Do this in Claude",
     "connect_claude_first": "Connect Claude first",
-    "fix_seed": "Use the Accounted connector. Help me with the task {task}. {brief} Legal basis: {lagrum}. Go through what is waiting, propose what to do with each item and tell me what you need from me to finish.",
+    "fix_seed": "I use Accounted and the connector is connected. Task: {task}. {brief} Legal basis: {lagrum}. Do this: fetch what is waiting through the connector, propose an account and VAT for each item with one line on why, carry out what is safe and list what you need from me. Ask before booking anything you are unsure of, and end with what remains.",
     "progress_aria": "{done} of {total} tasks done",
     "progress_line": "{done} of {total} done",
     "progress_all_done": "All done. Nice.",
