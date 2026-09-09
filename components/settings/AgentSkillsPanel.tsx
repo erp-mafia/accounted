@@ -6,12 +6,10 @@ import { ChevronDown, GraduationCap, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
-import { SettingsGroup, SettingsRowNote } from '@/components/settings/SettingsRows'
 import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
@@ -175,33 +173,26 @@ export function AgentSkillsPanel() {
   }
 
   return (
-    <div>
-      {/* Dynamic status stays visible; the static "what this is" copy sits
-          behind the "?" next to it. */}
+    <div className="space-y-6">
       {atoms && (
-        <div className="flex items-center gap-2 px-1">
-          <SettingsRowNote className="tabular-nums">
+        <div className="flex items-center gap-2">
+          <p className="text-[12px] tabular-nums text-muted-foreground">
             {counts.total} kunskapsområden · {counts.active} aktiva för ditt företag
-          </SettingsRowNote>
+          </p>
           <HelpPopover className="shrink-0">
-            Utöver vad den minns om ditt företag bygger assistenten på en uppsättning
-            kunskapsområden om svensk bokföring och skatt. Kärnkompetensen gäller alla;
-            bransch- och bolagsanpassningen väljs utifrån ditt företag. Klicka på ett
-            område för att läsa hela kunskapen.
+            Utöver vad den minns om ditt företag bygger assistenten på en uppsättning kunskapsområden om
+            svensk bokföring och skatt. Kärnkompetensen gäller alla; bransch- och bolagsanpassningen väljs
+            utifrån ditt företag. Klicka på ett område för att läsa hela kunskapen.
           </HelpPopover>
         </div>
       )}
 
       {/* Live region always mounted so the failure is announced when it
           appears, not merely inserted. */}
-      <div role="status" aria-live="polite" className="min-w-0 px-1">
+      <div role="status" aria-live="polite" className="min-w-0">
         {loadError && (
           <AttnLine
-            action={
-              loadError.detail
-                ? undefined
-                : { label: 'Försök igen', onClick: () => setReloadKey((k) => k + 1) }
-            }
+            action={loadError.detail ? undefined : { label: 'Försök igen', onClick: () => setReloadKey((k) => k + 1) }}
           >
             {loadError.detail
               ? `Kunskapsområdena kunde inte läsas in just nu. ${loadError.detail}`
@@ -211,9 +202,13 @@ export function AgentSkillsPanel() {
       </div>
 
       {atoms === null && !loadError && (
-        <div className="space-y-3">
-          {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-12 w-full" />
+        <div aria-busy>
+          <Skeleton className="mb-3 h-3 w-32" />
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex items-center justify-between border-b border-border/60 py-3.5">
+              <Skeleton className="h-3.5 w-72" />
+              <Skeleton className="h-3.5 w-12" />
+            </div>
           ))}
         </div>
       )}
@@ -226,73 +221,70 @@ export function AgentSkillsPanel() {
         />
       )}
 
-      {atoms && atoms.length > 0 &&
+      {/* One section per tier: a small heading with the count and the blurb
+          behind its "?", then one row per area: the title, its one-line
+          description, and the state on the right. The row opens to the full
+          text; nothing else sits on it. */}
+      {atoms &&
+        atoms.length > 0 &&
         TIER_ORDER.filter((tier) => grouped[tier].length > 0).map((tier) => (
-          <SettingsGroup key={tier} label={TIER_SECTION[tier].title} help={TIER_SECTION[tier].blurb}>
-            {grouped[tier].map((atom) => {
-              const isOpen = expandedId === atom.id
-              const isLoading = loadingBody === atom.id
-              const body = bodies[atom.id]
-              const dormant = !atom.active
-              return (
-                <div key={atom.id} className="border-b border-border">
-                  <button
-                    onClick={() => toggle(atom)}
-                    aria-expanded={isOpen}
-                    className="flex w-full items-start gap-3 px-1 py-3 text-left"
-                  >
-                    <ChevronDown
-                      className={cn(
-                        'mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform',
-                        !isOpen && '-rotate-90',
-                      )}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span
-                        className={cn(
-                          'block text-sm font-medium',
-                          dormant ? 'text-muted-foreground' : 'text-foreground',
-                        )}
-                      >
+          <section key={tier}>
+            <p className="flex items-center gap-2 pb-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+              <span>{TIER_SECTION[tier].title}</span>
+              <span className="font-normal tabular-nums text-muted-foreground/70">{grouped[tier].length}</span>
+              <HelpPopover className="shrink-0">{TIER_SECTION[tier].blurb}</HelpPopover>
+            </p>
+            <div>
+              {grouped[tier].map((atom) => {
+                const isOpen = expandedId === atom.id
+                const isLoading = loadingBody === atom.id
+                const body = bodies[atom.id]
+                const dormant = !atom.active
+                return (
+                  <div key={atom.id} className="border-b border-border/60">
+                    <button
+                      type="button"
+                      onClick={() => toggle(atom)}
+                      aria-expanded={isOpen}
+                      className="group flex w-full items-baseline gap-3 py-3 text-left"
+                    >
+                      <span className={cn('shrink-0 text-[13.5px] font-medium', dormant ? 'text-muted-foreground' : 'text-foreground')}>
                         {atom.title}
                       </span>
-                      <span className="block text-xs text-muted-foreground">{atom.description}</span>
-                    </span>
-                    {/* Chips mark exceptions: active is the normal state and
-                        renders as muted text, only dormant gets a Badge. */}
-                    {tier !== 'horizontal' && (
-                      atom.active ? (
-                        <span className="mt-0.5 shrink-0 text-xs text-muted-foreground">Aktiv</span>
-                      ) : (
-                        <Badge variant="outline" className="mt-0.5 shrink-0">Vilande</Badge>
-                      )
+                      <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">{atom.description}</span>
+                      {tier !== 'horizontal' && (
+                        <span className={cn('shrink-0 text-[11.5px]', dormant ? 'rounded-full border border-border px-2 py-px text-muted-foreground' : 'text-muted-foreground')}>
+                          {dormant ? 'Vilande' : 'Aktiv'}
+                        </span>
+                      )}
+                      <ChevronDown
+                        className={cn('h-3.5 w-3.5 shrink-0 self-center text-muted-foreground/60 transition-transform', !isOpen && '-rotate-90')}
+                        aria-hidden
+                      />
+                    </button>
+                    {isOpen && (
+                      <div className="pb-4">
+                        {isLoading && (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            Läser in…
+                          </div>
+                        )}
+                        {!isLoading && body !== undefined && body.length > 0 && (
+                          <div className={cn(PROSE, 'max-w-[760px]')}>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+                          </div>
+                        )}
+                        {!isLoading && body !== undefined && body.length === 0 && (
+                          <p className="text-xs text-muted-foreground">Innehållet kunde inte läsas in.</p>
+                        )}
+                      </div>
                     )}
-                  </button>
-
-                  {isOpen && (
-                    <div className="px-1 pb-4 pl-8">
-                      {isLoading && (
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          Läser in…
-                        </div>
-                      )}
-                      {!isLoading && body !== undefined && body.length > 0 && (
-                        <div className={PROSE}>
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
-                        </div>
-                      )}
-                      {!isLoading && body !== undefined && body.length === 0 && (
-                        <p className="text-xs text-muted-foreground">
-                          Innehållet kunde inte läsas in.
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </SettingsGroup>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
         ))}
     </div>
   )

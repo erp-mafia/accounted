@@ -152,19 +152,23 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
               {t('v2_close')}
             </button>
           )}
-          <FyPicker
-            value={periodId}
-            onChange={(id, period) => {
-              setPeriodId(id)
-              setPeriodBounds(period ? { start: period.period_start, end: period.period_end } : null)
-              setDateRange({})
-            }}
-            includeAllOption={false}
-            hideFuturePeriods
-            initialPeriods={initialPeriods}
-            initialCompanyId={initialCompanyId}
-            storageKeyPrefix={FY_STORAGE_KEY_PREFIX}
-          />
+          {/* On a phone the bar holds one picker: the month is the one a
+              person changes while reconciling; the year waits for a wider screen. */}
+          <div className={cn(v2 && flowAccount && 'hidden sm:block')}>
+            <FyPicker
+              value={periodId}
+              onChange={(id, period) => {
+                setPeriodId(id)
+                setPeriodBounds(period ? { start: period.period_start, end: period.period_end } : null)
+                setDateRange({})
+              }}
+              includeAllOption={false}
+              hideFuturePeriods
+              initialPeriods={initialPeriods}
+              initialCompanyId={initialCompanyId}
+              storageKeyPrefix={FY_STORAGE_KEY_PREFIX}
+            />
+          </div>
           {periodBounds && (
             <ReportDateRange
               periodStart={periodBounds.start}
