@@ -1297,7 +1297,7 @@ function MemoryChip({ event }: { event: MemoryEvent }) {
     : null
   return (
     <Link
-      href="/settings/assistant?view=memory"
+      href="/agent-knowledge?view=memory"
       className="group inline-flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
       title="Visa i Assistentens minne"
     >
