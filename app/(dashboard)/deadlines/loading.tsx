@@ -1,9 +1,10 @@
+import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 
 export default function DeadlinesLoading() {
   return (
     <div className="space-y-8">
-      <Skeleton className="h-8 w-44" />
+      <PageHeader title={<Skeleton className="h-4 w-44" />} />
       <div className="space-y-3">
         {[1, 2, 3, 4, 5].map((i) => (
           <div

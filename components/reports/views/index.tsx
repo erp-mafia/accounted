@@ -15,6 +15,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, FileText, Percent } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ReportBodyLoading } from '@/components/reports/ReportLoading'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { EmptyState } from '@/components/ui/empty-state'
 import { FyPicker } from '@/components/common/FyPicker'
@@ -1800,12 +1801,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
     return (
       <div className="space-y-8">
         {bareHeader}
-        <Card>
-          <CardContent className="p-6 space-y-4">
-            <Skeleton className="h-5 w-32" />
-            <Skeleton className="h-64" />
-          </CardContent>
-        </Card>
+        <ReportBodyLoading />
       </div>
     )
   }
@@ -2004,14 +2000,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
         </Card>
       )}
 
-      {!error && (awaitingFiscalPeriod || (loading && !data)) && (
-        <Card>
-          <CardContent className="p-6 space-y-4">
-            <Skeleton className="h-5 w-48" />
-            <Skeleton className="h-64" />
-          </CardContent>
-        </Card>
-      )}
+      {!error && (awaitingFiscalPeriod || (loading && !data)) && <ReportBodyLoading />}
 
       {data && !awaitingFiscalPeriod && (
         <div

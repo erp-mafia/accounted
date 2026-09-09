@@ -8,8 +8,7 @@ import { useTranslations } from 'next-intl'
 import { ChevronLeft } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
+import { ReportBodyLoading, ReportPageLoading } from '@/components/reports/ReportLoading'
 import { useCompany } from '@/contexts/CompanyContext'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
@@ -18,47 +17,37 @@ import { useShell } from '@/components/dashboard/ShellProvider'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import type { FiscalPeriod } from '@/types'
 
-function ReportViewLoading() {
-  return (
-    <Card>
-      <CardContent className="space-y-4 p-6">
-        <Skeleton className="h-5 w-32" />
-        <Skeleton className="h-64" />
-      </CardContent>
-    </Card>
-  )
-}
-
-const TrialBalanceView = dynamic(() => import('./lazy-views/TrialBalanceView'), { loading: ReportViewLoading })
-const IncomeStatementView = dynamic(() => import('./lazy-views/IncomeStatementView'), { loading: ReportViewLoading })
-const BalanceSheetView = dynamic(() => import('./lazy-views/BalanceSheetView'), { loading: ReportViewLoading })
-const ResultatrapportView = dynamic(() => import('./lazy-views/ResultatrapportView'), { loading: ReportViewLoading })
-const BalansrapportView = dynamic(() => import('./lazy-views/BalansrapportView'), { loading: ReportViewLoading })
-const VatDeclarationView = dynamic(() => import('./lazy-views/VatDeclarationView'), { loading: ReportViewLoading })
-const SupplierLedgerView = dynamic(() => import('./lazy-views/SupplierLedgerView'), { loading: ReportViewLoading })
-const GeneralLedgerView = dynamic(() => import('./lazy-views/GeneralLedgerView'), { loading: ReportViewLoading })
-const JournalRegisterView = dynamic(() => import('./lazy-views/JournalRegisterView'), { loading: ReportViewLoading })
-const ARLedgerView = dynamic(() => import('./lazy-views/ARLedgerView'), { loading: ReportViewLoading })
-const DimensionPnlView = dynamic(() => import('./lazy-views/DimensionPnlView'), { loading: ReportViewLoading })
+const TrialBalanceView = dynamic(() => import('./lazy-views/TrialBalanceView'), { loading: ReportBodyLoading })
+const IncomeStatementView = dynamic(() => import('./lazy-views/IncomeStatementView'), { loading: ReportBodyLoading })
+const BalanceSheetView = dynamic(() => import('./lazy-views/BalanceSheetView'), { loading: ReportBodyLoading })
+const ResultatrapportView = dynamic(() => import('./lazy-views/ResultatrapportView'), { loading: ReportBodyLoading })
+const BalansrapportView = dynamic(() => import('./lazy-views/BalansrapportView'), { loading: ReportBodyLoading })
+// Standalone: the view owns its title bar, so the import stage shows one too.
+const VatDeclarationView = dynamic(() => import('./lazy-views/VatDeclarationView'), { loading: ReportPageLoading })
+const SupplierLedgerView = dynamic(() => import('./lazy-views/SupplierLedgerView'), { loading: ReportBodyLoading })
+const GeneralLedgerView = dynamic(() => import('./lazy-views/GeneralLedgerView'), { loading: ReportBodyLoading })
+const JournalRegisterView = dynamic(() => import('./lazy-views/JournalRegisterView'), { loading: ReportBodyLoading })
+const ARLedgerView = dynamic(() => import('./lazy-views/ARLedgerView'), { loading: ReportBodyLoading })
+const DimensionPnlView = dynamic(() => import('./lazy-views/DimensionPnlView'), { loading: ReportBodyLoading })
 const NEDeclarationView = dynamic(() =>
   import('./NEDeclarationView').then((module) => ({ default: module.NEDeclarationView })),
-  { loading: ReportViewLoading },
+  { loading: ReportBodyLoading },
 )
 const PeriodiskSammanstallningView = dynamic(() =>
   import('./PeriodiskSammanstallningView').then((module) => ({ default: module.PeriodiskSammanstallningView })),
-  { loading: ReportViewLoading },
+  { loading: ReportBodyLoading },
 )
 const INK2DeclarationView = dynamic(() =>
   import('./INK2DeclarationView').then((module) => ({ default: module.INK2DeclarationView })),
-  { loading: ReportViewLoading },
+  { loading: ReportBodyLoading },
 )
 const BehandlingshistorikView = dynamic(() =>
   import('./BehandlingshistorikView').then((module) => ({ default: module.BehandlingshistorikView })),
-  { loading: ReportViewLoading },
+  { loading: ReportBodyLoading },
 )
 const BokslutsbilagorView = dynamic(() =>
   import('./BokslutsbilagorView').then((module) => ({ default: module.BokslutsbilagorView })),
-  { loading: ReportViewLoading },
+  { loading: ReportBodyLoading },
 )
 
 /**
@@ -171,12 +160,7 @@ function FocusedReportInner({
       )}
 
       {!isReady && !isPeriodless ? (
-        <Card>
-          <CardContent className="p-6 space-y-4">
-            <Skeleton className="h-5 w-32" />
-            <Skeleton className="h-64" />
-          </CardContent>
-        </Card>
+        <ReportBodyLoading />
       ) : isPeriodless || selectedPeriod ? (
         <FocusedView
           slug={slug}
