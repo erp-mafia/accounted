@@ -121,9 +121,10 @@ function Empty({ label }: { label: string }) {
   return <p className="px-6 py-6 text-[13px] text-muted-foreground">{label}</p>
 }
 
+/** The pane's one primary: the page where this work gets done. */
 function OpenPage({ href, label }: { href: string; label: string }) {
   return (
-    <Button asChild variant="outline" size="sm">
+    <Button asChild size="sm">
       <Link href={href}>{label}</Link>
     </Button>
   )
