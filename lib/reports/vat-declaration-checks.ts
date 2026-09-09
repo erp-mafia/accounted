@@ -53,6 +53,8 @@ export interface VatDeclarationCheck {
   status: VatDeclarationCheckStatus
   /** Swedish user-facing message; safe to render directly in the UI. */
   message: string
+  /** The figures and the rule behind the message, for whoever wants them; the UI keeps it behind a "?". */
+  detail?: string
   /** Optional rutor that the user should investigate. */
   rutor?: Array<keyof VatDeclarationRutor>
 }
@@ -140,13 +142,17 @@ export function runVatDeclarationChecks(
       code: 'RC_BASIS_MISSING',
       status: 'ERROR',
       message:
+        'Inköp med omvänd moms är bokförda utan sitt underlag i ruta 20-24: ' +
+        `cirka ${shortfall.toLocaleString('sv-SE')} kr saknas. Skatteverket ` +
+        'avvisar deklarationen tills båda sidor finns med. Korrigera ' +
+        'verifikationerna nedan så läggs underlaget till; inga belopp ändras.',
+      detail:
         'Den utgående momsen på inköp (ruta 30-32) motsvarar ett basbelopp ' +
         `på cirka ${Math.round(expectedRcBasis).toLocaleString('sv-SE')} kr, ` +
         'men ruta 20-24 innehåller bara ' +
-        `${Math.round(rcBasis).toLocaleString('sv-SE')} kr: cirka ` +
-        `${shortfall.toLocaleString('sv-SE')} kr saknas. Skatteverket kräver ` +
-        'att båda sidor finns med (ML 13 kap; SKV felkod FK004). Kontrollera ' +
-        'att leverantörsfakturor med omvänd skattskyldighet är bokförda med ' +
+        `${Math.round(rcBasis).toLocaleString('sv-SE')} kr. Skatteverket ` +
+        'kräver att båda sidor finns med (ML 13 kap; SKV felkod FK004): ' +
+        'leverantörsfakturor med omvänd skattskyldighet bokförs med ' +
         'basbelopp på 44xx/45xx-konton.',
       rutor: ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32'],
     })
