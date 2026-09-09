@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { initJourney, journeyReducer, type JourneyAction, type JourneyState } from '../reducer'
-import type { CompanyLookupResult, CompanySearchHit } from '@/lib/company-lookup/types'
+import type { CompanyLookupResult, CompanySearchHit, CompanySuggestion } from '@/lib/company-lookup/types'
 
 function lookup(overrides: Partial<CompanyLookupResult> = {}): CompanyLookupResult {
   return {
@@ -213,5 +213,110 @@ describe('journeyReducer: name search', () => {
     )
     expect(s.step).toBe('orgnr')
     expect(s.searchHits).toEqual([])
+  })
+})
+
+describe('journeyReducer: search-as-you-type pick (SCB row, TIC on pick)', () => {
+  const suggestion = (overrides: Partial<CompanySuggestion> = {}): CompanySuggestion => ({
+    orgNumber: '5566778899',
+    name: 'Testbrand AB',
+    city: 'Malmö',
+    legalEntityType: 'AB',
+    active: true,
+    ...overrides,
+  })
+
+  it('SUGGESTION_PICKED stores the orgnr and prefill, then waits for the single TIC lookup', () => {
+    const s = journeyReducer(initJourney(), { type: 'SUGGESTION_PICKED', suggestion: suggestion() })
+    expect(s.step).toBe('orgnr')
+    expect(s.lookupPending).toBe(true)
+    expect(s.lookupRan).toBe(false)
+    expect(s.ticLookup).toBeNull()
+    expect(s.settings.org_number).toBe('5566778899')
+    expect(s.settings.company_name).toBe('Testbrand AB')
+    expect(s.settings.entity_type).toBe('aktiebolag')
+    expect(s.searchHits).toEqual([])
+  })
+
+  it('a picked row followed by a TIC answer lands exactly where a typed orgnr does', () => {
+    const viaPick = run(
+      initJourney(),
+      { type: 'SUGGESTION_PICKED', suggestion: suggestion() },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: lookup() } },
+    )
+    const viaOrg = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '5566778899' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: lookup() } },
+    )
+    expect(viaPick.step).toBe('fy')
+    expect(viaPick.settings).toEqual(viaOrg.settings)
+    expect(viaPick.lookupRan).toBe(true)
+  })
+
+  it('TIC facts override the SCB prefill', () => {
+    const s = run(
+      initJourney(),
+      { type: 'SUGGESTION_PICKED', suggestion: suggestion({ name: 'TESTBRAND AKTIEBOLAG' }) },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: lookup({ companyName: 'Testbrand AB' }) } },
+    )
+    expect(s.settings.company_name).toBe('Testbrand AB')
+  })
+
+  it('with TIC off, the SCB prefill carries the AB past the form and name questions', () => {
+    const s = run(
+      initJourney(),
+      { type: 'SUGGESTION_PICKED', suggestion: suggestion() },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'disabled' } },
+    )
+    // Name and form known, address not: the degraded path asks for it.
+    expect(s.step).toBe('address')
+    expect(s.lookupRan).toBe(false)
+    expect(s.settings.company_name).toBe('Testbrand AB')
+    expect(s.settings.entity_type).toBe('aktiebolag')
+  })
+
+  it('an unmapped legal form falls through to the form picker on the degraded path', () => {
+    const s = run(
+      initJourney(),
+      { type: 'SUGGESTION_PICKED', suggestion: suggestion({ legalEntityType: null }) },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'error' } },
+    )
+    expect(s.step).toBe('form')
+    expect(s.lookupNote).toBe('error')
+    expect(s.settings.org_number).toBe('5566778899')
+  })
+
+  it('a sole trader row still confirms the verksamhetsnamn', () => {
+    const s = run(
+      initJourney(),
+      { type: 'SUGGESTION_PICKED', suggestion: suggestion({ orgNumber: '8001011234', name: 'ANDERSSON, ANNA', legalEntityType: 'EF' }) },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'disabled' } },
+    )
+    expect(s.settings.entity_type).toBe('enskild_firma')
+    expect(s.step).toBe('name')
+  })
+
+  it('a pick replaces a previous orgnr and its facts', () => {
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '1111111111' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+      { type: 'NOTFOUND_EDIT' },
+      { type: 'SUGGESTION_PICKED', suggestion: suggestion() },
+    )
+    expect(s.settings.org_number).toBe('5566778899')
+    expect(s.ticLookup).toBeNull()
+    expect(s.lookupNote).toBe('none')
+  })
+
+  it('is ignored off the orgnr step and while submitting', () => {
+    const later = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '5566778899' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: lookup() } },
+    )
+    expect(later.step).toBe('fy')
+    expect(journeyReducer(later, { type: 'SUGGESTION_PICKED', suggestion: suggestion({ orgNumber: '2222222222' }) })).toBe(later)
   })
 })

@@ -4301,6 +4301,11 @@ export const PartySearchRegistryQuerySchema = z.object({
   q: z.string().max(120).optional(),
 })
 
+/** GET /api/company/search: the onboarding picker's free-text query. */
+export const CompanySearchQuerySchema = z.object({
+  q: z.string().trim().min(3).max(120),
+})
+
 /**
  * GET /api/parties/registry: the org number a customer or supplier form is
  * being filled for. Shape, check digit and the legal-person rule are one
