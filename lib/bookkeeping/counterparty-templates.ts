@@ -332,10 +332,20 @@ export async function findCounterpartyTemplatesBatch(
     }
   }
 
-  // Build normalized name lookup
+  // Build normalized name lookup. A user rename (PATCH
+  // /api/settings/counterparty-templates) moves the bank-derived key into
+  // counterparty_aliases; without the alias leg here, a template renamed to a
+  // human label ("musik") would keep learning through findTemplateByKey but
+  // never be proposed again, since the alias tier above only sees raw
+  // descriptors. A real counterparty_name always wins over an alias.
   const nameMap = new Map<string, CategorizationTemplate>()
   for (const tmpl of templates) {
     nameMap.set(tmpl.counterparty_name, tmpl)
+  }
+  for (const tmpl of templates) {
+    for (const alias of tmpl.counterparty_aliases || []) {
+      if (!nameMap.has(alias)) nameMap.set(alias, tmpl)
+    }
   }
 
   for (const tx of transactions) {

@@ -755,6 +755,62 @@ describe('counterparty-templates', () => {
     })
   })
 
+  // ── findCounterpartyTemplate after a rename ──────────────────
+
+  describe('findCounterpartyTemplate after a user rename', () => {
+    it('still proposes a template renamed to a label for a new bank-line variant of the merchant', async () => {
+      // Learned from "Kortköp 260612 SPOTIFY AB" (key "spotify"), then renamed
+      // to "Musik" by the user: the old key sits in aliases. Next month's line
+      // carries a new date, so the raw-descriptor alias tier misses; the
+      // normalized-name tier must resolve through the alias instead.
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const renamed = makeCategorizationTemplate({
+        id: 'renamed-1',
+        counterparty_name: 'musik',
+        counterparty_aliases: ['kortköp 260612 spotify ab', 'spotify'],
+        occurrence_count: 2,
+        confidence: 0.6,
+      })
+      enqueue({ data: [renamed] })
+
+      const tx = makeTransaction({
+        merchant_name: null,
+        original_description: 'Kortköp 260705 SPOTIFY AB',
+        description: 'Kortköp 260705 SPOTIFY AB',
+      })
+      const match = await findCounterpartyTemplate(supabase as never, 'company-1', tx)
+
+      expect(match?.template.id).toBe('renamed-1')
+      expect(match?.matchMethod).toBe('exact_normalized')
+    })
+
+    it('a real counterparty_name beats another template carrying the same string as alias', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const owner = makeCategorizationTemplate({
+        id: 'owner',
+        counterparty_name: 'spotify',
+        counterparty_aliases: [],
+        occurrence_count: 4,
+      })
+      const other = makeCategorizationTemplate({
+        id: 'other',
+        counterparty_name: 'musik',
+        counterparty_aliases: ['spotify'],
+        occurrence_count: 9,
+      })
+      enqueue({ data: [other, owner] })
+
+      const tx = makeTransaction({
+        merchant_name: null,
+        original_description: 'Kortköp 260705 SPOTIFY AB',
+        description: 'Kortköp 260705 SPOTIFY AB',
+      })
+      const match = await findCounterpartyTemplate(supabase as never, 'company-1', tx)
+
+      expect(match?.template.id).toBe('owner')
+    })
+  })
+
   // ── populateTemplatesFromSieVouchers ─────────────────────────
 
   describe('populateTemplatesFromSieVouchers', () => {
