@@ -172,7 +172,7 @@ describe('generateResultatrapport', () => {
     expect(discontinued.prior_period).toBe(5000)
   })
 
-  it('excludes account 8999 (year-end closing account)', async () => {
+  it('lists a booked 8999 as a class-8 row and nets it into beräknat resultat (#2455)', async () => {
     const q = createQueuedMockSupabase()
     q.enqueue({
       data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
@@ -190,8 +190,11 @@ describe('generateResultatrapport', () => {
     const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
 
     const class8 = report.groups.find((g) => g.class === 8)
-    expect(class8).toBeUndefined()
-    expect(report.net_result_current).toBe(100000)
+    const row8999 = class8?.rows.find((r) => r.account_number === '8999')
+    expect(row8999?.current_period).toBe(-100000)
+    // The omföring of årets resultat zeroes the operational result, exactly
+    // as a Fortnox/Visma resultatrapport reads after bokslut.
+    expect(report.net_result_current).toBe(0)
   })
 
   it('ignores balance accounts (class 1-2)', async () => {
