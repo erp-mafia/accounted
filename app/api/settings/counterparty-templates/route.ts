@@ -169,6 +169,15 @@ export const PATCH = withRouteContext(
       .select('*')
       .single()
     if (updateError) {
+      // Lost the race against another rename or the learn path: the unique
+      // (company_id, counterparty_name) index rejected the new name.
+      if ((updateError as { code?: string }).code === '23505') {
+        return errorResponseFromCode('CONFLICT', log, {
+          requestId,
+          messageSv: 'Det finns redan en mall med det här namnet',
+          messageEn: 'A template with this name already exists',
+        })
+      }
       return NextResponse.json({ error: getUserErrorMessage(updateError) }, { status: 500 })
     }
 

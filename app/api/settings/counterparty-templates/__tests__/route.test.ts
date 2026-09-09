@@ -281,6 +281,15 @@ describe('PATCH /api/settings/counterparty-templates', () => {
     expect(findCall('categorization_templates', 'delete')).toBeUndefined()
   })
 
+  it('returns 409 when the update loses the race on the unique name', async () => {
+    enqueue({ data: existing }) // lookup by id
+    enqueue({ data: null }) // no twin at check time
+    enqueue({ data: null, error: { code: '23505', message: 'duplicate key value' } }) // update
+
+    const { status } = await parseJsonResponse(await patch({ id: TEMPLATE_ID, counterparty_name: 'Spotify' }))
+    expect(status).toBe(409)
+  })
+
   it('is a no-op when the name is unchanged', async () => {
     enqueue({ data: existing }) // lookup by id
 

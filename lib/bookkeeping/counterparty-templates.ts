@@ -324,10 +324,19 @@ export async function findCounterpartyTemplatesBatch(
 
   const templates = allTemplates as CategorizationTemplate[]
 
-  // Build alias lookup: lowercase alias → template
+  // Build alias lookup: lowercase alias → template. An alias that equals
+  // another template's canonical counterparty_name (only reachable through a
+  // user rename) must not shadow that template when a bank line is exactly
+  // that string: the canonical owner wins.
+  const canonicalOwner = new Map<string, CategorizationTemplate>()
+  for (const tmpl of templates) {
+    canonicalOwner.set(tmpl.counterparty_name, tmpl)
+  }
   const aliasMap = new Map<string, CategorizationTemplate>()
   for (const tmpl of templates) {
     for (const alias of tmpl.counterparty_aliases || []) {
+      const owner = canonicalOwner.get(alias)
+      if (owner && owner.id !== tmpl.id) continue
       aliasMap.set(alias, tmpl)
     }
   }

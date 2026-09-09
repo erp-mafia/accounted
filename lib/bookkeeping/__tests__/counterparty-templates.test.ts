@@ -809,6 +809,28 @@ describe('counterparty-templates', () => {
 
       expect(match?.template.id).toBe('owner')
     })
+
+    it('a bank line that is exactly a canonical name resolves to its owner, not to a row holding it as alias', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const owner = makeCategorizationTemplate({
+        id: 'owner',
+        counterparty_name: 'spotify',
+        counterparty_aliases: [],
+        occurrence_count: 4,
+      })
+      const other = makeCategorizationTemplate({
+        id: 'other',
+        counterparty_name: 'musik',
+        counterparty_aliases: ['spotify'],
+        occurrence_count: 9,
+      })
+      enqueue({ data: [other, owner] })
+
+      const tx = makeTransaction({ merchant_name: 'spotify', original_description: 'spotify', description: 'spotify' })
+      const match = await findCounterpartyTemplate(supabase as never, 'company-1', tx)
+
+      expect(match?.template.id).toBe('owner')
+    })
   })
 
   // ── populateTemplatesFromSieVouchers ─────────────────────────
