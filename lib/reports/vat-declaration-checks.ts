@@ -142,8 +142,8 @@ export function runVatDeclarationChecks(
       code: 'RC_BASIS_MISSING',
       status: 'ERROR',
       message:
-        'Inköp med omvänd moms är bokförda utan sitt underlag i ruta 20-24: ' +
-        `cirka ${shortfall.toLocaleString('sv-SE')} kr saknas. Skatteverket ` +
+        'Inköp med omvänd moms har fått sin moms (ruta 30-32) men saknar ' +
+        `sitt underlag (ruta 20-24): cirka ${shortfall.toLocaleString('sv-SE')} kr saknas. Skatteverket ` +
         'avvisar deklarationen tills båda sidor finns med. Korrigera ' +
         'verifikationerna nedan så läggs underlaget till; inga belopp ändras.',
       detail:
