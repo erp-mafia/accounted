@@ -9,6 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { PartyRole, RegisterRow } from '@/lib/parties/register'
 import { cn, formatCurrency } from '@/lib/utils'
+import { AccountChip } from './AccountChip'
 import { AccountNub } from './AccountNub'
 import { isDuplicateCandidate, reasonText, rolesLabel } from './format'
 
@@ -84,11 +85,8 @@ export function SuggestionQueue({
     <div className={dense ? 'space-y-2' : 'space-y-4'}>
       {dense ? (
         <>
-          <div className="flex items-center justify-end text-[12.5px]">
-            <button type="button" className={QUIET_LINK_CLASS} onClick={allSelected ? onClear : onSelectAll} disabled={rows.length === 0}>
-              {allSelected ? t('deselect') : t('select_all')}
-            </button>
-          </div>
+          {/* Selection actions float: the header checkbox selects every row,
+              and the bar below carries the rest. Nothing sits above the table. */}
           {count > 0 && (
             <div className="fixed bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-x-5 whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 text-[12.5px] shadow-lg animate-fade-in md:left-[calc(50%+var(--nav-w)/2)]">
               <span className="tabular-nums">
@@ -97,6 +95,11 @@ export function SuggestionQueue({
               <Button type="button" size="sm" onClick={onConfirmSelected} disabled={!canWrite || busy}>
                 {t('promote_n', { count })}
               </Button>
+              {!allSelected && (
+                <button type="button" className={QUIET_LINK_CLASS} onClick={onSelectAll}>
+                  {t('select_all')}
+                </button>
+              )}
               <button type="button" className={QUIET_LINK_CLASS} onClick={onClear}>
                 {t('deselect')}
               </button>
@@ -121,7 +124,16 @@ export function SuggestionQueue({
         <table className="w-full border-collapse text-[13px]">
           <thead>
             <tr>
-              <th className={`${TH_CLASS} w-8`} />
+              <th className={`${TH_CLASS} w-8`}>
+                {dense && rows.length > 0 && (
+                  <Checkbox
+                    checked={allSelected ? true : count > 0 ? 'indeterminate' : false}
+                    onCheckedChange={() => (allSelected ? onClear() : onSelectAll())}
+                    aria-label={allSelected ? t('deselect') : t('select_all')}
+                    disabled={!canWrite}
+                  />
+                )}
+              </th>
               <th className={TH_CLASS}>{t('th_name')}</th>
               <th className={TH_CLASS}>{t('th_why')}</th>
               <th className={TH_CLASS}>{t('th_becomes')}</th>
@@ -214,7 +226,7 @@ export function SuggestionQueue({
                     </DropdownMenu>
                   </td>
                   <td className={td}>
-                    <AccountNub account={row.stats?.dominantAccount ?? null} />
+                    {dense ? <AccountChip account={row.stats?.dominantAccount ?? null} /> : <AccountNub account={row.stats?.dominantAccount ?? null} />}
                   </td>
                   <td className={`${td} text-right tabular-nums`}>{row.stats?.revenueSek ? formatCurrency(row.stats.revenueSek) : ''}</td>
                   <td className={`${td} text-right tabular-nums`}>{row.stats?.expenseSek ? formatCurrency(row.stats.expenseSek) : ''}</td>
