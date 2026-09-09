@@ -844,7 +844,7 @@ export async function insertOrUpdateTemplate(
           source: newSource,
           counterparty_aliases: mergedAliases,
           // Rules ladder: a changed proposal is a correction the Regler page
-          // shows next to the hit count (migration 20260907120000).
+          // shows next to the hit count (migration 20260907121500).
           corrections: (existing.corrections ?? 0) + 1,
           line_pattern: params.linePattern !== undefined ? params.linePattern : existing.line_pattern,
           ...(params.defaultDimensions && Object.keys(params.defaultDimensions).length > 0

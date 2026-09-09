@@ -15,6 +15,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, FileText, Percent } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ReportBodyLoading } from '@/components/reports/ReportLoading'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { EmptyState } from '@/components/ui/empty-state'
 import { FyPicker } from '@/components/common/FyPicker'
@@ -1800,12 +1801,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
     return (
       <div className="space-y-8">
         {bareHeader}
-        <Card>
-          <CardContent className="p-6 space-y-4">
-            <Skeleton className="h-5 w-32" />
-            <Skeleton className="h-64" />
-          </CardContent>
-        </Card>
+        <ReportBodyLoading />
       </div>
     )
   }
@@ -1923,16 +1919,17 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   return (
     <VatDrillContext.Provider value={{ fiscalPeriodId: isYearly ? fiscalPeriodId : undefined }}>
     <div className="space-y-8">
-      {/* Standalone page: the title row carries the primary action (locked
-          convention 9), so Exportera sits beside the H1 and the period chips
-          get their own row below. XML and PDF live in "Lämna in": they are
-          filing artifacts, not report exports. */}
+      {/* Standalone page: Exportera sits beside the H1 as a secondary
+          control. The primary action belongs to the step in front of the
+          person (Korrigera alla, Bokför momsen, Lämna in), not to the
+          spreadsheet (Jakob, 2026-09-09). XML and PDF live in "Lämna in":
+          they are filing artifacts, not report exports. */}
       {pageTitle && (
         <PageHeader
           title={pageTitle}
           action={
             <ReportExportMenu
-              variant="default"
+              variant="outline"
               items={[
                 { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
               ]}
@@ -1983,7 +1980,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
             )}
             {!pageTitle && (
               <ReportExportMenu
-                variant="default"
+                variant="outline"
                 items={[
                   { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
                 ]}
@@ -2003,14 +2000,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
         </Card>
       )}
 
-      {!error && (awaitingFiscalPeriod || (loading && !data)) && (
-        <Card>
-          <CardContent className="p-6 space-y-4">
-            <Skeleton className="h-5 w-48" />
-            <Skeleton className="h-64" />
-          </CardContent>
-        </Card>
-      )}
+      {!error && (awaitingFiscalPeriod || (loading && !data)) && <ReportBodyLoading />}
 
       {data && !awaitingFiscalPeriod && (
         <div

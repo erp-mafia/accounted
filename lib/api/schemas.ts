@@ -1416,6 +1416,16 @@ export const UpdateSupplierInvoiceSchema = z.object({
   notes: z.string().optional(),
 })
 
+/**
+ * PATCH /api/supplier-invoices/[id]/items/[itemId]: move one line to another
+ * expense account. The registration verifikat is corrected inline (BFL 5 kap
+ * 5 §, track 2) in the same call, so the invoice and the ledger never
+ * disagree about where the cost sits.
+ */
+export const SupplierInvoiceItemAccountSchema = z.object({
+  account_number: accountNumberSchema,
+})
+
 // ============================================================
 // Supplier payment batch (betalfil) schemas
 // ============================================================
