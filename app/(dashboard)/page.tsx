@@ -2,7 +2,7 @@ import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
-import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
+import { AttGoraSkeleton, ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
 import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
@@ -173,7 +173,7 @@ export default async function DashboardPage() {
     return (
       <>
         <PageHeader title={tV2('title')} help={<HelpPopover>{tV2('help')}</HelpPopover>} />
-        <Suspense fallback={<PanesSkeleton />}>
+        <Suspense fallback={<AttGoraSkeleton />}>
           <HemV2Section
             companyId={companyId}
             userId={user.id}

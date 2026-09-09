@@ -161,12 +161,16 @@ export default function AttGoraV2({
   return (
     <div className="stagger-enter">
       {notices}
-      {/* Without notices the panes butt against the top bar: its border is
-          the only line, instead of a second one 16px below it. */}
+      {/* The panes draw a top line only when a notice sits between them and
+          the top bar; otherwise they butt against the bar and its border is
+          the only line. The notices slot is always an element, so the DOM
+          decides (first-child), not the prop: an empty notices section
+          renders nothing and must not leave a second line 16px below. */}
       <div
         className={cn(
           '-mx-4 -mb-8 grid md:-mx-6 md:grid-cols-[250px_minmax(0,1fr)] xl:grid-cols-[250px_minmax(0,1fr)_256px]',
-          notices ? 'border-t border-border/60 md:h-[calc(100vh-124px)]' : '-mt-4 md:h-[calc(100vh-108px)]',
+          'first:-mt-4 md:first:h-[calc(100vh-108px)]',
+          '[&:not(:first-child)]:border-t [&:not(:first-child)]:border-border/60 md:[&:not(:first-child)]:h-[calc(100vh-124px)]',
         )}
       >
         {/* Tree */}

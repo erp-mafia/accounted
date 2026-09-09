@@ -1,6 +1,8 @@
 'use client'
 
 import { usePathname } from 'next/navigation'
+import { useShell } from '@/components/dashboard/ShellProvider'
+import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 
 /**
@@ -21,6 +23,7 @@ import { Skeleton } from '@/components/ui/skeleton'
  */
 export default function DashboardLoading() {
   const pathname = usePathname()
+  const shell = useShell()
 
   if (pathname.startsWith('/chat')) {
     return (
@@ -54,6 +57,24 @@ export default function DashboardLoading() {
           </div>
         </aside>
         <div className="hidden min-w-0 flex-1 bg-background md:block" />
+      </div>
+    )
+  }
+
+  // Shell v2 has no greeting hero: the top bar carries the title, so the
+  // fallback is the bar plus rows, the silhouette of every v2 list page.
+  if (shell === 'v2') {
+    return (
+      <div className="space-y-8">
+        <PageHeader title={<Skeleton className="h-4 w-24" />} />
+        <div>
+          {['w-44', 'w-52', 'w-40', 'w-48', 'w-44', 'w-56'].map((w, i) => (
+            <div key={i} className="flex items-center gap-3 border-b border-border px-1 py-3.5">
+              <Skeleton className={`h-3.5 ${w}`} />
+              <Skeleton className="ml-auto h-3.5 w-16" />
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
