@@ -436,9 +436,44 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
   }
 
   if (!status || !items) {
+    if (v2) {
+      // The silhouette of the page that follows: the strip of figures, the
+      // action row and the paired rows, so nothing moves when the data lands.
+      return (
+        <div className="space-y-6" aria-busy>
+          <div className="grid grid-cols-2 gap-6 border-b border-border pb-4 md:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="space-y-2">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-6 w-28" />
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-4">
+            <Skeleton className="h-9 w-64 rounded-full" />
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-3 w-24" />
+          </div>
+          <div className="space-y-px">
+            <div className="flex items-center gap-6 border-b border-border py-2">
+              <Skeleton className="h-3 w-12" />
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="ml-auto h-3 w-16" />
+            </div>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="flex items-center gap-6 border-b border-border/60 py-3.5">
+                <Skeleton className="h-3.5 w-20" />
+                <Skeleton className="h-3.5 w-48" />
+                <Skeleton className="ml-auto h-3.5 w-20" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )
+    }
     return (
-      <div className={cn(!v2 && 'grid gap-8 lg:grid-cols-[220px_1fr]')} aria-busy>
-        {!v2 && rail}
+      <div className="grid gap-8 lg:grid-cols-[220px_1fr]" aria-busy>
+        {rail}
         <div className="min-w-0 space-y-6">
         <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border">
           {[0, 1, 2, 3].map((i) => (
@@ -620,8 +655,32 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         {!v2 && rail}
         <div className="min-w-0 space-y-6">
       {v2 ? (
-        <div className="space-y-2">
-          <p className={cn('text-[15px]', status.is_reconciled ? 'text-success' : diffAbs >= 0.005 ? 'text-foreground' : '')} data-ph-mask>
+        <div className="space-y-3">
+          {/* The two sides and what separates them, on one line (Kick's
+              reconciliation strip): the outside, the ledger, the difference,
+              the part of it nothing explains. */}
+          <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-b border-border pb-4 md:grid-cols-4">
+            {tiles.map((tile) => (
+              <div key={tile.key} className="min-w-0">
+                <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+                  <span className="truncate">{tile.label}</span>
+                  {tile.help && <InfoTooltip content={tile.help} iconClassName="h-3 w-3" />}
+                </div>
+                <div
+                  className={cn(
+                    'mt-1 text-[20px] font-semibold leading-tight tabular-nums',
+                    tile.tone === 'ok' && 'text-success',
+                    tile.tone === 'attn' && 'text-warning',
+                  )}
+                  data-ph-mask
+                >
+                  {tile.value}
+                </div>
+                {tile.sub && <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{tile.sub}</div>}
+              </div>
+            ))}
+          </div>
+          <p className={cn('text-[13.5px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
             {verdict}
             {verdictUnexplained && <span className="ml-1 text-warning">{verdictUnexplained}</span>}
             <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3 text-[12.5px]')}>

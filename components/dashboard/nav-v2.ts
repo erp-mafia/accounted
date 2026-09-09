@@ -101,7 +101,9 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     ],
   },
   {
-    href: '/purchases',
+    // Inköp lands on the invoice list: the flow-strip landing that sat here
+    // said less than the list itself (founder call 2026-09-09).
+    href: '/supplier-invoices',
     labelKey: 'v2_purchases',
     icon: Wallet,
     sub: [

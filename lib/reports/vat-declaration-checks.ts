@@ -142,11 +142,10 @@ export function runVatDeclarationChecks(
       code: 'RC_BASIS_MISSING',
       status: 'ERROR',
       message:
-        'Inköp med omvänd moms har fått sin moms (ruta 30-32) men saknar ' +
-        `sitt underlag (ruta 20-24): cirka ${shortfall.toLocaleString('sv-SE')} kr saknas. Skatteverket ` +
-        'avvisar deklarationen tills båda sidor finns med. Korrigera ' +
-        'verifikationerna nedan så läggs underlaget till; inga belopp ändras. ' +
-        'Skatteverkets felkod: FK004.',
+        'Omvänd moms utan underlag: momsen finns i ruta 30-32 men cirka ' +
+        `${shortfall.toLocaleString('sv-SE')} kr saknas i ruta 20-24. Korrigera ` +
+        'verifikationerna nedan så läggs underlaget till, inga belopp ändras ' +
+        '(Skatteverkets felkod FK004).',
       detail:
         'Den utgående momsen på inköp (ruta 30-32) motsvarar ett basbelopp ' +
         `på cirka ${Math.round(expectedRcBasis).toLocaleString('sv-SE')} kr, ` +

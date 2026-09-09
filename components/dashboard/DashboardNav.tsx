@@ -877,6 +877,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           isActive={isActive}
           isEnabled={isItemEnabled}
           badgeFor={v2BadgeFor}
+          renderIcon={(item, className) => (item.icon ? renderNavIcon({ href: item.href, icon: item.icon }, className) : null)}
           needsCompanyTitle={tNav('needs_company_tooltip')}
           betaLabel={tNav('badge_beta')}
           mainNavLabel={tNav('main_navigation')}
@@ -1368,7 +1369,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   </div>
                   <div className="space-y-0.5">
                     {items.map((item) => {
-                      const Icon = item.icon
                       const active = isActive(item.href)
                       const enabled = isItemEnabled(item.href) && !item.comingSoon
                       const badge = item.href === '/transactions' && uncategorizedCount > 0
@@ -1379,7 +1379,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       const decorBadge = renderBadge(item, 'mobile')
                       const content = (
                         <>
-                          <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
+                          {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
                           <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
                           {decorBadge ? decorBadge : badge !== null && (
                             <span data-ph-mask className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
@@ -1485,12 +1485,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   { href: cockpitMode ? '/settings/account?ctx=byra' : '/settings', labelKey: 'settings' as NavLabelKey, icon: Settings },
                   { href: '/help', labelKey: 'help' as NavLabelKey, icon: HelpCircle },
                 ]).map((item) => {
-                  const Icon = item.icon
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
                   const content = (
                     <>
-                      <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
+                      {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
                       <span className="text-sm">{tNav(item.labelKey)}</span>
                     </>
                   )

@@ -71,7 +71,7 @@ const supplyItemsFor = (supplierType: SupplierType) =>
       ]
 
 /** How many gap rows render before the "Visa alla" toggle. */
-const GAP_PREVIEW_COUNT = 8
+const GAP_PREVIEW_COUNT = 5
 
 /**
  * "Kontroll av underlaget": the local pre-flight checks for the

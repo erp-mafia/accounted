@@ -37,7 +37,7 @@ export function CategoryPopover({
 }) {
   const t = useTranslations('tx_template_picker')
   const panelRef = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null)
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number; width: number } | null>(null)
 
   useLayoutEffect(() => {
     if (!anchor) return
@@ -52,8 +52,10 @@ export function CategoryPopover({
       const maxHeight = Math.max(160, Math.min(MAX_HEIGHT, useBelow ? spaceBelow : spaceAbove))
       const height = Math.min(maxHeight, panelRef.current?.offsetHeight ?? maxHeight)
       const top = useBelow ? r.bottom + GAP : Math.max(MARGIN, r.top - GAP - height)
-      const left = Math.max(MARGIN, Math.min(r.left, window.innerWidth - WIDTH - MARGIN))
-      setPos({ top, left, maxHeight })
+      // A phone is narrower than the panel: it takes the width that is there.
+      const width = Math.min(WIDTH, window.innerWidth - 2 * MARGIN)
+      const left = Math.max(MARGIN, Math.min(r.left, window.innerWidth - width - MARGIN))
+      setPos({ top, left, maxHeight, width })
     }
     place()
     window.addEventListener('scroll', place, true)
@@ -85,7 +87,7 @@ export function CategoryPopover({
           style={{
             top: pos?.top ?? -9999,
             left: pos?.left ?? -9999,
-            width: WIDTH,
+            width: pos?.width ?? WIDTH,
             maxHeight: pos?.maxHeight ?? MAX_HEIGHT,
             visibility: pos ? 'visible' : 'hidden',
           }}
