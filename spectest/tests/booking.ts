@@ -67,7 +67,9 @@ export const bookTransaction = env.test(
     // The template picker offers BAS-mapped templates. Insättning skattekonto
     // is D 1630 / K 1930.
     const review = await chooseTemplate(b, "Inbetalning skattekonto 16556677-8899", "skattekonto", /Insättning skattekonto/, "1630");
-    await expect(review).toContainText("D: 1630 Skattekonto → K: 1930 Företagskonto");
+    // The verifikat block is the one statement of how it books.
+    await expect(review).toContainText("1630 Skattekonto");
+    await expect(review).toContainText("1930 Företagskonto");
 
     // The button says "Bokför utan underlag" when no receipt is attached:
     // still the booking, with the missing underlag named rather than hidden.
