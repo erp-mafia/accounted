@@ -7435,6 +7435,7 @@
     "toast_payment_date_updated": "Utbetalningsdag uppdaterad",
     "header_employees": "{count, plural, one {# anställd} other {# anställda}}",
     "not_found": "Lönekörning hittades inte",
+    "load_failed": "Lönekörningen kunde inte hämtas. Ladda om sidan.",
     "more_actions": "Fler åtgärder",
     "unknown_error": "Okänt fel",
     "rail_calculate": "Beräkna",
