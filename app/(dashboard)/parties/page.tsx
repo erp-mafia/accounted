@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -64,7 +64,6 @@ function CounterpartsPage() {
   const [merge, setMerge] = useState<{ subject: MergeCandidate; suggested: MergeCandidate[] } | null>(null)
   const [picker, setPicker] = useState<{ partyId: string; name: string } | null>(null)
   const [rename, setRename] = useState<{ row: CounterpartRow; name: string } | null>(null)
-  const autoRan = useRef(false)
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(query.trim()), 250)
@@ -126,11 +125,8 @@ function CounterpartsPage() {
     [refreshing, toast, t, reload],
   )
 
-  useEffect(() => {
-    if (!list || autoRan.current || !canWrite) return
-    autoRan.current = true
-    void refresh(true)
-  }, [list, canWrite, refresh])
+  // Opening the page reads; it never writes. New bank strings are read by
+  // the nightly resolver cron, or when the person presses Läs nya.
 
   function undoToast(title: string, undoUrl: string, ids: string[]) {
     toast({

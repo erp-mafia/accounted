@@ -10,6 +10,8 @@ import { resolveCompanyCounterparts, resolverMode } from '@/lib/parties/resolver
  * used because the shared directory has no member policies; the company is
  * the caller's active company and nothing else.
  */
+// A write (alias rows), so a viewer cannot trigger it; the nightly cron is
+// the background path, this route is the person pressing Läs nya.
 export const POST = withRouteContext('parties.resolver_run', async (_request, { companyId, log, requestId }) => {
   if (resolverMode() === 'off') return NextResponse.json({ data: { skipped: true, planned: 0, written: 0 } })
   try {
@@ -21,4 +23,4 @@ export const POST = withRouteContext('parties.resolver_run', async (_request, { 
     log.warn('counterpart resolver run failed', { message: err instanceof Error ? err.message : String(err) })
     return errorResponseFromCode('INTERNAL_ERROR', log, { requestId })
   }
-})
+}, { requireWrite: true })

@@ -480,6 +480,9 @@ export async function suggestPartiesForCompany(
       .order('created_at', { ascending: true })
       .range(from, to),
   )
+  // Runs only from the explicit refresh (Uppdatera förslag / Läs nya) or
+  // the nightly cron, never from a page load; every merge is logged by
+  // merge_parties and undoable for 30 days.
   for (const plan of planDuplicateMerges(live)) {
     const { error } = await supabase.rpc('merge_parties', {
       p_company_id: companyId,
