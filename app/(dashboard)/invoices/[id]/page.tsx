@@ -1714,7 +1714,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </Badge>
             )}
           </div>
-          <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
+          <p className="page-header-meta mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
         </div>
 
         <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">

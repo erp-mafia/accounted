@@ -244,7 +244,7 @@ export default function CustomerDetailPage({
         <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="page-header-lead min-w-0">
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{customer.name}</h1>
-            <p className="page-header-desc mt-1 text-sm text-muted-foreground">
+            <p className="page-header-meta mt-1 text-sm text-muted-foreground">
               {t(CUSTOMER_TYPE_KEY[customer.customer_type])}
             </p>
           </div>

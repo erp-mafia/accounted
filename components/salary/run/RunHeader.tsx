@@ -265,7 +265,7 @@ export function RunHeader({
               <Badge variant="outline">{t('correction_badge')}</Badge>
             )}
           </div>
-          <p className="page-header-desc mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+          <p className="page-header-meta mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
             {metaParts.map((part, i) => (
               <span key={i} className="inline-flex items-center gap-x-2">
                 {i > 0 && <span aria-hidden>·</span>}
