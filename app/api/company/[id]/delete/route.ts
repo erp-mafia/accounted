@@ -178,6 +178,20 @@ export async function POST(
         .select('id'),
     },
     {
+      table: 'zettle_connections',
+      result: await service
+        .from('zettle_connections')
+        .update({
+          status: 'revoked',
+          disconnected_at: archivedAt,
+          refresh_token_encrypted: null,
+          oauth_state: null,
+        })
+        .eq('company_id', companyId)
+        .neq('status', 'revoked')
+        .select('id'),
+    },
+    {
       table: 'stripe_connections',
       result: await service
         .from('stripe_connections')

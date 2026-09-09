@@ -93,7 +93,7 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
     rows.push({
       group: 'Resultat',
       account_number: '',
-      account_name: 'Årets resultat',
+      account_name: 'Beräknat resultat',
       ytd_opening: roundOre(report.net_result_ytd - report.net_result_current),
       current_period: report.net_result_current,
       ytd_closing: report.net_result_ytd,

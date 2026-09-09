@@ -116,6 +116,23 @@ export const WORKLIST_CATEGORIES = [
    * Counts PEOPLE, not receipts: the action is one transfer per person.
    */
   'expense_payout',
+  /**
+   * The next skattekonto charge the balance does not cover ("Betala in till
+   * Skatteverket"), one item at most.
+   * Pending:  skattekonto_transactions with status = 'upcoming' (Skatteverket's
+   *           "kommande": a charge it will draw on forfallodatum), grouped on
+   *           the earliest due date on or after today, whose sum exceeds the
+   *           last synced saldo (extension_data skattekonto_balance_snapshot).
+   *           Ignored rows take part: Skatteverket draws regardless of our
+   *           flag. With no snapshot the whole charge is the amount to pay in.
+   * Done:     the saldo covers the charge (the payment reached Skatteverket
+   *           and the next sync or file import shows it), or the due date
+   *           passes and the charge becomes a booked event, which is then
+   *           book_skattekonto's work, not this row's.
+   * Never counts with book_skattekonto: that one is a verifikat to write for
+   * a settled event; this one is money that has to move before a date.
+   */
+  'skattekonto_payment_due',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
@@ -138,6 +155,28 @@ export interface ExpensePayoutDue {
   total_sek: number
   /** ISO date of the oldest unpaid claim. */
   oldest_expense_date: string
+}
+
+/**
+ * The next charge Skatteverket will draw that the skattekonto balance does
+ * not cover: the Att göra row "Betala in till Skatteverket". Same math as the
+ * /skattekonto page's Nästa dragning line and its payment dialog.
+ */
+export interface SkattekontoPaymentDue {
+  /** ISO due date of the charge (forfallodatum, else transaktionsdatum). */
+  due: string
+  /** Everything Skatteverket draws on `due`, as a positive amount. */
+  charge: number
+  /** Last synced saldo; null when no balance snapshot exists. */
+  balance: number | null
+  /** What has to be paid in: charge minus balance (never below 0), or the full charge when the balance is unknown. */
+  amount: number
+  /** Number of skattekonto rows drawn on `due`. */
+  count: number
+  /** OCR reference for the payment; null when the company's org number cannot produce one. */
+  ocr: string | null
+  /** Bankgiro for every skattekonto payment (5050-1055). */
+  bankgiro: string
 }
 
 export interface WorklistCounts {

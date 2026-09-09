@@ -122,6 +122,27 @@
 .jny-biginput input::placeholder { color: hsl(var(--muted-foreground) / 0.45); }
 .jny-biginput.is-err { animation: jnyShake 340ms var(--ease-out); }
 @keyframes jnyShake { 0%, 100% { transform: none; } 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
+/* Search-as-you-type picker under the orgnr field: an 8px surface on the
+   page, 4px rows inset inside it (the radius ladder), flat hover. In flow
+   (the step scrolls, so a floated list would be clipped to the field). */
+.jny-suggest {
+  max-width: 360px; margin: 10px auto 0; padding: 4px; list-style: none;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  text-align: left;
+  animation: jnyQIn 200ms var(--ease-out);
+}
+.jny-suggest li {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 9px 12px; border-radius: 4px; cursor: pointer;
+  font-size: 14px; line-height: 1.3; letter-spacing: 0;
+  transition: background-color 150ms var(--ease-out);
+}
+.jny-suggest li:hover, .jny-suggest li.is-active { background: hsl(var(--secondary) / 0.6); }
+.jny-suggest li.is-inactive .jny-sug-name { color: hsl(var(--muted-foreground)); }
+.jny-sug-name { font-weight: 400; }
+.jny-sug-sub { font-size: 11.5px; color: hsl(var(--muted-foreground)); font-variant-numeric: tabular-nums; }
 .jny-enterhint { font-size: 11.5px; color: hsl(var(--muted-foreground)); margin-top: 10px; }
 .jny-enterhint b { border: 1px solid hsl(var(--border)); border-radius: 5px; padding: 1px 6px; font-weight: 400; }
 

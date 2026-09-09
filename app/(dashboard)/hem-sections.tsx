@@ -6,6 +6,7 @@ import { HemNotices } from '@/components/dashboard/HemNotices'
 import {
   getWorklistCounts,
   listExpensePayoutsDue,
+  listSkattekontoPaymentDue,
   listSuggestedMatches,
   SUGGESTED_MATCH_SCAN_CAP,
 } from '@/lib/worklist'
@@ -199,16 +200,29 @@ export async function HemPanesSection({
   // Same pattern for people owed for utlägg: Hem renders one row per person
   // and the worklist count is the list's length.
   const expensePayoutsPromise = listExpensePayoutsDue(supabase, companyId)
-  const [worklist, suggestedMatches, expensePayouts, resumeItems, bankConnectionsRes, postedEntries] =
+  // And for the next uncovered skattekonto charge: Hem renders the Betala
+  // row with amount, bankgiro and OCR; the worklist count is 1 or 0 from it.
+  const skattekontoPaymentPromise = listSkattekontoPaymentDue(supabase, companyId)
+  const [
+    worklist,
+    suggestedMatches,
+    expensePayouts,
+    skattekontoPayment,
+    resumeItems,
+    bankConnectionsRes,
+    postedEntries,
+  ] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
       // sidebar badges, so the numbers can never diverge.
       getWorklistCounts(supabase, companyId, {
         suggestedMatches: suggestedMatchesPromise,
         expensePayoutsDue: expensePayoutsPromise,
+        skattekontoPaymentDue: skattekontoPaymentPromise,
       }),
       suggestedMatchesPromise,
       expensePayoutsPromise,
+      skattekontoPaymentPromise,
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
@@ -242,6 +256,7 @@ export async function HemPanesSection({
         worklist={worklist}
         suggestedMatches={suggestedMatches.slice(0, 5)}
         expensePayouts={expensePayouts}
+        skattekontoPayment={skattekontoPayment}
         expiringBankConnections={expiringBankConnections}
         emptyLedger={emptyLedger}
         hasActiveBankConnection={hasActiveBankConnection}

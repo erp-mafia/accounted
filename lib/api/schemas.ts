@@ -1779,7 +1779,7 @@ export const BookTransactionSchema = z
 
 // ── Webshop orders (Orders page) ──────────────────────────────
 
-export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify'])
+export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify', 'zettle'])
 
 export const WebshopOrdersListQuerySchema = z.object({
   platform: WebshopPlatformSchema.optional(),
@@ -4299,6 +4299,11 @@ export const PartyEnrichSchema = z.object({
 
 export const PartySearchRegistryQuerySchema = z.object({
   q: z.string().max(120).optional(),
+})
+
+/** GET /api/company/search: the onboarding picker's free-text query. */
+export const CompanySearchQuerySchema = z.object({
+  q: z.string().trim().min(3).max(120),
 })
 
 /**

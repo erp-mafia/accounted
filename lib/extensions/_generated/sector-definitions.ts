@@ -185,6 +185,17 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "hasOwnData": true
     },
     {
+          "slug": "zettle",
+          "name": "Zettle",
+          "sector": "general",
+          "category": "import",
+          "icon": "CreditCard",
+          "dataPattern": "manual",
+          "description": "Hämta betalda köp och återbetalningar från Zettle till Ordersidan",
+          "longDescription": "Anslut ditt Zettle-konto så hämtas betalda köp och återbetalningar automatiskt varje natt till Ordersidan, med belopp, betalsätt, moms per sats och radunderlag. Inget bokförs automatiskt: du bokför varje köp själv från Ordersidan.",
+          "hasOwnData": true
+    },
+    {
           "slug": "mail",
           "name": "Brevlådor",
           "sector": "general",

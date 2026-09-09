@@ -4,6 +4,7 @@ import { createLogger } from '@/lib/logger'
 import { EmptyModelAnswerError } from './errors'
 import { buildLedgerTools } from './ledger-tools'
 import { buildAssistantSnapshot } from './snapshot'
+import { FISCAL_YEAR_RULE } from '@/lib/agent/fiscal-years'
 
 const log = createLogger('agent.ask')
 
@@ -89,7 +90,8 @@ Regler:
 // With tools: the model can and should fetch the real figures itself.
 const TOOL_RULES = `
 Du har läsverktyg för bolagets faktiska bokföring: resultatrapport, balansrapport, momsrapport, huvudbok, transaktioner (query_journal), kund- och leverantörsreskontra, lönejournal, kontoplan, fakturor, dokumentinkorg med mera. När användaren frågar om siffror, belopp, poster, kategorier eller en period: ANROPA rätt verktyg och svara med de faktiska siffrorna, inte uppskattningar. Verktygen är skrivskyddade; för att bokföra eller ändra något hänvisar du användaren till rätt sida i appen.
-"Nuläge"-blocket nedan är bara grunddata (moms, deadlines), inte hela bokföringen: använd verktygen för siffror.`
+"Nuläge"-blocket nedan är bara grunddata (moms, deadlines, räkenskapsår), inte hela bokföringen: använd verktygen för siffror.
+${FISCAL_YEAR_RULE}`
 
 // Without tools (core-only build, or a text-only model): answer from what is
 // in the prompt and be honest about the rest.

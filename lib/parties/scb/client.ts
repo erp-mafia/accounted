@@ -28,6 +28,8 @@ export interface ScbCandidate {
   city: string | null
   industry: string | null
   legalForm: string | null
+  /** SCB's legal form code ("49" övriga aktiebolag, "10" enskild näringsidkare). */
+  legalFormCode: string | null
   /** SCB's own status text; active is Företagsstatus code 1. */
   status: string | null
   active: boolean
@@ -47,13 +49,27 @@ export interface ScbClient {
   variables(): Promise<unknown>
   categories(): Promise<unknown>
   lookupByOrgNumber(orgNumber: string): Promise<ScbLookupResult>
-  searchByName(query: string): Promise<ScbSearchResult>
+  searchByName(query: string, opts?: ScbSearchOptions): Promise<ScbSearchResult>
+}
+
+export interface ScbSearchOptions {
+  /**
+   * Offer enskilda näringsidkare (legal form 10) alongside legal persons.
+   * Off by default: the parties picker matches counterparts on supplier
+   * invoices, where a natural person is noise. Onboarding turns it on
+   * because a sole trader searching for their own firm is the point; the
+   * org number SCB returns there is the owner's personnummer, so the caller
+   * decides what to print. Estates (91) are never offered.
+   */
+  includeSoleTraders?: boolean
 }
 
 /** Candidates shown per search; SCB can return thousands for a short word. */
 export const SCB_SEARCH_CAP = 25
 /** Legal forms never offered in the picker: natural persons and estates. */
 const NON_COMPANY_LEGAL_FORMS = new Set(['10', '91'])
+/** SCB legal form code for a natural person running a business (enskild näringsidkare). */
+export const SCB_LEGAL_FORM_SOLE_TRADER = '10'
 
 /**
  * What we send SCB for a name: the AP prefix, supplier numbers and a
@@ -78,10 +94,11 @@ export function nameSearchBody(query: string, mode: 'starts_with' | 'contains') 
   }
 }
 
-function candidateFrom(row: ScbCompanyRow): ScbCandidate | null {
+function candidateFrom(row: ScbCompanyRow, includeSoleTraders: boolean): ScbCandidate | null {
   const org = String(row.OrgNr ?? '').replace(/[^0-9]/g, '')
   const legalFormCode = String(row['Juridisk form, kod'] ?? '').trim()
-  if (org.length !== 10 || NON_COMPANY_LEGAL_FORMS.has(legalFormCode)) return null
+  if (org.length !== 10) return null
+  if (NON_COMPANY_LEGAL_FORMS.has(legalFormCode) && !(includeSoleTraders && legalFormCode === SCB_LEGAL_FORM_SOLE_TRADER)) return null
   const str = (k: string) => {
     const v = row[k]
     const t = v === null || v === undefined ? '' : String(v).trim()
@@ -93,6 +110,7 @@ function candidateFrom(row: ScbCompanyRow): ScbCandidate | null {
     city: str('PostOrt'),
     industry: str('Bransch_1'),
     legalForm: str('Juridisk form'),
+    legalFormCode: legalFormCode || null,
     status: str('Företagsstatus'),
     active: String(row['Företagsstatus, kod'] ?? '').trim() === '1',
   }
@@ -122,7 +140,8 @@ export function createScbClient(config: ScbConfig, deps: { json?: typeof scbJson
       const row = list.find((r) => String(r.OrgNr ?? r.PeOrgNr ?? '').replace(/[^0-9]/g, '').endsWith(org10)) ?? null
       return { found: Boolean(row), peOrgNr, row, facts: row ? factsFromScbCompany(row) : [], fetchedAt }
     },
-    async searchByName(raw) {
+    async searchByName(raw, opts = {}) {
+      const includeSoleTraders = opts.includeSoleTraders === true
       const query = nameQuery(raw)
       if (query.length < 2) return { query, mode: 'starts_with', total: 0, truncated: false, candidates: [] }
       // Count first: a short word can match thousands and we never pull those.
@@ -132,7 +151,9 @@ export function createScbClient(config: ScbConfig, deps: { json?: typeof scbJson
         if (total === 0) return { query, mode, total, truncated: false, candidates: [] }
         if (total > SCB_SEARCH_CAP * 4) return { query, mode, total, truncated: true, candidates: [] }
         const rows = await json<ScbCompanyRow[]>(config, 'POST', '/api/Je/HamtaForetag', body)
-        const all = (Array.isArray(rows) ? rows : []).map(candidateFrom).filter((c): c is ScbCandidate => c !== null)
+        const all = (Array.isArray(rows) ? rows : [])
+          .map((r) => candidateFrom(r, includeSoleTraders))
+          .filter((c): c is ScbCandidate => c !== null)
         // Active companies first, then by name; the cap keeps the picker a picker.
         all.sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, 'sv'))
         // total is what the picker can offer: SCB's count minus the natural

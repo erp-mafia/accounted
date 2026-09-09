@@ -181,6 +181,22 @@ describe('name search', () => {
     expect(SCB_SEARCH_CAP).toBe(25)
   })
 
+  it('offers sole traders only when asked, and never estates', async () => {
+    const json = async (_c: unknown, _m: string, path: string) => {
+      if (path.endsWith('RaknaForetag')) return 3
+      return [row('5564082161', 'Adobe Systems Nordic Aktiebolag'), row('8001011234', 'ADOBE, ANNA', '1', '10'), row('8001011235', 'ADOBE, ANNA DÖDSBO', '1', '91')]
+    }
+    const client = createScbClient(cfg, { json: json as never })
+    const parties = await client.searchByName('Adobe')
+    expect(parties.candidates.map((c) => c.orgNumber)).toEqual(['5564082161'])
+    const onboarding = await client.searchByName('Adobe', { includeSoleTraders: true })
+    expect(onboarding.candidates.map((c) => [c.orgNumber, c.legalFormCode])).toEqual([
+      ['5564082161', '49'],
+      ['8001011234', '10'],
+    ])
+    expect(onboarding.total).toBe(2)
+  })
+
   it('does not call SCB for a query shorter than two characters', async () => {
     const json = async () => {
       throw new Error('should not be called')

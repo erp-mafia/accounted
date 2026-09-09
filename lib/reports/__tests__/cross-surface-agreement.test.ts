@@ -19,6 +19,12 @@
  * is asserted explicitly, so when Stage 2 moves generateIncomeStatement to
  * 'exclude-final' this test says exactly which expectations must change instead
  * of failing vaguely.
+ *
+ * One deliberate exception inside the operational family (#2455): a booked or
+ * imported 8999 omföring is listed by Resultatrapport (account-level, reads 0
+ * after the omföring like a Fortnox/Visma resultatrapport) but excluded by
+ * Resultaträkning (ÅRL uppställningsform, årets resultat is always computed).
+ * That gap is pinned below too.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -40,6 +46,7 @@ import {
   EXPECTED,
   PRE_CLOSING_ROWS,
   rowsForMode,
+  tbRow,
 } from './closed-year-fixture'
 
 const COMPANY_ID = 'company-1'
@@ -153,6 +160,35 @@ describe('operational surfaces agree with each other', () => {
     expect(is.net_result).toBe(EXPECTED.resultAfterFinancial)
     expect(rr.net_result_current).toBe(EXPECTED.resultAfterFinancial)
     expect(is.net_result).toBe(rr.net_result_current)
+  })
+
+  it('differ by exactly a booked 8999 omföring, the one deliberate gap (#2455)', async () => {
+    // Same closed year, plus a manual/imported omföring: D 8999 / K 2099.
+    const omforing = EXPECTED.resultAfterFinancial
+    vi.mocked(generateTrialBalance).mockImplementation(async (_s, _c, _p, opts) => ({
+      rows:
+        opts.closingEntry === 'exclude-all-year-end'
+          ? [
+              ...rowsForMode(opts.closingEntry),
+              tbRow('8999', 'Årets resultat', omforing),
+              tbRow('2099', 'Årets resultat', -omforing),
+            ]
+          : rowsForMode(opts.closingEntry),
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    }))
+
+    const is = await generateIncomeStatement(makeSupabase(), COMPANY_ID, PERIOD_ID)
+    const rr = await generateResultatrapport(makeSupabase(), COMPANY_ID, PERIOD_ID)
+
+    // Resultaträkning ignores 8999 and still reports the computed result.
+    expect(is.net_result).toBe(EXPECTED.resultAfterFinancial)
+    // Resultatrapport lists the row and its beräknat resultat reads zero.
+    const row8999 = rr.groups.flatMap((g) => g.rows).find((r) => r.account_number === '8999')
+    expect(row8999?.current_period).toBe(-omforing)
+    expect(rr.net_result_current).toBe(0)
+    expect(is.net_result - rr.net_result_current).toBe(omforing)
   })
 
   it('and the same revenue as the statutory family', async () => {

@@ -3906,9 +3906,9 @@ export interface IngestResult {
   shadow_date_drift_candidates?: number
 }
 
-// ── Webshop orders (Orders page; synced by the woocommerce/shopify extensions) ──
+// ── Webshop orders (Orders page; synced by the woocommerce/shopify/zettle extensions) ──
 
-export type WebshopPlatform = 'woocommerce' | 'shopify'
+export type WebshopPlatform = 'woocommerce' | 'shopify' | 'zettle'
 export type WebshopOrderRowType = 'order' | 'refund'
 
 /** One VAT rate bucket of an order, in the order's currency. */
