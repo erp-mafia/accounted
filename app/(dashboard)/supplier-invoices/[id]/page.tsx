@@ -32,6 +32,9 @@ import Link from 'next/link'
 import { AccountNumber } from '@/components/ui/account-number'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { AccountChip } from '@/components/ui/account-chip'
+import { CategoryPopover } from '@/components/transactions/CategoryPopover'
+import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import useSWR from 'swr'
@@ -50,6 +53,7 @@ import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import type { EntityType } from '@/types'
 
 interface EditableLine {
   account_number: string
@@ -110,51 +114,53 @@ const EXCEPTION_STATUS_VARIANTS: Record<string, 'secondary' | 'outline' | 'warni
 function InlineAccountCell({
   item,
   editable,
-  accounts,
+  entityType,
   label,
   onCommit,
 }: {
   item: { id: string; account_number: string }
   editable: boolean
-  accounts: React.ComponentProps<typeof AccountCombobox>['accounts']
+  entityType: EntityType
   label: string
   onCommit: (itemId: string, account: string) => Promise<void>
 }) {
-  const [editing, setEditing] = useState(false)
-  const [value, setValue] = useState(item.account_number)
-  if (!editable) return <AccountNumber number={item.account_number} />
-  if (!editing) {
-    return (
+  // The category chip from Transaktioner: the account as a hue dot, its
+  // name and the number, and the same anchored picker (templates, or an
+  // account by search) when it is clicked. A template's debit account is
+  // what the line books to; the picker sits beside the row instead of
+  // swapping the cell for a combobox.
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  if (!editable) return <AccountChip account={item.account_number} />
+  return (
+    <>
       <button
         type="button"
-        className="-mx-1 rounded-sm px-1 transition-colors duration-150 hover:bg-secondary/60"
+        className="-mx-1 rounded-full px-1 transition-colors duration-150 hover:bg-secondary/60"
         aria-label={label}
-        onClick={() => {
-          setValue(item.account_number)
-          setEditing(true)
-        }}
+        onClick={(e) => setAnchor(e.currentTarget)}
       >
-        <AccountNumber number={item.account_number} />
+        <AccountChip account={item.account_number} />
       </button>
-    )
-  }
-  return (
-    <div
-      className="w-[240px]"
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') setEditing(false)
-      }}
-    >
-      <AccountCombobox
-        value={value}
-        accounts={accounts}
-        onChange={setValue}
-        onCommit={(n) => {
-          setEditing(false)
-          if (n !== item.account_number) void onCommit(item.id, n)
-        }}
-      />
-    </div>
+      {anchor && (
+        <CategoryPopover anchor={anchor} onClose={() => setAnchor(null)}>
+          <div className="flex min-h-0 flex-col overflow-hidden">
+            <TemplatePicker
+              direction="expense"
+              entityType={entityType}
+              dense
+              onSelect={(template) => {
+                setAnchor(null)
+                if (template.debit_account !== item.account_number) void onCommit(item.id, template.debit_account)
+              }}
+              onSelectAccount={(account) => {
+                setAnchor(null)
+                if (account !== item.account_number) void onCommit(item.id, account)
+              }}
+            />
+          </div>
+        </CategoryPopover>
+      )}
+    </>
   )
 }
 
@@ -1104,7 +1110,7 @@ export default function SupplierInvoiceDetailPage() {
                   {formatCurrency(item.unit_price, invoice.currency)}
                 </td>
                 <td className={TD_CLASS}>
-                  <InlineAccountCell item={item} editable={lineAccountEditable} accounts={accounts} label={t('line_account_edit')} onCommit={changeLineAccount} />
+                  <InlineAccountCell item={item} editable={lineAccountEditable} entityType={(company?.entity_type ?? 'aktiebolag') as EntityType} label={t('line_account_edit')} onCommit={changeLineAccount} />
                 </td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{Math.round(item.vat_rate * 100)}%</td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
