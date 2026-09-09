@@ -43,6 +43,7 @@ import {
 
 
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import type { TransactionCategory, VatTreatment, EntityType, LinePatternEntry } from '@/types'
 
 /**
@@ -498,4 +499,39 @@ export function proposalLinesToFormLines(
       ...(isSettlement ? currencyMeta : {}),
     }
   })
+}
+
+/**
+ * The verifikat a static catalog template books for a total (incl. VAT), as
+ * form lines: the same computation the transactions review shows, so Ny
+ * verifikation and Bokför från mall apply a template exactly the way a bank
+ * row would be booked with it. Expense templates are booked as a payment
+ * out (negative amount); income templates as money in; a transfer books the
+ * template's own debit and credit legs as written.
+ */
+export function staticTemplateToFormLines(
+  template: BookingTemplate,
+  totalAmount: number,
+  entityType?: EntityType,
+): FormLine[] {
+  const accounts = resolveTemplateAccountsForEntity(template, entityType)
+  const abs = Math.abs(totalAmount)
+  if (!(abs > 0) || !accounts.debitAccount || !accounts.creditAccount) return []
+  if (template.direction === 'transfer') {
+    const amount = roundOre(abs).toFixed(2)
+    return [
+      { account_number: accounts.debitAccount, debit_amount: amount, credit_amount: '', line_description: '' },
+      { account_number: accounts.creditAccount, debit_amount: '', credit_amount: amount, line_description: '' },
+    ]
+  }
+  const lines = computeProposalLines({
+    amount: template.direction === 'income' ? abs : -abs,
+    entityType,
+    templateDebitAccount: accounts.debitAccount,
+    templateCreditAccount: accounts.creditAccount,
+    templateVatRate: template.vat_rate,
+    templateVatTreatment: template.vat_treatment,
+    templateSupplierType: template.reverse_charge_supplier_type,
+  })
+  return proposalLinesToFormLines(lines)
 }

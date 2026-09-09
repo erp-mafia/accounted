@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { applyVatAmountToLines, computeProposalLines, proposalLinesToFormLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
+import { applyVatAmountToLines, computeProposalLines, proposalLinesToFormLines, resolveTemplateAccountsForEntity, staticTemplateToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import { buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { makeCategorizationTemplate, makeTransaction } from '@/tests/helpers'
@@ -603,5 +604,38 @@ describe('vatAmountSek: the underlag\'s moms over the rate', () => {
       { side: 'kredit', account: '1930', amount: 546, settlement: true },
     ]
     expect(applyVatAmountToLines(lines, 546, true)).toBe(lines)
+  })
+})
+
+describe('staticTemplateToFormLines', () => {
+  const sum = (lines: { debit_amount: string; credit_amount: string }[], side: 'debit_amount' | 'credit_amount') =>
+    roundOre(lines.reduce((acc, l) => acc + (parseFloat(l[side]) || 0), 0))
+
+  it('books an expense template with its VAT out of the total, balanced', () => {
+    const lines = staticTemplateToFormLines(getTemplateById('travel_transport')!, 376, 'aktiebolag')
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['5810', '354.72', ''],
+      ['2641', '21.28', ''],
+      ['1930', '', '376.00'],
+    ])
+    expect(sum(lines, 'debit_amount')).toBe(sum(lines, 'credit_amount'))
+  })
+
+  it('books an income template as money in', () => {
+    const lines = staticTemplateToFormLines(getTemplateById('revenue_standard_25')!, 1250, 'aktiebolag')
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('1250.00')
+    expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('1000.00')
+    expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('250.00')
+  })
+
+  it('books a transfer template as its two legs, no VAT', () => {
+    expect(staticTemplateToFormLines(getTemplateById('financial_tax_account')!, 5000, 'aktiebolag')).toEqual([
+      { account_number: '1630', debit_amount: '5000.00', credit_amount: '', line_description: '' },
+      { account_number: '1930', debit_amount: '', credit_amount: '5000.00', line_description: '' },
+    ])
+  })
+
+  it('returns nothing for a non-positive total', () => {
+    expect(staticTemplateToFormLines(getTemplateById('travel_transport')!, 0)).toEqual([])
   })
 })

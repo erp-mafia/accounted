@@ -3195,6 +3195,14 @@
     "new_btn": "New transaction"
   },
   "tx_template_picker": {
+    "group_goods": "Goods & Materials",
+    "group_tax": "Tax & VAT",
+    "group_closing": "Year-end",
+    "picker_title": "Choose a template",
+    "amount_label": "Total incl. VAT",
+    "apply": "Apply",
+    "use_template": "Use template",
+    "standard_templates": "Standard templates",
     "group_premises": "Premises",
     "group_vehicle": "Vehicle",
     "group_it_software": "IT & Software",

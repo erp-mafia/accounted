@@ -37,6 +37,12 @@ export type TemplateGroup =
   | 'financial'
   | 'private_transfers'
   | 'equipment'
+  // The three families the static catalog has no templates for but the
+  // library (system + own templates) files under: goods for resale (4xxx),
+  // tax and VAT settlements (1630/2650/25xx), and year-end postings (88xx).
+  | 'goods'
+  | 'tax'
+  | 'closing'
 
 export interface BookingTemplate {
   id: string
@@ -108,6 +114,9 @@ const GROUP_LABELS: Record<TemplateGroup, { sv: string; en: string }> = {
   financial: { sv: 'Finansiella poster', en: 'Financial Items' },
   private_transfers: { sv: 'Privata transaktioner', en: 'Private Transfers' },
   equipment: { sv: 'Inventarier & Utrustning', en: 'Equipment' },
+  goods: { sv: 'Varor & material', en: 'Goods & Materials' },
+  tax: { sv: 'Skatt & moms', en: 'Tax & VAT' },
+  closing: { sv: 'Bokslut', en: 'Year-end' },
 }
 
 // ============================================================
