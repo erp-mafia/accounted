@@ -10,6 +10,7 @@ import {
   FLOW_INITIATOR_MISMATCH_MESSAGE,
 } from '@/lib/auth/oauth-flow-binding'
 import { encryptCredential } from '@/extensions/general/zettle/lib/credentials'
+import { validateReturnOrigin } from '@/extensions/general/zettle/lib/return-origin'
 import {
   exchangeCodeForTokens,
   fetchUserSelf,
@@ -46,13 +47,14 @@ export async function GET(request: Request) {
   const errorDescription = searchParams.get('error_description')
 
   const appBase = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '')
-  // Return the browser to the origin the connect flow started on (validated
-  // at connect time: the app origin or a brand domain from the brands table).
-  // Zettle redirects to the one registered callback URL, so a white-label
-  // user would otherwise land on the canonical app domain.
-  const returnUrlFor = (origin: string | null | undefined) =>
-    `${(origin || appBase).replace(/\/$/, '')}/import?mode=zettle`
-  let returnUrl = returnUrlFor(null)
+  // Return the browser to the origin the connect flow started on. Zettle
+  // redirects to the one registered callback URL, so a white-label user
+  // would otherwise land on the canonical app domain. The stored value is
+  // re-validated here (members can update the row through RLS): the app
+  // origin or a brand domain, never an arbitrary URL.
+  const returnUrlFor = async (origin: string | null | undefined) =>
+    `${await validateReturnOrigin(origin, appBase)}/import?mode=zettle`
+  let returnUrl = `${appBase}/import?mode=zettle`
 
   if (error) {
     const errorMessage = errorDescription || error
@@ -73,7 +75,7 @@ export async function GET(request: Request) {
           .eq('status', 'pending')
           .select('return_origin')
           .maybeSingle()
-        returnUrl = returnUrlFor(denied?.return_origin)
+        returnUrl = await returnUrlFor(denied?.return_origin)
       } catch (cleanupError) {
         console.error('[zettle] Failed to clean up pending connection:', cleanupError)
       }
@@ -99,7 +101,7 @@ export async function GET(request: Request) {
       .single()
 
     if (pendingConnection) {
-      returnUrl = returnUrlFor(pendingConnection.return_origin)
+      returnUrl = await returnUrlFor(pendingConnection.return_origin)
     }
 
     if (findError || !pendingConnection) {

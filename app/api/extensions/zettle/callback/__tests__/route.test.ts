@@ -30,6 +30,13 @@ vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: { get: (...args: unknown[]) => registryGet(...args) },
 }))
 
+// Only a host that resolves in the brands table is a valid return origin.
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandByHost: vi.fn(async (host: string) =>
+    host === 'brand.testbrand.example' ? { domain: 'brand.testbrand.example' } : null,
+  ),
+}))
+
 vi.stubEnv('NEXT_PUBLIC_APP_URL', 'http://localhost:3000')
 
 import { GET } from '../route'
@@ -170,6 +177,29 @@ describe('GET /api/extensions/zettle/callback', () => {
 
     expect(response.headers.get('location')).toBe(
       'https://brand.testbrand.example/import?mode=zettle&zettle_connected=true',
+    )
+  })
+
+  it('never redirects to a tampered return_origin that is not a brand domain', async () => {
+    // Members can UPDATE the row through RLS: the column is not trusted.
+    const findChain = mockChain({
+      data: {
+        id: CONNECTION_ID,
+        user_id: 'user-1',
+        company_id: 'company-1',
+        return_origin: 'https://evil.example',
+      },
+    })
+    const replayChain = mockChain({ error: null })
+    const activateChain = mockChain({
+      data: { id: CONNECTION_ID, company_id: 'company-1', user_id: 'user-1', organization_uuid: 'org-uuid-1' },
+    })
+    mockFrom.mockReturnValueOnce(findChain).mockReturnValueOnce(replayChain).mockReturnValueOnce(activateChain)
+
+    const response = await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+    expect(response.headers.get('location')).toBe(
+      'http://localhost:3000/import?mode=zettle&zettle_connected=true',
     )
   })
 
