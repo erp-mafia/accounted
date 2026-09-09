@@ -110,6 +110,23 @@ export interface SIEDimensionValue {
 }
 
 /**
+ * Correction history carried by a #VER (SIE 4B #BTRANS / #RTRANS).
+ *
+ * `struck` = #BTRANS rows: lines removed in the source system after
+ * posting (how the voucher looked before the correction).
+ * `added` = #RTRANS rows: lines added by a correction. Per spec each #RTRANS
+ * is immediately followed by an identical #TRANS, so these lines are ALSO
+ * present in `lines`; they are listed here only to mark them as corrections.
+ *
+ * Never part of the final voucher state: `lines` (#TRANS only) is what gets
+ * booked, this is audit trail for the rättelselogg.
+ */
+export interface SIEVoucherCorrections {
+  struck: SIETransactionLine[]
+  added: SIETransactionLine[]
+}
+
+/**
  * Voucher/Journal entry from #VER tag
  */
 export interface SIEVoucher {
@@ -120,6 +137,8 @@ export interface SIEVoucher {
   registrationDate?: Date
   signature?: string
   lines: SIETransactionLine[]
+  /** Set only when the #VER carried #BTRANS or #RTRANS rows. */
+  corrections?: SIEVoucherCorrections
 }
 
 /**

@@ -18,6 +18,7 @@ import type {
   FiscalYearPrecheck,
   SIEImport,
   MigrationDocumentation,
+  SIETransactionLine,
 } from './types'
 import type { CreateJournalEntryLineInput } from '@/types'
 import { roundOre } from '@/lib/money'
@@ -1257,7 +1258,12 @@ export async function importVouchers(
   fiscalPeriodId: string,
   parsed: ParsedSIEFile,
   accountMap: Map<string, string>,
-  defaultSeries: string
+  defaultSeries: string,
+  // The sie_imports row this run belongs to. Stamped on the correction
+  // history rows (journal_entry_rattelse_log.sie_import_id) so the log can
+  // be traced back to the file that carried it. Null in callers that have
+  // no import record (tests, legacy paths).
+  sieImportId: string | null = null
 ): Promise<{
   created: number
   ids: string[]
@@ -1339,7 +1345,41 @@ export async function importVouchers(
       line_description: string | null
       dimensions?: Record<string, string>
     }[]
+    // Source-system correction history (#BTRANS struck / #RTRANS added, see
+    // SIEVoucherCorrections). Persisted by the RPC as a journal_entry_rattelse_log
+    // row with source='sie_import'; never booked as lines.
+    corrections?: {
+      struck: CorrectionLineSnapshot[]
+      added: CorrectionLineSnapshot[]
+      signature: string | null
+    }
   }
+
+  interface CorrectionLineSnapshot {
+    account_number: string
+    debit_amount: number
+    credit_amount: number
+    line_description: string | null
+    sort_order: number
+    /** SIE `sign` of this row: who removed/added it in the source system. */
+    signature: string | null
+  }
+
+  // History keeps the source account when it is unmapped: the row is audit
+  // trail, not a booking, and a rewritten account would misdescribe what the
+  // source system showed. Zero-amount rows carry no information and are dropped
+  // like their #TRANS counterparts.
+  const toCorrectionSnapshots = (sourceLines: SIETransactionLine[]): CorrectionLineSnapshot[] =>
+    sourceLines
+      .filter((line) => line.amount !== 0)
+      .map((line, index) => ({
+        account_number: accountMap.get(line.account) ?? line.account,
+        debit_amount: line.amount > 0 ? Math.round(line.amount * 100) / 100 : 0,
+        credit_amount: line.amount < 0 ? Math.round(Math.abs(line.amount) * 100) / 100 : 0,
+        line_description: line.description || null,
+        sort_order: index,
+        signature: line.signature?.trim() || null,
+      }))
 
   const preparedVouchers: PreparedVoucher[] = []
 
@@ -1507,6 +1547,22 @@ export async function importVouchers(
       OPENING_BALANCE_DESCRIPTION_RE.test(voucher.description || '') &&
       !SHARE_CAPITAL_DESCRIPTION_RE.test(voucher.description || '')
 
+    let corrections: PreparedVoucher['corrections']
+    if (voucher.corrections) {
+      const struck = toCorrectionSnapshots(voucher.corrections.struck)
+      const added = toCorrectionSnapshots(voucher.corrections.added)
+      if (struck.length > 0 || added.length > 0) {
+        // SIE 4B: `sign` on #BTRANS/#RTRANS names who removed or added the row.
+        // Each snapshot keeps its own; this voucher-level summary is the first
+        // one, for the log row's external_signature column.
+        const signature =
+          [...voucher.corrections.struck, ...voucher.corrections.added]
+            .map((line) => line.signature?.trim())
+            .find((sig) => !!sig) ?? null
+        corrections = { struck, added, signature }
+      }
+    }
+
     preparedVouchers.push({
       sourceId: voucherId,
       series: resolvedSeries,
@@ -1516,6 +1572,7 @@ export async function importVouchers(
       sourceNumber: rawSourceNumber,
       sourceType: isLikelyOpeningBalance ? 'opening_balance' : 'import',
       lines,
+      ...(corrections ? { corrections } : {}),
     })
   }
 
@@ -1572,6 +1629,7 @@ export async function importVouchers(
     sourceSeries: voucher.sourceSeries,
     sourceNumber: voucher.sourceNumber,
     sourceType: voucher.sourceType,
+    ...(voucher.corrections ? { corrections: voucher.corrections, sieImportId } : {}),
     lines: voucher.lines.map((line, lineIndex) => ({
       account_number: line.account_number,
       account_id: accountIdMap.get(line.account_number) || null,
@@ -2914,7 +2972,8 @@ export async function executeSIEImport(
         result.fiscalPeriodId,
         parsed,
         accountMap,
-        defaultSeries
+        defaultSeries,
+        result.importId
       )
 
       result.journalEntriesCreated += voucherResults.created

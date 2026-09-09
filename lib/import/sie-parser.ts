@@ -397,6 +397,67 @@ function addIssue(
 }
 
 /**
+ * Parse the fields of a #TRANS / #RTRANS / #BTRANS record (identical layout):
+ *   #TAG accountNumber {objectList} amount [date] [description] [quantity] [signature]
+ * Returns null (after reporting) when the amount is missing.
+ */
+function parseTransactionLine(
+  fields: string[],
+  tag: string,
+  issues: ParseIssue[],
+  lineNum: number
+): SIETransactionLine | null {
+  // Parse account and capture the object list (in braces)
+  let fieldIndex = 1
+  const account = parseStringField(fields[fieldIndex++])
+
+  // Object list (single field thanks to brace-aware splitting):
+  // dimension tags like {1 "KS01" 6 "P001"}. Parsed onto the line so
+  // import is lossless (dimensions plan PR5).
+  let objectListRaw: string | null = null
+  if (fields[fieldIndex]?.startsWith('{')) {
+    objectListRaw = fields[fieldIndex]
+    fieldIndex++
+  }
+
+  const transAmountStr = fields[fieldIndex]
+  if (!transAmountStr || transAmountStr.trim() === '') {
+    addIssue(issues, 'warning', lineNum, `Belopp saknas i #${tag}: raden hoppas över`, tag)
+    return null
+  }
+
+  const amount = parseNumberField(fields[fieldIndex++])
+
+  const transLine: SIETransactionLine = {
+    account,
+    amount,
+  }
+
+  if (objectListRaw) {
+    const dims = parseObjectList(objectListRaw, issues, lineNum)
+    if (dims) {
+      transLine.dimensions = dims
+    }
+  }
+
+  // Optional fields
+  if (fields[fieldIndex]) {
+    transLine.date = parseSIEDate(parseStringField(fields[fieldIndex++])) || undefined
+  }
+  if (fields[fieldIndex]) {
+    transLine.description = parseStringField(fields[fieldIndex++])
+  }
+  if (fields[fieldIndex]) {
+    transLine.quantity = parseNumberField(fields[fieldIndex++])
+  }
+  if (fields[fieldIndex]) {
+    transLine.signature = parseStringField(fields[fieldIndex++])
+  }
+
+  return transLine
+}
+
+/**
  * Parse a SIE file content string
  */
 export function parseSIEFile(content: string): ParsedSIEFile {
@@ -432,6 +493,24 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   // Track current voucher being parsed (inside #VER { ... })
   let currentVoucher: SIEVoucher | null = null
 
+  // SIE 4B: an #RTRANS row must be immediately followed by an identical
+  // #TRANS row (the twin older readers use). Remembered here so the twin
+  // can be verified; a missing twin is reported, since the final state is
+  // built from #TRANS only and would silently lack that line.
+  let pendingRtrans: { line: SIETransactionLine; lineNum: number } | null = null
+
+  const reportMissingRtransTwin = (): void => {
+    if (!pendingRtrans) return
+    addIssue(
+      issues,
+      'warning',
+      pendingRtrans.lineNum,
+      `#RTRANS ${pendingRtrans.line.account} ${pendingRtrans.line.amount.toFixed(2)} följs inte av en identisk #TRANS-rad: rättelseraden ingår inte i verifikatets slutliga rader`,
+      'RTRANS'
+    )
+    pendingRtrans = null
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const lineNum = i + 1
     const line = lines[i].trim()
@@ -441,6 +520,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 
     // Handle voucher block end
     if (line === '}') {
+      reportMissingRtransTwin()
       if (currentVoucher) {
         // Validate voucher balance
         const total = currentVoucher.lines.reduce((sum, l) => sum + l.amount, 0)
@@ -472,6 +552,10 @@ export function parseSIEFile(content: string): ParsedSIEFile {
     // Parse the tag and fields
     const fields = splitSIELine(line)
     const tag = fields[0].substring(1).toUpperCase()
+
+    if (pendingRtrans && tag !== 'TRANS') {
+      reportMissingRtransTwin()
+    }
 
     try {
       switch (tag) {
@@ -708,69 +792,48 @@ export function parseSIEFile(content: string): ParsedSIEFile {
         case 'TRANS':
         case 'RTRANS':
         case 'BTRANS': {
-          // #TRANS = final transaction lines (the current state of the voucher)
-          // #RTRANS = supplementary/corrected transaction (must be followed by identical #TRANS for backward compat)
-          // #BTRANS = removed/cancelled transaction (programs not understanding BTRANS simply ignore it)
+          // #TRANS = the voucher's final lines (its current state).
+          // #BTRANS = "removed transaction item": a line struck in the source
+          //   system after posting (how the voucher looked before the rättelse).
+          // #RTRANS = "supplementary transaction item": a line added by a
+          //   rättelse. Per SIE 4B it is always immediately followed by an
+          //   identical #TRANS row, so the line is ALSO in the final state.
           //
-          // When a voucher has been corrected, Fortnox/Visma emit all three types.
-          // Only #TRANS represents the final voucher state; #RTRANS and #BTRANS are
-          // supplementary history. We skip RTRANS/BTRANS to avoid double-counting
-          // which would make balanced vouchers appear unbalanced.
+          // When a voucher has been corrected, Fortnox/Visma emit all three
+          // types. Only #TRANS is booked (summing all three would double-count
+          // and make balanced vouchers look unbalanced, #63). #BTRANS/#RTRANS
+          // are kept aside as `corrections`: the correction history behind the
+          // verifikat, persisted by the import into the rättelselogg (#2427).
           if (!currentVoucher) {
             addIssue(issues, 'error', lineNum, `#${tag} utanför verifikationsblock (#VER): filen kan vara skadad`, tag)
             break
           }
 
-          // Skip RTRANS/BTRANS: they are correction audit trail, not final state
-          if (tag === 'RTRANS' || tag === 'BTRANS') {
+          const transLine = parseTransactionLine(fields, tag, issues, lineNum)
+          if (!transLine) {
             break
           }
 
-          // Parse account and capture the object list (in braces)
-          let fieldIndex = 1
-          const account = parseStringField(fields[fieldIndex++])
-
-          // Object list (single field thanks to brace-aware splitting):
-          // dimension tags like {1 "KS01" 6 "P001"}. Parsed onto the line so
-          // import is lossless (dimensions plan PR5).
-          let objectListRaw: string | null = null
-          if (fields[fieldIndex]?.startsWith('{')) {
-            objectListRaw = fields[fieldIndex]
-            fieldIndex++
-          }
-
-          const transAmountStr = fields[fieldIndex]
-          if (!transAmountStr || transAmountStr.trim() === '') {
-            addIssue(issues, 'warning', lineNum, `Belopp saknas i #${tag}: raden hoppas över`, tag)
+          if (tag === 'BTRANS') {
+            const corrections = (currentVoucher.corrections ??= { struck: [], added: [] })
+            corrections.struck.push(transLine)
             break
           }
 
-          const amount = parseNumberField(fields[fieldIndex++])
-
-          const transLine: SIETransactionLine = {
-            account,
-            amount,
+          if (tag === 'RTRANS') {
+            const corrections = (currentVoucher.corrections ??= { struck: [], added: [] })
+            corrections.added.push(transLine)
+            pendingRtrans = { line: transLine, lineNum }
+            break
           }
 
-          if (objectListRaw) {
-            const dims = parseObjectList(objectListRaw, issues, lineNum)
-            if (dims) {
-              transLine.dimensions = dims
+          if (pendingRtrans) {
+            const twin = pendingRtrans.line
+            if (twin.account === transLine.account && Math.abs(twin.amount - transLine.amount) < 0.005) {
+              pendingRtrans = null
+            } else {
+              reportMissingRtransTwin()
             }
-          }
-
-          // Optional fields
-          if (fields[fieldIndex]) {
-            transLine.date = parseSIEDate(parseStringField(fields[fieldIndex++])) || undefined
-          }
-          if (fields[fieldIndex]) {
-            transLine.description = parseStringField(fields[fieldIndex++])
-          }
-          if (fields[fieldIndex]) {
-            transLine.quantity = parseNumberField(fields[fieldIndex++])
-          }
-          if (fields[fieldIndex]) {
-            transLine.signature = parseStringField(fields[fieldIndex++])
           }
 
           currentVoucher.lines.push(transLine)
