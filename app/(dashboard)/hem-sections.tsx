@@ -59,7 +59,10 @@ export async function HemNoticesSection({
     now,
     deferReap: (task) => after(task),
   })
-  return <HemNotices notices={notices} />
+  // The Skatteverket reconnect has its own places (the Konton row and the
+  // Skattekonto page); a line about it over every visit to Att göra was
+  // noise (founder feedback 2026-09-09).
+  return <HemNotices notices={notices.filter((n) => n.category !== 'skv_disconnected')} />
 }
 
 export async function HemChecklistSection({

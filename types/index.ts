@@ -3970,6 +3970,9 @@ export interface InvoiceExtractionResult {
     address: string | null
     bankgiro: string | null
     plusgiro: string | null
+    /** Payment details for a foreign supplier; read since 2026-09 so a betalfil can carry it. */
+    iban?: string | null
+    bic?: string | null
   }
   invoice: {
     invoiceNumber: string | null
