@@ -73,3 +73,23 @@ export interface CompanySearchHit {
  * so the two never disagree on what is worth a provider call.
  */
 export const COMPANY_SEARCH_MIN_CHARS = 3
+
+/**
+ * One row of the search-as-you-type picker on the onboarding orgnr step,
+ * from SCB's företagsregister (free): enough to recognise the company and
+ * to run the single TIC lookup once it is picked. `legalEntityType` uses
+ * the same vocabulary as CompanyLookupResult so the reducer maps it with
+ * mapSetupEntityType; null when SCB's legal form is not one we set up.
+ * A sole trader's `orgNumber` is the owner's personnummer: the picker
+ * names the form instead of printing it.
+ */
+export interface CompanySuggestion {
+  orgNumber: string
+  name: string
+  city: string | null
+  legalEntityType: string | null
+  active: boolean
+}
+
+/** Rows the picker shows; SCB may return more, the client keeps a picker a picker. */
+export const COMPANY_SUGGEST_MAX = 6
