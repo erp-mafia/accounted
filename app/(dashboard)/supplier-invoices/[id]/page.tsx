@@ -53,7 +53,7 @@ import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
-import type { EntityType } from '@/types'
+import type { BASAccount, EntityType } from '@/types'
 
 interface EditableLine {
   account_number: string
@@ -115,12 +115,14 @@ function InlineAccountCell({
   item,
   editable,
   entityType,
+  accounts,
   label,
   onCommit,
 }: {
   item: { id: string; account_number: string }
   editable: boolean
   entityType: EntityType
+  accounts: BASAccount[]
   label: string
   onCommit: (itemId: string, account: string) => Promise<void>
 }) {
@@ -130,16 +132,25 @@ function InlineAccountCell({
   // what the line books to; the picker sits beside the row instead of
   // swapping the cell for a combobox.
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
-  if (!editable) return <AccountChip account={item.account_number} />
+  const [manual, setManual] = useState('')
+  const accountName = accounts.find((a) => a.account_number === item.account_number)?.account_name ?? null
+  const pick = (account: string) => {
+    setAnchor(null)
+    if (account && account !== item.account_number) void onCommit(item.id, account)
+  }
+  if (!editable) return <AccountChip account={item.account_number} name={accountName} />
   return (
     <>
       <button
         type="button"
         className="-mx-1 rounded-full px-1 transition-colors duration-150 hover:bg-secondary/60"
         aria-label={label}
-        onClick={(e) => setAnchor(e.currentTarget)}
+        onClick={(e) => {
+          setManual('')
+          setAnchor(e.currentTarget)
+        }}
       >
-        <AccountChip account={item.account_number} />
+        <AccountChip account={item.account_number} name={accountName} />
       </button>
       {anchor && (
         <CategoryPopover anchor={anchor} onClose={() => setAnchor(null)}>
@@ -148,15 +159,14 @@ function InlineAccountCell({
               direction="expense"
               entityType={entityType}
               dense
-              onSelect={(template) => {
-                setAnchor(null)
-                if (template.debit_account !== item.account_number) void onCommit(item.id, template.debit_account)
-              }}
-              onSelectAccount={(account) => {
-                setAnchor(null)
-                if (account !== item.account_number) void onCommit(item.id, account)
-              }}
+              onSelect={(template) => pick(template.debit_account)}
+              onSelectAccount={pick}
             />
+          </div>
+          {/* Any account in the company's own chart, by number or name: the
+              template search covers the common ones, this covers the rest. */}
+          <div className="border-t border-border/70 bg-background px-3 py-2">
+            <AccountCombobox value={manual} accounts={accounts} onChange={setManual} onCommit={pick} />
           </div>
         </CategoryPopover>
       )}
@@ -1110,7 +1120,7 @@ export default function SupplierInvoiceDetailPage() {
                   {formatCurrency(item.unit_price, invoice.currency)}
                 </td>
                 <td className={TD_CLASS}>
-                  <InlineAccountCell item={item} editable={lineAccountEditable} entityType={(company?.entity_type ?? 'aktiebolag') as EntityType} label={t('line_account_edit')} onCommit={changeLineAccount} />
+                  <InlineAccountCell item={item} editable={lineAccountEditable} entityType={(company?.entity_type ?? 'aktiebolag') as EntityType} accounts={accounts} label={t('line_account_edit')} onCommit={changeLineAccount} />
                 </td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{Math.round(item.vat_rate * 100)}%</td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
