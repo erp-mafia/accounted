@@ -8,7 +8,7 @@ import { HOVER_REVEAL_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-tabl
 import type { CounterpartRow } from '@/lib/parties/list'
 import type { PartyRole } from '@/lib/parties/register'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { AccountNub } from './AccountNub'
+import { AccountChip } from './AccountChip'
 import { BrandMark } from './BrandMark'
 import { reasonText } from './format'
 import { regionName } from './SuggestionQueue'
@@ -104,7 +104,7 @@ export function CounterpartList({
                   </div>
                 </td>
                 <td className={TD_CLASS}>
-                  <AccountNub account={row.account} />
+                  <AccountChip account={row.account} />
                 </td>
                 <td className={`${TD_CLASS} text-right tabular-nums text-muted-foreground`}>{row.count || ''}</td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>{money(row.inSek)}</td>

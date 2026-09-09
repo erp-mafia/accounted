@@ -8965,7 +8965,7 @@
     "cp_refreshed": "{count} nya motparter lästa",
     "cp_refresh_failed": "Kunde inte läsa nya motparter.",
     "cp_th_name": "Motpart",
-    "cp_th_account": "Konto",
+    "cp_th_account": "Bokförs som",
     "cp_th_count": "Rader",
     "cp_th_in": "In",
     "cp_th_out": "Ut",

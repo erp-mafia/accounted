@@ -8965,7 +8965,7 @@
     "cp_refreshed": "{count} new counterparts read",
     "cp_refresh_failed": "Could not read new counterparts.",
     "cp_th_name": "Counterpart",
-    "cp_th_account": "Account",
+    "cp_th_account": "Books as",
     "cp_th_count": "Rows",
     "cp_th_in": "In",
     "cp_th_out": "Out",
