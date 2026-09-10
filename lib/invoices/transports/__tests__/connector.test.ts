@@ -61,6 +61,18 @@ describe('connector Peppol transport', () => {
     expect(await transport.fetchInboundDocumentXml!('doc-1', 'Invoice')).toBeNull()
   })
 
+  it('passes the listing cursor through when set and leaves it out otherwise', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse([]))
+    const transport = build(fetchMock as unknown as typeof fetch)
+    await transport.listInboundDocuments!({ documentType: 'Invoice', limit: 5, receivedAfter: '2026-09-01T00:00:00.000Z' })
+    await transport.listInboundDocuments!({ documentType: 'CreditNote' })
+    const first = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string)
+    const second = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string)
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe('https://app.gnubok.se/api/connect/peppol/inbound/list')
+    expect(first).toEqual({ documentType: 'Invoice', limit: 5, receivedAfter: '2026-09-01T00:00:00.000Z' })
+    expect(second).toEqual({ documentType: 'CreditNote' })
+  })
+
   it('polls status and evidence with the connector provider stamped on and the owning company resolved', async () => {
     const event = {
       provider: 'qvalia', providerTenantId: '5560000000', providerSubmissionId: 'int-1', providerEventId: 'e1', idempotencyKey: null,
