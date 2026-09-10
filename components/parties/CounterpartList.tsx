@@ -91,11 +91,9 @@ export function CounterpartList({
               <Fragment key={row.id}>
               {startsNewGroup ? (
                 <tr>
-                  <th colSpan={7} scope="colgroup" className="px-4 pb-2 pt-10 text-left font-normal">
-                    <div className="border-t border-border pt-5">
-                      <p className="text-[13px] font-semibold text-foreground">{t('cp_group_new', { count: rows.length - confirmedCount })}</p>
-                      <p className="mt-0.5 text-[12px] text-muted-foreground">{t('cp_group_new_desc')}</p>
-                    </div>
+                  <th colSpan={7} scope="colgroup" className="px-4 pb-2 pt-9 text-left font-normal">
+                    <p className="text-[13px] font-semibold text-foreground">{t('cp_group_new', { count: rows.length - confirmedCount })}</p>
+                    <p className="mt-0.5 text-[12px] text-muted-foreground">{t('cp_group_new_desc')}</p>
                   </th>
                 </tr>
               ) : null}
@@ -135,7 +133,7 @@ export function CounterpartList({
                   </div>
                 </td>
                 <td className={TD_CLASS}>
-                  <AccountChip account={row.account} name={row.accountName} />
+                  {row.account ? <AccountChip account={row.account} name={row.accountName} /> : null}
                 </td>
                 <td className={`${TD_CLASS} text-right tabular-nums text-muted-foreground`}>{row.count || ''}</td>
                 <td className={`${TD_CLASS} text-right tabular-nums`}>{money(row.inSek)}</td>
