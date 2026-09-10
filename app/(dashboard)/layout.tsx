@@ -11,6 +11,8 @@ import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
+import { SystemNoticeBanner } from '@/components/dashboard/SystemNoticeBanner'
+import { parseSystemNoticeUntil } from '@/components/dashboard/system-notice'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
 import MultiUserGraceBanner from '@/components/billing/MultiUserGraceBanner'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
@@ -124,6 +126,14 @@ export default async function DashboardLayout({
     pathname.startsWith(p)
   )
 
+  // Operator-set system notice (NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL): null when
+  // unset or expired, so the banner is not even rendered outside its window.
+  // Computed before the shell branches below so every signed-in user sees it,
+  // byrå consultants and stale-cookie sessions included.
+  const systemNoticeUntil = parseSystemNoticeUntil(process.env.NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL)
+  const systemNoticeBanner =
+    systemNoticeUntil !== null ? <SystemNoticeBanner until={systemNoticeUntil} /> : null
+
   // Team now carries `kind` directly (types/index.ts, WL-08).
   const membershipRows = teamMemberships
   const byraMembership = membershipRows.find((m) => m.teams?.kind === 'byra') ?? null
@@ -214,6 +224,7 @@ export default async function DashboardLayout({
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
+            {systemNoticeBanner}
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -372,6 +383,7 @@ export default async function DashboardLayout({
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
+            {systemNoticeBanner}
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -584,6 +596,7 @@ export default async function DashboardLayout({
             Hoppa till innehåll
           </a>
           {isSandbox && <SandboxBanner />}
+          {systemNoticeBanner}
           {graceBanner && (
             <MultiUserGraceBanner
               graceEndsAt={graceBanner.graceEndsAt}
