@@ -95,9 +95,19 @@ import { resolveDetachErrorMessage } from '@/components/transactions/detach-unde
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary } from '@/types'
+import { mutate as globalMutate } from 'swr'
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
+
+/**
+ * Tell the drawer and the review to re-read a row's underlag. They read it
+ * through SWR on this key, so an attach or a detach elsewhere on the page
+ * has to say so or the receipt only appears on the next revalidation.
+ */
+function revalidateUnderlag(transactionId: string): Promise<unknown> {
+  return globalMutate(`/api/transactions/${transactionId}/underlag`)
+}
 
 /** Rows warmed per render pass: enough to cover a screenful, never a whole backlog. */
 const ASSISTANT_WARM_LIMIT = 8
@@ -3470,6 +3480,9 @@ export default function TransactionsPage() {
     setTransactions((prev) =>
       prev.map((t) => (t.id === transactionId ? { ...t, document_id: documentId } : t))
     )
+    // The drawer and the review read the underlag through SWR; without this
+    // the receipt only appeared there on the next revalidation.
+    void revalidateUnderlag(transactionId)
     // Booked row: the attach route propagated the doc onto the verifikation,
     // so flip the JE status optimistically too. Read the JE id off the
     // dialog's own subject (attachDocTx), not the transactions snapshot:
@@ -3521,6 +3534,7 @@ export default function TransactionsPage() {
       setTransactions((prev) =>
         prev.map((row) => (row.id === tx.id ? { ...row, document_id: null } : row))
       )
+      void revalidateUnderlag(tx.id)
       // The attach dialog renders its "already attached" hint off its own
       // snapshot of the row, not the list.
       setAttachDocTx((prev) => (prev?.id === tx.id ? { ...prev, document_id: null } : prev))
