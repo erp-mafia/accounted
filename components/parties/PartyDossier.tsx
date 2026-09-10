@@ -39,6 +39,20 @@ function Row({ label, value, note }: { label: string; value: React.ReactNode; no
  * "Vad Accounted vet" lists every fact with its source; promotion and
  * merge are one action each and always confirm up front.
  */
+const DECISION_KINDS = new Set(['confirm', 'merge', 'split', 'rename', 'role', 'dismiss', 'pin', 'ignore', 'label', 'undo'])
+
+/** The history line for a decision: every kind the table allows has words, and a role decision names the role. */
+function decisionLabel(t: ReturnType<typeof useTranslations>, d: { kind: string; after: unknown }): string {
+  if (d.kind === 'role') {
+    const roles = (d.after as { roles?: unknown } | null)?.roles
+    const list = Array.isArray(roles) ? (roles as string[]) : []
+    if (list.includes('supplier') && list.includes('customer')) return t('decision_role_both')
+    if (list.includes('customer')) return t('decision_role_customer')
+    if (list.includes('supplier')) return t('decision_role_supplier')
+  }
+  return DECISION_KINDS.has(d.kind) ? t(`decision_${d.kind}` as never) : d.kind
+}
+
 export function PartyDossier({
   partyId,
   period,
@@ -131,10 +145,14 @@ export function PartyDossier({
   const registryVat = dossier?.facts.find((f) => f.field === 'vat_number' && f.source === 'registry_scb')?.value
   const countryRaw = dossier?.facts.find((f) => f.field === 'country')?.value
   const countryCode = typeof countryRaw === 'string' && /^[A-Za-z]{2}$/.test(countryRaw) ? countryRaw.toUpperCase() : null
-  // One primary action: the role the ledger suggests and the party does not
-  // have yet. The other role and everything else live behind the menu.
+  // One primary action: a role the ledger's money supports and the party
+  // does not have yet. A confirmed supplier with only expenses has no
+  // primary action at all; the fallback that used to headline "Lägg upp som
+  // kund" for a counterpart you pay offered the one role that made no sense.
+  // The unsupported missing role stays reachable behind the menu, because a
+  // counterpart can genuinely be both.
   const missingRoles: PartyRole[] = p ? (['supplier', 'customer'] as PartyRole[]).filter((r) => (r === 'supplier' ? !p.roles.supplierId : !p.roles.customerId)) : []
-  const primaryRole: PartyRole | null = p ? (missingRoles.find((r) => p.defaultRoles.includes(r)) ?? missingRoles[0] ?? null) : null
+  const primaryRole: PartyRole | null = p ? (missingRoles.find((r) => p.defaultRoles.includes(r)) ?? null) : null
   const secondaryRole: PartyRole | null = missingRoles.find((r) => r !== primaryRole) ?? null
   const scbFetchedAt = dossier?.facts.filter((f) => f.source === 'registry_scb').map((f) => f.fetchedAt ?? f.recordedAt).sort().at(-1) ?? null
 
@@ -328,7 +346,7 @@ export function PartyDossier({
                         <tr key={d.id}>
                           <td className={`${VTD_CLASS} w-24 whitespace-nowrap text-muted-foreground tabular-nums`}>{formatDate(d.createdAt)}</td>
                           <td className={VTD_CLASS}>
-                            {['confirm', 'dismiss', 'merge', 'split', 'undo'].includes(d.kind) ? t(`decision_${d.kind}`) : d.kind}
+                            {decisionLabel(t, d)}
                             {d.note ? <span className="text-muted-foreground"> · {d.note}</span> : null}
                           </td>
                         </tr>

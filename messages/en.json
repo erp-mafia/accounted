@@ -8723,6 +8723,13 @@
     "unsigned": "Not signed off"
   },
   "parties": {
+    "decision_role_supplier": "Set up as supplier",
+    "decision_role_customer": "Set up as customer",
+    "decision_role_both": "Set up as supplier and customer",
+    "decision_rename": "Renamed",
+    "decision_pin": "Pinned",
+    "decision_ignore": "Ignored",
+    "decision_label": "Labelled",
     "cp_group_new_desc": "Counterparts the books recognise that are not in your register yet. Set them up as a supplier or customer from the row, or dismiss them.",
     "cp_group_new": "New, recognised in the books ({count})",
     "dossier_seen_as": "Seen as {names}",

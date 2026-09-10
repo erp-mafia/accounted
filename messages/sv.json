@@ -8723,6 +8723,13 @@
     "unsigned": "Ej signerad"
   },
   "parties": {
+    "decision_role_supplier": "Upplagd som leverantör",
+    "decision_role_customer": "Upplagd som kund",
+    "decision_role_both": "Upplagd som leverantör och kund",
+    "decision_rename": "Namn ändrat",
+    "decision_pin": "Fastnålad",
+    "decision_ignore": "Ignorerad",
+    "decision_label": "Märkt",
     "cp_group_new_desc": "Motparter som bokföringen känner igen men som inte finns i ditt register än. Lägg upp dem som leverantör eller kund från raden, eller avfärda dem.",
     "cp_group_new": "Nya, känns igen i bokföringen ({count})",
     "dossier_seen_as": "Sett som {names}",
