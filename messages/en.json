@@ -3108,7 +3108,6 @@
     "ai_use": "Use",
     "ai_show_templates": "Show templates",
     "ai_unsure": "The assistant is unsure: {reason}",
-    "ai_unconfigured": "The assistant is not configured.",
     "ai_alternatives": "Other accounts",
     "underlag_missing_title": "No document for {amount}.",
     "underlag_missing_body": "Every voucher needs a receipt or an invoice (BFL 5 kap. 7 §). Fetch it now, or post without one and add it later.",

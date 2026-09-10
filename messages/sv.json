@@ -3108,7 +3108,6 @@
     "ai_use": "Använd",
     "ai_show_templates": "Visa mallar",
     "ai_unsure": "Assistenten är osäker: {reason}",
-    "ai_unconfigured": "Assistenten är inte konfigurerad.",
     "ai_alternatives": "Andra konton",
     "underlag_missing_title": "Inget underlag för {amount}.",
     "underlag_missing_body": "Varje verifikat ska ha ett kvitto eller en faktura (BFL 5 kap. 7 §). Hämta det nu, eller bokför utan och komplettera senare.",
