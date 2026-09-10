@@ -21,7 +21,7 @@ async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
   return ((await res.json()) as { data: TransactionUnderlag }).data
 }
 import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-documents'
-import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, AlertTriangle, Inbox, FileText, X } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, Inbox, FileText, X } from 'lucide-react'
 import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import { computeProposalLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
@@ -38,7 +38,7 @@ import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import VatTreatmentSelect from './VatTreatmentSelect'
-import AiCategorizeProposal, { type AiProposalMeta } from './AiCategorizeProposal'
+import AiCategorizeProposal, { type AiProposalMeta, type AssistantPick } from './AiCategorizeProposal'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { TransactionCategory, VatTreatment, EntityType, LinePatternEntry } from '@/types'
@@ -73,14 +73,15 @@ interface QuickReviewDialogProps {
     /** The underlag's moms in the transaction's currency, when the person chose it over the proposal's rate. */
     vatAmount?: number
   ) => Promise<string | null>
-  /** Open the template picker, searched on an account when one is named. */
-  onChangeTemplate?: (query?: string) => void
+  onChangeTemplate?: () => void
+  /** Reopen the review on the assistant's booking (account + VAT) when the current one has a template. */
+  onUseAssistantPick?: (pick: AssistantPick) => void
   /**
    * Shell v2 with a template already chosen: the list proposed it, so a
    * second "assistenten föreslår" line here read as a contradiction.
    */
   /** Why this template is the pick: the source of the row's suggestion, when there was one. */
-  recommendation?: { source?: 'rule' | 'catalog' | 'counterparty'; seenCount?: number; confidence?: number } | null
+  recommendation?: { source?: 'rule' | 'catalog' | 'counterparty' | 'assistant'; seenCount?: number; confidence?: number } | null
   /**
    * "Andra rader": hand the COMPUTED proposal lines (exactly what the
    * verifikation preview shows) to the parent, which routes them into
@@ -107,6 +108,7 @@ export default function QuickReviewDialog({
   counterpartyDefaultDimensions,
   onConfirm,
   onChangeTemplate,
+  onUseAssistantPick,
   recommendation = null,
   onEditLines,
 }: QuickReviewDialogProps) {
@@ -153,6 +155,10 @@ export default function QuickReviewDialog({
   const [dims, setDims] = useState<Record<string, string>>(
     () => ({ ...(counterpartyDefaultDimensions ?? {}) }),
   )
+  // The dimension fields stay folded until one is set or asked for: two
+  // empty pickers on every review was weight without a decision.
+  const [dimsOpen, setDimsOpen] = useState(false)
+  const showDims = dimsOpen || Object.keys(dims).length > 0
 
   const preAttachedDocumentId = transaction?.document_id ?? null
   // The underlag from either door (pinned to the row, or matched in the
@@ -250,6 +256,18 @@ export default function QuickReviewDialog({
   const isCounterpartyTemplate = !!template?.id && isCounterpartyTemplateId(template.id)
   const hasCounterpartyPattern = !!(counterpartyLinePattern && counterpartyLinePattern.length > 0)
   const isTemplateBooking = !!templateId || isCounterpartyTemplate
+  // The template's rules as one line under the why, not three boxes: the
+  // special rule, the deductibility note when it adds something, and the
+  // reverse-charge requirement.
+  const ruleLine = [
+    template?.special_rules_sv,
+    template?.deductibility_note_sv && !(template.special_rules_sv ?? '').includes(template.deductibility_note_sv)
+      ? template.deductibility_note_sv
+      : null,
+    template?.requires_vat_registration_data ? t('reverse_charge_warning') : null,
+  ]
+    .filter((x): x is string => !!x)
+    .join(' · ')
   const isLiabilityAccount = accountOverride?.startsWith('2') ?? false
   // For non-SEK transactions, the verifikation and the headline must show
   // the SEK-converted total: the mall/category booking always posts in SEK.
@@ -524,7 +542,7 @@ export default function QuickReviewDialog({
       <DialogContent className={documentId ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto' : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[85vh] overflow-y-auto'}>
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="sr-only">
             {isTemplateBooking ? t('description_template') : t('description_default')}
           </DialogDescription>
         </DialogHeader>
@@ -608,7 +626,7 @@ export default function QuickReviewDialog({
               {recommendation?.source ? t('rec_kicker') : t('rec_kicker_manual')}
             </span>
             {onChangeTemplate && !hasCounterpartyPattern && (
-              <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')} onClick={() => onChangeTemplate()}>
+              <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')} onClick={onChangeTemplate}>
                 {t('rec_change')}
               </button>
             )}
@@ -628,22 +646,25 @@ export default function QuickReviewDialog({
                 ? t('rec_why_counterparty', { count: recommendation.seenCount ?? 1 })
                 : recommendation?.source === 'catalog'
                   ? t('rec_why_catalog')
-                  : t('rec_why_manual')}
-            {recommendation?.source === 'catalog' && recommendation.confidence != null && recommendation.confidence > 0 && recommendation.confidence < 1
-              ? ` · ${t('rec_confidence', { percent: Math.round(recommendation.confidence * 100) })}`
-              : ''}
+                  : recommendation?.source === 'assistant'
+                    ? (documentId ? t('rec_why_assistant_doc') : t('rec_why_assistant_row'))
+                    : t('rec_why_manual')}
+            {ruleLine ? ` · ${ruleLine}` : ''}
           </p>
-          {tx.id && (
+          {/* The assistant's read, unless this review already is its pick. */}
+          {tx.id && recommendation?.source !== 'assistant' && (
             <AiCategorizeProposal
               key={tx.id}
               transactionId={tx.id}
               open={open}
+              hasUnderlag={!!documentId}
               currentAccount={entityAccounts.debitAccount && entityAccounts.creditAccount ? (entityAccounts.debitAccount.startsWith('19') ? entityAccounts.creditAccount : entityAccounts.debitAccount) : accountOverride || null}
               autoApply={!isTemplateBooking}
               // A template books its own lines, so an account the assistant
-              // names cannot be dropped in; it opens the picker on that
-              // account instead. Without a template the account applies.
-              onShowTemplates={isTemplateBooking && onChangeTemplate && !hasCounterpartyPattern ? (account) => onChangeTemplate(account) : undefined}
+              // names cannot be dropped in; taking the pick reopens the
+              // review on the assistant's booking. Without a template the
+              // account and VAT apply in place.
+              onUsePick={isTemplateBooking && onUseAssistantPick ? onUseAssistantPick : undefined}
               onProposal={setAiProposal}
               onApply={(account, vat) => {
                 handleAccountChange(account)
@@ -654,36 +675,6 @@ export default function QuickReviewDialog({
             />
           )}
         </div>
-
-        {/* Template special rules */}
-        {template?.special_rules_sv && (
-          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
-            <p className="text-xs text-attn leading-snug">
-              {template.special_rules_sv}
-            </p>
-          </div>
-        )}
-
-        {/* Deductibility note */}
-        {template?.deductibility_note_sv && (
-          <div className="rounded-lg border border-primary/20 bg-primary/[0.03] px-3 py-2">
-            <p className="text-xs text-foreground leading-snug">
-              {template.deductibility_note_sv}
-            </p>
-          </div>
-        )}
-
-        {/* Reverse charge warning */}
-        {template?.requires_vat_registration_data && (
-          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-attn leading-snug">
-                {t('reverse_charge_warning')}
-              </p>
-            </div>
-          </div>
-        )}
 
         {/* Journal entry preview: hidden until we have a SEK conversion;
             otherwise we'd render a verifikation in the wrong currency. */}
@@ -785,7 +776,14 @@ export default function QuickReviewDialog({
             library-template and legacy counterparty bookings. Multi-line
             counterparty patterns are excluded: their per-line bags are
             authoritative server-side and an edit here would be ignored. */}
-        {dimensionsEnabled && !hasCounterpartyPattern && (
+        {dimensionsEnabled && !hasCounterpartyPattern && !showDims && (
+          <div className="flex justify-end">
+            <button type="button" className={cn(QUIET_LINK_CLASS, 'text-xs')} onClick={() => setDimsOpen(true)} disabled={isProcessing}>
+              {t('label_dimensions')}
+            </button>
+          </div>
+        )}
+        {dimensionsEnabled && !hasCounterpartyPattern && showDims && (
           <div>
             <label className="text-sm font-medium text-muted-foreground">{t('label_dimensions')}</label>
             <div className="mt-1">

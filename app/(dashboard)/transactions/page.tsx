@@ -136,6 +136,7 @@ const TransactionAttachDocumentDialog = dynamic(
   { loading: DialogLoadingSkeleton },
 )
 const QuickReviewDialog = dynamic(() => import('@/components/transactions/QuickReviewDialog'), { loading: DialogLoadingSkeleton })
+import type { AssistantPick } from '@/components/transactions/AiCategorizeProposal'
 const EditTransactionTitleDialog = dynamic(
   () => import('@/components/transactions/EditTransactionTitleDialog'),
   { loading: DialogLoadingSkeleton },
@@ -437,7 +438,9 @@ interface QuickReviewState {
   // Learned counterparty bag; prefills the review dialog's dimension picker.
   defaultDimensions?: Record<string, string> | null
   /** The row suggestion this review opened from, so the dialog can say why. Null when the person picked. */
-  recommendation?: { source?: 'rule' | 'catalog' | 'counterparty'; seenCount?: number; confidence?: number } | null
+  recommendation?: { source?: 'rule' | 'catalog' | 'counterparty' | 'assistant'; seenCount?: number; confidence?: number } | null
+  /** Account + VAT to open on instead of the category's defaults (the assistant's pick). */
+  defaults?: { account: string; vat: VatTreatment | 'none' }
 }
 
 export default function TransactionsPage() {
@@ -525,8 +528,6 @@ export default function TransactionsPage() {
 
   // Template picker dialog
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
-  // Search the picker opens with; set when the review's Byt names an account.
-  const [templatePickerQuery, setTemplatePickerQuery] = useState('')
   const [templatePickerTransaction, setTemplatePickerTransaction] = useState<TransactionWithInvoice | null>(null)
   // Shell v2: the element the picker opens beside (chip or Bokför button); null = the dialog.
   const [templatePickerAnchor, setTemplatePickerAnchor] = useState<HTMLElement | null>(null)
@@ -3846,7 +3847,6 @@ export default function TransactionsPage() {
 
   function openCategoryDialog(transaction: TransactionWithInvoice, anchor?: HTMLElement) {
     setTemplatePickerTransaction(transaction)
-    setTemplatePickerQuery('')
     setTemplatePickerAnchor(shell === 'v2' ? (anchor ?? null) : null)
     setTemplatePickerOpen(true)
   }
@@ -3926,13 +3926,30 @@ export default function TransactionsPage() {
     setQuickReviewOpen(true)
   }
 
-  function handleChangeTemplate(query?: string) {
+  function handleChangeTemplate() {
     setQuickReviewOpen(false)
     if (quickReview?.transaction) {
       setTemplatePickerTransaction(quickReview.transaction)
-      setTemplatePickerQuery(query ?? '')
       setTemplatePickerOpen(true)
     }
+  }
+
+  // The assistant's pick, taken with one click from a review that books
+  // through a template: the same review reopens as a category booking with
+  // the assistant's account and VAT, so the verifikat below shows exactly
+  // what it proposed (reverse charge included) before anything is posted.
+  function handleUseAssistantPick(pick: AssistantPick) {
+    if (!quickReview) return
+    setQuickReview({
+      transaction: quickReview.transaction,
+      category: pick.category ?? quickReview.category,
+      label: pick.label ? `${pick.account} ${pick.label}` : pick.account,
+      template: null,
+      templateId: undefined,
+      linePattern: null,
+      recommendation: { source: 'assistant' },
+      defaults: { account: pick.account, vat: pick.vat },
+    })
   }
 
   function handleManualBooking() {
@@ -4146,11 +4163,9 @@ export default function TransactionsPage() {
   // Library and counterparty templates (no templateId) seed the review form
   // from their own accounts; everything else falls back to the category
   // defaults. Never undefined: see resolveQuickReviewDefaults.
-  const quickReviewDefaults = resolveQuickReviewDefaults(
-    quickReview?.template,
-    quickReview?.templateId,
-    quickReview?.category,
-  )
+  const quickReviewDefaults =
+    quickReview?.defaults ??
+    resolveQuickReviewDefaults(quickReview?.template, quickReview?.templateId, quickReview?.category)
 
   const templatePickerProps: ComponentProps<typeof TemplatePicker> = {
     direction: templatePickerTransaction && templatePickerTransaction.amount < 0 ? 'expense' : 'income',
@@ -4164,7 +4179,6 @@ export default function TransactionsPage() {
     },
     onPickLibraryTemplate: handlePickLibraryTemplate,
     onSelectAccount: handlePickAccount,
-    initialQuery: templatePickerQuery,
   }
   // Alternate paths as quiet links (concept vact): the templates are the
   // main content, not three stacked buttons.
@@ -4842,6 +4856,7 @@ export default function TransactionsPage() {
           recommendation={quickReview?.recommendation ?? null}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
+          onUseAssistantPick={handleUseAssistantPick}
           onEditLines={handleEditProposedLines}
         />
       )}
