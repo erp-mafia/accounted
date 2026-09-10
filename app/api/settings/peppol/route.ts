@@ -89,11 +89,14 @@ export const GET = withRouteContext(
       // Eligibility is answered up front so a company that cannot be
       // registered (personnummer, missing org number) sees why before it
       // asks the operators for a receiving slot.
-      const { data: settings } = await supabase
+      const { data: settings, error: settingsError } = await supabase
         .from('company_settings')
         .select('org_number, company_name, vat_number, city, country')
         .eq('company_id', companyId)
         .maybeSingle()
+      // A failed read is a server error, never "no organisation number":
+      // that verdict would hide the receiving offer from an eligible company.
+      if (settingsError) throw new Error(`Failed to read company settings: ${settingsError.message}`)
       const participant: PeppolParticipantEligibility = settings
         ? describePeppolParticipantEligibility(settings as unknown as ParticipantSettings)
         : { ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' }

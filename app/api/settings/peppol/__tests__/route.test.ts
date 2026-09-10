@@ -183,6 +183,18 @@ describe('/api/settings/peppol', () => {
     expect(body.data.registration).toMatchObject({ status, last_error_code: code, can_retry: expected })
   })
 
+  it('GET answers the standard error envelope when the settings read fails, never "no org number"', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    enqueue({ data: [registeredRow], error: null })
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+    const response = await get()
+    expect(response.status).toBe(500)
+    const body = await response.json()
+    expect(body.error.code).toBeDefined()
+    expect(body.data).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain('PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED')
+  })
+
   it('GET marks a pending row older than five minutes as stale', async () => {
     unregister = registerPeppolTransport(makeTransport())
     const staleAt = new Date(Date.now() - 6 * 60 * 1000).toISOString()

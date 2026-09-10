@@ -61,23 +61,30 @@ export const POST = withRouteContext(
       }
 
       if (result.created) {
-        const { data: company } = await supabase
+        const { data: company, error: companyError } = await supabase
           .from('company_settings')
           .select('company_name, org_number, vat_number, city, country')
           .eq('company_id', companyId)
           .maybeSingle()
+        // The request is already recorded; a failed settings read must not
+        // masquerade as "no organisation number" in the operator mail.
+        if (companyError) log.error('peppol access request: company settings read failed', { companyId, reason: companyError.message })
         const emailService = getEmailService()
         if (emailService.isConfigured()) {
           const companyName = (company as { company_name?: string | null } | null)?.company_name ?? 'okänt bolag'
           const orgNumber = (company as { org_number?: string | null } | null)?.org_number ?? 'saknas'
           // Whether a receiving grant could be used at all (#2483): a
           // personnummer-based company cannot publish a Peppol id.
-          const eligibility = company
-            ? describePeppolParticipantEligibility(
-                company as unknown as Pick<CompanySettings, 'org_number' | 'company_name' | 'vat_number' | 'city' | 'country'>,
-              )
-            : { ok: false as const, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' as const }
-          const eligibilityLine = eligibility.ok ? 'ja' : `nej (${eligibility.code})`
+          const eligibility = companyError
+            ? null
+            : company
+              ? describePeppolParticipantEligibility(
+                  company as unknown as Pick<CompanySettings, 'org_number' | 'company_name' | 'vat_number' | 'city' | 'country'>,
+                )
+              : { ok: false as const, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' as const }
+          const eligibilityLine = eligibility === null
+            ? 'okänd (bolagsinställningarna kunde inte läsas)'
+            : eligibility.ok ? 'ja' : `nej (${eligibility.code})`
           const sent = await emailService.sendEmail({
             to: getSupportRecipientEmail(),
             subject: `[${getBranding().appName.toLowerCase()} peppol] Åtkomstbegäran${wantsReceiving ? ' (+ mottagning)' : ''}: ${companyName}`,
