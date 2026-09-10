@@ -3006,11 +3006,7 @@
     "invoices_help": "Invoice due dates"
   },
   "tx_inbox_card": {
-    "drawer_rec_recent": "Our recommendation · template used lately",
-    "drawer_rec_assistant": "Our recommendation · the assistant's read",
-    "drawer_rec_rule": "Our recommendation · by your rule",
-    "drawer_rec_catalog": "Our recommendation · known pattern",
-    "drawer_rec_counterparty": "Our recommendation · {count, plural, =1 {booked like this once before} other {booked like this # times before}}",
+    "drawer_rec": "Our recommendation · {why}",
     "underlag_heading": "Document",
     "underlag_supplier": "Supplier",
     "underlag_date": "Date",
@@ -6247,9 +6243,6 @@
     "load_failed": "Could not load the brand. Try reloading the page."
   },
   "transactions": {
-    "direct_why_rule": "{name} · by your rule",
-    "direct_why_counterparty": "{name} · booked like this {count} times before",
-    "direct_why_assistant": "{name} · the assistant read the underlag",
     "th_category": "Category",
     "th_account": "Account",
     "columns_button": "Columns",

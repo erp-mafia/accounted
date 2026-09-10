@@ -6,6 +6,7 @@ import {
   toCounterpartyTemplateId,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, type BookingTemplate, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
+import { proposalFromTemplate, type BookingProposal, type ProposalSource } from '@/lib/bookkeeping/proposal'
 import type {
   Transaction,
   TransactionCategory,
@@ -260,47 +261,15 @@ function accountToCategory(account: string, amount: number): string | null {
 // ============================================================
 
 /**
- * Where a row suggestion comes from. 'rule' is a mapping rule that MATCHED
- * this transaction; 'recent' is a template a rule points at, offered
- * because it was used lately, not because anything matched; 'counterparty'
- * is the learned per-counterpart rule (categorization_templates).
+ * A row suggestion is a BookingProposal (lib/bookkeeping/proposal.ts): the
+ * one object every source produces and every surface consumes. 'rule' is a
+ * mapping rule that MATCHED this transaction; 'recent' is a template a rule
+ * points at, offered because it was used lately, not because anything
+ * matched; 'counterparty' is the learned per-counterpart rule
+ * (categorization_templates); 'assistant' is the model's read.
  */
-export type SuggestionSource = 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant'
-
-export interface SuggestedTemplate {
-  template_id: string
-  /** Where the suggestion comes from: a rule the company set, the catalog's patterns, or this counterpart's history. */
-  source?: SuggestionSource
-  /** For a counterpart: how many times it was booked this way before. */
-  seen_count?: number
-  /** For the assistant's read: the category the booking goes under, and whether a receipt was read. */
-  category?: TransactionCategory
-  has_underlag?: boolean
-  /** For a counterpart: its place on the rules ladder (proposed | propose | auto | paused). */
-  rule_mode?: CategorizationTemplate['mode']
-  /** For a matched mapping rule: the company's own (not a system default), and whether it asks for a review. */
-  rule_own?: boolean
-  rule_requires_review?: boolean
-  name_sv: string
-  name_en: string
-  group: string
-  debit_account: string
-  credit_account: string
-  confidence: number
-  description_sv: string
-  risk_level: string
-  requires_review: boolean
-  line_pattern?: LinePatternEntry[] | null
-  // Learned VAT treatment on a single-line counterparty suggestion. Without
-  // it the review dialog previews the verifikation at gross with no moms leg,
-  // while the server books the expense net + 2641. Multi-line suggestions
-  // carry their VAT inside line_pattern instead.
-  vat_treatment?: VatTreatment | null
-  // Learned {sie_dim_no: code} bag on counterparty suggestions: prefills the
-  // review dialog's dimension picker (the server applies it at booking anyway;
-  // surfacing it keeps the user in the loop).
-  default_dimensions?: Record<string, string> | null
-}
+export type SuggestionSource = ProposalSource
+export type SuggestedTemplate = BookingProposal
 
 /**
  * Get recently used templates from mapping rules.
@@ -332,21 +301,9 @@ export function getRecentlyUsedTemplates(
     // Filter by direction
     if (direction && template.direction !== direction && template.direction !== 'transfer') continue
 
-    results.push({
-      template_id: template.id,
-      source: 'recent',
-      name_sv: template.name_sv,
-      name_en: template.name_en,
-      group: template.group,
-      debit_account: template.debit_account,
-      credit_account: template.credit_account,
-      // Used lately, not matched: below any keyword match (at most 0.3), and
-      // never the row's chip (rowProposal skips it); the picker still lists it.
-      confidence: 0.1,
-      description_sv: template.description_sv,
-      risk_level: template.risk_level,
-      requires_review: template.requires_review,
-    })
+    // Used lately, not matched: below any keyword match (at most 0.3), and
+    // never the row's chip (rowProposal skips it); the picker still lists it.
+    results.push(proposalFromTemplate(template, 'recent', 0.1))
 
     if (results.length >= 5) break
   }
@@ -380,18 +337,9 @@ export async function getSuggestedTemplates(
       if (!template || seen.has(template.id)) continue
       seen.add(template.id)
       results.push({
-        template_id: template.id,
-        source: 'rule',
+        ...proposalFromTemplate(template, 'rule', Math.max(rule.confidence_score || 0, 0.9)),
         rule_own: !!rule.company_id,
         rule_requires_review: !!rule.requires_review,
-        name_sv: template.name_sv,
-        name_en: template.name_en,
-        group: template.group,
-        debit_account: template.debit_account,
-        credit_account: template.credit_account,
-        confidence: Math.max(rule.confidence_score || 0, 0.9),
-        description_sv: template.description_sv,
-        risk_level: template.risk_level,
         requires_review: template.requires_review || !!rule.requires_review,
       })
     }
@@ -413,19 +361,7 @@ export async function getSuggestedTemplates(
   for (const m of keywordMatches) {
     if (!seen.has(m.template.id)) {
       seen.add(m.template.id)
-      results.push({
-        template_id: m.template.id,
-        source: 'catalog',
-        name_sv: m.template.name_sv,
-        name_en: m.template.name_en,
-        group: m.template.group,
-        debit_account: m.template.debit_account,
-        credit_account: m.template.credit_account,
-        confidence: m.confidence,
-        description_sv: m.template.description_sv,
-        risk_level: m.template.risk_level,
-        requires_review: m.template.requires_review,
-      })
+      results.push(proposalFromTemplate(m.template, 'catalog', m.confidence))
     }
   }
 
@@ -470,6 +406,7 @@ export function buildCounterpartySuggestion(
   return {
     template_id: toCounterpartyTemplateId(template.id),
     source: 'counterparty',
+    booking: { kind: 'counterparty', counterparty_template_id: template.id },
     seen_count: template.occurrence_count,
     rule_mode: template.mode,
     name_sv: formatCounterpartyName(template.counterparty_name),

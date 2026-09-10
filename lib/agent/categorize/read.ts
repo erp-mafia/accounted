@@ -3,14 +3,14 @@ import { gatherCandidates } from './candidates'
 import { gatherUnderlag } from './underlag'
 import { selectAccount, type AccountCandidate, type AccountSelection } from './select-account'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
-import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
+import { accountProposal, categoryForAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+export { categoryForAccount }
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
-import type { EntityType, Transaction, TransactionCategory } from '@/types'
+import type { EntityType, Transaction } from '@/types'
 import { readIsFresh, underlagKeyFor, firstSentence, type AssistantRead } from './read-shape'
-import { ASSISTANT_SURE, ASSISTANT_LIKELY } from '@/lib/transactions/direct-booking'
+import { ASSISTANT_LIKELY } from '@/lib/transactions/direct-booking'
 
 /**
  * The assistant's read of one transaction, done before anyone opens it.
@@ -122,56 +122,32 @@ export async function loadReads(
   return out
 }
 
-/** The category the categorize API books under for an account the assistant named. */
-export function categoryForAccount(
-  account: string,
-  entityType?: EntityType,
-  preferred?: TransactionCategory | null,
-): TransactionCategory {
-  if (preferred && preferred !== 'uncategorized') return preferred
-  const candidates: TransactionCategory[] = [
-    'expense_equipment', 'expense_software', 'expense_travel', 'expense_office', 'expense_marketing',
-    'expense_professional_services', 'expense_representation', 'expense_consumables', 'expense_vehicle',
-    'expense_telecom', 'expense_bank_fees', 'expense_currency_exchange', 'expense_other',
-    'income_services', 'income_products', 'income_other',
-  ]
-  for (const c of candidates) {
-    if (getDefaultAccountForCategory(c, entityType) === account) return c
-  }
-  return account.startsWith('3') ? 'income_other' : 'expense_other'
-}
-
 /**
- * The read as a row suggestion: the account with its name, the legs the
- * chip and the preview need, and the first sentence of the reasoning as
+ * The read as a row proposal: the account with its name, booked as one
+ * account with an explicit VAT, the first sentence of the reasoning as
  * the description. Null when the assistant found nothing that fits.
  */
 export function assistantSuggestionFromRead(
   read: AssistantRead,
   tx: Pick<Transaction, 'id' | 'amount'>,
   entityType?: EntityType,
-): SuggestedTemplate | null {
+): BookingProposal | null {
   if (!read.account) return null
   const account = read.account
   const label = read.candidates.find((c) => c.account === account)?.label ?? getAccountName(account)
   const category = categoryForAccount(account, entityType, read.category)
-  const vat = read.vat_treatment ?? getDefaultVatTreatmentForCategory(category) ?? null
-  return {
-    template_id: `assistant:${tx.id}`,
+  return accountProposal({
+    id: `assistant:${tx.id}`,
     source: 'assistant',
-    name_sv: label === account ? account : `${label}`,
-    name_en: label === account ? account : `${label}`,
-    group: 'assistant',
-    debit_account: tx.amount < 0 ? account : '1930',
-    credit_account: tx.amount < 0 ? '1930' : account,
-    confidence: read.confidence,
-    description_sv: firstSentence(read.reasoning),
-    risk_level: 'LOW',
-    requires_review: read.confidence < ASSISTANT_SURE,
-    vat_treatment: vat,
+    account,
+    label,
     category,
+    vat_treatment: read.vat_treatment,
+    amount: tx.amount,
+    confidence: read.confidence,
+    description: firstSentence(read.reasoning),
     has_underlag: read.has_underlag,
-  }
+  })
 }
 
 /**
@@ -179,7 +155,7 @@ export function assistantSuggestionFromRead(
  * a counterpart come first, then the assistant when it is at least likely,
  * then the catalog's keyword matches, then an unsure assistant last.
  */
-export function mergeAssistantSuggestion(list: SuggestedTemplate[], s: SuggestedTemplate): SuggestedTemplate[] {
+export function mergeAssistantSuggestion(list: BookingProposal[], s: BookingProposal): BookingProposal[] {
   const rest = list.filter((x) => x.source !== 'assistant')
   if (s.confidence < ASSISTANT_LIKELY) return [...rest, s]
   const firstCatalog = rest.findIndex((x) => x.source !== 'rule' && x.source !== 'counterparty')

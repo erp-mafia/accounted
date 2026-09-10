@@ -23,6 +23,6 @@ describe('booksWithoutReview', () => {
   })
   it('never books a catalog keyword match without a review', () => {
     expect(booksWithoutReview({ source: 'catalog', confidence: 0.95 })).toBe(false)
-    expect(booksWithoutReview({ confidence: 0.95 })).toBe(false)
+    expect(booksWithoutReview({ source: 'manual', confidence: 1 })).toBe(false)
   })
 })

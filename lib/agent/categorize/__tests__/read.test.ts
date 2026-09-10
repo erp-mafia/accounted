@@ -28,7 +28,8 @@ const read = (over: Partial<AssistantRead> = {}): AssistantRead => ({
 })
 
 const sug = (source: SuggestedTemplate['source'], confidence = 0.9): SuggestedTemplate => ({
-  template_id: `${source}-x`, source, name_sv: 'x', name_en: 'x', group: 'g', debit_account: '5410', credit_account: '1930',
+  template_id: `${source}-x`, source, booking: { kind: 'template', template_id: 'x', category: 'expense_other' },
+  name_sv: 'x', name_en: 'x', group: 'g', debit_account: '5410', credit_account: '1930',
   confidence, description_sv: '', risk_level: 'LOW', requires_review: false,
 })
 
@@ -53,14 +54,14 @@ describe('assistantSuggestionFromRead', () => {
       debit_account: '6570',
       credit_account: '1930',
       vat_treatment: 'reverse_charge',
-      category: 'expense_bank_fees',
+      booking: { kind: 'account', account: '6570', vat_treatment: 'reverse_charge', category: 'expense_bank_fees' },
       has_underlag: false,
       description_sv: 'Stripe fakturerar från Irland.',
     })
   })
   it('puts an income account on the credit side', () => {
     const s = assistantSuggestionFromRead(read({ account: '3001', vat_treatment: 'standard_25', candidates: [] }), { id: 'tx-1', amount: 1000 })
-    expect(s).toMatchObject({ debit_account: '1930', credit_account: '3001', category: 'income_services' })
+    expect(s).toMatchObject({ debit_account: '1930', credit_account: '3001', booking: { kind: 'account', account: '3001', category: 'income_services' } })
     expect(s!.name_sv).not.toBe('3001')
   })
   it('is nothing when the assistant found nothing that fits', () => {

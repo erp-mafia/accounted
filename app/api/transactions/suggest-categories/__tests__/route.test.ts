@@ -83,7 +83,6 @@ function makeTemplate(overrides: Record<string, unknown> = {}) {
 function enqueueBaseQueries() {
   enqueue({ data: [{ id: TX_ID, amount: 217.04, currency: 'SEK', description: 'Ränta' }] }) // transactions
   enqueue({ data: [] }) // mapping_rules
-  enqueue({ data: [] }) // historical transactions
   enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
 }
 
@@ -137,7 +136,6 @@ describe('POST /api/transactions/suggest-categories', () => {
     // 1931 to 1940 and books it, so the suggestion must be offered the same way.
     enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-live' }] })
     enqueue({ data: [] }) // mapping_rules
-    enqueue({ data: [] }) // historical transactions
     enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
@@ -160,7 +158,6 @@ describe('POST /api/transactions/suggest-categories', () => {
     // connection. The template learned on 1931 is still the same account.
     enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-1930' }] })
     enqueue({ data: [] })
-    enqueue({ data: [] })
     enqueue({ data: { entity_type: 'aktiebolag' } })
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
@@ -177,7 +174,6 @@ describe('POST /api/transactions/suggest-categories', () => {
 
   it('withholds a template whose twin leg sits in the COUNTER position (settlement against itself)', async () => {
     enqueue({ data: [{ id: TX_ID, amount: 217.04, currency: 'SEK', description: 'Ränta', cash_account_id: 'ca-live' }] })
-    enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ data: { entity_type: 'aktiebolag' } })
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
@@ -198,7 +194,6 @@ describe('POST /api/transactions/suggest-categories', () => {
     // learned as 5010 / 1931 is valid for it, the 1931 leg is its bank side.
     enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-orphan' }] })
     enqueue({ data: [] }) // mapping_rules
-    enqueue({ data: [] }) // historical transactions
     enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
