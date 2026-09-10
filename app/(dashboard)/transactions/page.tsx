@@ -4509,7 +4509,9 @@ export default function TransactionsPage() {
           rows + bank sync status/actions + the Bankavstämning path (the
           ignore flows point users there). */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 text-xs text-muted-foreground">
-        {mode === 'inbox' && (
+        {/* The count only when there is one: "Inget att hantera" over an
+            empty list says what the empty list already says. */}
+        {mode === 'inbox' && inboxItems.length > 0 && (
           <span className="tabular-nums">{t('footer_to_handle', { count: inboxItems.length })}</span>
         )}
         {mode === 'inbox' && pendingOutsideCount > 0 && (
