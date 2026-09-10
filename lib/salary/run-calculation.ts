@@ -749,6 +749,7 @@ export async function runSalaryCalculation(
         vacationRule: emp.vacation_rule,
         vacationDaysPerYear: emp.vacation_days_per_year,
         semestertillaggRate: emp.semestertillagg_rate,
+        vacationPayRate: emp.vacation_pay_rate ?? null,
         dailyDivisor: dailyDivisor(emp.workdays_per_week),
         vaxaStodEligible: emp.vaxa_stod_eligible,
         vaxaStodStart: emp.vaxa_stod_start,
