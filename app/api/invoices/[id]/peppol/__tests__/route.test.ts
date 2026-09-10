@@ -275,4 +275,23 @@ describe('POST /api/invoices/[id]/peppol', () => {
     expect(body.error.code).toBe(expectedCode)
     expect(body.error.details).toMatchObject({ pgCode: code })
   })
+
+  it('names the missing fiscal year when the stage RPC has no retention basis for the invoice date', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({
+      data: null,
+      error: { code: 'P0002', message: 'Peppol delivery requires a fiscal period retention basis' },
+    })
+
+    const response = await POST(
+      createMockRequest(`/api/invoices/${INVOICE_ID}/peppol`, { method: 'POST' }),
+      createMockRouteParams({ id: INVOICE_ID }),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(422)
+    expect(body.error.code).toBe('PEPPOL_FISCAL_PERIOD_MISSING')
+    expect(body.error.details).toMatchObject({ invoice_date: '2026-08-13' })
+  })
 })

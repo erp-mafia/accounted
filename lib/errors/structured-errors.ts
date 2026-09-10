@@ -1733,6 +1733,35 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Peppol-operatören kunde inte nås just nu. Fakturan har inte skickats; försök igen om en stund.',
     message_en: 'The Peppol access point could not be reached. The invoice has not been sent; try again shortly.',
   },
+  // The SMP lookup itself failed (#2484), as opposed to a lookup that
+  // answered "not registered": the staged delivery stays staged and nothing
+  // terminal is recorded. The route answers 502 when the transport says the
+  // failure is retryable, 422 otherwise.
+  PEPPOL_LOOKUP_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Kunde inte slå upp mottagaren i Peppol-nätverket. Försök igen om en stund.',
+    message_en: 'Could not look up the recipient in the Peppol network. Try again shortly.',
+    retryable: true,
+  },
+  // The hosted service refused the submission for a reason about the sender,
+  // the key or the service (not registered, quota, rate limit, scope,
+  // upstream unconfigured), never about the document (#2484). The delivery
+  // stays resendable; the route composes the hosted text onto the prefix
+  // when the registry knows the code, else this generic pointer.
+  PEPPOL_SEND_PRECONDITION_FAILED: {
+    httpStatus: 409,
+    message_sv: 'Fakturan kunde inte skickas via Peppol ännu: kontrollera Peppol-inställningarna och försök igen.',
+    message_en: 'The invoice could not be sent via Peppol yet: check the Peppol settings and try again.',
+    thrown_message_sv: true,
+  },
+  // stage_peppol_delivery raises P0002 when no fiscal period covers the
+  // invoice date: the delivery row carries a retention basis (BFL 7 kap.)
+  // derived from the period, so it cannot be staged without one.
+  PEPPOL_FISCAL_PERIOD_MISSING: {
+    httpStatus: 422,
+    message_sv: 'Fakturadatumet saknar ett räkenskapsår. Skapa räkenskapsåret innan fakturan skickas via Peppol.',
+    message_en: 'The invoice date falls outside every fiscal year. Create the fiscal year before sending the invoice via Peppol.',
+  },
   // /api/settings/peppol: publishing a company's identifier for receiving.
   PEPPOL_RECEIVING_UNSUPPORTED: {
     httpStatus: 503,
@@ -1817,6 +1846,18 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 422,
     message_sv: 'Peppol-id:t får inte registreras från det här kontot. Kontakta support.',
     message_en: 'The Peppol id may not be registered from this account. Contact support.',
+  },
+  // The two likeliest send preconditions (#2484): the route composes these
+  // behind PEPPOL_SEND_PRECONDITION_FAILED's prefix.
+  CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED: {
+    httpStatus: 422,
+    message_sv: 'Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Fakturering > E-faktura via Peppol, eller kontakta support.',
+    message_en: 'The company\'s Peppol id is not registered with the access point. Switch on receiving under Settings > Invoicing > E-invoicing via Peppol, or contact support.',
+  },
+  CONNECTOR_SCOPE_MISSING: {
+    httpStatus: 403,
+    message_sv: 'Kopplingsnyckeln saknar Peppol-behörighet. Kontakta support.',
+    message_en: 'The connector key lacks Peppol permission. Contact support.',
   },
   CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE: {
     httpStatus: 409,
