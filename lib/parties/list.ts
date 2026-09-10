@@ -268,9 +268,17 @@ export function composeCounterparts(input: {
   const seen = new Set(input.aliases.map((a) => a.alias_key))
   for (const [key, s] of input.bank) if (!seen.has(key)) unnamed += s.count
 
+  // Your counterparts first, then the ones the ledger recognised but nobody
+  // has adopted. Sorted by money inside each group, so the page reads as the
+  // register it is rather than as a queue of proposals.
   const filtered = rows
     .filter((r) => matches(q, r.name, r.orgNumber, r.what))
-    .sort((a, b) => b.inSek + b.outSek - (a.inSek + a.outSek) || a.name.localeCompare(b.name, 'sv'))
+    .sort(
+      (a, b) =>
+        Number(b.status === 'confirmed') - Number(a.status === 'confirmed') ||
+        b.inSek + b.outSek - (a.inSek + a.outSek) ||
+        a.name.localeCompare(b.name, 'sv'),
+    )
 
   return {
     rows: filtered,

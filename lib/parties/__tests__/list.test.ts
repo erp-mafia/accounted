@@ -71,7 +71,9 @@ describe('composeCounterparts', () => {
     // A suggestion takes the directory's brand name; a confirmed record keeps its own.
     expect(v).toMatchObject({ statsSource: 'ledger', count: 3, outSek: 900, account: '5420', status: 'suggested', what: 'Ekonomiprogram, SaaS', name: 'Visma' })
     expect(a.name).toBe('Anthropic')
-    expect(out.rows[0]!.id).toBe('p2')
+    // The register comes first: the confirmed counterpart outranks a larger
+    // suggestion, so the page reads as a register and not as a queue.
+    expect(out.rows.map((r) => r.id)).toEqual(['p1', 'p2'])
   })
 
   it('lists a reading without a party as its own row and keeps unnamed spend off the list', () => {
@@ -109,5 +111,50 @@ describe('composeCounterparts', () => {
     })
     expect(out.rows.map((r) => r.id)).toEqual(['p2'])
     expect(out.counts.total).toBe(2)
+  })
+})
+
+describe('composeCounterparts: the register comes before the readings', () => {
+  const stats = (expenseSek: number) => ({
+    expenseSek,
+    revenueSek: 0,
+    count: 1,
+    lastSeen: '2026-09-01',
+    account: '6570',
+    accountName: 'Bankavgifter',
+    dominantAccountName: 'Bankavgifter',
+    rhythm: null,
+  })
+
+  it('puts confirmed counterparts first, however small, and sorts by money inside each group', () => {
+    const out = composeCounterparts({
+      parties: [
+        party({ id: 'big', displayName: 'Stor nyhet', status: 'suggested', stats: stats(900_000) as never }),
+        party({ id: 'small', displayName: 'Liten leverantör', stats: stats(500) as never }),
+        party({ id: 'mid', displayName: 'Mellanleverantör', stats: stats(9_000) as never }),
+        party({ id: 'newer', displayName: 'Mindre nyhet', status: 'suggested', stats: stats(100) as never }),
+      ],
+      aliases: [],
+      bank: new Map(),
+    })
+    expect(out.rows.map((r) => r.name)).toEqual([
+      'Mellanleverantör',
+      'Liten leverantör',
+      'Stor nyhet',
+      'Mindre nyhet',
+    ])
+    expect(out.counts).toMatchObject({ confirmed: 2, suggested: 2 })
+  })
+
+  it('leaves a register of only confirmed counterparts in money order', () => {
+    const out = composeCounterparts({
+      parties: [
+        party({ id: 'a', displayName: 'A', stats: stats(100) as never }),
+        party({ id: 'b', displayName: 'B', stats: stats(700) as never }),
+      ],
+      aliases: [],
+      bank: new Map(),
+    })
+    expect(out.rows.map((r) => r.name)).toEqual(['B', 'A'])
   })
 })

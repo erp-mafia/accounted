@@ -1,5 +1,6 @@
 'use client'
 
+import { Fragment } from 'react'
 import { useTranslations } from 'next-intl'
 import { MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -27,6 +28,11 @@ function money(n: number): string {
  * resolver read out of the bank text. The state sits in a quiet chip, the
  * actions in the row menu, and nothing asks to be confirmed before it can
  * be used.
+ *
+ * The register comes first and the newly recognised follow, under headings
+ * that appear only when both are on screen: a company whose counterparts are
+ * all confirmed sees a plain register, and one that has only just been read
+ * sees a plain list of readings. Neither needs to be told which it is.
  */
 export function CounterpartList({
   rows,
@@ -50,6 +56,8 @@ export function CounterpartList({
   onDismiss: (row: CounterpartRow) => void
 }) {
   const t = useTranslations('parties')
+  const confirmedCount = rows.filter((r) => r.status === 'confirmed').length
+  const mixed = confirmedCount > 0 && confirmedCount < rows.length
 
   return (
     <div className="overflow-x-auto">
@@ -66,7 +74,16 @@ export function CounterpartList({
           </tr>
         </thead>
         <tbody className="stagger-enter">
-          {rows.map((row) => {
+          {rows.map((row, i) => {
+            const mine = row.status === 'confirmed'
+            // The heading for a group, on its first row, and only when the
+            // other group is on screen too.
+            const heading =
+              mixed && (i === 0 || (rows[i - 1]!.status === 'confirmed') !== mine)
+                ? mine
+                  ? t('cp_group_mine', { count: confirmedCount })
+                  : t('cp_group_new', { count: rows.length - confirmedCount })
+                : null
             const whyKey = !row.partyId && row.source ? WHY_KEY[row.source as keyof typeof WHY_KEY] : undefined
             const why = row.status === 'suggested' && row.reason ? reasonText(t, row.reason, row.rhythm, row.orgNumber) : whyKey ? t(whyKey) : null
             // A reading with no party has no dossier to open, so its why stays on the line.
@@ -76,8 +93,19 @@ export function CounterpartList({
             const chip =
               row.status === 'suggested' ? t('cp_status_suggested') : row.status === 'read' ? t('cp_status_read') : row.status === 'tentative' ? t('cp_status_tentative') : null
             return (
+              <Fragment key={row.id}>
+              {heading ? (
+                <tr>
+                  <th
+                    colSpan={7}
+                    scope="colgroup"
+                    className="px-3 pb-1.5 pt-6 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground first:pt-0"
+                  >
+                    {heading}
+                  </th>
+                </tr>
+              ) : null}
               <tr
-                key={row.id}
                 className={cn('group transition-colors duration-150 hover:bg-secondary/35', row.partyId && 'cursor-pointer')}
                 onClick={(e) => {
                   if (!row.partyId) return
@@ -97,6 +125,14 @@ export function CounterpartList({
                         ) : (
                           <span className="truncate text-foreground">{row.name}</span>
                         )}
+                        {row.roles.map((role) => (
+                          <span
+                            key={role}
+                            className="rounded-full border border-border px-2 py-0.5 text-[11px] leading-none whitespace-nowrap text-muted-foreground"
+                          >
+                            {role === 'supplier' ? t('cp_role_supplier') : t('cp_role_customer')}
+                          </span>
+                        ))}
                         {chip ? (
                           <span
                             className={cn(
@@ -150,6 +186,7 @@ export function CounterpartList({
                   ) : null}
                 </td>
               </tr>
+              </Fragment>
             )
           })}
         </tbody>
