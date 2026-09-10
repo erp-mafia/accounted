@@ -174,4 +174,17 @@ describe('endpoint identifiers', () => {
     expect(invoice('73 0000 0000 1', '0088')?.customer.endpoint).toEqual({ scheme: '0088', identifier: '73000000001' })
     expect(invoice('--', '0007')?.customer.endpoint).toBeNull()
   })
+
+  it('treats an endpoint whose scheme is not a four-digit ICD as absent, so it cannot fail the archive CHECK', () => {
+    const invoice = (endpoint: string, scheme: string) => parseUblJsonDocument({
+      Invoice: [{
+        'cbc:ID': [{ _: '1' }],
+        'cac:AccountingSupplierParty': [{ 'cac:Party': [{ 'cbc:EndpointID': [{ _: endpoint, $: { schemeID: scheme } }] }] }],
+        'cac:InvoiceLine': [],
+      }],
+    })
+    expect(invoice('5567321707', 'SE:ORGNR')?.supplier.endpoint).toBeNull()
+    expect(invoice('5567321707', '07')?.supplier.endpoint).toBeNull()
+    expect(invoice('5567321707', ' 0007 ')?.supplier.endpoint).toEqual({ scheme: '0007', identifier: '5567321707' })
+  })
 })

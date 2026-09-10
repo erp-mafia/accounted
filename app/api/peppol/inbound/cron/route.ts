@@ -27,8 +27,11 @@ export const maxDuration = 300
  *
  * After the listing, a bounded reprocessing pass revisits what the archive
  * still holds pending (missing XML, unrouted, failed) regardless of whether
- * the provider still lists it. Retryable problems in that pass page once per
- * run; terminal ones are recorded on the row and never retried.
+ * the provider still lists it. One page per run, and only for what needs a
+ * person: documents that became terminal in this run (never retried again,
+ * and a received e-invoice under seven-year retention) and real processing
+ * failures. Transport hiccups, XML misses under budget and held documents
+ * are logged at warn and retried after the backoff.
  *
  * Truthful no-op when no access point is switched on in this environment.
  */
@@ -49,16 +52,26 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
   ctx.log.info('peppol inbound sync complete', { ...summary, errors: summary.errors.length })
 
   const reprocess = await reprocessInboundPeppolDocuments({ service, transport, deliver, log: ctx.log })
-  ctx.log.info('peppol inbound reprocess complete', { ...reprocess, errors: reprocess.errors.length })
+  ctx.log.info('peppol inbound reprocess complete', {
+    ...reprocess,
+    terminalDocuments: reprocess.terminalDocuments.length,
+    errors: reprocess.errors.length,
+  })
   if (reprocess.errors.length > 0) {
-    ctx.log.warn('peppol inbound reprocess left retryable errors', {
+    ctx.log.warn('peppol inbound reprocess left failures to retry', {
       ids: reprocess.errors.map((e) => e.id),
       errors: reprocess.errors,
     })
-    ctx.log.error('peppol inbound reprocess had errors', {
+  }
+  const terminalDocuments = [...summary.terminalDocuments, ...reprocess.terminalDocuments]
+  if (reprocess.errors.length > 0 || terminalDocuments.length > 0) {
+    ctx.log.error('peppol inbound needs an operator', {
       alert: true,
       errorCount: reprocess.errors.length,
-      ids: reprocess.errors.map((e) => e.id),
+      errorIds: reprocess.errors.map((e) => e.id),
+      terminalCount: terminalDocuments.length,
+      terminalProviderDocumentIds: terminalDocuments.map((d) => d.providerDocumentId),
+      terminalReasons: terminalDocuments.map((d) => `${d.providerDocumentId}: ${d.reason}`),
     })
   }
   return NextResponse.json({ data: { ...summary, reprocess } })

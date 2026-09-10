@@ -23,7 +23,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { roundOre } from '@/lib/money'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
-import { PEPPOL_INBOUND_AWAITING_XML, type PeppolInboundDelivery } from '@/lib/invoices/peppol-inbound'
+import {
+  PEPPOL_INBOUND_AWAITING_OWNER,
+  PEPPOL_INBOUND_AWAITING_XML,
+  type PeppolInboundDelivery,
+} from '@/lib/invoices/peppol-inbound'
 import type { PeppolInboundDocument, PeppolInboundLine } from '@/lib/invoices/peppol-inbound-ubl'
 import type {
   ExtractedInvoiceLineItem,
@@ -185,8 +189,10 @@ export async function deliverPeppolDocumentToInbox(
     return { inboxItemId: null, xmlDocumentId: null, holdReason: PEPPOL_INBOUND_AWAITING_XML }
   }
 
+  // No member to own the item is a configuration state of the company, not
+  // a fault of the document: hold and try again later, do not page.
   const userId = await resolvePeppolInboxOwner({ service, companyId, provider: row.provider })
-  if (!userId) throw new Error('No owner member found for the receiving company')
+  if (!userId) return { inboxItemId: null, xmlDocumentId: null, holdReason: PEPPOL_INBOUND_AWAITING_OWNER }
 
   const baseName = `peppol-${document.documentType === 'CreditNote' ? 'kreditnota' : 'faktura'}-${document.documentId || row.provider_document_id}`
 

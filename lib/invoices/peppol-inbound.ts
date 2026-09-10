@@ -61,15 +61,41 @@ export interface PeppolInboundRow {
 /**
  * `last_error` markers with a meaning for the retry machinery. A `terminal:`
  * prefix means no pass will touch the row again without a human: retrying
- * cannot change the answer.
+ * cannot change the answer. Every newly terminal document is paged once by
+ * the cron, because a received e-invoice that cannot be archived or filed
+ * is an operator matter under the seven-year retention.
  */
 export const PEPPOL_INBOUND_TERMINAL_PREFIX = 'terminal:'
-export const PEPPOL_INBOUND_XML_UNAVAILABLE = 'terminal: xml unavailable upstream'
+/** How many times the provider may answer "no XML" before the row goes terminal. */
+export const PEPPOL_INBOUND_XML_MAX_MISSES = 3
+export const PEPPOL_INBOUND_XML_UNAVAILABLE = `terminal: xml unavailable upstream after ${PEPPOL_INBOUND_XML_MAX_MISSES} attempts`
+export const PEPPOL_INBOUND_RECIPIENT_MISSING = 'terminal: recipient endpoint missing in document'
+export const PEPPOL_INBOUND_UNREADABLE = 'terminal: document could not be read as UBL'
+export const PEPPOL_INBOUND_UNARCHIVABLE_PREFIX = 'terminal: payload unarchivable: '
 /** The row is routed but held back from the inbox until the exact XML is archived. */
 export const PEPPOL_INBOUND_AWAITING_XML = 'awaiting xml'
+/** The row is routed but the company has no member to own the inbox item yet (configuration, not a fault). */
+export const PEPPOL_INBOUND_AWAITING_OWNER = 'awaiting owner member'
+
+const XML_MISS_RE = /^xml unavailable upstream \(miss (\d+)\/\d+\)$/
 
 export function isTerminalInboundError(lastError: string | null | undefined): boolean {
   return typeof lastError === 'string' && lastError.startsWith(PEPPOL_INBOUND_TERMINAL_PREFIX)
+}
+
+/** Misses recorded so far in a `last_error` written by fetchMissingInboundXml, else 0. */
+export function xmlMissCount(lastError: string | null | undefined): number {
+  const match = typeof lastError === 'string' ? XML_MISS_RE.exec(lastError) : null
+  return match ? Number(match[1]) : 0
+}
+
+export function xmlMissMarker(misses: number): string {
+  return `xml unavailable upstream (miss ${misses}/${PEPPOL_INBOUND_XML_MAX_MISSES})`
+}
+
+/** The miss counter survives routing and holding; anything else is replaced. */
+function carriedXmlMarker(row: PeppolInboundRow): string | null {
+  return xmlMissCount(row.last_error) > 0 ? row.last_error : null
 }
 
 /** What the inbox integration receives for one routed document. */
@@ -93,6 +119,13 @@ export type PeppolInboundDeliverer = (delivery: PeppolInboundDelivery) => Promis
   holdReason?: string | null
 }>
 
+/** A document that went terminal in this run: the cron pages these once. */
+export interface PeppolInboundTerminalDocument {
+  id: string
+  providerDocumentId: string
+  reason: string
+}
+
 export interface PeppolInboundSyncResult {
   listed: number
   archived: number
@@ -101,6 +134,9 @@ export interface PeppolInboundSyncResult {
   unrouted: number
   delivered: number
   failed: number
+  /** Documents that became terminal in this run (unarchivable payloads, unreadable documents). */
+  terminal: number
+  terminalDocuments: PeppolInboundTerminalDocument[]
   errors: Array<{ providerDocumentId: string; reason: string }>
 }
 
@@ -109,18 +145,44 @@ export interface PeppolInboundReprocessResult {
   candidates: number
   /** Rows whose missing XML was fetched and archived this pass. */
   xmlFetched: number
+  /** Rows the provider answered "no XML" for this pass, still under the miss budget. */
+  xmlMissed: number
+  /** Rows whose XML fetch hit a transport error; nothing changed, asked again after the backoff. */
+  retried: number
+  /** Rows routed but held back from the inbox (awaiting XML or an owner member). */
+  held: number
   /** Rows that gained a company this pass (a registration appeared). */
   routed: number
   /** Rows filed in the inbox this pass. */
   delivered: number
-  /** Rows marked or found terminal this pass; nothing more will be tried on them. */
+  /** Rows that became terminal this pass; nothing more will be tried on them. */
   terminal: number
-  /** Retryable problems: the row keeps its state and is examined again after the backoff. */
+  terminalDocuments: PeppolInboundTerminalDocument[]
+  /** Real failures (database, delivery): the row keeps its state, is examined again after the backoff, and the cron pages. */
   errors: Array<{ id: string; providerDocumentId: string; reason: string }>
 }
 
-/** How long a pending row rests between two reprocessing attempts. */
+/** How long a pending row rests between two attempts, in either pass. */
 export const PEPPOL_INBOUND_REPROCESS_BACKOFF_MS = 30 * 60 * 1000
+
+/**
+ * Postgres codes for an insert that will fail the same way every time it is
+ * retried with the same payload: a CHECK or NOT NULL violation, a value the
+ * column type cannot hold. Anything else (connection, lock, RLS) may pass
+ * next time.
+ */
+const DETERMINISTIC_PG_CODES = new Set(['23502', '23514', '22001', '22003', '22007', '22008', '22P02'])
+
+export class PeppolInboundArchiveError extends Error {
+  readonly code: string | null
+  readonly deterministic: boolean
+  constructor(message: string, options: { code?: string | null; cause?: unknown }) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined)
+    this.name = 'PeppolInboundArchiveError'
+    this.code = options.code ?? null
+    this.deterministic = !!options.code && DETERMINISTIC_PG_CODES.has(options.code)
+  }
+}
 
 function cleanIsoDate(value: string | null): string | null {
   return value && ISO_DATE_RE.test(value) ? value : null
@@ -128,6 +190,19 @@ function cleanIsoDate(value: string | null): string | null {
 
 function roundMoney(value: number | null): number | null {
   return value === null ? null : roundOre(value)
+}
+
+function isRested(row: PeppolInboundRow, now: Date): boolean {
+  if (!row.processed_at) return true
+  const processedAt = Date.parse(row.processed_at)
+  return Number.isNaN(processedAt) || processedAt < now.getTime() - PEPPOL_INBOUND_REPROCESS_BACKOFF_MS
+}
+
+/** Milliseconds for an ISO timestamp, or null when it does not parse. */
+function parseTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null
+  const ms = Date.parse(value)
+  return Number.isNaN(ms) ? null : ms
 }
 
 /**
@@ -177,13 +252,14 @@ async function updateRow(
 /**
  * Fetch and archive the exact XML for a row that has none. The one place the
  * XML retry lives: the listing sync calls it for a document it sees again,
- * the reprocessing pass for anything pending.
+ * the reprocessing pass for anything pending. Every attempt stamps
+ * `processed_at`, so neither pass asks again before the backoff.
  *
  * - a document comes back: stored with its hash (the immutability trigger
- *   allows null -> value once);
- * - the provider answers null: the XML does not exist upstream, so the row
- *   is marked terminal and never asked for again;
- * - the transport fails: nothing is written, the row stays retryable.
+ *   allows null -> value once) and the miss counter is cleared;
+ * - the provider answers null: one miss is recorded; on the third the row
+ *   goes terminal and is never asked for again;
+ * - the transport fails: only the attempt is stamped, the row stays as it was.
  */
 export async function fetchMissingInboundXml(args: {
   service: SupabaseClient
@@ -191,7 +267,7 @@ export async function fetchMissingInboundXml(args: {
   row: PeppolInboundRow
   log: Logger
   now?: Date
-}): Promise<{ row: PeppolInboundRow; outcome: 'fetched' | 'terminal' | 'error' | 'skipped'; reason?: string }> {
+}): Promise<{ row: PeppolInboundRow; outcome: 'fetched' | 'missed' | 'terminal' | 'error' | 'skipped'; reason?: string }> {
   const { service, transport, row, log } = args
   if (row.xml_payload || !transport.fetchInboundDocumentXml || isTerminalInboundError(row.last_error)) {
     return { row, outcome: 'skipped' }
@@ -202,22 +278,38 @@ export async function fetchMissingInboundXml(args: {
     xml = await transport.fetchInboundDocumentXml(row.provider_document_id, row.document_type)
   } catch (err) {
     const reason = describeError(err)
-    log.warn('inbound Peppol XML fetch failed, will retry', { providerDocumentId: row.provider_document_id, reason })
-    return { row, outcome: 'error', reason }
+    log.warn('inbound Peppol XML fetch failed, will retry after the backoff', { id: row.id, providerDocumentId: row.provider_document_id, reason })
+    const updated = await updateRow(service, row.id, { processed_at: touchedAt })
+    return { row: updated, outcome: 'error', reason }
   }
   if (!xml) {
+    const misses = xmlMissCount(row.last_error) + 1
+    if (misses >= PEPPOL_INBOUND_XML_MAX_MISSES) {
+      const updated = await updateRow(service, row.id, {
+        last_error: PEPPOL_INBOUND_XML_UNAVAILABLE,
+        processed_at: touchedAt,
+      })
+      log.warn('inbound Peppol XML unavailable upstream, document is terminal', {
+        providerDocumentId: row.provider_document_id,
+        misses,
+      })
+      return { row: updated, outcome: 'terminal' }
+    }
     const updated = await updateRow(service, row.id, {
-      last_error: PEPPOL_INBOUND_XML_UNAVAILABLE,
+      last_error: xmlMissMarker(misses),
       processed_at: touchedAt,
     })
-    log.warn('inbound Peppol XML unavailable upstream, document kept as JSON only', {
+    log.warn('inbound Peppol XML not available upstream yet, will ask again after the backoff', {
       providerDocumentId: row.provider_document_id,
+      misses,
+      maxMisses: PEPPOL_INBOUND_XML_MAX_MISSES,
     })
-    return { row: updated, outcome: 'terminal' }
+    return { row: updated, outcome: 'missed' }
   }
   const updated = await updateRow(service, row.id, {
     xml_payload: xml,
     xml_sha256: sha256Hex(xml),
+    last_error: xmlMissCount(row.last_error) > 0 ? null : row.last_error,
     processed_at: touchedAt,
   })
   return { row: updated, outcome: 'fetched' }
@@ -226,15 +318,23 @@ export async function fetchMissingInboundXml(args: {
 /**
  * Archive one message from the provider. Idempotent on (provider, provider
  * document id): a message seen before returns the stored row and
- * `created: false`, after fetching its XML if the archive still lacks it.
+ * `created: false`, after fetching its XML if the archive still lacks it
+ * and the row has rested for the backoff (a provider that re-lists the same
+ * window every run must not make each run spend a fetch timeout per row).
+ *
+ * An insert that fails deterministically (the payload violates a column
+ * constraint) throws a PeppolInboundArchiveError with `deterministic: true`;
+ * the caller decides whether to record a stub.
  */
 export async function archiveInboundPeppolMessage(args: {
   service: SupabaseClient
   transport: PeppolTransport
   message: PeppolInboundMessage
   log: Logger
+  now?: Date
 }): Promise<{ row: PeppolInboundRow; document: PeppolInboundDocument | null; created: boolean }> {
   const { service, transport, message, log } = args
+  const now = args.now ?? new Date()
 
   const { data: existing, error: existingError } = await service
     .from('peppol_inbound_documents')
@@ -244,8 +344,12 @@ export async function archiveInboundPeppolMessage(args: {
     .maybeSingle()
   if (existingError) throw new Error(`Failed to read inbound Peppol archive: ${existingError.message}`)
   if (existing) {
-    // Seen is not done: a row archived as JSON only gets its XML on sight.
-    const { row } = await fetchMissingInboundXml({ service, transport, row: existing as PeppolInboundRow, log })
+    // Seen is not done: a row archived as JSON only gets its XML on sight,
+    // once per backoff.
+    let row = existing as PeppolInboundRow
+    if (!row.xml_payload && isRested(row, now)) {
+      row = (await fetchMissingInboundXml({ service, transport, row, log, now })).row
+    }
     return { row, document: parseUblJsonDocument(row.ubl_json), created: false }
   }
 
@@ -286,7 +390,7 @@ export async function archiveInboundPeppolMessage(args: {
     xml_sha256: xml ? sha256Hex(xml) : null,
     ubl_json: message.payload,
     summary: document ? { warnings: document.warnings, lines: document.lines.length, attachments: document.attachments.length } : { unparsed: true },
-    received_at: message.receivedAt ?? new Date().toISOString(),
+    received_at: message.receivedAt ?? now.toISOString(),
     })
     .select('*')
     .single()
@@ -304,15 +408,56 @@ export async function archiveInboundPeppolMessage(args: {
         return { row, document: parseUblJsonDocument(row.ubl_json), created: false }
       }
     }
-    throw new Error(`Failed to archive inbound Peppol document: ${error?.message ?? 'no row'}`)
+    throw new PeppolInboundArchiveError(
+      `Failed to archive inbound Peppol document: ${error?.message ?? 'no row'}`,
+      { code: (error as { code?: string } | null)?.code ?? null, cause: error },
+    )
   }
   return { row: data as PeppolInboundRow, document, created: true }
 }
 
 /**
+ * Record a document whose payload the archive cannot hold (a deterministic
+ * insert failure) as a terminal stub under its own provider id, so the
+ * listing cursor can move past it and the failure is paged once instead of
+ * blocking every later document forever. The provider still holds the
+ * original; the stub carries the reason for the operator.
+ */
+export async function archiveUnarchivableInboundMessage(args: {
+  service: SupabaseClient
+  message: PeppolInboundMessage
+  reason: string
+  now?: Date
+}): Promise<PeppolInboundRow> {
+  const { service, message } = args
+  const now = args.now ?? new Date()
+  const receivedAt = parseTimestamp(message.receivedAt)
+  const lastError = `${PEPPOL_INBOUND_UNARCHIVABLE_PREFIX}${args.reason.slice(0, 200)}`
+  const { data, error } = await service
+    .from('peppol_inbound_documents')
+    .insert({
+      provider: message.provider,
+      provider_document_id: message.providerDocumentId,
+      document_type: message.documentType,
+      status: 'failed',
+      ubl_json: {},
+      summary: { unarchivable: true },
+      received_at: receivedAt === null ? now.toISOString() : new Date(receivedAt).toISOString(),
+      processed_at: now.toISOString(),
+      last_error: lastError,
+    })
+    .select('*')
+    .single()
+  if (error || !data) throw new Error(`Failed to record unarchivable inbound Peppol document: ${error?.message ?? 'no row'}`)
+  return data as PeppolInboundRow
+}
+
+/**
  * Route an archived document to its company and deliver it to the inbox.
  * Safe to call again on rows left in `received`/`routed`/`unrouted`/`failed`;
- * `converted`, `ignored` and terminal rows are left alone.
+ * `converted`, `ignored` and terminal rows are left alone. A document that
+ * cannot be read, or names no recipient, is terminal: no retry can change
+ * what the payload says.
  */
 export async function processInboundPeppolRow(args: {
   service: SupabaseClient
@@ -320,21 +465,30 @@ export async function processInboundPeppolRow(args: {
   document: PeppolInboundDocument | null
   deliver: PeppolInboundDeliverer | null
   log: Logger
-}): Promise<{ row: PeppolInboundRow; outcome: 'delivered' | 'routed' | 'unrouted' | 'failed' | 'skipped' }> {
+}): Promise<{ row: PeppolInboundRow; outcome: 'delivered' | 'routed' | 'unrouted' | 'failed' | 'terminal' | 'skipped' }> {
   const { service, log } = args
   let row = args.row
   if (row.status === 'converted' || row.status === 'ignored' || isTerminalInboundError(row.last_error)) {
     return { row, outcome: 'skipped' }
   }
 
+  if (!args.document) {
+    row = await updateRow(service, row.id, {
+      status: 'failed',
+      last_error: PEPPOL_INBOUND_UNREADABLE,
+      processed_at: new Date().toISOString(),
+    })
+    return { row, outcome: 'terminal' }
+  }
+
   if (!row.company_id) {
     if (!row.recipient_scheme || !row.recipient_identifier) {
       row = await updateRow(service, row.id, {
         status: 'unrouted',
-        last_error: 'recipient endpoint missing in document',
+        last_error: PEPPOL_INBOUND_RECIPIENT_MISSING,
         processed_at: new Date().toISOString(),
       })
-      return { row, outcome: 'unrouted' }
+      return { row, outcome: 'terminal' }
     }
     const companyId = await resolvePeppolRecipientCompany({
       service,
@@ -345,7 +499,7 @@ export async function processInboundPeppolRow(args: {
     if (!companyId) {
       row = await updateRow(service, row.id, {
         status: 'unrouted',
-        last_error: null,
+        last_error: carriedXmlMarker(row),
         processed_at: new Date().toISOString(),
       })
       log.warn('inbound Peppol document for an unregistered recipient', {
@@ -354,20 +508,10 @@ export async function processInboundPeppolRow(args: {
       })
       return { row, outcome: 'unrouted' }
     }
-    row = await updateRow(service, row.id, { company_id: companyId, status: 'routed', last_error: null })
+    row = await updateRow(service, row.id, { company_id: companyId, status: 'routed', last_error: carriedXmlMarker(row) })
   }
 
-  if (!args.deliver || !args.document) {
-    if (!args.document) {
-      row = await updateRow(service, row.id, {
-        status: 'failed',
-        last_error: 'document could not be read as UBL',
-        processed_at: new Date().toISOString(),
-      })
-      return { row, outcome: 'failed' }
-    }
-    return { row, outcome: 'routed' }
-  }
+  if (!args.deliver) return { row, outcome: 'routed' }
 
   try {
     const result = await args.deliver({
@@ -377,12 +521,18 @@ export async function processInboundPeppolRow(args: {
       xml: row.xml_payload,
     })
     if (result.holdReason) {
-      // Not filed yet (typically: the exact XML is not archived). The row
-      // stays routed and the reprocessing pass tries again after the backoff.
+      // Not filed yet (the exact XML is not archived, or nobody can own the
+      // item). The row stays routed and the reprocessing pass tries again
+      // after the backoff. Warned, not paged: a hold is a state, not a fault.
       row = await updateRow(service, row.id, {
         status: 'routed',
-        last_error: result.holdReason,
+        last_error: carriedXmlMarker(row) ?? result.holdReason,
         processed_at: new Date().toISOString(),
+      })
+      log.warn('inbound Peppol document held back from the inbox', {
+        id: row.id,
+        providerDocumentId: row.provider_document_id,
+        reason: result.holdReason,
       })
       return { row, outcome: 'routed' }
     }
@@ -429,9 +579,26 @@ async function newestArchivedReceivedAt(
 }
 
 /**
+ * Oldest first, stable, unparsable or missing timestamps last: the order in
+ * which the archive must fill so the newest archived `received_at` is
+ * always a contiguous prefix of what the provider holds.
+ */
+export function orderInboundMessagesOldestFirst(messages: PeppolInboundMessage[]): PeppolInboundMessage[] {
+  return messages
+    .map((message, index) => ({ message, index, at: parseTimestamp(message.receivedAt) ?? Number.POSITIVE_INFINITY }))
+    .sort((a, b) => (a.at === b.at ? a.index - b.index : a.at - b.at))
+    .map((entry) => entry.message)
+}
+
+/**
  * One polling pass: list unread invoices and credit notes at the provider,
- * archive, route and deliver each. Errors are per document; the pass always
- * finishes.
+ * archive, route and deliver each, oldest first. Processing errors are per
+ * document; an archive failure stops the document type for this run, because
+ * archiving a newer document past an older one that is not in the archive
+ * would move the listing cursor beyond it (the provider re-lists the rest
+ * next run; the archive's unique key tolerates the repeat). A payload the
+ * archive can never hold is recorded as a terminal stub instead, so it does
+ * not block the cursor forever.
  */
 export async function syncInboundPeppolDocuments(args: {
   service: SupabaseClient
@@ -439,10 +606,13 @@ export async function syncInboundPeppolDocuments(args: {
   deliver: PeppolInboundDeliverer | null
   log: Logger
   limit?: number
+  now?: Date
 }): Promise<PeppolInboundSyncResult> {
   const { service, transport, log } = args
+  const now = args.now ?? new Date()
   const result: PeppolInboundSyncResult = {
-    listed: 0, archived: 0, duplicates: 0, routed: 0, unrouted: 0, delivered: 0, failed: 0, errors: [],
+    listed: 0, archived: 0, duplicates: 0, routed: 0, unrouted: 0, delivered: 0, failed: 0,
+    terminal: 0, terminalDocuments: [], errors: [],
   }
   if (!transport.listInboundDocuments) return result
 
@@ -464,11 +634,42 @@ export async function syncInboundPeppolDocuments(args: {
     }
     result.listed += messages.length
 
-    for (const message of messages) {
+    const ordered = orderInboundMessagesOldestFirst(messages)
+    for (let index = 0; index < ordered.length; index += 1) {
+      const message = ordered[index]
+      let archived: Awaited<ReturnType<typeof archiveInboundPeppolMessage>>
       try {
-        const archived = await archiveInboundPeppolMessage({ service, transport, message, log })
-        if (archived.created) result.archived += 1
-        else result.duplicates += 1
+        archived = await archiveInboundPeppolMessage({ service, transport, message, log, now })
+      } catch (err) {
+        if (err instanceof PeppolInboundArchiveError && err.deterministic) {
+          try {
+            const stub = await archiveUnarchivableInboundMessage({ service, message, reason: describeError(err), now })
+            result.terminal += 1
+            result.terminalDocuments.push({ id: stub.id, providerDocumentId: message.providerDocumentId, reason: stub.last_error ?? '' })
+            log.warn('inbound Peppol payload cannot be archived, recorded as terminal', {
+              providerDocumentId: message.providerDocumentId,
+              reason: describeError(err),
+            })
+            continue
+          } catch (stubErr) {
+            err = stubErr
+          }
+        }
+        const reason = describeError(err)
+        result.failed += 1
+        result.errors.push({ providerDocumentId: message.providerDocumentId, reason })
+        log.warn('inbound Peppol listing stopped at a document that could not be archived; newer ones are re-listed next run', {
+          documentType,
+          providerDocumentId: message.providerDocumentId,
+          reason,
+          skipped: ordered.length - index - 1,
+        })
+        break
+      }
+      if (archived.created) result.archived += 1
+      else result.duplicates += 1
+
+      try {
         const processed = await processInboundPeppolRow({
           service,
           row: archived.row,
@@ -480,6 +681,14 @@ export async function syncInboundPeppolDocuments(args: {
         else if (processed.outcome === 'routed') result.routed += 1
         else if (processed.outcome === 'unrouted') result.unrouted += 1
         else if (processed.outcome === 'failed') result.failed += 1
+        else if (processed.outcome === 'terminal') {
+          result.terminal += 1
+          result.terminalDocuments.push({
+            id: processed.row.id,
+            providerDocumentId: processed.row.provider_document_id,
+            reason: processed.row.last_error ?? '',
+          })
+        }
       } catch (err) {
         result.failed += 1
         result.errors.push({ providerDocumentId: message.providerDocumentId, reason: describeError(err) })
@@ -515,7 +724,7 @@ export async function reprocessInboundPeppolDocuments(args: {
   const now = args.now ?? new Date()
   const cutoff = new Date(now.getTime() - PEPPOL_INBOUND_REPROCESS_BACKOFF_MS).toISOString()
   const result: PeppolInboundReprocessResult = {
-    candidates: 0, xmlFetched: 0, routed: 0, delivered: 0, terminal: 0, errors: [],
+    candidates: 0, xmlFetched: 0, xmlMissed: 0, retried: 0, held: 0, routed: 0, delivered: 0, terminal: 0, terminalDocuments: [], errors: [],
   }
 
   const { data, error } = await service
@@ -531,11 +740,14 @@ export async function reprocessInboundPeppolDocuments(args: {
   const candidates = (data ?? []) as PeppolInboundRow[]
   result.candidates = candidates.length
 
+  const markTerminal = (row: PeppolInboundRow) => {
+    result.terminal += 1
+    result.terminalDocuments.push({ id: row.id, providerDocumentId: row.provider_document_id, reason: row.last_error ?? '' })
+  }
+
   for (const candidate of candidates) {
-    if (isTerminalInboundError(candidate.last_error)) {
-      result.terminal += 1
-      continue
-    }
+    // Already terminal (the query excludes these; belt and braces): not ours to touch.
+    if (isTerminalInboundError(candidate.last_error)) continue
     try {
       let row = await updateRow(service, candidate.id, { processed_at: now.toISOString() })
       const hadCompany = !!row.company_id
@@ -543,13 +755,15 @@ export async function reprocessInboundPeppolDocuments(args: {
       const xml = await fetchMissingInboundXml({ service, transport, row, log, now })
       row = xml.row
       if (xml.outcome === 'fetched') result.xmlFetched += 1
+      if (xml.outcome === 'missed') result.xmlMissed += 1
       if (xml.outcome === 'terminal') {
-        result.terminal += 1
+        markTerminal(row)
         continue
       }
-      if (xml.outcome === 'error') {
-        result.errors.push({ id: row.id, providerDocumentId: row.provider_document_id, reason: xml.reason ?? 'xml fetch failed' })
-      }
+      // A transport error is the upstream's bad hour, not this document's: it
+      // was already logged at warn with the id and is asked again after the
+      // backoff. Paging on it would page every pass while the upstream is down.
+      if (xml.outcome === 'error') result.retried += 1
 
       const processed = await processInboundPeppolRow({
         service,
@@ -560,6 +774,8 @@ export async function reprocessInboundPeppolDocuments(args: {
       })
       if (!hadCompany && processed.row.company_id) result.routed += 1
       if (processed.outcome === 'delivered') result.delivered += 1
+      else if (processed.outcome === 'routed' && args.deliver) result.held += 1
+      else if (processed.outcome === 'terminal') markTerminal(processed.row)
       else if (processed.outcome === 'failed') {
         result.errors.push({
           id: row.id,

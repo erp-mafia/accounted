@@ -47,7 +47,9 @@ function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTranspor
   }
 }
 
-const cleanReprocess = { candidates: 2, xmlFetched: 1, routed: 1, delivered: 1, terminal: 0, errors: [] }
+const cleanSync = { listed: 1, archived: 1, duplicates: 0, routed: 0, unrouted: 0, delivered: 1, failed: 0, terminal: 0, terminalDocuments: [], errors: [] }
+const cleanReprocess = { candidates: 2, xmlFetched: 1, xmlMissed: 0, retried: 0, held: 0, routed: 1, delivered: 1, terminal: 0, terminalDocuments: [], errors: [] }
+const pages = () => logMock.error.mock.calls.filter(([, context]) => (context as { alert?: boolean } | undefined)?.alert === true)
 
 describe('GET /api/peppol/inbound/cron', () => {
   let unregister: (() => void) | null = null
@@ -56,7 +58,7 @@ describe('GET /api/peppol/inbound/cron', () => {
     vi.clearAllMocks()
     process.env.CRON_SECRET = 'cron-secret'
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'qvalia'
-    syncMock.mockResolvedValue({ listed: 1, archived: 1, duplicates: 0, routed: 0, unrouted: 0, delivered: 1, failed: 0, errors: [] })
+    syncMock.mockResolvedValue(cleanSync)
     reprocessMock.mockResolvedValue(cleanReprocess)
   })
 
@@ -114,31 +116,53 @@ describe('GET /api/peppol/inbound/cron', () => {
     expect(logMock.error).not.toHaveBeenCalled()
   })
 
-  it('pages exactly once per run when the reprocessing pass leaves retryable errors', async () => {
+  it('pages exactly once per run when the reprocessing pass leaves real failures', async () => {
     unregister = registerPeppolTransport(makeTransport())
     reprocessMock.mockResolvedValue({
       ...cleanReprocess,
       errors: [
-        { id: 'doc-a', providerDocumentId: 'pd-a', reason: 'timeout' },
+        { id: 'doc-a', providerDocumentId: 'pd-a', reason: 'connection reset' },
         { id: 'doc-b', providerDocumentId: 'pd-b', reason: 'storage down' },
       ],
     })
     const response = await GET(request('cron-secret'))
     expect(response.status).toBe(200)
     expect(logMock.warn).toHaveBeenCalledWith(
-      'peppol inbound reprocess left retryable errors',
+      'peppol inbound reprocess left failures to retry',
       expect.objectContaining({ ids: ['doc-a', 'doc-b'] }),
     )
-    const pages = logMock.error.mock.calls.filter(([, context]) => (context as { alert?: boolean } | undefined)?.alert === true)
-    expect(pages).toHaveLength(1)
-    expect(pages[0][1]).toMatchObject({ alert: true, errorCount: 2, ids: ['doc-a', 'doc-b'] })
+    expect(pages()).toHaveLength(1)
+    expect(pages()[0][1]).toMatchObject({ alert: true, errorCount: 2, errorIds: ['doc-a', 'doc-b'], terminalCount: 0 })
   })
 
-  it('does not page when the pass only marks documents terminal', async () => {
+  it('pages once, listing provider document ids, when a document became terminal in this run', async () => {
     unregister = registerPeppolTransport(makeTransport())
-    reprocessMock.mockResolvedValue({ ...cleanReprocess, terminal: 3 })
+    syncMock.mockResolvedValue({
+      ...cleanSync, terminal: 1,
+      terminalDocuments: [{ id: 'stub-1', providerDocumentId: 'pd-stub', reason: 'terminal: payload unarchivable: check' }],
+    })
+    reprocessMock.mockResolvedValue({
+      ...cleanReprocess, terminal: 1,
+      terminalDocuments: [{ id: 'doc-x', providerDocumentId: 'pd-x', reason: 'terminal: xml unavailable upstream after 3 attempts' }],
+    })
     await GET(request('cron-secret'))
-    expect(logMock.warn).not.toHaveBeenCalledWith('peppol inbound reprocess left retryable errors', expect.anything())
+    expect(pages()).toHaveLength(1)
+    expect(pages()[0][1]).toMatchObject({
+      alert: true,
+      errorCount: 0,
+      terminalCount: 2,
+      terminalProviderDocumentIds: ['pd-stub', 'pd-x'],
+      terminalReasons: ['pd-stub: terminal: payload unarchivable: check', 'pd-x: terminal: xml unavailable upstream after 3 attempts'],
+    })
+  })
+
+  it('does not page for old terminal rows, transport retries, XML misses under budget or held documents', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    // Old terminal rows are not candidates, so the pass reports terminal: 0 for them.
+    reprocessMock.mockResolvedValue({ ...cleanReprocess, retried: 4, xmlMissed: 2, held: 3, terminal: 0 })
+    await GET(request('cron-secret'))
+    expect(logMock.warn).not.toHaveBeenCalledWith('peppol inbound reprocess left failures to retry', expect.anything())
     expect(logMock.error).not.toHaveBeenCalled()
+    expect(pages()).toHaveLength(0)
   })
 })

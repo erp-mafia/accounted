@@ -191,6 +191,16 @@ describe('deliverPeppolDocumentToInbox', () => {
     expect(calls.some((c) => c.method === 'insert')).toBe(false)
   })
 
+  it('holds instead of throwing when the company has no member to own the item', async () => {
+    enqueue({ data: null, error: null })                               // no existing inbox item
+    enqueue({ data: null, error: null })                               // no registration user
+    enqueue({ data: null, error: null })                               // no owner either
+    const result = await deliverPeppolDocumentToInbox(service, { row: row(), companyId: 'company-1', document, xml: XML })
+    expect(result).toEqual({ inboxItemId: null, xmlDocumentId: null, holdReason: 'awaiting owner member' })
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+    expect(calls.some((c) => c.method === 'insert')).toBe(false)
+  })
+
   it('files a document whose XML was archived on an earlier attempt without re-archiving it', async () => {
     enqueue({ data: null, error: null })                               // no existing inbox item
     enqueue({ data: { user_id: 'user-reg' }, error: null })            // registration owner

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizePeppolIdentifier } from '@/lib/invoices/peppol-identifiers'
+import { isPeppolScheme, normalizePeppolIdentifier } from '@/lib/invoices/peppol-identifiers'
 
 describe('normalizePeppolIdentifier', () => {
   it('reduces a Swedish organisation number (0007) to its ten digits', () => {
@@ -24,5 +24,15 @@ describe('normalizePeppolIdentifier', () => {
   it('returns an empty string when nothing identifying is left', () => {
     expect(normalizePeppolIdentifier('0007', '--')).toBe('')
     expect(normalizePeppolIdentifier('0088', '   ')).toBe('')
+  })
+})
+
+describe('isPeppolScheme', () => {
+  it('accepts four-digit ICD codes only, whitespace tolerated', () => {
+    expect(isPeppolScheme('0007')).toBe(true)
+    expect(isPeppolScheme(' 0088 ')).toBe(true)
+    expect(isPeppolScheme('SE:ORGNR')).toBe(false)
+    expect(isPeppolScheme('07')).toBe(false)
+    expect(isPeppolScheme('')).toBe(false)
   })
 })
