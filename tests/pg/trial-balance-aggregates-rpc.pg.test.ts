@@ -1,5 +1,5 @@
 /**
- * pg-real test for get_trial_balance_aggregates (migration 20260910160147,
+ * pg-real test for get_trial_balance_aggregates (migration 20260910163731,
  * issue #2470).
  *
  * The RPC is the SQL side of generateTrialBalance: per-account debit/credit

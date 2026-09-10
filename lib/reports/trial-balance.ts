@@ -28,7 +28,7 @@ import type { TrialBalanceRow } from '@/types'
  * The catalog whitelist + statutory-guard test pin this.
  *
  * Period activity is summed per account by the get_trial_balance_aggregates
- * RPC (migration 20260910160147, issue #2470): one round trip returns the
+ * RPC (migration 20260910163731, issue #2470): one round trip returns the
  * 'period' bucket and, for a sub-range, the 'rollforward' bucket, under the
  * requested ClosingEntryMode. The previous implementation walked every line
  * of the period through the shared two-step entry-lines fetch
