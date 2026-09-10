@@ -120,11 +120,17 @@ export function useSupplierInvoiceSubmit({
    * POST /approve when policy says so. Returns false on failure after toasting
    * and finishCreate(invoiceId); callers must stop the success path then.
    * Person-paid invoices are already status=paid and skip approve.
+   * Network/abort failures are treated like a non-OK response so the invoice
+   * id is preserved for manual recovery instead of an uncaught reject.
    */
   async function tryAutoApprove(invoiceId: string, payer: SupplierInvoiceFormData['payer']): Promise<boolean> {
     if (!shouldAutoApprove || isPersonPayer(payer)) return true
-    const approveRes = await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
-    if (approveRes.ok) return true
+    try {
+      const approveRes = await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
+      if (approveRes.ok) return true
+    } catch {
+      // Offline / abort / DNS: fall through to the same failure path as !ok.
+    }
     toast({
       title: t('warning_title'),
       description: t('auto_approve_failed_description'),
