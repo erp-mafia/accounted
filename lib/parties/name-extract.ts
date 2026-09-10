@@ -154,6 +154,12 @@ function stripVatSweden(text: string): string {
   return text.replace(/VAT\s?-?\s?Sweden/giu, ' ')
 }
 
+/** Whether a name carries a country word ("Anthropic Ireland", "Visma Sverige"): a legal entity, not a brand. */
+export function hasCountryWord(name: string): boolean {
+  const cleaned = stripVatSweden(name)
+  return COUNTRY_WORDS.some(([re]) => re.test(cleaned))
+}
+
 function countryHint(text: string): string | undefined {
   const cleaned = stripVatSweden(text)
   const code = CODE_IN_PARENS.exec(cleaned)?.[1]

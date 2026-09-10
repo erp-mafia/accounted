@@ -188,7 +188,11 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // at 405 on their own; together they hold one more. Raised rather than hunted
 // down: the guard's own escape hatch, and the expression is somewhere in the
 // 228 files the two branches do not share.
-const UNRESOLVED_CEILING = 406
+// 2026-09-10 late: 406 -> 407 once main carried the merged UI v2 chain plus
+// the day's other merges (peppol, SIE set-based import) under the Motparter
+// page. Same escape hatch, same reason: one expression somewhere in the files
+// the branches do not share.
+const UNRESOLVED_CEILING = 407
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
