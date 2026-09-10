@@ -1,4 +1,6 @@
 import * as XLSX from 'xlsx'
+import { makeNotice, type ImportNotice } from '@/lib/import/notices'
+import { formatCurrency } from '@/lib/utils'
 import { detectColumns } from './column-detector'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { detectFileFormat } from '../bank-file/parser'
@@ -120,6 +122,7 @@ export function parseOpeningBalanceFile(
 
   const rows: ParsedOpeningBalanceRow[] = []
   const warnings: string[] = []
+  const notices: ImportNotice[] = []
   const seenAccounts = new Map<string, number>() // account_number → first row_index
 
   for (let i = 0; i < dataRows.length; i++) {
@@ -139,6 +142,7 @@ export function parseOpeningBalanceFile(
       // Could be a summary/total row: skip silently unless it looked intentional
       if (rawAccountNumber.length > 0 && !/^(summa|total|sum|samman)/i.test(rawAccountNumber)) {
         warnings.push(`Rad ${i + 2}: "${rawAccountNumber}" är inte ett giltigt kontonummer (4 siffror): hoppades över`)
+        notices.push(makeNotice('ob_invalid_account_row', 'notice', { row: i + 2, raw: rawAccountNumber }))
       }
       continue
     }
@@ -195,6 +199,7 @@ export function parseOpeningBalanceFile(
     // Track duplicates
     if (seenAccounts.has(accountNumber)) {
       warnings.push(`Konto ${accountNumber} förekommer på flera rader: beloppen kommer summeras`)
+      notices.push(makeNotice('ob_duplicate_account', 'notice', { account: accountNumber }))
     }
     seenAccounts.set(accountNumber, i + 2) // +2 for header row + 1-based
 
@@ -250,6 +255,13 @@ export function parseOpeningBalanceFile(
 
   if (!isBalanced) {
     warnings.push(`Debet (${totalDebit.toFixed(2)}) och kredit (${totalCredit.toFixed(2)}) balanserar inte: differens: ${diff.toFixed(2)} SEK`)
+    notices.push(
+      makeNotice('ob_unbalanced', 'action', {
+        debit: formatCurrency(totalDebit, 'SEK', { minimumFractionDigits: 2 }),
+        credit: formatCurrency(totalCredit, 'SEK', { minimumFractionDigits: 2 }),
+        diff: formatCurrency(diff, 'SEK', { minimumFractionDigits: 2 }),
+      })
+    )
   }
 
   return {
@@ -264,6 +276,7 @@ export function parseOpeningBalanceFile(
     total_credit: totalCredit,
     is_balanced: isBalanced,
     warnings,
+    notices,
     detected_bank_format:
       mergedRows.length === 0 ? detectBankStatementFormat(buffer, filename) : null,
   }

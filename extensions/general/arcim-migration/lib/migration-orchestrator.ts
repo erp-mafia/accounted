@@ -63,6 +63,7 @@ import {
   buildFxRateIndex,
   type FxUnresolved,
 } from './entity-mapper'
+import { invoiceWithinScope, type FiscalYearScope } from './invoice-scope'
 
 const log = createLogger('extensions/arcim-migration/migration-orchestrator')
 
@@ -88,6 +89,26 @@ export interface MigrationOptions {
   importAssets?: boolean
   /** Auto-link imported supplier invoices to GL payment vouchers. Default true. */
   reconcileVouchers?: boolean
+  /**
+   * Fill the Kontakter register from the migrated data at the end of the
+   * run. Default true. The wizard drives one request per step (#2469) and
+   * turns this off on all but the last, so the scan runs once per migration.
+   */
+  suggestParties?: boolean
+  /**
+   * Fiscal years the SIE import covers. Paid invoices issued outside them are
+   * neither fetched in detail nor inserted (see invoice-scope.ts); unpaid
+   * ones are kept from any year. Null or omitted imports the whole register.
+   */
+  fiscalYearScope?: FiscalYearScope | null
+  /**
+   * An earlier request in this migration already received rows on this
+   * grant. Seeds ProviderRunState.grantProven so an opaque 403 on the first
+   * call of a later per-step request still reads as one closed register,
+   * not a dead token (the same rule as within a single request). Only
+   * affects how a failure is classified, never what is fetched or written.
+   */
+  grantProven?: boolean
   onProgress?: (progress: MigrationProgress) => void
 }
 
@@ -235,7 +256,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
   const runId = crypto.randomUUID()
   // What this run has proven about the grant, read by recordStepError: a 403
   // once a call has already succeeded is one closed register, not a dead token.
-  const runState: ProviderRunState = { grantProven: false }
+  const runState: ProviderRunState = { grantProven: options.grantProven === true }
   // Every invoice this run inserted, with the booking voucher the provider
   // named for it. Linked to the SIE-imported registration verifikat after both
   // invoice steps (see the registration-link step below).
@@ -314,6 +335,29 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     const customerIdMap = new Map<string, string>()
     const orgNumberToCustomerId = new Map<string, string>()
     const nameToCustomerId = new Map<string, string>()
+    // The wizard runs one step per request (#2469), so the invoice steps can
+    // arrive with the customer step skipped and these maps empty. Without
+    // the register loaded, every customer on the invoice list would be
+    // re-created as a stub and the invoices pointed at the stubs. Loaded
+    // once per request, by whichever step first needs it.
+    let customerRegisterLoaded = false
+    const loadCustomerRegister = async () => {
+      if (customerRegisterLoaded) return
+      customerRegisterLoaded = true
+      const existing = await fetchAllRows<{ id: string; org_number: string | null; name: string | null }>(
+        ({ from, to }) =>
+          supabase
+            .from('customers')
+            .select('id, org_number, name')
+            .eq('company_id', companyId)
+            .order('id', { ascending: true })
+            .range(from, to)
+      )
+      for (const row of existing) {
+        if (row.org_number) orgNumberToCustomerId.set(row.org_number, row.id)
+        if (row.name) nameToCustomerId.set(row.name, row.id)
+      }
+    }
 
     if (options.importCustomers !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Importerar kunder...', progress: 20 })
@@ -334,6 +378,9 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               .from('customers')
               .select('id, org_number, name, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses')
               .eq('company_id', companyId)
+              // Stable order: .range() pages past 1 000 rows are only
+              // reliable with a total order.
+              .order('id', { ascending: true })
               .range(from, to)
         )
         const existingCustomerById = new Map(existingCustomers.map((row) => [row.id, row]))
@@ -341,6 +388,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           if (row.org_number) orgNumberToCustomerId.set(row.org_number, row.id)
           if (row.name) nameToCustomerId.set(row.name, row.id)
         }
+        customerRegisterLoaded = true
 
         let imported = 0
         let updated = 0
@@ -477,6 +525,25 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     const supplierIdMap = new Map<string, string>()
     const orgNumberToSupplierId = new Map<string, string>()
     const nameToSupplierId = new Map<string, string>()
+    // Same per-request register load as for customers (#2469).
+    let supplierRegisterLoaded = false
+    const loadSupplierRegister = async () => {
+      if (supplierRegisterLoaded) return
+      supplierRegisterLoaded = true
+      const existing = await fetchAllRows<{ id: string; org_number: string | null; name: string | null }>(
+        ({ from, to }) =>
+          supabase
+            .from('suppliers')
+            .select('id, org_number, name')
+            .eq('company_id', companyId)
+            .order('id', { ascending: true })
+            .range(from, to)
+      )
+      for (const row of existing) {
+        if (row.org_number) orgNumberToSupplierId.set(orgMapKey(row.org_number), row.id)
+        if (row.name) nameToSupplierId.set(row.name, row.id)
+      }
+    }
 
     if (options.importSuppliers !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Importerar leverantörer...', progress: 40 })
@@ -490,12 +557,14 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               .from('suppliers')
               .select('id, org_number, name')
               .eq('company_id', companyId)
+              .order('id', { ascending: true })
               .range(from, to)
         )
         for (const row of existingSuppliers) {
           if (row.org_number) orgNumberToSupplierId.set(orgMapKey(row.org_number), row.id)
           if (row.name) nameToSupplierId.set(row.name, row.id)
         }
+        supplierRegisterLoaded = true
 
         let imported = 0
         let skipped = 0
@@ -582,11 +651,18 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       try {
         // Hydrated, not the bare list: the list payload omits VAT, the net
         // and the line items for most providers (see provider-data-fetcher).
-        const { invoices, hydration, unhydratedIds } = await fetchSalesInvoicesHydrated(
-          provider, accessToken, providerCompanyId,
+        // Scoped before hydration: a paid invoice outside the imported fiscal
+        // years never costs a detail fetch (#2469).
+        const { invoices, hydration, unhydratedIds, excluded = [] } = await fetchSalesInvoicesHydrated(
+          provider, accessToken, providerCompanyId, undefined,
+          (dto) => invoiceWithinScope(dto, options.fiscalYearScope),
         )
-        if (invoices.length > 0) runState.grantProven = true
-        console.log(`[migration] Sales invoices: ${invoices.length} total`)
+        if (invoices.length > 0 || excluded.length > 0) runState.grantProven = true
+        console.log(`[migration] Sales invoices: ${invoices.length} in scope, ${excluded.length} outside the imported fiscal years`)
+
+        // Resolve against the customers already in the register, whether the
+        // customer step ran in this request or an earlier one.
+        await loadCustomerRegister()
 
         // Bulk-load existing invoice numbers once.
         const existingInvoices = await fetchAllRows<{ invoice_number: string }>(({ from, to }) =>
@@ -837,7 +913,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, creditNotesUnlinked, hydration, errorSample: errorSample ?? undefined }
+        if (excluded.length > 0) {
+          skipReasons.outsideFiscalYears = excluded.length
+          skipped += excluded.length
+        }
+        results.salesInvoices = { total: invoices.length + excluded.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, creditNotesUnlinked, hydration, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import sales invoices:', err)
         recordStepError(results, 'salesInvoices', err, runState)
@@ -848,11 +928,14 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     if (options.importSupplierInvoices !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Importerar leverantörsfakturor...', progress: 80 })
       try {
-        const { invoices, hydration, unhydratedIds } = await fetchSupplierInvoicesHydrated(
-          provider, accessToken, providerCompanyId,
+        const { invoices, hydration, unhydratedIds, excluded = [] } = await fetchSupplierInvoicesHydrated(
+          provider, accessToken, providerCompanyId, undefined,
+          (dto) => invoiceWithinScope(dto, options.fiscalYearScope),
         )
-        if (invoices.length > 0) runState.grantProven = true
-        console.log(`[migration] Supplier invoices: ${invoices.length} total`)
+        if (invoices.length > 0 || excluded.length > 0) runState.grantProven = true
+        console.log(`[migration] Supplier invoices: ${invoices.length} in scope, ${excluded.length} outside the imported fiscal years`)
+
+        await loadSupplierRegister()
 
         // Load existing (supplier_invoice_number, supplier_id) pairs once.
         const existingSuppInv = await fetchAllRows<{
@@ -1087,7 +1170,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, hydration, errorSample: errorSample ?? undefined }
+        if (excluded.length > 0) {
+          skipReasons.outsideFiscalYears = excluded.length
+          skipped += excluded.length
+        }
+        results.supplierInvoices = { total: invoices.length + excluded.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, hydration, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import supplier invoices:', err)
         recordStepError(results, 'supplierInvoices', err, runState)
@@ -1177,11 +1264,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
 
     // Fill the Kontakter register from the migrated vouchers and documents
     // (non-blocking): suggested parties only, confirmed by the user later.
-    try {
-      const summary = await suggestPartiesForCompany(supabase, companyId, userId)
-      console.log(`[migration] party suggestions: ${summary.created} new, ${summary.attached} attached, ${summary.skipped} skipped`)
-    } catch (err) {
-      console.error('Failed to suggest parties after migration:', err)
+    if (options.suggestParties !== false) {
+      try {
+        const summary = await suggestPartiesForCompany(supabase, companyId, userId)
+        console.log(`[migration] party suggestions: ${summary.created} new, ${summary.attached} attached, ${summary.skipped} skipped`)
+      } catch (err) {
+        console.error('Failed to suggest parties after migration:', err)
+      }
     }
 
     emitProgress(options, { status: 'completed', progress: 100, results })

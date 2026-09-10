@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
+import { legacyNotices } from '@/lib/import/notices'
 import { fetchAccounts } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
@@ -23,7 +24,7 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CreditCard, Landmark, Loader2, ChevronRight, Download, AlertTriangle, ShoppingBag, ShoppingCart } from 'lucide-react'
+import { ArrowLeft, CreditCard, Landmark, Loader2, ChevronRight, Download, ShoppingBag, ShoppingCart } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -399,20 +400,11 @@ function BankFileImportWizard() {
       {/* Status chip for at-a-glance "auto-sync is healthy / stale / needs attention" */}
       <BankSyncStatusChip />
 
-      {/* Overlap warning: active PSD2 means file import will likely create
-          duplicates of transactions the nightly sync already covers. */}
+      {/* Overlap note: active PSD2 means a file import of the same period
+          duplicates what the nightly sync already fetched. One quiet
+          sentence, not a box (design convention 6). */}
       {activePsd2Banks.length > 0 && (
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-4">
-          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
-          <div className="flex-1 text-sm">
-            <p className="font-medium">
-              {tTx('import_psd2_active_warning_title', { bankName: activePsd2Banks.join(', ') })}
-            </p>
-            <p className="mt-1 text-muted-foreground">
-              {tTx('import_psd2_active_warning_body')}
-            </p>
-          </div>
-        </div>
+        <AttnLine>{tTx('import_psd2_active_warning_body', { bankName: activePsd2Banks.join(', ') })}</AttnLine>
       )}
 
       {/* Progress */}
@@ -1434,6 +1426,7 @@ function OpeningBalanceFlow() {
       {obStep === 'edit' && parseResult && (
         <OpeningBalanceEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onContinue={handleEditContinue}
           onBack={() => {
             if (needsMapping) {
@@ -1715,6 +1708,7 @@ function CustomersFlow() {
       {step === 'edit' && parseResult && (
         <CustomersEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
           isLoading={isLoading}
@@ -1972,6 +1966,7 @@ function SuppliersFlow() {
       {step === 'edit' && parseResult && (
         <SuppliersEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
           isLoading={isLoading}
@@ -2217,6 +2212,7 @@ function ArticlesFlow() {
       {step === 'edit' && parseResult && (
         <ArticlesEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
           isLoading={isLoading}

@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import { makeNotice, noticesFromParseIssues } from '@/lib/import/notices'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -192,49 +194,14 @@ export default function BankFileConfirmStep({
       {/* Duplicate rows: repeated here because the generic_csv path skips the
           preview step where the same card is shown. Advisory: ingest skips
           them automatically at execute. */}
-      {duplicateCount > 0 && (
-        <Card>
-          <CardHeader className="py-3">
-            <CardTitle className="text-sm flex items-center gap-2 text-warning">
-              <AlertTriangle className="h-4 w-4" />
-              {t('import_duplicate_rows_title', { count: duplicateCount })}
-            </CardTitle>
-            <CardDescription>
-              {t('import_duplicate_rows_body')}
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      )}
-
-      {/* Skipped rows: surfaced here because the manual-mapping path skips the
-          preview step where these warnings would otherwise be shown. */}
-      {warnings.length > 0 && (
-        <Card>
-          <CardHeader className="py-3">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-warning" />
-              {warnings.length} {warnings.length === 1 ? 'rad' : 'rader'} hoppades över
-            </CardTitle>
-            <CardDescription>
-              Dessa rader kunde inte läsas och importeras inte. Kontrollera att inga transaktioner saknas.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <div className="space-y-1 max-h-32 overflow-y-auto">
-              {warnings.slice(0, 10).map((issue, i) => (
-                <p key={i} className="text-xs text-muted-foreground">
-                  Rad {issue.row}: {issue.message}
-                </p>
-              ))}
-              {warnings.length > 10 && (
-                <p className="text-xs text-muted-foreground font-medium">
-                  …och {warnings.length - 10} till
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <ImportNotices
+        notices={[
+          ...(duplicateCount > 0
+            ? [makeNotice('bank_duplicate_rows', 'notice', { count: duplicateCount })]
+            : []),
+          ...noticesFromParseIssues(warnings),
+        ]}
+      />
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">

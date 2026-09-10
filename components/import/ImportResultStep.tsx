@@ -25,6 +25,8 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import TheaterCanvas from '@/components/import/TheaterCanvas'
 import { FiscalYearGapNotice } from '@/components/import/FiscalYearGapNotice'
 import type { ImportPreview, ImportResult } from '@/lib/import/types'
+import { resolveNotices } from '@/lib/import/notices'
+import { ImportNotices } from '@/components/import/ImportNotices'
 import type { TheaterModel } from '@/lib/import/theater-model'
 
 interface ImportResultStepProps {
@@ -71,13 +73,15 @@ export default function ImportResultStep({
   const skipped = result.details?.skippedVouchers
   const untransferred = result.details?.untransferredResults
 
-  // Filter out raw warnings when we have structured data for them
-  let otherWarnings = skipped && skipped.total > 0
-    ? result.warnings.filter((w) => !w.includes('hoppades över'))
-    : result.warnings
-  if (untransferred && untransferred.length > 0) {
-    otherWarnings = otherWarnings.filter((w) => !w.includes('förts om till eget kapital'))
-  }
+  // The skipped-voucher, untransferred-result and IB-resync cards below
+  // render those facts with their own explanations, so their notice codes
+  // are excluded here by code, never by matching Swedish sentences.
+  const notices = resolveNotices(result, [
+    'sie_vouchers_skipped',
+    'sie_untransferred_result',
+    'sie_next_ib_resynced',
+    'sie_next_period_locked',
+  ])
 
   return (
     <div className="space-y-6">
@@ -273,6 +277,13 @@ export default function ImportResultStep({
                 <span className="text-sm">{t('result_accounts_created')}</span>
               </div>
               <p className="text-2xl font-display tabular-nums">{result.accountsCreated ?? 0}</p>
+              {result.accountsRenamed !== undefined && result.accountsRenamed > 0 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {result.accountsRenamed === 1
+                    ? '1 konto fick sitt namn från källsystemet'
+                    : `${result.accountsRenamed} konton fick sina namn från källsystemet`}
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -299,10 +310,20 @@ export default function ImportResultStep({
               <div className="text-2xl font-display">
                 {result.openingBalanceEntryId ? (
                   <Badge variant="success">Importerade</Badge>
+                ) : result.details?.openingBalanceSkipped === 'prior_activity' ? (
+                  <Badge variant="secondary">Härledda</Badge>
                 ) : (
                   <Badge variant="secondary">Inga</Badge>
                 )}
               </div>
+              {/* The file's #IB was deliberately not booked: the company already
+                  has posted entries, so this year's IB is the prior year's UB.
+                  Said here, not as a warning (#2462). */}
+              {!result.openingBalanceEntryId && result.details?.openingBalanceSkipped === 'prior_activity' && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Från föregående års utgående balans, eftersom bolaget redan har bokförda verifikationer.
+                </p>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -417,27 +438,8 @@ export default function ImportResultStep({
         </Card>
       )}
 
-      {/* Other warnings (filtered) */}
-      {otherWarnings.length > 0 && (
-        <Card className="border-border">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-warning">
-              <AlertCircle className="h-5 w-5" />
-              Varningar ({otherWarnings.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2 max-h-48 overflow-y-auto">
-              {otherWarnings.map((warning, i) => (
-                <div key={i} className="text-sm flex gap-2">
-                  <AlertCircle className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
-                  <span>{warning}</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Everything else the import noticed: one sentence, the rest folded. */}
+      <ImportNotices notices={notices} />
 
       {/* Next steps: the migrator bridge. Not instructions to read, an action
           to take: fetch the bank history so it can be matched against the

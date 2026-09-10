@@ -4227,6 +4227,8 @@ export interface Employee {
   vacation_days_per_year: number
   vacation_days_saved: number
   semestertillagg_rate: number
+  /** Kollektivavtal semesterlön rate (0.135 = 13.5 %); null = statutory. */
+  vacation_pay_rate: number | null
   // Arbetsschema-lite: weekly schedule driving the hourly/daily divisors
   // (173/21 at the defaults). employment_degree keeps prorating base salary;
   // these ONLY drive divisors.

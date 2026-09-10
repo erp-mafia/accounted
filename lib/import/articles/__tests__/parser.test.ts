@@ -263,4 +263,35 @@ describe('parseArticlesFile ROT/RUT (housework) column', () => {
     // Dropping a non-empty value is surfaced, never silent.
     expect(result.warnings.some((w) => w.includes('2 rader hade ett ROT/RUT-värde'))).toBe(true)
   })
+
+  it('emits structured notices beside the warning strings', () => {
+    const buffer = buildXlsx([
+      ['Benämning', 'Pris inkl. moms', 'Moms', 'Valuta'],
+      ['Konsulttimme', '1187,50', '25', 'EURO'],
+      ['Fika', '30', '13', 'SEK'],
+    ])
+
+    const result = parseArticlesFile(buffer, 'artiklar.xlsx')
+
+    // The VAT-inclusive price column is money-relevant: an action, and the
+    // only one, so it becomes the single attention sentence.
+    expect(result.notices).toContainEqual({
+      code: 'articles_price_incl_vat',
+      severity: 'action',
+      params: { header: 'Pris inkl. moms' },
+    })
+    expect(result.notices?.filter((n) => n.severity === 'action')).toHaveLength(1)
+    expect(result.notices).toContainEqual({
+      code: 'articles_vat_rounded',
+      severity: 'notice',
+      params: { count: 1 },
+    })
+    expect(result.notices).toContainEqual({
+      code: 'articles_currency_dropped',
+      severity: 'notice',
+      params: { count: 1 },
+    })
+    // The strings are still there for API consumers.
+    expect(result.warnings.length).toBe(result.notices?.length)
+  })
 })
