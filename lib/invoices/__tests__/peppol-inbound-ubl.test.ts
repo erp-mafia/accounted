@@ -159,3 +159,19 @@ describe('ubl helpers', () => {
     expect(swedishOrgNumberFrom('12', null)).toBeNull()
   })
 })
+
+describe('endpoint identifiers', () => {
+  it('normalises the EndpointID the way the recipient resolver does', () => {
+    const invoice = (endpoint: string, scheme: string) => parseUblJsonDocument({
+      Invoice: [{
+        'cbc:ID': [{ _: '1' }],
+        'cac:AccountingCustomerParty': [{ 'cac:Party': [{ 'cbc:EndpointID': [{ _: endpoint, $: { schemeID: scheme } }] }] }],
+        'cac:InvoiceLine': [],
+      }],
+    })
+    expect(invoice('16 559538-6219', '0007')?.customer.endpoint).toEqual({ scheme: '0007', identifier: '5595386219' })
+    expect(invoice('559538-6219', '0007')?.customer.endpoint).toEqual({ scheme: '0007', identifier: '5595386219' })
+    expect(invoice('73 0000 0000 1', '0088')?.customer.endpoint).toEqual({ scheme: '0088', identifier: '73000000001' })
+    expect(invoice('--', '0007')?.customer.endpoint).toBeNull()
+  })
+})

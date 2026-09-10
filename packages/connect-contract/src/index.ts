@@ -20,7 +20,7 @@ import { z } from 'zod'
  * breaking change is a new operation or family name, never a changed one.
  */
 
-export const CONTRACT_VERSION = '2026-09-08'
+export const CONTRACT_VERSION = '2026-09-10'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -371,6 +371,14 @@ export const peppolInboundListRequestSchema = z.object({
   documentType: peppolDocumentTypeSchema,
   limit: z.number().int().min(1).max(100).optional(),
   includeRead: z.boolean().optional(),
+  /**
+   * Listing cursor: the newest `receivedAt` the caller has already archived
+   * for this document type. A service that supports it lists only documents
+   * received after that instant; one that does not ignores the field (object
+   * schemas strip unknown keys), so the caller must still dedupe by
+   * providerDocumentId.
+   */
+  receivedAfter: z.iso.datetime({ offset: true }).optional(),
 })
 export type PeppolInboundListRequest = z.infer<typeof peppolInboundListRequestSchema>
 

@@ -14,6 +14,8 @@
  * field is odd.
  */
 
+import { normalizePeppolIdentifier } from '@/lib/invoices/peppol-identifiers'
+
 export type UblJsonNode = Record<string, unknown>
 
 export interface PeppolInboundEndpoint {
@@ -198,7 +200,8 @@ function readEndpoint(party: UblJsonNode | null): PeppolInboundEndpoint | null {
   const identifier = ublNodeText(endpoint)
   const scheme = ublAttr(endpoint, 'schemeID')
   if (!identifier || !scheme) return null
-  return { scheme, identifier: identifier.replace(/\s/g, '') }
+  const normalized = normalizePeppolIdentifier(scheme, identifier)
+  return normalized ? { scheme, identifier: normalized } : null
 }
 
 function readParty(root: UblJsonNode | null, container: string, warnings: string[]): PeppolInboundParty {

@@ -2,14 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registerPeppolTransport, type PeppolTransport } from '@/lib/invoices/peppol-transport'
 
 const syncMock = vi.fn()
+const reprocessMock = vi.fn()
 const deliverMock = vi.fn()
+const logMock = vi.hoisted(() => {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
+  log.child.mockReturnValue(log)
+  return log
+})
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: () => ({ from: vi.fn() }),
 }))
+vi.mock('@/lib/logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/logger')>()),
+  createLogger: () => logMock,
+}))
 vi.mock('@/lib/invoices/peppol-inbound', () => ({
   syncInboundPeppolDocuments: (...args: unknown[]) => syncMock(...args),
+  reprocessInboundPeppolDocuments: (...args: unknown[]) => reprocessMock(...args),
 }))
 vi.mock('@/lib/invoices/peppol-inbox-delivery', () => ({
   deliverPeppolDocumentToInbox: (...args: unknown[]) => deliverMock(...args),
@@ -36,6 +47,8 @@ function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTranspor
   }
 }
 
+const cleanReprocess = { candidates: 2, xmlFetched: 1, routed: 1, delivered: 1, terminal: 0, errors: [] }
+
 describe('GET /api/peppol/inbound/cron', () => {
   let unregister: (() => void) | null = null
 
@@ -44,6 +57,7 @@ describe('GET /api/peppol/inbound/cron', () => {
     process.env.CRON_SECRET = 'cron-secret'
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'qvalia'
     syncMock.mockResolvedValue({ listed: 1, archived: 1, duplicates: 0, routed: 0, unrouted: 0, delivered: 1, failed: 0, errors: [] })
+    reprocessMock.mockResolvedValue(cleanReprocess)
   })
 
   afterEach(() => {
@@ -58,6 +72,7 @@ describe('GET /api/peppol/inbound/cron', () => {
     const response = await GET(request(null))
     expect(response.status).toBe(401)
     expect(syncMock).not.toHaveBeenCalled()
+    expect(reprocessMock).not.toHaveBeenCalled()
   })
 
   it('is a truthful no-op when no access point is switched on', async () => {
@@ -66,25 +81,64 @@ describe('GET /api/peppol/inbound/cron', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ data: { skipped: true, reason: 'provider_selection_required' } })
     expect(syncMock).not.toHaveBeenCalled()
+    expect(reprocessMock).not.toHaveBeenCalled()
   })
 
   it('skips a send-only transport', async () => {
     unregister = registerPeppolTransport(makeTransport({ listInboundDocuments: undefined }))
     const response = await GET(request('cron-secret'))
     expect(await response.json()).toEqual({ data: { skipped: true, reason: 'receiving_unsupported' } })
+    expect(reprocessMock).not.toHaveBeenCalled()
   })
 
-  it('runs the sync with the inbox deliverer and reports the summary', async () => {
+  it('runs the sync, then the reprocessing pass with the same deliverer, and reports both', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
     const response = await GET(request('cron-secret'))
     const body = await response.json()
     expect(response.status).toBe(200)
-    expect(body.data).toMatchObject({ listed: 1, delivered: 1 })
+    expect(body.data).toMatchObject({ listed: 1, delivered: 1, reprocess: cleanReprocess })
     expect(syncMock).toHaveBeenCalledTimes(1)
-    const args = syncMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown }
-    expect(args.transport).toBe(transport)
-    await args.deliver({ row: {}, companyId: 'c', document: {}, xml: null })
+    expect(reprocessMock).toHaveBeenCalledTimes(1)
+    expect(syncMock.mock.invocationCallOrder[0]).toBeLessThan(reprocessMock.mock.invocationCallOrder[0])
+
+    const syncArgs = syncMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown }
+    const reprocessArgs = reprocessMock.mock.calls[0][0] as { transport: PeppolTransport; deliver: (d: unknown) => unknown }
+    expect(syncArgs.transport).toBe(transport)
+    expect(reprocessArgs.transport).toBe(transport)
+    expect(reprocessArgs.deliver).toBe(syncArgs.deliver)
+    await reprocessArgs.deliver({ row: {}, companyId: 'c', document: {}, xml: null })
     expect(deliverMock).toHaveBeenCalledTimes(1)
+
+    expect(logMock.info).toHaveBeenCalledWith('peppol inbound reprocess complete', expect.objectContaining({ candidates: 2, errors: 0 }))
+    expect(logMock.error).not.toHaveBeenCalled()
+  })
+
+  it('pages exactly once per run when the reprocessing pass leaves retryable errors', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    reprocessMock.mockResolvedValue({
+      ...cleanReprocess,
+      errors: [
+        { id: 'doc-a', providerDocumentId: 'pd-a', reason: 'timeout' },
+        { id: 'doc-b', providerDocumentId: 'pd-b', reason: 'storage down' },
+      ],
+    })
+    const response = await GET(request('cron-secret'))
+    expect(response.status).toBe(200)
+    expect(logMock.warn).toHaveBeenCalledWith(
+      'peppol inbound reprocess left retryable errors',
+      expect.objectContaining({ ids: ['doc-a', 'doc-b'] }),
+    )
+    const pages = logMock.error.mock.calls.filter(([, context]) => (context as { alert?: boolean } | undefined)?.alert === true)
+    expect(pages).toHaveLength(1)
+    expect(pages[0][1]).toMatchObject({ alert: true, errorCount: 2, ids: ['doc-a', 'doc-b'] })
+  })
+
+  it('does not page when the pass only marks documents terminal', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    reprocessMock.mockResolvedValue({ ...cleanReprocess, terminal: 3 })
+    await GET(request('cron-secret'))
+    expect(logMock.warn).not.toHaveBeenCalledWith('peppol inbound reprocess left retryable errors', expect.anything())
+    expect(logMock.error).not.toHaveBeenCalled()
   })
 })

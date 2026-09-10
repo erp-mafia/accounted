@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { ensureInitialized } from '@/lib/init'
-import { syncInboundPeppolDocuments } from '@/lib/invoices/peppol-inbound'
+import {
+  reprocessInboundPeppolDocuments,
+  syncInboundPeppolDocuments,
+} from '@/lib/invoices/peppol-inbound'
 import { deliverPeppolDocumentToInbox } from '@/lib/invoices/peppol-inbox-delivery'
 import {
   getPeppolTransport,
@@ -22,6 +25,11 @@ export const maxDuration = 300
  * company's identifier, so this is one poll for all of them; a document
  * nobody is registered for is kept as `unrouted`, never dropped.
  *
+ * After the listing, a bounded reprocessing pass revisits what the archive
+ * still holds pending (missing XML, unrouted, failed) regardless of whether
+ * the provider still lists it. Retryable problems in that pass page once per
+ * run; terminal ones are recorded on the row and never retried.
+ *
  * Truthful no-op when no access point is switched on in this environment.
  */
 export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) => {
@@ -35,14 +43,25 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
   }
 
   const service = createServiceClientNoCookies()
-  const summary = await syncInboundPeppolDocuments({
-    service,
-    transport,
-    deliver: (delivery) => deliverPeppolDocumentToInbox(service, delivery),
-    log: ctx.log,
-  })
+  const deliver = (delivery: Parameters<typeof deliverPeppolDocumentToInbox>[1]) =>
+    deliverPeppolDocumentToInbox(service, delivery)
+  const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log: ctx.log })
   ctx.log.info('peppol inbound sync complete', { ...summary, errors: summary.errors.length })
-  return NextResponse.json({ data: summary })
+
+  const reprocess = await reprocessInboundPeppolDocuments({ service, transport, deliver, log: ctx.log })
+  ctx.log.info('peppol inbound reprocess complete', { ...reprocess, errors: reprocess.errors.length })
+  if (reprocess.errors.length > 0) {
+    ctx.log.warn('peppol inbound reprocess left retryable errors', {
+      ids: reprocess.errors.map((e) => e.id),
+      errors: reprocess.errors,
+    })
+    ctx.log.error('peppol inbound reprocess had errors', {
+      alert: true,
+      errorCount: reprocess.errors.length,
+      ids: reprocess.errors.map((e) => e.id),
+    })
+  }
+  return NextResponse.json({ data: { ...summary, reprocess } })
 })
 
 export const POST = GET
