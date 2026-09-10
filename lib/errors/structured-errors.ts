@@ -1847,6 +1847,18 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Peppol-id:t får inte registreras från det här kontot. Kontakta support.',
     message_en: 'The Peppol id may not be registered from this account. Contact support.',
   },
+  // The two likeliest send preconditions (#2484): the route composes these
+  // behind PEPPOL_SEND_PRECONDITION_FAILED's prefix.
+  CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED: {
+    httpStatus: 422,
+    message_sv: 'Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Fakturering > E-faktura via Peppol, eller kontakta support.',
+    message_en: 'The company\'s Peppol id is not registered with the access point. Switch on receiving under Settings > Invoicing > E-invoicing via Peppol, or contact support.',
+  },
+  CONNECTOR_SCOPE_MISSING: {
+    httpStatus: 403,
+    message_sv: 'Kopplingsnyckeln saknar Peppol-behörighet. Kontakta support.',
+    message_en: 'The connector key lacks Peppol permission. Contact support.',
+  },
   CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE: {
     httpStatus: 409,
     message_sv: 'Peppol-id:t är redan publicerat hos en annan operatör. Avregistrera det där först.',

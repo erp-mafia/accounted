@@ -267,7 +267,14 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     realCompany(true)
     const response = await send()
     expect(response.status).toBe(403)
-    expect((await response.json()).error.code).toBe('PEPPOL_SANDBOX_NOT_ALLOWED')
+    const body = await response.json()
+    expect(body.error.code).toBe('PEPPOL_SANDBOX_NOT_ALLOWED')
+    expect(body.error.message).toBe(
+      'Peppol-sändning är inte tillgänglig i demobolaget. Skapa ett riktigt konto för att skicka e-fakturor.',
+    )
+    expect(body.error.message_en).toBe(
+      'Peppol sending is not available in the demo company. Create a real account to send e-invoices.',
+    )
     expect(transport.lookupRecipient).not.toHaveBeenCalled()
     expect(transport.submit).not.toHaveBeenCalled()
     expectRefusalLogged('PEPPOL_SANDBOX_NOT_ALLOWED')
@@ -320,6 +327,26 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     expect(response.status).toBe(409)
     expect((await response.json()).error.code).toBe('PEPPOL_SEND_INVALID_STATUS')
     expectRefusalLogged('PEPPOL_SEND_INVALID_STATUS')
+  })
+
+  it('logs which BIS preflight rule stopped the send', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    realCompany()
+    grantAccess()
+    enqueue({ data: invoiceRow({ your_reference: null }), error: null })
+    enqueue({ data: company, error: null })
+
+    const response = await send()
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('VALIDATION_ERROR')
+    expect(transport.lookupRecipient).not.toHaveBeenCalled()
+    expect(logMock.info).toHaveBeenCalledWith('peppol send refused', {
+      invoiceId: INVOICE_ID,
+      code: 'VALIDATION_ERROR',
+      issues: ['BUYER_REFERENCE_REQUIRED'],
+    })
   })
 
   it('names the missing fiscal year when the stage RPC has no retention basis for the invoice date', async () => {
@@ -407,7 +434,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     expect(serviceRpcMock).not.toHaveBeenCalled()
   })
 
-  it('answers 422 with the same code when the lookup failure is not retryable', async () => {
+  it('answers 502 too when the lookup failure is not retryable: a lookup is never a document verdict', async () => {
     const transport = makeTransport({
       lookupRecipient: vi.fn().mockRejectedValue(
         connectorFailure('CONNECTOR_PROTOCOL_ERROR', false, 'participant: Required'),
@@ -420,7 +447,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
 
     const response = await send()
 
-    expect(response.status).toBe(422)
+    expect(response.status).toBe(502)
     const body = await response.json()
     expect(body.error.code).toBe('PEPPOL_LOOKUP_FAILED')
     expect(body.error.details.code).toBe('CONNECTOR_PROTOCOL_ERROR')
@@ -603,10 +630,10 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     })
   })
 
-  it('records a retryable failure and answers 502 when the access point is unreachable', async () => {
+  it('records a retryable failure and answers 502 when the hosted service is unreachable', async () => {
     const transport = makeTransport({
       submit: vi.fn().mockRejectedValue(
-        new PeppolTransportError('Could not reach Qvalia', { retryable: true }),
+        connectorFailure('CONNECTOR_UNREACHABLE', true),
       ),
     })
     unregister = registerPeppolTransport(transport)
@@ -617,7 +644,9 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     const response = await send()
 
     expect(response.status).toBe(502)
-    expect((await response.json()).error.code).toBe('PEPPOL_SUBMISSION_FAILED')
+    const body = await response.json()
+    expect(body.error.code).toBe('PEPPOL_SUBMISSION_FAILED')
+    expect(body.error.details).toEqual({ reason: null, code: 'CONNECTOR_UNREACHABLE' })
     const last = serviceRpcMock.mock.calls.at(-1)?.[1] as Record<string, unknown>
     expect(last).toMatchObject({
       p_provider_event_code: 'submit_failed',
@@ -626,22 +655,61 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     })
   })
 
-  describe('hosted precondition answers never become a verdict on the document', () => {
+  describe('a retryable hosted answer is a plain failure, whatever its code', () => {
+    const transientCodes = [
+      'CONNECTOR_UNREACHABLE',
+      'CONNECTOR_RATE_LIMITED',
+      'CONNECTOR_LEDGER_FAILED',
+      'CONNECTOR_UPSTREAM_UNCONFIGURED',
+      'CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS',
+      'CONNECTOR_UPSTREAM_ERROR',
+      'HTTP_429',
+      'HTTP_502',
+    ]
+
+    it.each(transientCodes)('%s retryable: 502 PEPPOL_SUBMISSION_FAILED, retryable_failure, not terminal', async (code) => {
+      const transport = makeTransport({
+        submit: vi.fn().mockRejectedValue(connectorFailure(code, true, 'busy')),
+      })
+      unregister = registerPeppolTransport(transport)
+      realCompany()
+      grantAccess()
+      stageInvoice()
+
+      const response = await send()
+      const body = await response.json()
+
+      expect(response.status).toBe(502)
+      expect(body.error.code).toBe('PEPPOL_SUBMISSION_FAILED')
+      expect(body.error.details).toEqual({ reason: 'busy', code })
+      const last = serviceRpcMock.mock.calls.at(-1)?.[1] as Record<string, unknown>
+      expect(last).toMatchObject({
+        p_provider_event_code: 'submit_failed',
+        p_normalized_status: 'retryable_failure',
+        p_is_terminal: false,
+      })
+    })
+  })
+
+  describe('a coded non-retryable hosted answer is a precondition, never a verdict on the document', () => {
     const preconditionCodes = [
       'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED',
       'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED',
       'CONNECTOR_QUOTA_EXCEEDED',
-      'CONNECTOR_RATE_LIMITED',
       'CONNECTOR_SCOPE_MISSING',
-      'CONNECTOR_UPSTREAM_UNCONFIGURED',
-      'CONNECTOR_LEDGER_FAILED',
-      'CONNECTOR_UNREACHABLE',
-      'CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS',
-      'HTTP_502',
+      'CONNECTOR_KEY_INVALID',
+      'CONNECTOR_KEY_SUSPENDED',
+      'CONNECTOR_KEY_MISSING',
+      'CONNECTOR_COMPANY_MISSING',
+      'CONNECTOR_PATH_NOT_ALLOWED',
+      'CONNECTOR_NOT_OWNED',
+      'BAD_REQUEST',
+      'CONNECTOR_PROTOCOL_ERROR',
+      'HTTP_403',
+      'HTTP_404',
     ]
 
     it.each(preconditionCodes)('%s stays resendable: 409, retryable_failure, and the same XML is submitted again', async (code) => {
-      // Non-retryable on the wire on purpose: the code decides, not the flag.
       const transport = makeTransport({
         submit: vi.fn()
           .mockRejectedValueOnce(connectorFailure(code, false, 'hosted detail'))
@@ -681,9 +749,25 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
       expect((await second.json()).data.delivery.status).toBe('submission_accepted')
     })
 
-    it('composes the hosted text onto the prefix when the registry knows the code', async () => {
+    it.each([
+      [
+        'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED',
+        'Fakturan kunde inte skickas via Peppol ännu: Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Fakturering > E-faktura via Peppol, eller kontakta support.',
+        "The invoice could not be sent via Peppol yet: The company's Peppol id is not registered with the access point. Switch on receiving under Settings > Invoicing > E-invoicing via Peppol, or contact support.",
+      ],
+      [
+        'CONNECTOR_SCOPE_MISSING',
+        'Fakturan kunde inte skickas via Peppol ännu: Kopplingsnyckeln saknar Peppol-behörighet. Kontakta support.',
+        'The invoice could not be sent via Peppol yet: The connector key lacks Peppol permission. Contact support.',
+      ],
+      [
+        'CONNECTOR_QUOTA_EXCEEDED',
+        'Fakturan kunde inte skickas via Peppol ännu: Kontots Peppol-platser är förbrukade. Hör av dig till support så öppnar vi fler.',
+        'The invoice could not be sent via Peppol yet: The account has used its Peppol slots. Contact support and we will open more.',
+      ],
+    ])('composes the hosted text onto the prefix when the registry knows %s', async (code, sv, en) => {
       unregister = registerPeppolTransport(makeTransport({
-        submit: vi.fn().mockRejectedValue(connectorFailure('CONNECTOR_QUOTA_EXCEEDED', false)),
+        submit: vi.fn().mockRejectedValue(connectorFailure(code, false)),
       }))
       realCompany()
       grantAccess()
@@ -691,17 +775,13 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
 
       const body = await (await send()).json()
 
-      expect(body.error.message).toBe(
-        'Fakturan kunde inte skickas via Peppol ännu: Kontots Peppol-platser är förbrukade. Hör av dig till support så öppnar vi fler.',
-      )
-      expect(body.error.message_en).toBe(
-        'The invoice could not be sent via Peppol yet: The account has used its Peppol slots. Contact support and we will open more.',
-      )
+      expect(body.error.message).toBe(sv)
+      expect(body.error.message_en).toBe(en)
     })
 
     it('falls back to the settings pointer for a code the registry does not know', async () => {
       unregister = registerPeppolTransport(makeTransport({
-        submit: vi.fn().mockRejectedValue(connectorFailure('HTTP_502', false)),
+        submit: vi.fn().mockRejectedValue(connectorFailure('HTTP_403', false)),
       }))
       realCompany()
       grantAccess()

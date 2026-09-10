@@ -14,6 +14,7 @@ import {
   PEPPOL_BIS_BILLING_PROFILE_ID,
 } from '@/lib/invoices/peppol-bis-billing'
 import {
+  isFiscalPeriodMissingError,
   persistVerifiedPeppolEvent,
   sha256Hex,
   stagePeppolDelivery,
@@ -44,28 +45,23 @@ const paramsSchema = z.object({ id: z.uuid() })
 const SENDABLE_STATUSES = new Set<Invoice['status']>(['draft', 'sent', 'overdue'])
 
 /**
- * Hosted answers about the sender, the key or the service, never about the
- * document: the sender is not registered, the participant is not allowed on
- * this key, the quota or rate limit is hit, a scope is missing, the upstream
- * is unconfigured or unreachable. None of them is a verdict on the invoice,
- * so the delivery stays resendable and the event is submit_failed, whatever
- * the envelope's retryable flag says. A bare HTTP_<n> belongs here too: it
- * means the connector URL never reached a Peppol route.
+ * How a failed submission is classified. A verdict on the document arrives
+ * only as the access point's own answer: the direct adapter throws a
+ * non-retryable error without a code, and the connector wraps the access
+ * point's refusal as a non-retryable CONNECTOR_UPSTREAM_ERROR. Every other
+ * coded answer is about the sender, the key, the route or the service:
+ * transient ones (unreachable, rate limited, ledger, upstream unconfigured,
+ * HTTP 429/5xx) are a plain failure; permanent ones (sender not registered,
+ * not allowed, quota, scope, key, HTTP 4xx, protocol) are a precondition.
+ * Neither is terminal: the delivery stays resendable.
  */
-const PRECONDITION_TRANSPORT_CODES: ReadonlySet<string> = new Set([
-  'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED',
-  'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED',
-  'CONNECTOR_QUOTA_EXCEEDED',
-  'CONNECTOR_RATE_LIMITED',
-  'CONNECTOR_SCOPE_MISSING',
-  'CONNECTOR_UPSTREAM_UNCONFIGURED',
-  'CONNECTOR_LEDGER_FAILED',
-  'CONNECTOR_UNREACHABLE',
-  'CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS',
-])
+type SubmitVerdict = 'rejected' | 'precondition' | 'failed'
 
-function isPreconditionCode(code: string | null): code is string {
-  return code !== null && (PRECONDITION_TRANSPORT_CODES.has(code) || /^HTTP_\d+$/.test(code))
+function classifySubmitFailure(err: unknown): { verdict: SubmitVerdict; code: string | null } {
+  if (!isPeppolTransportError(err)) return { verdict: 'failed', code: null }
+  if (err.retryable) return { verdict: 'failed', code: err.code }
+  const documentVerdict = err.code === null || err.code === 'CONNECTOR_UPSTREAM_ERROR'
+  return { verdict: documentVerdict ? 'rejected' : 'precondition', code: err.code }
 }
 
 const PRECONDITION_PREFIX_SV = 'Fakturan kunde inte skickas via Peppol ännu: '
@@ -83,17 +79,6 @@ function preconditionMessages(code: string): { messageSv?: string; messageEn?: s
     messageSv: PRECONDITION_PREFIX_SV + entry.message_sv,
     messageEn: PRECONDITION_PREFIX_EN + entry.message_en,
   }
-}
-
-/**
- * stage_peppol_delivery raises P0002 with this text when no fiscal period
- * covers the invoice date (the delivery row needs the period's retention
- * basis). Its other P0002 (invoice not eligible) keeps the generic mapping.
- */
-function isFiscalPeriodMissing(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null) return false
-  const { code, message } = err as { code?: unknown; message?: unknown }
-  return code === 'P0002' && typeof message === 'string' && /fiscal period retention basis/i.test(message)
 }
 
 /** Provider-source lifecycle events written by this route (service role). */
@@ -169,7 +154,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Every refusal before a delivery row exists leaves one structured line
     // with the registry code: no amounts, no names. Prod had zero deliveries
     // and no way to tell which gate stopped them (#2484).
-    const logRefusal = (code: string) => log.info('peppol send refused', { invoiceId, code })
+    const logRefusal = (code: string, extra: Record<string, unknown> = {}) =>
+      log.info('peppol send refused', { invoiceId, code, ...extra })
     const refuse = (code: string, ctx: RefusalContext = {}) => {
       logRefusal(code)
       return privateNoStore(errorResponseFromCode(code, log, { requestId, ...ctx }))
@@ -188,7 +174,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // The demo company never speaks to the access point: a transmission is
     // billed per document.
     if (await isSandboxCompany(supabase, companyId)) {
-      return refuse('PEPPOL_SANDBOX_NOT_ALLOWED')
+      return refuse('PEPPOL_SANDBOX_NOT_ALLOWED', {
+        messageSv: 'Peppol-sändning är inte tillgänglig i demobolaget. Skapa ett riktigt konto för att skicka e-fakturor.',
+        messageEn: 'Peppol sending is not available in the demo company. Create a real account to send e-invoices.',
+      })
     }
 
     // Access is granted per company by the operators and capped in sends:
@@ -250,7 +239,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const generated = generatePeppolDocumentOrResponse({ invoice, company, log, requestId })
     if (!generated.ok) {
-      logRefusal(generated.code)
+      // The BIS issue codes say which preflight rule stopped the send.
+      logRefusal(generated.code, generated.issues ? { issues: generated.issues.slice(0, 10) } : {})
       return generated.response
     }
     const document = generated.document
@@ -272,7 +262,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           document,
         })
       } catch (err) {
-        if (isFiscalPeriodMissing(err)) {
+        if (isFiscalPeriodMissingError(err)) {
           return refuse('PEPPOL_FISCAL_PERIOD_MISSING', { details: { invoice_date: invoice.invoice_date } })
         }
         throw err
@@ -298,8 +288,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
 
       // A lookup that cannot be performed is not a lookup that answered "not
-      // registered": the delivery stays staged and nothing terminal is
-      // recorded. Anything but a transport error keeps the generic handling.
+      // registered" and never a verdict on the document: the delivery stays
+      // staged, nothing terminal is recorded, and the answer is always 502
+      // retryable. Anything but a transport error keeps the generic handling.
       let lookup: PeppolRecipientLookup
       try {
         lookup = await transport.lookupRecipient(document.recipient)
@@ -312,7 +303,6 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         })
         return privateNoStore(errorResponseFromCode('PEPPOL_LOOKUP_FAILED', log, {
           requestId,
-          status: err.retryable ? 502 : 422,
           details: { reason: err.detail, code: err.code },
         }))
       }
@@ -391,13 +381,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         providerSubmissionId = receipt.providerSubmissionId
         acceptedAt = receipt.acceptedAt
       } catch (err) {
-        const transportCode = isPeppolTransportError(err) ? err.code : null
-        // A precondition answer is never a verdict on the document: the
-        // delivery stays resendable however the hosted side flagged it. Only
-        // a genuine rejection (provider `rejected`/`duplicate`, arriving as a
-        // non-retryable transport error) is terminal.
-        const precondition = isPreconditionCode(transportCode)
-        const retryable = precondition || (isPeppolTransportError(err) ? err.retryable : true)
+        const { verdict, code: transportCode } = classifySubmitFailure(err)
+        // Only the access point's own verdict (provider `rejected`/`duplicate`)
+        // is terminal; a precondition or a transient failure leaves the
+        // delivery resendable.
+        const retryable = verdict !== 'rejected'
         // The provider's own explanation (validation rule, duplicate notice) is
         // what the user can act on; the adapter's error message stays in the
         // event log and never reaches the response.
@@ -408,7 +396,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         log.error('Peppol submission failed', err as Error, {
           invoiceId,
           retryable,
-          precondition,
+          verdict,
           transportCode,
         })
         await persistVerifiedPeppolEvent({
@@ -426,7 +414,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             occurredAt: new Date().toISOString(),
           }),
         })
-        if (precondition) {
+        if (verdict === 'precondition' && transportCode !== null) {
           return privateNoStore(errorResponseFromCode('PEPPOL_SEND_PRECONDITION_FAILED', log, {
             requestId,
             ...preconditionMessages(transportCode),
@@ -434,7 +422,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           }))
         }
         return privateNoStore(errorResponseFromCode(
-          retryable ? 'PEPPOL_SUBMISSION_FAILED' : 'PEPPOL_SUBMISSION_REJECTED',
+          verdict === 'failed' ? 'PEPPOL_SUBMISSION_FAILED' : 'PEPPOL_SUBMISSION_REJECTED',
           log,
           { requestId, details: { reason: providerReason, code: transportCode } },
         ))

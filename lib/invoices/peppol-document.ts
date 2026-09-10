@@ -14,8 +14,12 @@ export type PeppolInvoiceRecord = Invoice & { customer?: Customer | null; items?
 
 type RouteLog = Parameters<typeof errorResponseFromCode>[1]
 
-/** The registry code the built response carries, so a caller can log the refusal without reading the body. */
-type RefusedPeppolResult = { ok: false; code: string; response: NextResponse }
+/**
+ * The registry code the built response carries (and, for a failed BIS
+ * preflight, the issue codes), so a caller can log the refusal without
+ * reading the body.
+ */
+type RefusedPeppolResult = { ok: false; code: string; issues?: string[]; response: NextResponse }
 
 export type LoadPeppolRecordsResult =
   | { ok: true; invoice: PeppolInvoiceRecord; company: CompanySettings }
@@ -119,6 +123,7 @@ export function generatePeppolDocumentOrResponse(args: {
     return {
       ok: false,
       code: 'VALIDATION_ERROR',
+      issues: document.issues.map((item) => item.code),
       response: privateNoStore(errorResponseFromCode('VALIDATION_ERROR', args.log, {
         requestId: args.requestId,
         messageSv: first?.messageSv,
