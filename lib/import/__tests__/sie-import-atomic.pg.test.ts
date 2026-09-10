@@ -542,6 +542,35 @@ describe('import_sie_journal_entries RPC', () => {
     expect(sequence.rowCount).toBe(0)
   })
 
+  it('refuses a closed fiscal period even though headers insert directly as posted', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany({ isClosed: true })
+
+    await expect(
+      getPool().query(
+        `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+        [
+          companyId,
+          userId,
+          fiscalPeriodId,
+          JSON.stringify([
+            { sourceId: 'A1', series: 'A', date: '2026-02-01', description: 'Into closed period', sourceType: 'import', lines: makeLines(10) },
+          ]),
+        ],
+      ),
+    ).rejects.toThrow(/locked\/closed fiscal period/i)
+
+    const headers = await getPool().query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM public.journal_entries WHERE company_id = $1`,
+      [companyId],
+    )
+    expect(headers.rows[0]!.count).toBe('0')
+    const sequence = await getPool().query(
+      `SELECT 1 FROM public.voucher_sequences WHERE company_id = $1 AND fiscal_period_id = $2`,
+      [companyId, fiscalPeriodId],
+    )
+    expect(sequence.rowCount).toBe(0)
+  })
+
   it('rejects an imported history row that claims an actor (provenance check)', async () => {
     const { companyId } = await seedCompany()
     await expect(
