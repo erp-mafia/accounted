@@ -7,6 +7,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { getErrorEntry, hasErrorEntry } from '@/lib/errors/structured-errors'
 import {
   PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
@@ -47,9 +48,10 @@ export interface PeppolRegistrationRow {
   /** Raw text of the last failure, for logs and ops; never shown to users. */
   last_error: string | null
   /**
-   * Stable code behind `last_error`: the transport code (hosted connector
-   * envelope code or HTTP_<status>) when there is one, else the registration
-   * result code. The UI translates this through the error registry.
+   * Stable code behind `last_error`, always an error-registry code: the
+   * transport code when the registry knows it and it carries a verdict of
+   * its own, else the verdict (PEPPOL_REGISTRATION_REJECTED or _FAILED). The
+   * UI translates it and offers a retry only when the entry is retryable.
    */
   last_error_code: string | null
   created_at: string
@@ -153,8 +155,55 @@ const PASSTHROUGH_TRANSPORT_CODES: ReadonlySet<string> = new Set<PassthroughCode
   'PEPPOL_RECEIVING_UNSUPPORTED',
 ])
 
-/** Transport answers meaning the hosted side does not hold the identifier for this key. */
-const NOT_HELD_TRANSPORT_CODES: ReadonlySet<string> = new Set(['CONNECTOR_NOT_OWNED', 'HTTP_404'])
+/**
+ * Hosted answers that are transient whatever the envelope's retryable flag
+ * says: the hosted side is busy, mid-flight, or misconfigured, not refusing.
+ * A bare HTTP_404 belongs here too: every hosted 404 is a CONNECTOR_NOT_OWNED
+ * envelope, so a bare one means the connector URL never reached the route.
+ */
+const TRANSIENT_TRANSPORT_CODES: ReadonlySet<string> = new Set([
+  'CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS',
+  'CONNECTOR_RATE_LIMITED',
+  'CONNECTOR_UPSTREAM_UNCONFIGURED',
+  'CONNECTOR_LEDGER_FAILED',
+  'CONNECTOR_UNREACHABLE',
+  'HTTP_404',
+])
+
+/** The one transport answer meaning the hosted side does not hold the identifier for this key. */
+const NOT_HELD_TRANSPORT_CODE = 'CONNECTOR_NOT_OWNED'
+
+/**
+ * What goes into last_error_code. The transport code is kept only when the
+ * registry has text for it AND the code is a verdict of its own:
+ * CONNECTOR_UPSTREAM_ERROR and HTTP_<n> are wrappers around whatever the
+ * access point said (a permanent Qvalia refusal arrives as UPSTREAM_ERROR),
+ * so storing them would show retry advice for a refusal. Everything else
+ * stores the verdict itself.
+ */
+function persistedErrorCode(transportCode: string | null, verdict: string): string {
+  if (!transportCode) return verdict
+  if (transportCode === 'CONNECTOR_UPSTREAM_ERROR' || /^HTTP_\d+$/.test(transportCode)) return verdict
+  return hasErrorEntry(transportCode) ? transportCode : verdict
+}
+
+/**
+ * Whether "try again" can change anything: a failed attempt (failed, or
+ * pending past the stale window) or a failed withdrawal on a live row, and a
+ * stored code whose registry entry is retryable. An unknown or missing code
+ * counts as retryable; a permanent verdict never offers the button.
+ */
+export function canRetryPeppolRegistration(
+  row: Pick<PeppolRegistrationRow, 'status' | 'updated_at' | 'last_error_code'>,
+  now: number = Date.now(),
+): boolean {
+  const failedAttempt = row.status === 'failed' || isStalePeppolPending(row, now)
+  const failedWithdrawal = row.status === 'registered' && row.last_error_code !== null
+  if (!failedAttempt && !failedWithdrawal) return false
+  if (!row.last_error_code) return true
+  const entry = getErrorEntry(row.last_error_code)
+  return entry ? entry.retryable === true : true
+}
 
 interface TransportFailure {
   permanent: boolean
@@ -169,8 +218,9 @@ interface TransportFailure {
 function describeTransportFailure(err: unknown): TransportFailure {
   if (isPeppolTransportError(err)) {
     const transportCode = err.code
+    const transient = transportCode !== null && TRANSIENT_TRANSPORT_CODES.has(transportCode)
     return {
-      permanent: !err.retryable || (transportCode !== null && PERMANENT_TRANSPORT_CODES.has(transportCode)),
+      permanent: !transient && (!err.retryable || (transportCode !== null && PERMANENT_TRANSPORT_CODES.has(transportCode))),
       transportCode,
       detail: err.detail,
       raw: [err.message, err.detail].filter(Boolean).join(': ').slice(0, 500),
@@ -235,9 +285,9 @@ export async function getPeppolRegistration(args: {
 /**
  * A failure the transport reported. `code` separates a verdict on the
  * identifier (REJECTED: retrying cannot help) from an operational problem
- * (FAILED: retry later). `detail` is the hosted detail text; `reason` is the
- * stable code stored as last_error_code (the transport code when there is
- * one, else the result code).
+ * (FAILED: retry later). `detail` is the hosted detail text; `reason` is
+ * what the transport actually said (its code) for the response details and
+ * the log, which may differ from the registry code persisted on the row.
  */
 export interface PeppolTransportVerdict {
   ok: false
@@ -279,30 +329,34 @@ export async function registerCompanyForPeppolReceiving(args: {
   if (!prepared.ok) return { ok: false, code: prepared.code }
 
   const existing = await getPeppolRegistration({ supabase: service, companyId, provider: transport.provider })
-  let live = existing && LIVE_STATUSES.includes(existing.status) ? existing : null
-  if (live && isStalePeppolPending(live)) {
-    // The live-row unique index would block a new pending row, so the stale
-    // one is closed first; it stays as history with the reason on it.
-    const { error } = await service
-      .from('peppol_registrations')
-      .update({
-        status: 'failed',
-        last_error: 'Registration did not complete within 5 minutes; retired by a new attempt',
-        last_error_code: 'PEPPOL_REGISTRATION_FAILED',
-      })
-      .eq('id', live.id)
-    if (error) throw new Error(`Failed to retire stale Peppol registration: ${error.message}`)
-    live = null
-  }
+  const live = existing && LIVE_STATUSES.includes(existing.status) ? existing : null
+  const stale = live !== null && isStalePeppolPending(live)
 
   let rowId: string
-  if (live) {
+  if (live && !stale) {
     rowId = live.id
   } else {
+    // The cap is checked before anything is written, so a cap-reached answer
+    // leaves a stale row exactly as it was. The stale row is still counted
+    // as live by the index, but its slot is this company's own: it is not
+    // held against the retry.
     const cap = getPeppolReceivingCap()
     if (cap !== null) {
       const liveCount = await countLivePeppolRegistrations({ supabase: service, provider: transport.provider })
-      if (liveCount >= cap) return { ok: false, code: 'PEPPOL_REGISTRATION_CAP_REACHED' }
+      if (liveCount - (stale ? 1 : 0) >= cap) return { ok: false, code: 'PEPPOL_REGISTRATION_CAP_REACHED' }
+    }
+    if (live) {
+      // The live-row unique index would block a new pending row, so the
+      // stale one is closed first; it stays as history with the reason on it.
+      const { error } = await service
+        .from('peppol_registrations')
+        .update({
+          status: 'failed',
+          last_error: 'Registration did not complete within 5 minutes; retired by a new attempt',
+          last_error_code: 'PEPPOL_REGISTRATION_FAILED',
+        })
+        .eq('id', live.id)
+      if (error) throw new Error(`Failed to retire stale Peppol registration: ${error.message}`)
     }
     const { data, error } = await service
       .from('peppol_registrations')
@@ -318,6 +372,17 @@ export async function registerCompanyForPeppolReceiving(args: {
       })
       .select('id')
       .single()
+    if ((error as { code?: string } | null)?.code === '23505') {
+      // A concurrent attempt (a double click, two tabs) holds the live row:
+      // the registration is in progress, not broken, and the other request
+      // will finalize it.
+      return {
+        ok: false,
+        code: 'PEPPOL_REGISTRATION_FAILED',
+        detail: null,
+        reason: 'CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS',
+      }
+    }
     if (error || !data) throw new Error(`Failed to create Peppol registration: ${error?.message ?? 'no row'}`)
     rowId = (data as { id: string }).id
   }
@@ -356,7 +421,7 @@ export async function registerCompanyForPeppolReceiving(args: {
     const reason = failure.transportCode ?? code
     await service
       .from('peppol_registrations')
-      .update({ status: 'failed', last_error: failure.raw, last_error_code: reason })
+      .update({ status: 'failed', last_error: failure.raw, last_error_code: persistedErrorCode(failure.transportCode, code) })
       .eq('id', rowId)
     if (isPassthroughCode(code)) return { ok: false, code }
     return { ok: false, code, detail: failure.detail, reason }
@@ -407,7 +472,7 @@ export async function deregisterCompanyFromPeppolReceiving(args: {
     })
   } catch (err) {
     const failure = describeTransportFailure(err)
-    if (failure.transportCode !== null && NOT_HELD_TRANSPORT_CODES.has(failure.transportCode)) {
+    if (failure.transportCode === NOT_HELD_TRANSPORT_CODE) {
       // The hosted side does not hold the identifier (a stale pending row, or
       // one withdrawn out of band): the local row is all that is left, so it
       // is closed rather than kept live with a hidden error.
@@ -423,7 +488,7 @@ export async function deregisterCompanyFromPeppolReceiving(args: {
     const reason = failure.transportCode ?? code
     await service
       .from('peppol_registrations')
-      .update({ last_error: failure.raw, last_error_code: reason })
+      .update({ last_error: failure.raw, last_error_code: persistedErrorCode(failure.transportCode, code) })
       .eq('id', existing.id)
     if (code === 'PEPPOL_RECEIVING_UNSUPPORTED') return { ok: false, code }
     return { ok: false, code, detail: failure.detail, reason }

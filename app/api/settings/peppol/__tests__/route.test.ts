@@ -143,7 +143,7 @@ describe('/api/settings/peppol', () => {
     expect(body.data.participant).toEqual({ ok: true, code: null })
     expect(body.data.access).toMatchObject({ status: 'enabled', send_enabled: true, receive_enabled: true, sent_count: 3, remaining_sends: 47 })
     expect(body.data.registration).toMatchObject({
-      status: 'registered', participant_identifier: '5595386219', last_error_code: null, stale_pending: false,
+      status: 'registered', participant_identifier: '5595386219', last_error_code: null, stale_pending: false, can_retry: false,
     })
     expect(body.data.registration).not.toHaveProperty('business_card')
     expect(body.data.registration).not.toHaveProperty('last_error')
@@ -162,8 +162,25 @@ describe('/api/settings/peppol', () => {
     service.enqueue({ data: null, error: null, count: 0 })
     const body = await (await get()).json()
     expect(body.data.participant).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_PERSONAL_NUMBER' })
-    expect(body.data.registration).toMatchObject({ status: 'failed', last_error_code: 'CONNECTOR_UPSTREAM_ERROR' })
+    expect(body.data.registration).toMatchObject({ status: 'failed', last_error_code: 'CONNECTOR_UPSTREAM_ERROR', can_retry: true })
     expect(JSON.stringify(body)).not.toContain('Something went wrong')
+  })
+
+  it.each([
+    ['failed', 'CONNECTOR_PEPPOL_PARTICIPANT_TAKEN', false],
+    ['failed', 'PEPPOL_REGISTRATION_REJECTED', false],
+    ['failed', 'PEPPOL_REGISTRATION_FAILED', true],
+    ['failed', null, true],
+    ['registered', 'CONNECTOR_RATE_LIMITED', true],
+    ['registered', 'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED', false],
+  ])('GET decides can_retry server-side: %s with %s -> %s', async (status, code, expected) => {
+    unregister = registerPeppolTransport(makeTransport())
+    enqueue({ data: [{ ...registeredRow, status, registered_at: status === 'registered' ? registeredRow.registered_at : null, last_error_code: code }], error: null })
+    enqueue({ data: companySettings, error: null })
+    enqueue({ data: enabledAccess, error: null })
+    service.enqueue({ data: null, error: null, count: 0 })
+    const body = await (await get()).json()
+    expect(body.data.registration).toMatchObject({ status, last_error_code: code, can_retry: expected })
   })
 
   it('GET marks a pending row older than five minutes as stale', async () => {
@@ -174,7 +191,7 @@ describe('/api/settings/peppol', () => {
     enqueue({ data: enabledAccess, error: null })
     service.enqueue({ data: null, error: null, count: 0 })
     const body = await (await get()).json()
-    expect(body.data.registration).toMatchObject({ status: 'pending', stale_pending: true })
+    expect(body.data.registration).toMatchObject({ status: 'pending', stale_pending: true, can_retry: true })
   })
 
   it('POST refuses without a transport and in the sandbox', async () => {

@@ -5,6 +5,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { ensureInitialized } from '@/lib/init'
 import { getPeppolAccess, getPeppolAccessSummary } from '@/lib/invoices/peppol-access'
 import {
+  canRetryPeppolRegistration,
   deregisterCompanyFromPeppolReceiving,
   describePeppolParticipantEligibility,
   getPeppolRegistration,
@@ -48,6 +49,9 @@ function registrationPayload(row: PeppolRegistrationRow | null) {
     deregistered_at: row.deregistered_at,
     last_error_code: row.last_error_code,
     stale_pending: isStalePeppolPending(row),
+    // Decided here, next to the registry: the page never guesses whether a
+    // stored code is worth retrying.
+    can_retry: canRetryPeppolRegistration(row),
     updated_at: row.updated_at,
   }
 }

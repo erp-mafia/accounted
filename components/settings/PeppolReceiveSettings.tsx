@@ -25,6 +25,8 @@ interface PeppolRegistrationView {
   last_error_code: string | null
   /** A pending row the server considers abandoned (older than five minutes). */
   stale_pending: boolean
+  /** Server verdict: the stored code is retryable and the row is in a state a retry can change. */
+  can_retry: boolean
   updated_at: string
 }
 
@@ -111,10 +113,13 @@ export function PeppolReceiveSettings() {
   const registrationErrorText = registration?.last_error_code && registration.status !== 'deregistered'
     ? registryText(registration.last_error_code, localeKey) ?? registryText('PEPPOL_REGISTRATION_FAILED', localeKey)
     : null
+  // A retry on a live row repeats the withdrawal (the toggle stays on); on a
+  // failed or stale row it repeats the registration.
+  const retryRepeatsWithdrawal = registration?.status === 'registered'
   const canRetry = !!registration
-    && (registration.status === 'failed' || registration.stale_pending)
-    && receivingAvailable
-    && !participantBlocked
+    && registration.can_retry
+    && registration.status !== 'deregistered'
+    && (retryRepeatsWithdrawal ? transportAvailable : receivingAvailable && !participantBlocked)
 
   const requestAccess = useCallback(async () => {
     setIsRequesting(true)
@@ -271,7 +276,7 @@ export function PeppolReceiveSettings() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => void toggleReceiving(true)}
+                    onClick={() => void toggleReceiving(!retryRepeatsWithdrawal)}
                     disabled={isSaving || !canWrite}
                   >
                     {isSaving ? t('retry_sending') : t('retry_button')}

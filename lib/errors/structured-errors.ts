@@ -1763,6 +1763,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 502,
     message_sv: 'Peppol-operatören kunde inte genomföra registreringen. Försök igen om en stund.',
     message_en: 'The Peppol access point could not complete the registration. Try again shortly.',
+    retryable: true,
   },
   PEPPOL_REGISTRATION_NOT_FOUND: {
     httpStatus: 404,
