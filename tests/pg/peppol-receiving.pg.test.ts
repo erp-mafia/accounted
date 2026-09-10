@@ -49,6 +49,15 @@ describe('peppol_registrations', () => {
     // A deregistered history row does not block a new live one.
     await insertRegistration(b.companyId, b.userId, '5567321707', 'deregistered')
     await expect(insertRegistration(b.companyId, b.userId, '5567321707')).resolves.toBeTruthy()
+
+    // #2483: the stable code lives beside the raw text and is nullable.
+    const failedId = await insertRegistration(a.companyId, a.userId, '5560160681', 'failed')
+    const { rows } = await getPool().query(
+      `UPDATE public.peppol_registrations SET last_error_code = 'CONNECTOR_UPSTREAM_ERROR', last_error = 'raw'
+       WHERE id = $1 RETURNING last_error_code`,
+      [failedId],
+    )
+    expect(rows[0].last_error_code).toBe('CONNECTOR_UPSTREAM_ERROR')
   })
 
   it('is readable by members of the company only and not writable by authenticated users', async () => {

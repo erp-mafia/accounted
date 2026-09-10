@@ -44,7 +44,14 @@ export interface PeppolRegistrationRow {
   document_types: unknown[]
   registered_at: string | null
   deregistered_at: string | null
+  /** Raw text of the last failure, for logs and ops; never shown to users. */
   last_error: string | null
+  /**
+   * Stable code behind `last_error`: the transport code (hosted connector
+   * envelope code or HTTP_<status>) when there is one, else the registration
+   * result code. The UI translates this through the error registry.
+   */
+  last_error_code: string | null
   created_at: string
   updated_at: string
 }
@@ -93,7 +100,93 @@ export function preparePeppolParticipant(settings: ParticipantSettings): PeppolP
   }
 }
 
+export type PeppolParticipantEligibility =
+  | { ok: true; code: null }
+  | { ok: false; code: Extract<PeppolParticipantPreparation, { ok: false }>['code'] }
+
+/**
+ * Read-side view of preparePeppolParticipant: can this company be registered
+ * at all, and if not, why. The settings page asks before it offers receiving,
+ * so a personnummer-based company learns the answer up front instead of after
+ * the operators granted a slot.
+ */
+export function describePeppolParticipantEligibility(settings: ParticipantSettings): PeppolParticipantEligibility {
+  const prepared = preparePeppolParticipant(settings)
+  return prepared.ok ? { ok: true, code: null } : { ok: false, code: prepared.code }
+}
+
 const LIVE_STATUSES: PeppolRegistrationStatus[] = ['pending', 'registered']
+
+/**
+ * A pending row older than this is a crashed or timed-out attempt, not a call
+ * in flight: the connector gives up after 60 s and the route after 90 s.
+ */
+export const PEPPOL_PENDING_STALE_MS = 5 * 60 * 1000
+
+export function isStalePeppolPending(
+  row: Pick<PeppolRegistrationRow, 'status' | 'updated_at'>,
+  now: number = Date.now(),
+): boolean {
+  if (row.status !== 'pending') return false
+  const updatedAt = Date.parse(row.updated_at)
+  return Number.isFinite(updatedAt) && now - updatedAt > PEPPOL_PENDING_STALE_MS
+}
+
+/**
+ * Hosted verdicts on the identifier itself (packages/connect-contract):
+ * retrying the same registration cannot change them, whatever the envelope's
+ * retryable flag says.
+ */
+const PERMANENT_TRANSPORT_CODES = new Set([
+  'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED',
+  'CONNECTOR_PEPPOL_PARTICIPANT_TAKEN',
+  'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE',
+  'CONNECTOR_QUOTA_EXCEEDED',
+  'PEPPOL_REGISTRATION_CAP_REACHED',
+  'PEPPOL_RECEIVING_UNSUPPORTED',
+])
+
+/** Hosted codes that already exist as registration result codes: pass them through 1:1. */
+type PassthroughCode = 'PEPPOL_REGISTRATION_CAP_REACHED' | 'PEPPOL_RECEIVING_UNSUPPORTED'
+const PASSTHROUGH_TRANSPORT_CODES: ReadonlySet<string> = new Set<PassthroughCode>([
+  'PEPPOL_REGISTRATION_CAP_REACHED',
+  'PEPPOL_RECEIVING_UNSUPPORTED',
+])
+
+/** Transport answers meaning the hosted side does not hold the identifier for this key. */
+const NOT_HELD_TRANSPORT_CODES: ReadonlySet<string> = new Set(['CONNECTOR_NOT_OWNED', 'HTTP_404'])
+
+interface TransportFailure {
+  permanent: boolean
+  /** The transport's stable code, null for non-transport errors (a DB write that failed). */
+  transportCode: string | null
+  /** The hosted detail text, for the API response's details.reason. */
+  detail: string | null
+  /** Composed raw text for last_error (logs and ops only). */
+  raw: string
+}
+
+function describeTransportFailure(err: unknown): TransportFailure {
+  if (isPeppolTransportError(err)) {
+    const transportCode = err.code
+    return {
+      permanent: !err.retryable || (transportCode !== null && PERMANENT_TRANSPORT_CODES.has(transportCode)),
+      transportCode,
+      detail: err.detail,
+      raw: [err.message, err.detail].filter(Boolean).join(': ').slice(0, 500),
+    }
+  }
+  return {
+    permanent: false,
+    transportCode: null,
+    detail: null,
+    raw: err instanceof Error ? err.message.slice(0, 500) : 'unknown error',
+  }
+}
+
+function isPassthroughCode(code: string | null): code is PassthroughCode {
+  return code !== null && PASSTHROUGH_TRANSPORT_CODES.has(code)
+}
 
 /**
  * How many companies may publish a receiving identifier through our provider
@@ -139,6 +232,20 @@ export async function getPeppolRegistration(args: {
   return rows.find((row) => LIVE_STATUSES.includes(row.status)) ?? rows[0] ?? null
 }
 
+/**
+ * A failure the transport reported. `code` separates a verdict on the
+ * identifier (REJECTED: retrying cannot help) from an operational problem
+ * (FAILED: retry later). `detail` is the hosted detail text; `reason` is the
+ * stable code stored as last_error_code (the transport code when there is
+ * one, else the result code).
+ */
+export interface PeppolTransportVerdict {
+  ok: false
+  code: 'PEPPOL_REGISTRATION_REJECTED' | 'PEPPOL_REGISTRATION_FAILED'
+  detail: string | null
+  reason: string | null
+}
+
 export type RegisterPeppolResult =
   | { ok: true; registration: PeppolRegistrationRow }
   | {
@@ -150,13 +257,14 @@ export type RegisterPeppolResult =
         | 'PEPPOL_RECEIVING_UNSUPPORTED'
         | 'PEPPOL_REGISTRATION_CAP_REACHED'
     }
-  | { ok: false; code: 'PEPPOL_REGISTRATION_FAILED'; detail: string | null }
+  | PeppolTransportVerdict
 
 /**
  * Publish the company's identifier through the transport and record the
  * outcome. The row is written as `pending` before the network call and
  * finalized after it, so a crash mid-way leaves a visible pending row rather
- * than a silent gap.
+ * than a silent gap. A pending row older than PEPPOL_PENDING_STALE_MS is such
+ * a leftover: it is retired as failed and a fresh attempt runs.
  */
 export async function registerCompanyForPeppolReceiving(args: {
   service: SupabaseClient
@@ -171,7 +279,21 @@ export async function registerCompanyForPeppolReceiving(args: {
   if (!prepared.ok) return { ok: false, code: prepared.code }
 
   const existing = await getPeppolRegistration({ supabase: service, companyId, provider: transport.provider })
-  const live = existing && LIVE_STATUSES.includes(existing.status) ? existing : null
+  let live = existing && LIVE_STATUSES.includes(existing.status) ? existing : null
+  if (live && isStalePeppolPending(live)) {
+    // The live-row unique index would block a new pending row, so the stale
+    // one is closed first; it stays as history with the reason on it.
+    const { error } = await service
+      .from('peppol_registrations')
+      .update({
+        status: 'failed',
+        last_error: 'Registration did not complete within 5 minutes; retired by a new attempt',
+        last_error_code: 'PEPPOL_REGISTRATION_FAILED',
+      })
+      .eq('id', live.id)
+    if (error) throw new Error(`Failed to retire stale Peppol registration: ${error.message}`)
+    live = null
+  }
 
   let rowId: string
   if (live) {
@@ -219,6 +341,7 @@ export async function registerCompanyForPeppolReceiving(args: {
         business_card: prepared.businessCard,
         document_types: PEPPOL_RECEIVING_DOCUMENT_TYPES,
         last_error: null,
+        last_error_code: null,
       })
       .eq('id', rowId)
       .select('*')
@@ -226,21 +349,44 @@ export async function registerCompanyForPeppolReceiving(args: {
     if (error || !data) throw new Error(`Failed to finalize Peppol registration: ${error?.message ?? 'no row'}`)
     return { ok: true, registration: data as PeppolRegistrationRow }
   } catch (err) {
-    const detail = isPeppolTransportError(err)
-      ? [err.message, err.detail].filter(Boolean).join(': ').slice(0, 500)
-      : err instanceof Error ? err.message.slice(0, 500) : 'unknown error'
+    const failure = describeTransportFailure(err)
+    const code = isPassthroughCode(failure.transportCode)
+      ? failure.transportCode
+      : failure.permanent ? 'PEPPOL_REGISTRATION_REJECTED' : 'PEPPOL_REGISTRATION_FAILED'
+    const reason = failure.transportCode ?? code
     await service
       .from('peppol_registrations')
-      .update({ status: 'failed', last_error: detail })
+      .update({ status: 'failed', last_error: failure.raw, last_error_code: reason })
       .eq('id', rowId)
-    return { ok: false, code: 'PEPPOL_REGISTRATION_FAILED', detail: isPeppolTransportError(err) ? err.detail : null }
+    if (isPassthroughCode(code)) return { ok: false, code }
+    return { ok: false, code, detail: failure.detail, reason }
   }
 }
 
 export type DeregisterPeppolResult =
   | { ok: true; registration: PeppolRegistrationRow }
   | { ok: false; code: 'PEPPOL_RECEIVING_UNSUPPORTED' | 'PEPPOL_REGISTRATION_NOT_FOUND' }
-  | { ok: false; code: 'PEPPOL_REGISTRATION_FAILED'; detail: string | null }
+  | PeppolTransportVerdict
+
+async function finalizeDeregistered(
+  service: SupabaseClient,
+  rowId: string,
+  lastError: { last_error: string | null; last_error_code: string | null },
+): Promise<PeppolRegistrationRow> {
+  const { data, error } = await service
+    .from('peppol_registrations')
+    .update({
+      status: 'deregistered',
+      deregistered_at: new Date().toISOString(),
+      last_error: lastError.last_error,
+      last_error_code: lastError.last_error_code,
+    })
+    .eq('id', rowId)
+    .select('*')
+    .single()
+  if (error || !data) throw new Error(`Failed to record Peppol deregistration: ${error?.message ?? 'no row'}`)
+  return data as PeppolRegistrationRow
+}
 
 export async function deregisterCompanyFromPeppolReceiving(args: {
   service: SupabaseClient
@@ -260,20 +406,29 @@ export async function deregisterCompanyFromPeppolReceiving(args: {
       identifier: existing.participant_identifier,
     })
   } catch (err) {
-    const detail = isPeppolTransportError(err) ? err.detail : null
+    const failure = describeTransportFailure(err)
+    if (failure.transportCode !== null && NOT_HELD_TRANSPORT_CODES.has(failure.transportCode)) {
+      // The hosted side does not hold the identifier (a stale pending row, or
+      // one withdrawn out of band): the local row is all that is left, so it
+      // is closed rather than kept live with a hidden error.
+      const registration = await finalizeDeregistered(service, existing.id, {
+        last_error: failure.raw,
+        last_error_code: failure.transportCode,
+      })
+      return { ok: true, registration }
+    }
+    const code = failure.transportCode === 'PEPPOL_RECEIVING_UNSUPPORTED'
+      ? 'PEPPOL_RECEIVING_UNSUPPORTED'
+      : failure.permanent ? 'PEPPOL_REGISTRATION_REJECTED' : 'PEPPOL_REGISTRATION_FAILED'
+    const reason = failure.transportCode ?? code
     await service
       .from('peppol_registrations')
-      .update({ last_error: err instanceof Error ? err.message.slice(0, 500) : 'unknown error' })
+      .update({ last_error: failure.raw, last_error_code: reason })
       .eq('id', existing.id)
-    return { ok: false, code: 'PEPPOL_REGISTRATION_FAILED', detail }
+    if (code === 'PEPPOL_RECEIVING_UNSUPPORTED') return { ok: false, code }
+    return { ok: false, code, detail: failure.detail, reason }
   }
 
-  const { data, error } = await service
-    .from('peppol_registrations')
-    .update({ status: 'deregistered', deregistered_at: new Date().toISOString(), last_error: null })
-    .eq('id', existing.id)
-    .select('*')
-    .single()
-  if (error || !data) throw new Error(`Failed to record Peppol deregistration: ${error?.message ?? 'no row'}`)
-  return { ok: true, registration: data as PeppolRegistrationRow }
+  const registration = await finalizeDeregistered(service, existing.id, { last_error: null, last_error_code: null })
+  return { ok: true, registration }
 }
