@@ -225,3 +225,37 @@ export function filterArticleSuggestions<T extends ArticleSuggestion>(
   if (!q) return articles
   return articles.filter((a) => foldText(`${a.article_number ?? ''} ${a.name}`).includes(q))
 }
+
+/** The cells of a committed product row that the entry row's ghost cells stand in for. */
+export type EntryGhostCell = 'quantity' | 'unit' | 'unit_price' | 'vat_rate'
+
+export interface EntryKeyInput {
+  key: string
+  query: string
+  /** The suggestion popover is open. */
+  open: boolean
+  /** Index of the highlighted suggestion, -1 for none. */
+  activeIdx: number
+  matchCount: number
+}
+
+export type EntryKeyAction =
+  | { kind: 'article'; index: number }
+  | { kind: 'free_text'; text: string }
+  | { kind: 'none' }
+
+/**
+ * What Enter and Tab do in the unified entry row. Both commit: a highlighted
+ * article wins, otherwise the typed text becomes a free-text row. With nothing
+ * typed neither commits: Enter is swallowed by the caller (never submits the
+ * form) and Tab passes through so the row is not a focus trap.
+ */
+export function resolveEntryKey(input: EntryKeyInput): EntryKeyAction {
+  if (input.key !== 'Enter' && input.key !== 'Tab') return { kind: 'none' }
+  if (input.open && input.activeIdx >= 0 && input.activeIdx < input.matchCount) {
+    return { kind: 'article', index: input.activeIdx }
+  }
+  const text = input.query.trim()
+  if (text) return { kind: 'free_text', text }
+  return { kind: 'none' }
+}
