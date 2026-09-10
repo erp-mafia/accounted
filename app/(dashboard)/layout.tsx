@@ -126,6 +126,14 @@ export default async function DashboardLayout({
     pathname.startsWith(p)
   )
 
+  // Operator-set system notice (NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL): null when
+  // unset or expired, so the banner is not even rendered outside its window.
+  // Computed before the shell branches below so every signed-in user sees it,
+  // byrå consultants and stale-cookie sessions included.
+  const systemNoticeUntil = parseSystemNoticeUntil(process.env.NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL)
+  const systemNoticeBanner =
+    systemNoticeUntil !== null ? <SystemNoticeBanner until={systemNoticeUntil} /> : null
+
   // Team now carries `kind` directly (types/index.ts, WL-08).
   const membershipRows = teamMemberships
   const byraMembership = membershipRows.find((m) => m.teams?.kind === 'byra') ?? null
@@ -216,6 +224,7 @@ export default async function DashboardLayout({
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
+            {systemNoticeBanner}
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -374,6 +383,7 @@ export default async function DashboardLayout({
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
+            {systemNoticeBanner}
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -423,10 +433,6 @@ export default async function DashboardLayout({
   }
 
   const isSandbox = settings?.is_sandbox === true
-
-  // Operator-set system notice (NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL): null when
-  // unset or expired, so the banner is not even rendered outside its window.
-  const systemNoticeUntil = parseSystemNoticeUntil(process.env.NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL)
 
   // Multi-user seat gate, switcher side: which of the user's OTHER companies
   // are frozen for them (non-owner membership, multi_user lapsed past grace).
@@ -590,7 +596,7 @@ export default async function DashboardLayout({
             Hoppa till innehåll
           </a>
           {isSandbox && <SandboxBanner />}
-          {systemNoticeUntil !== null && <SystemNoticeBanner until={systemNoticeUntil} />}
+          {systemNoticeBanner}
           {graceBanner && (
             <MultiUserGraceBanner
               graceEndsAt={graceBanner.graceEndsAt}
