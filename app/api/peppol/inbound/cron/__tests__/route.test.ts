@@ -132,7 +132,35 @@ describe('GET /api/peppol/inbound/cron', () => {
       expect.objectContaining({ ids: ['doc-a', 'doc-b'] }),
     )
     expect(pages()).toHaveLength(1)
-    expect(pages()[0][1]).toMatchObject({ alert: true, errorCount: 2, errorIds: ['doc-a', 'doc-b'], terminalCount: 0 })
+    expect(pages()[0][1]).toMatchObject({
+      alert: true, errorCount: 2, reprocessErrorIds: ['doc-a', 'doc-b'], syncErrorProviderDocumentIds: [], terminalCount: 0,
+    })
+  })
+
+  it('pages once for listing-sync failures too, even when the reprocessing pass is clean', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    syncMock.mockResolvedValue({
+      ...cleanSync, failed: 1,
+      errors: [
+        { providerDocumentId: 'list:CreditNote', reason: 'Qvalia answered 503' },
+        { providerDocumentId: 'pd-old', reason: 'Failed to archive inbound Peppol document: connection failure' },
+      ],
+    })
+    reprocessMock.mockResolvedValue(cleanReprocess)
+    const response = await GET(request('cron-secret'))
+    expect(response.status).toBe(200)
+    expect(pages()).toHaveLength(1)
+    expect(pages()[0][1]).toMatchObject({
+      alert: true,
+      errorCount: 2,
+      syncErrorProviderDocumentIds: ['list:CreditNote', 'pd-old'],
+      reprocessErrorIds: [],
+      errorReasons: [
+        'sync list:CreditNote: Qvalia answered 503',
+        'sync pd-old: Failed to archive inbound Peppol document: connection failure',
+      ],
+      terminalCount: 0,
+    })
   })
 
   it('pages once, listing provider document ids, when a document became terminal in this run', async () => {

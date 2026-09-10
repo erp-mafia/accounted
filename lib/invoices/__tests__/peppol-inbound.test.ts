@@ -91,10 +91,13 @@ function row(overrides: Partial<PeppolInboundRow> = {}): PeppolInboundRow {
   }
 }
 
-const registration = (participantIdentifier = '5595386219') => ({
-  data: [{ company_id: 'company-1', participant_identifier: participantIdentifier }],
-  error: null,
-})
+/** The exact digits-only read hits: one query. */
+const registered = () => enqueue({ data: { company_id: 'company-1' }, error: null })
+/** Exact read misses, the paginated normalised scan finds nothing: two queries. */
+const unregistered = () => {
+  enqueue({ data: null, error: null })
+  enqueue({ data: [], error: null })
+}
 
 function updates(): Record<string, unknown>[] {
   return calls
@@ -139,27 +142,38 @@ describe('resolvePeppolRecipientCompany', () => {
     reset()
   })
 
-  it('routes hyphenated and 16-prefixed EndpointIDs to the digits-only registration', async () => {
+  it('routes hyphenated and 16-prefixed EndpointIDs to the digits-only registration with one exact read', async () => {
     for (const identifier of ['559538-6219', '165595386219', '16 559538-6219', '5595386219']) {
       reset()
-      enqueue(registration('5595386219'))
+      registered()
       const companyId = await resolvePeppolRecipientCompany({ service, provider: 'qvalia', scheme: '0007', identifier })
       expect(companyId, identifier).toBe('company-1')
+      expect(calls.filter((c) => c.table === 'peppol_registrations' && c.method === 'select')).toHaveLength(1)
+      const filters = calls.filter((c) => c.table === 'peppol_registrations' && c.method === 'eq').map((c) => c.args)
+      expect(filters).toEqual([
+        ['provider', 'qvalia'], ['participant_scheme', '0007'], ['participant_identifier', '5595386219'], ['status', 'registered'],
+      ])
+      expect(calls.some((c) => c.method === 'range')).toBe(false)
     }
   })
 
-  it('matches a registration stored with formatting against a clean endpoint', async () => {
-    enqueue(registration('559538-6219'))
+  it('falls back to a paginated normalised scan for a registration stored with formatting', async () => {
+    enqueue({ data: null, error: null })                                          // exact read misses
+    enqueue({ data: [{ id: 'reg-1', company_id: 'company-1', participant_identifier: '559538-6219' }], error: null })
     const companyId = await resolvePeppolRecipientCompany({ service, provider: 'qvalia', scheme: '0007', identifier: '5595386219' })
     expect(companyId).toBe('company-1')
-    // The comparison happens in code, on the normalised form, never as a raw equality filter.
-    const filters = calls.filter((c) => c.table === 'peppol_registrations' && c.method === 'eq').map((c) => c.args[0])
-    expect(filters).toEqual(['provider', 'participant_scheme', 'status'])
+    expect(mockService.from).toHaveBeenCalledTimes(2)
+    // The scan is paginated and ordered on a unique column, never a raw equality on the identifier.
+    expect(calls.filter((c) => c.method === 'range')).toHaveLength(1)
+    expect(calls.find((c) => c.method === 'order')?.args).toEqual(['id', { ascending: true }])
+    const scanFilters = calls.filter((c) => c.method === 'eq').slice(4).map((c) => c.args[0])
+    expect(scanFilters).toEqual(['provider', 'participant_scheme', 'status'])
   })
 
-  it('returns null for another organisation and for an empty identifier without querying', async () => {
-    enqueue(registration('5595386219'))
-    expect(await resolvePeppolRecipientCompany({ service, provider: 'qvalia', scheme: '0007', identifier: '5567321707' })).toBeNull()
+  it('returns null when neither read matches, and for an empty identifier without querying', async () => {
+    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'reg-2', company_id: 'company-2', participant_identifier: '556732-1707' }], error: null })
+    expect(await resolvePeppolRecipientCompany({ service, provider: 'qvalia', scheme: '0007', identifier: '5595386219' })).toBeNull()
     reset()
     expect(await resolvePeppolRecipientCompany({ service, provider: 'qvalia', scheme: '0007', identifier: '--' })).toBeNull()
     expect(calls).toHaveLength(0)
@@ -199,6 +213,7 @@ describe('archiveInboundPeppolMessage', () => {
       received_at: '2026-08-21T13:55:00.000Z',
     })
     expect(inserts()[0].xml_sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(inserts()[0].processed_at).toEqual(expect.any(String))
     expect(transport.fetchInboundDocumentXml).toHaveBeenCalledWith(message.providerDocumentId, 'Invoice')
   })
 
@@ -269,7 +284,7 @@ describe('processInboundPeppolRow', () => {
 
   it('routes to the registered company and delivers to the inbox', async () => {
     const deliver = vi.fn().mockResolvedValue({ inboxItemId: 'inbox-1', xmlDocumentId: 'doc-xml-1' })
-    enqueue(registration())                                                        // registration lookup
+    registered()                                                        // registration lookup
     enqueue({ data: row({ company_id: 'company-1', status: 'routed' }), error: null }) // route update
     enqueue({ data: row({ company_id: 'company-1', status: 'converted', inbox_item_id: 'inbox-1' }), error: null })
 
@@ -283,7 +298,7 @@ describe('processInboundPeppolRow', () => {
 
   it('marks a document for an unregistered recipient as unrouted, and never delivers it', async () => {
     const deliver = vi.fn()
-    enqueue({ data: [], error: null })                                            // no registration
+    unregistered()                                            // no registration
     enqueue({ data: row({ status: 'unrouted' }), error: null })
     const result = await processInboundPeppolRow({ service, row: row(), document, deliver, log })
     expect(result.outcome).toBe('unrouted')
@@ -305,7 +320,7 @@ describe('processInboundPeppolRow', () => {
   it('carries the XML miss counter through routing and holding instead of overwriting it', async () => {
     const deliver = vi.fn().mockResolvedValue({ inboxItemId: null, xmlDocumentId: null, holdReason: PEPPOL_INBOUND_AWAITING_XML })
     const missed = row({ xml_payload: null, xml_sha256: null, last_error: xmlMissMarker(2) })
-    enqueue(registration())
+    registered()
     enqueue({ data: { ...missed, company_id: 'company-1', status: 'routed' }, error: null })
     enqueue({ data: { ...missed, company_id: 'company-1', status: 'routed' }, error: null })
     const result = await processInboundPeppolRow({ service, row: missed, document, deliver, log })
@@ -377,7 +392,7 @@ describe('syncInboundPeppolDocuments', () => {
     enqueue({ data: { received_at: '2026-08-20T10:00:00.000Z' }, error: null })   // invoice cursor
     enqueue({ data: null, error: null })                                          // no existing archive row
     enqueue({ data: row(), error: null })                                         // insert
-    enqueue(registration())                                                       // registration
+    registered()                                                       // registration
     enqueue({ data: row({ company_id: 'company-1', status: 'routed' }), error: null })
     enqueue({ data: row({ company_id: 'company-1', status: 'converted' }), error: null })
     enqueue({ data: null, error: null })                                          // credit note cursor: nothing archived
@@ -391,13 +406,14 @@ describe('syncInboundPeppolDocuments', () => {
     })
   })
 
-  it('passes the newest archived received_at per document type as the listing cursor', async () => {
+  it('passes one second before the newest archived received_at per document type as the listing cursor', async () => {
     const transport = makeTransport({ listInboundDocuments: vi.fn().mockResolvedValue([]) })
     enqueue({ data: { received_at: '2026-08-20T10:00:00.000Z' }, error: null })   // invoice cursor
     enqueue({ data: null, error: null })                                          // credit note cursor
     await syncInboundPeppolDocuments({ service, transport, deliver: null, log })
     const listCalls = (transport.listInboundDocuments as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
-    expect(listCalls[0]).toEqual({ documentType: 'Invoice', limit: 50, receivedAfter: '2026-08-20T10:00:00.000Z' })
+    // One second back: a same-second sibling listed next run is not skipped; the unique key dedupes the overlap.
+    expect(listCalls[0]).toEqual({ documentType: 'Invoice', limit: 50, receivedAfter: '2026-08-20T09:59:59.000Z' })
     expect(listCalls[1]).toEqual({ documentType: 'CreditNote', limit: 50 })
     const cursorReads = calls.filter((c) => c.table === 'peppol_inbound_documents' && c.method === 'order')
     expect(cursorReads.map((c) => c.args)).toEqual([
@@ -432,7 +448,7 @@ describe('syncInboundPeppolDocuments', () => {
     enqueue({ data: stub, error: null })                                          // stub insert
     enqueue({ data: null, error: null })                                          // newer: no existing row
     enqueue({ data: row({ id: 'doc-2', provider_document_id: 'newer' }), error: null }) // newer insert
-    enqueue({ data: [], error: null })                                            // newer: nobody registered
+    unregistered()                                            // newer: nobody registered
     enqueue({ data: row({ id: 'doc-2', provider_document_id: 'newer', status: 'unrouted' }), error: null })
     enqueue({ data: null, error: null })                                          // credit note cursor
 
@@ -463,7 +479,7 @@ describe('syncInboundPeppolDocuments', () => {
     for (const id of ['same-a', 'same-b']) {
       enqueue({ data: null, error: null })                                        // no existing row
       enqueue({ data: row({ id, provider_document_id: id }), error: null })       // insert
-      enqueue({ data: [], error: null })                                          // nobody registered
+      unregistered()                                          // nobody registered
       enqueue({ data: row({ id, provider_document_id: id, status: 'unrouted' }), error: null })
     }
     enqueue({ data: null, error: null })                                          // credit note cursor
@@ -515,7 +531,7 @@ describe('reprocessInboundPeppolDocuments', () => {
     reset()
   })
 
-  it('selects pending rows of this provider outside the backoff, terminal rows excluded, least recently processed first', async () => {
+  it('selects pending rows of this provider outside the backoff with literal filters, terminal rows excluded, least recently processed first', async () => {
     const transport = makeTransport()
     enqueue({ data: [], error: null })
     const result = await reprocessInboundPeppolDocuments({ service, transport, deliver: null, log, now })
@@ -523,11 +539,9 @@ describe('reprocessInboundPeppolDocuments', () => {
     const query = calls.filter((c) => c.table === 'peppol_inbound_documents')
     expect(query.find((c) => c.method === 'eq')?.args).toEqual(['provider', 'qvalia'])
     expect(query.find((c) => c.method === 'in')?.args).toEqual(['status', ['received', 'routed', 'unrouted', 'failed']])
-    expect(query.filter((c) => c.method === 'or').map((c) => c.args[0])).toEqual([
-      'processed_at.is.null,processed_at.lt.2026-09-10T11:30:00.000Z',
-      'last_error.is.null,last_error.not.like.terminal:*',
-    ])
-    expect(query.find((c) => c.method === 'order')?.args).toEqual(['processed_at', { ascending: true, nullsFirst: true }])
+    expect(query.find((c) => c.method === 'lt')?.args).toEqual(['processed_at', '2026-09-10T11:30:00.000Z'])
+    expect(query.filter((c) => c.method === 'or').map((c) => c.args[0])).toEqual(['last_error.is.null,last_error.not.like.terminal:*'])
+    expect(query.find((c) => c.method === 'order')?.args).toEqual(['processed_at', { ascending: true }])
     expect(query.find((c) => c.method === 'limit')?.args).toEqual([25])
   })
 
@@ -607,7 +621,7 @@ describe('reprocessInboundPeppolDocuments', () => {
     enqueue({ data: [pending], error: null })
     enqueue({ data: stamped(pending), error: null })                              // stamp
     enqueue({ data: stamped(pending), error: null })                              // attempt stamp on error
-    enqueue({ data: [], error: null })                                            // still no registration
+    unregistered()                                            // still no registration
     enqueue({ data: stamped({ ...pending, status: 'unrouted' }), error: null })   // unrouted update
 
     const result = await reprocessInboundPeppolDocuments({ service, transport, deliver: vi.fn(), log, now })
@@ -623,7 +637,7 @@ describe('reprocessInboundPeppolDocuments', () => {
     const unrouted = row({ status: 'unrouted', recipient_identifier: '5595386219', processed_at: '2026-09-01T00:00:00.000Z' })
     enqueue({ data: [unrouted], error: null })
     enqueue({ data: stamped(unrouted), error: null })                             // stamp
-    enqueue(registration('5595386219'))                                           // the company registered since
+    registered()                                           // the company registered since
     enqueue({ data: stamped({ ...unrouted, company_id: 'company-1', status: 'routed' }), error: null })
     enqueue({ data: stamped({ ...unrouted, company_id: 'company-1', status: 'converted', inbox_item_id: 'inbox-2' }), error: null })
 

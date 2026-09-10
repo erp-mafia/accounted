@@ -63,12 +63,21 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
       errors: reprocess.errors,
     })
   }
+  // One page per run for everything that needs a person, from both passes:
+  // listing-sync failures (a listing that failed, a document that stopped
+  // the type), reprocess failures, and documents that became terminal.
   const terminalDocuments = [...summary.terminalDocuments, ...reprocess.terminalDocuments]
-  if (reprocess.errors.length > 0 || terminalDocuments.length > 0) {
+  const failures = [
+    ...summary.errors.map((e) => `sync ${e.providerDocumentId}: ${e.reason}`),
+    ...reprocess.errors.map((e) => `reprocess ${e.id} (${e.providerDocumentId}): ${e.reason}`),
+  ]
+  if (failures.length > 0 || terminalDocuments.length > 0) {
     ctx.log.error('peppol inbound needs an operator', {
       alert: true,
-      errorCount: reprocess.errors.length,
-      errorIds: reprocess.errors.map((e) => e.id),
+      errorCount: failures.length,
+      syncErrorProviderDocumentIds: summary.errors.map((e) => e.providerDocumentId),
+      reprocessErrorIds: reprocess.errors.map((e) => e.id),
+      errorReasons: failures,
       terminalCount: terminalDocuments.length,
       terminalProviderDocumentIds: terminalDocuments.map((d) => d.providerDocumentId),
       terminalReasons: terminalDocuments.map((d) => `${d.providerDocumentId}: ${d.reason}`),

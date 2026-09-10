@@ -17,6 +17,7 @@ import { ISO_DATE_RE } from '@/lib/invariants'
 import { roundOre } from '@/lib/money'
 import { describeError, sha256Hex } from '@/lib/invoices/peppol-delivery'
 import { normalizePeppolIdentifier } from '@/lib/invoices/peppol-identifiers'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   parseUblJsonDocument,
   type PeppolInboundDocument,
@@ -220,14 +221,38 @@ export async function resolvePeppolRecipientCompany(args: {
 }): Promise<string | null> {
   const wanted = normalizePeppolIdentifier(args.scheme, args.identifier)
   if (!wanted) return null
-  const { data, error } = await args.service
+
+  // Registrations are written digits-only (the registration flow builds the
+  // identifier from the organisation number), so the exact match is the
+  // common path: one indexed read against the live-participant index.
+  const { data: exact, error: exactError } = await args.service
     .from('peppol_registrations')
-    .select('company_id, participant_identifier')
+    .select('company_id')
     .eq('provider', args.provider)
     .eq('participant_scheme', args.scheme)
+    .eq('participant_identifier', wanted)
     .eq('status', 'registered')
-  if (error) throw new Error(`Failed to resolve Peppol recipient: ${error.message}`)
-  const registrations = (data ?? []) as Array<{ company_id: string; participant_identifier: string }>
+    .limit(1)
+    .maybeSingle()
+  if (exactError) throw new Error(`Failed to resolve Peppol recipient: ${exactError.message}`)
+  const exactCompany = (exact as { company_id: string } | null)?.company_id
+  if (exactCompany) return exactCompany
+
+  // Fallback for a registration stored with formatting (rows written before
+  // identifiers were normalised): compare in code on the normalised form,
+  // paginated so PostgREST's silent 1000-row cap cannot hide the match.
+  const registrations = await fetchAllRows<{ id: string; company_id: string; participant_identifier: string }>(
+    ({ from, to }) =>
+      args.service
+        .from('peppol_registrations')
+        .select('id, company_id, participant_identifier')
+        .eq('provider', args.provider)
+        .eq('participant_scheme', args.scheme)
+        .eq('status', 'registered')
+        .order('id', { ascending: true })
+        .range(from, to),
+    { dedupeBy: (registration) => registration.id },
+  )
   const match = registrations.find(
     (registration) => normalizePeppolIdentifier(args.scheme, registration.participant_identifier) === wanted,
   )
@@ -391,6 +416,9 @@ export async function archiveInboundPeppolMessage(args: {
     ubl_json: message.payload,
     summary: document ? { warnings: document.warnings, lines: document.lines.length, attachments: document.attachments.length } : { unparsed: true },
     received_at: message.receivedAt ?? now.toISOString(),
+    // Archiving is the first touch: every pending row carries a processed_at
+    // from birth, so the reprocessing pass can select on a plain comparison.
+    processed_at: now.toISOString(),
     })
     .select('*')
     .single()
@@ -558,10 +586,14 @@ export async function processInboundPeppolRow(args: {
 }
 
 /**
- * The newest `received_at` archived for one provider and document type: the
- * listing cursor. Null when the archive holds nothing for the pair yet.
+ * The listing cursor: one second before the newest `received_at` archived
+ * for one provider and document type. The second is deliberate: two
+ * documents received within the same second may be listed across two runs,
+ * and a cursor equal to the newest archived timestamp would let a provider
+ * that honours it skip the sibling; the archive's unique key absorbs the
+ * one-second overlap as a duplicate. Null when the archive holds nothing.
  */
-async function newestArchivedReceivedAt(
+async function listingCursor(
   service: SupabaseClient,
   provider: string,
   documentType: PeppolInboundDocumentType,
@@ -575,7 +607,8 @@ async function newestArchivedReceivedAt(
     .limit(1)
     .maybeSingle()
   if (error) throw new Error(`Failed to read inbound Peppol cursor: ${error.message}`)
-  return (data as { received_at: string } | null)?.received_at ?? null
+  const newest = parseTimestamp((data as { received_at: string } | null)?.received_at)
+  return newest === null ? null : new Date(newest - 1000).toISOString()
 }
 
 /**
@@ -621,7 +654,7 @@ export async function syncInboundPeppolDocuments(args: {
     try {
       // The cursor lets a provider that supports it skip what we already
       // hold; the archive's unique key dedupes for one that does not.
-      const receivedAfter = await newestArchivedReceivedAt(service, transport.provider, documentType)
+      const receivedAfter = await listingCursor(service, transport.provider, documentType)
       messages = await transport.listInboundDocuments({
         documentType,
         limit: args.limit ?? 50,
@@ -710,6 +743,9 @@ export async function syncInboundPeppolDocuments(args: {
  *
  * Every candidate is stamped `processed_at = now` before anything else, so a
  * row is never examined twice within one backoff whatever happens to it.
+ * Every row has a processed_at (the archive stamps it at insert), so the
+ * backoff is a plain comparison; a row from before that stamp is healed by
+ * the listing sync while it is still listed.
  */
 export async function reprocessInboundPeppolDocuments(args: {
   service: SupabaseClient
@@ -732,9 +768,11 @@ export async function reprocessInboundPeppolDocuments(args: {
     .select('*')
     .eq('provider', transport.provider)
     .in('status', ['received', 'routed', 'unrouted', 'failed'])
-    .or(`processed_at.is.null,processed_at.lt.${cutoff}`)
-    .or(`last_error.is.null,last_error.not.like.${PEPPOL_INBOUND_TERMINAL_PREFIX}*`)
-    .order('processed_at', { ascending: true, nullsFirst: true })
+    .lt('processed_at', cutoff)
+    // Literal on purpose: the column guard (tests/schema) can only check a
+    // filter it can read, and the prefix is PEPPOL_INBOUND_TERMINAL_PREFIX.
+    .or('last_error.is.null,last_error.not.like.terminal:*')
+    .order('processed_at', { ascending: true })
     .limit(limit)
   if (error) throw new Error(`Failed to list pending inbound Peppol documents: ${error.message}`)
   const candidates = (data ?? []) as PeppolInboundRow[]
