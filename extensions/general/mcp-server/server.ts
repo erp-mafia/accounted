@@ -9012,7 +9012,7 @@ export const tools: McpTool[] = [
         counterparty_matches: { type: 'object' },
         proposals: {
           type: 'object',
-          description: 'tx_id -> proposals; pass categorize_args to gnubok_categorize_transaction.',
+          description: 'tx_id -> proposals; book with categorize_args.',
         },
         no_signal_transaction_ids: {
           type: 'array',
