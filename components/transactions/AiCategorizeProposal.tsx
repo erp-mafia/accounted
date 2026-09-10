@@ -6,6 +6,7 @@ import { Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import type { TransactionCategory, VatTreatment } from '@/types'
+import { firstSentence, type AssistantRead } from '@/lib/agent/categorize/read-shape'
 
 /**
  * The assistant's verdict inside the recommendation header of the review
@@ -80,12 +81,23 @@ interface Props {
   onUsePick?: (pick: AssistantPick) => void
   /** Surface the proposal metadata so the dialog can log a calibration sample on book. */
   onProposal?: (meta: AiProposalMeta) => void
+  /** A stored read of this row: shown at once, no fetch. */
+  initial?: AssistantRead | null
 }
 
-/** The first sentence of the model's reasoning; the rest waits behind "Mer". */
-function firstSentence(text: string): string {
-  const m = text.trim().match(/^.*?[.!?](?=\s|$)/)
-  return m ? m[0] : text.trim()
+/** A stored read in the shape the live route answers with. */
+function fromStoredRead(read: AssistantRead): ProposalDto {
+  return {
+    account: read.account,
+    category: read.category,
+    vatTreatment: read.vat_treatment,
+    reverseCharge: read.reverse_charge,
+    confidence: read.confidence,
+    fromCandidate: read.from_candidate,
+    choice: { kind: read.account ? (read.from_candidate ? 'account' : 'category') : 'needs_review' },
+    reasoning: read.reasoning,
+    candidates: read.candidates.map((c) => ({ account: c.account, label: c.label, vatTreatment: c.vatTreatment, source: c.source })),
+  }
 }
 
 export default function AiCategorizeProposal({
@@ -97,16 +109,17 @@ export default function AiCategorizeProposal({
   onApply,
   onUsePick,
   onProposal,
+  initial = null,
 }: Props) {
   const t = useTranslations('tx_quick_review')
-  const [state, setState] = useState<State>({ status: 'loading' })
+  const [state, setState] = useState<State>(() => (initial ? { status: 'ready', proposal: fromStoredRead(initial) } : { status: 'loading' }))
   const [expanded, setExpanded] = useState(false)
   // Apply the pick to the dialog exactly once per fetch, so the user's later
   // manual edits are never clobbered by a re-render.
   const appliedRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!open) return
+    if (!open || initial) return
     let alive = true
     appliedRef.current = null
     ;(async () => {
@@ -130,7 +143,7 @@ export default function AiCategorizeProposal({
     return () => {
       alive = false
     }
-  }, [open, transactionId])
+  }, [open, transactionId, initial])
 
   const reportedRef = useRef(false)
   useEffect(() => {

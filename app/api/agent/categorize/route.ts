@@ -6,9 +6,7 @@ import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getAiStatus } from '@/lib/ai'
-import { gatherCandidates } from '@/lib/agent/categorize/candidates'
-import { gatherUnderlag } from '@/lib/agent/categorize/underlag'
-import { selectAccount } from '@/lib/agent/categorize/select-account'
+import { loadReads, readIsFresh, readTransaction, storeRead, type AssistantRead } from '@/lib/agent/categorize/read'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { EntityType, Transaction } from '@/types'
 
@@ -96,36 +94,56 @@ export const POST = withRouteContext(
     ])
 
     try {
-      // Gather the matched receipt/invoice text when the caller didn't supply it:
-      // this is what lifts the cold-start case — the model reads the actual
-      // supplier + line items, not just the bank line. Best-effort; '' if none.
-      const underlag =
-        parsed.data.underlag ??
-        (await gatherUnderlag(
-          supabase,
-          companyId,
-          (tx as Transaction).id,
-          (tx as { document_id?: string | null }).document_id,
-        ))
+      const transaction = tx as Transaction
+      const entityType = ((company?.entity_type as EntityType | undefined) ?? 'enskild_firma')
+      const vatRegistered = settings?.vat_registered ?? false
 
-      const candidates = await gatherCandidates(supabase, companyId, tx as Transaction)
-      const selection = await selectAccount({
-        transaction: {
-          merchantName: (tx as Transaction).merchant_name,
-          description: (tx as Transaction).description,
-          amount: (tx as Transaction).amount,
-          date: (tx as Transaction).date,
-          currency: (tx as Transaction).currency,
-        },
-        underlag,
-        candidates,
-        entityType: ((company?.entity_type as EntityType | undefined) ?? 'enskild_firma'),
-        vatRegistered: settings?.vat_registered ?? false,
+      // The read made before anyone opened the row (the ten-minute cron, or
+      // an earlier open) answers at once while it is fresh; a caller who
+      // brings its own underlag or sample count wants a new one.
+      if (parsed.data.underlag == null && parsed.data.samples == null) {
+        const stored = await loadReads(supabase, companyId, [transaction.id]).catch(() => new Map())
+        const read = stored.get(transaction.id)
+        if (read && readIsFresh(read, transaction)) {
+          return NextResponse.json({ data: storedToSelection(read) })
+        }
+      }
+
+      const { selection, candidates, read } = await readTransaction(supabase, companyId, transaction, {
+        entityType,
+        vatRegistered,
+        underlag: parsed.data.underlag,
         samples: parsed.data.samples,
       })
+      // Keep it for the list and the next open. Best effort: a failed
+      // store never costs the caller the answer.
+      await storeRead(supabase, companyId, read).catch(() => undefined)
       return NextResponse.json({ data: { ...selection, candidates } })
     } catch (err) {
       return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
     }
   },
 )
+
+/** A stored read in the shape the live selection answers with. */
+function storedToSelection(read: AssistantRead) {
+  return {
+    account: read.account,
+    category: read.category,
+    vatTreatment: read.vat_treatment,
+    reverseCharge: read.reverse_charge,
+    confidence: read.confidence,
+    modelConfidence: read.model_confidence,
+    agreement: read.agreement,
+    reasoning: read.reasoning,
+    choice: read.account
+      ? read.from_candidate
+        ? { kind: 'candidate', account: read.account }
+        : { kind: 'category', category: read.category }
+      : { kind: 'needs_review' },
+    model: read.model,
+    fromCandidate: read.from_candidate,
+    candidates: read.candidates,
+    stored: true,
+  }
+}

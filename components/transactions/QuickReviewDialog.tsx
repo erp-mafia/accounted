@@ -39,6 +39,7 @@ import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import VatTreatmentSelect from './VatTreatmentSelect'
 import AiCategorizeProposal, { type AiProposalMeta, type AssistantPick } from './AiCategorizeProposal'
+import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { TransactionCategory, VatTreatment, EntityType, LinePatternEntry } from '@/types'
@@ -76,6 +77,8 @@ interface QuickReviewDialogProps {
   onChangeTemplate?: () => void
   /** Reopen the review on the assistant's booking (account + VAT) when the current one has a template. */
   onUseAssistantPick?: (pick: AssistantPick) => void
+  /** The assistant's stored read of this row, when one exists: the line opens with it instead of fetching. */
+  assistantRead?: AssistantRead | null
   /**
    * Shell v2 with a template already chosen: the list proposed it, so a
    * second "assistenten föreslår" line here read as a contradiction.
@@ -109,6 +112,7 @@ export default function QuickReviewDialog({
   onConfirm,
   onChangeTemplate,
   onUseAssistantPick,
+  assistantRead = null,
   recommendation = null,
   onEditLines,
 }: QuickReviewDialogProps) {
@@ -658,6 +662,7 @@ export default function QuickReviewDialog({
               transactionId={tx.id}
               open={open}
               hasUnderlag={!!documentId}
+              initial={assistantRead && readIsFresh(assistantRead, tx) ? assistantRead : null}
               currentAccount={entityAccounts.debitAccount && entityAccounts.creditAccount ? (entityAccounts.debitAccount.startsWith('19') ? entityAccounts.creditAccount : entityAccounts.debitAccount) : accountOverride || null}
               autoApply={!isTemplateBooking}
               // A template books its own lines, so an account the assistant

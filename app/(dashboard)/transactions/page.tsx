@@ -99,6 +99,8 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import type { AssistantRead } from '@/lib/agent/categorize/read-shape'
+import { booksWithoutReview } from '@/lib/transactions/direct-booking'
 import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -477,6 +479,8 @@ export default function TransactionsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
+  // The assistant's stored reads for the loaded rows: the review opens with one instead of fetching it.
+  const [assistantReads, setAssistantReads] = useState<Record<string, AssistantRead>>({})
   const [processingId, setProcessingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -748,7 +752,7 @@ export default function TransactionsPage() {
     const s = templateSuggestions[tx.id]?.[0]
     if (!s) return null
     const account = s.debit_account.startsWith('19') ? s.credit_account : s.debit_account
-    const hue = s.group === 'counterparty' ? accountHue(account) : templateGroupHue(s.group as TemplateGroup)
+    const hue = s.group === 'counterparty' || s.group === 'assistant' ? accountHue(account) : templateGroupHue(s.group as TemplateGroup)
     return { label: s.name_sv, hue, confidence: s.confidence, source: s.source, seenCount: s.seen_count }
   }
   const categoryLabelFor = (tx: TransactionWithInvoice): string | null => {
@@ -1537,6 +1541,7 @@ export default function TransactionsPage() {
       if (data.template_suggestions) {
         setTemplateSuggestions(data.template_suggestions)
       }
+      if (data.assistant_reads) setAssistantReads(data.assistant_reads)
     } catch {
       // Non-critical
     }
@@ -1745,8 +1750,10 @@ export default function TransactionsPage() {
     // but leave the narration to the caller's single aggregate toast instead
     // of stacking one toast per row.
     silent?: boolean
+    /** What was booked and why, for a booking that skipped the review. */
+    narration?: string
   }) {
-    const { id, isBusiness, category, journalEntryId, journalEntryCreated, journalEntryError, silent } = args
+    const { id, isBusiness, category, journalEntryId, journalEntryCreated, journalEntryError, silent, narration } = args
     // A completed Ångra must win over the delayed patch below. The undo has
     // already storno-reversed the verifikat server-side, so re-applying the
     // booked shape afterwards would show a journal_entry_id that no longer
@@ -1764,6 +1771,7 @@ export default function TransactionsPage() {
     } else if (journalEntryCreated) {
       toast({
         title: 'Bokförd',
+        description: narration,
         action: (
           <ToastAction altText="Ångra kategorisering" onClick={async () => {
             try {
@@ -1858,13 +1866,15 @@ export default function TransactionsPage() {
     // duplicate warning, activate-account) keep their dialogs/actions: they
     // are the only way forward for those rows.
     silent?: boolean
+    /** What was booked and why, shown on the Bokförd toast of a booking that skipped the review. */
+    narration?: string
     // ok distinguishes "the server accepted the categorization" from "nothing
     // happened". A 2xx with a null journal_entry_id is a real success (e.g. an
     // already-categorized flag flip), so the id alone cannot carry that signal:
     // the batch aggregate would count the row as failed after finishBooking
     // already animated it out of the inbox.
   }): Promise<{ ok: boolean; journalEntryId: string | null }> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent } = args
+    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -2114,6 +2124,7 @@ export default function TransactionsPage() {
         journalEntryCreated: result.journal_entry_created,
         journalEntryError: result.journal_entry_error,
         silent,
+        narration,
       })
 
       return { ok: true, journalEntryId: result.journal_entry_id || null }
@@ -3868,11 +3879,75 @@ export default function TransactionsPage() {
   function bookProposal(transaction: TransactionWithInvoice) {
     const s = templateSuggestions[transaction.id]?.[0]
     if (!s) return openCategoryDialog(transaction)
+    // A decision the company already made (a rule, a settled counterpart, a
+    // sure read of a receipt) books from the row; Ångra sits on the toast.
+    if (booksWithoutReview(s)) return void bookDirect(transaction, s)
+    if (s.source === 'assistant') return openAssistantReview(transaction, s)
     if (isCounterpartyTemplateId(s.template_id)) return handleOpenTemplateReview(transaction, s.template_id)
     const template = getTemplateById(s.template_id)
     if (!template) return openCategoryDialog(transaction)
     pendingRecommendation.current = { source: s.source, seenCount: s.seen_count, confidence: s.confidence }
     handleTemplateSelected(template, transaction)
+  }
+
+  function directNarration(s: SuggestedTemplate): string {
+    if (s.source === 'rule') return t('direct_why_rule', { name: s.name_sv })
+    if (s.source === 'counterparty') return t('direct_why_counterparty', { name: s.name_sv, count: s.seen_count ?? 0 })
+    return t('direct_why_assistant', { name: s.name_sv })
+  }
+
+  async function bookDirect(transaction: TransactionWithInvoice, s: SuggestedTemplate) {
+    const narration = directNarration(s)
+    if (s.source === 'counterparty') {
+      await bookWithCounterpartyTemplate(transaction.id, extractCounterpartyId(s.template_id), s.default_dimensions ?? undefined, narration)
+      return
+    }
+    if (s.source === 'assistant') {
+      const account = transaction.amount < 0 ? s.debit_account : s.credit_account
+      await runCategorize({
+        id: transaction.id,
+        isBusiness: true,
+        category: s.category ?? 'expense_other',
+        vatTreatment: s.vat_treatment ?? undefined,
+        accountOverride: account,
+        confirmNoMatch: false,
+        narration,
+      })
+      return
+    }
+    const template = getTemplateById(s.template_id)
+    // A library template books through the review (its accounts drive an
+    // override the dialog seeds); only the catalog's own templates go direct.
+    if (!template || isLibraryTemplateId(template.id)) {
+      if (!template) return openCategoryDialog(transaction)
+      pendingRecommendation.current = { source: s.source, seenCount: s.seen_count, confidence: s.confidence }
+      return handleTemplateSelected(template, transaction)
+    }
+    await runCategorize({
+      id: transaction.id,
+      isBusiness: true,
+      category: template.fallback_category,
+      templateId: template.id,
+      confirmNoMatch: false,
+      narration,
+    })
+  }
+
+  // The assistant's read as the review: a category booking seeded with its
+  // account and VAT, the header saying whose pick it is.
+  function openAssistantReview(transaction: TransactionWithInvoice, s: SuggestedTemplate) {
+    const account = transaction.amount < 0 ? s.debit_account : s.credit_account
+    setQuickReview({
+      transaction,
+      category: s.category ?? 'expense_other',
+      label: s.name_sv,
+      template: null,
+      templateId: undefined,
+      linePattern: null,
+      recommendation: { source: 'assistant', confidence: s.confidence },
+      defaults: { account, vat: s.vat_treatment ?? 'none' },
+    })
+    setQuickReviewOpen(true)
   }
 
   function handleOpenTemplateReview(transaction: TransactionWithInvoice, templateId: string) {
@@ -4004,18 +4079,16 @@ export default function TransactionsPage() {
     setBookingDialogOpen(true)
   }
 
-  async function handleQuickReviewConfirm(
+  // Book through a learned counterparty template: the same call the review
+  // makes, shared with the row's direct booking. Returns the verifikat id,
+  // or null when the server refused (the toast or the duplicate dialog
+  // carries the way forward).
+  async function bookWithCounterpartyTemplate(
     id: string,
-    category: TransactionCategory,
-    vatTreatment: VatTreatment | undefined,
-    accountOverride: string | undefined,
-    templateId?: string,
+    cpTemplateId: string,
     dimensions?: Record<string, string>,
-    vatAmount?: number
+    narration?: string,
   ): Promise<string | null> {
-    let journalEntryId: string | null
-    if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
-      const cpTemplateId = extractCounterpartyId(quickReview.template.id)
       const cpCategorize = async (
         // Set after the user confirmed the duplicate warning: force is bound
         // to the reviewed candidate's voucher, same contract as runCategorize.
@@ -4146,8 +4219,23 @@ export default function TransactionsPage() {
         journalEntryId: cpJeId,
         journalEntryCreated: result?.journal_entry_created,
         journalEntryError: result?.journal_entry_error,
+        narration,
       })
-      journalEntryId = cpJeId
+      return cpJeId
+  }
+
+  async function handleQuickReviewConfirm(
+    id: string,
+    category: TransactionCategory,
+    vatTreatment: VatTreatment | undefined,
+    accountOverride: string | undefined,
+    templateId?: string,
+    dimensions?: Record<string, string>,
+    vatAmount?: number
+  ): Promise<string | null> {
+    let journalEntryId: string | null
+    if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
+      journalEntryId = await bookWithCounterpartyTemplate(id, extractCounterpartyId(quickReview.template.id), dimensions)
     } else {
       journalEntryId = await handleCategorize(id, true, category, vatTreatment, accountOverride, templateId, undefined, dimensions, vatAmount)
     }
@@ -4857,6 +4945,7 @@ export default function TransactionsPage() {
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
           onUseAssistantPick={handleUseAssistantPick}
+          assistantRead={quickReview ? (assistantReads[quickReview.transaction.id] ?? null) : null}
           onEditLines={handleEditProposedLines}
         />
       )}
