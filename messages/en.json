@@ -6101,6 +6101,10 @@
     "banner_affected": "Your access to {companyName} will be paused in {days, plural, =1 {1 day} other {# days}} unless the company upgrades.",
     "banner_cta": "Upgrade"
   },
+  "system_notice": {
+    "high_load": "The system is under high load right now. Some pages may respond slowly or fail temporarily. We are on it.",
+    "dismiss": "Close"
+  },
   "paused": {
     "title": "Your account is paused",
     "body_single": "Your account is paused in {companyName}. Only one person can work in the company without a paid plan.",

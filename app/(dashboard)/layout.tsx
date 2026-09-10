@@ -11,6 +11,8 @@ import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
+import { SystemNoticeBanner } from '@/components/dashboard/SystemNoticeBanner'
+import { parseSystemNoticeUntil } from '@/components/dashboard/system-notice'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
 import MultiUserGraceBanner from '@/components/billing/MultiUserGraceBanner'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
@@ -422,6 +424,10 @@ export default async function DashboardLayout({
 
   const isSandbox = settings?.is_sandbox === true
 
+  // Operator-set system notice (NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL): null when
+  // unset or expired, so the banner is not even rendered outside its window.
+  const systemNoticeUntil = parseSystemNoticeUntil(process.env.NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL)
+
   // Multi-user seat gate, switcher side: which of the user's OTHER companies
   // are frozen for them (non-owner membership, multi_user lapsed past grace).
   // Zero queries for the common owner-of-everything user; the grants read
@@ -584,6 +590,7 @@ export default async function DashboardLayout({
             Hoppa till innehåll
           </a>
           {isSandbox && <SandboxBanner />}
+          {systemNoticeUntil !== null && <SystemNoticeBanner until={systemNoticeUntil} />}
           {graceBanner && (
             <MultiUserGraceBanner
               graceEndsAt={graceBanner.graceEndsAt}

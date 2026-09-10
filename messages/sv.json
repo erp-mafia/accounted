@@ -6101,6 +6101,10 @@
     "banner_affected": "Din åtkomst till {companyName} pausas om {days, plural, =1 {1 dag} other {# dagar}} om företaget inte uppgraderar.",
     "banner_cta": "Uppgradera"
   },
+  "system_notice": {
+    "high_load": "Just nu är det hög belastning i systemet. Vissa sidor kan svara långsamt eller tillfälligt ge fel. Vi jobbar på det.",
+    "dismiss": "Stäng"
+  },
   "paused": {
     "title": "Ditt konto är pausat",
     "body_single": "Ditt konto är pausat i {companyName}. Endast en person kan arbeta i företaget utan betald plan.",
