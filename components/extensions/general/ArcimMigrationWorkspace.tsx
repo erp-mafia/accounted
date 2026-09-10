@@ -14,6 +14,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { AttnLine } from '@/components/ui/attn-line'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
 import Link from 'next/link'
 import { getBranding } from '@/lib/branding/service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -1389,12 +1390,10 @@ function OptionsStep({
         }}
         isSubmitting={false}
         title="Starta migrering"
-        warningText="Se till att ingen annan import pågår."
         confirmLabel="Starta migrering"
       >
         {/* One sentence naming what happens, the selection as a compact muted
-            line list; the ochre caution above the actions is the dialog's
-            only colored element. */}
+            line list, no caution: nothing here needs one. */}
         <div className="space-y-4">
           <div className="space-y-2">
             <p className="text-sm">
@@ -1490,18 +1489,20 @@ function formatFiscalYearLabel(start: string, end: string): string {
   return startYear === endYear ? startYear : `${startYear}/${endYear}`
 }
 
-/** Determine the overall status icon and color for a single FY import */
-function getFYStatus(r: ImportResult): { icon: 'success' | 'warning' | 'error'; label: string } {
+/**
+ * Per-year status. "Importerad" is the resting state: warnings alone never
+ * change it (they were never year-status, and painting them ochre made
+ * users read a correct import as broken). "Delvis importerad" only when
+ * vouchers were actually lost; "Misslyckades" when nothing landed.
+ */
+function getFYStatus(r: ImportResult): { tone: 'success' | 'warning' | 'error'; label: string } {
   if (r.errors.length > 0 && r.journalEntriesCreated === 0) {
-    return { icon: 'error', label: 'Misslyckades' }
+    return { tone: 'error', label: 'Misslyckades' }
   }
   if (r.errors.length > 0 || (r.details?.skippedVouchers && r.details.skippedVouchers.total > 0)) {
-    return { icon: 'warning', label: 'Delvis importerad' }
+    return { tone: 'warning', label: 'Delvis importerad' }
   }
-  if (r.details?.untransferredResults && r.details.untransferredResults.length > 0) {
-    return { icon: 'warning', label: 'Importerad med varning' }
-  }
-  return { icon: 'success', label: 'Importerad' }
+  return { tone: 'success', label: 'Importerad' }
 }
 
 /** Compose the opening-balance adjustment into one quiet sentence. */
@@ -1520,20 +1521,96 @@ function openingBalanceSentence(ob: NonNullable<NonNullable<ImportResult['detail
 }
 
 /**
- * Per-fiscal-year outcome as a line: year, count, status. Warnings are one
- * ochre sentence each (AttnLine), neutral adjustments are quiet muted lines,
- * errors keep strong color. Nothing folds away, nothing gets a box.
+ * What the import did that is worth knowing but needs no action: shown
+ * behind a small info icon next to the status label, never as lines.
+ */
+function fiscalYearInfoLines(result: ImportResult): string[] {
+  const d = result.details
+  const lines: string[] = []
+  if (result.accountsCreated && result.accountsCreated > 0) {
+    lines.push(
+      result.accountsCreated === 1
+        ? '1 nytt konto lades till i kontoplanen med namn från källsystemet.'
+        : `${result.accountsCreated} nya konton lades till i kontoplanen med namn från källsystemet.`
+    )
+  }
+  if (result.accountsRenamed && result.accountsRenamed > 0) {
+    lines.push(
+      result.accountsRenamed === 1
+        ? '1 konto fick sitt namn från källsystemet.'
+        : `${result.accountsRenamed} konton fick sina namn från källsystemet.`
+    )
+  }
+  if (d?.openingBalanceSkipped === 'prior_activity') {
+    lines.push(
+      'Ingående balanser härleddes från föregående års utgående balans, eftersom bolaget redan hade bokförda verifikationer.'
+    )
+  }
+  if (d?.openingBalance) lines.push(openingBalanceSentence(d.openingBalance))
+  if (d?.migrationAdjustment?.created) {
+    lines.push(
+      `Omföringsverifikation skapad: ${d.migrationAdjustment.accountsAdjusted} konton justerade så att balansräkning och resultaträkning matchar källsystemet.`
+    )
+  }
+  if (d && d.retriedBatches > 0 && d.failedBatches === 0) {
+    lines.push(`${d.retriedBatches} ${d.retriedBatches === 1 ? 'batch' : 'batcher'} behövde omförsök.`)
+  }
+  return lines
+}
+
+/**
+ * Raw warnings whose fact is already carried by `details` (and rendered
+ * from there, or hoisted to the section-level line): dropped here so nothing
+ * is said twice. The substring matches mirror the strings sie-import.ts
+ * pushes; phase 2 (#2461) replaces them with codes.
+ */
+function remainingWarnings(result: ImportResult): string[] {
+  const d = result.details
+  return result.warnings.filter((w) => {
+    if (d?.skippedVouchers && d.skippedVouchers.total > 0 && w.includes('hoppades över')) return false
+    if (d?.untransferredResults && d.untransferredResults.length > 0 && w.includes('förts om till eget kapital')) return false
+    if (d?.migrationAdjustment?.created && w.startsWith('Migreringsjustering skapad')) return false
+    if (d?.openingBalance && w.includes('konto 2099')) return false
+    return true
+  })
+}
+
+/**
+ * One culprit, one sentence: the untransferred-result check is company
+ * scoped, so the same year would otherwise be named under every later year
+ * of a multi-year migration (#2462).
+ */
+function untransferredResultSentences(results: ImportResult[]): string[] {
+  const seen = new Map<string, string>()
+  for (const r of results) {
+    for (const u of r.details?.untransferredResults ?? []) {
+      if (seen.has(u.fiscal_period_id)) continue
+      seen.set(
+        u.fiscal_period_id,
+        `${u.period_name}: årets resultat på ${u.pl_net.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK är inte omfört till eget kapital, senare års balansräkning visar en differens tills omföringen bokförs (konto 8999 mot t.ex. 2099).`
+      )
+    }
+  }
+  return [...seen.values()]
+}
+
+/**
+ * Per-fiscal-year outcome as a line: year, count, status. At most one ochre
+ * sentence per year (vouchers that were lost); errors keep strong color;
+ * everything else sits behind a muted "N anmärkningar" expander, and what
+ * the import did (renames, new accounts, derived IB, adjustments) behind
+ * the info icon next to the status. Nothing gets a box.
  */
 function FiscalYearLine({ result, index }: { result: ImportResult; index: number }) {
-  const t = useTranslations('extensions')
+  const [showRemarks, setShowRemarks] = useState(false)
   const status = getFYStatus(result)
   const d = result.details
   const fyLabel = d?.fiscalYear
     ? formatFiscalYearLabel(d.fiscalYear.start, d.fiscalYear.end)
     : `Räkenskapsår ${index + 1}`
 
-  // One ochre sentence per warning (the #1562 idiom).
-  const warningSentences: string[] = []
+  // The one ochre sentence: vouchers the import could not carry over.
+  let skippedSentence: string | null = null
   if (d?.skippedVouchers && d.skippedVouchers.total > 0) {
     const parts: string[] = []
     if (d.skippedVouchers.empty > 0) parts.push(`${d.skippedVouchers.empty} tomma`)
@@ -1549,43 +1626,11 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
         `${d.skippedVouchers.unmapped} med ej kopplade konton${perAccount ? ` (${perAccount})` : ''}`
       )
     }
-    warningSentences.push(
-      `${d.skippedVouchers.total} verifikationer hoppades över (${parts.join(', ')}): saldon har justerats automatiskt via omföringsverifikation.`
-    )
+    skippedSentence = `${d.skippedVouchers.total} verifikationer hoppades över (${parts.join(', ')}): saldon har justerats automatiskt via omföringsverifikation.`
   }
-  if (d?.untransferredResults && d.untransferredResults.length > 0) {
-    for (const u of d.untransferredResults) {
-      warningSentences.push(
-        `${u.period_name}: årets resultat på ${u.pl_net.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK är inte omfört till eget kapital, senare års balansräkning visar en differens tills omföringen bokförs (konto 8999 mot t.ex. 2099).`
-      )
-    }
-  }
-  // Remaining raw warnings; strings covered by the sentences above are
-  // filtered out.
-  warningSentences.push(
-    ...result.warnings.filter(
-      (w) =>
-        !(d?.skippedVouchers && d.skippedVouchers.total > 0 && w.includes('hoppades över')) &&
-        !(d?.untransferredResults && d.untransferredResults.length > 0 && w.includes('förts om till eget kapital'))
-    )
-  )
 
-  const infoLines: string[] = []
-  // Accounts the import inserted into the chart (self-mapped source accounts
-  // the company did not have). Said out loud so "did the import go right?"
-  // has an answer on screen instead of in a chart-of-accounts diff.
-  if (result.accountsCreated && result.accountsCreated > 0) {
-    infoLines.push(t('ext_arcim_accounts_created', { count: result.accountsCreated }))
-  }
-  if (d?.openingBalance) infoLines.push(openingBalanceSentence(d.openingBalance))
-  if (d?.migrationAdjustment?.created) {
-    infoLines.push(
-      `Omföringsverifikation skapad: ${d.migrationAdjustment.accountsAdjusted} konton justerade så att balansräkning och resultaträkning matchar källsystemet.`
-    )
-  }
-  if (d && d.retriedBatches > 0 && d.failedBatches === 0) {
-    infoLines.push(`${d.retriedBatches} ${d.retriedBatches === 1 ? 'batch' : 'batcher'} behövde omförsök.`)
-  }
+  const remarks = remainingWarnings(result)
+  const infoLines = fiscalYearInfoLines(result)
 
   return (
     <div className="py-3">
@@ -1597,17 +1642,41 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
             <> · ersatte {result.replacedPriorImport.deletedEntries.toLocaleString('sv-SE')} tidigare importerade</>
           )}
         </span>
-        <span
-          className={cn(
-            'ml-auto text-xs',
-            status.icon === 'error'
-              ? 'font-medium text-destructive'
-              : status.icon === 'warning'
-                ? 'text-attn'
-                : 'text-muted-foreground'
+        <span className="ml-auto inline-flex items-center gap-2 text-xs">
+          {remarks.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowRemarks((v) => !v)}
+              aria-expanded={showRemarks}
+              className="text-muted-foreground underline-offset-2 hover:underline"
+            >
+              {remarks.length === 1 ? '1 anmärkning' : `${remarks.length} anmärkningar`}
+            </button>
           )}
-        >
-          {status.label}
+          <span
+            className={cn(
+              status.tone === 'error'
+                ? 'font-medium text-destructive'
+                : status.tone === 'warning'
+                  ? 'text-attn'
+                  : 'text-muted-foreground'
+            )}
+          >
+            {status.label}
+          </span>
+          {infoLines.length > 0 && (
+            <InfoTooltip
+              side="left"
+              maxWidth="360px"
+              content={
+                <ul className="space-y-1 text-left">
+                  {infoLines.map((l, i) => (
+                    <li key={i}>{l}</li>
+                  ))}
+                </ul>
+              }
+            />
+          )}
         </span>
       </div>
       {result.errors.length > 0 && (
@@ -1617,12 +1686,14 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
           ))}
         </div>
       )}
-      {warningSentences.map((w, i) => (
-        <AttnLine key={i} className="mt-1">{w}</AttnLine>
-      ))}
-      {infoLines.map((l, i) => (
-        <p key={i} className="mt-1 text-[12.5px] leading-5 text-muted-foreground">{l}</p>
-      ))}
+      {skippedSentence && <AttnLine className="mt-1">{skippedSentence}</AttnLine>}
+      {showRemarks && remarks.length > 0 && (
+        <ul className="mt-1 space-y-1">
+          {remarks.map((w, i) => (
+            <li key={i} className="text-[12.5px] leading-5 text-muted-foreground">{w}</li>
+          ))}
+        </ul>
+      )}
       {d && d.failedBatches > 0 && (
         <p className="mt-1 text-[12.5px] leading-5 text-destructive">
           {d.retriedBatches} {d.retriedBatches === 1 ? 'batch' : 'batcher'} behövde omförsök, {d.failedBatches} misslyckades trots omförsök.
@@ -2144,6 +2215,11 @@ function ResultStep({
               <FiscalYearLine key={i} result={r} index={i} />
             ))}
           </div>
+          {/* Company-level fact, said once: a prior year whose result was
+              never transferred to equity skews every later opening balance. */}
+          {untransferredResultSentences(sieResults).map((sentence, i) => (
+            <AttnLine key={i}>{sentence}</AttnLine>
+          ))}
         </section>
       )}
 

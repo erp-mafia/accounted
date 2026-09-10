@@ -251,7 +251,10 @@ describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
 
     expect(createJournalEntry).not.toHaveBeenCalled()
     expect(result.openingBalanceEntryId).toBeNull()
-    expect(result.warnings.join(' ')).toMatch(/hoppades över eftersom bolaget redan har bokförda verifikationer/)
+    // The skip is the correct outcome for every year after the first, so it
+    // is recorded as info in details, not pushed as a warning (#2462).
+    expect(result.details?.openingBalanceSkipped).toBe('prior_activity')
+    expect(result.warnings.join(' ')).not.toMatch(/hoppades över eftersom bolaget/)
     // Zero entries from a file with no vouchers is a deliberate no-op (the
     // continuation guard skipped the IB), not a failure: the finalizer
     // downgrade only fires when the file contained vouchers that could not
@@ -543,6 +546,13 @@ describe('executeSIEImport — untransferred prior-year results', () => {
       /Resultatet för Räkenskapsår 2024\/2025 .* har inte förts om till eget kapital/
     )
     expect(result.details?.untransferredResults).toEqual([culprit])
+    // Scoped to periods before the imported year: an unscoped walk named
+    // the same culprit under every later year of a multi-year run (#2462).
+    expect(findUntransferredResults).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      { beforePeriodStart: '2024-01-01' }
+    )
   })
 
   it('adds nothing when every prior year transferred its result', async () => {

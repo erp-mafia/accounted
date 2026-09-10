@@ -5566,6 +5566,11 @@ async function commitImportSie(
         fiscal_period_id: result.fiscalPeriodId,
         opening_balance_entry_id: result.openingBalanceEntryId,
         journal_entries_created: result.journalEntriesCreated,
+        accounts_created: result.accountsCreated ?? 0,
+        // Informational facts that used to travel as warnings (#2462): the
+        // agent still needs them to explain a null opening_balance_entry_id.
+        accounts_renamed: result.accountsRenamed ?? 0,
+        opening_balance_skipped: result.details?.openingBalanceSkipped ?? null,
         warnings: result.warnings,
       },
     }
