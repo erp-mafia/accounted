@@ -2111,7 +2111,6 @@
     "unlock_webshop_gloss": "orders pulled from WooCommerce and Shopify",
     "unlock_users": "More users",
     "unlock_users_gloss": "invite colleagues, everyone can work in the company",
-    "terms_deferred": "First charge {date}. Cancel any time. Payment via Stripe.",
     "terms_now": "No lock-in, cancel any time. Payment via Stripe.",
     "unlock_help": "The subscription is the external connections: the assistant, your bank, Skatteverket, email, Stripe and the webshops. Without it, bookkeeping, invoicing, reports and SIE export keep working as usual and everything stays: accounting records are kept for seven years under the Swedish Bookkeeping Act regardless of subscription. Start again later and the connections pick up where they left off.",
     "without_note": "Without a subscription only the external connections pause. Everything else stays.",
