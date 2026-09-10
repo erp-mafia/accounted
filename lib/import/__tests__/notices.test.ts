@@ -64,6 +64,10 @@ describe('import notices', () => {
     expect(legacy).toEqual([
       { code: 'legacy', severity: 'notice', params: { text: '369 konton bytte namn' } },
     ])
+
+    // A producer that emits notices decides what is shown: a string it
+    // left unwrapped (rendered by a dedicated card) must not resurface.
+    expect(resolveNotices({ notices: [], warnings: ['Resultatet har inte förts om'] })).toEqual([])
   })
 
   it('excludes codes a dedicated card already renders, by code and never by text', () => {

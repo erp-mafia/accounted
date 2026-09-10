@@ -9068,6 +9068,7 @@
     "legacy": "{text}",
     "parse_issue_row": "Row {row}: {message}",
     "parse_issue": "{message}",
+    "sie_no_vouchers": "The file contained no vouchers: the fiscal year is created and ready for bookkeeping.",
     "sie_prior_import_gone": "A previous import could not be replaced ({reason}): the file was imported as a new import.",
     "sie_ib_series_collision": "The opening balances take the next number in series {series}, so the file's vouchers in that series may be shifted by one compared to the source system.",
     "sie_ib_exists_skipped": "Opening balances already existed for the fiscal year and were not imported again.",

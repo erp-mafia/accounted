@@ -9068,6 +9068,7 @@
     "legacy": "{text}",
     "parse_issue_row": "Rad {row}: {message}",
     "parse_issue": "{message}",
+    "sie_no_vouchers": "Filen innehöll inga verifikationer: räkenskapsåret är skapat och redo att bokföras i.",
     "sie_prior_import_gone": "En tidigare import kunde inte ersättas ({reason}): filen importerades som en ny import.",
     "sie_ib_series_collision": "Ingående balanser tar nästa nummer i serie {series}, så filens verifikationer i den serien kan ha förskjutits ett nummer jämfört med källsystemet.",
     "sie_ib_exists_skipped": "Ingående balanser fanns redan för räkenskapsåret och importerades inte igen.",

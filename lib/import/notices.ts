@@ -106,16 +106,18 @@ export function noticesFromParseIssues(issues: readonly ParseIssueLike[] | undef
 }
 
 /**
- * Notices for the UI: the structured list when the producer emitted one,
- * otherwise the legacy strings wrapped. `exclude` drops codes whose fact
- * a dedicated card already renders (skipped vouchers, untransferred
- * results), so the same thing is never on screen twice.
+ * Notices for the UI: the structured list whenever the producer carries
+ * one (an empty list is an answer: a producer that emits notices wrapped
+ * every string it wanted shown), otherwise the legacy strings wrapped.
+ * `exclude` drops codes whose fact a dedicated card already renders
+ * (skipped vouchers, IB resync), so the same thing is never on screen
+ * twice.
  */
 export function resolveNotices(
   source: { notices?: ImportNotice[] | null; warnings?: string[] | null },
   exclude: readonly string[] = []
 ): ImportNotice[] {
-  const list = source.notices && source.notices.length > 0
+  const list = Array.isArray(source.notices)
     ? source.notices
     : legacyNotices(source.warnings ?? undefined)
   if (exclude.length === 0) return sortNotices(list)

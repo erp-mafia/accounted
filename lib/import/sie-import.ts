@@ -2075,6 +2075,7 @@ export async function finalizeImportRecord(
       'SIE-filen innehåller inga verifikationer för räkenskapsåret: inget ' +
       'att importera. Räkenskapsåret är skapat och redo att bokföras i.',
     )
+    result.notices?.push(makeNotice('sie_no_vouchers', 'info'))
   } else if (noEntriesCreated) {
     result.success = false
     if (result.errors.length === 0) {
