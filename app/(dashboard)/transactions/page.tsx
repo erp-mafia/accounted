@@ -46,7 +46,7 @@ import { mapWithConcurrency } from '@/lib/concurrency'
 
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
-import { accountProposal, categorizeBodyFor, proposalFromTemplate, proposalHue, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { categorizeBodyFor, proposalFromTemplate, proposalHue, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { useProposalWhy } from '@/components/transactions/proposal-why'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type {
@@ -98,7 +98,6 @@ import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, Su
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import type { AssistantRead } from '@/lib/agent/categorize/read-shape'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
-import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -136,7 +135,6 @@ const TransactionAttachDocumentDialog = dynamic(
   { loading: DialogLoadingSkeleton },
 )
 const QuickReviewDialog = dynamic(() => import('@/components/transactions/QuickReviewDialog'), { loading: DialogLoadingSkeleton })
-import type { AssistantPick } from '@/components/transactions/AiCategorizeProposal'
 const EditTransactionTitleDialog = dynamic(
   () => import('@/components/transactions/EditTransactionTitleDialog'),
   { loading: DialogLoadingSkeleton },
@@ -3929,29 +3927,6 @@ export default function TransactionsPage() {
     }
   }
 
-  // The assistant's pick, taken with one click from a review that books
-  // through a template: the same review reopens on the assistant's account
-  // and VAT, so the verifikat shows exactly what it proposed (reverse charge
-  // included) before anything is posted.
-  function handleUseAssistantPick(pick: AssistantPick) {
-    if (!quickReview) return
-    const tx = quickReview.transaction
-    openReview(
-      tx,
-      accountProposal({
-        id: `assistant:${tx.id}`,
-        source: 'assistant',
-        account: pick.account,
-        label: pick.label || getAccountName(pick.account),
-        category: pick.category ?? (tx.amount < 0 ? 'expense_other' : 'income_other'),
-        vat_treatment: pick.vat === 'none' ? null : pick.vat,
-        amount: tx.amount,
-        has_underlag: !!tx.document_id,
-      }),
-      false,
-    )
-  }
-
   function handleManualBooking() {
     setTemplatePickerOpen(false)
     if (templatePickerTransaction) {
@@ -4706,7 +4681,6 @@ export default function TransactionsPage() {
           entityType={entityType as EntityType}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
-          onUseAssistantPick={handleUseAssistantPick}
           assistantRead={quickReview ? (assistantReads[quickReview.transaction.id] ?? null) : null}
           onEditLines={handleEditProposedLines}
         />

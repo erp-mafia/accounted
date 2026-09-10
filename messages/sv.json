@@ -3092,6 +3092,8 @@
     "adjustment": "Justering"
   },
   "tx_quick_review": {
+    "changed_from": "Bytt från {label}. Kontrollera konto och moms nedan.",
+    "changed_undo": "Ångra",
     "vat_doc_booked": "bokförs",
     "vat_proposal_booked": "förslaget bokför {amount}",
     "vat_use_proposal": "Använd förslagets {amount}",

@@ -6,9 +6,12 @@ import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { computeProposalLines } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLinesInput } from '@/lib/bookkeeping/proposal-lines'
 
-export type JournalEntryPreviewProps = ProposalLinesInput
+export type JournalEntryPreviewProps = ProposalLinesInput & {
+  /** Accounts that were not in the previous proposal: their lines are marked so a change is seen, not inferred. */
+  changedAccounts?: string[]
+}
 
-export default function JournalEntryPreview(props: JournalEntryPreviewProps) {
+export default function JournalEntryPreview({ changedAccounts, ...props }: JournalEntryPreviewProps) {
   const {
     amount,
     amountSek,
@@ -61,7 +64,12 @@ export default function JournalEntryPreview(props: JournalEntryPreviewProps) {
             <span className={`w-12 text-right flex-shrink-0 ${line.side === 'debet' ? 'text-foreground' : 'text-muted-foreground'}`}>
               {line.side === 'debet' ? 'Debet' : 'Kredit'}
             </span>
-            <span className="flex-1 truncate">{formatAccountWithName(line.account)}</span>
+            <span className={`flex-1 truncate ${changedAccounts?.includes(line.account) ? 'font-semibold text-foreground' : ''}`}>
+              {formatAccountWithName(line.account)}
+              {changedAccounts?.includes(line.account) && (
+                <span className="ml-1.5 rounded-sm bg-attn/15 px-1 font-sans text-[10px] font-medium uppercase tracking-wide text-attn">ny</span>
+              )}
+            </span>
             <span className="flex-shrink-0 tabular-nums">{formatCurrency(line.amount, 'SEK')}</span>
           </div>
         ))}
