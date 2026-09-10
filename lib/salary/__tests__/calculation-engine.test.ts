@@ -9,6 +9,7 @@ import {
 } from '../calculation-engine'
 import { calculateVacationPay } from '../absence-calculator'
 import { recurringLineFlags } from '../recurring-lines'
+import { roundOre } from '@/lib/money'
 import type { PayrollConfig } from '../payroll-config'
 import type { TaxTableRate } from '../tax-tables'
 
@@ -642,6 +643,86 @@ function lineItem(overrides: Partial<LineItem> & { itemType: string; amount: num
     ...overrides,
   }
 }
+
+describe('kollektivavtal semesterlön rate (vacationPayRate, #2477)', () => {
+  const base = {
+    monthlySalary: 40000,
+    employmentDegree: 100,
+    vacationDaysPerYear: 25,
+    semestertillaggRate: 0.0043,
+    lineItems: [baseLineItem(40000)],
+  }
+
+  it('procentregeln accrues at 13.5 % instead of 12 %', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'procentregeln', vacationPayRate: 0.135 }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(roundOre(40000 * 0.135))
+    expect(r.vacationCompensation).toBe(0)
+    const step = r.steps.find((s) => s.label.startsWith('Semesteravsättning (procentregeln'))
+    expect(step?.label).toBe('Semesteravsättning (procentregeln 13,5 %)')
+    expect(step?.input.rate).toBe(0.135)
+  })
+
+  it('a kollektivavtal rate is absolute: no 30-day uplift on top', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'procentregeln', vacationDaysPerYear: 30, vacationPayRate: 0.135 }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(roundOre(40000 * 0.135))
+  })
+
+  it('semesterersättning pays out 13.5 % into gross', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'semesterersattning', vacationPayRate: 0.135 }),
+      config2026, emptyTaxRates
+    )
+    const expected = roundOre(40000 * 0.135)
+    expect(r.vacationCompensation).toBe(expected)
+    expect(r.grossSalary).toBe(40000 + expected)
+    expect(r.vacationAccrual).toBe(0)
+  })
+
+  it('null and undefined mean the statutory rate: byte-identical to before', () => {
+    const before = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'procentregeln' }),
+      config2026, emptyTaxRates
+    )
+    const withNull = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'procentregeln', vacationPayRate: null }),
+      config2026, emptyTaxRates
+    )
+    expect(withNull.vacationAccrual).toBe(before.vacationAccrual)
+    expect(withNull.vacationAccrual).toBe(roundOre(40000 * 0.12))
+    expect(withNull.netSalary).toBe(before.netSalary)
+  })
+
+  it('sammalöneregeln ignores vacationPayRate: its tillägg is a separate field', () => {
+    const without = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'sammaloneregeln' }),
+      config2026, emptyTaxRates
+    )
+    const withRate = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'sammaloneregeln', vacationPayRate: 0.135 }),
+      config2026, emptyTaxRates
+    )
+    expect(withRate.vacationAccrual).toBe(without.vacationAccrual)
+    expect(withRate.vacationCompensation).toBe(0)
+  })
+
+  it('calculateVacationAccrual honours the rate too', () => {
+    const r = calculateVacationAccrual({
+      monthlySalary: 40000,
+      vacationRule: 'procentregeln',
+      vacationDaysPerYear: 25,
+      semestertillaggRate: 0.0043,
+      vacationPayRate: 0.135,
+      vacationBasis: 40000,
+    })
+    expect(r.accrual).toBe(roundOre(40000 * 0.135))
+  })
+})
 
 describe('hardening: vacation rule contract', () => {
   // Same input across all 4 vacation rules, locking in the relationships

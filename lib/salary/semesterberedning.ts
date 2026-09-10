@@ -37,6 +37,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre, sumOre } from '@/lib/money'
 import { dailyDivisor } from './work-schedule'
+import { resolveVacationPayRate } from './vacation-pay-rate'
 import { getVacationYearBounds, type VacationYearBasis } from './vacation-year'
 import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBalanceRow } from './vacation-ledger'
 import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
@@ -103,6 +104,7 @@ interface EmployeeRosterRow {
   personnummer: string | null
   vacation_rule: string
   vacation_days_per_year: number
+  vacation_pay_rate: number | null
   salary_type: string
   monthly_salary: number | null
   hourly_rate: number | null
@@ -121,17 +123,18 @@ function lastDayBefore(dateIso: string): string {
 /** The employee master fields the day valuation reads. */
 export type DayValueEmployee = Pick<
   EmployeeRosterRow,
-  'vacation_rule' | 'vacation_days_per_year' | 'salary_type' | 'monthly_salary' | 'hourly_rate' | 'hours_per_week' | 'workdays_per_week'
+  'vacation_rule' | 'vacation_days_per_year' | 'vacation_pay_rate' | 'salary_type' | 'monthly_salary' | 'hourly_rate' | 'hours_per_week' | 'workdays_per_week'
 >
 
 /**
  * Simplified BFNAR 2016:10 value of one vacation day in SEK. Shared by the
- * year-close and the MCP vacation-balance tool; the v1 vacation-balance
- * route carries the same formula inline. All three must agree on the
- * semesterlöneskuld estimate.
+ * year-close, the MCP vacation-balance tool and the v1 vacation-balance
+ * route, so all three agree on the semesterlöneskuld estimate and a
+ * kollektivavtal semesterlön rate (employees.vacation_pay_rate) reaches
+ * every one of them.
  */
 export function dayValueSek(emp: DayValueEmployee): number {
-  const rate = emp.vacation_days_per_year >= 30 ? 0.144 : 0.12
+  const rate = resolveVacationPayRate(emp.vacation_days_per_year, emp.vacation_pay_rate)
   if (emp.salary_type === 'hourly') {
     const annualBasis = (emp.hourly_rate || 0) * (emp.hours_per_week ?? 40) * 52
     return roundOre((annualBasis * rate) / Math.max(emp.vacation_days_per_year, 1))
@@ -193,7 +196,7 @@ async function loadRoster(
   const { data, error } = await supabase
     .from('employees')
     .select(
-      'id, first_name, last_name, personnummer, vacation_rule, vacation_days_per_year, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end',
+      'id, first_name, last_name, personnummer, vacation_rule, vacation_days_per_year, vacation_pay_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end',
     )
     .eq('company_id', companyId)
     .eq('is_active', true)

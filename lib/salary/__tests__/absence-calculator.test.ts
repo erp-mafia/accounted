@@ -171,6 +171,36 @@ describe('calculateVacationPay', () => {
     expect(result.amount).toBe(r(perDay * 5))
   })
 
+  it('uses the kollektivavtal rate (13.5%) under procentregeln when set', () => {
+    const result = calculateVacationPay({
+      monthlySalary: 30000,
+      vacationDaysTaken: 5,
+      vacationRule: 'procentregeln',
+      semestertillaggRate: 0.0043,
+      vacationDaysPerYear: 25,
+      vacationPayRate: 0.135,
+    })
+    const annualBasis = r(30000 * 12)
+    const totalVacPay = r(annualBasis * 0.135)
+    const perDay = r(totalVacPay / 25)
+    expect(result.amount).toBe(r(perDay * 5))
+    expect(result.steps[0].label).toBe('Semesterlön (procentregeln 13.5%)')
+    expect(result.steps[0].input.rate).toBe(0.135)
+  })
+
+  it('sammalöneregeln ignores the kollektivavtal rate', () => {
+    const base = {
+      monthlySalary: 30000,
+      vacationDaysTaken: 5,
+      vacationRule: 'sammaloneregeln' as const,
+      semestertillaggRate: 0.0043,
+      vacationDaysPerYear: 25,
+    }
+    expect(calculateVacationPay({ ...base, vacationPayRate: 0.135 }).amount).toBe(
+      calculateVacationPay(base).amount,
+    )
+  })
+
   it('uses 14.4% for 30+ vacation days', () => {
     const result = calculateVacationPay({
       monthlySalary: 30000,

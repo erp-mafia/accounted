@@ -1,4 +1,6 @@
 import type { PayrollConfig } from './payroll-config'
+import { roundOre } from '@/lib/money'
+import { resolveVacationPayRate } from './vacation-pay-rate'
 
 /**
  * Absence calculation for Swedish payroll.
@@ -173,7 +175,8 @@ export function calculateParentalLeaveDeduction(
  * Calculate vacation pay for taken vacation days.
  *
  * Sammalöneregeln (§16a): Regular pay continues + semestertillägg per day
- * Procentregeln (§16): 12% of semesterlönegrundande (14.4% for 30 days)
+ * Procentregeln (§16): 12% of semesterlönegrundande (14.4% for 30 days), or
+ * the kollektivavtal rate when the employee carries one.
  */
 export function calculateVacationPay(params: {
   monthlySalary: number
@@ -181,6 +184,8 @@ export function calculateVacationPay(params: {
   vacationRule: 'procentregeln' | 'sammaloneregeln' | 'none'
   semestertillaggRate: number
   vacationDaysPerYear: number
+  /** Kollektivavtal rate override (0.135 = 13.5 %); null = statutory. */
+  vacationPayRate?: number | null
 }): { amount: number; tillagg: number; steps: AbsenceStep[] } {
   const r = (x: number) => Math.round(x * 100) / 100
   const dailyRate = r(params.monthlySalary / 21)
@@ -219,7 +224,7 @@ export function calculateVacationPay(params: {
   } else {
     // Procentregeln: daily vacation pay based on 12% of annual basis
     // This is typically used for hourly workers; the daily rate comes from their accrued pool
-    const rate = params.vacationDaysPerYear >= 30 ? 0.144 : 0.12
+    const rate = resolveVacationPayRate(params.vacationDaysPerYear, params.vacationPayRate)
     const annualBasis = r(params.monthlySalary * 12)
     const totalVacationPay = r(annualBasis * rate)
     const perDay = r(totalVacationPay / params.vacationDaysPerYear)
@@ -229,7 +234,7 @@ export function calculateVacationPay(params: {
       amount,
       tillagg: 0,
       steps: [{
-        label: `Semesterlön (procentregeln ${rate * 100}%)`,
+        label: `Semesterlön (procentregeln ${roundOre(rate * 100)}%)`,
         formula: '(annual_basis × rate / entitled_days) × taken_days',
         input: {
           annual_basis: annualBasis,

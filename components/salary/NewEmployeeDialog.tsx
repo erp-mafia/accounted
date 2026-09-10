@@ -15,6 +15,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { vacationPayRateFromPercentInput } from '@/lib/salary/vacation-pay-rate'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
@@ -252,6 +253,8 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       bank_account_number: normalizeBankNumber(account) || undefined,
       vacation_rule: vacationRule,
       vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || 25,
+      // Empty (or hidden under sammalöneregeln/none) = statutory rate.
+      vacation_pay_rate: vacationPayRateFromPercentInput(form.get('vacation_pay_rate')),
       // Always sent: {} means no default dimensions.
       default_dimensions: dimensions,
     }
@@ -433,6 +436,14 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
               <Input id="vacation_days_per_year" name="vacation_days_per_year" type="number" min="25" max="40" defaultValue="25" />
               <p className="text-xs text-muted-foreground">Lagstadgat minimum: 25 dagar</p>
             </Field>
+            {(vacationRule === 'procentregeln' || vacationRule === 'semesterersattning') && (
+              <Field label="Semesterlön, procentsats" htmlFor="vacation_pay_rate">
+                <Input id="vacation_pay_rate" name="vacation_pay_rate" type="number" step="0.01" min="12" max="30" placeholder="12" />
+                <p className="text-xs text-muted-foreground">
+                  Lämna tomt för lagens 12 % (14,4 % vid 30 dagar). Ange kollektivavtalets procentsats, t.ex. 13,5.
+                </p>
+              </Field>
+            )}
           </div>
         </section>
 

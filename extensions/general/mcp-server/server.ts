@@ -15654,7 +15654,7 @@ export const tools: McpTool[] = [
       const { data: e, error } = await supabase
         .from('employees')
         .select(
-          'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, default_dimensions, is_active',
+          'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vacation_pay_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, default_dimensions, is_active',
         )
         .eq('id', employeeId)
         .eq('company_id', companyId)
@@ -15697,6 +15697,7 @@ export const tools: McpTool[] = [
           vacation_days_per_year: e.vacation_days_per_year,
           vacation_days_saved: e.vacation_days_saved,
           semestertillagg_rate: e.semestertillagg_rate,
+          vacation_pay_rate: e.vacation_pay_rate ?? null,
         },
         vaxa_stod: {
           eligible: e.vaxa_stod_eligible,
@@ -16313,6 +16314,7 @@ export const tools: McpTool[] = [
         bank_account_number: { type: 'string' },
         vacation_rule: { type: 'string', enum: ['procentregeln', 'sammaloneregeln', 'semesterersattning', 'none'] },
         vacation_days_per_year: { type: 'number' },
+        vacation_pay_rate: { type: ['number', 'null'], description: 'Kollektivavtal semesterlön rate as a fraction, 0.12-0.30 (0.135 = 13.5 %). Omit/null = statutory 12 % (14.4 % at 30 days). Procentregeln and semesterersättning only.' },
         email: { type: 'string' },
         phone: { type: 'string' },
         vaxa_stod_eligible: { type: 'boolean' },
@@ -16426,6 +16428,7 @@ export const tools: McpTool[] = [
         bank_account_number: { type: 'string' },
         vacation_rule: { type: 'string', enum: ['procentregeln', 'sammaloneregeln', 'semesterersattning', 'none'] },
         vacation_days_per_year: { type: 'number' },
+        vacation_pay_rate: { type: ['number', 'null'], description: 'Kollektivavtal semesterlön rate as a fraction, 0.12-0.30 (0.135 = 13.5 %). null clears back to the statutory 12 % (14.4 % at 30 days).' },
         email: { type: 'string' },
         phone: { type: 'string' },
         is_active: { type: 'boolean', description: 'false soft-deactivates (BFL retention keeps the row)' },
@@ -16747,7 +16750,7 @@ export const tools: McpTool[] = [
       const { dayValueSek } = await import('@/lib/salary/semesterberedning')
       const { data: employee, error: empErr } = await supabase
         .from('employees')
-        .select('vacation_rule, vacation_days_per_year, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
+        .select('vacation_rule, vacation_days_per_year, vacation_pay_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
         .eq('id', employeeId)
         .eq('company_id', companyId)
         .maybeSingle()
