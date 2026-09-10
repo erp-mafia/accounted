@@ -8,8 +8,8 @@ import type { CustomerDto } from '@/lib/providers/dto'
  * individual whose identity number is shorter than a personnummer (a birth
  * date, a customer number in the wrong field) failed the insert and the
  * whole row was dropped. Everything the column can hold is encrypted into
- * it (so a mistyped personnummer never lands in plaintext); only a value
- * that cannot be a personnummer stays readable in the notes.
+ * it (so a mistyped personnummer never lands in plaintext); a value that
+ * cannot be a personnummer is omitted, never written to a plaintext field.
  */
 
 function individual(number: string | null, note?: string): CustomerDto {
@@ -73,18 +73,20 @@ describe('mapCustomer: personal_number shape guard', () => {
     expect(row.notes).toBeNull()
   })
 
-  it('keeps a short identity number out of the column and in the notes instead', () => {
+  it('omits a short identity number entirely: the row imports, nothing lands in plaintext', () => {
     const row = mapCustomer(individual('850101'), 'user-1', 'company-1')
 
     expect(row.personal_number).toBeNull()
     expect(row.org_number).toBeNull()
-    expect(row.notes).toBe('Identitetsnummer i källsystemet: 850101')
+    expect(row.notes).toBeNull()
+    expect(JSON.stringify(row)).not.toContain('850101')
   })
 
-  it('appends the unstorable number after the provider note', () => {
+  it('leaves the provider note untouched when the number is omitted', () => {
     const row = mapCustomer(individual('1234', 'Betalar alltid sent'), 'user-1', 'company-1')
 
-    expect(row.notes).toBe('Betalar alltid sent\nIdentitetsnummer i källsystemet: 1234')
+    expect(row.notes).toBe('Betalar alltid sent')
+    expect(JSON.stringify(row)).not.toContain('1234')
   })
 
   it('leaves personal_number and notes null when there is no identity number', () => {

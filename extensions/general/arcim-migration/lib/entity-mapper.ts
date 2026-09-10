@@ -616,16 +616,12 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
   // encrypts to something the column rejects, and the row was lost with it
   // (#2469). Everything the column can hold is encrypted into it, a mistyped
   // or oddly separated personnummer included, so no personnummer-like value
-  // ever lands in plaintext; only a value that cannot be a personnummer at
-  // all (too short, or absurdly long) is kept readable in the notes.
+  // ever lands in plaintext. A value the column cannot hold (too short to be
+  // a personnummer, or absurdly long) is omitted: the row still imports, and
+  // an identity number is never written to a plaintext field.
   const personalNumber = isIndividual ? number : null
   const storablePersonalNumber =
     personalNumber && fitsPersonalNumberColumn(personalNumber) ? personalNumber : null
-  const unstorableIdentityNote =
-    personalNumber && !storablePersonalNumber
-      ? `Identitetsnummer i källsystemet: ${personalNumber}`
-      : null
-  const notes = [dto.note, unstorableIdentityNote].filter((part): part is string => !!part)
   return {
     user_id: userId,
     company_id: companyId,
@@ -642,7 +638,7 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
     vat_number: dto.vatNumber || null,
     vat_number_validated: false,
     default_payment_terms: dto.defaultPaymentTermsDays || 30,
-    notes: notes.length > 0 ? notes.join('\n') : null,
+    notes: dto.note || null,
   }
 }
 
