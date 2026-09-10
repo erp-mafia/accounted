@@ -2,7 +2,7 @@ import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
-import { AttGoraSkeleton, ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
+import { ChecklistSkeleton, PanesSkeleton } from '@/components/dashboard/HemSkeletons'
 import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
@@ -16,7 +16,6 @@ import {
   getResolvedDashboardAgentProfile,
 } from './request-context'
 import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-sections'
-import { HemV2Section } from './hem-v2'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { getTranslations } from 'next-intl/server'
@@ -164,72 +163,42 @@ export default async function DashboardPage() {
   }
   const setupOpen = !settings.initial_setup_completed_at && !settings.initial_setup_dismissed_at
 
-  // Shell v2 (dev_docs/ui_v2_build_plan.md, PR 3): Hem IS the queue. The
-  // top bar carries the title; the three panes fill the panel.
-  const shell: DashboardShell =
-    (userPrefs?.ui_state as { shell?: DashboardShell } | null)?.shell === 'v1' ? 'v1' : 'v2'
-  if (shell === 'v2') {
-    const tV2 = await getTranslations('att_gora_v2')
-    return (
-      <>
-        <PageHeader title={tV2('title')} help={<HelpPopover>{tV2('help')}</HelpPopover>} />
-        <Suspense fallback={<AttGoraSkeleton />}>
-          <HemV2Section
-            companyId={companyId}
-            userId={user.id}
-            now={now}
-            setupOpen={setupOpen}
-            hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
-            hasMcpKey={hasMcpKey}
-            notices={
-              <Suspense fallback={null}>
-                <HemNoticesSection companyId={companyId} userId={user.id} now={now} />
-              </Suspense>
-            }
-            checklist={
-              <Suspense fallback={<ChecklistSkeleton />}>
-                <HemChecklistSection
-                  companyId={companyId}
-                  userId={user.id}
-                  now={now}
-                  initialSetup={initialSetup}
-                  hasMcpKey={hasMcpKey}
-                  vatRegistered={settings.vat_registered}
-                  momsPeriod={settings.moms_period ?? null}
-                />
-              </Suspense>
-            }
-          />
-        </Suspense>
-      </>
-    )
-  }
+  // The streamed sections, shared by both shells: the notice line and the
+  // setup checklist fill in behind their own Suspense boundaries.
+  const notices = (
+    <Suspense fallback={null}>
+      <HemNoticesSection companyId={companyId} userId={user.id} now={now} />
+    </Suspense>
+  )
+  const checklist = (
+    <Suspense fallback={<ChecklistSkeleton />}>
+      <HemChecklistSection
+        companyId={companyId}
+        userId={user.id}
+        now={now}
+        initialSetup={initialSetup}
+        hasMcpKey={hasMcpKey}
+        vatRegistered={settings.vat_registered}
+        momsPeriod={settings.moms_period ?? null}
+      />
+    </Suspense>
+  )
 
-  return (
+  // Hem: greeting, notice line, setup checklist, then the Att göra and
+  // Fortsätt panes side by side. In shell v2 the same content runs under the
+  // Att göra top bar, and MainContainer's full-bleed frame stretches it to
+  // the panel instead of the v1 max-w-5xl card. The three-pane queue of
+  // PR 3 was tried and dropped (founder direction 2026-09-10: "the to-do
+  // page should be the old homepage, but stretched").
+  const hem = (
     <DashboardContent
       companyId={companyId}
       agentBuilt={agentBuilt}
       userFirstName={userFirstName}
       initialSetup={initialSetup}
       hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
-      notices={
-        <Suspense fallback={null}>
-          <HemNoticesSection companyId={companyId} userId={user.id} now={now} />
-        </Suspense>
-      }
-      checklist={
-        <Suspense fallback={<ChecklistSkeleton />}>
-          <HemChecklistSection
-            companyId={companyId}
-            userId={user.id}
-            now={now}
-            initialSetup={initialSetup}
-            hasMcpKey={hasMcpKey}
-            vatRegistered={settings.vat_registered}
-            momsPeriod={settings.moms_period ?? null}
-          />
-        </Suspense>
-      }
+      notices={notices}
+      checklist={checklist}
       panes={
         <Suspense fallback={<PanesSkeleton />}>
           <HemPanesSection companyId={companyId} now={now} setupOpen={setupOpen} />
@@ -237,4 +206,20 @@ export default async function DashboardPage() {
       }
     />
   )
+
+  const shell: DashboardShell =
+    (userPrefs?.ui_state as { shell?: DashboardShell } | null)?.shell === 'v1' ? 'v1' : 'v2'
+  if (shell === 'v2') {
+    const tV2 = await getTranslations('att_gora_v2')
+    const header = <PageHeader title={tV2('title')} help={<HelpPopover>{tV2('help')}</HelpPopover>} />
+
+    return (
+      <>
+        {header}
+        {hem}
+      </>
+    )
+  }
+
+  return hem
 }

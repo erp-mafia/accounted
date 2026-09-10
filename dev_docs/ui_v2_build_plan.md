@@ -33,6 +33,8 @@ Done when: any page renders in both shells, the toggle persists, lint and tests 
 
 ### PR 3: Att göra as three panes on the worklist
 
+**Superseded 2026-09-10.** The three panes were tried on the preview and dropped: Att göra in shell v2 is Hem (greeting, notices, checklist, Att göra + Fortsätt panes) stretched to the full-bleed panel. `lib/worklist/tasks-v2.ts`, `components/attgora/*` and the `att_gora_v2` strings beyond the top bar's title and help are deleted.
+
 - Left: task tree grouped Löpande / Stäng månad / Moms / Bokslut with counts, from `lib/worklist` categories plus `pending_operations` ("Assistentens förslag").
 - Middle: the task detail, starting with Granska utgående and Granska inkommande (row-centric review, approve selected).
 - Right: Detaljer (deadline, lagrum), Beroenden, task-scoped assistant message.
