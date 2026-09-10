@@ -3106,6 +3106,7 @@
     "ai_agrees": "Assistenten håller med.",
     "ai_instead": "Assistenten föreslår i stället",
     "ai_use": "Använd",
+    "ai_show_templates": "Visa mallar",
     "ai_unsure": "Assistenten är osäker: {reason}",
     "ai_unconfigured": "Assistenten är inte konfigurerad.",
     "ai_alternatives": "Andra konton",
