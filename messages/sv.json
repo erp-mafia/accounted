@@ -3092,10 +3092,10 @@
     "adjustment": "Justering"
   },
   "tx_quick_review": {
+    "vat_doc_wins": "Bokförs med underlagets moms {amount}.",
+    "vat_rate_wins": "Bokförs med satsens moms {amount}.",
     "changed_from": "Bytt från {label}. Kontrollera konto och moms nedan.",
     "changed_undo": "Ångra",
-    "vat_doc_booked": "bokförs",
-    "vat_proposal_booked": "förslaget bokför {amount}",
     "vat_use_proposal": "Använd förslagets {amount}",
     "vat_use_doc_amount": "Använd underlagets {amount}",
     "rec_why_recent": "Nyligen använd mall",
@@ -3121,8 +3121,6 @@
     "underlag_missing_body": "Varje verifikat ska ha ett kvitto eller en faktura (BFL 5 kap. 7 §). Hämta det nu, eller bokför utan och komplettera senare.",
     "underlag_fetch": "Hämta underlag",
     "book_without_underlag": "Bokför utan underlag",
-    "vat_from_doc": "Moms enligt underlaget: {amount}",
-    "vat_doc_source": "{source, select, pinned {kopplat till raden} matched {matchat i inkorgen} other {}}",
     "exchange_rate_fetch_failed": "Kunde inte hämta växelkursen.",
     "title": "Granska bokföring",
     "description_template": "Granska verifikationen innan du bokför",

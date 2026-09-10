@@ -557,7 +557,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_treatment: 'reduced_12',
     vat_rate: 0.12,
     deductibility: 'full',
-    special_rules_sv: 'Logi har 12% moms. Frukost särredovisas med 12% moms.',
+    special_rules_sv: 'Frukost särredovisas från logikostnaden.',
     mcc_codes: [3501, 3502, 3503, 3504, 7011],
     keywords: ['hotell', 'hotel', 'logi', 'övernattning', 'scandic', 'elite', 'best western', 'booking', 'airbnb'],
     risk_level: 'LOW',

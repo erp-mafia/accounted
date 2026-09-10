@@ -174,7 +174,12 @@ export default function QuickReviewDialog({
       })
     })
   }, [amountForLegs, transaction?.id, transaction?.document_id])
+  // The person's own VAT choice. It also settles the underlag question: a
+  // rate picked by hand is what gets booked, and the moms line below offers
+  // the document's figure as the way back. Without this the document's moms
+  // silently won and changing the rate appeared to do nothing.
   const setVatTreatment = useCallback((v: VatTreatment | 'none') => {
+    setUseDocVat(false)
     setProposal((p) => withAccount(p, p.booking.kind === 'account' ? p.booking.account : businessAccount(p), v === 'none' ? 'exempt' : v, amountForLegs))
   }, [amountForLegs])
 
@@ -643,27 +648,26 @@ export default function QuickReviewDialog({
 
         {/* Moms per the underlag: stated whenever the document has one, with
             the choice to book it when it differs from the proposal's rate. */}
-        {docVatUsable && (
+        {/* The underlag's moms, only when it disagrees with the rate: when
+            they agree the verifikat above already shows the figure, and
+            saying it twice reads as two different facts. */}
+        {docVatDiffers && (
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-muted-foreground">
             <span>
-              {t('vat_from_doc', { amount: formatCurrency(docVat, tx.currency) })}
-              {underlag?.source ? ` · ${t('vat_doc_source', { source: underlag.source })}` : ''}
-              {docVatDiffers
-                ? ` · ${useDocVat ? t('vat_doc_booked') : t('vat_proposal_booked', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })}`
-                : ''}
+              {useDocVat
+                ? t('vat_doc_wins', { amount: formatCurrency(docVat, tx.currency) })
+                : t('vat_rate_wins', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })}
             </span>
-            {docVatDiffers && (
-              <button
-                type="button"
-                className={cn(QUIET_LINK_CLASS, 'text-[12px]')}
-                disabled={isProcessing}
-                onClick={() => setUseDocVat((v) => !v)}
-              >
-                {useDocVat
-                  ? t('vat_use_proposal', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })
-                  : t('vat_use_doc_amount', { amount: formatCurrency(docVat, tx.currency) })}
-              </button>
-            )}
+            <button
+              type="button"
+              className={cn(QUIET_LINK_CLASS, 'text-[12px]')}
+              disabled={isProcessing}
+              onClick={() => setUseDocVat((v) => !v)}
+            >
+              {useDocVat
+                ? t('vat_use_proposal', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })
+                : t('vat_use_doc_amount', { amount: formatCurrency(docVat, tx.currency) })}
+            </button>
           </p>
         )}
 
