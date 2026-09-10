@@ -45,6 +45,7 @@ export default function PrivacyPolicyPage() {
             <p>Vi behandlar följande kategorier av personuppgifter:</p>
             <ul>
               <li><strong>Kontouppgifter:</strong> E-postadress (för inloggning)</li>
+              <li><strong>BankID-inloggning (hostad tjänst):</strong> Personnummer (lagras krypterat), namn och vilka företag du har en roll i. För en enskild firma är organisationsnumret detsamma som ditt personnummer.</li>
               <li><strong>Företagsuppgifter:</strong> Företagsnamn, organisationsnummer, adress, kontaktuppgifter</li>
               <li><strong>Kundidentitet:</strong> Personnummer för privatkunder när det behövs för avtal eller fakturering</li>
               <li><strong>Bokföringsdata:</strong> Verifikationer, fakturor, kvitton, transaktioner, kontoplaner</li>
@@ -255,8 +256,12 @@ export default function PrivacyPolicyPage() {
                 meddelandeinnehåll och andra personuppgifter automatiskt från leveranshistoriken.
               </li>
               <li>
-                <strong>Kontouppgifter:</strong> Så länge kontot är aktivt, plus 30 dagar efter
-                begäran om radering (för att hantera pågående bokföringsplikter).
+                <strong>Kontouppgifter:</strong> Så länge kontot är aktivt. När du raderar kontot
+                tas e-postadress, namn, BankID-uppgifter, inloggningssessioner, inställningar och
+                assistentkonversationer bort ur tjänsten direkt, och bank-, e-post- och
+                Skatteverketskopplingar som du har godkänt återkallas. Bokföringsmaterial i
+                företagen bevaras enligt Bokföringslagen och pekar då bara på ett anonymt
+                användar-ID.
               </li>
               <li>
                 <strong>Kundidentitet:</strong> Under kundrelationen, eller i sju år när uppgiften
