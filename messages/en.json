@@ -7091,6 +7091,11 @@
     "dismiss": "Hide"
   },
   "att_gora_v2": {
+    "task_skattekonto_payment_due": "Pay into the tax account",
+    "body_skattekonto_payment_due": "Skatteverket will soon charge amounts the tax account balance does not cover. Pay in by the due date to avoid interest. The tax account page shows the amount, OCR number and date.",
+    "lagrum_skattekonto_payment_due": "Interest on a tax account deficit, SFL chapter 65.",
+    "assist_skattekonto_payment_due": "{count, plural, =0 {The tax account covers the upcoming charges.} one {One payment into the tax account is needed before the due date.} other {# payments into the tax account are needed before the due date.}}",
+    "page_skattekonto": "Tax account",
     "source_mail_hunt": "Email",
     "source_email": "Email",
     "source_upload": "Uploaded",

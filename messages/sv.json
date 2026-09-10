@@ -7091,6 +7091,11 @@
     "dismiss": "Dölj"
   },
   "att_gora_v2": {
+    "task_skattekonto_payment_due": "Betala in till skattekontot",
+    "body_skattekonto_payment_due": "Skatteverket drar snart belopp som saldot på skattekontot inte täcker. Betala in senast förfallodagen, så slipper bolaget kostnadsränta. Skattekontot visar belopp, OCR-nummer och datum.",
+    "lagrum_skattekonto_payment_due": "Kostnadsränta vid underskott på skattekontot, SFL 65 kap.",
+    "assist_skattekonto_payment_due": "{count, plural, =0 {Skattekontot täcker de kommande dragningarna.} one {En inbetalning till skattekontot behövs före förfallodagen.} other {# inbetalningar till skattekontot behövs före förfallodagen.}}",
+    "page_skattekonto": "Skattekontot",
     "source_mail_hunt": "Mejl",
     "source_email": "Mejl",
     "source_upload": "Uppladdat",

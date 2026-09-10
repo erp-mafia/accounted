@@ -271,7 +271,9 @@ export function categoryForAccount(
     'income_services', 'income_products', 'income_other',
   ]
   for (const c of candidates) {
-    if (getDefaultAccountForCategory(c, entityType) === account) return c
+    // The mapping needs a definite entity type; without one the sole trader
+    // default is what the mapping itself used to assume.
+    if (getDefaultAccountForCategory(c, entityType ?? 'enskild_firma') === account) return c
   }
   return account.startsWith('3') ? 'income_other' : 'expense_other'
 }
