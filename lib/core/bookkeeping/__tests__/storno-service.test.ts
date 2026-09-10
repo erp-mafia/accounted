@@ -107,6 +107,8 @@ describe('correctEntry', () => {
       { data: [{ id: 'orig-1' }], error: null },
       // 9: relink transactions original → corrected (thenable)
       { data: null, error: null },
+      // 9b: relink voucher links original → corrected (thenable, #2364)
+      { data: null, error: null },
       // 10: relink documents original → corrected (thenable)
       { data: null, error: null },
       // 11: fetch final reversal (.single())
@@ -365,6 +367,7 @@ describe('correctEntry', () => {
       { data: null, error: null },                                            // 8: post corrected
       { data: [{ id: 'correction-1' }], error: null },                        // 9: CAS update
       { data: null, error: null },                                            // 10: relink transactions
+      { data: null, error: null },                                            // relink voucher links original → corrected (thenable, #2364)
       { data: null, error: null },                                            // 11: relink documents
       { data: { ...secondReversal, lines: [] }, error: null },                // 12: fetch final reversal
       { data: { ...secondCorrection, lines: [] }, error: null },              // 13: fetch final corrected
@@ -446,6 +449,7 @@ describe('correctEntry', () => {
       { data: null, error: null },                                           // 7: post corrected
       { data: [{ id: 'c3' }], error: null },                                 // 8: CAS
       { data: null, error: null },                                           // 9: relink transactions
+      { data: null, error: null },                                           // relink voucher links original → corrected (thenable, #2364)
       { data: null, error: null },                                           // 10: relink documents
       { data: { ...reversalEntry, lines: [] }, error: null },                // 11: final reversal
       { data: { ...correctedEntry, lines: [] }, error: null },               // 12: final corrected
@@ -496,6 +500,7 @@ describe('correctEntry', () => {
       { data: null, error: null },                                           // 8: post corrected
       { data: [{ id: 'orig-1' }], error: null },                             // 9: CAS
       { data: null, error: null },                                           // 10: relink transactions
+      { data: null, error: null },                                           // relink voucher links original → corrected (thenable, #2364)
       { data: null, error: null },                                           // 11: relink documents
       { data: { ...reversalEntry, lines: [] }, error: null },                // 12: final reversal
       { data: { ...correctedEntry, lines: [] }, error: null },               // 13: final corrected
@@ -523,6 +528,60 @@ describe('correctEntry', () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-1', companyId: 'company-1' })
     )
+  })
+
+  // #2364: a bank row has two anchors (transactions.journal_entry_id and the
+  // transaction_voucher_links junction). Both must follow the correction, or
+  // the original keeps its link and the row reads double-anchored.
+  describe('bank anchors follow the correction (#2364)', () => {
+    type MockClient = ReturnType<typeof makeClient>
+
+    function updatesOn(supabase: MockClient, table: string) {
+      return supabase.from.mock.calls.flatMap((call, i) => {
+        if (call[0] !== table) return []
+        const b = supabase.from.mock.results[i]!.value as Record<string, ReturnType<typeof vi.fn>>
+        return b.update.mock.calls.map((u) => ({ payload: u[0], eqs: b.eq.mock.calls }))
+      })
+    }
+
+    it('re-points the original entry\'s transaction_voucher_links rows to the corrected entry, scoped by company', async () => {
+      setupResults()
+      const supabase = makeClient()
+      const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+      const junction = updatesOn(supabase, 'transaction_voucher_links')
+      expect(junction).toHaveLength(1)
+      expect(junction[0]!.payload).toEqual({ journal_entry_id: 'corrected-1' })
+      expect(junction[0]!.eqs).toEqual([
+        ['company_id', 'company-1'],
+        ['journal_entry_id', 'orig-1'],
+      ])
+      // The pointer column still follows the correction the way it always did.
+      const pointer = updatesOn(supabase, 'transactions')
+      expect(pointer).toHaveLength(1)
+      expect(pointer[0]!.payload).toEqual({ journal_entry_id: 'corrected-1' })
+      expect(result.transactionRelinkError).toBeUndefined()
+    })
+
+    it('surfaces a junction relink failure on the result instead of throwing (correction chain stays traceable)', async () => {
+      setupResults()
+      results[10] = { data: null, error: { message: 'permission denied for table transaction_voucher_links' } }
+      const supabase = makeClient()
+      const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+      expect(result.corrected.id).toBe('corrected-1')
+      expect(result.transactionRelinkError).toBe('permission denied for table transaction_voucher_links')
+    })
+
+    it('surfaces a pointer relink failure the same way and still attempts the junction relink', async () => {
+      setupResults()
+      results[9] = { data: null, error: { message: 'pointer relink failed' } }
+      const supabase = makeClient()
+      const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+      expect(result.transactionRelinkError).toBe('pointer relink failed')
+      expect(updatesOn(supabase, 'transaction_voucher_links')).toHaveLength(1)
+    })
   })
 })
 
@@ -562,6 +621,7 @@ describe('correctEntry: date/period override (recordate engine)', () => {
       { data: null, error: null },                                                                   // 8 post corrected
       { data: [{ id: 'orig-1' }], error: null },                                                     // 9 CAS
       { data: null, error: null },                                                                   // 10 relink transactions
+      { data: null, error: null },                                                                   // relink voucher links original → corrected (thenable, #2364)
       { data: null, error: null },                                                                   // 11 relink documents
       { data: { ...reversalEntry, lines: [] }, error: null },                                        // 12 final reversal
       { data: { ...correctedEntry, lines: [] }, error: null },                                       // 13 final corrected

@@ -18,6 +18,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 
 export type SupplierIdentity = {
   orgNumber?: string | null
@@ -104,7 +105,40 @@ export async function matchSupplierByIdentity(
   companyId: string,
   identity: SupplierIdentity,
 ): Promise<SupplierMatch | null> {
-  if (identity.orgNumber) {
+  // The register was written by hand in the form's XXXXXX-XXXX shape, by the
+  // v1 API and MCP in whatever the caller sent, and the extractor emits bare
+  // digits: comparing raw strings missed every hyphenated row (#2391). New
+  // writes store the canonical key, but the comparison stays key-based so
+  // rows written before the backfill, and self-hosted instances that have
+  // not run it, match too. Normalising in SQL is not possible through
+  // PostgREST, so the scan happens here over the suppliers that have an
+  // org_number at all: a small set even for companies with thousands of
+  // suppliers, and the same shape as the vat_number scan below. Archived
+  // suppliers are skipped: a register that holds the same number twice (an
+  // archived hyphenated row next to its live bare replacement) must resolve
+  // to the live one, not to whichever id sorts first.
+  const orgKey = orgNumberKey(identity.orgNumber)
+  if (orgKey) {
+    try {
+      const rows = await fetchAllRows<{ id: string; org_number: string | null }>(
+        ({ from, to }) =>
+          supabase
+            .from('suppliers')
+            .select('id, org_number')
+            .eq('company_id', companyId)
+            .not('org_number', 'is', null)
+            .is('archived_at', null)
+            .order('id', { ascending: true })
+            .range(from, to),
+      )
+      const hit = rows.find((row) => orgNumberKey(row.org_number) === orgKey)
+      if (hit) return { supplierId: hit.id, matchedOn: 'org_number' }
+    } catch (error) {
+      console.error('[match-supplier] org_number lookup failed:', error)
+    }
+  } else if (identity.orgNumber) {
+    // Not a Swedish org number (a foreign registration number passed through
+    // agent-supplied extracted_data): only an exact match can be trusted.
     const { data } = await supabase
       .from('suppliers')
       .select('id')
@@ -115,9 +149,7 @@ export async function matchSupplierByIdentity(
     if (data) return { supplierId: data.id as string, matchedOn: 'org_number' }
   }
 
-  // Normalising in SQL is not possible through PostgREST, so the comparison
-  // happens here over the suppliers that have a vat_number at all: a small
-  // set even for companies with thousands of suppliers.
+  // Same shape as the org_number scan: compare canonical keys in memory.
   if (vatNumberKey(identity.vatNumber)) {
     try {
       const rows = await fetchAllRows<{ id: string; vat_number: string | null }>(

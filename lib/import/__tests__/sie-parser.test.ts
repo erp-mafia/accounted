@@ -145,6 +145,41 @@ const SIE_EMPTY_SERIES = [
   '}',
 ].join('\n')
 
+// SIE 4B corrected voucher (Fortnox-style): the original 5010 line was
+// struck (#BTRANS) and replaced by 6540 (#RTRANS, twinned by an identical
+// #TRANS). Final state = the #TRANS rows only, and it balances.
+const SIE_WITH_CORRECTIONS = [
+  '#FLAGGA 0',
+  '#SIETYP 4',
+  '#FNAMN "Rättat AB"',
+  '#RAR 0 20240101 20241231',
+  '#KONTO 1930 "Företagskonto"',
+  '#KONTO 5010 "Lokalhyra"',
+  '#KONTO 6540 "IT-tjänster"',
+  '#VER A 7 20240301 "Faktura IT"',
+  '{',
+  '#BTRANS 5010 {} 1200.00 20240301 "Lokalhyra" 0 "EL"',
+  '#RTRANS 6540 {} 1200.00 20240301 "IT-tjänster" 0 "EL"',
+  '#TRANS 6540 {} 1200.00 20240301 "IT-tjänster"',
+  '#TRANS 1930 {} -1200.00',
+  '}',
+].join('\n')
+
+// Spec violation: an #RTRANS with no identical #TRANS twin after it.
+const SIE_RTRANS_WITHOUT_TWIN = [
+  '#FLAGGA 0',
+  '#SIETYP 4',
+  '#FNAMN "Trasig AB"',
+  '#RAR 0 20240101 20241231',
+  '#KONTO 1930 "Företagskonto"',
+  '#KONTO 6540 "IT-tjänster"',
+  '#VER A 8 20240301 "Utan tvilling"',
+  '{',
+  '#RTRANS 6540 {} 1200.00',
+  '#TRANS 1930 {} -1200.00',
+  '}',
+].join('\n')
+
 // SIE file with { on same line as #VER
 const SIE_BRACE_ON_VER_LINE = [
   '#FLAGGA 0',
@@ -444,6 +479,49 @@ describe('parseSIEFile', () => {
       const errors = result.issues.filter((i) => i.severity === 'error')
       expect(errors.length).toBeGreaterThanOrEqual(1)
       expect(errors.some((e) => e.message.includes('balanserar inte'))).toBe(true)
+    })
+
+    // SIE 4B #BTRANS / #RTRANS (#2427): final state stays #TRANS-only, the
+    // correction history is kept aside on the voucher.
+    it('books #TRANS only and keeps #BTRANS/#RTRANS as correction history', () => {
+      const result = parseSIEFile(SIE_WITH_CORRECTIONS)
+      expect(result.vouchers).toHaveLength(1)
+      const v = result.vouchers[0]
+
+      // Final state: exactly the #TRANS rows, balanced, no double counting.
+      expect(v.lines).toHaveLength(2)
+      expect(v.lines[0]).toMatchObject({ account: '6540', amount: 1200 })
+      expect(v.lines[1]).toMatchObject({ account: '1930', amount: -1200 })
+      expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0)
+
+      // History: the struck original and the added replacement, with the
+      // SIE `sign` (who corrected in the source system).
+      expect(v.corrections).toBeDefined()
+      expect(v.corrections!.struck).toHaveLength(1)
+      expect(v.corrections!.struck[0]).toMatchObject({ account: '5010', amount: 1200, description: 'Lokalhyra', signature: 'EL' })
+      expect(v.corrections!.added).toHaveLength(1)
+      expect(v.corrections!.added[0]).toMatchObject({ account: '6540', amount: 1200, signature: 'EL' })
+      expect(result.stats.totalTransactionLines).toBe(2)
+    })
+
+    it('leaves corrections undefined on a voucher without #BTRANS/#RTRANS', () => {
+      const result = parseSIEFile(SIE_WITH_VOUCHERS)
+      for (const v of result.vouchers) {
+        expect(v.corrections).toBeUndefined()
+      }
+    })
+
+    it('warns when an #RTRANS is not twinned by an identical #TRANS', () => {
+      const result = parseSIEFile(SIE_RTRANS_WITHOUT_TWIN)
+      const v = result.vouchers[0]
+
+      // Spec rule: #RTRANS is not part of the final state on its own.
+      expect(v.lines).toHaveLength(1)
+      expect(v.corrections!.added).toHaveLength(1)
+
+      const twinWarnings = result.issues.filter((i) => i.tag === 'RTRANS' && i.severity === 'warning')
+      expect(twinWarnings).toHaveLength(1)
+      expect(twinWarnings[0].message).toContain('följs inte av en identisk #TRANS')
     })
   })
 

@@ -4,9 +4,10 @@ import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
+import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
-import { Loader2, Trash2, Users, ChevronDown } from 'lucide-react'
+import { Loader2, Trash2, Users, ChevronDown, Pencil } from 'lucide-react'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import type { CategorizationTemplate } from '@/types'
@@ -50,6 +51,9 @@ export function CounterpartyTemplatesPanel() {
   const [isLoading, setIsLoading] = useState(true)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [savingId, setSavingId] = useState<string | null>(null)
 
   const fetchTemplates = useCallback(async () => {
     try {
@@ -88,6 +92,48 @@ export function CounterpartyTemplatesPanel() {
       toast({ title: t('toast_delete_failed'), variant: 'destructive' })
     } finally {
       setDeletingId(null)
+    }
+  }
+
+  function startRename(tt: CategorizationTemplate) {
+    setEditingId(tt.id)
+    setEditName(formatCounterpartyName(tt.counterparty_name))
+  }
+
+  function cancelRename() {
+    setEditingId(null)
+    setEditName('')
+  }
+
+  async function handleRename(id: string) {
+    const name = editName.trim()
+    if (!name) return
+    setSavingId(id)
+    try {
+      const res = await fetch('/api/settings/counterparty-templates', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, counterparty_name: name }),
+      })
+      if (res.status === 409) {
+        toast({ title: t('toast_duplicate_name'), variant: 'destructive' })
+        return
+      }
+      if (!res.ok) {
+        toast({ title: t('toast_rename_failed'), variant: 'destructive' })
+        return
+      }
+      const json = (await res.json()) as { data?: CategorizationTemplate }
+      if (json.data) {
+        const updated = json.data
+        setTemplates((prev) => prev.map((tt) => (tt.id === id ? { ...tt, ...updated } : tt)))
+      }
+      cancelRename()
+      toast({ title: t('toast_renamed') })
+    } catch {
+      toast({ title: t('toast_rename_failed'), variant: 'destructive' })
+    } finally {
+      setSavingId(null)
     }
   }
 
@@ -213,8 +259,58 @@ export function CounterpartyTemplatesPanel() {
                     )}
                   </div>
 
-                  {/* Delete */}
-                  <div className="flex justify-end pt-1">
+                  {/* Rename + delete */}
+                  {editingId === tt.id ? (
+                    <form
+                      className="flex items-center gap-2 pt-1"
+                      onSubmit={(e) => {
+                        e.preventDefault()
+                        handleRename(tt.id)
+                      }}
+                    >
+                      <Input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') cancelRename()
+                        }}
+                        maxLength={100}
+                        autoFocus
+                        aria-label={t('rename_label')}
+                        className="h-8 max-w-xs text-sm"
+                      />
+                      <Button
+                        type="submit"
+                        size="sm"
+                        disabled={savingId === tt.id || editName.trim().length < 2}
+                        className="h-7 text-xs"
+                      >
+                        {savingId === tt.id ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : null}
+                        {t('rename_save')}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={cancelRename}
+                        disabled={savingId === tt.id}
+                        className="h-7 text-xs"
+                      >
+                        {t('rename_cancel')}
+                      </Button>
+                    </form>
+                  ) : (
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => startRename(tt)}
+                      disabled={deletingId === tt.id}
+                      className="h-7 text-xs"
+                    >
+                      <Pencil className="mr-1.5 h-3 w-3" />
+                      {t('rename_button')}
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
@@ -230,6 +326,7 @@ export function CounterpartyTemplatesPanel() {
                       {t('delete_button')}
                     </Button>
                   </div>
+                  )}
                 </div>
               )}
             </div>

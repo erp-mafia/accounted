@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ENTITY_TYPES } from '@/lib/company/entity-type'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
@@ -9,6 +10,7 @@ import {
   fiscalYearSchema,
 } from '@/lib/invariants/zod'
 import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
@@ -191,7 +193,7 @@ function validateAccrualPeriod(
 // Enum schemas (matching types/index.ts)
 // ============================================================
 
-export const EntityTypeSchema = z.enum(['enskild_firma', 'aktiebolag'])
+export const EntityTypeSchema = z.enum(ENTITY_TYPES)
 
 export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
 
@@ -294,6 +296,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'webshop_order',
   'expense_claim',
   'expense_payout',
+  'rot_rut_reclaim',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
@@ -710,6 +713,15 @@ export const RotRutSettleSchema = z.object({
     .string()
     .regex(/^19\d{2}$/, 'Bankkontot måste vara ett BAS 19xx-konto')
     .optional(),
+})
+
+/**
+ * POST /api/rot-rut/payout-requests/[id]/reclaim: book the share Skatteverket
+ * refused back onto the customer(s). The amounts come from the recorded
+ * beslut, never from the body; only the booking date is the caller's.
+ */
+export const RotRutReclaimSchema = z.object({
+  booking_date: isoDate,
 })
 
 // The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst
@@ -1201,6 +1213,17 @@ function emptyStringAsUndefined<T extends z.ZodTypeAny>(inner: T) {
   )
 }
 
+/**
+ * suppliers.org_number is stored as the 10-digit key (#2391): the form asks
+ * for XXXXXX-XXXX and the AI extractor emits bare digits, and the matcher
+ * compares through the same key, so storage is canonical whatever the caller
+ * typed. Only Swedish-shaped input (10 or 12 digits once separators are
+ * stripped) is rewritten; a foreign registration number or an unrecognised
+ * value is stored as typed, because eu_business and non_eu_business
+ * suppliers keep their home-registry number in this column.
+ */
+const supplierOrgNumber = z.string().transform((v) => orgNumberKey(v) ?? v.trim())
+
 export const CreateSupplierSchema = z.object({
   name: z.string().min(1, 'Supplier name is required'),
   supplier_type: SupplierTypeSchema,
@@ -1211,7 +1234,7 @@ export const CreateSupplierSchema = z.object({
   postal_code: z.string().optional(),
   city: z.string().optional(),
   country: CountryCodeSchema,
-  org_number: z.string().optional(),
+  org_number: supplierOrgNumber.optional(),
   vat_number: z.string().optional(),
   bankgiro: z.string().optional(),
   plusgiro: z.string().optional(),
@@ -1770,7 +1793,7 @@ export const BookTransactionSchema = z
 
 // ── Webshop orders (Orders page) ──────────────────────────────
 
-export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify'])
+export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify', 'zettle'])
 
 export const WebshopOrdersListQuerySchema = z.object({
   platform: WebshopPlatformSchema.optional(),
@@ -3124,6 +3147,11 @@ const EmployeeSchemaBase = z.object({
   vacation_rule: VacationRuleSchema.default('procentregeln'),
   vacation_days_per_year: z.number().int().min(25).max(40).default(25),
   semestertillagg_rate: z.number().min(0).max(0.05).default(0.0043),
+  // Kollektivavtal semesterlön rate as a fraction (0.135 = 13.5 %); null =
+  // statutory 12 % (14.4 % at 30 days). Bounds mirror the DB CHECK and
+  // lib/salary/vacation-pay-rate: below the floor is illegal, above 30 % is
+  // a unit typo.
+  vacation_pay_rate: z.number().min(0.12).max(0.3).nullable().optional(),
   email: z.string().email().optional(),
   phone: z.string().max(20).optional(),
   address_line1: z.string().max(200).optional(),
@@ -3246,6 +3274,7 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
   vacation_rule: VacationRuleSchema,
   vacation_days_per_year: z.number().int().min(25).max(40),
   semestertillagg_rate: z.number().min(0).max(0.05),
+  vacation_pay_rate: z.number().min(0.12).max(0.3).nullable(),
   vaxa_stod_eligible: z.boolean(),
 })
 
@@ -4290,6 +4319,11 @@ export const PartyEnrichSchema = z.object({
 
 export const PartySearchRegistryQuerySchema = z.object({
   q: z.string().max(120).optional(),
+})
+
+/** GET /api/company/search: the onboarding picker's free-text query. */
+export const CompanySearchQuerySchema = z.object({
+  q: z.string().trim().min(3).max(120),
 })
 
 /**

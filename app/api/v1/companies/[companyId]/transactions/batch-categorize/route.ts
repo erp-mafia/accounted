@@ -10,6 +10,7 @@
  * Idempotent over the whole batch. Dry-runnable.
  */
 import { z } from 'zod'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
@@ -543,8 +544,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .select('entity_type')
       .eq('company_id', ctx.companyId!)
       .single()
-    const entityType: EntityType =
-      (settings?.entity_type as EntityType) || 'enskild_firma'
+    const entityType: EntityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settings?.entity_type)
 
     const results: Item[] = []
     for (let i = 0; i < body.items.length; i++) {

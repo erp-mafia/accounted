@@ -1,4 +1,5 @@
 import type { ArticleType } from '@/types'
+import type { ImportNotice } from '@/lib/import/notices'
 
 /** Result of auto-detecting columns in an article register file. */
 export interface DetectedArticleColumns {
@@ -70,6 +71,8 @@ export interface ArticleImportParseResult {
   rows: AnnotatedArticleRow[]
   duplicate_count: number
   warnings: string[]
+  /** Structured twins of `warnings` (lib/import/notices.ts). */
+  notices?: ImportNotice[]
 }
 
 /** Result of executing the article import. */
@@ -82,4 +85,6 @@ export interface ArticleImportExecuteResult {
   errors: { row_index: number; name: string; reason: string }[]
   /** Non-fatal notes (e.g. dropped revenue-account overrides). */
   warnings: string[]
+  /** Structured twins of `warnings` (lib/import/notices.ts). */
+  notices?: ImportNotice[]
 }

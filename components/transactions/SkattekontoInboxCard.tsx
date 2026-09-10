@@ -131,7 +131,11 @@ export default function SkattekontoInboxCard({
           {formatDate(row.transaktionsdatum)}
         </td>
       )}
-      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+      {/* overflow-hidden: the shrink-0 chips below don't truncate, so on a
+          viewport too narrow for them the cell must clip instead of painting
+          over the Belopp column. Same guard #2003 put on TransactionInboxCard;
+          this row and the ones below never got it. */}
+      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
         <span className="row-collapsible flex min-w-0 items-center gap-2">
           <span className="truncate">{row.transaktionstext}</span>
           {/* v2 names the source in the Konto column instead. */}

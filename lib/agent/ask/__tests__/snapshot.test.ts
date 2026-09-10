@@ -141,6 +141,35 @@ describe('buildAssistantSnapshot', () => {
     expect(snap).toContain('Moms (2026-09-12)')
   })
 
+  it('lists the räkenskapsår newest first with their period_id (#2185)', async () => {
+    const periods = [
+      { id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false },
+      { id: 'fp-2025', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: true },
+    ]
+    const supabase = {
+      from: (table: string) => {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          order: () => chain,
+          limit: () => chain,
+          maybeSingle: async () => ({ data: null, error: null }),
+          then: (onFulfilled: (v: unknown) => unknown) =>
+            Promise.resolve(
+              table === 'fiscal_periods'
+                ? { data: periods, error: null }
+                : { count: null, error: null },
+            ).then(onFulfilled),
+        }
+        return chain
+      },
+    } as unknown as SupabaseClient
+    const snap = await buildAssistantSnapshot(supabase, 'c1')
+    expect(snap).toContain(
+      'Räkenskapsår (senaste först): 2026-01-01..2026-12-31 period_id=fp-2026 (senaste); 2025-01-01..2025-12-31 period_id=fp-2025 (avslutat).',
+    )
+  })
+
   it('returns an empty string when there is nothing to say', async () => {
     const snap = await buildAssistantSnapshot(supabaseWith(null), 'c1')
     expect(snap).toBe('')

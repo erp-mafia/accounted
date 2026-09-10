@@ -1,6 +1,8 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import type { ImportNotice } from '@/lib/import/notices'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import type { ParsedOpeningBalanceRow } from '@/lib/import/opening-balance/types'
@@ -13,6 +15,8 @@ interface OpeningBalanceEditStepProps {
   rows: ParsedOpeningBalanceRow[]
   onContinue: (rows: EditableRow[]) => void
   onBack: () => void
+  /** What the parser noticed about the file (lib/import/notices.ts). */
+  notices?: ImportNotice[]
 }
 
 let idCounter = 0
@@ -24,6 +28,7 @@ export default function OpeningBalanceEditStep({
   rows: initialRows,
   onContinue,
   onBack,
+  notices = [],
 }: OpeningBalanceEditStepProps) {
   const seedRows = useMemo<EditableRow[]>(
     () =>
@@ -50,6 +55,9 @@ export default function OpeningBalanceEditStep({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* The grid below recomputes the balance live, so the parser's
+            unbalanced notice would say the same thing twice. */}
+        <ImportNotices notices={notices.filter((n) => n.code !== 'ob_unbalanced')} />
         <OpeningBalanceRowEditor initialRows={seedRows} onChange={setState} />
 
         <div className="flex justify-between pt-2">

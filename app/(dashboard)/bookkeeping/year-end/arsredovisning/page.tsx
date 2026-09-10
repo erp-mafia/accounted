@@ -79,6 +79,9 @@ export default function ArsredovisningPage() {
   const [savedParentOrgNr, setSavedParentOrgNr] = useState('')
   const [parentCity, setParentCity] = useState('')
   const [savedParentCity, setSavedParentCity] = useState('')
+  // ÅRL 5:20 §: manual medelantal anställda. Empty = computed from Löner.
+  const [medelantalOverride, setMedelantalOverride] = useState('')
+  const [savedMedelantalOverride, setSavedMedelantalOverride] = useState('')
   const [longTermDebtConfirmed, setLongTermDebtConfirmed] = useState(false)
   const [savedLongTermDebtConfirmed, setSavedLongTermDebtConfirmed] = useState(false)
   const [securitiesPledgedConfirmed, setSecuritiesPledgedConfirmed] = useState(false)
@@ -115,6 +118,11 @@ export default function ArsredovisningPage() {
   useEffect(() => {
     if (!periodId) return
     let cancelled = false
+    // A year switch from the header picker re-runs this effect: show the
+    // skeleton instead of the previous year's numbers while the new one
+    // loads, and drop a stale error so the picker stays reachable.
+    setLoading(true)
+    setError(null)
     Promise.all([
       fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning`).then((r) => r.json()),
       fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures`).then((r) =>
@@ -162,6 +170,10 @@ export default function ArsredovisningPage() {
         setSavedParentOrgNr(d.disclosures.parent_company_org_number ?? '')
         setParentCity(d.disclosures.parent_company_city ?? '')
         setSavedParentCity(d.disclosures.parent_company_city ?? '')
+        const medel = d.disclosures.medelantal_anstallda_override
+        const medelStr = medel != null ? String(medel) : ''
+        setMedelantalOverride(medelStr)
+        setSavedMedelantalOverride(medelStr)
         setLongTermDebtConfirmed(d.disclosures.confirmations.long_term_debt_over_five_years)
         setSavedLongTermDebtConfirmed(d.disclosures.confirmations.long_term_debt_over_five_years)
         setSecuritiesPledgedConfirmed(d.disclosures.confirmations.securities_pledged)
@@ -197,6 +209,7 @@ export default function ArsredovisningPage() {
     parentName !== savedParentName ||
     parentOrgNr !== savedParentOrgNr ||
     parentCity !== savedParentCity ||
+    medelantalOverride !== savedMedelantalOverride ||
     longTermDebtConfirmed !== savedLongTermDebtConfirmed ||
     securitiesPledgedConfirmed !== savedSecuritiesPledgedConfirmed ||
     contingentLiabilitiesConfirmed !== savedContingentLiabilitiesConfirmed ||
@@ -220,6 +233,21 @@ export default function ArsredovisningPage() {
         return
       }
       longTermDebtParsed = parsed
+    }
+    // Medelantal anställda: empty clears the override (note falls back to
+    // the FTE average from Löner); otherwise a whole number of employees.
+    let medelantalParsed: number | null = null
+    if (medelantalOverride.trim()) {
+      const parsed = Number(medelantalOverride.trim())
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        toast({
+          title: 'Ogiltigt antal',
+          description: 'Medelantal anställda måste vara ett heltal, noll eller större (eller lämnas tomt).',
+          variant: 'destructive',
+        })
+        return
+      }
+      medelantalParsed = parsed
     }
     let proposedDividendParsed = 0
     if (proposedDividend.trim()) {
@@ -258,6 +286,7 @@ export default function ArsredovisningPage() {
             parent_company_name: parentName.trim() || null,
             parent_company_org_number: parentOrgNr.trim() || null,
             parent_company_city: parentCity.trim() || null,
+            medelantal_anstallda_override: medelantalParsed,
             long_term_debt_over_five_years_confirmed: longTermDebtConfirmed,
             securities_pledged_confirmed: securitiesPledgedConfirmed,
             contingent_liabilities_confirmed: contingentLiabilitiesConfirmed,
@@ -287,6 +316,7 @@ export default function ArsredovisningPage() {
       setSavedParentName(parentName)
       setSavedParentOrgNr(parentOrgNr)
       setSavedParentCity(parentCity)
+      setSavedMedelantalOverride(medelantalOverride)
       setSavedLongTermDebtConfirmed(longTermDebtConfirmed)
       setSavedSecuritiesPledgedConfirmed(securitiesPledgedConfirmed)
       setSavedContingentLiabilitiesConfirmed(contingentLiabilitiesConfirmed)
@@ -318,6 +348,7 @@ export default function ArsredovisningPage() {
     parentName,
     parentOrgNr,
     parentCity,
+    medelantalOverride,
     longTermDebtConfirmed,
     securitiesPledgedConfirmed,
     contingentLiabilitiesConfirmed,
@@ -551,11 +582,28 @@ export default function ArsredovisningPage() {
           </span>
         }
         action={
-          <Button variant="outline" asChild>
-            <Link href={`/bookkeeping/year-end?period=${periodId}`}>
-              <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
-            </Link>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* The year switch has to live on the loaded view too: the
+                no-period branch above auto-jumps to the remembered scope (or
+                the newest year) before anyone sees its picker, so without
+                this the only way to another year's årsredovisning was to
+                change the scope on some other page and come back. */}
+            <FyPicker
+              value={periodId}
+              onChange={(id) => {
+                if (id && id !== periodId) {
+                  router.replace(`/bookkeeping/year-end/arsredovisning?period=${id}`)
+                }
+              }}
+              includeAllOption={false}
+              hideFuturePeriods
+            />
+            <Button variant="outline" asChild>
+              <Link href={`/bookkeeping/year-end?period=${periodId}`}>
+                <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
+              </Link>
+            </Button>
+          </div>
         }
       />
 
@@ -695,6 +743,23 @@ export default function ArsredovisningPage() {
               <p className="text-xs text-muted-foreground mt-1">
                 Noter som krävs enligt ÅRL men inte kan härledas automatiskt. Tomma
                 fält visas som &quot;Inga.&quot; i PDF:en.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="ar-medelantal">Medelantal anställda</Label>
+              <Input
+                id="ar-medelantal"
+                type="text"
+                inputMode="numeric"
+                value={medelantalOverride}
+                onChange={(e) => setMedelantalOverride(e.target.value)}
+                placeholder="Beräknas från Löner"
+                className="max-w-[220px] tabular-nums"
+              />
+              <p className="text-xs text-muted-foreground">
+                ÅRL 5:20 §. Lämna tomt för att använda antalet anställda från Löner.
+                Ägare som tar ut lön räknas som anställd; fyll i om lönen bokförts utan
+                anställd i Löner.
               </p>
             </div>
             <div className="space-y-2">

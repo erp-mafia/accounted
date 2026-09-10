@@ -8,7 +8,8 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getAiStatus } from '@/lib/ai'
 import { loadReads, readIsFresh, readTransaction, storeRead } from '@/lib/agent/categorize/read'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import type { EntityType, Transaction } from '@/types'
+import { parseEntityType } from '@/lib/company/entity-type'
+import type { Transaction } from '@/types'
 
 /**
  * POST /api/agent/categorize: a provider-agnostic booking proposal for one
@@ -96,7 +97,7 @@ export const POST = withRouteContext(
 
     try {
       const transaction = tx as Transaction
-      const entityType = ((company?.entity_type as EntityType | undefined) ?? 'enskild_firma')
+      const entityType = parseEntityType(company?.entity_type)
       const vatRegistered = settings?.vat_registered ?? false
 
       // The read made before anyone opened the row (the ten-minute cron, or

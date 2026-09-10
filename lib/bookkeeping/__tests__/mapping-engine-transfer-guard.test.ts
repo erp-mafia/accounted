@@ -43,7 +43,7 @@ describe('evaluateMappingRules own-account transfer guard', () => {
       supabase as never,
       'company-1',
       makeTransaction({ amount: -1000, currency: 'SEK' }),
-      undefined,
+      'enskild_firma',
       '1930',
     )
 
@@ -65,7 +65,7 @@ describe('evaluateMappingRules own-account transfer guard', () => {
       supabase as never,
       'company-1',
       makeTransaction({ amount: 217.04, currency: 'SEK' }),
-      undefined,
+      'enskild_firma',
       '1940',
     )
 

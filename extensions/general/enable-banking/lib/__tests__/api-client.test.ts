@@ -736,6 +736,39 @@ describe('convertTransaction', () => {
     expect(out.proprietary_bank_transaction_code).toBe('XB')
   })
 
+  // Enable Banking's real payload: bank_transaction_code is an object. Until
+  // 2026-09 the object went straight through, so the ledger column received
+  // its JSON text ('{"description":"Card purchase",...}') and the label
+  // derivation never matched anything.
+  it('flattens the object-shaped bank_transaction_code to a string', () => {
+    const tx = makeTx({
+      bank_transaction_code: { description: 'Card purchase', code: 'PMNT', sub_code: 'CCRD' },
+    })
+    const out = convertTransaction(tx, 'SEK')
+    expect(out.bank_transaction_code).toBe('PMNT/CCRD')
+    expect(out.description).toBe('Kortköp')
+  })
+
+  it('keeps the description when the ASPSP sends no ISO code (the Swedish norm) and labels from it', () => {
+    const tx = makeTx({
+      bank_transaction_code: { description: 'Card purchase', code: null, sub_code: null },
+    })
+    const out = convertTransaction(tx, 'SEK')
+    expect(out.bank_transaction_code).toBe('Card purchase')
+    expect(out.description).toBe('Kortköp')
+  })
+
+  it('drops an empty object instead of storing its JSON', () => {
+    const tx = makeTx({
+      bank_transaction_code: { description: '', code: null, sub_code: null },
+      proprietary_bank_transaction_code: { description: null, code: null, sub_code: null },
+    })
+    const out = convertTransaction(tx, 'SEK')
+    expect(out.bank_transaction_code).toBeUndefined()
+    expect(out.proprietary_bank_transaction_code).toBeUndefined()
+    expect(out.description).toBe('Okänd transaktion')
+  })
+
   // Enable Banking has no `bban` key on AccountIdentification: a Swedish
   // BBAN arrives as other.identification with scheme_name BBAN. The earlier
   // `.bban` read was always undefined, so domestic counterparties were lost.

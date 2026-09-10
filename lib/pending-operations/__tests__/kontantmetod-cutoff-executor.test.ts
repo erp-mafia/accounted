@@ -32,7 +32,7 @@ const collection = {
 }
 
 function makePendingOp(overrides: Partial<PendingOperation> = {}): PendingOperation {
-  const lines = buildCutoffLines(collection.receivables, collection.payables)
+  const lines = buildCutoffLines(collection.receivables, collection.payables, 'aktiebolag')
   return {
     id: 'op-1', user_id: 'user-1', company_id: 'company-1',
     operation_type: 'post_kontantmetod_cutoff', status: 'pending', title: 'cut-off',
@@ -103,7 +103,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2027-02-01T12:00:00Z'))
   vi.mocked(assessKontantmetodCutoff).mockResolvedValue({
     collection,
-    lines: buildCutoffLines(collection.receivables, collection.payables),
+    lines: buildCutoffLines(collection.receivables, collection.payables, 'aktiebolag'),
     postings: {
       complete: false, hasAny: false, receivableEntryId: null,
       receivableReversalId: null, payableEntryId: null, payableReversalId: null,
@@ -151,7 +151,7 @@ describe('commitPendingOperation: post_kontantmetod_cutoff', () => {
         ...collection,
         receivables: [{ ...collection.receivables[0]!, outstanding: 1300 }],
       },
-      lines: buildCutoffLines([], []),
+      lines: buildCutoffLines([], [], 'aktiebolag'),
       postings: { complete: false, hasAny: false, receivableEntryId: null, receivableReversalId: null, payableEntryId: null, payableReversalId: null, missing: [], duplicates: [] },
     })
     const result = await commitPendingOperation(
@@ -165,7 +165,7 @@ describe('commitPendingOperation: post_kontantmetod_cutoff', () => {
   it('rejects a duplicate, locked period, wrong accounting method, and missing next period', async () => {
     vi.mocked(assessKontantmetodCutoff).mockResolvedValueOnce({
       collection,
-      lines: buildCutoffLines(collection.receivables, []),
+      lines: buildCutoffLines(collection.receivables, [], 'aktiebolag'),
       postings: { complete: true, hasAny: true, receivableEntryId: 'je-1', receivableReversalId: 'je-2', payableEntryId: null, payableReversalId: null, missing: [], duplicates: [] },
     })
     await expect(commitPendingOperation(

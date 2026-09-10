@@ -17,6 +17,7 @@ import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { InvoiceExtractionResult } from '@/types'
 import { getAiService, readAiConfig, extractJsonObject } from '@/lib/ai'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
 
@@ -235,21 +236,15 @@ export function promoteSingleProminentAmount(
   }
 }
 
-/** Digits only; the comparable core of an org/VAT number. */
+/** Digits only; the comparable core of a VAT number. */
 const digitsOf = (value: string | null | undefined): string => (value ?? '').replace(/\D/g, '')
 
 /**
  * Canonical 10-digit form of a Swedish organisation number, or '' when the
- * input is not one. The 12-digit century-prefixed forms denote the same
- * identity: "16" for organisations, "19"/"20" for personnummer-form numbers
- * (enskild firma stores the owner's personnummer as org number). Junk that is
- * not 10 digits after trimming never matches anything.
+ * input is not one: the same key the supplier matcher compares through
+ * (lib/invariants/org-number.ts). Junk never matches anything.
  */
-function toOrg10(digits: string): string {
-  const trimmed =
-    digits.length === 12 && /^(16|19|20)/.test(digits) ? digits.slice(2) : digits
-  return trimmed.length === 10 ? trimmed : ''
-}
+const toOrg10 = (value: string | null | undefined): string => orgNumberKey(value) ?? ''
 
 /**
  * Never present the receiving company as its own supplier.
@@ -269,8 +264,8 @@ export function stripOwnCompanyAsSupplier(
   own: OwnCompanyIdentity | undefined
 ): InvoiceExtractionResult {
   if (!own) return data
-  const ownOrg10 = toOrg10(digitsOf(own.orgNumber))
-  const extractedOrg10 = toOrg10(digitsOf(data.supplier.orgNumber))
+  const ownOrg10 = toOrg10(own.orgNumber)
+  const extractedOrg10 = toOrg10(data.supplier.orgNumber)
   const extractedVat = digitsOf(data.supplier.vatNumber)
   const orgHit = ownOrg10 !== '' && extractedOrg10 !== '' && extractedOrg10 === ownOrg10
   const vatHit = ownOrg10 !== '' && extractedVat === `${ownOrg10}01`
@@ -370,7 +365,7 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
   },
   "invoice": {
     "invoiceNumber": string | null,    // include any suffix, e.g. "06655767-0007"
-    "invoiceDate": string | null,      // ISO date YYYY-MM-DD
+    "invoiceDate": string | null,      // ISO date YYYY-MM-DD: the invoice date, or on a receipt the purchase date printed on it
     "dueDate": string | null,          // ISO date YYYY-MM-DD
     "paymentReference": string | null, // OCR / payment reference
     "currency": string,                // ISO 4217 (SEK, USD, EUR, ...). Default "SEK" only if truly indeterminate.
@@ -411,6 +406,7 @@ Rules:
 - legibility: "good" = all key amounts and the merchant are readable. "partial" = some key fields are cut off, blurry, or unreadable. "unreadable" = the document is mostly illegible (too blurry/dark/small). Judge the IMAGE quality, not whether fields exist on the document.
 - payment: only for documents that show how payment was made. "card" for kort/VISA/Mastercard; cardLast4 only when a masked card number like ****1234 is printed. "invoice" means the document says it will be billed separately.
 - purchaseTime: the HH:MM time printed on a receipt. null when absent.
+- invoiceDate on receipts: the purchase date printed on the receipt (the "Datum"/"Date" line, usually right next to the time, or the date on the card slip). The field is NOT invoice-only: every receipt carries a date, so fill it whenever one is printed, and leave null only when no date is printed or it is unreadable.
 - Öresavrundning: Swedish receipts often show an "Avrundning"/"Öresavrundning" line. "total" is ALWAYS the amount actually paid AFTER rounding; put the rounding line in totals.roundingAmount (negative when rounded down). When present: subtotal + vatAmount + roundingAmount = total.
 - Currency: detect from the document (symbol $/€/kr or explicit code). Use the ISO 4217 code. Do NOT default to SEK if the document clearly shows another currency.
 - "total" is the amount the buyer must pay (look for "Att betala", "Total", "Amount paid", "Amount due", "Balance"). Prefer this over Subtotal.

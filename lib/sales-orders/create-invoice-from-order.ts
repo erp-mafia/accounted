@@ -206,6 +206,12 @@ export async function createInvoiceFromSalesOrder(
     if ('dbError' in build) return failDb(build.dbError)
     return fail(build.code, build.details)
   }
+  // Fail closed on a missing Riksbanken rate, like convertToInvoice does: the
+  // builder leaves exchange_rate NULL on a miss and resolveSekAmount() would
+  // then book the foreign amount 1:1 as kronor on 1510/3xxx/26xx.
+  if (order.currency !== 'SEK' && build.invoiceFields.exchange_rate == null) {
+    return fail('SALES_ORDER_INVOICE_FX_RATE_UNAVAILABLE', { currency: order.currency })
+  }
 
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')

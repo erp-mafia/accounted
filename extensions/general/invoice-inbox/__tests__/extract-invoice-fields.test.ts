@@ -240,6 +240,31 @@ describe('extractInvoiceFields', () => {
     expect(content[0].source.media_type).toBe('image/jpeg')
   })
 
+  it('tells the model that a receipt carries its purchase date in invoiceDate', async () => {
+    // Prod, last 30 days as of 2026-09-08: supplier invoices lost invoiceDate
+    // on 0.4% of items, receipts on 46% (75% via WhatsApp), while purchaseTime
+    // was filled on nearly every one of those receipts. The field was described
+    // as a bare ISO date under the invoice block, right next to a purchaseTime
+    // rule marked "receipts only", and the model took the asymmetry literally.
+    // Pin the receipt rule so a prompt edit cannot silently drop it again.
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({
+      buffer: Buffer.from('JPEG'),
+      mimeType: 'image/jpeg',
+      fileName: 'kvitto.jpg',
+    })
+    const call = mockCreate.mock.calls[0][0]
+    const system: string =
+      typeof call.system === 'string'
+        ? call.system
+        : call.system.map((block: { text: string }) => block.text).join('\n')
+    expect(system).toContain(
+      '"invoiceDate": string | null,      // ISO date YYYY-MM-DD: the invoice date, or on a receipt the purchase date printed on it'
+    )
+    expect(system).toContain('- invoiceDate on receipts: the purchase date printed on the receipt')
+    expect(system).toContain('The field is NOT invoice-only')
+  })
+
   it('sends document content for a PDF upload', async () => {
     mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
     await extractInvoiceFields({

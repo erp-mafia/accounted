@@ -172,8 +172,12 @@ const CODE_KEYWORD_METHODS: ReadonlyArray<readonly [RegExp, TransactionMethod]> 
   [/AUTOGIRO/i, 'autogiro'],
   [/INTRST|INTEREST|RÄNTA|RANTA/i, 'interest'],
   [/\bFEE\b|CHRG|CHARGE|AVGIFT/i, 'fee'],
-  [/ATM|CASH.?WDL|WITHDRAW|UTTAG/i, 'withdrawal'],
+  // Card before withdrawal: Swedish banks send the combined channel wording
+  // "Kortköp/uttag" as the code description for ordinary card purchases (SEB,
+  // Swedbank), and TRAILING_PHRASES already reads that phrase as card. A bare
+  // ATM/UTTAG code without a card marker still lands on withdrawal.
   [/\bCARD\b|KORT|\bPOS\b/i, 'card'],
+  [/ATM|CASH.?WDL|WITHDRAW|UTTAG/i, 'withdrawal'],
   [/SALA|SALARY|\bLÖN\b|\bLON\b/i, 'salary'],
 ]
 

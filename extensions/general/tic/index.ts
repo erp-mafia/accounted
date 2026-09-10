@@ -34,7 +34,12 @@ import {
   readBankIdFlow,
   setBankIdFlowCookies,
 } from './lib/bankid-flow-cookie'
-import { lookupCompanyByOrgNumber, registrationDateToMs } from './lib/lookup'
+import {
+  lookupCompanyByOrgNumber,
+  registrationDateToMs,
+  searchCompaniesForLookup,
+} from './lib/lookup'
+import { COMPANY_SEARCH_MIN_CHARS } from '@/lib/company-lookup/types'
 import {
   hasForeignCredential,
   isUnadoptedPendingAccount,
@@ -42,6 +47,9 @@ import {
 } from './lib/bankid-pending'
 import { sendBankIdSignupConfirmation } from './lib/bankid-confirmation-mail'
 import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
+import { openBankIdResult, sealBankIdResult } from './lib/bankid-flow-result'
+import type { BankIdFlowResult, BankIdFlowState } from './lib/bankid-flow-cookie'
+import type { BankIdUser } from './lib/bankid-types'
 import {
   evaluateBrandSignupGate,
   readInviteTokenFromCookieHeader,
@@ -208,6 +216,52 @@ async function consumeBankIdSession(
  * Non-blocking: any failure is logged and swallowed: BankID auth must still
  * succeed even if enrichment is down.
  */
+/**
+ * The identification a flow completed with.
+ *
+ * Opened from the cookie when /poll sealed it there. Otherwise fetched from
+ * TIC's collect endpoint: a cookie minted before the seal existed, or a flow
+ * whose completing poll response never reached the browser. Null when
+ * neither has it, and the caller refuses: TIC hands a completed result out at
+ * most twice, so there is nothing left to retry (#2471).
+ */
+/**
+ * Seal for the cookie, or undefined when sealing is impossible: no user on
+ * the poll answer, or no BANKID_ENCRYPTION_KEY in this deployment (login never
+ * needed the key before this seal existed; signing has its own fallbacks).
+ * Undefined means the routes behave as they did before the seal: one collect
+ * against TIC, which still works on every path that spends two fetches.
+ */
+function sealIfPossible(user: BankIdUser | undefined): BankIdFlowResult | undefined {
+  if (!user?.personalNumber) return undefined
+  try {
+    return sealBankIdResult(user)
+  } catch (error) {
+    log.warn('poll: could not seal the identification, falling back to collect', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return undefined
+  }
+}
+
+async function completedUserFor(
+  flow: BankIdFlowState,
+  route: 'complete' | 'link',
+): Promise<BankIdUser | null> {
+  const sealed = openBankIdResult(flow)
+  if (sealed) return sealed
+
+  const session = await collectBankIdResult(flow.sessionId)
+  if (session.status === 'complete' && session.user) return session.user
+
+  log.warn(`${route} refused: no completed identification`, {
+    reason: 'not_complete',
+    ticStatus: session.status,
+    session: flow.sessionId.slice(0, 8),
+  })
+  return null
+}
+
 async function fetchAndStoreEnrichment(
   sessionId: string,
   userId: string,
@@ -359,7 +413,7 @@ function toFinancialReportSummary(
 function handleTicError(
   error: unknown,
   log: { error: (msg: string, meta?: unknown) => void } | Console,
-  route: 'lookup' | 'profile',
+  route: 'lookup' | 'profile' | 'search',
   orgNumber: string,
   fallbackMessage: string
 ): Response {
@@ -946,6 +1000,7 @@ export const ticExtension: Extension = {
             // No live flow in this browser: the tab is polling something that
             // has finished, expired, or never belonged to it. Terminal, not an
             // error, so the client can settle instead of spinning.
+            log.info('poll no_session', { reason: 'no_flow' })
             return NextResponse.json({ error: 'no_session' }, { status: 404 })
           }
 
@@ -956,6 +1011,7 @@ export const ticExtension: Extension = {
           // still legitimate for the page that started it.
           const pollBody = await request.json().catch(() => ({}))
           if (!isBankIdFlowMode(pollBody?.mode) || pollBody.mode !== flow.mode) {
+            log.info('poll no_session', { reason: 'mode_mismatch', session: flow.sessionId.slice(0, 8) })
             return NextResponse.json({ error: 'no_session' }, { status: 404 })
           }
           const isProbe = pollBody?.probe === true
@@ -967,37 +1023,77 @@ export const ticExtension: Extension = {
           // probe has no id yet and may discover it, but every active poll must
           // present the id returned by /start or by that probe.
           if (!isProbe && request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
+            log.info('poll no_session', { reason: 'flow_mismatch', session: flow.sessionId.slice(0, 8) })
             return NextResponse.json({ error: 'no_session' }, { status: 404 })
           }
 
+          // Served from the cookie once /poll has sealed the identification
+          // there. TIC hands a completed result out at most twice, and the
+          // iPhone path (BankID reloads the tab, the mount probe polls, the
+          // Fortsätt tap polls again) spent both before /complete got its
+          // turn (#2471). After the first observation nothing here asks TIC.
+          const sealed = openBankIdResult(flow)
           let result: Awaited<ReturnType<typeof pollBankIdSession>>
-          try {
-            result = await pollBankIdSession(flow.sessionId)
-          } catch (error) {
-            // TIC no longer knows this session (404), or answered 410 for an
-            // expired one. Report it as no_session so the client settles
-            // instead of counting it as a service outage.
-            //
-            // Deliberately does NOT clear the cookie. A clearing Set-Cookie is
-            // untargeted: a slow response about a dead session would delete
-            // whatever flow is in the jar by the time it lands, including one
-            // the user has just started in another tab. The stale cookie is
-            // harmless (it answers no_session again and expires on its own),
-            // whereas deleting a live flow costs a billable session.
-            if (error instanceof TICAPIError && (error.statusCode === 404 || error.statusCode === 410)) {
+          if (sealed) {
+            result = { sessionId: flow.sessionId, status: 'complete', user: sealed }
+            log.info('poll status', { status: 'complete', source: 'cookie' })
+          } else {
+            try {
+              result = await pollBankIdSession(flow.sessionId)
+            } catch (error) {
+              // TIC no longer knows this session (404), or answered 410 for an
+              // expired one. Report it as no_session so the client settles
+              // instead of counting it as a service outage.
+              //
+              // Deliberately does NOT clear the cookie. A clearing Set-Cookie is
+              // untargeted: a slow response about a dead session would delete
+              // whatever flow is in the jar by the time it lands, including one
+              // the user has just started in another tab. The stale cookie is
+              // harmless (it answers no_session again and expires on its own),
+              // whereas deleting a live flow costs a billable session.
+              if (error instanceof TICAPIError && (error.statusCode === 404 || error.statusCode === 410)) {
+                log.info('poll no_session', {
+                  reason: 'tic_gone',
+                  statusCode: error.statusCode,
+                  session: flow.sessionId.slice(0, 8),
+                })
+                return NextResponse.json({ error: 'no_session' }, { status: 404 })
+              }
+              throw error
+            }
+
+            // An expired-session body comes back with no `status` at all
+            // (identityFetch returns a 410 body verbatim). Same treatment.
+            if (!result?.status) {
+              log.info('poll no_session', { reason: 'no_status', session: flow.sessionId.slice(0, 8) })
               return NextResponse.json({ error: 'no_session' }, { status: 404 })
             }
-            throw error
-          }
 
-          // An expired-session body comes back with no `status` at all
-          // (identityFetch returns a 410 body verbatim). Same treatment.
-          if (!result?.status) {
-            return NextResponse.json({ error: 'no_session' }, { status: 404 })
-          }
+            if (result.status !== 'pending') {
+              log.info('poll status', {
+                status: result.status,
+                hintCode: result.hintCode,
+                hasUser: !!result.user?.personalNumber,
+                source: 'tic',
+              })
+            }
 
-          if (result.status !== 'pending') {
-            log.info('poll status', { status: result.status, hintCode: result.hintCode, hasUser: !!result.user?.personalNumber })
+            if (result.status === 'collected') {
+              // TIC has already handed this result out (both deliveries went
+              // to responses this browser never kept, or to a cookie from
+              // before the seal existed) and will not again. Terminal: say so,
+              // so the tab settles instead of polling to its deadline. The
+              // message reaches the panel as-is, so it is Swedish.
+              log.warn('poll: result already collected by TIC, none sealed here', {
+                session: flow.sessionId.slice(0, 8),
+              })
+              result = {
+                ...result,
+                status: 'failed',
+                user: undefined,
+                message: 'BankID-identifieringen gick inte att hämta. Försök igen.',
+              }
+            }
           }
 
           // Whitelist the fields the UI renders. The raw TIC payload carries
@@ -1031,12 +1127,15 @@ export const ticExtension: Extension = {
           // The client settles on this status, and the cookie expires.
           if (result.status === 'complete') {
             // Identification is done; what remains is the signup e-mail step,
-            // which is a person typing. Re-issue with the longer window so a
-            // user hunting for the right address does not have the session
-            // expire under them: on the old client-state design this step was
-            // bounded only by TIC's own retention.
+            // which is a person typing. Re-issue with the longer window on
+            // EVERY completed poll, sealed or not, so the budget runs from the
+            // last poll the person made (the Fortsätt tap on a reloaded tab),
+            // not from the mount probe that happened to see completion first;
+            // MAX_TOTAL_LIFE caps the chain. The first observation also seals
+            // the identification so no later read has to ask TIC.
             await setBankIdFlowCookies(response, {
               ...flow,
+              result: flow.result ?? sealIfPossible(result.user),
               expiresAt: Date.now() + FLOW_VERIFIED_WINDOW_SECONDS * 1000,
             })
           }
@@ -1070,6 +1169,7 @@ export const ticExtension: Extension = {
           // seen, in whatever flow suited it.
           const flow = await readBankIdFlow(request)
           if (!flow) {
+            log.warn('complete refused', { reason: 'no_flow' })
             return NextResponse.json(
               { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
               { status: 400 }
@@ -1081,6 +1181,7 @@ export const ticExtension: Extension = {
           // this tab started. Only the tab that started or explicitly resumed
           // the current flow may complete it.
           if (request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
+            log.warn('complete refused', { reason: 'flow_mismatch', session: sessionId.slice(0, 8) })
             return NextResponse.json(
               { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
               { status: 400 }
@@ -1092,6 +1193,7 @@ export const ticExtension: Extension = {
             // proves who is being linked. Completing a link flow here would
             // create or sign in an account off a session opened for something
             // else entirely.
+            log.warn('complete refused', { reason: 'link_mode', session: sessionId.slice(0, 8) })
             return NextResponse.json(
               { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
               { status: 400 }
@@ -1104,6 +1206,7 @@ export const ticExtension: Extension = {
             : undefined
 
           if (mode === 'signup' && !trimmedEmail) {
+            log.warn('complete refused', { reason: 'signup_no_email', session: sessionId.slice(0, 8) })
             return NextResponse.json(
               { error: 'email is required for signup' },
               { status: 400 }
@@ -1122,17 +1225,18 @@ export const ticExtension: Extension = {
             return response
           }
 
-          // Verify BankID session is complete. The message surfaces directly
-          // in the register-page toast, so it must be Swedish.
-          const session = await collectBankIdResult(sessionId)
-          if (session.status !== 'complete' || !session.user) {
+          // The identification this flow completed with: sealed in the cookie
+          // by /poll, or (older cookies) fetched from TIC once. The message
+          // surfaces directly in the register-page toast, so it must be Swedish.
+          const user = await completedUserFor(flow, 'complete')
+          if (!user) {
             return settle(NextResponse.json(
               { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
               { status: 400 }
             ))
           }
 
-          const { personalNumber, givenName, surname, name } = session.user
+          const { personalNumber, givenName, surname, name } = user
           const pnrHash = hashPersonalNumber(personalNumber)
           const supabase = createServiceClient()
 
@@ -1203,6 +1307,7 @@ export const ticExtension: Extension = {
             // browser's flow cookie can both arrive here; only one may mint,
             // because the second magic link invalidates the first.
             if (!await consumeBankIdSession(supabase, sessionId)) {
+              log.warn('complete refused', { reason: 'already_consumed', mode, session: sessionId.slice(0, 8) })
               return settle(NextResponse.json(
                 { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
                 { status: 400 }
@@ -1402,6 +1507,7 @@ export const ticExtension: Extension = {
           // recoverable account_exists path above leaves the flow reusable,
           // and before the mail so two tabs cannot both send one.
           if (!await consumeBankIdSession(supabase, sessionId)) {
+            log.warn('complete refused', { reason: 'already_consumed', mode, session: sessionId.slice(0, 8) })
             await rollbackSignup('session already consumed')
             return settle(NextResponse.json(
               { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
@@ -1520,6 +1626,7 @@ export const ticExtension: Extension = {
           // currently logged in on this browser.
           const flow = await readBankIdFlow(request)
           if (!flow || flow.mode !== 'link') {
+            log.warn('link refused', { reason: flow ? 'mode_mismatch' : 'no_flow' })
             return NextResponse.json(
               { error: 'session_invalid', message: 'BankID session is not complete' },
               { status: 400 }
@@ -1527,6 +1634,7 @@ export const ticExtension: Extension = {
           }
 
           if (request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
+            log.warn('link refused', { reason: 'flow_mismatch', session: flow.sessionId.slice(0, 8) })
             return NextResponse.json(
               { error: 'session_invalid', message: 'BankID session is not complete' },
               { status: 400 }
@@ -1553,16 +1661,17 @@ export const ticExtension: Extension = {
             return response
           }
 
-          // Verify BankID session
-          const session = await collectBankIdResult(sessionId)
-          if (session.status !== 'complete' || !session.user) {
+          // Sealed in the cookie by /poll, or (older cookies) fetched from
+          // TIC once.
+          const user = await completedUserFor(flow, 'link')
+          if (!user) {
             return settle(NextResponse.json(
               { error: 'session_invalid', message: 'BankID session is not complete' },
               { status: 400 }
             ))
           }
 
-          const { personalNumber, givenName, surname } = session.user
+          const { personalNumber, givenName, surname } = user
           const pnrHash = hashPersonalNumber(personalNumber)
           const supabase = createServiceClient()
 
@@ -1587,6 +1696,7 @@ export const ticExtension: Extension = {
           // Single-use, same reason as /complete: two tabs sharing this
           // browser's flow must not both act on one identification.
           if (!await consumeBankIdSession(supabase, sessionId)) {
+            log.warn('link refused', { reason: 'already_consumed', session: sessionId.slice(0, 8) })
             return settle(NextResponse.json(
               { error: 'session_invalid', message: 'BankID session is not complete' },
               { status: 400 }
@@ -1689,6 +1799,36 @@ export const ticExtension: Extension = {
         } catch (error) {
           log.error('unlink failed', error)
           return NextResponse.json({ error: 'Failed to unlink BankID' }, { status: 500 })
+        }
+      },
+    },
+    {
+      method: 'GET',
+      path: '/search',
+      // Onboarding's orgnr field also accepts a company name: one Lens call
+      // returns up to five hits in /lookup's shape so a pick needs no second
+      // call. User is authenticated but may not yet have a company.
+      skipCompanyContext: true,
+      handler: async (request: Request, ctx?) => {
+        const log = ctx?.log ?? console
+        const url = new URL(request.url)
+        const query = (url.searchParams.get('q') ?? '').trim()
+
+        if (query.length < COMPANY_SEARCH_MIN_CHARS) {
+          return NextResponse.json(
+            { error: `q must be at least ${COMPANY_SEARCH_MIN_CHARS} characters` },
+            { status: 400 }
+          )
+        }
+
+        try {
+          const hits = await searchCompaniesForLookup(query)
+          if (hits.length === 0) {
+            return NextResponse.json({ error: 'Company not found' }, { status: 404 })
+          }
+          return NextResponse.json({ data: hits })
+        } catch (error) {
+          return handleTicError(error, log, 'search', query, 'Failed to search companies')
         }
       },
     },

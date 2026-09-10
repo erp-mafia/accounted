@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { commitEntry, createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -297,7 +298,7 @@ export async function loadRuleContext(
   let primary: string | null = null
   return {
     rules,
-    entityType: (settingsResult.data?.entity_type as EntityType) ?? 'aktiebolag',
+    entityType: await resolveCompanyEntityType(supabase, companyId, settingsResult.data?.entity_type),
     // Same signal as lib/tax/deadline-config.ts: employer_registered is the
     // explicit attestation (nullable, 20260717151000; null = never attested)
     // and falls back to the onboarding pays_salaries answer. An explicit

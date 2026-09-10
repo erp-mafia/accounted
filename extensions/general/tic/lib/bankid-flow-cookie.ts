@@ -126,7 +126,31 @@ export interface BankIdFlowState {
   startedAt: number
   /** Absolute expiry, enforced server-side; the browser's Max-Age only mirrors it. */
   expiresAt: number
+  /**
+   * The completed identification, sealed by /poll the first time TIC reported
+   * it. TIC hands a completed result out at most twice, so it is kept here and
+   * every later read (probe, poll, /complete, /link) opens it from the cookie
+   * instead of asking TIC again. Ciphertext, not plaintext: see
+   * bankid-flow-result.ts. Absent until completion, and on cookies minted
+   * before the field existed, which still verify.
+   */
+  result?: BankIdFlowResult
 }
+
+export interface BankIdFlowResult {
+  /** AES-256-GCM ciphertext of the BankIdUser JSON, base64url. */
+  enc: string
+  /** When the identification was first observed complete (ms since epoch). */
+  completedAt: number
+}
+
+/**
+ * A sealed BankIdUser is a few hundred bytes; anything past this is not a
+ * result this server produced. Keeps a forged-but-signed cookie (impossible)
+ * or a bug from growing the jar past what browsers accept.
+ */
+const MAX_RESULT_ENC_LENGTH = 2048
+const BASE64URL = /^[A-Za-z0-9_-]+$/u
 
 type Environment = Record<string, string | undefined>
 
@@ -285,8 +309,18 @@ export async function verifyBankIdFlow(
   // measured from the original start, polling in a loop would keep a usable
   // identification alive for as long as TIC retains the session.
   if (now - state.startedAt > MAX_TOTAL_LIFE_MS) return null
+  if (state.result !== undefined && !isFlowResult(state.result)) return null
 
   return state as BankIdFlowState
+}
+
+function isFlowResult(value: unknown): value is BankIdFlowResult {
+  if (!value || typeof value !== 'object') return false
+  const result = value as Partial<BankIdFlowResult>
+  if (typeof result.enc !== 'string' || !result.enc) return false
+  if (result.enc.length > MAX_RESULT_ENC_LENGTH || !BASE64URL.test(result.enc)) return false
+  if (typeof result.completedAt !== 'number' || !Number.isFinite(result.completedAt)) return false
+  return true
 }
 
 /**

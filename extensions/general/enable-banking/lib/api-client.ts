@@ -16,6 +16,7 @@ import { getAuthorizationHeader } from './jwt'
 import { deriveTransactionLabel } from './transaction-label'
 import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
+import { normalizeBankTransactionCode } from '@accounted/connect-contract'
 import { dateFromDaysBefore, historyWindowDays } from './history-window'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
@@ -193,8 +194,20 @@ export interface Transaction {
   }
   remittance_information?: string[]
   merchant_category_code?: string
-  bank_transaction_code?: string
-  proprietary_bank_transaction_code?: string
+  /**
+   * Enable Banking sends this as an object ({ description, code, sub_code });
+   * older sandbox fixtures and some ASPSPs send a bare string. Never read it
+   * raw: convertTransaction flattens it with the shared contract rule.
+   */
+  bank_transaction_code?: string | EnableBankingTransactionCode
+  proprietary_bank_transaction_code?: string | EnableBankingTransactionCode
+}
+
+/** The structured transaction code as Enable Banking actually serializes it. */
+export interface EnableBankingTransactionCode {
+  description?: string | null
+  code?: string | null
+  sub_code?: string | null
 }
 
 export interface TransactionsResponse {
@@ -1347,6 +1360,14 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
   const creditorName = tx.creditor?.name || tx.creditor_name
   const debtorName = tx.debtor?.name || tx.debtor_name
 
+  // Enable Banking's codes arrive as { description, code, sub_code } objects.
+  // Flatten them ONCE here, with the rule the Connect service applies on its
+  // side (normalizeBankTransactionCode), so the label derivation below sees a
+  // string and the ledger column receives text, not the object's JSON.
+  const bankTransactionCode = normalizeBankTransactionCode(tx.bank_transaction_code) ?? undefined
+  const proprietaryBankTransactionCode =
+    normalizeBankTransactionCode(tx.proprietary_bank_transaction_code) ?? undefined
+
   return {
     id: tx.entry_reference || tx.transaction_id || `${tx.booking_date}_${rawAmount}`,
     date: tx.value_date || tx.booking_date || new Date().toISOString().split('T')[0],
@@ -1361,8 +1382,8 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
     description: tx.remittance_information?.filter(r => r.trim()).join(' ') ||
                  (isCredit ? debtorName : creditorName) ||
                  deriveTransactionLabel({
-                   bankTransactionCode: tx.bank_transaction_code,
-                   proprietaryBankTransactionCode: tx.proprietary_bank_transaction_code,
+                   bankTransactionCode,
+                   proprietaryBankTransactionCode,
                    mcc: tx.merchant_category_code,
                    isCredit,
                  }) ||
@@ -1372,8 +1393,8 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
       ? pickAccountIdentifier(tx.debtor_account, tx.debtor_account_additional_identification)
       : pickAccountIdentifier(tx.creditor_account, tx.creditor_account_additional_identification),
     merchant_category_code: tx.merchant_category_code,
-    bank_transaction_code: tx.bank_transaction_code,
-    proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code,
+    bank_transaction_code: bankTransactionCode,
+    proprietary_bank_transaction_code: proprietaryBankTransactionCode,
   }
 }
 

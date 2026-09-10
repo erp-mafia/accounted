@@ -520,6 +520,9 @@ describe('counterparty-templates', () => {
       const chain = {
         select: () => chain,
         eq: () => chain,
+        contains: () => chain,
+        order: () => chain,
+        limit: () => chain,
         maybeSingle: async () => ({ data: null, error: null }),
         insert: async (payload: Record<string, unknown>) => {
           inserted.push(payload)
@@ -710,15 +713,123 @@ describe('counterparty-templates', () => {
       expect(supabase.from).toHaveBeenCalledWith('categorization_templates')
     })
 
-    it('does DB lookup when existingTemplate is undefined', async () => {
+    it('does DB lookup by name, then by alias, when existingTemplate is undefined', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
-      enqueue({ data: null }) // select returns null
+      enqueue({ data: null }) // select by name returns null
+      enqueue({ data: null }) // select by alias returns null
       enqueue({ data: null }) // insert
 
       await insertOrUpdateTemplate(supabase as never, 'user-1', baseParams)
 
-      // Two calls: select + insert
-      expect(supabase.from).toHaveBeenCalledTimes(2)
+      // Three calls: select by name + select by alias + insert
+      expect(supabase.from).toHaveBeenCalledTimes(3)
+    })
+
+    it('re-approval lands on a renamed template through its alias, not as a new row', async () => {
+      // A user rename moves the bank-derived key into counterparty_aliases.
+      // The learn path derives its key from the bank description, so without
+      // the alias leg every later approval would insert a duplicate.
+      const { supabase, enqueue, findCall, calls } = createQueuedMockSupabase()
+      const renamed = makeCategorizationTemplate({
+        id: 'renamed-1',
+        counterparty_name: 'spotify',
+        counterparty_aliases: ['spotify ab stockholm 4471 kortköp', 'spotify ab stockholm 4471'],
+        debit_account: '6200',
+        credit_account: '1930',
+        occurrence_count: 5,
+      })
+      enqueue({ data: null }) // select by name: nothing under the old key
+      enqueue({ data: renamed }) // select by alias: the renamed row
+      enqueue({ data: null }) // update
+
+      await insertOrUpdateTemplate(supabase as never, 'user-1', {
+        ...baseParams,
+        counterpartyName: 'spotify ab stockholm 4471',
+      })
+
+      const aliasFilter = findCall('categorization_templates', 'contains')
+      expect(aliasFilter).toEqual(['counterparty_aliases', ['spotify ab stockholm 4471']])
+      expect(calls.some((c) => c.method === 'insert')).toBe(false)
+      const payload = findCall('categorization_templates', 'update')?.[0] as { occurrence_count: number }
+      expect(payload.occurrence_count).toBe(6)
+    })
+  })
+
+  // ── findCounterpartyTemplate after a rename ──────────────────
+
+  describe('findCounterpartyTemplate after a user rename', () => {
+    it('still proposes a template renamed to a label for a new bank-line variant of the merchant', async () => {
+      // Learned from "Kortköp 260612 SPOTIFY AB" (key "spotify"), then renamed
+      // to "Musik" by the user: the old key sits in aliases. Next month's line
+      // carries a new date, so the raw-descriptor alias tier misses; the
+      // normalized-name tier must resolve through the alias instead.
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const renamed = makeCategorizationTemplate({
+        id: 'renamed-1',
+        counterparty_name: 'musik',
+        counterparty_aliases: ['kortköp 260612 spotify ab', 'spotify'],
+        occurrence_count: 2,
+        confidence: 0.6,
+      })
+      enqueue({ data: [renamed] })
+
+      const tx = makeTransaction({
+        merchant_name: null,
+        original_description: 'Kortköp 260705 SPOTIFY AB',
+        description: 'Kortköp 260705 SPOTIFY AB',
+      })
+      const match = await findCounterpartyTemplate(supabase as never, 'company-1', tx)
+
+      expect(match?.template.id).toBe('renamed-1')
+      expect(match?.matchMethod).toBe('exact_normalized')
+    })
+
+    it('a real counterparty_name beats another template carrying the same string as alias', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const owner = makeCategorizationTemplate({
+        id: 'owner',
+        counterparty_name: 'spotify',
+        counterparty_aliases: [],
+        occurrence_count: 4,
+      })
+      const other = makeCategorizationTemplate({
+        id: 'other',
+        counterparty_name: 'musik',
+        counterparty_aliases: ['spotify'],
+        occurrence_count: 9,
+      })
+      enqueue({ data: [other, owner] })
+
+      const tx = makeTransaction({
+        merchant_name: null,
+        original_description: 'Kortköp 260705 SPOTIFY AB',
+        description: 'Kortköp 260705 SPOTIFY AB',
+      })
+      const match = await findCounterpartyTemplate(supabase as never, 'company-1', tx)
+
+      expect(match?.template.id).toBe('owner')
+    })
+
+    it('a bank line that is exactly a canonical name resolves to its owner, not to a row holding it as alias', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const owner = makeCategorizationTemplate({
+        id: 'owner',
+        counterparty_name: 'spotify',
+        counterparty_aliases: [],
+        occurrence_count: 4,
+      })
+      const other = makeCategorizationTemplate({
+        id: 'other',
+        counterparty_name: 'musik',
+        counterparty_aliases: ['spotify'],
+        occurrence_count: 9,
+      })
+      enqueue({ data: [other, owner] })
+
+      const tx = makeTransaction({ merchant_name: 'spotify', original_description: 'spotify', description: 'spotify' })
+      const match = await findCounterpartyTemplate(supabase as never, 'company-1', tx)
+
+      expect(match?.template.id).toBe('owner')
     })
   })
 

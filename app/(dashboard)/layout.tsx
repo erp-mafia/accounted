@@ -12,6 +12,8 @@ import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
+import { SystemNoticeBanner } from '@/components/dashboard/SystemNoticeBanner'
+import { parseSystemNoticeUntil } from '@/components/dashboard/system-notice'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
 import MultiUserGraceBanner from '@/components/billing/MultiUserGraceBanner'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
@@ -35,6 +37,7 @@ import {
 } from '@/lib/company/home-domain'
 import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
 import type { AccountingFramework, EntityType, CompanyRole, Team, DashboardShell } from '@/types'
+import { parseEntityType } from '@/lib/company/entity-type'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
@@ -123,6 +126,14 @@ export default async function DashboardLayout({
   const isNoCompanyAllowed = NO_COMPANY_ALLOWED_PATHS.some((p) =>
     pathname.startsWith(p)
   )
+
+  // Operator-set system notice (NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL): null when
+  // unset or expired, so the banner is not even rendered outside its window.
+  // Computed before the shell branches below so every signed-in user sees it,
+  // byrå consultants and stale-cookie sessions included.
+  const systemNoticeUntil = parseSystemNoticeUntil(process.env.NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL)
+  const systemNoticeBanner =
+    systemNoticeUntil !== null ? <SystemNoticeBanner until={systemNoticeUntil} /> : null
 
   // Team now carries `kind` directly (types/index.ts, WL-08).
   const membershipRows = teamMemberships
@@ -214,6 +225,7 @@ export default async function DashboardLayout({
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
+            {systemNoticeBanner}
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -372,6 +384,7 @@ export default async function DashboardLayout({
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
+            {systemNoticeBanner}
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -399,13 +412,10 @@ export default async function DashboardLayout({
 
   // Resolve entity type the same way the report engines and
   // getCompanyEntityType do: company_settings is read-primary, companies is the
-  // canonical fallback, then default to enskild_firma. Mirroring it onto the
-  // active company keeps the settings rail (useSettingsNavItems, which reads
-  // context) and the sidebar in agreement on who is an employer. #782
-  const entityType =
-    (settings?.entity_type as EntityType) ||
-    (companyRow.entity_type as EntityType) ||
-    'enskild_firma'
+  // canonical (NOT NULL) fallback; never a guessed default. Mirroring it onto
+  // the active company keeps the settings rail (useSettingsNavItems, which
+  // reads context) and the sidebar in agreement on who is an employer. #782
+  const entityType: EntityType = parseEntityType(settings?.entity_type ?? companyRow.entity_type)
   const paysSalaries = settings?.pays_salaries ?? false
   // Dimensions register visibility (Kostnadsställen & projekt nav row). Same
   // mechanism as paysSalaries: UI gate only, never load-bearing for
@@ -592,6 +602,7 @@ export default async function DashboardLayout({
             Hoppa till innehåll
           </a>
           {isSandbox && <SandboxBanner />}
+          {systemNoticeBanner}
           {graceBanner && (
             <MultiUserGraceBanner
               graceEndsAt={graceBanner.graceEndsAt}

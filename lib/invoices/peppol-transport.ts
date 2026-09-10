@@ -162,12 +162,23 @@ export interface PeppolInboundListOptions {
 export class PeppolTransportError extends Error {
   readonly retryable: boolean
   readonly detail: string | null
+  /**
+   * Stable, machine-readable code behind the failure (a hosted connector
+   * envelope code, `HTTP_<status>`, or an adapter constant). Null when the
+   * adapter has nothing better than prose. Callers persist and translate the
+   * code; `message` and `detail` stay for logs.
+   */
+  readonly code: string | null
 
-  constructor(message: string, options: { retryable: boolean; detail?: string | null; cause?: unknown }) {
+  constructor(
+    message: string,
+    options: { retryable: boolean; detail?: string | null; code?: string | null; cause?: unknown },
+  ) {
     super(message, options.cause !== undefined ? { cause: options.cause } : undefined)
     this.name = 'PeppolTransportError'
     this.retryable = options.retryable
     this.detail = options.detail ?? null
+    this.code = options.code ?? null
   }
 }
 

@@ -24,7 +24,8 @@ import {
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import type { Currency, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 
@@ -265,7 +266,7 @@ export const POST = withRouteContext(
     // Entity type drives the credit account for privately-paid invoices:
     // AB → 2893 (skuld till aktieägare), EF → 2018 (egen insättning). Loaded
     // up front so we can fail early if the company row is missing.
-    let entityType: 'aktiebolag' | 'enskild_firma' | null = null
+    let entityType: EntityType | null = null
     if (paidPrivately) {
       const { data: company } = await supabase
         .from('companies')
@@ -278,7 +279,7 @@ export const POST = withRouteContext(
           details: { reason: 'company entity_type missing, cannot pick owner account' },
         })
       }
-      entityType = company.entity_type as 'aktiebolag' | 'enskild_firma'
+      entityType = parseEntityType(company.entity_type)
       if (body.employee_id) {
         // Checked before the arrival-number sequence is touched: a claim the
         // service would refuse must not burn an ankomstnummer.

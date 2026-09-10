@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { EntityType } from '@/types'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { proposeAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
@@ -335,14 +337,14 @@ function notApplicable(): OveravskrivningarCalculation {
   }
 }
 
-async function loadEntityType(supabase: SupabaseClient, companyId: string): Promise<string> {
+async function loadEntityType(supabase: SupabaseClient, companyId: string): Promise<EntityType> {
   const { data, error } = await supabase
     .from('company_settings')
     .select('entity_type')
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) throw new Error(`Failed to load company entity type: ${error.message}`)
-  return data?.entity_type ?? 'aktiebolag'
+  return resolveCompanyEntityType(supabase, companyId, data?.entity_type)
 }
 
 async function loadFiscalPeriodCohorts(

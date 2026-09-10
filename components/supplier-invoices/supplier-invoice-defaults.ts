@@ -1,4 +1,5 @@
 import type { CompanySettings, EntityType } from '@/types'
+import { isEntityType } from '@/lib/company/entity-type'
 
 export interface SupplierInvoiceDefaults {
   entityType: EntityType
@@ -26,8 +27,11 @@ export function deriveSupplierInvoiceDefaults(
   settings: CompanySettings | null | undefined,
   fallbackEntityType?: EntityType | null,
 ): SupplierInvoiceDefaults {
-  const entityType =
-    (settings?.entity_type as EntityType | null | undefined) ?? fallbackEntityType ?? 'enskild_firma'
+  // UI prefill only: the server re-resolves the form on submit
+  // (resolveCompanyEntityType), so a not-yet-loaded settings row may fall
+  // back to the company row and, failing that, to the enskild firma defaults.
+  const stored = settings?.entity_type ?? fallbackEntityType
+  const entityType: EntityType = isEntityType(stored) ? stored : 'enskild_firma'
   return {
     entityType,
     accountingMethod: settings?.accounting_method === 'cash' ? 'cash' : 'accrual',

@@ -37,6 +37,7 @@ export function BookingTemplatesPanel() {
     all: t('entity_all'),
     enskild_firma: t('entity_enskild_firma'),
     aktiebolag: t('entity_aktiebolag'),
+    ideell_forening: t('entity_ideell_forening'),
   }
 
   // The panel renders the same session-cached list the pickers use

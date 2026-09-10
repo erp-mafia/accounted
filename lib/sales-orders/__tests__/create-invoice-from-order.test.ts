@@ -307,6 +307,42 @@ describe('createInvoiceFromSalesOrder', () => {
     expect(findCall('invoices', 'insert')).toBeUndefined()
   })
 
+  it('fails closed with SALES_ORDER_INVOICE_FX_RATE_UNAVAILABLE when a foreign-currency order gets no Riksbanken rate', async () => {
+    enqueue({ data: orderWith([makeSalesOrderItem()], { currency: 'EUR' }) })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer() })
+    // The builder leaves exchange_rate NULL on a miss; booking that 1:1 as
+    // kronor is exactly what convertToInvoice refuses, so this path must too.
+    mockBuildInvoiceWriteData.mockResolvedValue({
+      ...okBuild,
+      invoiceFields: { ...okBuild.invoiceFields, currency: 'EUR', exchange_rate: null, exchange_rate_date: null, total_sek: null },
+    })
+
+    const result = await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+
+    expect(result).toMatchObject({ ok: false, code: 'SALES_ORDER_INVOICE_FX_RATE_UNAVAILABLE', details: { currency: 'EUR' } })
+    expect(findCall('invoices', 'insert')).toBeUndefined()
+  })
+
+  it('still creates the invoice for a foreign-currency order when the rate is present', async () => {
+    enqueue({ data: orderWith([makeSalesOrderItem()], { currency: 'EUR' }) })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer() })
+    enqueue({ data: { id: IDS.invoice, status: 'draft', invoice_number: null, sales_order_id: IDS.order } })
+    enqueue({ data: null })
+    enqueue({ data: orderWith() })
+    enqueue({ data: [invoicedRow(IDS.item1, 10)] })
+    mockBuildInvoiceWriteData.mockResolvedValue({
+      ...okBuild,
+      invoiceFields: { ...okBuild.invoiceFields, currency: 'EUR', exchange_rate: 11.45, exchange_rate_date: '2026-09-02' },
+    })
+
+    const result = await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+
+    expect(result.ok).toBe(true)
+    expect(findCall('invoices', 'insert')![0]).toMatchObject({ currency: 'EUR', exchange_rate: 11.45 })
+  })
+
   it('returns CUSTOMER_NOT_FOUND when the raw customer row is gone', async () => {
     enqueue({ data: orderWith() })
     enqueue({ data: [] })

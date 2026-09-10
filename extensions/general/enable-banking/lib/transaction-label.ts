@@ -58,8 +58,12 @@ const MCC_LABELS: Record<string, string> = {
 const KEYWORD_LABELS: Array<[RegExp, string]> = [
   [/INTRST|INTEREST|RÄNTA|RANTA/i, 'Ränta'],
   [/\bFEE\b|CHRG|CHARGE|AVGIFT/i, 'Avgift'],
-  [/ATM|CASH.?WDL|WITHDRAW|UTTAG/i, 'Uttag'],
+  // Card before withdrawal: the flattened Enable Banking description for an
+  // ordinary card purchase is often the combined channel wording
+  // "Kortköp/uttag" (SEB, Swedbank); same order as CODE_KEYWORD_METHODS in
+  // lib/transactions/transaction-method.ts and the Connect mirror.
   [/\bCARD\b|KORT|\bPOS\b/i, 'Kortköp'],
+  [/ATM|CASH.?WDL|WITHDRAW|UTTAG/i, 'Uttag'],
   [/SALA|SALARY|\bLÖN\b|\bLON\b/i, 'Lön'],
 ]
 

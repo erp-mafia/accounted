@@ -34,6 +34,13 @@ import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { matchesInvoiceSearch } from '@/lib/invoices/invoice-search'
 import {
+  INVOICE_LIST_TABS,
+  isUnsentNumberedInvoice,
+  matchesInvoiceListTab,
+  parseInvoiceListTab,
+  type InvoiceListTab,
+} from '@/lib/invoices/invoice-list-tabs'
+import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
   type InvoiceRegisterCoverage,
@@ -44,6 +51,15 @@ import {
   type InvoiceListSortColumn,
 } from '@/lib/invoices/invoice-list-sort'
 import { invoiceRowTone, type InvoiceRowTone } from '@/lib/invoices/invoice-list-row-tone'
+import {
+  ROT_RUT_LIST_FILTERS,
+  matchesRotRutListFilter,
+  parseRotRutListFilter,
+  rotRutListStateOf,
+  type RotRutListFilter,
+  type RotRutListItem,
+  type RotRutListState,
+} from '@/lib/invoices/rot-rut-list-status'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import {
   ArrowDown,
@@ -105,49 +121,20 @@ const INITIAL_VISIBLE_ROWS = 100
 
 const CREATE_MODES = ['faktura', 'aterkommande', 'sjalvfaktura'] as const
 
-// Main views (concept seg) and the low-frequency views behind "Fler …".
-const SEG_TABS = ['all', 'unpaid', 'overdue', 'draft'] as const
-const MORE_TABS = ['paid', 'proforma', 'quote', 'delivery_note', 'credit', 'cancelled'] as const
-const ALL_TABS = [...SEG_TABS, ...MORE_TABS]
-type ListTab = (typeof SEG_TABS)[number] | (typeof MORE_TABS)[number]
-
-// The one status predicate: both the visible rows and the per-view counts in
-// the ContextPicker go through it, so the annotation always matches what the
-// view will show.
-function matchesListTab(invoice: Invoice, tab: ListTab): boolean {
-  const isCreditNote = !!invoice.credited_invoice_id
-  const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
-  return (
-    (tab === 'all' && invoice.status !== 'cancelled') ||
-    (tab === 'unpaid' &&
-      ['sent', 'overdue'].includes(invoice.status) &&
-      !isCreditNote &&
-      docType === 'invoice') ||
-    (tab === 'overdue' &&
-      invoice.status === 'overdue' &&
-      !isCreditNote &&
-      docType === 'invoice') ||
-    (tab === 'draft' &&
-      invoice.status === 'draft' &&
-      docType === 'invoice' &&
-      !isCreditNote) ||
-    (tab === 'paid' && invoice.status === 'paid') ||
-    (tab === 'credit' && isCreditNote) ||
-    (tab === 'proforma' && docType === 'proforma' && invoice.status !== 'cancelled') ||
-    (tab === 'quote' && docType === 'quote' && invoice.status !== 'cancelled') ||
-    (tab === 'delivery_note' &&
-      docType === 'delivery_note' &&
-      invoice.status !== 'cancelled') ||
-    (tab === 'cancelled' && invoice.status === 'cancelled')
-  )
-}
+// The status views and their one predicate live in lib/invoices/invoice-list-tabs:
+// the visible rows, the per-view counts in the ContextPicker and the status
+// sections all go through it, so the annotation always matches what the view
+// will show.
+const ALL_TABS = INVOICE_LIST_TABS
+type ListTab = InvoiceListTab
+const matchesListTab = matchesInvoiceListTab
 
 // Row grouping: sections in the table body. 'none' (the flat list) is the
 // default; the other modes are opt-in via ?group= and mirror the
 // supplier-invoices layout (payment queue as its own section).
 const GROUP_MODES = ['status', 'customer', 'month', 'none'] as const
 type GroupMode = (typeof GROUP_MODES)[number]
-const STATUS_SECTION_ORDER = ['drafts', 'awaiting', 'settled'] as const
+const STATUS_SECTION_ORDER = ['drafts', 'unsent', 'awaiting', 'settled'] as const
 /** Sentinel bucket for rows with no customer or no date. Not a display
  *  string: the header renders t('group_unknown') for it. */
 const UNKNOWN_GROUP_KEY = 'unknown'
@@ -158,11 +145,12 @@ const GROUP_LABEL_KEYS: Record<GroupMode, string> = {
   none: 'group_none',
 }
 
-type StatusGroup = 'drafts' | 'awaiting' | 'settled'
+type StatusGroup = (typeof STATUS_SECTION_ORDER)[number]
 /** Sections reuse the tab predicates so the two can never drift: what the
- *  Utkast and Obetalda tabs show is what the sections bucket. */
+ *  Utkast, Ej skickade and Obetalda tabs show is what the sections bucket. */
 function statusGroupOf(invoice: Invoice): StatusGroup {
   if (matchesListTab(invoice, 'draft')) return 'drafts'
+  if (matchesListTab(invoice, 'unsent')) return 'unsent'
   if (matchesListTab(invoice, 'unpaid')) return 'awaiting'
   return 'settled'
 }
@@ -186,6 +174,7 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   all: 'tab_all',
   unpaid: 'tab_unpaid',
   overdue: 'tab_overdue',
+  unsent: 'tab_unsent',
   draft: 'tab_draft',
   paid: 'tab_paid',
   proforma: 'tab_proforma',
@@ -193,6 +182,31 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   delivery_note: 'tab_delivery_note',
   credit: 'tab_credit',
   cancelled: 'tab_cancelled',
+}
+
+/** A list row: the invoice plus the begäran embed the ROT/RUT column reads. */
+type ListInvoice = Invoice & { rot_rut_items?: RotRutListItem[] | null }
+
+const ROT_RUT_STATE_LABEL_KEYS: Record<NonNullable<RotRutListState>, string> = {
+  claimable: 'rot_rut_status_claimable',
+  generated: 'rot_rut_status_generated',
+  submitted: 'rot_rut_status_submitted',
+  paid: 'rot_rut_status_paid',
+  partially_paid: 'rot_rut_status_partially_paid',
+  rejected: 'rot_rut_status_rejected',
+  cancelled: 'rot_rut_status_cancelled',
+}
+const rotRutFilterLabelKey = (filter: RotRutListFilter): string =>
+  filter === 'all' ? 'rot_rut_filter_all' : ROT_RUT_STATE_LABEL_KEYS[filter]
+
+/** Chips mark exceptions (convention 5): a begäran on its way or approved is
+ *  the normal state of a ROT/RUT invoice and reads as muted text; only a
+ *  partial approval and an avslag deviate. */
+const ROT_RUT_EXCEPTION_VARIANT: Partial<
+  Record<NonNullable<RotRutListState>, RowStatusDescriptor['variant']>
+> = {
+  partially_paid: 'warning',
+  rejected: 'destructive',
 }
 
 function daysOverdue(dueDateStr: string): number {
@@ -257,7 +271,7 @@ export default function InvoicesPage() {
   const { canWrite } = useCanWrite()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [invoices, setInvoices] = useState<ListInvoice[]>([])
   // Settings-driven gates from the session-cached settings row
   // (lib/reference-data), derived instead of copied into state.
   const { settings: companySettings } = useCompanySettings()
@@ -278,11 +292,7 @@ export default function InvoicesPage() {
   const [activeTab, setActiveTab] = useState<ListTab>(() => {
     // Deep links from the worklist and older bookmarks: ?status= / ?tab=.
     const param = searchParams.get('status') ?? searchParams.get('tab')
-    const alias: Record<string, ListTab> = { drafts: 'draft' }
-    const candidate = param ? (alias[param] ?? (param as ListTab)) : null
-    return candidate && ALL_TABS.includes(candidate as never)
-      ? (candidate as ListTab)
-      : 'all'
+    return parseInvoiceListTab(param) ?? 'all'
   })
   // Shell v2: grouping sits behind a gear at the right (same as Inköp).
   const shell = useShell()
@@ -290,6 +300,10 @@ export default function InvoicesPage() {
     const param = searchParams.get('group')
     return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'none'
   })
+  // ROT/RUT begäran filter (#2426), ?rotrut=. 'all' is the URL-less default.
+  const [rotRutFilter, setRotRutFilter] = useState<RotRutListFilter>(
+    () => parseRotRutListFilter(searchParams.get('rotrut')) ?? 'all',
+  )
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   // Fiscal-year scope (convention 8): null = all years.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
@@ -366,8 +380,6 @@ export default function InvoicesPage() {
     )
   const closeRotRutPayout = () =>
     router.replace(invoicesUrl((p) => p.delete('rot-rut')), { scroll: false })
-  const openRotRutPayout = () =>
-    router.push(invoicesUrl((p) => p.set('rot-rut', '1')), { scroll: false })
 
   // Begäran om utbetalning (Lag 2009:194 8 §) only concerns companies selling
   // ROT/RUT-eligible work to consumers, so the action stays out of the header
@@ -378,6 +390,9 @@ export default function InvoicesPage() {
   // ones. ?rot-rut=1 keeps working regardless, so nothing is unreachable.
   const showRotRutAction =
     rotRutEnabled || invoices.some((invoice) => (invoice.deduction_total ?? 0) > 0)
+  // The begäran column and its filter share that gate: a company without
+  // ROT/RUT never sees an empty column or a picker with nothing to pick.
+  const showRotRut = showRotRutAction
 
   // Invoice-register coverage (see lib/invoices/invoice-register-coverage.ts):
   // a migrated or backfilled company has invoices that live only as verifikat,
@@ -415,7 +430,11 @@ export default function InvoicesPage() {
         ({ from, to }) =>
           supabase
             .from('invoices')
-            .select('*, customer:customers(name)')
+            // The begäran embed feeds the ROT/RUT column and filter; the
+            // items index on invoice_id keeps the reverse join cheap.
+            .select(
+              '*, customer:customers(name), rot_rut_items:rot_rut_payout_request_items(request:rot_rut_payout_requests(id, status, created_at))',
+            )
             .eq('company_id', company.id)
             .order('invoice_date', { ascending: false })
             .order('id', { ascending: false })
@@ -445,7 +464,7 @@ export default function InvoicesPage() {
   // Search + fiscal-year scope, before the status view: the per-view counts
   // in the ContextPicker are computed on this same base so they always equal
   // the rows the view would show.
-  const scopedInvoices = useMemo(
+  const searchScopedInvoices = useMemo(
     () =>
       invoices.filter((invoice) => {
         const matchesSearch = matchesInvoiceSearch(invoice, normalizedSearch)
@@ -458,6 +477,15 @@ export default function InvoicesPage() {
         return matchesSearch && matchesFy
       }),
     [fyPeriod, invoices, normalizedSearch],
+  )
+  // The ROT/RUT filter sits between search/FY and the status view, so the
+  // status counts honour it while its own counts are taken one level up.
+  const scopedInvoices = useMemo(
+    () =>
+      rotRutFilter === 'all'
+        ? searchScopedInvoices
+        : searchScopedInvoices.filter((invoice) => matchesRotRutListFilter(invoice, rotRutFilter)),
+    [rotRutFilter, searchScopedInvoices],
   )
   const filteredInvoices = useMemo(
     () => scopedInvoices.filter((invoice) => matchesListTab(invoice, activeTab)),
@@ -514,6 +542,7 @@ export default function InvoicesPage() {
     const count = meta?.count ?? 0
     if (groupMode === 'status') {
       if (key === 'drafts') return t('section_drafts', { count })
+      if (key === 'unsent') return t('section_unsent', { count })
       if (key === 'awaiting') return t('section_awaiting', { count })
       return t('section_settled', { count })
     }
@@ -542,6 +571,19 @@ export default function InvoicesPage() {
     }
     return counts
   }, [scopedInvoices])
+
+  const rotRutCounts = useMemo(() => {
+    const counts = Object.fromEntries(ROT_RUT_LIST_FILTERS.map((f) => [f, 0])) as Record<
+      RotRutListFilter,
+      number
+    >
+    for (const invoice of searchScopedInvoices) {
+      const state = rotRutListStateOf(invoice)
+      counts.all += 1
+      if (state && state in counts) counts[state as RotRutListFilter] += 1
+    }
+    return counts
+  }, [searchScopedInvoices])
 
   const resetPaging = () => setVisibleCount(INITIAL_VISIBLE_ROWS)
 
@@ -576,6 +618,16 @@ export default function InvoicesPage() {
     // is written out so it round-trips through reload and back-navigation.
     if (mode === 'none') params.delete('group')
     else params.set('group', mode)
+    const qs = params.toString()
+    router.replace(qs ? `/invoices?${qs}` : '/invoices', { scroll: false })
+  }
+
+  const updateRotRut = (filter: RotRutListFilter) => {
+    setRotRutFilter(filter)
+    resetPaging()
+    const params = new URLSearchParams(searchParams.toString())
+    if (filter === 'all') params.delete('rotrut')
+    else params.set('rotrut', filter)
     const qs = params.toString()
     router.replace(qs ? `/invoices?${qs}` : '/invoices', { scroll: false })
   }
@@ -748,10 +800,7 @@ export default function InvoicesPage() {
     if (quoteStatus === 'accepted') return { label: t('quote_status_accepted') }
     if (quoteStatus === 'open') return { label: t('quote_status_open') }
     if (invoice.status === 'draft') {
-      const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
-      const isUnsent =
-        !!invoice.invoice_number && docType === 'invoice' && !isCreditNote && !invoice.is_self_billed
-      return isUnsent
+      return isUnsentNumberedInvoice(invoice)
         ? { label: t('status_unsent'), exception: true, variant: 'outline' }
         : { label: t('status_draft'), exception: true, variant: 'secondary' }
     }
@@ -775,6 +824,11 @@ export default function InvoicesPage() {
     return { label: t('status_sent') }
   }
 
+  function rotRutDescriptor(state: NonNullable<RotRutListState>): RowStatusDescriptor {
+    const variant = ROT_RUT_EXCEPTION_VARIANT[state]
+    return { label: t(ROT_RUT_STATE_LABEL_KEYS[state]), exception: variant !== undefined, variant }
+  }
+
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 15): title + invoice actions */}
@@ -782,12 +836,13 @@ export default function InvoicesPage() {
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <div className="flex flex-wrap items-center gap-2">
           {showRotRutAction && (
+            // The ROT/RUT overview (begäran, beslut, utbetalning, nekat
+            // belopp) has its own page; the file dialog still opens from
+            // ?rot-rut=1 here for existing links and the Att göra rows.
             <Button
               type="button"
               variant="outline"
-              onClick={openRotRutPayout}
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              onClick={() => router.push('/invoices/rot-rut')}
             >
               <FileDown className="mr-2 h-4 w-4" />
               {t('rot_rut_payout_action')}
@@ -830,6 +885,24 @@ export default function InvoicesPage() {
             items={GROUP_MODES.map((mode) => ({
               id: mode,
               label: t(GROUP_LABEL_KEYS[mode]),
+            }))}
+          />
+        )}
+        {showRotRut && (
+          <ContextPicker
+            value={rotRutFilter}
+            onChange={(id) => updateRotRut(id as RotRutListFilter)}
+            ariaLabel={t('rot_rut_filter_aria')}
+            triggerLabel={
+              rotRutFilter !== 'all' && rotRutCounts[rotRutFilter] > 0
+                ? `${t('rot_rut_filter_label')} · ${t(rotRutFilterLabelKey(rotRutFilter))} · ${rotRutCounts[rotRutFilter]}`
+                : `${t('rot_rut_filter_label')} · ${t(rotRutFilterLabelKey(rotRutFilter))}`
+            }
+            items={ROT_RUT_LIST_FILTERS.map((filter) => ({
+              id: filter,
+              label: t(rotRutFilterLabelKey(filter)),
+              annotation:
+                filter !== 'all' && rotRutCounts[filter] > 0 ? String(rotRutCounts[filter]) : undefined,
             }))}
           />
         )}
@@ -958,8 +1031,10 @@ export default function InvoicesPage() {
         ) : (
           <DataListEmpty
             icon={<ReceiptText className="h-6 w-6" />}
-            title={t('no_category_title')}
-            description={t('no_category_description')}
+            title={t(activeTab === 'unsent' ? 'no_unsent_title' : 'no_category_title')}
+            description={t(
+              activeTab === 'unsent' ? 'no_unsent_description' : 'no_category_description',
+            )}
           />
         )
       ) : (
@@ -1003,6 +1078,9 @@ export default function InvoicesPage() {
                   className="text-right"
                   align="right"
                 />
+                {showRotRut && (
+                  <th className={cn(TH_CLASS, 'whitespace-nowrap')}>{t('th_rot_rut')}</th>
+                )}
                 <SortableHeader
                   label={t('th_status')}
                   sortLabel={t('sort_by', { column: t('th_status') })}
@@ -1017,6 +1095,7 @@ export default function InvoicesPage() {
                 const prevKey = index > 0 ? visibleRows[index - 1].groupKey : undefined
                 const showHeader = showGroupHeaders && groupKey !== null && groupKey !== prevKey
                 const status = statusDescriptor(invoice)
+                const rotRutState = showRotRut ? rotRutListStateOf(invoice) : null
                 const isCreditNote = !!invoice.credited_invoice_id
                 const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
                 const displayedTotal = getDisplayTotal(
@@ -1044,7 +1123,7 @@ export default function InvoicesPage() {
                   {showHeader && (
                     <tr data-no-stagger>
                       <td
-                        colSpan={showSelection ? 6 : 5}
+                        colSpan={(showSelection ? 6 : 5) + (showRotRut ? 1 : 0)}
                         className={cn(
                           'border-b border-border px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground',
                           index === 0 ? 'pt-4' : 'pt-6',
@@ -1129,6 +1208,11 @@ export default function InvoicesPage() {
                     >
                       {formatCurrency(displayedTotal, invoice.currency)}
                     </td>
+                    {showRotRut && (
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                        {rotRutState && <RowStatus status={rotRutDescriptor(rotRutState)} />}
+                      </td>
+                    )}
                     <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                       <span className="inline-flex items-center gap-1.5">
                         {typeMarker && (

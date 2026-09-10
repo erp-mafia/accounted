@@ -301,6 +301,13 @@ describe('computeProposalLines', () => {
       })
     })
 
+    it('translates the owner account to 2890 for an ideell förening', () => {
+      expect(resolveTemplateAccountsForEntity(template, 'ideell_forening')).toEqual({
+        debitAccount: '2890',
+        creditAccount: '1930',
+      })
+    })
+
     it('substitutes AB accounts for aktiebolag, falling back per side', () => {
       expect(resolveTemplateAccountsForEntity(template, 'aktiebolag')).toEqual({
         debitAccount: '2893',

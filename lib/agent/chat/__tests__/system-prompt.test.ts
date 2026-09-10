@@ -28,7 +28,9 @@ const intent: AgentIntent = {
   promptTemplate: () => '',
 }
 
-function block(vatStatus: VatStatus): string {
+type FiscalYears = Parameters<typeof buildIdentityBlock>[0]['fiscalYears']
+
+function block(vatStatus: VatStatus, fiscalYears?: FiscalYears): string {
   return buildIdentityBlock({
     intent,
     companyId: 'c1',
@@ -38,6 +40,7 @@ function block(vatStatus: VatStatus): string {
     rankedMemory: [],
     vatStatus,
     today: '2026-01-01 (torsdag)',
+    fiscalYears,
     // buildIdentityBlock never touches supabase; it's a pure render of args.
     supabase: {} as unknown as SupabaseClient,
   })
@@ -107,5 +110,28 @@ describe('chat system prompt: always-on epistemics rules', () => {
     // line; it now lives here, in the single canonical epistemics home.
     const out = block(null)
     expect(out).toContain('redan laddad')
+  })
+})
+
+// #2185: a multi-year ledger read as single-year to the model because the
+// report tools default to the most recent period and nothing told it other
+// years existed. The inventory and the rule are always-on (Block 2), since
+// the question about an earlier year tends to come many turns in.
+describe('chat system prompt: räkenskapsår inventory', () => {
+  it('lists the years with their period_id and the rule for addressing them', () => {
+    const out = block(null, [
+      { id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false },
+      { id: 'fp-2024', name: '2024', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: true },
+    ])
+    expect(out).toContain('# Räkenskapsår')
+    expect(out).toContain('2026-01-01..2026-12-31 period_id=fp-2026 (senaste)')
+    expect(out).toContain('2024-01-01..2024-12-31 period_id=fp-2024 (avslutat)')
+    expect(out).toContain('skicka det årets period_id')
+    expect(out).toContain('Säg alltid vilket räkenskapsår svaret gäller')
+  })
+
+  it('renders no section when the company has no periods', () => {
+    expect(block(null, [])).not.toContain('# Räkenskapsår')
+    expect(block(null)).not.toContain('# Räkenskapsår')
   })
 })

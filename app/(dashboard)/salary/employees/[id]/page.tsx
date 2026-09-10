@@ -22,6 +22,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { vacationPayRateFromPercentInput, vacationPayRateToPercent } from '@/lib/salary/vacation-pay-rate'
 import {
   validateEmployeeBankAccount,
   isValidClearing,
@@ -197,6 +198,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       bank_account_number: normalizeBankNumber(account) || undefined,
       vacation_rule: vacationRule,
       vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || undefined,
+      // Always sent: an empty field (or a rule that hides it) clears the
+      // kollektivavtal rate back to the statutory one.
+      vacation_pay_rate: vacationPayRateFromPercentInput(form.get('vacation_pay_rate')),
       // Always sent: {} clears the employee's default dimensions.
       default_dimensions: dimensions,
     }
@@ -407,6 +411,11 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         <DefRow label={t('form_vacation_days')}>
           <span className="tabular-nums">{employee.vacation_days_per_year}</span>
         </DefRow>
+        {employee.vacation_pay_rate != null && (
+          <DefRow label={t('form_vacation_pay_rate')}>
+            <span className="tabular-nums">{vacationPayRateToPercent(employee.vacation_pay_rate)} %</span>
+          </DefRow>
+        )}
         {dimensionsEnabled && (
           <DefRow label={t('form_dimensions_title')}>
             {savedDimensionLabel ? (
@@ -656,6 +665,23 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                       />
                       <p className="text-xs text-muted-foreground">{t('form_vacation_days_hint')}</p>
                     </div>
+                    {(vacationRule === 'procentregeln' || vacationRule === 'semesterersattning') && (
+                      <div className="space-y-2">
+                        <Label htmlFor="vacation_pay_rate">{t('form_vacation_pay_rate')}</Label>
+                        <Input
+                          id="vacation_pay_rate"
+                          name="vacation_pay_rate"
+                          type="number"
+                          step="0.01"
+                          min="12"
+                          max="30"
+                          placeholder="12"
+                          defaultValue={vacationPayRateToPercent(employee.vacation_pay_rate)}
+                          disabled={!canWrite}
+                        />
+                        <p className="text-xs text-muted-foreground">{t('form_vacation_pay_rate_hint')}</p>
+                      </div>
+                    )}
                   </div>
                 </section>
 

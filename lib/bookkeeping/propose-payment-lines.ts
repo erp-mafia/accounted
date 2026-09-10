@@ -40,6 +40,13 @@ export interface ProposePaymentLinesInput {
      */
     deduction_total?: number | null
     /**
+     * The part of the deduction Skatteverket refused and that a
+     * rot_rut_reclaim voucher moved back onto the customer (debit 1510).
+     * When set, the invoice's remaining is a plain 1510 fordran again and the
+     * remaining-aware proposal applies to it.
+     */
+    deduction_reclaimed_total?: number | null
+    /**
      * Dimensions PR7: the invoice's default bag. Stamped on every proposed
      * line: the payment dialog always submits its (editable) lines, so the
      * preview IS the booked entry and must re-propagate the tag like the
@@ -145,7 +152,10 @@ export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[]
  *     pure function does not carry; the dialog's FX path already handles it.
  *   - On a ROT/RUT invoice the outstanding remainder is (or includes)
  *     Skatteverket's share, which sits on 1513 and is settled by the ROT/RUT
- *     payout flow, not by clearing 1510 here.
+ *     payout flow, not by clearing 1510 here. The one exception is a
+ *     deduction Skatteverket refused: the reclaim voucher has already moved
+ *     that share onto 1510 (deduction_reclaimed_total > 0), so the reopened
+ *     remaining is an ordinary customer fordran and is proposed as such.
  *
  * Two shapes:
  *   - 0 < remaining < 1 kr (the stuck öresavrundning case): a bank-less
@@ -163,11 +173,15 @@ function proposeRemainingAwareLines(
 ): FormLine[] | null {
   if (accountingMethod !== 'accrual') return null
   if (invoice.currency !== 'SEK') return null
-  if ((invoice.deduction_total ?? 0) > 0) return null
+  const reclaimed = invoice.deduction_reclaimed_total ?? 0
+  if ((invoice.deduction_total ?? 0) > 0 && !(reclaimed > 0)) return null
 
-  const total = roundOre(invoice.total)
+  // With a reclaimed deduction the customer's whole fordran is total minus
+  // the deduction plus the refused share; "partial" is measured against
+  // that, not the printed total.
+  const total = roundOre(invoice.total - (invoice.deduction_total ?? 0) + reclaimed)
   const remaining = roundOre(
-    invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0),
+    invoice.remaining_amount ?? total - (invoice.paid_amount ?? 0),
   )
   const hasPartial = remaining > ORE_TOLERANCE && total - remaining > ORE_TOLERANCE
   if (!hasPartial) return null

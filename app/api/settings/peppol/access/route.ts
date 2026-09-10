@@ -11,9 +11,11 @@ import {
   getPeppolAccessSummary,
   requestPeppolAccess,
 } from '@/lib/invoices/peppol-access'
+import { describePeppolParticipantEligibility } from '@/lib/invoices/peppol-registration'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getSupportRecipientEmail } from '@/lib/support'
+import type { CompanySettings } from '@/types'
 
 ensureInitialized()
 
@@ -59,15 +61,30 @@ export const POST = withRouteContext(
       }
 
       if (result.created) {
-        const { data: company } = await supabase
+        const { data: company, error: companyError } = await supabase
           .from('company_settings')
-          .select('company_name, org_number')
+          .select('company_name, org_number, vat_number, city, country')
           .eq('company_id', companyId)
           .maybeSingle()
+        // The request is already recorded; a failed settings read must not
+        // masquerade as "no organisation number" in the operator mail.
+        if (companyError) log.error('peppol access request: company settings read failed', { companyId, reason: companyError.message })
         const emailService = getEmailService()
         if (emailService.isConfigured()) {
           const companyName = (company as { company_name?: string | null } | null)?.company_name ?? 'okänt bolag'
           const orgNumber = (company as { org_number?: string | null } | null)?.org_number ?? 'saknas'
+          // Whether a receiving grant could be used at all (#2483): a
+          // personnummer-based company cannot publish a Peppol id.
+          const eligibility = companyError
+            ? null
+            : company
+              ? describePeppolParticipantEligibility(
+                  company as unknown as Pick<CompanySettings, 'org_number' | 'company_name' | 'vat_number' | 'city' | 'country'>,
+                )
+              : { ok: false as const, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' as const }
+          const eligibilityLine = eligibility === null
+            ? 'okänd (bolagsinställningarna kunde inte läsas)'
+            : eligibility.ok ? 'ja' : `nej (${eligibility.code})`
           const sent = await emailService.sendEmail({
             to: getSupportRecipientEmail(),
             subject: `[${getBranding().appName.toLowerCase()} peppol] Åtkomstbegäran${wantsReceiving ? ' (+ mottagning)' : ''}: ${companyName}`,
@@ -76,10 +93,11 @@ export const POST = withRouteContext(
               `<p><strong>Bolag:</strong> ${escapeHtml(companyName)} (${escapeHtml(orgNumber)})</p>`,
               `<p><strong>Company ID:</strong> ${companyId}</p>`,
               `<p><strong>Begärd av:</strong> ${escapeHtml(user.email ?? '')} (${user.id})</p>`,
+              `<p><strong>Kan registreras för mottagning:</strong> ${escapeHtml(eligibilityLine)}</p>`,
               note ? `<hr /><p>${escapeHtml(note).replace(/\n/g, '<br />')}</p>` : '',
               `<hr /><p>Aktivera: <code>npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 50${wantsReceiving ? ' --receive' : ''}</code></p>`,
             ].join('\n'),
-            text: `Bolag: ${companyName} (${orgNumber})\nCompany ID: ${companyId}\nBegärd av: ${user.email ?? ''} (${user.id})\n\n${note ?? ''}\n\nAktivera: npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 50${wantsReceiving ? ' --receive' : ''}`,
+            text: `Bolag: ${companyName} (${orgNumber})\nCompany ID: ${companyId}\nBegärd av: ${user.email ?? ''} (${user.id})\nKan registreras för mottagning: ${eligibilityLine}\n\n${note ?? ''}\n\nAktivera: npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 50${wantsReceiving ? ' --receive' : ''}`,
           })
           if (!sent.success) {
             log.warn('peppol access request e-mail failed', { companyId, reason: sent.error })
