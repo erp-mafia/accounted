@@ -53,4 +53,15 @@ describe('dayValueSek', () => {
     expect(withoutRate).toBe(1557.57)
     expect(withRate).toBe(withoutRate)
   })
+
+  it('sammalöneregeln values the day at the employee\'s own tillägg rate', () => {
+    // 30000 / 21 + 30000 x 0.008 = 1668.57
+    expect(
+      dayValueSek({ ...MONTHLY_PROCENT, vacation_rule: 'sammaloneregeln', semestertillagg_rate: 0.008 }),
+    ).toBe(1668.57)
+    // null falls back to the statutory 0.43 %.
+    expect(
+      dayValueSek({ ...MONTHLY_PROCENT, vacation_rule: 'sammaloneregeln', semestertillagg_rate: null }),
+    ).toBe(1557.57)
+  })
 })

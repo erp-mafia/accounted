@@ -82,7 +82,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     const { data: employee, error: empErr } = await ctx.supabase
       .from('employees')
-      .select('id, vacation_rule, vacation_days_per_year, vacation_pay_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
+      .select('id, vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
       .eq('id', idParse.data)
       .eq('company_id', ctx.companyId!)
       .maybeSingle()

@@ -16750,7 +16750,7 @@ export const tools: McpTool[] = [
       const { dayValueSek } = await import('@/lib/salary/semesterberedning')
       const { data: employee, error: empErr } = await supabase
         .from('employees')
-        .select('vacation_rule, vacation_days_per_year, vacation_pay_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
+        .select('vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
         .eq('id', employeeId)
         .eq('company_id', companyId)
         .maybeSingle()

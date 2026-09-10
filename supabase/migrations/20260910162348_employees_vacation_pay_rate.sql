@@ -21,13 +21,20 @@ ALTER TABLE public.employees
 ALTER TABLE public.employees
   DROP CONSTRAINT IF EXISTS employees_vacation_pay_rate_check;
 
+-- NOT VALID: the ACCESS EXCLUSIVE lock of ADD CONSTRAINT then holds only for
+-- the catalog change, not for a scan of existing rows (every row is NULL
+-- here anyway). The VALIDATE below runs after COMMIT under SHARE UPDATE
+-- EXCLUSIVE, so employee and payroll writes are never blocked by the scan.
 ALTER TABLE public.employees
   ADD CONSTRAINT employees_vacation_pay_rate_check
-  CHECK (vacation_pay_rate IS NULL OR (vacation_pay_rate >= 0.12 AND vacation_pay_rate <= 0.30));
+  CHECK (vacation_pay_rate IS NULL OR (vacation_pay_rate >= 0.12 AND vacation_pay_rate <= 0.30))
+  NOT VALID;
 
 COMMENT ON COLUMN public.employees.vacation_pay_rate IS
   'Kollektivavtal semesterlön rate under procentregeln/semesterersattning as a fraction (0.135 = 13.5 %). NULL = statutory 12 % (14.4 % at 30 days). Not used by sammalöneregeln.';
 
 COMMIT;
+
+ALTER TABLE public.employees VALIDATE CONSTRAINT employees_vacation_pay_rate_check;
 
 NOTIFY pgrst, 'reload schema';

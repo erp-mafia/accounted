@@ -105,6 +105,7 @@ interface EmployeeRosterRow {
   vacation_rule: string
   vacation_days_per_year: number
   vacation_pay_rate: number | null
+  semestertillagg_rate: number | null
   salary_type: string
   monthly_salary: number | null
   hourly_rate: number | null
@@ -124,7 +125,10 @@ function lastDayBefore(dateIso: string): string {
 export type DayValueEmployee = Pick<
   EmployeeRosterRow,
   'vacation_rule' | 'vacation_days_per_year' | 'vacation_pay_rate' | 'salary_type' | 'monthly_salary' | 'hourly_rate' | 'hours_per_week' | 'workdays_per_week'
->
+> & {
+  /** Sammalöneregeln tillägg per day; absent or null = statutory 0.43 %. */
+  semestertillagg_rate?: number | null
+}
 
 /**
  * Simplified BFNAR 2016:10 value of one vacation day in SEK. Shared by the
@@ -141,9 +145,10 @@ export function dayValueSek(emp: DayValueEmployee): number {
   }
   const monthly = emp.monthly_salary || 0
   if (emp.vacation_rule === 'sammaloneregeln') {
-    // Dagslön + semestertillägg per day. The employee's tillägg rate lives on
-    // the master row but the statutory floor 0.43% is used when absent.
-    return roundOre(monthly / dailyDivisor(emp.workdays_per_week) + monthly * 0.0043)
+    // Dagslön + semestertillägg per day at the employee's configured rate
+    // (many CBAs use 0.8 %); the statutory floor 0.43 % when absent.
+    const tillagg = emp.semestertillagg_rate ?? 0.0043
+    return roundOre(monthly / dailyDivisor(emp.workdays_per_week) + monthly * tillagg)
   }
   return roundOre((monthly * 12 * rate) / Math.max(emp.vacation_days_per_year, 1))
 }
@@ -196,7 +201,7 @@ async function loadRoster(
   const { data, error } = await supabase
     .from('employees')
     .select(
-      'id, first_name, last_name, personnummer, vacation_rule, vacation_days_per_year, vacation_pay_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end',
+      'id, first_name, last_name, personnummer, vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end',
     )
     .eq('company_id', companyId)
     .eq('is_active', true)
