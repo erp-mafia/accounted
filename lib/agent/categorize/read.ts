@@ -76,9 +76,6 @@ export async function readTransaction(
   return { selection, candidates, read }
 }
 
-const READ_COLUMNS =
-  'transaction_id, underlag_key, has_underlag, account, category, vat_treatment, reverse_charge, confidence, model_confidence, agreement, from_candidate, reasoning, candidates, model, updated_at'
-
 export async function storeRead(supabase: SupabaseClient, companyId: string, read: AssistantRead): Promise<void> {
   const { error } = await supabase.from('transaction_assistant_reads').upsert(
     {
@@ -113,7 +110,9 @@ export async function loadReads(
   if (transactionIds.length === 0) return out
   const { data } = await supabase
     .from('transaction_assistant_reads')
-    .select(READ_COLUMNS)
+    .select(
+      'transaction_id, underlag_key, has_underlag, account, category, vat_treatment, reverse_charge, confidence, model_confidence, agreement, from_candidate, reasoning, candidates, model, updated_at',
+    )
     .eq('company_id', companyId)
     .in('transaction_id', transactionIds)
   for (const row of (data ?? []) as unknown as AssistantRead[]) {

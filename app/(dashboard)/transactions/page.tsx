@@ -95,9 +95,19 @@ import { resolveDetachErrorMessage } from '@/components/transactions/detach-unde
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary } from '@/types'
+import { mutate as globalMutate } from 'swr'
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
+
+/**
+ * Tell the drawer and the review to re-read a row's underlag. They read it
+ * through SWR on this key, so an attach or a detach elsewhere on the page
+ * has to say so or the receipt only appears on the next revalidation.
+ */
+function revalidateUnderlag(transactionId: string): Promise<unknown> {
+  return globalMutate(`/api/transactions/${transactionId}/underlag`)
+}
 
 /** Rows warmed per render pass: enough to cover a screenful, never a whole backlog. */
 const ASSISTANT_WARM_LIMIT = 8
@@ -470,8 +480,10 @@ export default function TransactionsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
-  // The assistant's stored reads for the loaded rows: the review opens with one instead of fetching it.
-  const [assistantReads, setAssistantReads] = useState<Record<string, AssistantRead>>({})
+  // The assistant's reads for the loaded rows, so the review opens with one
+  // instead of fetching it. A ref, not state: only the review reads them, and
+  // it reads at open time, so a landing read has nothing to re-render.
+  const assistantReadsRef = useRef<Record<string, AssistantRead>>({})
   // Rows already sent to the assistant this session (per company), so a
   // landing read never re-triggers the sweep below.
   const warmedReadsRef = useRef<{ companyId: string | null; ids: Set<string> }>({ companyId: null, ids: new Set() })
@@ -1532,6 +1544,7 @@ export default function TransactionsPage() {
     if (!companyId) return
     if (warmedReadsRef.current.companyId !== companyId) {
       warmedReadsRef.current = { companyId, ids: new Set() }
+      assistantReadsRef.current = {}
     }
     const warmed = warmedReadsRef.current.ids
     const pending = transactions
@@ -1541,7 +1554,7 @@ export default function TransactionsPage() {
           !tx.journal_entry_id &&
           !tx.is_ignored &&
           !warmed.has(tx.id) &&
-          !(assistantReads[tx.id] && readIsFresh(assistantReads[tx.id], tx)),
+          !(assistantReadsRef.current[tx.id] && readIsFresh(assistantReadsRef.current[tx.id], tx)),
       )
       .slice(0, ASSISTANT_WARM_LIMIT)
     if (pending.length === 0) return
@@ -1560,7 +1573,7 @@ export default function TransactionsPage() {
           if (!res.ok) return
           const body = (await res.json()) as { data?: AssistantRead }
           if (cancelled || !body.data) return
-          setAssistantReads((prev) => ({ ...prev, [tx.id]: body.data as AssistantRead }))
+          assistantReadsRef.current[tx.id] = body.data
         } catch {
           return
         }
@@ -1569,7 +1582,7 @@ export default function TransactionsPage() {
     return () => {
       cancelled = true
     }
-  }, [companyId, transactions, assistantReads])
+  }, [companyId, transactions])
 
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return
@@ -1584,7 +1597,7 @@ export default function TransactionsPage() {
       if (data.template_suggestions) {
         setTemplateSuggestions(data.template_suggestions)
       }
-      if (data.assistant_reads) setAssistantReads(data.assistant_reads)
+      if (data.assistant_reads) Object.assign(assistantReadsRef.current, data.assistant_reads)
     } catch {
       // Non-critical
     }
@@ -3470,6 +3483,9 @@ export default function TransactionsPage() {
     setTransactions((prev) =>
       prev.map((t) => (t.id === transactionId ? { ...t, document_id: documentId } : t))
     )
+    // The drawer and the review read the underlag through SWR; without this
+    // the receipt only appeared there on the next revalidation.
+    void revalidateUnderlag(transactionId)
     // Booked row: the attach route propagated the doc onto the verifikation,
     // so flip the JE status optimistically too. Read the JE id off the
     // dialog's own subject (attachDocTx), not the transactions snapshot:
@@ -3521,6 +3537,7 @@ export default function TransactionsPage() {
       setTransactions((prev) =>
         prev.map((row) => (row.id === tx.id ? { ...row, document_id: null } : row))
       )
+      void revalidateUnderlag(tx.id)
       // The attach dialog renders its "already attached" hint off its own
       // snapshot of the row, not the list.
       setAttachDocTx((prev) => (prev?.id === tx.id ? { ...prev, document_id: null } : prev))
@@ -4750,7 +4767,7 @@ export default function TransactionsPage() {
           entityType={entityType as EntityType}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
-          assistantRead={quickReview ? (assistantReads[quickReview.transaction.id] ?? null) : null}
+          assistantRead={quickReview ? (assistantReadsRef.current[quickReview.transaction.id] ?? null) : null}
           onEditLines={handleEditProposedLines}
         />
       )}

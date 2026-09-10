@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import useSWR from 'swr'
@@ -8,12 +8,10 @@ import { useTranslations } from 'next-intl'
 import { ChevronDown, X, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { useToast } from '@/components/ui/use-toast'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { TransactionWithInvoice } from '@/components/transactions/transaction-types'
 import type { TransactionUnderlag } from '@/lib/transactions/underlag-read'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
   const res = await fetch(url)
@@ -78,40 +76,17 @@ export function TransactionDrawer({
   onClose,
 }: TransactionDrawerProps) {
   const t = useTranslations('tx_inbox_card')
-  const { toast } = useToast()
   const isIncome = transaction.amount > 0
   const booked = !!transaction.journal_entry_id
   const attach = actions.find((a) => a.key === 'attach')
   // The underlag from either door: pinned to the row, or matched in the
   // inbox. The receipt is what makes the booking decidable, so it sits
   // above the details rather than as one line among them.
-  const { data: underlag, mutate: refreshUnderlag } = useSWR<TransactionUnderlag>(
+  const { data: underlag } = useSWR<TransactionUnderlag>(
     `/api/transactions/${transaction.id}/underlag`,
     fetchUnderlag,
   )
   const facts = underlag?.facts ?? null
-  const [hunting, setHunting] = useState(false)
-  async function searchMail() {
-    setHunting(true)
-    try {
-      const res = await fetch('/api/receipt-hunt/run', { method: 'POST' })
-      const json = (await res.json().catch(() => null)) as { data?: { fetched?: number; proposed?: number }; error?: { message?: string } } | null
-      if (!res.ok) {
-        toast({
-          title: t('underlag_search_failed'),
-          description: json?.error ? getErrorMessage(json.error, { statusCode: res.status }) : undefined,
-          variant: 'destructive',
-        })
-        return
-      }
-      toast({ title: t('underlag_search_done', { fetched: json?.data?.fetched ?? 0, proposed: json?.data?.proposed ?? 0 }) })
-      await refreshUnderlag()
-    } catch {
-      toast({ title: t('underlag_search_failed'), variant: 'destructive' })
-    } finally {
-      setHunting(false)
-    }
-  }
   const kindLabel = (kind: string | null) =>
     kind === 'receipt' ? t('kind_receipt') : kind === 'supplier_invoice' ? t('kind_supplier_invoice') : kind
 
@@ -260,17 +235,10 @@ export function TransactionDrawer({
           ) : (
             <div className="text-[12.5px]">
               <p className={underlag ? 'text-warning' : 'text-muted-foreground'}>{underlag ? t('underlag_missing_line') : '…'}</p>
-              {underlag && !booked && (
-                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
-                  {attach && (
-                    <button type="button" className={QUIET_LINK_CLASS} onClick={attach.onSelect} disabled={processing}>
-                      {t('underlag_attach')}
-                    </button>
-                  )}
-                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => void searchMail()} disabled={hunting || processing}>
-                    {hunting ? t('underlag_search_running') : t('underlag_search_mail')}
-                  </button>
-                </div>
+              {underlag && !booked && attach && (
+                <button type="button" className={cn(QUIET_LINK_CLASS, 'mt-1.5')} onClick={attach.onSelect} disabled={processing}>
+                  {t('underlag_attach')}
+                </button>
               )}
             </div>
           )}
