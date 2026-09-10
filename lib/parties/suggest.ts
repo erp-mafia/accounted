@@ -397,7 +397,10 @@ export interface DuplicateCandidate {
 export function planDuplicateMerges(parties: DuplicateCandidate[]): Array<{ survivorId: string; mergedIds: string[] }> {
   const groups = new Map<string, DuplicateCandidate[]>()
   for (const p of parties) {
-    const k = p.display_name.trim().toLowerCase().replace(/\s+/g, ' ')
+    // Case, whitespace and punctuation are never what tells two names apart:
+    // "Anthropic, PBC" and "Anthropic PBC" are one company. Legal forms are
+    // kept, since "Anthropic PBC" and "Anthropic Ireland" are two.
+    const k = p.display_name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
     if (k.length < 2) continue
     groups.set(k, [...(groups.get(k) ?? []), p])
   }

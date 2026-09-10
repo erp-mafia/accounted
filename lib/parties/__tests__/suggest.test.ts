@@ -291,7 +291,7 @@ describe('similarAmong', () => {
 })
 
 describe('planDuplicateMerges', () => {
-  it('folds exact namesakes into the one with an org number, then a confirmed one, then the oldest', () => {
+  it('folds namesakes (case, spacing and punctuation aside) into the one with an org number, then a confirmed one, then the oldest', () => {
     const plans = planDuplicateMerges([
       { id: 'a', display_name: 'The Intelligence Company AB (publ)', org_number: null, status: 'suggested', created_at: '2026-06-01' },
       { id: 'b', display_name: 'The Intelligence Company AB (publ) ', org_number: null, status: 'suggested', created_at: '2026-07-01' },
@@ -302,7 +302,8 @@ describe('planDuplicateMerges', () => {
     ])
     expect(plans).toEqual([
       { survivorId: 'c', mergedIds: ['a', 'b'] },
-      { survivorId: 'd', mergedIds: ['e'] },
+      // The comma is punctuation, not a different company.
+      { survivorId: 'd', mergedIds: ['e', 'f'] },
     ])
   })
 

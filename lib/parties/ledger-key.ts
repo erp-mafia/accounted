@@ -103,6 +103,26 @@ export function displayNameFromVoucherText(raw: string): string {
 // Legal forms that look like initials but name the company: never stripped.
 const LEGAL_FORM_TOKENS = new Set(['AB', 'HB', 'KB', 'EF', 'AS', 'SA', 'NV', 'BV', 'SE', 'OY', 'AG', 'SL', 'SP', 'SRL', 'SPA'])
 
+// Legal forms that are words in their own right, matched in any case.
+const LEGAL_FORM_WORDS = new Set([
+  'ab', 'aktiebolag', 'hb', 'kb', 'ltd', 'limited', 'oy', 'gmbh', 'inc', 'sarl', 'publ', 'filial',
+  'pbc', 'llc', 'plc', 'corp', 'corporation', 'aps', 'srl', 'spa', 'sas', 'bv', 'nv', 'ag',
+])
+
+/**
+ * Whether a name carries a legal form: "Anthropic, PBC", "Visma Spcs AB",
+ * "Anthropic Ireland Limited". A name that does is a legal entity, not a
+ * brand, and one brand can be several of them with different tax
+ * treatment; the list must never fold them into one word. The short
+ * ambiguous forms (AS, SE, EF, SA, SP) count only written in capitals.
+ */
+export function hasLegalForm(name: string): boolean {
+  return name
+    .split(/\s+/)
+    .map((t) => t.replace(/[.,()]/g, ''))
+    .some((t) => LEGAL_FORM_WORDS.has(t.toLowerCase()) || (t === t.toUpperCase() && LEGAL_FORM_TOKENS.has(t)))
+}
+
 /**
  * "KjellCo Oktober", "Resend Jul", "Supabase JW Maj", "Kontorsplatser j": a
  * trailing month or a one- or two-letter initial says when and who, not

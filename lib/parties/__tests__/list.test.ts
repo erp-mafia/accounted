@@ -68,8 +68,9 @@ describe('composeCounterparts', () => {
     const a = out.rows.find((r) => r.id === 'p1')!
     expect(a).toMatchObject({ statsSource: 'bank', count: 1, outSek: 200, what: 'AI-assistent (Claude), SaaS', status: 'confirmed', aliasKeys: [anthropicKey] })
     const v = out.rows.find((r) => r.id === 'p2')!
-    // A suggestion takes the directory's brand name; a confirmed record keeps its own.
-    expect(v).toMatchObject({ statsSource: 'ledger', count: 3, outSek: 900, account: '5420', status: 'suggested', what: 'Ekonomiprogram, SaaS', name: 'Visma' })
+    // A suggestion that names a legal entity keeps that name: Visma Spcs AB and
+    // Visma Solutions Oy are two companies behind one brand.
+    expect(v).toMatchObject({ statsSource: 'ledger', count: 3, outSek: 900, account: '5420', status: 'suggested', what: 'Ekonomiprogram, SaaS', name: 'Visma Spcs AB' })
     expect(a.name).toBe('Anthropic')
     // The register comes first: the confirmed counterpart outranks a larger
     // suggestion, so the page reads as a register and not as a queue.
@@ -156,5 +157,23 @@ describe('composeCounterparts: the register comes before the readings', () => {
       bank: new Map(),
     })
     expect(out.rows.map((r) => r.name)).toEqual(['B', 'A'])
+  })
+})
+
+describe('composeCounterparts: a brand names a fragment, never an entity', () => {
+  const suggested = (id: string, displayName: string) => party({ id, displayName, status: 'suggested' })
+
+  it('gives a head-of-text fragment the brand behind it', () => {
+    const out = composeCounterparts({ parties: [suggested('p1', 'Claude')], aliases: [], bank: new Map() })
+    expect(out.rows[0]!.name).toBe('Anthropic')
+  })
+
+  it('keeps a legal entity apart from its brand, so two entities stay two rows with two names', () => {
+    const out = composeCounterparts({
+      parties: [suggested('us', 'Anthropic, PBC'), suggested('ie', 'Anthropic Ireland')],
+      aliases: [],
+      bank: new Map(),
+    })
+    expect(out.rows.map((r) => r.name).sort()).toEqual(['Anthropic Ireland', 'Anthropic, PBC'])
   })
 })

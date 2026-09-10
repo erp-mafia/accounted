@@ -12,7 +12,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
-import { stripTrailingWhenAndWho } from './ledger-key'
+import { hasLegalForm, stripTrailingWhenAndWho } from './ledger-key'
+import { hasCountryWord } from './name-extract'
 import { getRegister, type LedgerStats, type PartyRole, type RegisterPeriod, type RegisterRow } from './register'
 import type { SuggestionReason } from './suggest'
 import { matchSeedText } from './resolver/directory'
@@ -171,10 +172,15 @@ export function composeCounterparts(input: {
     const seed = matchSeedText(p.displayName)
     const useBank = bank.count > 0
     const ledger = p.stats
-    // A suggestion still carries the ledger's head-of-text name; when the
-    // directory knows the brand behind it, the brand is the name. A confirmed
-    // record keeps the name the person gave it.
-    const seedName = p.status === 'suggested' && seed && seed.name.toLowerCase() !== p.displayName.toLowerCase() ? seed.name : null
+    // A suggestion still carries the ledger's head-of-text name ("Claude",
+    // "SJ biljetter"); when the directory knows the brand behind it, the
+    // brand is the name. Not when the stored name is a legal entity: one
+    // brand can be several ("Anthropic, PBC" in the US under reverse charge,
+    // "Anthropic Ireland" invoicing with OSS moms), and folding them into
+    // one word hid exactly the distinction the bookkeeping turns on. A
+    // confirmed record keeps the name the person gave it.
+    const isEntity = hasLegalForm(p.displayName) || hasCountryWord(p.displayName)
+    const seedName = p.status === 'suggested' && seed && !isEntity && seed.name.toLowerCase() !== p.displayName.toLowerCase() ? seed.name : null
     // A suggestion stored before the month and initial strip ("Resend Jul",
     // "Kontorsplatser j") shows its company name; the stored row is untouched.
     const shownName = seedName ?? (p.status === 'suggested' ? stripTrailingWhenAndWho(p.displayName) : p.displayName)
