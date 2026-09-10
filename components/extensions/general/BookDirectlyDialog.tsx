@@ -86,6 +86,7 @@ const TEMPLATE_ENTITY_LABELS: Record<string, string> = {
   all: 'Alla',
   enskild_firma: 'Enskild firma',
   aktiebolag: 'Aktiebolag',
+  ideell_forening: 'Ideell förening',
 }
 
 interface Props {

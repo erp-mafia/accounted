@@ -11,6 +11,7 @@ const STORED: KPIPreferences = {
   visibleKpis: ['netResult', 'cashPosition'],
   kpiOrder: ['cashPosition', 'netResult', 'vatLiability'],
   accountOverrides: { cashPosition: ['1930', '1940'] },
+  showMonthlyTable: true,
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

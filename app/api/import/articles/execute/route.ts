@@ -11,6 +11,7 @@ import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { checkRevenueAccount, type RevenueAccountStatus } from '@/lib/articles/validate-revenue-account'
 import type { Article } from '@/types'
 import type { ArticleImportExecuteResult } from '@/lib/import/articles/types'
+import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -71,6 +72,7 @@ export const POST = withRouteContext(
       const accountStatusCache = new Map<string, RevenueAccountStatus>()
       const droppedAccounts = new Set<string>()
       const warnings: string[] = []
+      const notices: ImportNotice[] = []
 
       // Currency codes are validated against the currencies reference table
       // (the same set the articles.currency FK enforces): unknown codes are
@@ -91,6 +93,7 @@ export const POST = withRouteContext(
         if (!droppedCurrencies.has(code)) {
           droppedCurrencies.add(code)
           warnings.push(`Valutan ${code} stöds inte, ignorerades: priset importerades som SEK.`)
+          notices.push(makeNotice('articles_currency_unsupported', 'notice', { code }))
         }
         return null
       }
@@ -108,6 +111,11 @@ export const POST = withRouteContext(
             status === 'activatable'
               ? `Försäljningskonto ${acc} är inte aktiverat i kontoplanen. Artiklar importerades utan kontoöverstyrning.`
               : `Försäljningskonto ${acc} är ogiltigt, ignorerades.`,
+          )
+          notices.push(
+            status === 'activatable'
+              ? makeNotice('articles_account_inactive', 'action', { account: acc })
+              : makeNotice('articles_account_invalid', 'notice', { account: acc })
           )
         }
         return null
@@ -241,6 +249,7 @@ export const POST = withRouteContext(
         failed: errors.length,
         errors,
         warnings,
+        notices,
       }
 
       opLog.info('article import complete', response)

@@ -29,6 +29,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     --success-bg: rgba(90,122,90,0.08);
     --error: #b35a3a;
     --error-bg: rgba(179,90,58,0.08);
+    --attn: #826a2b;
     --accent: #1a1a1a;
     --accent-text: #ffffff;
     --drop-bg: rgba(0,0,0,0.03);
@@ -44,6 +45,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     --success-bg: rgba(122,171,122,0.1);
     --error: #d4816a;
     --error-bg: rgba(212,129,106,0.1);
+    --attn: #c9a95a;
     --accent: #e5e5e5;
     --accent-text: #161616;
     --drop-bg: rgba(255,255,255,0.03);
@@ -72,7 +74,11 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
   .status { display: inline-block; font-size: 12px; font-weight: 500; border-radius: 999px; padding: 2px 10px; margin-bottom: 8px; }
   .status.ok { color: var(--success); background: var(--success-bg); }
   .status.bad { color: var(--error); background: var(--error-bg); }
-  .warnings { margin-top: 8px; color: var(--error); font-size: 12px; }
+  .notices { margin-top: 8px; font-size: 12px; }
+  .notices .action { color: var(--attn); }
+  .notices .muted { color: var(--text-muted); }
+  .notices .error { color: var(--error); }
+  .notices button.link { font: inherit; font-size: 12px; padding: 0; border: 0; background: none; color: var(--text-muted); text-decoration: underline; cursor: pointer; }
   .actions { display: flex; gap: 8px; margin-top: 12px; }
   button {
     font: inherit; font-weight: 500; cursor: pointer; border-radius: 6px;
@@ -218,9 +224,37 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     reader.readAsArrayBuffer(file);
   }
 
+  function esc(t) {
+    return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // One tier model, same as the app (lib/import/notices.ts): the first
+  // action is the one attention line, everything else folds behind
+  // "Visa N anmärkningar", blocking errors stay red and disable Importera.
+  function renderNotices(sc) {
+    const v = sc.validation || {};
+    const errors = v.errors || [];
+    const notices = Array.isArray(v.notices) ? v.notices
+      : (v.warnings || []).map(function(w) { return { code: 'legacy', severity: 'notice', text: w }; });
+    const actions = notices.filter(function(n) { return n.severity === 'action'; });
+    const folded = actions.slice(1).concat(notices.filter(function(n) { return n.severity === 'notice'; }));
+    let html = '';
+    errors.forEach(function(e) { html += '<div class="error">• ' + esc(e) + '</div>'; });
+    if (actions.length > 0) html += '<div class="action">' + esc(actions[0].text) + '</div>';
+    if (folded.length > 0) {
+      html += '<div><button type="button" class="link" id="toggle-notices">Visa ' + folded.length +
+        (folded.length === 1 ? ' anmärkning' : ' anmärkningar') + '</button></div>';
+      html += '<div id="folded-notices" class="hidden">' + folded.map(function(n) {
+        return '<div class="' + (n.severity === 'action' ? 'action' : 'muted') + '">• ' + esc(n.text) + '</div>';
+      }).join('') + '</div>';
+    }
+    return html ? '<div class="notices">' + html + '</div>' : '';
+  }
+
   function renderReport(sc) {
     drop.textContent = fileState.name;
-    const ok = sc.verdict === 'ok' || sc.verdict === 'ok_with_warnings';
+    const blocked = ((sc.validation || {}).notices || []).some(function(n) { return n.blocking; });
+    const ok = (sc.verdict === 'ok' || sc.verdict === 'ok_with_warnings') && !blocked;
     const f = sc.file || {};
     const rows = [
       ['Företag', (f.company_name || '?') + ' (' + (f.org_number || '?') + ')'],
@@ -229,18 +263,24 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       ['Konton', String(f.account_count != null ? f.account_count : '?')],
     ];
     let html = '<span class="status ' + (ok ? 'ok' : 'bad') + '">' +
-      (sc.verdict === 'ok' ? 'Ser korrekt ut'
+      (blocked ? 'Fel företag'
+        : sc.verdict === 'ok' ? 'Ser korrekt ut'
         : sc.verdict === 'ok_with_warnings' ? 'OK med anmärkningar'
         : sc.verdict === 'duplicate' ? 'Redan importerad'
         : 'Ogiltig fil') + '</span>';
     rows.forEach(function(r) {
-      html += '<div class="row"><span class="k">' + r[0] + '</span><span class="v">' + r[1] + '</span></div>';
+      html += '<div class="row"><span class="k">' + esc(r[0]) + '</span><span class="v">' + esc(r[1]) + '</span></div>';
     });
-    const warnings = ((sc.validation || {}).warnings || []).concat((sc.validation || {}).errors || []);
-    if (warnings.length > 0) {
-      html += '<div class="warnings">' + warnings.slice(0, 3).map(function(w) { return '• ' + w; }).join('<br>') + '</div>';
-    }
+    html += renderNotices(sc);
     el('report').innerHTML = html;
+    const toggle = document.getElementById('toggle-notices');
+    if (toggle) {
+      const showLabel = toggle.textContent;
+      toggle.addEventListener('click', function() {
+        const hidden = document.getElementById('folded-notices').classList.toggle('hidden');
+        toggle.textContent = hidden ? showLabel : 'Dölj anmärkningar';
+      });
+    }
     show('report');
     if (ok) { show('actions'); el('import').disabled = false; }
     else hide('actions');

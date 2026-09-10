@@ -70,15 +70,19 @@ export async function getDashboardNavFlagsViaProbes(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<Omit<DashboardNavFlags, 'hasExpenseClaims'>> {
-  const [woo, shopify, orders, trips] = await Promise.all([
+  const [woo, shopify, zettle, orders, trips] = await Promise.all([
     supabase.from('woocommerce_connections').select('id').eq('company_id', companyId).eq('status', 'active').limit(1),
     supabase.from('shopify_connections').select('id').eq('company_id', companyId).eq('status', 'active').limit(1),
+    supabase.from('zettle_connections').select('id').eq('company_id', companyId).eq('status', 'active').limit(1),
     supabase.from('webshop_orders').select('id').eq('company_id', companyId).limit(1),
     supabase.from('mileage_trips').select('id').eq('company_id', companyId).limit(1),
   ])
   return {
     hasWebshop:
-      (woo.data?.length ?? 0) > 0 || (shopify.data?.length ?? 0) > 0 || (orders.data?.length ?? 0) > 0,
+      (woo.data?.length ?? 0) > 0 ||
+      (shopify.data?.length ?? 0) > 0 ||
+      (zettle.data?.length ?? 0) > 0 ||
+      (orders.data?.length ?? 0) > 0,
     hasMileageTrips: (trips.data?.length ?? 0) > 0,
   }
 }

@@ -352,7 +352,15 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
               flowId,
             })
           }
-        } else if (pollData.status === 'failed' || pollData.status === 'cancelled') {
+        } else if (
+          pollData.status === 'failed' ||
+          pollData.status === 'cancelled' ||
+          // TIC has already handed this result out and the server holds no
+          // copy. Terminal: the server answers `failed` for it, this guard is
+          // for a server that predates that mapping, so the tab settles
+          // instead of polling a dead session to the deadline.
+          pollData.status === 'collected'
+        ) {
           completedRef.current = true
           cleanup()
           setStatus('failed')

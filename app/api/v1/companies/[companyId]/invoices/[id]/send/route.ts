@@ -40,6 +40,7 @@
  */
 
 import { z } from 'zod'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
@@ -560,7 +561,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Also override `status` to 'sent' on the in-memory copy. The actual DB
     // flip happens at step 9a (after email delivery), but if we render with
     // the stale 'draft' status the customer receives a PDF stamped
-    // "UTKAST: inte en giltig faktura".
+    // "UTKAST".
     const renderableInvoice: Invoice = {
       ...(typed as Invoice),
       invoice_number: finalInvoiceNumber,
@@ -729,7 +730,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           ctx.companyId!,
           ctx.userId,
           renderableInvoice,
-          (settings.entity_type ?? 'enskild_firma') as EntityType,
+          await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settings.entity_type),
           customer.name,
         )
         if (entry) {

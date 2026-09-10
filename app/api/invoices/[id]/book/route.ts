@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
@@ -61,7 +62,11 @@ export const POST = withRouteContext(
     if ((settings.accounting_method || 'accrual') !== 'accrual') {
       return errorResponseFromCode('INVOICE_BOOK_CASH_METHOD', log, { requestId })
     }
-    const entityType = ((settings as Partial<CompanySettings>).entity_type as EntityType) || 'enskild_firma'
+    const entityType = await resolveCompanyEntityType(
+      supabase,
+      companyId,
+      (settings as Partial<CompanySettings>).entity_type,
+    )
 
     const result = await bookInvoiceDeferred({
       supabase,

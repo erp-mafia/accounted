@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
+import { legacyNotices } from '@/lib/import/notices'
 import { fetchAccounts } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
@@ -23,7 +24,7 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CreditCard, Landmark, Loader2, ChevronRight, Download, AlertTriangle, ShoppingBag, ShoppingCart } from 'lucide-react'
+import { ArrowLeft, CreditCard, Landmark, Loader2, ChevronRight, Download, ShoppingBag, ShoppingCart } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -399,20 +400,11 @@ function BankFileImportWizard() {
       {/* Status chip for at-a-glance "auto-sync is healthy / stale / needs attention" */}
       <BankSyncStatusChip />
 
-      {/* Overlap warning: active PSD2 means file import will likely create
-          duplicates of transactions the nightly sync already covers. */}
+      {/* Overlap note: active PSD2 means a file import of the same period
+          duplicates what the nightly sync already fetched. One quiet
+          sentence, not a box (design convention 6). */}
       {activePsd2Banks.length > 0 && (
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-4">
-          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
-          <div className="flex-1 text-sm">
-            <p className="font-medium">
-              {tTx('import_psd2_active_warning_title', { bankName: activePsd2Banks.join(', ') })}
-            </p>
-            <p className="mt-1 text-muted-foreground">
-              {tTx('import_psd2_active_warning_body')}
-            </p>
-          </div>
-        </div>
+        <AttnLine>{tTx('import_psd2_active_warning_body', { bankName: activePsd2Banks.join(', ') })}</AttnLine>
       )}
 
       {/* Progress */}
@@ -1434,6 +1426,7 @@ function OpeningBalanceFlow() {
       {obStep === 'edit' && parseResult && (
         <OpeningBalanceEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onContinue={handleEditContinue}
           onBack={() => {
             if (needsMapping) {
@@ -1715,6 +1708,7 @@ function CustomersFlow() {
       {step === 'edit' && parseResult && (
         <CustomersEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
           isLoading={isLoading}
@@ -1972,6 +1966,7 @@ function SuppliersFlow() {
       {step === 'edit' && parseResult && (
         <SuppliersEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
           isLoading={isLoading}
@@ -2217,6 +2212,7 @@ function ArticlesFlow() {
       {step === 'edit' && parseResult && (
         <ArticlesEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
           isLoading={isLoading}
@@ -2326,11 +2322,14 @@ const WooCommercePanel = getSettingsPanel('woocommerce')
 // And for the Shopify order feed: same category as the WooCommerce feed above.
 const ShopifyPanel = getSettingsPanel('shopify')
 
+// And for the Zettle purchase feed: same category as the Shopify feed above.
+const ZettlePanel = getSettingsPanel('zettle')
+
 // ============================================================
 // Import Page with Selection Cards
 // ============================================================
 
-type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'bank' | 'skattekonto' | 'sie' | 'underlag' | 'csv_data' | 'migration'
+type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'zettle' | 'bank' | 'skattekonto' | 'sie' | 'underlag' | 'csv_data' | 'migration'
 
 export default function ImportPage() {
   const { isSandbox, role } = useCompany()
@@ -2366,7 +2365,7 @@ export default function ImportPage() {
     // Manual file-import modes (bank file, CSV/Excel, SIE) stay reachable.
     const allowedModes = isSandbox
       ? ['bank', 'skattekonto', 'sie', 'underlag', 'csv_data']
-      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'bank', 'skattekonto', 'sie', 'underlag', 'csv_data', 'migration']
+      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'zettle', 'bank', 'skattekonto', 'sie', 'underlag', 'csv_data', 'migration']
     if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
@@ -2441,6 +2440,8 @@ export default function ImportPage() {
   const woocommerceDisabled = isSandbox
   const hasShopifyExtension = ENABLED_EXTENSION_IDS.has('shopify')
   const shopifyDisabled = isSandbox
+  const hasZettleExtension = ENABLED_EXTENSION_IDS.has('zettle')
+  const zettleDisabled = isSandbox
 
   return (
     <div className="space-y-8">
@@ -2515,6 +2516,16 @@ export default function ImportPage() {
                     chips={<LogoChip src="/logos/shopify.svg" name="Shopify" />}
                     disabled={shopifyDisabled}
                     onClick={() => setMode('shopify')}
+                  />
+                )}
+                {hasZettleExtension && (
+                  <ImportRow
+                    title={t('zettle_title')}
+                    sub={t('zettle_description')}
+                    chip={<BetaChip label={t('badge_beta')} />}
+                    chips={<LogoChip src="/logos/zettle.svg" name="Zettle" />}
+                    disabled={zettleDisabled}
+                    onClick={() => setMode('zettle')}
                   />
                 )}
                 {hasMigrationExtension && (
@@ -2753,6 +2764,21 @@ export default function ImportPage() {
               <p className="mb-1 font-medium">{t('shopify_not_enabled_title')}</p>
               <p className="max-w-md text-sm text-muted-foreground">
                 {t('shopify_not_enabled_description')}
+              </p>
+            </CardContent>
+          </Card>
+        )
+      )}
+      {mode === 'zettle' && (
+        hasZettleExtension && ZettlePanel ? (
+          <ZettlePanel />
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <ShoppingBag className="mb-4 h-10 w-10 text-muted-foreground/40" />
+              <p className="mb-1 font-medium">{t('zettle_not_enabled_title')}</p>
+              <p className="max-w-md text-sm text-muted-foreground">
+                {t('zettle_not_enabled_description')}
               </p>
             </CardContent>
           </Card>

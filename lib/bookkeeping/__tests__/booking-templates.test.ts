@@ -614,6 +614,16 @@ describe('buildMappingResultFromTemplate', () => {
     expect(abResult.debit_account).toBe('2893')
   })
 
+  it('books an ideell förening private expense to the member account 2890, never an owner account', () => {
+    const tx = makeTransaction({ amount: -300 })
+    const privat = buildMappingResultFromTemplate(getTemplate('private_expense'), tx, 'ideell_forening')
+    expect(privat.debit_account).toBe('2890')
+    expect(privat.credit_account).toBe('1930')
+    // Non-owner templates keep their base (EF) account for a förening.
+    const course = buildMappingResultFromTemplate(getTemplate('education_course'), tx, 'ideell_forening')
+    expect(course.debit_account).toBe('6991')
+  })
+
   it('includes template_id in the MappingResult', () => {
     const template = getTemplate('bank_fees')
     const tx = makeTransaction({ amount: -49 })

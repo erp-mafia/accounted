@@ -71,7 +71,7 @@ export interface CompletedDisposition {
  * the next one (bolagsskatt comes last because it depends on everything else).
  */
 export interface DispositionsProposal {
-  entityType: 'aktiebolag' | 'enskild_firma' | 'handelsbolag' | 'kommanditbolag' | 'ekonomisk_forening'
+  entityType: 'aktiebolag' | 'enskild_firma' | 'ideell_forening' | 'handelsbolag' | 'kommanditbolag' | 'ekonomisk_forening'
   fiscalPeriod: {
     id: string
     name: string

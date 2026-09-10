@@ -15,7 +15,8 @@ import {
   type CanonicalAnnualReport,
 } from './compliance-types'
 import { buildIxbrlInput, type BuildIxbrlOptions } from '@/lib/bokslut/ixbrl/build-input'
-import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
+import { resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
+import { getMedelantalOverride } from './narrative-service'
 
 export interface BuildCanonicalAnnualReportOptions extends BuildIxbrlOptions {
   stage?: AnnualReportValidationStage
@@ -29,9 +30,17 @@ interface EmployeeRow {
   employment_degree: number
 }
 
-function reportMetrics(
+/**
+ * Size metrics for the ÅRL 1:3 § and K2-relief thresholds. The employee
+ * figure is the same one the note and the iXBRL fact disclose: a manual
+ * override on arsredovisning_narratives for the period wins over the FTE
+ * average, so the eligibility verdict and the document cannot disagree
+ * about how many people the company employs.
+ */
+export function reportMetrics(
   report: Awaited<ReturnType<typeof buildArsredovisningData>>,
   employees: EmployeeRow[],
+  previousMedelantalOverride: number | null = null,
 ): AnnualReportSizeMetrics {
   const currentOverview = report.forvaltningsberattelse.flerarsoversikt.find(
     (row) => row.year === report.fiscal_period.name,
@@ -43,7 +52,8 @@ function reportMetrics(
     : null
   return {
     current: {
-      employees: computeMedelantalAnstallda(
+      employees: resolveMedelantalAnstallda(
+        report.disclosures.medelantal_anstallda_override,
         employees,
         report.fiscal_period.period_start,
         report.fiscal_period.period_end,
@@ -53,7 +63,8 @@ function reportMetrics(
     },
     previous: report.previous_period
       ? {
-          employees: computeMedelantalAnstallda(
+          employees: resolveMedelantalAnstallda(
+            previousMedelantalOverride,
             employees,
             report.previous_period.period_start,
             report.previous_period.period_end,
@@ -106,7 +117,17 @@ export async function buildCanonicalAnnualReport(
     signed_at: signature.signed_at,
   }))
 
-  const metrics = reportMetrics(report, (employeesResult.data ?? []) as EmployeeRow[])
+  // The jämförelseår's manual figure lives on that period's narrative row;
+  // without it a SIE-migrated company with no employees rows would count
+  // as 0 last year and dodge the two-year ÅRL 1:3 § test.
+  const previousMedelantalOverride = report.previous_period
+    ? await getMedelantalOverride(supabase, companyId, report.previous_period.id)
+    : null
+  const metrics = reportMetrics(
+    report,
+    (employeesResult.data ?? []) as EmployeeRow[],
+    previousMedelantalOverride,
+  )
   const eligibility = evaluateAnnualReportEligibility({
     entityType: report.company.entity_type,
     framework: report.accounting_framework,

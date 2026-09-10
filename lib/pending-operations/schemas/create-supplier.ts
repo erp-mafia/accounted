@@ -26,6 +26,7 @@
  */
 import { z } from 'zod'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { parseVatNumber } from '@/lib/vat/vies-client'
 
 const IBAN_RE = /^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/
@@ -54,6 +55,8 @@ function optString(inner: z.ZodTypeAny) {
 
 const emailField = optString(z.string().email('Invalid email format').max(255))
 const phoneField = optString(z.string().max(50))
+// Stored as the 10-digit key the supplier matcher compares through (#2391):
+// the shape check above guarantees the key exists.
 const orgNumberField = optString(
   z
     .string()
@@ -61,7 +64,8 @@ const orgNumberField = optString(
     .refine(
       (v) => SE_ORG_NUMBER_RE.test(v.replace(/\s/g, '')),
       'Invalid Swedish org number format (expected XXXXXX-XXXX or 12 digits)',
-    ),
+    )
+    .transform((v) => orgNumberKey(v) ?? v),
 )
 const vatNumberField = optString(
   z

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   normalizeOrgNumber,
+  orgNumberKey,
   isValidOrgNumber,
   isOrgNumberShaped,
   hasInvalidOrgNumberCheckDigit,
@@ -60,6 +61,45 @@ describe('shape versus check digit', () => {
   })
 })
 
+describe('orgNumberKey', () => {
+  it('reduces every spelling of the same identity to 10 digits', () => {
+    expect(orgNumberKey(AB_10)).toBe(AB_10)
+    expect(orgNumberKey('556012-5790')).toBe(AB_10)
+    expect(orgNumberKey('556012 5790')).toBe(AB_10)
+    expect(orgNumberKey('165560125790')).toBe(AB_10)
+    expect(orgNumberKey('16556012-5790')).toBe(AB_10)
+    expect(orgNumberKey(' 556012 - 5790 ')).toBe(AB_10)
+    expect(orgNumberKey('19800101-1231')).toBe(EF_10)
+    expect(orgNumberKey('198001011231')).toBe(EF_10)
+  })
+
+  it('keeps a VAT number typed into the org field out of the key space', () => {
+    // 556012579001 is orgnr + "01"; its last 10 digits are another identity.
+    expect(orgNumberKey('556012579001')).toBeNull()
+    expect(orgNumberKey('SE556012579001')).toBeNull()
+    expect(orgNumberKey('SE 556012-5790 01')).toBeNull()
+  })
+
+  it('does not strip letters: a foreign 10-digit registration is not a Swedish number', () => {
+    expect(orgNumberKey('BE0123456789')).toBeNull()
+    expect(orgNumberKey('SE5560125790')).toBeNull()
+  })
+
+  it('does not check the Luhn digit: two rows with the same mistyped number are one supplier', () => {
+    expect(orgNumberKey('5560125791')).toBe('5560125791')
+    expect(normalizeOrgNumber('5560125791')).toBeNull()
+  })
+
+  it('returns null for anything not org-number shaped', () => {
+    expect(orgNumberKey('DK12345678')).toBeNull()
+    expect(orgNumberKey('12345')).toBeNull()
+    expect(orgNumberKey('12345678901')).toBeNull()
+    expect(orgNumberKey('')).toBeNull()
+    expect(orgNumberKey(null)).toBeNull()
+    expect(orgNumberKey(undefined)).toBeNull()
+  })
+})
+
 describe('formatOrgNumberDisplay', () => {
   it('renders NNNNNN-NNNN from any accepted input form', () => {
     expect(formatOrgNumberDisplay(AB_10)).toBe('556012-5790')
@@ -101,5 +141,11 @@ describe('toRedovisare12', () => {
     // stored and filing: a failed export at a deadline is worse than letting
     // Skatteverket reject it with its own message. See the module docblock.
     expect(toRedovisare12('5560125791', 'aktiebolag')).toBe('165560125791')
+  })
+
+  it('prefixes 16 for an ideell förening like every other juridisk person', () => {
+    // 8-series org numbers are issued by Skatteverket to föreningar; they
+    // must never be read as a personnummer century.
+    expect(toRedovisare12('814400-9464', 'ideell_forening')).toBe('168144009464')
   })
 })

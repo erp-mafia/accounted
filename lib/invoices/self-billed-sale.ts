@@ -16,6 +16,7 @@
  * accepts an optional is_self_billed flag), so the two can never drift.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
@@ -306,7 +307,7 @@ export async function createSelfBilledSaleInvoice(
     .eq('company_id', companyId)
     .maybeSingle()
   const accountingMethod = settings?.accounting_method || 'accrual'
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+  const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
 
   const { data: completeInvoice } = await supabase
     .from('invoices')

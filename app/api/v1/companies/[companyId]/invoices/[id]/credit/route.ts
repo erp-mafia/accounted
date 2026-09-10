@@ -39,7 +39,7 @@ const CreditNoteRequest = z.object({
 })
 
 const ORIGINAL_INVOICE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions, deduction_reclaimed_total'
 
 // default_dimensions stays in this projection: the inserted credit-note row is
 // handed to createCreditNoteJournalEntry, which reads the bag off the row so
@@ -197,6 +197,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (original.status === 'credited') {
       return v1ErrorResponseFromCode('INVOICE_CREDIT_ALREADY_CREDITED', ctx.log, {
         requestId: ctx.requestId,
+      })
+    }
+    // Same guard as the dashboard credit route: a reclaimed ROT/RUT share
+    // (rot_rut_reclaim) must be reversed before the issue-time split is credited.
+    if (Number((original as { deduction_reclaimed_total?: number | null }).deduction_reclaimed_total ?? 0) > 0) {
+      return v1ErrorResponseFromCode('INVOICE_CREDIT_ROT_RUT_RECLAIMED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { deduction_reclaimed_total: original.deduction_reclaimed_total },
       })
     }
     if (!['sent', 'paid', 'overdue'].includes(original.status)) {

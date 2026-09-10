@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import {
   calculateBolagsskatt,
@@ -43,7 +44,11 @@ export async function buildDispositionsProposal(
     .select('entity_type')
     .eq('company_id', companyId)
     .maybeSingle()
-  const entityType = (settings?.entity_type ?? 'aktiebolag') as DispositionsProposal['entityType']
+  const entityType: DispositionsProposal['entityType'] = await resolveCompanyEntityType(
+    supabase,
+    companyId,
+    settings?.entity_type,
+  )
 
   if (entityType !== 'aktiebolag') {
     // Non-AB entities (enskild firma, handelsbolag, etc.) do not produce

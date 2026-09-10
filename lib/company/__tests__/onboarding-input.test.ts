@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CompanySetupSchema, planCompanySetup } from '../onboarding-input'
 
 const base = {
@@ -196,5 +196,44 @@ describe('planCompanySetup', () => {
     if (!plan.ok) return
     expect(plan.input.settings.vat_number).toBeNull()
     expect(plan.input.settings.moms_period).toBeNull()
+  })
+})
+
+describe('CompanySetupSchema: ideell_forening', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('is refused while the creation flag is off', () => {
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
+    const result = CompanySetupSchema.safeParse({
+      name: 'SS Testklubb',
+      entity_type: 'ideell_forening',
+      org_number: '8144009464',
+      vat_registered: false,
+      f_skatt: false,
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues.map((i) => i.path.join('.'))).toContain('entity_type')
+    }
+  })
+
+  it('defaults to accrual and keeps a broken fiscal year once enabled', () => {
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
+    const setup = CompanySetupSchema.parse({
+      name: 'SS Testklubb',
+      entity_type: 'ideell_forening',
+      org_number: '8144009464',
+      vat_registered: false,
+      f_skatt: false,
+      fiscal_year_start_month: 7,
+    })
+    const plan = planCompanySetup(setup)
+    expect(plan.ok).toBe(true)
+    if (!plan.ok) return
+    expect(plan.resolved).toEqual({ accountingMethod: 'accrual', accountingMethodDefaulted: true })
+    expect(plan.input.settings.fiscal_year_start_month).toBe(7)
+    expect(plan.input.entityType).toBe('ideell_forening')
   })
 })

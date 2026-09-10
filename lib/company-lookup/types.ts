@@ -55,3 +55,41 @@ export interface CompanyLookupResult {
    */
   registrationDate?: number | null
 }
+
+/**
+ * One hit from a free-text company search (onboarding's orgnr field also
+ * accepts a name). Carries the org number the hit resolves to alongside the
+ * same lookup result `/lookup` would return for it, so picking a hit costs
+ * no second provider call.
+ */
+export interface CompanySearchHit {
+  orgNumber: string
+  result: CompanyLookupResult
+}
+
+/**
+ * Shortest free-text query the search accepts. Shared by the client (which
+ * shakes the field instead of calling) and the TIC route (which answers 400)
+ * so the two never disagree on what is worth a provider call.
+ */
+export const COMPANY_SEARCH_MIN_CHARS = 3
+
+/**
+ * One row of the search-as-you-type picker on the onboarding orgnr step,
+ * from SCB's företagsregister (free): enough to recognise the company and
+ * to run the single TIC lookup once it is picked. `legalEntityType` uses
+ * the same vocabulary as CompanyLookupResult so the reducer maps it with
+ * mapSetupEntityType; null when SCB's legal form is not one we set up.
+ * A sole trader's `orgNumber` is the owner's personnummer: the picker
+ * names the form instead of printing it.
+ */
+export interface CompanySuggestion {
+  orgNumber: string
+  name: string
+  city: string | null
+  legalEntityType: string | null
+  active: boolean
+}
+
+/** Rows the picker shows; SCB may return more, the client keeps a picker a picker. */
+export const COMPANY_SUGGEST_MAX = 6

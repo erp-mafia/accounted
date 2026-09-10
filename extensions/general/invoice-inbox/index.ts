@@ -1,4 +1,5 @@
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { z } from 'zod'
@@ -3346,10 +3347,14 @@ export const invoiceInboxExtension: Extension = {
             .select('entity_type')
             .eq('company_id', ctx.companyId)
             .maybeSingle()
-          // Same default as categorize-core. Leaving it undefined silently
-          // proposed enskild-firma accounts to aktiebolag: 2013 instead of
-          // 2893 for an owner expense, 6991 instead of 7610 for a course.
-          const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+          // Resolved, never defaulted: a guessed form proposes the wrong
+          // owner account (2013 vs 2893 vs 2890) and the wrong course
+          // account (6991 vs 7610).
+          const entityType: EntityType = await resolveCompanyEntityType(
+            ctx.supabase,
+            ctx.companyId,
+            settings?.entity_type,
+          )
 
           const settlementAccount = await resolveSettlementAccount(
             ctx.supabase,

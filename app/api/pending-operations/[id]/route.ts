@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -122,7 +123,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       .select('entity_type')
       .eq('company_id', companyId)
       .maybeSingle()
-    const entityType = ((settings?.entity_type as EntityType) || 'enskild_firma')
+    const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
 
     const isBusiness = newCategory !== 'private'
 

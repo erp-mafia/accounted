@@ -83,6 +83,34 @@ describe('VAT filing deadlines', () => {
       vat_filing_method: 'paper',
     }))[0]).toMatchObject({ day: 12, month: 6, year: 2027, period: '2026' })
   })
+
+  it('gives an ideell förening the juridisk person helårsmoms schedule, same as an AB', () => {
+    const config = getConfig('moms_yearly')
+    const ab = config.generateDates(2027, makeSettings({
+      entity_type: 'aktiebolag',
+      moms_period: 'yearly',
+      vat_filing_method: 'paper',
+    }))
+    const forening = config.generateDates(2027, makeSettings({
+      entity_type: 'ideell_forening',
+      moms_period: 'yearly',
+      vat_filing_method: 'paper',
+    }))
+    expect(forening).toHaveLength(ab.length)
+    expect(forening[0]).toMatchObject({ day: 12, month: 6, year: 2027, period: '2026' })
+    // A broken fiscal year is honoured (a förening is not calendar-locked).
+    expect(config.generateDates(2027, makeSettings({
+      entity_type: 'ideell_forening',
+      moms_period: 'yearly',
+      fiscal_year_start_month: 7,
+      vat_filing_method: 'electronic',
+    }))[0]).toMatchObject(config.generateDates(2027, makeSettings({
+      entity_type: 'aktiebolag',
+      moms_period: 'yearly',
+      fiscal_year_start_month: 7,
+      vat_filing_method: 'electronic',
+    }))[0])
+  })
 })
 
 describe('monthly tax and employer deadlines', () => {

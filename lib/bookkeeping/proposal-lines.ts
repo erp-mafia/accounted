@@ -36,6 +36,7 @@ import { getVatRate, isGeneratedVatAccount, isReverseChargeBasisLeg } from '@/li
 import { getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
 import { buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
+import { templateAccountForForm } from '@/lib/company/entity-type'
 import {
   legacyTemplateDirection as legacyDirection,
   patternDirection,
@@ -145,13 +146,11 @@ export function resolveTemplateAccountsForEntity(
   },
   entityType: EntityType | undefined,
 ): { debitAccount?: string; creditAccount?: string } {
-  if (entityType === 'aktiebolag') {
-    return {
-      debitAccount: template.debit_account_ab ?? template.debit_account,
-      creditAccount: template.credit_account_ab ?? template.credit_account,
-    }
+  if (!entityType) return { debitAccount: template.debit_account, creditAccount: template.credit_account }
+  return {
+    debitAccount: templateAccountForForm(entityType, template.debit_account, template.debit_account_ab),
+    creditAccount: templateAccountForForm(entityType, template.credit_account, template.credit_account_ab),
   }
-  return { debitAccount: template.debit_account, creditAccount: template.credit_account }
 }
 
 /**

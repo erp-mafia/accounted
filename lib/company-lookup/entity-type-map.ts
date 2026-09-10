@@ -1,4 +1,5 @@
 import type { EntityType } from '@/types'
+import { isEntityTypeCreatable } from '@/lib/company/entity-type'
 
 /**
  * Explicit allow-lists for TIC/Bolagsverket `legalEntityType` → Accounted
@@ -25,10 +26,36 @@ const ENSKILD_FIRMA_VALUES = new Set<string>([
   'enskild näringsidkare',
 ])
 
+/**
+ * Ideell förening (issue #2072). Most föreningar carry an 8-series org number
+ * issued by Skatteverket, so the Bolagsverket-backed lookup legitimately
+ * misses them; this arm matters for the registered ones and for BankID
+ * company roles. Ekonomisk förening, stiftelse and trossamfund are NOT
+ * mapped: different equity, tax form and regelverk.
+ */
+const IDEELL_FORENING_VALUES = new Set<string>([
+  'ideell förening',
+  'ideell forening',
+  'ideella föreningar',
+])
+
 export function mapEntityType(ticType: string | null | undefined): EntityType | null {
   if (!ticType) return null
   const normalized = ticType.trim().toLowerCase()
   if (AKTIEBOLAG_VALUES.has(normalized)) return 'aktiebolag'
   if (ENSKILD_FIRMA_VALUES.has(normalized)) return 'enskild_firma'
+  if (IDEELL_FORENING_VALUES.has(normalized)) return 'ideell_forening'
   return null
+}
+
+/**
+ * The form a registry lookup may PREFILL for automatic setup: mapEntityType
+ * narrowed to forms this deployment can create. A form behind a feature flag
+ * maps to null here so the onboarding journey falls through to the form
+ * picker (which lists only creatable forms) instead of prefilling a value the
+ * create path will refuse at the last step.
+ */
+export function mapSetupEntityType(ticType: string | null | undefined): EntityType | null {
+  const mapped = mapEntityType(ticType)
+  return mapped && isEntityTypeCreatable(mapped) ? mapped : null
 }

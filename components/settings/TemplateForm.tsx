@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { useState, useMemo } from 'react'
+import type { EntityType } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -51,7 +52,7 @@ export function TemplateForm({
       : '',
   )
   const [description, setDescription] = useState(initialTemplate?.description ?? '')
-  const [entityType, setEntityType] = useState<'all' | 'enskild_firma' | 'aktiebolag'>(
+  const [entityType, setEntityType] = useState<'all' | EntityType>(
     initialTemplate?.entity_type ?? 'all',
   )
   const [lines, setLines] = useState<BookingTemplateLibraryLine[]>(() =>

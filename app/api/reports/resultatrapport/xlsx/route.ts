@@ -84,7 +84,7 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
     rows.push({
       group: 'Resultat',
       account_number: '',
-      account_name: 'Årets resultat',
+      account_name: 'Beräknat resultat',
       current_period: report.net_result_current,
       prior_period: report.net_result_prior,
     })

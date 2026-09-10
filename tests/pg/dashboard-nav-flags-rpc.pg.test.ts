@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { getPool, withUserContext } from './setup'
 import { insertAuthUser, insertCompany, insertCompanyMember, seedCompany } from './fixtures'
 
-// Validates migration 20260826120000_get_dashboard_nav_flags:
-//   1. has_webshop flips on an ACTIVE WooCommerce or Shopify connection
+// Validates migration 20260826120000_get_dashboard_nav_flags (plus zettle):
+//   1. has_webshop flips on an ACTIVE WooCommerce, Shopify, or Zettle connection
 //      (a pending/revoked one does not count) and has_mileage_trips on any
 //      mileage_trips row.
 //   2. SECURITY INVOKER: a member of ANOTHER company sees (false, false)
@@ -60,6 +60,16 @@ describe('get_dashboard_nav_flags()', () => {
        VALUES ($1, $2, $3, 'active')`,
       // Unique per run: shopify_connections_shop_active_uniq is on the domain.
       [companyId, userId, `nav-flags-${companyId.slice(0, 8)}.myshopify.com`],
+    )
+    expect((await flagsAs(userId, companyId)).has_webshop).toBe(true)
+  })
+
+  it('flips has_webshop on an active Zettle connection', async () => {
+    const { userId, companyId } = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.zettle_connections (company_id, user_id, organization_uuid, status)
+       VALUES ($1, $2, $3, 'active')`,
+      [companyId, userId, `nav-flags-zettle-${companyId}`],
     )
     expect((await flagsAs(userId, companyId)).has_webshop).toBe(true)
   })

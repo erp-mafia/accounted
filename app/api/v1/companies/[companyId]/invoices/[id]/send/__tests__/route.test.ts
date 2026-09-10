@@ -807,7 +807,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     // a preflight render runs first with the F-PREVIEW placeholder. The final
     // render is the second call: its invoice must carry status: 'sent' and
     // the freshly-assigned invoice_number, otherwise the customer's PDF is
-    // stamped "UTKAST: inte en giltig faktura".
+    // stamped "UTKAST".
     const calls = vi.mocked(InvoicePDF).mock.calls
     expect(calls.length).toBeGreaterThanOrEqual(2)
     const finalRenderArgs = calls[calls.length - 1][0]

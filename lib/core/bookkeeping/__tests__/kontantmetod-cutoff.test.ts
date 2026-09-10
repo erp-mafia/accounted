@@ -75,7 +75,7 @@ describe('distributeOre', () => {
 
 describe('buildCutoffLines: fordringar', () => {
   it('books the receivable against revenue and VILANDE output moms', () => {
-    const { receivableLines } = buildCutoffLines([receivable()], [])
+    const { receivableLines } = buildCutoffLines([receivable()], [], 'aktiebolag')
 
     const debit = receivableLines.find((l) => l.debit_amount > 0)
     expect(debit?.account_number).toBe('1510')
@@ -98,6 +98,7 @@ describe('buildCutoffLines: fordringar', () => {
         receivable({ id: 'c', outstanding: 106, vat: 6, vatTreatment: 'reduced_6' }),
       ],
       [],
+      'aktiebolag',
     )
     const totals = sum(receivableLines)
     expect(totals.debit).toBe(totals.credit)
@@ -110,6 +111,7 @@ describe('buildCutoffLines: fordringar', () => {
     const { receivableLines } = buildCutoffLines(
       [receivable({ outstanding: 1000.01, vat: 200.003 })],
       [],
+      'aktiebolag',
     )
     const totals = sum(receivableLines)
     expect(totals.debit).toBe(totals.credit)
@@ -122,6 +124,7 @@ describe('buildCutoffLines: fordringar', () => {
         receivable({ id: 'b', outstanding: 1120, vat: 120, vatTreatment: 'reduced_12' }),
       ],
       [],
+      'aktiebolag',
     )
     expect(receivableLines.find((l) => l.account_number === VILANDE_OUTPUT_VAT_ACCOUNTS.standard_25)).toBeDefined()
     expect(receivableLines.find((l) => l.account_number === VILANDE_OUTPUT_VAT_ACCOUNTS.reduced_12)).toBeDefined()
@@ -133,6 +136,7 @@ describe('buildCutoffLines: fordringar', () => {
     const { receivableLines } = buildCutoffLines(
       [receivable({ vatTreatment: 'export', outstanding: 5000, vat: 0 })],
       [],
+      'aktiebolag',
     )
     expect(receivableLines.some((l) => l.account_number.startsWith('26'))).toBe(false)
     expect(receivableLines.find((l) => l.account_number === '3305')?.credit_amount).toBe(5000)
@@ -147,6 +151,7 @@ describe('buildCutoffLines: fordringar', () => {
     const { receivableLines } = buildCutoffLines(
       [receivable({ vatTreatment: 'export', outstanding: 5000, vat: 100 })],
       [],
+      'aktiebolag',
     )
     const totals = sum(receivableLines)
     expect(totals.debit).toBe(totals.credit)
@@ -154,14 +159,14 @@ describe('buildCutoffLines: fordringar', () => {
   })
 
   it('emits nothing when there is nothing outstanding', () => {
-    expect(buildCutoffLines([], []).receivableLines).toEqual([])
-    expect(buildCutoffLines([receivable({ outstanding: 0, vat: 0 })], []).receivableLines).toEqual([])
+    expect(buildCutoffLines([], [], 'aktiebolag').receivableLines).toEqual([])
+    expect(buildCutoffLines([receivable({ outstanding: 0, vat: 0 })], [], 'aktiebolag').receivableLines).toEqual([])
   })
 })
 
 describe('buildCutoffLines: skulder', () => {
   it('books the payable against expense and VILANDE input moms', () => {
-    const { payableLines } = buildCutoffLines([], [payable()])
+    const { payableLines } = buildCutoffLines([], [payable()], 'aktiebolag')
 
     const credit = payableLines.find((l) => l.credit_amount > 0)
     expect(credit?.account_number).toBe('2440')
@@ -188,6 +193,7 @@ describe('buildCutoffLines: skulder', () => {
           ],
         }),
       ],
+      'aktiebolag',
     )
     const totals = sum(payableLines)
     expect(totals.debit).toBe(totals.credit)
@@ -209,6 +215,7 @@ describe('buildCutoffLines: skulder', () => {
           ],
         }),
       ],
+      'aktiebolag',
     )
     const totals = sum(payableLines)
     expect(totals.debit).toBe(totals.credit)
@@ -216,7 +223,7 @@ describe('buildCutoffLines: skulder', () => {
   })
 
   it('falls back to a generic expense account when item detail is missing', () => {
-    const { payableLines } = buildCutoffLines([], [payable({ netByAccount: [] })])
+    const { payableLines } = buildCutoffLines([], [payable({ netByAccount: [] })], 'aktiebolag')
     expect(payableLines.find((l) => l.account_number === '6990')?.debit_amount).toBe(1000)
     const totals = sum(payableLines)
     expect(totals.debit).toBe(totals.credit)
@@ -226,6 +233,7 @@ describe('buildCutoffLines: skulder', () => {
     const lines = buildCutoffLines(
       [receivable({ outstanding: -1250, vat: -250 })],
       [payable({ outstanding: -1250, vat: -250 })],
+      'aktiebolag',
     )
     expect(lines.receivableLines.find((line) => line.account_number === '1510')).toMatchObject({
       debit_amount: 0,
@@ -250,7 +258,7 @@ describe('buildCutoffLines: skulder', () => {
 
 describe('reverseLines', () => {
   it('swaps every debit and credit so the vändning nets to zero', () => {
-    const { receivableLines } = buildCutoffLines([receivable()], [])
+    const { receivableLines } = buildCutoffLines([receivable()], [], 'aktiebolag')
     const reversed = reverseLines(receivableLines)
 
     const original = sum(receivableLines)
@@ -374,7 +382,7 @@ describe('cut-off snapshot and posting inspection', () => {
   })
 
   it('requires exact cut-off lines and exact next-period reversals', async () => {
-    const lines = buildCutoffLines([receivable()], [payable()])
+    const lines = buildCutoffLines([receivable()], [payable()], 'aktiebolag')
     const rows = [
       {
         id: 'ar', fiscal_period_id: 'fp-1',
@@ -413,7 +421,7 @@ describe('cut-off snapshot and posting inspection', () => {
   })
 
   it('treats a single stale immutable marker as a conflict', async () => {
-    const lines = buildCutoffLines([receivable()], [])
+    const lines = buildCutoffLines([receivable()], [], 'aktiebolag')
     const stale = lines.receivableLines.map((line) =>
       line.account_number === '1510' ? { ...line, debit_amount: 999 } : line,
     )
@@ -439,7 +447,7 @@ describe('cut-off snapshot and posting inspection', () => {
   })
 
   it('treats an otherwise exact marker on the wrong date as a conflict', async () => {
-    const lines = buildCutoffLines([receivable()], [])
+    const lines = buildCutoffLines([receivable()], [], 'aktiebolag')
     const status = await inspectKontantmetodCutoffPostings(
       makeJournalSupabase([{
         id: 'ar',
@@ -456,7 +464,7 @@ describe('cut-off snapshot and posting inspection', () => {
   })
 
   it('treats multiple exact markers as a duplicate conflict', async () => {
-    const lines = buildCutoffLines([receivable()], [])
+    const lines = buildCutoffLines([receivable()], [], 'aktiebolag')
     const rows = [
       {
         id: 'ar', fiscal_period_id: 'fp-1',
@@ -487,7 +495,7 @@ describe('cut-off snapshot and posting inspection', () => {
     await expect(
       inspectKontantmetodCutoffPostings(
         makeJournalSupabase([], { message: 'connection lost' }),
-        'co-1', 'fp-1', 'fp-2', '2026-12-31', buildCutoffLines([], []),
+        'co-1', 'fp-1', 'fp-2', '2026-12-31', buildCutoffLines([], [], 'aktiebolag'),
       ),
     ).rejects.toThrow(/kunde inte kontrolleras/i)
   })
@@ -626,7 +634,7 @@ describe('collectKontantmetodCutoff', () => {
         invoice_payments: paymentOf(17500),
       }) as never, 'co-1', '2026-01-01', '2026-12-31')
       expect(result.receivables).toEqual([])
-      expect(buildCutoffLines(result.receivables, []).receivableLines).toEqual([])
+      expect(buildCutoffLines(result.receivables, [], 'aktiebolag').receivableLines).toEqual([])
     })
 
     it('carries only the customer residual on a part-paid ROT invoice, moms scaled by the customer share', async () => {
@@ -639,7 +647,7 @@ describe('collectKontantmetodCutoff', () => {
       expect(result.receivables).toEqual([
         expect.objectContaining({ id: 'inv-rot', outstanding: 7500, vat: 2142.86 }),
       ])
-      const { receivableLines } = buildCutoffLines(result.receivables, [])
+      const { receivableLines } = buildCutoffLines(result.receivables, [], 'aktiebolag')
       expect(receivableLines.find((l) => l.account_number === '1510')?.debit_amount).toBe(7500)
       expect(receivableLines.find((l) => l.account_number === '2618')?.credit_amount).toBe(2142.86)
       expect(receivableLines.find((l) => l.account_number === '3001')?.credit_amount).toBe(5357.14)
@@ -684,7 +692,7 @@ describe('collectKontantmetodCutoff', () => {
       }) as never, 'co-1', '2026-01-01', '2026-12-31')
       expect(result.receivables.map((r) => r.outstanding)).toEqual([17500, -17500])
       expect(result.receivables.map((r) => r.vat)).toEqual([5000, -5000])
-      expect(buildCutoffLines(result.receivables, []).receivableLines).toEqual([])
+      expect(buildCutoffLines(result.receivables, [], 'aktiebolag').receivableLines).toEqual([])
     })
 
     it('leaves a plain invoice with the same figures exactly as before', async () => {
@@ -701,7 +709,7 @@ describe('collectKontantmetodCutoff', () => {
         expect(result.receivables).toEqual([
           expect.objectContaining({ id: 'inv-rot', outstanding: 7500, vat: 1500 }),
         ])
-        const { receivableLines } = buildCutoffLines(result.receivables, [])
+        const { receivableLines } = buildCutoffLines(result.receivables, [], 'aktiebolag')
         expect(receivableLines.find((l) => l.account_number === '1510')?.debit_amount).toBe(7500)
         expect(receivableLines.find((l) => l.account_number === '3001')?.credit_amount).toBe(6000)
         expect(receivableLines.find((l) => l.account_number === '2618')?.credit_amount).toBe(1500)
@@ -737,7 +745,7 @@ describe('collectKontantmetodCutoff', () => {
         supplierType: 'eu_business',
       }],
     })
-    const lines = buildCutoffLines([], result.payables).payableLines
+    const lines = buildCutoffLines([], result.payables, 'aktiebolag').payableLines
     expect(lines.find((line) => line.account_number === '2624')?.credit_amount).toBe(1104)
     expect(lines.find((line) => line.account_number === '2645')?.debit_amount).toBe(1104)
     expect(lines.find((line) => line.account_number === '4536')?.debit_amount).toBe(9200)
@@ -799,7 +807,7 @@ describe('collectKontantmetodCutoff', () => {
     }) as never, 'co-1', '2026-01-01', '2026-12-31')
     expect(result.receivables.map((item) => item.outstanding)).toEqual([1250, -1250])
     expect(result.payables.map((item) => item.outstanding)).toEqual([1250, -1250])
-    const lines = buildCutoffLines(result.receivables, result.payables)
+    const lines = buildCutoffLines(result.receivables, result.payables, 'aktiebolag')
     expect(lines.receivableLines).toEqual([])
     expect(lines.payableLines).toEqual([])
   })
@@ -849,6 +857,7 @@ describe('postKontantmetodCutoff', () => {
     periodEnd: '2026-12-31',
     receivables: [receivable()],
     payables: [],
+    entityType: 'aktiebolag' as const,
   }
 
   beforeEach(() => {
@@ -933,7 +942,7 @@ describe('postKontantmetodCutoff', () => {
           id: 'existing',
           fiscal_period_id: 'fp-1',
           description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
-          lines: buildCutoffLines([receivable()], []).receivableLines,
+          lines: buildCutoffLines([receivable()], [], 'aktiebolag').receivableLines,
         }]),
         'co-1',
         'user-1',
@@ -944,7 +953,7 @@ describe('postKontantmetodCutoff', () => {
   })
 
   it('resumes with the missing payable pair after a prior receivable pair succeeded', async () => {
-    const receivableLines = buildCutoffLines([receivable()], []).receivableLines
+    const receivableLines = buildCutoffLines([receivable()], [], 'aktiebolag').receivableLines
     const existingRows = [
       {
         id: 'ar', fiscal_period_id: 'fp-1',
@@ -1066,6 +1075,7 @@ describe('buildCutoffLines: omvänd betalningsskyldighet', () => {
         }],
         netByAccount: [{ account: '6540', amount: 1000 }],
       })],
+      'aktiebolag',
     )
     expect(payableLines.some((l) => l.account_number === VILANDE_INPUT_VAT_ACCOUNT)).toBe(false)
     expect(payableLines.find((l) => l.account_number === '2645')?.debit_amount).toBe(250)
@@ -1079,7 +1089,7 @@ describe('buildCutoffLines: omvänd betalningsskyldighet', () => {
   })
 
   it('still books vilande moms for ordinary (non-RC) supplier invoices', () => {
-    const { payableLines } = buildCutoffLines([], [payable({ reverseCharge: false })])
+    const { payableLines } = buildCutoffLines([], [payable({ reverseCharge: false })], 'aktiebolag')
     expect(payableLines.find((l) => l.account_number === VILANDE_INPUT_VAT_ACCOUNT)?.debit_amount).toBe(250)
   })
 })

@@ -5,6 +5,7 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { createCompanyCore } from '@/lib/company/create-company'
+import { isEntityType, isEntityTypeCreatable } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -95,8 +96,8 @@ async function createCompanyFromOnboardingImpl(params: {
     return { error: 'Unauthorized' }
   }
 
-  const entityType = params.settings.entity_type as string | undefined
-  if (entityType !== 'enskild_firma' && entityType !== 'aktiebolag') {
+  const entityType = params.settings.entity_type
+  if (!isEntityType(entityType) || !isEntityTypeCreatable(entityType)) {
     return { error: 'Ogiltig företagsform.' }
   }
 

@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { ENTITY_TYPE_LABELS_SV, isEntityType } from '@/lib/company/entity-type'
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
 import { getActiveCompanyId } from '@/lib/company/context'
@@ -170,8 +171,8 @@ function buildInitialFields(
   const entityLabel =
     company.entity_type === 'aktiebolag'
       ? 'AB'
-      : company.entity_type === 'enskild_firma'
-        ? 'Enskild firma'
+      : isEntityType(company.entity_type)
+        ? ENTITY_TYPE_LABELS_SV[company.entity_type]
         : company.entity_type
 
   // Tier the resolution: TIC snapshot (if cached) wins because it's the
