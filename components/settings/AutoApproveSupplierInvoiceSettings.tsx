@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl'
 import { useCallback, useState } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import {
   SettingsGroup,
   SettingsRow,
@@ -19,7 +20,8 @@ interface AutoApproveSupplierInvoiceSettingsProps {
 /**
  * Opt-in auto-approval of leverantörsfakturor after register. Off (default)
  * leaves aktiebolag invoices in status registered until someone clicks
- * Godkänn. Enskild firma still auto-approves in the create flow regardless.
+ * Godkänn. Enskild firma always auto-approves in the create flow: the switch
+ * is shown on and disabled so the setting is not a misleading no-op.
  */
 export function AutoApproveSupplierInvoiceSettings({
   settings,
@@ -28,6 +30,10 @@ export function AutoApproveSupplierInvoiceSettings({
   const t = useTranslations('settings_auto_approve_supplier_invoices')
   const { toast } = useToast()
   const [isSaving, setIsSaving] = useState(false)
+  const company = useCompanyOptional()?.company ?? null
+  // Prefer the company row when settings.entity_type is stale on legacy data
+  // (same pattern as BookkeepingSettingsContent).
+  const isEF = (company?.entity_type ?? settings.entity_type) === 'enskild_firma'
 
   const saveToggle = useCallback(async (value: boolean) => {
     setIsSaving(true)
@@ -48,12 +54,12 @@ export function AutoApproveSupplierInvoiceSettings({
 
   return (
     <SettingsGroup label={t('heading')}>
-      <SettingsRow label={t('enable_label')} help={t('enable_help')}>
+      <SettingsRow label={t('enable_label')} help={isEF ? t('enable_help_ef') : t('enable_help')}>
         <SettingsRowEnd>
           <Switch
-            checked={settings.auto_approve_supplier_invoices ?? false}
+            checked={isEF ? true : (settings.auto_approve_supplier_invoices ?? false)}
             onCheckedChange={saveToggle}
-            disabled={isSaving}
+            disabled={isEF || isSaving}
             aria-label={t('enable_label')}
           />
         </SettingsRowEnd>

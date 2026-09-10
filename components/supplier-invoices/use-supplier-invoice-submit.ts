@@ -116,6 +116,24 @@ export function useSupplierInvoiceSubmit({
   } | null>(null)
   const [isResolvingConflict, setIsResolvingConflict] = useState(false)
 
+  /**
+   * POST /approve when policy says so. Returns false on failure after toasting
+   * and finishCreate(invoiceId); callers must stop the success path then.
+   * Person-paid invoices are already status=paid and skip approve.
+   */
+  async function tryAutoApprove(invoiceId: string, payer: SupplierInvoiceFormData['payer']): Promise<boolean> {
+    if (!shouldAutoApprove || isPersonPayer(payer)) return true
+    const approveRes = await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
+    if (approveRes.ok) return true
+    toast({
+      title: t('warning_title'),
+      description: t('auto_approve_failed_description'),
+      variant: 'destructive',
+    })
+    finishCreate(invoiceId)
+    return false
+  }
+
   // Persist user edits back into the inbox item's extracted_data so the
   // inbox stays in sync with what was actually booked. Best-effort: a
   // failed PATCH never blocks the registration.
@@ -357,18 +375,9 @@ export function useSupplierInvoiceSubmit({
       return
     }
 
-    if (shouldAutoApprove) {
-      const approveRes = await fetch(`/api/supplier-invoices/${result.data.id}/approve`, { method: 'POST' })
-      if (!approveRes.ok) {
-        toast({
-          title: t('warning_title'),
-          description: t('auto_approve_failed_description'),
-          variant: 'destructive',
-        })
-        finishCreate(result.data.id)
-        setIsSubmitting(false)
-        return
-      }
+    if (!(await tryAutoApprove(result.data.id, data.payer))) {
+      setIsSubmitting(false)
+      return
     }
 
     toast({ title: t('invoice_registered_title'), description: t('arrival_number_label', { number: result.data.arrival_number }) })
@@ -393,18 +402,9 @@ export function useSupplierInvoiceSubmit({
       // Clear dirty state: see comment in handleDirectSubmit.
       reset(pendingData)
 
-      if (shouldAutoApprove && !isPersonPayer(pendingData.payer)) {
-        const approveRes = await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
-        if (!approveRes.ok) {
-          toast({
-            title: t('warning_title'),
-            description: t('auto_approve_failed_description'),
-            variant: 'destructive',
-          })
-          finishCreate(invoiceId)
-          setIsSubmitting(false)
-          return
-        }
+      if (!(await tryAutoApprove(invoiceId, pendingData.payer))) {
+        setIsSubmitting(false)
+        return
       }
 
       if (pendingTransactionId) {
@@ -507,6 +507,10 @@ export function useSupplierInvoiceSubmit({
     setIsResolvingConflict(false)
 
     if (ok && result.data) {
+      if (!(await tryAutoApprove(result.data.id, pendingData.payer))) {
+        reset(pendingData)
+        return
+      }
       toast({
         title: t('uncredit_and_register_success_title'),
         description: t('arrival_number_label', { number: result.data.arrival_number }),
@@ -560,11 +564,15 @@ export function useSupplierInvoiceSubmit({
     const invoiceId = result.data.id
     const arrivalNumber = result.data.arrival_number
 
+    // Clear dirty state before approve/match (same as handleConfirm).
+    reset(pendingData)
+
     // Auto-approve before matching when EF (or AB with the setting), so the
     // invoice is in the 'approved' state that match-supplier-invoice expects
     // (it accepts registered too, but EF's expectation is fully-booked).
-    if (shouldAutoApprove) {
-      await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
+    if (!(await tryAutoApprove(invoiceId, pendingData.payer))) {
+      setIsSubmitting(false)
+      return
     }
 
     const matchRes = await fetch(`/api/transactions/${transactionId}/match-supplier-invoice`, {
@@ -587,7 +595,6 @@ export function useSupplierInvoiceSubmit({
         variant: 'destructive',
       })
     }
-    reset(pendingData)
     finishCreate(invoiceId)
   }
 

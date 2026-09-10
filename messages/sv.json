@@ -2198,7 +2198,8 @@
   "settings_auto_approve_supplier_invoices": {
     "heading": "Leverantörsfakturor",
     "enable_label": "Godkänn automatiskt vid registrering",
-    "enable_help": "Sätter godkännande för betalning (attest) direkt när leverantörsfakturan registreras. Enskild firma gör redan detta. För aktiebolag sparar det det manuella Godkänn-steget.",
+    "enable_help": "Sätter godkännande för betalning (attest) direkt när leverantörsfakturan registreras, så att det manuella Godkänn-steget hoppas över.",
+    "enable_help_ef": "Enskild firma godkänner alltid leverantörsfakturor vid registrering. Inställningen går inte att stänga av.",
     "toast_save_failed": "Kunde inte spara"
   },
   "settings_peppol": {
