@@ -293,8 +293,6 @@ interface TemplatePickerProps {
   /** Shell v2: one line per template, colour dot, no cards (the picker sits beside the row). */
   dense?: boolean
   selectedTemplateId?: string
-  /** Pre-fill the search, for a picker opened to show the templates for one account. */
-  initialQuery?: string
   /**
    * List the standard library templates (the seeded multi-line ones: lön,
    * momsredovisning, skattekonto, bokslut) inside their families too. The
@@ -314,11 +312,10 @@ export default function TemplatePicker({
   onSelectAccount,
   dense = false,
   selectedTemplateId,
-  initialQuery,
   includeSystemLibrary = false,
 }: TemplatePickerProps) {
   const t = useTranslations('tx_template_picker')
-  const [searchQuery, setSearchQuery] = useState(initialQuery ?? '')
+  const [searchQuery, setSearchQuery] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   // The user's library templates (company + team scope), session-cached
   // (lib/reference-data). Kept in their raw shape so every template renders,
