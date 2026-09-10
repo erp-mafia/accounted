@@ -18,6 +18,7 @@ import { getRegister, type LedgerStats, type PartyRole, type RegisterPeriod, typ
 import type { SuggestionReason } from './suggest'
 import { matchSeedText } from './resolver/directory'
 import { isScbConfigured } from './scb/config'
+import { roundOre } from '@/lib/money'
 
 export type CounterpartStatus = 'confirmed' | 'suggested' | 'read' | 'tentative'
 
@@ -86,10 +87,6 @@ interface TxRecord {
 }
 
 const OFF_LIST_KINDS = new Set(['payroll', 'transfer', 'category', 'unsure'])
-
-function roundOre(n: number): number {
-  return Math.round(n * 100) / 100
-}
 
 export function aliasKeyOf(tx: Pick<TxRecord, 'original_description' | 'description' | 'merchant_name'>): string {
   const raw = tx.original_description?.trim() || tx.description?.trim() || tx.merchant_name?.trim() || ''
