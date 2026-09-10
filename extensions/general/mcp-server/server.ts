@@ -8991,7 +8991,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_suggest_categories',
     keywords: ['konteringsförslag', 'kontering', 'kategorisera'],
     title: 'Suggest Transaction Categories',
-    description: 'Booking proposals for uncategorized transactions. proposals[tx_id] is ordered best first (counterpart, matched rule, assistant, catalog), each with why, confidence, books_without_review and categorize_args.',
+    description: 'Booking proposals for uncategorized transactions, ordered best first per tx_id, each with why, confidence, books_without_review and categorize_args (null = app only).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9012,7 +9012,7 @@ export const tools: McpTool[] = [
         counterparty_matches: { type: 'object' },
         proposals: {
           type: 'object',
-          description: 'tx_id -> proposals; pass categorize_args to gnubok_categorize_transaction (null = app only).',
+          description: 'tx_id -> proposals; pass categorize_args to gnubok_categorize_transaction.',
         },
         no_signal_transaction_ids: {
           type: 'array',
