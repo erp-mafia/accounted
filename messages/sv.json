@@ -3096,6 +3096,10 @@
     "adjustment": "Justering"
   },
   "tx_quick_review": {
+    "vat_doc_booked": "bokförs",
+    "vat_proposal_booked": "förslaget bokför {amount}",
+    "vat_use_proposal": "Använd förslagets {amount}",
+    "vat_use_doc_amount": "Använd underlagets {amount}",
     "rec_why_recent": "Nyligen använd mall",
     "rec_why_assistant_doc": "Assistentens läsning av underlaget",
     "rec_why_assistant_row": "Assistentens läsning av raden",
@@ -3120,8 +3124,6 @@
     "underlag_fetch": "Hämta underlag",
     "book_without_underlag": "Bokför utan underlag",
     "vat_from_doc": "Moms enligt underlaget: {amount}",
-    "vat_from_proposal": "Förslaget bokför {amount}",
-    "vat_use_doc": "Bokför med underlagets moms",
     "vat_doc_source": "{source, select, pinned {kopplat till raden} matched {matchat i inkorgen} other {}}",
     "exchange_rate_fetch_failed": "Kunde inte hämta växelkursen.",
     "title": "Granska bokföring",

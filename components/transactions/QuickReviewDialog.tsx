@@ -709,27 +709,27 @@ export default function QuickReviewDialog({
         {/* Moms per the underlag: stated whenever the document has one, with
             the choice to book it when it differs from the proposal's rate. */}
         {docVatUsable && (
-          <div className={cn('rounded-lg border border-border px-3 py-2 text-xs', docVatDiffers && 'bg-muted/30')}>
-            <p className="text-muted-foreground">
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-muted-foreground">
+            <span>
               {t('vat_from_doc', { amount: formatCurrency(docVat, tx.currency) })}
               {underlag?.source ? ` · ${t('vat_doc_source', { source: underlag.source })}` : ''}
-            </p>
+              {docVatDiffers
+                ? ` · ${useDocVat ? t('vat_doc_booked') : t('vat_proposal_booked', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })}`
+                : ''}
+            </span>
             {docVatDiffers && (
-              <label className="mt-1.5 flex items-center gap-2 text-foreground">
-                <input
-                  type="checkbox"
-                  checked={useDocVat}
-                  onChange={(e) => setUseDocVat(e.target.checked)}
-                  className="h-3.5 w-3.5"
-                  disabled={isProcessing}
-                />
-                <span>
-                  {t('vat_use_doc')}{' '}
-                  <span className="text-muted-foreground">({t('vat_from_proposal', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })})</span>
-                </span>
-              </label>
+              <button
+                type="button"
+                className={cn(QUIET_LINK_CLASS, 'text-[12px]')}
+                disabled={isProcessing}
+                onClick={() => setUseDocVat((v) => !v)}
+              >
+                {useDocVat
+                  ? t('vat_use_proposal', { amount: formatCurrency(proposedVatInTxCurrency, tx.currency) })
+                  : t('vat_use_doc_amount', { amount: formatCurrency(docVat, tx.currency) })}
+              </button>
             )}
-          </div>
+          </p>
         )}
 
         {/* Account & VAT: hidden for template bookings (accounts defined by the template) */}

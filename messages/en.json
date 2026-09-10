@@ -3096,6 +3096,10 @@
     "adjustment": "Adjustment"
   },
   "tx_quick_review": {
+    "vat_doc_booked": "is booked",
+    "vat_proposal_booked": "the proposal books {amount}",
+    "vat_use_proposal": "Use the proposal's {amount}",
+    "vat_use_doc_amount": "Use the underlag's {amount}",
     "rec_why_recent": "Template used lately",
     "rec_why_assistant_doc": "The assistant's read of the underlag",
     "rec_why_assistant_row": "The assistant's read of the row",
@@ -3120,8 +3124,6 @@
     "underlag_fetch": "Fetch the document",
     "book_without_underlag": "Post without a document",
     "vat_from_doc": "VAT per the document: {amount}",
-    "vat_from_proposal": "The proposal posts {amount}",
-    "vat_use_doc": "Post with the document's VAT",
     "vat_doc_source": "{source, select, pinned {attached to the row} matched {matched in the inbox} other {}}",
     "exchange_rate_fetch_failed": "Could not fetch the exchange rate.",
     "title": "Review posting",
