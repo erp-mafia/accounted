@@ -73,7 +73,8 @@ interface QuickReviewDialogProps {
     /** The underlag's moms in the transaction's currency, when the person chose it over the proposal's rate. */
     vatAmount?: number
   ) => Promise<string | null>
-  onChangeTemplate?: () => void
+  /** Open the template picker, searched on an account when one is named. */
+  onChangeTemplate?: (query?: string) => void
   /**
    * Shell v2 with a template already chosen: the list proposed it, so a
    * second "assistenten föreslår" line here read as a contradiction.
@@ -607,7 +608,7 @@ export default function QuickReviewDialog({
               {recommendation?.source ? t('rec_kicker') : t('rec_kicker_manual')}
             </span>
             {onChangeTemplate && !hasCounterpartyPattern && (
-              <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')} onClick={onChangeTemplate}>
+              <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')} onClick={() => onChangeTemplate()}>
                 {t('rec_change')}
               </button>
             )}
@@ -628,7 +629,7 @@ export default function QuickReviewDialog({
                 : recommendation?.source === 'catalog'
                   ? t('rec_why_catalog')
                   : t('rec_why_manual')}
-            {recommendation?.confidence != null && recommendation.confidence > 0 && recommendation.confidence < 1
+            {recommendation?.source === 'catalog' && recommendation.confidence != null && recommendation.confidence > 0 && recommendation.confidence < 1
               ? ` · ${t('rec_confidence', { percent: Math.round(recommendation.confidence * 100) })}`
               : ''}
           </p>
@@ -638,7 +639,11 @@ export default function QuickReviewDialog({
               transactionId={tx.id}
               open={open}
               currentAccount={entityAccounts.debitAccount && entityAccounts.creditAccount ? (entityAccounts.debitAccount.startsWith('19') ? entityAccounts.creditAccount : entityAccounts.debitAccount) : accountOverride || null}
-              autoApply={!template}
+              autoApply={!isTemplateBooking}
+              // A template books its own lines, so an account the assistant
+              // names cannot be dropped in; it opens the picker on that
+              // account instead. Without a template the account applies.
+              onShowTemplates={isTemplateBooking && onChangeTemplate && !hasCounterpartyPattern ? (account) => onChangeTemplate(account) : undefined}
               onProposal={setAiProposal}
               onApply={(account, vat) => {
                 handleAccountChange(account)

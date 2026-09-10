@@ -525,6 +525,8 @@ export default function TransactionsPage() {
 
   // Template picker dialog
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
+  // Search the picker opens with; set when the review's Byt names an account.
+  const [templatePickerQuery, setTemplatePickerQuery] = useState('')
   const [templatePickerTransaction, setTemplatePickerTransaction] = useState<TransactionWithInvoice | null>(null)
   // Shell v2: the element the picker opens beside (chip or Bokför button); null = the dialog.
   const [templatePickerAnchor, setTemplatePickerAnchor] = useState<HTMLElement | null>(null)
@@ -3844,6 +3846,7 @@ export default function TransactionsPage() {
 
   function openCategoryDialog(transaction: TransactionWithInvoice, anchor?: HTMLElement) {
     setTemplatePickerTransaction(transaction)
+    setTemplatePickerQuery('')
     setTemplatePickerAnchor(shell === 'v2' ? (anchor ?? null) : null)
     setTemplatePickerOpen(true)
   }
@@ -3923,10 +3926,11 @@ export default function TransactionsPage() {
     setQuickReviewOpen(true)
   }
 
-  function handleChangeTemplate() {
+  function handleChangeTemplate(query?: string) {
     setQuickReviewOpen(false)
     if (quickReview?.transaction) {
       setTemplatePickerTransaction(quickReview.transaction)
+      setTemplatePickerQuery(query ?? '')
       setTemplatePickerOpen(true)
     }
   }
@@ -4160,6 +4164,7 @@ export default function TransactionsPage() {
     },
     onPickLibraryTemplate: handlePickLibraryTemplate,
     onSelectAccount: handlePickAccount,
+    initialQuery: templatePickerQuery,
   }
   // Alternate paths as quiet links (concept vact): the templates are the
   // main content, not three stacked buttons.
