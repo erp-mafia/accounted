@@ -63,6 +63,7 @@ import {
   buildFxRateIndex,
   type FxUnresolved,
 } from './entity-mapper'
+import { invoiceWithinScope, type FiscalYearScope } from './invoice-scope'
 
 const log = createLogger('extensions/arcim-migration/migration-orchestrator')
 
@@ -88,6 +89,18 @@ export interface MigrationOptions {
   importAssets?: boolean
   /** Auto-link imported supplier invoices to GL payment vouchers. Default true. */
   reconcileVouchers?: boolean
+  /**
+   * Fill the Kontakter register from the migrated data at the end of the
+   * run. Default true. The wizard drives one request per step (#2469) and
+   * turns this off on all but the last, so the scan runs once per migration.
+   */
+  suggestParties?: boolean
+  /**
+   * Fiscal years the SIE import covers. Paid invoices issued outside them are
+   * neither fetched in detail nor inserted (see invoice-scope.ts); unpaid
+   * ones are kept from any year. Null or omitted imports the whole register.
+   */
+  fiscalYearScope?: FiscalYearScope | null
   onProgress?: (progress: MigrationProgress) => void
 }
 
@@ -582,11 +595,14 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       try {
         // Hydrated, not the bare list: the list payload omits VAT, the net
         // and the line items for most providers (see provider-data-fetcher).
-        const { invoices, hydration, unhydratedIds } = await fetchSalesInvoicesHydrated(
-          provider, accessToken, providerCompanyId,
+        // Scoped before hydration: a paid invoice outside the imported fiscal
+        // years never costs a detail fetch (#2469).
+        const { invoices, hydration, unhydratedIds, excluded = [] } = await fetchSalesInvoicesHydrated(
+          provider, accessToken, providerCompanyId, undefined,
+          (dto) => invoiceWithinScope(dto, options.fiscalYearScope),
         )
-        if (invoices.length > 0) runState.grantProven = true
-        console.log(`[migration] Sales invoices: ${invoices.length} total`)
+        if (invoices.length > 0 || excluded.length > 0) runState.grantProven = true
+        console.log(`[migration] Sales invoices: ${invoices.length} in scope, ${excluded.length} outside the imported fiscal years`)
 
         // Bulk-load existing invoice numbers once.
         const existingInvoices = await fetchAllRows<{ invoice_number: string }>(({ from, to }) =>
@@ -837,7 +853,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, creditNotesUnlinked, hydration, errorSample: errorSample ?? undefined }
+        if (excluded.length > 0) {
+          skipReasons.outsideFiscalYears = excluded.length
+          skipped += excluded.length
+        }
+        results.salesInvoices = { total: invoices.length + excluded.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, creditNotesUnlinked, hydration, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import sales invoices:', err)
         recordStepError(results, 'salesInvoices', err, runState)
@@ -848,11 +868,12 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     if (options.importSupplierInvoices !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Importerar leverantörsfakturor...', progress: 80 })
       try {
-        const { invoices, hydration, unhydratedIds } = await fetchSupplierInvoicesHydrated(
-          provider, accessToken, providerCompanyId,
+        const { invoices, hydration, unhydratedIds, excluded = [] } = await fetchSupplierInvoicesHydrated(
+          provider, accessToken, providerCompanyId, undefined,
+          (dto) => invoiceWithinScope(dto, options.fiscalYearScope),
         )
-        if (invoices.length > 0) runState.grantProven = true
-        console.log(`[migration] Supplier invoices: ${invoices.length} total`)
+        if (invoices.length > 0 || excluded.length > 0) runState.grantProven = true
+        console.log(`[migration] Supplier invoices: ${invoices.length} in scope, ${excluded.length} outside the imported fiscal years`)
 
         // Load existing (supplier_invoice_number, supplier_id) pairs once.
         const existingSuppInv = await fetchAllRows<{
@@ -1087,7 +1108,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, hydration, errorSample: errorSample ?? undefined }
+        if (excluded.length > 0) {
+          skipReasons.outsideFiscalYears = excluded.length
+          skipped += excluded.length
+        }
+        results.supplierInvoices = { total: invoices.length + excluded.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, hydration, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import supplier invoices:', err)
         recordStepError(results, 'supplierInvoices', err, runState)
@@ -1177,11 +1202,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
 
     // Fill the Kontakter register from the migrated vouchers and documents
     // (non-blocking): suggested parties only, confirmed by the user later.
-    try {
-      const summary = await suggestPartiesForCompany(supabase, companyId, userId)
-      console.log(`[migration] party suggestions: ${summary.created} new, ${summary.attached} attached, ${summary.skipped} skipped`)
-    } catch (err) {
-      console.error('Failed to suggest parties after migration:', err)
+    if (options.suggestParties !== false) {
+      try {
+        const summary = await suggestPartiesForCompany(supabase, companyId, userId)
+        console.log(`[migration] party suggestions: ${summary.created} new, ${summary.attached} attached, ${summary.skipped} skipped`)
+      } catch (err) {
+        console.error('Failed to suggest parties after migration:', err)
+      }
     }
 
     emitProgress(options, { status: 'completed', progress: 100, results })

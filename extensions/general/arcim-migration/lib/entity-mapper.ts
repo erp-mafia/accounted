@@ -609,6 +609,21 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
   // (migration 20260726110000) accepts AES-256-GCM hex and nothing else, so
   // writing the identity number in plaintext here aborts the whole import with
   // 23514 the moment a Privatperson appears in the source data.
+  //
+  // The same check bounds the ciphertext length, which is 56 hex chars plus
+  // two per plaintext char: an identity number shorter than a personnummer
+  // (a 6-digit birth date, a customer number typed into the wrong field)
+  // encrypts to something the column rejects, and the row was lost with it
+  // (#2469). Only a personnummer-shaped value goes into the column; anything
+  // else is kept readable in the notes so the user can decide.
+  const personalNumber = isIndividual ? number : null
+  const storablePersonalNumber =
+    personalNumber && looksLikePersonnummer(personalNumber) ? personalNumber : null
+  const unstorableIdentityNote =
+    personalNumber && !storablePersonalNumber
+      ? `Identitetsnummer i källsystemet: ${personalNumber}`
+      : null
+  const notes = [dto.note, unstorableIdentityNote].filter((part): part is string => !!part)
   return {
     user_id: userId,
     company_id: companyId,
@@ -621,12 +636,22 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
     invoice_email_bcc_addresses: dto.invoiceEmailBccAddresses ?? null,
     ...addr,
     org_number: isIndividual ? null : number,
-    personal_number: isIndividual ? encryptCustomerPersonalNumber(number) : null,
+    personal_number: encryptCustomerPersonalNumber(storablePersonalNumber),
     vat_number: dto.vatNumber || null,
     vat_number_validated: false,
     default_payment_terms: dto.defaultPaymentTermsDays || 30,
-    notes: dto.note || null,
+    notes: notes.length > 0 ? notes.join('\n') : null,
   }
+}
+
+/**
+ * A Swedish personnummer or samordningsnummer as providers spell it: 10 or
+ * 12 digits with an optional separator (850101-1234, 19850101+1234,
+ * 198501011234). Shape only; the value is never validated further here.
+ */
+export function looksLikePersonnummer(value: string): boolean {
+  const digits = value.replace(/[\s+-]/g, '')
+  return /^\d{10}$|^\d{12}$/.test(digits)
 }
 
 export function mapSupplier(dto: SupplierDto, userId: string, companyId: string): Record<string, unknown> {
