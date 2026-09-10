@@ -38,6 +38,12 @@ export type TemplateGroup =
   | 'financial'
   | 'private_transfers'
   | 'equipment'
+  // The three families the static catalog has no templates for but the
+  // library (system + own templates) files under: goods for resale (4xxx),
+  // tax and VAT settlements (1630/2650/25xx), and year-end postings (88xx).
+  | 'goods'
+  | 'tax'
+  | 'closing'
 
 export interface BookingTemplate {
   id: string
@@ -109,6 +115,9 @@ const GROUP_LABELS: Record<TemplateGroup, { sv: string; en: string }> = {
   financial: { sv: 'Finansiella poster', en: 'Financial Items' },
   private_transfers: { sv: 'Privata transaktioner', en: 'Private Transfers' },
   equipment: { sv: 'Inventarier & Utrustning', en: 'Equipment' },
+  goods: { sv: 'Varor & material', en: 'Goods & Materials' },
+  tax: { sv: 'Skatt & moms', en: 'Tax & VAT' },
+  closing: { sv: 'Bokslut', en: 'Year-end' },
 }
 
 // ============================================================
@@ -549,7 +558,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_treatment: 'reduced_12',
     vat_rate: 0.12,
     deductibility: 'full',
-    special_rules_sv: 'Logi har 12% moms. Frukost särredovisas med 12% moms.',
+    special_rules_sv: 'Frukost särredovisas från logikostnaden.',
     mcc_codes: [3501, 3502, 3503, 3504, 7011],
     keywords: ['hotell', 'hotel', 'logi', 'övernattning', 'scandic', 'elite', 'best western', 'booking', 'airbnb'],
     risk_level: 'LOW',
@@ -575,8 +584,8 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_treatment: 'reduced_12',
     vat_rate: 0.12,
     deductibility: 'conditional',
-    deductibility_note_sv: 'Avdragsgill moms max 46 kr/person. Representationskostnad max 300 kr/person exkl moms (IL 16 kap 2§)',
-    special_rules_sv: 'Dokumentera: syfte, deltagare, företag. Momsavdrag max 300 kr/person.',
+    deductibility_note_sv: 'Momsavdrag på högst 300 kr/person (schablon 46 kr/person vid mat och alkohol); måltider inte avdragsgilla för inkomstskatt sedan 2017',
+    special_rules_sv: 'Dokumentera syfte, deltagare och företag.',
     mcc_codes: [5812, 5813, 5814],
     keywords: ['representation', 'lunch', 'middag', 'restaurang', 'restaurant', 'kund', 'kundmöte', 'gåva', 'present', 'representationsgåva'],
     risk_level: 'HIGH',
@@ -595,13 +604,13 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'representation',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '7622',
+    debit_account: '7631',
     credit_account: '1930',
-    vat_treatment: null,
-    vat_rate: 0,
+    vat_treatment: 'reduced_12',
+    vat_rate: 0.12,
     deductibility: 'conditional',
-    deductibility_note_sv: 'Max 60 kr/person',
-    special_rules_sv: 'Personalfest, intern lunch etc. Momsfritt. Max 60 kr/person för avdragsrätt.',
+    deductibility_note_sv: 'Enklare förtäring avdragsgill upp till 60 kr/person; måltider inte avdragsgilla för inkomstskatt sedan 2017',
+    special_rules_sv: 'Personalfest, teamlunch, fika. Momsavdrag på högst 300 kr/person (schablon 46 kr/person vid mat och alkohol).',
     mcc_codes: [5812, 5813, 5814],
     keywords: ['personalfest', 'intern representation', 'teamlunch', 'personallunch', 'fika', 'julfest', 'after work', 'intern lunch'],
     risk_level: 'LOW',
@@ -775,7 +784,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     deductibility: 'full',
     special_rules_sv: 'Banktjänster är momsfria',
     mcc_codes: [6010, 6011, 6012],
-    keywords: ['bankavgift', 'bank fee', 'kontoavgift', 'årsavgift', 'månadsavgift', 'kortavgift', 'zettle', 'izettle', 'stripe', 'klarna', 'swish', 'betalterminal', 'nets'],
+    keywords: ['bankavgift', 'bank fee', 'kontoavgift', 'årsavgift', 'månadsavgift', 'kortavgift', 'zettle', 'izettle', 'klarna', 'swish', 'betalterminal', 'nets'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 9,
@@ -784,6 +793,35 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     fallback_category: 'expense_bank_fees',
     description_sv: 'Bankavgifter, kontoavgifter och kortavgifter',
     common: true,
+  },
+  {
+    // Stripe Payments Europe Ltd (Ireland) invoices its fees without VAT and
+    // the Swedish buyer reports them under reverse charge, the same way the
+    // Stripe extension books fees inside a payout (extensions/general/stripe/
+    // lib/payouts.ts): ruta 21 basis, 25 % fictitious VAT on 2614 and 2645.
+    id: 'payment_fees_eu',
+    name_sv: 'Stripe-avgifter (omvänd moms)',
+    name_en: 'Stripe fees (reverse charge)',
+    group: 'bank_finance',
+    direction: 'expense',
+    entity_applicability: 'all',
+    debit_account: '6570',
+    credit_account: '1930',
+    vat_treatment: 'reverse_charge',
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv: 'Fakturerat utan moms från Irland; köparen redovisar omvänd moms (ruta 21, 30 och 48).',
+    mcc_codes: [],
+    keywords: ['stripe'],
+    risk_level: 'LOW',
+    requires_review: false,
+    impact_score: 8,
+    auto_match_confidence: 0.85,
+    default_private: false,
+    fallback_category: 'expense_bank_fees',
+    description_sv: 'Avgifter från Stripe (EU-leverantör) med omvänd skattskyldighet',
+    common: true,
+    requires_vat_registration_data: true,
   },
   {
     id: 'bank_interest_income',
@@ -1796,6 +1834,14 @@ export function stripBankNoise(lowerText: string): string {
  * Multi-signal matching against a transaction.
  * Returns top matches sorted by confidence descending.
  */
+/** Keywords up to this length are matched as whole words; longer ones may sit inside a word ("fjärruppvärmning"). */
+const WHOLE_WORD_KEYWORD_MAX = 3
+
+function keywordMatches(searchText: string, searchWords: ReadonlySet<string>, keyword: string): boolean {
+  if (keyword.length <= WHOLE_WORD_KEYWORD_MAX) return searchWords.has(keyword)
+  return searchText.includes(keyword)
+}
+
 export function findMatchingTemplates(
   transaction: Transaction,
   entityType?: EntityType
@@ -1810,6 +1856,7 @@ export function findMatchingTemplates(
   // Strip bank-method noise so e.g. "Överföring via internet" doesn't make
   // the matcher believe the merchant is "Internet" (→ 6230 telecom).
   const searchText = stripBankNoise(rawSearchText)
+  const searchWords = new Set(searchText.split(/[^\p{L}\p{N}]+/u).filter(Boolean))
 
   for (const t of BOOKING_TEMPLATES) {
     // Filter entity applicability
@@ -1829,11 +1876,13 @@ export function findMatchingTemplates(
       score += 0.4
     }
 
-    // Keyword matches in description + merchant: +0.3 (proportional)
+    // Keyword matches in description + merchant: +0.3 (proportional).
+    // Short keywords match whole words only: "el" inside "vercel" or
+    // "hotel" made El & Uppvärmning the top proposal for a hosting bill.
     if (t.keywords.length > 0) {
       let matchedKeywords = 0
       for (const kw of t.keywords) {
-        if (searchText.includes(kw.toLowerCase())) {
+        if (keywordMatches(searchText, searchWords, kw.toLowerCase())) {
           matchedKeywords++
         }
       }

@@ -3,20 +3,21 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 /**
- * Booking-feedback parity between the two booking paths on the transactions
- * page.
+ * One booking path on the transactions page.
  *
- * The counterparty-template path (Bokför → "Tidigare motparter") used to end a
- * successful booking with nothing but `setExitingIds().add(id)`: no "Bokförd"
- * toast, no Ångra action, no unbooked-count decrement, and the id was never
- * removed from exitingIds again, so an undo would have restored the row's data
- * while leaving it filtered out of the inbox. Every other booking path ran
- * runCategorize's success tail.
+ * The counterparty-template path (Bokför → "Tidigare motparter") once had a
+ * booking call of its own and ended a success with nothing but
+ * `setExitingIds().add(id)`: no "Bokförd" toast, no Ångra action, no
+ * unbooked-count decrement, and the id was never removed from exitingIds
+ * again, so an undo restored the row's data while leaving it filtered out of
+ * the inbox. It was then given the shared success tail, and finally the
+ * separate call went away: every proposal, whatever proposed it, books
+ * through `bookProposalNow` → `runCategorize` → `finishBooking`
+ * (lib/bookkeeping/proposal.ts decides the request body).
  *
- * Both now go through one `finishBooking`. This repo runs Vitest in the `node`
- * environment and never renders components, so, like the sibling
- * invoice-match-dialog tests, these are file-level assertions: the two paths
- * must not drift apart again.
+ * This repo runs Vitest in the `node` environment and never renders
+ * components, so, like the sibling invoice-match-dialog tests, these are
+ * file-level assertions: the path must not fork again.
  */
 
 const PAGE_SRC = fs.readFileSync(
@@ -40,17 +41,17 @@ describe('transactions page booking feedback', () => {
   })
 
   it('routes every successful booking through it', () => {
-    // runCategorize (category / catalog template / library template), the
-    // counterparty-template booking, the counterparty activate-and-retry, and
-    // the counterparty duplicate-warning "Bokför ändå" retry.
-    expect(PAGE_SRC.match(/finishBooking\(\{/g) ?? []).toHaveLength(4)
+    // One call site, because there is one booking path.
+    expect(PAGE_SRC.match(/finishBooking\(\{/g) ?? []).toHaveLength(1)
   })
 
-  it('no longer ends the counterparty path on a bare exitingIds add', () => {
-    // The old tail: setExitingIds(...) immediately followed by `journalEntryId = cpJeId`.
-    expect(PAGE_SRC).not.toMatch(
-      /setExitingIds\(\(prev\) => new Set\(prev\)\.add\(id\)\)\s*\n\s*journalEntryId = cpJeId/,
-    )
+  it('books through exactly one request, whatever proposed it', () => {
+    // A counterparty rule is a body field on the same call, not a call of its
+    // own: `counterparty_template_id` appears once on the wire and once where
+    // the proposal's body is unpacked.
+    expect(PAGE_SRC.match(/fetch\(`\/api\/transactions\/\$\{id\}\/categorize`/g) ?? []).toHaveLength(1)
+    expect(PAGE_SRC).not.toContain('cpCategorize')
+    expect(PAGE_SRC.match(/counterparty_template_id/g) ?? []).toHaveLength(2)
   })
 
   it('clears the id from exitingIds so an undo puts the row back', () => {
@@ -120,18 +121,18 @@ describe('transactions page booking feedback', () => {
  */
 
 describe('duplicate-guard 409 routing parity', () => {
-  it('handles the duplicate code on both booking paths of the transactions page', () => {
-    // runCategorize AND the counterparty-template branch.
+  it('handles the duplicate code once, on the one booking path', () => {
     expect(
       PAGE_SRC.match(/error\?\.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE'/g) ?? [],
-    ).toHaveLength(2)
+    ).toHaveLength(1)
   })
 
-  it('opens the dialog from the counterparty branch with a force-bound retry', () => {
-    // The branch must set the shared duplicateWarning state (the dialog) and
-    // bind the retry to the reviewed candidate's voucher.
+  it('retries the same booking, force-bound to the reviewed candidate', () => {
+    // The retry spreads the original args, so a counterparty rule (or a
+    // template, or an account) is retried as what it was, not as a bare
+    // category. Losing that spread would silently book something else.
     expect(PAGE_SRC).toMatch(
-      /TRANSACTION_BOOK_POSSIBLE_DUPLICATE'[\s\S]{0,600}cpCategorize\(\{\s*\n?\s*expectedDuplicateJournalEntryId: candidate\.journal_entry_id,/,
+      /TRANSACTION_BOOK_POSSIBLE_DUPLICATE'[\s\S]{0,900}runCategorize\(\{\s*\n?\s*\.\.\.args,\s*\n?\s*force: true,\s*\n?\s*expectedDuplicateJournalEntryId: candidate\.journal_entry_id,/,
     )
   })
 })

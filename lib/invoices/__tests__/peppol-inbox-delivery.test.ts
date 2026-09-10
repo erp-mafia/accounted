@@ -74,6 +74,8 @@ describe('peppolDocumentToExtraction', () => {
         address: 'Wallingatan 33 3tr, 11124 Stockholm',
         bankgiro: null,
         plusgiro: null,
+        iban: null,
+        bic: null,
       },
       invoice: {
         invoiceNumber: '20267497',

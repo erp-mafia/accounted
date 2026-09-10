@@ -1,5 +1,7 @@
 'use client'
 
+import { atomLabel } from '@/lib/agent-context/atom-labels'
+
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Pin, ArrowUpRight } from 'lucide-react'
@@ -12,7 +14,8 @@ import type { AgentCompetence, AtomTier, FactKind, FactSource } from '@/lib/agen
  * Read-only views of the agent's competence (domain-knowledge atoms) and top
  * learned facts, for the "Vad din agent vet" overview. Each renders as a flat
  * settings group (Fönster language) with its description behind the group
- * "?" help. Full editable management lives in /settings/assistant; each
+ * "?" help. Full editable management lives on the Minne and Kompetens
+ * views of /agent-knowledge (and in /settings/assistant); each
  * links there.
  */
 
@@ -46,7 +49,7 @@ export function CompetenceCard({ competence }: { competence: AgentCompetence }) 
                       className={a.active ? '' : 'text-muted-foreground'}
                       title={a.description}
                     >
-                      {a.title}
+                      {atomLabel(a)}
                       {!a.active && tier !== 'horizontal' && (
                         <span className="ml-1.5 opacity-70">· {t('badge_dormant')}</span>
                       )}
@@ -58,7 +61,7 @@ export function CompetenceCard({ competence }: { competence: AgentCompetence }) 
           })}
           <div className="flex items-center justify-between gap-4 px-1 pt-3 text-xs text-muted-foreground">
             <span className="tabular-nums">{t('comp_count', { total: atoms.length, active: activeAtoms })}</span>
-            <ManageLink href="/settings/assistant?view=skills" label={t('comp_manage')} />
+            <ManageLink href="/agent-knowledge?view=skills" label={t('comp_manage')} />
           </div>
         </>
       )}
@@ -103,7 +106,7 @@ export function FactsCard({ competence }: { competence: AgentCompetence }) {
             <span className="tabular-nums">
               {factsActiveTotal > facts.length ? t('facts_more', { n: factsActiveTotal - facts.length }) : ''}
             </span>
-            <ManageLink href="/settings/assistant?view=memory" label={t('facts_manage')} />
+            <ManageLink href="/agent-knowledge?view=memory" label={t('facts_manage')} />
           </div>
         </>
       )}

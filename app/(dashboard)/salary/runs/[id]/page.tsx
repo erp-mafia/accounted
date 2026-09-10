@@ -70,6 +70,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
   const [run, setRun] = useState<RunDetail | null>(null)
+  const [runError, setRunError] = useState<string | null>(null)
   const [availableEmployees, setAvailableEmployees] = useState<EmployeeMasked[]>([])
   // Registered utlägg (#2331): fetched only while the run is a draft, the
   // one status in which they can be put on a payslip.
@@ -112,6 +113,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   async function loadRun() {
     const res = await fetch(`/api/salary/runs/${id}`)
     if (res.ok) {
+      setRunError(null)
       const { data } = await res.json()
       setRun(data)
       if (data?.status === 'draft') {
@@ -135,6 +137,13 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           .catch(() => setTaxPayment(null))
           .finally(() => setTaxPaymentLoading(false))
       }
+    } else if (res.status !== 404) {
+      // Any other failure is not "not found": show what the server said, so
+      // a timeout or a refused read does not read as a missing run.
+      const body = (await res.json().catch(() => null)) as { error?: string } | null
+      setRunError(body?.error || t('load_failed'))
+    } else {
+      setRunError(null)
     }
   }
 
@@ -817,7 +826,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   }
 
   if (!run) {
-    return <p className="text-muted-foreground">{t('not_found')}</p>
+    return <p className="text-muted-foreground">{runError ?? t('not_found')}</p>
   }
 
   const periodLabel = periodLabelOf(run)

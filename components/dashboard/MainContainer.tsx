@@ -3,6 +3,7 @@
 import { usePathname } from 'next/navigation'
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
+import type { DashboardShell } from '@/types'
 
 /**
  * Picks the dashboard chrome container based on route. Extension workspaces
@@ -17,9 +18,18 @@ import type { ReactNode } from 'react'
  */
 export function MainContainer({
   companyId,
+  shell = 'v1',
   children,
 }: {
   companyId: string | null
+  /**
+   * Dashboard shell (user_preferences.ui_state.shell). 'v2' is the full-bleed
+   * frame: no max-width, 24px side padding, and PageHeader restyled into a
+   * top bar by the [data-shell="v2"] rules in globals.css. 'v1' is the
+   * centered max-w-5xl card. Founder decision 2026-09-07; see
+   * dev_docs/ui_v2_build_plan.md.
+   */
+  shell?: DashboardShell
   children: ReactNode
 }) {
   const pathname = usePathname()
@@ -47,6 +57,17 @@ export function MainContainer({
 
   if (isFullBleed) {
     return <div key={companyId ?? ''} className="h-full">{children}</div>
+  }
+
+  // Shell v2: the panel is the canvas. The 16px top padding is what the
+  // sticky PageHeader top bar pulls itself back over (negative margin), so
+  // the two numbers must stay in step with the CSS.
+  if (shell === 'v2') {
+    return (
+      <div key={companyId ?? ''} className="px-4 pb-8 pt-4 md:px-6">
+        {children}
+      </div>
+    )
   }
 
   return (

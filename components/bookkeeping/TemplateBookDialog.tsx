@@ -14,17 +14,16 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import {
-  applyTemplate,
-  getTemplateScope,
-  SCOPE_LABELS,
-  TEMPLATE_CATEGORY_LABELS,
-} from '@/lib/bookkeeping/template-library'
+import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import { staticTemplateToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
+import TemplatePicker from '@/components/transactions/TemplatePicker'
+import { useCompany } from '@/contexts/CompanyContext'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { roundOre } from '@/lib/money'
-import { ArrowLeft, Check, ChevronRight, Loader2, Search } from 'lucide-react'
+import { ArrowLeft, Check, Loader2 } from 'lucide-react'
 import type { BookingTemplateLibrary } from '@/types'
-import { useBookingTemplates, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
 interface Props {
@@ -41,26 +40,20 @@ function sumSide(lines: FormLine[], side: 'debit_amount' | 'credit_amount'): num
 
 /**
  * "Bokför från mall" (UI-migration plan PR 4, scene 9): a centered modal
- * with the template list (existing booking_template_library data, MRU
- * ordering from the API), then date + editable amount that recomputes the
- * kontering live via applyTemplate, a "Balanserar" row, and direct booking
- * (user action, so no Granskning detour).
+ * with the same picker every other surface uses (catalog, standard and own
+ * library templates, by family), then date + editable amount that recomputes
+ * the kontering live, a "Balanserar" row, and direct booking (user action, so
+ * no Granskning detour).
  */
 export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Props) {
   const t = useTranslations('bookkeeping')
   const { toast } = useToast()
 
-  // Session-cached (lib/reference-data): opening the dialog costs no
-  // requests once the lists are in the cache. null = still loading.
-  const { templates: cachedTemplates, isLoading: templatesLoading } = useBookingTemplates()
-  // Templates hidden for this company (settings panel opt-in) never show in
-  // the booking flow; the settings panel is the only surface that lists them.
-  const templates: BookingTemplateLibrary[] | null = templatesLoading
-    ? null
-    : cachedTemplates.filter((tt) => !tt.is_hidden)
+  const { company } = useCompany()
   const { periods } = useFiscalPeriods()
-  const [search, setSearch] = useState('')
-  const [selected, setSelected] = useState<BookingTemplateLibrary | null>(null)
+  const [selected, setSelected] = useState<
+    { kind: 'library'; raw: BookingTemplateLibrary } | { kind: 'static'; template: BookingTemplate } | null
+  >(null)
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0])
   const [amountInput, setAmountInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -69,7 +62,6 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   useEffect(() => {
     if (open) return
     setSelected(null)
-    setSearch('')
     setAmountInput('')
     setEntryDate(new Date().toISOString().split('T')[0])
   }, [open])
@@ -81,17 +73,16 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
 
   // The live kontering: recomputed from the template's line pattern on
   // every amount change (momssplit etc. handled by applyTemplate).
-  const lines = useMemo<FormLine[]>(
-    () => (selected && amount > 0 ? applyTemplate(selected.lines, amount) : []),
-    [selected, amount],
-  )
+  const lines = useMemo<FormLine[]>(() => {
+    if (!selected || amount <= 0) return []
+    return selected.kind === 'library'
+      ? applyTemplate(selected.raw.lines, amount)
+      : staticTemplateToFormLines(selected.template, amount, company?.entity_type)
+  }, [selected, amount, company?.entity_type])
+  const selectedName = selected ? (selected.kind === 'library' ? selected.raw.name : selected.template.name_sv) : null
   const totalDebit = sumSide(lines, 'debit_amount')
   const totalCredit = sumSide(lines, 'credit_amount')
   const balanced = lines.length >= 2 && totalDebit === totalCredit && totalDebit > 0
-
-  const filteredTemplates = (templates ?? []).filter((tpl) =>
-    tpl.name.toLowerCase().includes(search.trim().toLowerCase()),
-  )
 
   const periodForDate = periods.find(
     (p) => p.period_start <= entryDate && entryDate <= p.period_end,
@@ -111,7 +102,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
         body: JSON.stringify({
           fiscal_period_id: periodForDate.id,
           entry_date: entryDate,
-          description: selected.name,
+          description: selectedName,
           lines: lines.map((l) => ({
             account_number: l.account_number,
             debit_amount: parseFloat(l.debit_amount) || 0,
@@ -130,9 +121,11 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
         return
       }
       // MRU ordering for the next open; fire-and-forget.
-      void fetch(`/api/settings/booking-templates/${selected.id}/touch`, {
-        method: 'POST',
-      }).catch(() => {})
+      if (selected.kind === 'library') {
+        void fetch(`/api/settings/booking-templates/${selected.raw.id}/touch`, {
+          method: 'POST',
+        }).catch(() => {})
+      }
       toast({
         title: t('toast_posted_title'),
         description: t('toast_posted_description', {
@@ -154,55 +147,21 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
         <DialogHeader>
           {/* data-ph-mask: the template name is user data */}
           <DialogTitle data-ph-mask="" className="font-display text-lg tracking-tight">
-            {selected ? selected.name : t('tpl_dialog_title')}
+            {selectedName ?? t('tpl_dialog_title')}
           </DialogTitle>
         </DialogHeader>
 
         {!selected ? (
-          <>
-            <div className="flex items-center gap-2 border-b border-border/60 pb-2">
-              <Search className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={t('tpl_search_placeholder')}
-                className="w-full bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
-                autoFocus
-              />
-            </div>
-            <div className="-mx-2 max-h-80 overflow-y-auto px-1">
-              {templates === null ? (
-                <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                </div>
-              ) : filteredTemplates.length === 0 ? (
-                <p className="px-2.5 py-6 text-center text-[13px] text-muted-foreground">
-                  {t('tpl_empty')}
-                </p>
-              ) : (
-                filteredTemplates.map((tpl) => (
-                  <button
-                    key={tpl.id}
-                    type="button"
-                    onClick={() => setSelected(tpl)}
-                    className="flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2.5 text-left transition-colors hover:bg-secondary/60"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] text-foreground">
-                        {tpl.name}
-                      </span>
-                      <span className="block truncate text-[11px] text-muted-foreground">
-                        {TEMPLATE_CATEGORY_LABELS[tpl.category] ?? tpl.category}
-                        {' · '}
-                        {SCOPE_LABELS[getTemplateScope(tpl)]}
-                      </span>
-                    </span>
-                    <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/60" />
-                  </button>
-                ))
-              )}
-            </div>
-          </>
+          <div className="-mx-2 flex h-[420px] min-h-0 flex-col overflow-hidden">
+            <TemplatePicker
+              direction="all"
+              entityType={company?.entity_type}
+              dense
+              includeSystemLibrary
+              onSelect={(template) => setSelected({ kind: 'static', template })}
+              onPickLibraryTemplate={(raw) => setSelected({ kind: 'library', raw })}
+            />
+          </div>
         ) : (
           <div className="space-y-4">
             <button
