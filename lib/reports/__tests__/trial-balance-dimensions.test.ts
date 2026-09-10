@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ============================================================
 // Dimension-filtered trial balance (dimensions PR4).
@@ -59,7 +59,17 @@ const mockOpeningBalances = vi.mocked(getOpeningBalances)
 
 let supabase: ReturnType<typeof makeClient>
 
+// Pins the chunked entry-lines path (REPORTS_TB_RPC=off, the #2470 rollback);
+// the RPC path's dimension handling lives in trial-balance-rpc.test.ts.
+const savedFlag = process.env.REPORTS_TB_RPC
+
+afterEach(() => {
+  if (savedFlag === undefined) delete process.env.REPORTS_TB_RPC
+  else process.env.REPORTS_TB_RPC = savedFlag
+})
+
 beforeEach(() => {
+  process.env.REPORTS_TB_RPC = 'off'
   vi.clearAllMocks()
   mockResults = {}
   containsCalls = []

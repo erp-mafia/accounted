@@ -33,6 +33,8 @@ import {
   deriveForvalChips,
   deriveRequiresHousing,
   filterArticleSuggestions,
+  resolveEntryKey,
+  type EntryGhostCell,
   type NextStep,
 } from '@/components/invoices/invoice-editor-flow'
 import { sortArticles } from '@/lib/articles/sort'
@@ -154,6 +156,11 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 // focus. rounded-sm: nested leaf inside the rows surface (radius ladder).
 const CELL_INPUT_CLASS =
   'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] transition-colors duration-150 hover:bg-secondary/40 focus-visible:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring placeholder:text-muted-foreground/60'
+
+// Ghost cell in the entry row: previews the append default in the italic
+// muted tone, hovers like a cell input so it reads as clickable.
+const ENTRY_GHOST_CLASS =
+  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] italic text-muted-foreground/50 tabular-nums transition-colors duration-150 hover:bg-secondary/40 cursor-text'
 
 // Row-control icon button: 24px visual hit area in dense rows (per the row
 // chrome decision), inflated to a 40px touch target on coarse pointers.
@@ -958,15 +965,35 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }
 
   function commitEntryFreeText(text: string) {
+    // Enter or Tab commits and the caret lands in the new row's à-pris cell
+    // with the 0 selected.
+    commitEntryToCell(text, 'unit_price')
+  }
+
+  // Commit the entry row and put focus in one cell of the row it became. The
+  // ghost cells route here on click (issue #2481): a mouse user starts in the
+  // amount, quantity, unit or VAT cell of a row that does not exist yet, so
+  // the click births the row (description as typed, possibly empty) and
+  // lands in the same cell. The inputs mount on the next commit, hence the
+  // timeout; the Select triggers are not registered fields, so they are
+  // reached through the data-cell anchor instead of setFocus.
+  function commitEntryToCell(text: string, cell: EntryGhostCell) {
     const index = fields.length
     appendProductRow(text)
     setEntryQuery('')
     setEntryOpen(false)
     setEntryActiveIdx(-1)
     markRowSettled(index)
-    // Enter commits and the caret lands in the new row's à-pris cell with
-    // the 0 selected. The input mounts on the next commit, hence the timeout.
-    window.setTimeout(() => setFocus(`items.${index}.unit_price`, { shouldSelect: true }), 0)
+    window.setTimeout(() => {
+      if (cell === 'quantity' || cell === 'unit_price') {
+        setFocus(`items.${index}.${cell}`, { shouldSelect: true })
+        return
+      }
+      const trigger = document.querySelector<HTMLElement>(
+        `#invoice-editor-row-${index} [data-cell="${cell}"]`,
+      )
+      trigger?.focus()
+    }, 0)
   }
 
   // Free-text / blank row: explanatory text under an item, or an empty
@@ -1020,13 +1047,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setEntryActiveIdx((i) => Math.max(i - 1, -1))
-    } else if (e.key === 'Enter') {
-      e.preventDefault()
-      if (entryOpen && entryActiveIdx >= 0 && matches[entryActiveIdx]) {
-        commitEntryArticle(matches[entryActiveIdx].id)
-      } else if (entryQuery.trim()) {
-        commitEntryFreeText(entryQuery.trim())
-      }
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      // Tab commits like Enter (issue #2481): before, it left the typed text
+      // stranded in the entry row and submit failed on "at least one row".
+      // An empty Tab passes through so the row is not a focus trap; an empty
+      // Enter is swallowed so it never submits the form.
+      const action = resolveEntryKey({
+        key: e.key,
+        shiftKey: e.shiftKey,
+        query: entryQuery,
+        open: entryOpen,
+        activeIdx: entryActiveIdx,
+        matchCount: matches.length,
+      })
+      if (e.key === 'Enter' || action.kind !== 'none') e.preventDefault()
+      if (action.kind === 'article') commitEntryArticle(matches[action.index].id)
+      else if (action.kind === 'free_text') commitEntryFreeText(action.text)
     } else if (e.key === 'Escape') {
       // Close only the suggestions; the host dialog ignores Escape anyway.
       e.stopPropagation()
@@ -2388,6 +2424,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                   render={({ field: unitField }) => (
                                     <Select value={unitField.value} onValueChange={unitField.onChange}>
                                       <SelectTrigger
+                                        data-cell="unit"
                                         className={cn(
                                           CELL_SELECT_TRIGGER_CLASS,
                                           'text-muted-foreground',
@@ -2431,7 +2468,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       onValueChange={(v) => vatField.onChange(Number(v))}
                                       disabled={vatRatePlan.isPickerLocked}
                                     >
-                                      <SelectTrigger className={CELL_SELECT_TRIGGER_CLASS} aria-label={t('vat_label')}>
+                                      <SelectTrigger
+                                        data-cell="vat_rate"
+                                        className={CELL_SELECT_TRIGGER_CLASS}
+                                        aria-label={t('vat_label')}
+                                      >
                                         <SelectValue />
                                       </SelectTrigger>
                                       <SelectContent>
@@ -2871,14 +2912,66 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         aria-describedby={entryOpen ? `${entryListId}-hint` : undefined}
                         className={cn(CELL_INPUT_CLASS, 'w-full')}
                       />
-                      <div className="whitespace-nowrap px-2 text-right text-[13px] italic text-muted-foreground/50 tabular-nums">
-                        1 st
+                      {/* Ghost cells are click targets (issue #2481): a
+                          click births the row and lands in that cell.
+                          tabIndex -1 keeps Tab on the description input;
+                          mousedown, like the suggestion buttons, so the
+                          entry input's blur never races the commit. */}
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          type="button"
+                          tabIndex={-1}
+                          aria-label={t('quantity_label')}
+                          className={cn(ENTRY_GHOST_CLASS, 'w-14 text-right')}
+                          onMouseDown={(e) => {
+                            if (e.button !== 0) return
+                            e.preventDefault()
+                            commitEntryToCell(entryQuery.trim(), 'quantity')
+                          }}
+                        >
+                          1
+                        </button>
+                        <button
+                          type="button"
+                          tabIndex={-1}
+                          aria-label={t('unit_label')}
+                          className={ENTRY_GHOST_CLASS}
+                          onMouseDown={(e) => {
+                            if (e.button !== 0) return
+                            e.preventDefault()
+                            commitEntryToCell(entryQuery.trim(), 'unit')
+                          }}
+                        >
+                          st
+                        </button>
                       </div>
-                      <div className="px-2 text-right text-[13px] italic text-muted-foreground/50 tabular-nums">0</div>
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        aria-label={t('unit_price_label')}
+                        className={cn(ENTRY_GHOST_CLASS, 'w-full text-right')}
+                        onMouseDown={(e) => {
+                          if (e.button !== 0) return
+                          e.preventDefault()
+                          commitEntryToCell(entryQuery.trim(), 'unit_price')
+                        }}
+                      >
+                        0
+                      </button>
                       {vatRegistered && (
-                        <div className="whitespace-nowrap px-2 text-[13px] italic text-muted-foreground/50 tabular-nums">
+                        <button
+                          type="button"
+                          tabIndex={-1}
+                          aria-label={t('vat_label')}
+                          className={cn(ENTRY_GHOST_CLASS, 'whitespace-nowrap')}
+                          onMouseDown={(e) => {
+                            if (e.button !== 0) return
+                            e.preventDefault()
+                            commitEntryToCell(entryQuery.trim(), 'vat_rate')
+                          }}
+                        >
                           {vatRatePlan.defaultRate} %
-                        </div>
+                        </button>
                       )}
                       <div />
                       <div />
