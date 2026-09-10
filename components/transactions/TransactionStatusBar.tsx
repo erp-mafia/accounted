@@ -57,7 +57,10 @@ export default function TransactionStatusBar({
       label: t('action_import'),
       icon: Upload,
       description: t('create_import_desc'),
-      onSelect: () => router.push('/import'),
+      // Straight to the bank-file step: the option's own description says
+      // "CSV- eller SIE-fil från banken", so the chooser in between is a stop
+      // that asks what the user already answered.
+      onSelect: () => router.push('/import?mode=bank'),
     },
     {
       key: 'manuell',
