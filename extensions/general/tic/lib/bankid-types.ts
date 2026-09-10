@@ -37,7 +37,14 @@ export interface BankIdUser {
 
 export interface BankIdPollResponse {
   sessionId: string
-  status: 'pending' | 'complete' | 'failed' | 'cancelled'
+  /**
+   * `collected`: TIC has already handed the completed result out (it does so
+   * at most twice per session, poll and collect combined) and will not again;
+   * `user` is absent. Observed in prod 2026-09-10 (#2471), not in TIC's
+   * documentation. /poll answers `failed` for it unless the flow cookie holds
+   * the sealed result.
+   */
+  status: 'pending' | 'complete' | 'failed' | 'cancelled' | 'collected'
   hintCode?: string
   message?: string
   messageEn?: string
@@ -56,7 +63,7 @@ export interface BankIdPollResponse {
 
 export interface BankIdCollectResponse {
   sessionId: string
-  status: 'pending' | 'complete' | 'failed' | 'cancelled'
+  status: 'pending' | 'complete' | 'failed' | 'cancelled' | 'collected'
   hintCode?: string
   user?: BankIdUser
   completedAt?: string
