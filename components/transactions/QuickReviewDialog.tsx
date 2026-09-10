@@ -84,7 +84,7 @@ interface QuickReviewDialogProps {
    * second "assistenten föreslår" line here read as a contradiction.
    */
   /** Why this template is the pick: the source of the row's suggestion, when there was one. */
-  recommendation?: { source?: 'rule' | 'catalog' | 'counterparty' | 'assistant'; seenCount?: number; confidence?: number } | null
+  recommendation?: { source?: 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant'; seenCount?: number; confidence?: number } | null
   /**
    * "Andra rader": hand the COMPUTED proposal lines (exactly what the
    * verifikation preview shows) to the parent, which routes them into
@@ -652,7 +652,9 @@ export default function QuickReviewDialog({
                   ? t('rec_why_catalog')
                   : recommendation?.source === 'assistant'
                     ? (documentId ? t('rec_why_assistant_doc') : t('rec_why_assistant_row'))
-                    : t('rec_why_manual')}
+                    : recommendation?.source === 'recent'
+                      ? t('rec_why_recent')
+                      : t('rec_why_manual')}
           </p>
           {ruleLine && <p className="text-[12px] leading-snug text-muted-foreground">{ruleLine}</p>}
           {/* The assistant's read, unless this review already is its pick. */}

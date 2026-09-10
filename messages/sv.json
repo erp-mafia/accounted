@@ -3006,6 +3006,7 @@
     "invoices_help": "Förfallodatum för fakturor"
   },
   "tx_inbox_card": {
+    "drawer_rec_recent": "Vår rekommendation · nyligen använd mall",
     "drawer_rec_assistant": "Vår rekommendation · assistentens läsning",
     "drawer_rec_rule": "Vår rekommendation · enligt din regel",
     "drawer_rec_catalog": "Vår rekommendation · känt mönster",
@@ -3095,6 +3096,7 @@
     "adjustment": "Justering"
   },
   "tx_quick_review": {
+    "rec_why_recent": "Nyligen använd mall",
     "rec_why_assistant_doc": "Assistentens läsning av underlaget",
     "rec_why_assistant_row": "Assistentens läsning av raden",
     "ai_looking": "Assistenten tittar på raden…",

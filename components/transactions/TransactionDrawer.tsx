@@ -42,7 +42,7 @@ interface TransactionDrawerProps {
   accountLogo?: string | null
   categoryLabel: string | null
   /** Why the category chip says what it says, when it is a recommendation. */
-  recommendation?: { source?: 'rule' | 'catalog' | 'counterparty' | 'assistant'; seenCount?: number } | null
+  recommendation?: { source?: 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant'; seenCount?: number } | null
   primaryLabel: string
   onPrimary: (anchor: HTMLElement) => void
   onOpenCategory: (anchor: HTMLElement) => void
@@ -186,7 +186,9 @@ export function TransactionDrawer({
                     ? t('drawer_rec_counterparty', { count: recommendation.seenCount ?? 1 })
                     : recommendation.source === 'assistant'
                       ? t('drawer_rec_assistant')
-                      : t('drawer_rec_catalog')}
+                      : recommendation.source === 'recent'
+                        ? t('drawer_rec_recent')
+                        : t('drawer_rec_catalog')}
               </p>
             )}
           </div>
