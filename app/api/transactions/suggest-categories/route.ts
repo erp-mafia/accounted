@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getSuggestedCategories, getSuggestedTemplates, buildMerchantHistory, merchantHistoryFor, buildCounterpartySuggestion, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { findCounterpartyTemplatesBatch } from '@/lib/bookkeeping/counterparty-templates'
+import { loadReads, readIsFresh, assistantSuggestionFromRead, mergeAssistantSuggestion, type AssistantRead } from '@/lib/agent/categorize/read'
 import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
 import type { Transaction, EntityType, CategorizationTemplate } from '@/types'
 
@@ -158,7 +159,20 @@ export const POST = withRouteContext(
       template_suggestions[tx.id] = [cpSuggestion, ...existing]
     }
 
+    // The assistant's stored reads (the ten-minute cron, or an earlier
+    // open): a fresh one with an account joins the row's suggestions, and
+    // the read itself goes along so the review opens with it. Best effort:
+    // the list never waits on this table.
+    const assistant_reads: Record<string, AssistantRead> = {}
+    const reads = await loadReads(supabase, companyId, ids).catch(() => new Map<string, AssistantRead>())
+    for (const tx of transactions) {
+      const read = reads.get(tx.id)
+      if (!read || !readIsFresh(read, tx as Transaction)) continue
+      assistant_reads[tx.id] = read
+      const s = assistantSuggestionFromRead(read, tx as Transaction, entityType)
+      if (s) template_suggestions[tx.id] = mergeAssistantSuggestion(template_suggestions[tx.id] ?? [], s)
+    }
 
-    return NextResponse.json({ suggestions, template_suggestions })
+    return NextResponse.json({ suggestions, template_suggestions, assistant_reads })
   },
 )

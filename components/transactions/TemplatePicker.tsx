@@ -519,7 +519,7 @@ export default function TemplatePicker({
   }, [suggestedTemplates])
   const resolvedSuggestions = useMemo(() => {
     if (!suggestedTemplates) return []
-    return suggestedTemplates.filter(s => !isCounterpartyTemplateId(s.template_id))
+    return suggestedTemplates.filter(s => !isCounterpartyTemplateId(s.template_id) && s.source !== 'assistant')
   }, [suggestedTemplates])
   const hasCounterparty = counterpartySuggestions.length > 0 && !!onSelectCounterparty
   const hasSuggestions = resolvedSuggestions.length > 0

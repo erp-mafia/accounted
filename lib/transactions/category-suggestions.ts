@@ -262,7 +262,7 @@ function accountToCategory(account: string, amount: number): string | null {
 // Template Suggestions
 // ============================================================
 
-export type SuggestionSource = 'rule' | 'catalog' | 'counterparty'
+export type SuggestionSource = 'rule' | 'catalog' | 'counterparty' | 'assistant'
 
 export interface SuggestedTemplate {
   template_id: string
@@ -270,6 +270,9 @@ export interface SuggestedTemplate {
   source?: SuggestionSource
   /** For a counterpart: how many times it was booked this way before. */
   seen_count?: number
+  /** For the assistant's read: the category the booking goes under, and whether a receipt was read. */
+  category?: TransactionCategory
+  has_underlag?: boolean
   name_sv: string
   name_en: string
   group: string
