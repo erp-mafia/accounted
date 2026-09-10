@@ -29,6 +29,7 @@ import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
+import { useShell } from '@/components/dashboard/ShellProvider'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   individual: 'type_individual',
@@ -61,6 +62,7 @@ export default function CustomerDetailPage({
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const shell = useShell()
   const t = useTranslations('customer_detail')
   const tParties = useTranslations('parties')
   const errorLocale = useLocale() as ErrorLocale
@@ -227,9 +229,10 @@ export default function CustomerDetailPage({
   if (!customer) return null
 
   return (
-    <div className="max-w-2xl space-y-8 stagger-enter">
+    <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type kicker, quiet actions right */}
       <div>
+        {shell !== 'v2' && (
         <Link
           href="/customers"
           className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"
@@ -237,15 +240,16 @@ export default function CustomerDetailPage({
           <ArrowLeft className="h-4 w-4" />
           {t('back')}
         </Link>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <h1 className="font-display text-2xl leading-8 tracking-tight">{customer.name}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
+        )}
+        <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="page-header-lead min-w-0">
+            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{customer.name}</h1>
+            <p className="page-header-meta mt-1 text-sm text-muted-foreground">
               {t(CUSTOMER_TYPE_KEY[customer.customer_type])}
             </p>
           </div>
 
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="page-header-action flex shrink-0 items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
@@ -272,6 +276,8 @@ export default function CustomerDetailPage({
         </div>
       </div>
 
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start lg:gap-x-12">
+      <div className="space-y-8">
       <DetailSection kicker={t('section_contact')}>
         <DefRow label={t('def_email')}>
           {customer.email ? (
@@ -388,6 +394,8 @@ export default function CustomerDetailPage({
         </DetailSection>
       )}
 
+      </div>
+      <div className="space-y-8">
       <DetailSection
         kicker={t('section_invoices')}
         aside={
@@ -438,6 +446,8 @@ export default function CustomerDetailPage({
           <p className="text-sm text-muted-foreground">{t('no_invoices')}</p>
         )}
       </DetailSection>
+      </div>
+      </div>
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 

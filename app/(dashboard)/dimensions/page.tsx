@@ -17,8 +17,8 @@ export default async function DimensionsPage() {
     <div className="space-y-8">
       {/* Page header (concept scene 31): title + quiet Tagga historik.
           "Tagga historik" stays Swedish like the workbench it opens (PR6). */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('dimensions')}</h1>
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('dimensions')}</h1>
         <Link href="/dimensions/tagging" className={QUIET_LINK_CLASS}>
           Tagga historik
         </Link>

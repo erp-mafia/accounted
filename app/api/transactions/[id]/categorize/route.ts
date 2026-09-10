@@ -5,6 +5,7 @@ import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { getTemplateById, buildMappingResultFromTemplate, validateTemplateForEntity } from '@/lib/bookkeeping/booking-templates'
+import { applyVatAmountOverride } from '@/lib/bookkeeping/vat-amount-override'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
@@ -340,14 +341,37 @@ export const POST = withRouteContext(
     } else if (body.template_id) {
       const template = getTemplateById(body.template_id)!
       mappingResult = buildMappingResultFromTemplate(template, transaction as Transaction, entityType)
+      if (body.vat_amount != null) {
+        // The underlag's moms replaces the template's rate-based line; the
+        // helper refuses treatments it cannot apply to, which is a 400.
+        try {
+          mappingResult = applyVatAmountOverride(mappingResult, transaction as Transaction, template.vat_treatment, body.vat_amount)
+        } catch (err) {
+          txLog.warn('vat_amount rejected for template booking', err as Error)
+          return errorResponseFromCode('TX_CATEGORIZE_INVALID_VAT_AMOUNT', txLog, {
+            requestId,
+            details: { vat_amount: body.vat_amount, vat_treatment: template.vat_treatment ?? null },
+          })
+        }
+      }
     } else {
-      mappingResult = buildMappingResultFromCategory(
-        finalCategory,
-        transaction as Transaction,
-        is_business,
-        entityType,
-        body.vat_treatment,
-      )
+      try {
+        mappingResult = buildMappingResultFromCategory(
+          finalCategory,
+          transaction as Transaction,
+          is_business,
+          entityType,
+          body.vat_treatment,
+          body.vat_amount ?? null,
+        )
+      } catch (err) {
+        if (body.vat_amount == null) throw err
+        txLog.warn('vat_amount rejected for category booking', err as Error)
+        return errorResponseFromCode('TX_CATEGORIZE_INVALID_VAT_AMOUNT', txLog, {
+          requestId,
+          details: { vat_amount: body.vat_amount, vat_treatment: body.vat_treatment ?? null },
+        })
+      }
     }
 
     // Book the bank leg against the transaction's ACTUAL settlement account

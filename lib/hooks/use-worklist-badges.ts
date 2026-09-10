@@ -1,6 +1,7 @@
 'use client'
 
 import useSWR from 'swr'
+import { REFERENCE_SWR_OPTIONS } from '@/lib/reference-data/hooks'
 import { createClient } from '@/lib/supabase/client'
 
 export interface WorklistBadges {
@@ -56,6 +57,9 @@ export function useWorklistBadges(companyId: string | null | undefined) {
         pendingOperations: ops.error ? 0 : (ops.count ?? 0),
       }
     },
+    // The realtime channel in DashboardNav keeps these fresh; a refetch on
+    // every window focus was three count queries for nothing.
+    REFERENCE_SWR_OPTIONS,
   )
 
   return {

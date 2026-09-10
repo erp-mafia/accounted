@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
+import { ShellProvider } from '@/components/dashboard/ShellProvider'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
 import AnalyticsIdentify from '@/components/AnalyticsIdentify'
 import { computeIdentityHash } from '@/lib/analytics/identity-hash'
@@ -35,7 +36,7 @@ import {
   resolveCockpitHref,
 } from '@/lib/company/home-domain'
 import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
-import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
+import type { AccountingFramework, EntityType, CompanyRole, Team, DashboardShell } from '@/types'
 import { parseEntityType } from '@/lib/company/entity-type'
 import {
   getDashboardAuthContext,
@@ -495,6 +496,11 @@ export default async function DashboardLayout({
   // flip the data attribute client-side and persist via /api/user/ui-state.
   const uiState = (userPrefs?.ui_state ?? {}) as import('@/types').UserUiState
   const navCollapsed = uiState.nav_collapsed === true
+  // Shell v2 is the default (UI v2 PR 9a, cutover step one). Standard (v1)
+  // stays selectable under Inställningar → Konto → Layout until v1 is removed.
+  // Rendered as data-shell on the panel so the CSS in globals.css can restyle
+  // PageHeader without touching page code.
+  const shell: DashboardShell = uiState.shell === 'v1' ? 'v1' : 'v2'
 
   const allCompanyEntries = (allMemberships || [])
     .filter((m) => m.companies)
@@ -585,7 +591,7 @@ export default async function DashboardLayout({
         <div
           id="dash-shell"
           className="min-h-dvh bg-frame md:flex md:flex-col"
-          style={{ '--nav-w': navCollapsed ? '64px' : '248px' } as React.CSSProperties}
+          style={{ '--nav-w': shell === 'v2' ? '220px' : navCollapsed ? '64px' : '248px' } as React.CSSProperties}
         >
           {/* Skip to content link for keyboard/screen reader users */}
           <a
@@ -619,9 +625,11 @@ export default async function DashboardLayout({
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
             initialUiState={uiState}
+            shell={shell}
           />
-          <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
-            <MainContainer companyId={companyId}>
+          <main id="main-content" className={MAIN_PANEL_CLASS} role="main" data-shell={shell}>
+            <ShellProvider shell={shell}>
+            <MainContainer companyId={companyId} shell={shell}>
               {showSignpost ? (
                 <HomeDomainSignpost
                   activeCompanyName={displayName}
@@ -635,6 +643,7 @@ export default async function DashboardLayout({
                 children
               )}
             </MainContainer>
+            </ShellProvider>
           </main>
           {/* One-time expired-trial notice. Sandbox/anonymous demo users have
               no billing (their companies carry trial grants too), so the gate

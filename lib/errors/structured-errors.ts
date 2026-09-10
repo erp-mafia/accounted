@@ -450,6 +450,12 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Transaktionen kunde inte hittas.',
     message_en: 'Transaction not found.',
   },
+  TX_CATEGORIZE_INVALID_VAT_AMOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Underlagets moms kunde inte användas för den här bokföringen. Kontrollera beloppet och momssatsen.',
+    message_en: "The document's VAT amount cannot be used for this booking. Check the amount and the VAT treatment.",
+  },
   TRANSACTION_TITLE_LOCKED: {
     httpStatus: 409,
     message_sv:

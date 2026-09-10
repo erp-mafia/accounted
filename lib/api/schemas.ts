@@ -1439,6 +1439,16 @@ export const UpdateSupplierInvoiceSchema = z.object({
   notes: z.string().optional(),
 })
 
+/**
+ * PATCH /api/supplier-invoices/[id]/items/[itemId]: move one line to another
+ * expense account. The registration verifikat is corrected inline (BFL 5 kap
+ * 5 §, track 2) in the same call, so the invoice and the ledger never
+ * disagree about where the cost sits.
+ */
+export const SupplierInvoiceItemAccountSchema = z.object({
+  account_number: accountNumberSchema,
+})
+
 // ============================================================
 // Supplier payment batch (betalfil) schemas
 // ============================================================
@@ -1733,6 +1743,10 @@ export const CategorizeTransactionSchema = z
     category: TransactionCategorySchema.optional(),
     template_id: z.string().optional(),
     vat_treatment: VatTreatmentSchema.optional(),
+    // The underlag's actual moms, in the transaction's currency. Replaces the
+    // rate-based VAT line of a category or template booking (see
+    // buildMappingResultFromCategory / applyVatAmountOverride).
+    vat_amount: z.number().positive().optional(),
     account_override: accountNumber.optional(),
     counterparty_template_id: z.string().uuid().optional(),
     // Dimensions bag {sie_dim_no: code} applied to the business lines of the

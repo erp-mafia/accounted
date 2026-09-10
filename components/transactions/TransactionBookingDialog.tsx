@@ -44,6 +44,8 @@ interface TransactionBookingDialogProps {
    * library-template path.
    */
   proposalLines?: ProposalLine[] | null
+  /** Radtext for the business lines of a proposal handed over from the review. */
+  proposalLineDescription?: string | null
   /** Account number (string, e.g. '5460') to prefill on the counter line:
    *  set when the user picked an account from the template picker's "Konton"
    *  search results. Ignored when a preselectedTemplate is present. */
@@ -130,6 +132,7 @@ export default function TransactionBookingDialog({
   onBooked,
   preselectedTemplate,
   proposalLines,
+  proposalLineDescription,
   preselectedAccount,
 }: TransactionBookingDialogProps) {
   const t = useTranslations('tx_booking_dialog')
@@ -420,6 +423,7 @@ export default function TransactionBookingDialog({
                         currency: transaction.currency,
                         foreignAmount: Math.abs(transaction.amount),
                         exchangeRate: transaction.exchange_rate,
+                        businessLineDescription: proposalLineDescription ?? undefined,
                       })
                     : preselectedTemplate
                       ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)

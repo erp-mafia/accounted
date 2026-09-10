@@ -57,7 +57,7 @@ export function DimensionFilter({ value, onChange }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
-      <Label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      <Label className="field-label text-xs font-medium uppercase tracking-wider text-muted-foreground">
         Dimension
       </Label>
       <div className="flex flex-wrap items-center gap-2">
