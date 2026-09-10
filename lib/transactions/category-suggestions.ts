@@ -262,8 +262,14 @@ function accountToCategory(account: string, amount: number): string | null {
 // Template Suggestions
 // ============================================================
 
+export type SuggestionSource = 'rule' | 'catalog' | 'counterparty'
+
 export interface SuggestedTemplate {
   template_id: string
+  /** Where the suggestion comes from: a rule the company set, the catalog's patterns, or this counterpart's history. */
+  source?: SuggestionSource
+  /** For a counterpart: how many times it was booked this way before. */
+  seen_count?: number
   name_sv: string
   name_en: string
   group: string
@@ -317,6 +323,7 @@ export function getRecentlyUsedTemplates(
 
     results.push({
       template_id: template.id,
+      source: 'rule',
       name_sv: template.name_sv,
       name_en: template.name_en,
       group: template.group,
@@ -365,6 +372,7 @@ export async function getSuggestedTemplates(
       seen.add(m.template.id)
       results.push({
         template_id: m.template.id,
+        source: 'catalog',
         name_sv: m.template.name_sv,
         name_en: m.template.name_en,
         group: m.template.group,
@@ -399,6 +407,8 @@ export function buildCounterpartySuggestion(
 ): SuggestedTemplate {
   return {
     template_id: toCounterpartyTemplateId(template.id),
+    source: 'counterparty',
+    seen_count: template.occurrence_count,
     name_sv: formatCounterpartyName(template.counterparty_name),
     name_en: formatCounterpartyName(template.counterparty_name),
     group: 'counterparty',

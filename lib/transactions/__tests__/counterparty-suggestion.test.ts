@@ -47,6 +47,8 @@ describe('buildCounterpartySuggestion', () => {
     expect(isCounterpartyTemplateId(s.template_id)).toBe(true)
     expect(s.name_sv).toBe('Fee')
     expect(s.description_sv).toBe('4 tidigare bokföringar')
+    expect(s.source).toBe('counterparty')
+    expect(s.seen_count).toBe(4)
   })
 
   it('carries the learned VAT treatment so the preview matches the booking', () => {
