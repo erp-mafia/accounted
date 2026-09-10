@@ -300,10 +300,7 @@ function BillingCoreContent() {
     plan === 'yearly'
       ? t('price_note_yearly', { inc: formatCurrency(price.incVat), perMonth: formatCurrency(price.perMonthEquivalent) })
       : t('price_note_monthly', { inc: formatCurrency(price.incVat) })
-  const termsLine =
-    chargeDeferred && trialEndsAt
-      ? t('terms_deferred', { date: formatDateLong(trialEndsAt) })
-      : t('terms_now')
+  const termsLine = t('terms_now')
 
   return (
     <div>
