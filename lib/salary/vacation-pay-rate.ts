@@ -21,9 +21,10 @@ import { roundOre } from '@/lib/money'
 export const STATUTORY_VACATION_PAY_RATE = 0.12
 export const STATUTORY_VACATION_PAY_RATE_30_DAYS = 0.144
 
-/** Bounds enforced by the DB CHECK and the Zod schemas. A rate below the
- * statutory floor is illegal; above 30 % is a typo (13.5 entered as 0.135
- * is fine, 13.5 entered raw is not). */
+/** Bounds enforced by the DB CHECK and the Zod schemas. Below 12 % is
+ * illegal for every entitlement; above 30 % is a typo (13.5 entered as
+ * 0.135 is fine, 13.5 entered raw is not). The entitlement-dependent floor
+ * (14.4 % at 30 days) is enforced by resolveVacationPayRate, not here. */
 export const VACATION_PAY_RATE_MIN = STATUTORY_VACATION_PAY_RATE
 export const VACATION_PAY_RATE_MAX = 0.3
 
@@ -36,16 +37,22 @@ export function statutoryVacationPayRate(vacationDaysPerYear: number): number {
 
 /**
  * The effective procentregeln rate for an employee: the kollektivavtal
- * override when set, else the statutory rate for their entitlement.
+ * rate when it is ABOVE the statutory rate for their entitlement, else the
+ * statutory rate. The statutory rate is a floor per entitlement
+ * (Semesterlagen 16 b §: 12 %, 14.4 % at 30 days) and a kollektivavtal may
+ * only improve on it (2 a §), so 13.5 % on a 30-day employee still accrues
+ * 14.4 %. The DB CHECK and Zod bounds (0.12..0.30) cannot see the
+ * entitlement; this is where the per-employee floor is enforced.
  */
 export function resolveVacationPayRate(
   vacationDaysPerYear: number,
   vacationPayRate: number | null | undefined,
 ): number {
-  if (typeof vacationPayRate === 'number' && Number.isFinite(vacationPayRate) && vacationPayRate > 0) {
+  const statutory = statutoryVacationPayRate(vacationDaysPerYear)
+  if (typeof vacationPayRate === 'number' && Number.isFinite(vacationPayRate) && vacationPayRate > statutory) {
     return vacationPayRate
   }
-  return statutoryVacationPayRate(vacationDaysPerYear)
+  return statutory
 }
 
 /**

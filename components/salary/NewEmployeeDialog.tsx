@@ -440,7 +440,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
               <Field label="Semesterlön, procentsats" htmlFor="vacation_pay_rate">
                 <Input id="vacation_pay_rate" name="vacation_pay_rate" type="number" step="0.01" min="12" max="30" placeholder="12" />
                 <p className="text-xs text-muted-foreground">
-                  Lämna tomt för lagens 12 % (14,4 % vid 30 dagar). Ange kollektivavtalets procentsats, t.ex. 13,5.
+                  Lämna tomt för lagens 12 % (14,4 % vid 30 dagar). Ange kollektivavtalets procentsats, t.ex. 13,5. Lagens nivå gäller alltid som golv.
                 </p>
               </Field>
             )}

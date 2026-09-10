@@ -665,12 +665,17 @@ describe('kollektivavtal semesterlön rate (vacationPayRate, #2477)', () => {
     expect(step?.input.rate).toBe(0.135)
   })
 
-  it('a kollektivavtal rate is absolute: no 30-day uplift on top', () => {
-    const r = calculateSalary(
+  it('the statutory rate for the entitlement is a floor: 13.5 % on 30 days accrues 14.4 %', () => {
+    const below = calculateSalary(
       makeBasicInput({ ...base, vacationRule: 'procentregeln', vacationDaysPerYear: 30, vacationPayRate: 0.135 }),
       config2026, emptyTaxRates
     )
-    expect(r.vacationAccrual).toBe(roundOre(40000 * 0.135))
+    expect(below.vacationAccrual).toBe(roundOre(40000 * 0.144))
+    const above = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'procentregeln', vacationDaysPerYear: 30, vacationPayRate: 0.15 }),
+      config2026, emptyTaxRates
+    )
+    expect(above.vacationAccrual).toBe(roundOre(40000 * 0.15))
   })
 
   it('semesterersättning pays out 13.5 % into gross', () => {

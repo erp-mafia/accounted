@@ -22,10 +22,17 @@ describe('resolveVacationPayRate', () => {
     expect(resolveVacationPayRate(30, null)).toBe(0.144)
   })
 
-  it('uses the kollektivavtal rate when set, regardless of entitlement', () => {
+  it('uses the kollektivavtal rate when it is above the statutory rate for the entitlement', () => {
     expect(resolveVacationPayRate(25, 0.135)).toBe(0.135)
-    // A CBA rate is absolute: it does not stack with the 30-day uplift.
-    expect(resolveVacationPayRate(30, 0.135)).toBe(0.135)
+    expect(resolveVacationPayRate(30, 0.15)).toBe(0.15)
+  })
+
+  it('never goes below the statutory floor for the entitlement (Semesterlagen 2 a §)', () => {
+    // 30 days: the statutory rate is 14.4 %, so a 13.5 % CBA rate is too low.
+    expect(resolveVacationPayRate(30, 0.135)).toBe(0.144)
+    expect(resolveVacationPayRate(30, 0.144)).toBe(0.144)
+    // Equal to the floor is the floor.
+    expect(resolveVacationPayRate(25, 0.12)).toBe(0.12)
   })
 
   it('ignores zero, NaN and non-numeric overrides', () => {
