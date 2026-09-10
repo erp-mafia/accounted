@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import { makeNotice } from '@/lib/import/notices'
 import Fuse, { type IFuseOptions } from 'fuse.js'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -421,14 +423,13 @@ export default function OpeningBalanceRowEditor({
 
       {/* Warnings */}
       {!totals.isBalanced && Math.abs(totals.diff) > 1 && (
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-          <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
-          <p className="text-sm text-warning">
-            Debet och kredit balanserar inte. Differens:{' '}
-            {totals.diff.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK. Kontrollera
-            beloppen innan du fortsätter.
-          </p>
-        </div>
+        <ImportNotices
+          notices={[
+            makeNotice('ob_editor_unbalanced', 'action', {
+              diff: `${totals.diff.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK`,
+            }),
+          ]}
+        />
       )}
     </div>
   )

@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import { makeNotice } from '@/lib/import/notices'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -100,12 +102,7 @@ export default function OpeningBalancePeriodStep({
               Hämtar perioder...
             </div>
           ) : periods.length === 0 ? (
-            <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-              <AlertCircle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
-              <p className="text-sm text-warning">
-                Inga räkenskapsperioder hittades. Skapa en räkenskapsperiod under Bokföring först.
-              </p>
-            </div>
+            <ImportNotices notices={[makeNotice('ob_no_periods', 'action')]} />
           ) : (
             <Select value={selectedPeriodId} onValueChange={setSelectedPeriodId}>
               <SelectTrigger>
@@ -127,13 +124,7 @@ export default function OpeningBalancePeriodStep({
 
         {/* Replace notice: selecting a period that already has IB corrects it */}
         {periodHasOB && !periodIsClosed && !periodIsLocked && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-            <AlertCircle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
-            <p className="text-sm text-warning">
-              Denna period har redan ingående balanser. Om du fortsätter makuleras (stornas) den
-              befintliga IB-verifikationen och en ny bokförs med beloppen nedan.
-            </p>
-          </div>
+          <ImportNotices notices={[makeNotice('ob_period_has_ib', 'action')]} />
         )}
 
         {/* Summary */}

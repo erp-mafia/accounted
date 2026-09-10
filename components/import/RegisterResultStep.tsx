@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { CheckCircle2, XCircle, ArrowRight, AlertTriangle } from 'lucide-react'
 import Link from 'next/link'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import { resolveNotices, type ImportNotice } from '@/lib/import/notices'
 
 export type RegisterResult = {
   success: boolean
@@ -14,6 +16,8 @@ export type RegisterResult = {
   errors: { row_index: number; name: string; reason: string }[]
   /** Non-fatal notes (e.g. dropped revenue-account overrides on article import). */
   warnings?: string[]
+  /** Structured twins of `warnings` (lib/import/notices.ts). */
+  notices?: ImportNotice[]
 }
 
 interface RegisterResultStepProps {
@@ -102,22 +106,9 @@ export default function RegisterResultStep({
           </div>
         )}
 
-        {/* Warnings (non-fatal: e.g. dropped revenue-account overrides) */}
-        {result.warnings && result.warnings.length > 0 && (
-          <div className="space-y-2">
-            <h4 className="text-sm font-medium">Att notera</h4>
-            <div className="rounded-lg border border-border bg-muted/30 px-4 py-3">
-              <ul className="space-y-1 text-sm text-muted-foreground">
-                {result.warnings.map((w, i) => (
-                  <li key={i} className="flex items-start gap-2">
-                    <AlertTriangle className="h-3.5 w-3.5 text-warning mt-0.5 shrink-0" />
-                    <span>{w}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
+        {/* Non-fatal notes (e.g. dropped revenue-account overrides): one
+            sentence if something needs a hand, the rest folded. */}
+        <ImportNotices notices={resolveNotices(result)} />
 
         <div className="flex flex-wrap gap-3">
           <Button asChild>

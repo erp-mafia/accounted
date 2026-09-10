@@ -25,6 +25,8 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import TheaterCanvas from '@/components/import/TheaterCanvas'
 import { FiscalYearGapNotice } from '@/components/import/FiscalYearGapNotice'
 import type { ImportPreview, ImportResult } from '@/lib/import/types'
+import { resolveNotices } from '@/lib/import/notices'
+import { ImportNotices } from '@/components/import/ImportNotices'
 import type { TheaterModel } from '@/lib/import/theater-model'
 
 interface ImportResultStepProps {
@@ -71,13 +73,14 @@ export default function ImportResultStep({
   const skipped = result.details?.skippedVouchers
   const untransferred = result.details?.untransferredResults
 
-  // Filter out raw warnings when we have structured data for them
-  let otherWarnings = skipped && skipped.total > 0
-    ? result.warnings.filter((w) => !w.includes('hoppades över'))
-    : result.warnings
-  if (untransferred && untransferred.length > 0) {
-    otherWarnings = otherWarnings.filter((w) => !w.includes('förts om till eget kapital'))
-  }
+  // The skipped-voucher and IB-resync cards below render those facts with
+  // their own explanations, so their notice codes are excluded here by
+  // code, never by matching Swedish sentences.
+  const notices = resolveNotices(result, [
+    'sie_vouchers_skipped',
+    'sie_next_ib_resynced',
+    'sie_next_period_locked',
+  ])
 
   return (
     <div className="space-y-6">
@@ -417,27 +420,8 @@ export default function ImportResultStep({
         </Card>
       )}
 
-      {/* Other warnings (filtered) */}
-      {otherWarnings.length > 0 && (
-        <Card className="border-border">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-warning">
-              <AlertCircle className="h-5 w-5" />
-              Varningar ({otherWarnings.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2 max-h-48 overflow-y-auto">
-              {otherWarnings.map((warning, i) => (
-                <div key={i} className="text-sm flex gap-2">
-                  <AlertCircle className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
-                  <span>{warning}</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Everything else the import noticed: one sentence, the rest folded. */}
+      <ImportNotices notices={notices} />
 
       {/* Next steps: the migrator bridge. Not instructions to read, an action
           to take: fetch the bank history so it can be matched against the

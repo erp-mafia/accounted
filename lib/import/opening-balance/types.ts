@@ -1,3 +1,5 @@
+import type { ImportNotice } from '@/lib/import/notices'
+
 /** Layout of the balance columns in the uploaded file */
 export type BalanceColumnLayout = 'net' | 'debit_credit'
 
@@ -44,6 +46,8 @@ export interface OpeningBalanceParseResult {
   total_credit: number
   is_balanced: boolean
   warnings: string[]
+  /** Structured twins of `warnings` (lib/import/notices.ts). */
+  notices?: ImportNotice[]
   /**
    * Bank-file format name (e.g. "Swedbank") when the file produced no account
    * rows but matches a known bank statement format: the user most likely

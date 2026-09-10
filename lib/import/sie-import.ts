@@ -46,6 +46,7 @@ import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { monthsBetween, parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
 import { findUntransferredResults } from '@/lib/reports/imbalance-diagnosis'
 import { formatCurrency } from '@/lib/utils'
+import { legacyNotices, makeNotice, type ImportNotice } from '@/lib/import/notices'
 
 /**
  * Format a date to ISO date string (YYYY-MM-DD)
@@ -2290,8 +2291,21 @@ export async function executeSIEImport(
     journalEntryIds: [],
     errors: [],
     warnings: [],
+    notices: [],
     replacedPriorImport: null,
   }
+  // Structured twin for every warning we push: the string keeps API, MCP
+  // and import_documentation consumers whole, the notice carries the tier
+  // the UI renders (lib/import/notices.ts). Warnings pushed by paths that
+  // have no notice yet are wrapped as legacy notices before the
+  // diagnostics below, so nothing is lost while every site migrates.
+  const noticedWarnings = new Set<string>()
+  const warn = (text: string, notice: ImportNotice) => {
+    result.warnings.push(text)
+    result.notices!.push(notice)
+    noticedWarnings.add(text)
+  }
+  const sek = (amount: number) => formatCurrency(amount, 'SEK', { minimumFractionDigits: 2 })
 
   // Collected source_type='import' entry ids (vouchers + migration adjustment),
   // used only when options.markImportedNoDocRequired is set. Kept separate from
@@ -2384,8 +2398,9 @@ export async function executeSIEImport(
             // an earlier fiscal year after deletion).
             if (replaceResult.code === 'not_found' || replaceResult.code === 'not_completed') {
               staleSkips += 1
-              result.warnings.push(
-                `Tidigare import ${priorPeriodImport.id} kunde inte ersättas (${replaceResult.error ?? 'okänd orsak'}): dess data är redan borttagen, importen fortsätter som ny import.`
+              warn(
+                `Tidigare import ${priorPeriodImport.id} kunde inte ersättas (${replaceResult.error ?? 'okänd orsak'}): dess data är redan borttagen, importen fortsätter som ny import.`,
+                makeNotice('sie_prior_import_gone', 'info', { reason: replaceResult.error ?? 'okänd orsak' })
               )
               continue
             }
@@ -2504,7 +2519,7 @@ export async function executeSIEImport(
         taggedLines: dimensionSummary.taggedLines,
         toggleEnabled: dimensionSummary.toggleEnabled,
       }
-      result.warnings.push(...dimensionSummary.warnings)
+      for (const w of dimensionSummary.warnings) warn(w, makeNotice('legacy', 'notice', { text: w }))
     }
 
     // Build account mapping lookup
@@ -2657,9 +2672,10 @@ export async function executeSIEImport(
       options.importTransactions &&
       seriesUsedByFile.has(requestedOpeningBalanceSeries)
     ) {
-      result.warnings.push(
+      warn(
         `Vald verifikationsserie för ingående balanser (${requestedOpeningBalanceSeries}) används även av filens verifikationer: ` +
-        'IB-verifikationen tar seriens nästa nummer, så filens verifikationer i den serien kan förskjutas ett nummer jämfört med källsystemet.'
+        'IB-verifikationen tar seriens nästa nummer, så filens verifikationer i den serien kan förskjutas ett nummer jämfört med källsystemet.',
+        makeNotice('sie_ib_series_collision', 'notice', { series: requestedOpeningBalanceSeries })
       )
     }
 
@@ -2687,7 +2703,10 @@ export async function executeSIEImport(
         .single()
 
       if (period?.opening_balances_set || period?.opening_balance_entry_id) {
-        result.warnings.push('Ingående balanser finns redan för denna period: hoppar över IB-import')
+        warn(
+          'Ingående balanser finns redan för denna period: hoppar över IB-import',
+          makeNotice('sie_ib_exists_skipped', 'info')
+        )
       } else {
         // Continuation-import guard: if the company already has any posted
         // non-IB journal entries from a prior import or manual bookkeeping,
@@ -2729,9 +2748,10 @@ export async function executeSIEImport(
           .eq('status', 'posted')
 
         if (existingIbError) {
-          result.warnings.push(
+          warn(
             `Ingående balanser hoppades över: det gick inte att kontrollera om en IB-verifikation redan finns (${existingIbError.message}). ` +
-            'Importera om filen med enbart ingående balanser, eller skapa IB manuellt, om ingen IB-verifikation finns.'
+            'Importera om filen med enbart ingående balanser, eller skapa IB manuellt, om ingen IB-verifikation finns.',
+            makeNotice('sie_ib_check_failed', 'action')
           )
         } else if ((existingIbEntries?.length ?? 0) > 0) {
           // Skip the duplicate, but leave a consistent state behind. With
@@ -2823,15 +2843,21 @@ export async function executeSIEImport(
             ibSkipWarning +=
               ' Ångra eller ta bort den gamla IB-verifikationen först om du vill importera om ingående balanser.'
           }
-          result.warnings.push(ibSkipWarning)
+          warn(
+            ibSkipWarning,
+            amountsDiffer
+              ? makeNotice('sie_ib_orphan_amounts_differ', 'action', { count: orphans.length })
+              : makeNotice('sie_ib_orphan_skipped', 'notice', { count: orphans.length })
+          )
         } else {
         const ibValidation = validateIBBalance(parsed, accountMap)
 
         if (ibValidation.lines.length > 0) {
           if (effectiveIB.derivedFromPriorYearUB) {
-            result.warnings.push(
+            warn(
               'SIE-filen saknar ingående balanser (#IB) för räkenskapsåret. ' +
-              'Ingående balanser härleddes från föregående års utgående balanser (#UB -1) enligt kontinuitetsprincipen.'
+              'Ingående balanser härleddes från föregående års utgående balanser (#UB -1) enligt kontinuitetsprincipen.',
+              makeNotice('sie_ib_derived', 'info')
             )
           }
 
@@ -2844,23 +2870,29 @@ export async function executeSIEImport(
             if (Math.abs(ibValidation.excludedAccountsTotal) > 0.01 && ibValidation.fileImbalance <= 1.00) {
               // File-level IB is balanced: imbalance is entirely from excluded system accounts
               ibExplanation = 'excluded_accounts'
-              result.warnings.push(
+              warn(
                 `Exkluderade systemkonton har IB-saldon på totalt ${ibValidation.excludedAccountsTotal} SEK. ` +
-                `Differensen (${ibValidation.roundingAdjustment} SEK) bokförs på konto 2099.`
+                `Differensen (${ibValidation.roundingAdjustment} SEK) bokförs på konto 2099.`,
+                makeNotice('sie_ib_excluded_accounts', 'notice', {
+                  total: sek(ibValidation.excludedAccountsTotal),
+                  diff: sek(ibValidation.roundingAdjustment),
+                })
               )
             } else if (ibValidation.fileImbalance > 1.00) {
               // File-level IB doesn't balance: likely unallocated årets resultat from previous year
               ibExplanation = 'unallocated_result'
-              result.warnings.push(
+              warn(
                 `Ingående balanser obalanserade med ${ibValidation.roundingAdjustment} SEK ` +
                 `(troligen ej allokerat årets resultat från föregående räkenskapsår). ` +
-                `Differensen bokförs på konto 2099 (Årets resultat).`
+                `Differensen bokförs på konto 2099 (Årets resultat).`,
+                makeNotice('sie_ib_unbalanced', 'action', { diff: sek(ibValidation.roundingAdjustment) })
               )
             } else {
               // Small rounding
               ibExplanation = 'rounding'
-              result.warnings.push(
-                `Avrundningsdifferens vid SIE-import: ${ibValidation.roundingAdjustment} SEK bokförd på konto 2099`
+              warn(
+                `Avrundningsdifferens vid SIE-import: ${ibValidation.roundingAdjustment} SEK bokförd på konto 2099`,
+                makeNotice('sie_ib_rounding', 'info', { diff: sek(ibValidation.roundingAdjustment) })
               )
             }
           }
@@ -2954,10 +2986,14 @@ export async function executeSIEImport(
         const endGap = fyEnd.getTime() - latestVoucher.getTime()
 
         if (startGap > 60 * msPerDay || endGap > 60 * msPerDay) {
-          result.warnings.push(
+          warn(
             `SIE-filen verkar innehålla ett ofullständigt räkenskapsår: verifikationer ${formatDate(earliestVoucher)}-${formatDate(latestVoucher)}, ` +
             `räkenskapsår ${fiscalYearStart}-${fiscalYearEnd}. ` +
-            `Omföringsverifikationen kan bli felaktig om #UB/#RES avser hela året men verifikationerna bara täcker en del.`
+            `Omföringsverifikationen kan bli felaktig om #UB/#RES avser hela året men verifikationerna bara täcker en del.`,
+            makeNotice('sie_partial_fiscal_year', 'action', {
+              from: formatDate(earliestVoucher),
+              to: formatDate(latestVoucher),
+            })
           )
         }
       }
@@ -3009,8 +3045,9 @@ export async function executeSIEImport(
             `${voucherResults.skippedUnmapped} med ej mappade konton (${unmappedSkipSummary.map((a) => a.account).join(', ')})`
           )
         }
-        result.warnings.push(
-          `${totalSkipped} ${totalSkipped === 1 ? 'verifikation' : 'verifikationer'} hoppades över (${totalSkipped === 1 ? 'ofullständig' : 'ofullständiga'} i källsystemet): ${parts.join(', ')}`
+        warn(
+          `${totalSkipped} ${totalSkipped === 1 ? 'verifikation' : 'verifikationer'} hoppades över (${totalSkipped === 1 ? 'ofullständig' : 'ofullständiga'} i källsystemet): ${parts.join(', ')}`,
+          makeNotice('sie_vouchers_skipped', 'action', { count: totalSkipped, parts: parts.join(', ') })
         )
       }
 
@@ -3020,8 +3057,12 @@ export async function executeSIEImport(
           .filter(d => d.reason === 'single_line')
           .slice(0, 10)
           .map(d => d.voucherId)
-        result.warnings.push(
-          `${voucherResults.skippedSingleLine} ${voucherResults.skippedSingleLine === 1 ? 'enradsverifikation' : 'enradsverifikationer'} hoppades över (kan vara periodiseringar/manuella justeringar): ${singleLineDetails.join(', ')}${voucherResults.skippedSingleLine > 10 ? '...' : ''}`
+        warn(
+          `${voucherResults.skippedSingleLine} ${voucherResults.skippedSingleLine === 1 ? 'enradsverifikation' : 'enradsverifikationer'} hoppades över (kan vara periodiseringar/manuella justeringar): ${singleLineDetails.join(', ')}${voucherResults.skippedSingleLine > 10 ? '...' : ''}`,
+          makeNotice('sie_single_line_skipped', 'notice', {
+            count: voucherResults.skippedSingleLine,
+            ids: `${singleLineDetails.join(', ')}${voucherResults.skippedSingleLine > 10 ? '...' : ''}`,
+          })
         )
       }
 
@@ -3040,15 +3081,16 @@ export async function executeSIEImport(
             voucherResults.skippedDetails
           )
 
-          result.warnings.push(...adjustment.warnings)
+          for (const w of adjustment.warnings) warn(w, makeNotice('legacy', 'notice', { text: w }))
 
           if (adjustment.entryId) {
             result.journalEntriesCreated++
             result.journalEntryIds.push(adjustment.entryId)
             // The omföringsverifikation is source_type='import' too.
             importTypedEntryIds.push(adjustment.entryId)
-            result.warnings.push(
-              `Migreringsjustering skapad: ${adjustment.deltaAccounts} konton justerade för att matcha UB/RES från källsystemet`
+            warn(
+              `Migreringsjustering skapad: ${adjustment.deltaAccounts} konton justerade för att matcha UB/RES från källsystemet`,
+              makeNotice('sie_migration_adjustment_created', 'info', { count: adjustment.deltaAccounts })
             )
             migrationAdjustmentInfo = {
               created: true,
@@ -3058,8 +3100,9 @@ export async function executeSIEImport(
           }
         } catch (adjustmentError) {
           console.error('[sie-import] Failed to create migration adjustment entry:', adjustmentError)
-          result.warnings.push(
-            'Kunde inte skapa migreringsjustering: kontrollera saldon manuellt mot källsystemet'
+          warn(
+            'Kunde inte skapa migreringsjustering: kontrollera saldon manuellt mot källsystemet',
+            makeNotice('sie_migration_adjustment_failed', 'action')
           )
         }
       }
@@ -3077,11 +3120,12 @@ export async function executeSIEImport(
       await saveMappings(supabase, companyId, mappings, userId)
     } catch (mappingError) {
       console.error('[sie-import] Failed to save mappings (non-fatal):', mappingError)
-      result.warnings.push(
+      warn(
         `Kontomappningarna kunde inte sparas: de importerade verifikationerna ` +
         `påverkas inte, men mappningen mellan källkontona och BAS finns inte ` +
         `kvar, så nästa import av samma källsystem måste mappas om manuellt. ` +
-        `(${mappingError instanceof Error ? mappingError.message : 'okänt fel'})`
+        `(${mappingError instanceof Error ? mappingError.message : 'okänt fel'})`,
+        makeNotice('sie_mappings_not_saved', 'notice')
       )
     }
 
@@ -3117,22 +3161,27 @@ export async function executeSIEImport(
           }
           result.journalEntriesCreated += 2 // storno + new IB
           result.journalEntryIds.push(resync.stornoEntryId, resync.newOpeningBalanceEntryId)
-          result.warnings.push(
+          warn(
             `Ingående balanser för ${resync.nextPeriodName} synkades om mot den just importerade utgående balansen.`,
+            makeNotice('sie_next_ib_resynced', 'info', { period: resync.nextPeriodName })
           )
         } else if (resync.reason === 'next_period_locked' && resync.nextPeriodName) {
           result.nextPeriodIBResyncSkipped = {
             reason: 'locked',
             nextPeriodName: resync.nextPeriodName,
           }
-          result.warnings.push(
+          warn(
             `Nästa räkenskapsår (${resync.nextPeriodName}) är låst: ingående balanser kunde inte synkas om automatiskt. Lås upp perioden och importera igen för att synka.`,
+            makeNotice('sie_next_period_locked', 'action', { period: resync.nextPeriodName })
           )
         }
       } catch (resyncError) {
         console.error('[sie-import] IB resync failed (non-fatal):', resyncError)
-        result.warnings.push(
+        warn(
           `Ingående balanser för nästa räkenskapsår kunde inte synkas om automatiskt: ${resyncError instanceof Error ? resyncError.message : 'okänt fel'}. Kontrollera och justera manuellt.`,
+          makeNotice('sie_next_ib_resync_failed', 'action', {
+            reason: resyncError instanceof Error ? resyncError.message : 'okänt fel',
+          })
         )
       }
     }
@@ -3196,6 +3245,10 @@ export async function executeSIEImport(
       retriedBatches: voucherRetryStats.retriedBatches,
       failedBatches: voucherRetryStats.failedBatches,
     }
+
+    // Every warning pushed so far without a structured twin (paths not yet
+    // migrated to warn()) folds into the notice tier verbatim.
+    result.notices!.push(...legacyNotices(result.warnings.filter((w) => !noticedWarnings.has(w))))
 
     // Untransferred prior-year results — the root cause of "balansräkningen
     // balanserar inte" after multi-year migrations. Any non-latest fiscal
@@ -3274,8 +3327,9 @@ export async function executeSIEImport(
         )
       } catch (exemptError) {
         console.error('[sie-import] Failed to mark imported entries no-doc-required (non-fatal):', exemptError)
-        result.warnings.push(
+        warn(
           'Kunde inte markera importerade verifikat som "Inget underlag krävs": du kan markera dem manuellt i bokföringslistan.',
+          makeNotice('sie_no_doc_mark_failed', 'notice')
         )
       }
     }
@@ -3283,7 +3337,10 @@ export async function executeSIEImport(
     // Add warnings for any issues
     for (const issue of parsed.issues) {
       if (issue.severity === 'warning') {
-        result.warnings.push(`Line ${issue.line}: ${issue.message}`)
+        warn(
+          `Rad ${issue.line}: ${issue.message}`,
+          makeNotice('parse_issue_row', 'notice', { row: issue.line, message: issue.message })
+        )
       }
     }
 

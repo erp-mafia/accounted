@@ -6,6 +6,7 @@
  */
 
 import type { ChartPlan } from './chart-plan'
+import type { ImportNotice } from './notices'
 
 // SIE file types
 export type SIEType = 1 | 2 | 3 | 4
@@ -342,6 +343,12 @@ export interface ImportResult {
   // Issues
   errors: string[]
   warnings: string[]
+  /**
+   * Structured twins of `warnings` with a severity tier (info | notice |
+   * action) and an i18n code; the UI renders these and falls back to the
+   * strings only when absent. See lib/import/notices.ts.
+   */
+  notices?: ImportNotice[]
 
   // Structured details for UI (populated alongside warnings for backwards compat)
   details?: ImportResultDetails

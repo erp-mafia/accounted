@@ -1,4 +1,5 @@
 import type { ArticleType } from '@/types'
+import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { detectArticleColumns } from './column-detector'
 import { cellOrNull } from '../shared/column-utils'
 import { parseAmount } from '../opening-balance/parser'
@@ -91,6 +92,7 @@ export function parseArticlesFile(
   preview_rows: string[][]
   rows: ParsedArticleRow[]
   warnings: string[]
+  notices: ImportNotice[]
 } {
   const { sheetName, rawData } = readBestSheet(buffer, filename)
 
@@ -120,6 +122,7 @@ export function parseArticlesFile(
       preview_rows: [],
       rows: [],
       warnings: ['Filen innehåller för få rader.'],
+      notices: [],
     }
   }
 
@@ -129,6 +132,7 @@ export function parseArticlesFile(
 
   const rows: ParsedArticleRow[] = []
   const warnings: string[] = []
+  const notices: ImportNotice[] = []
   const cell = (row: string[], col: number | null): string | null =>
     col !== null ? cellOrNull(row[col]) : null
 
@@ -137,6 +141,7 @@ export function parseArticlesFile(
     warnings.push(
       `Priskolumnen "${headers[columns.price_col]}" verkar vara inkl. moms: priser importeras som exkl. moms. Kontrollera värdena.`,
     )
+    notices.push(makeNotice('articles_price_incl_vat', 'action', { header: headers[columns.price_col] ?? '' }))
   }
 
   let vatNoteCount = 0
@@ -221,15 +226,19 @@ export function parseArticlesFile(
 
   if (vatNoteCount > 0) {
     warnings.push(`${vatNoteCount} rad${vatNoteCount === 1 ? '' : 'er'} hade en momssats som avrundades till närmaste giltiga (0/6/12/25 %).`)
+    notices.push(makeNotice('articles_vat_rounded', 'notice', { count: vatNoteCount }))
   }
   if (droppedAccountCount > 0) {
     warnings.push(`${droppedAccountCount} rad${droppedAccountCount === 1 ? '' : 'er'} hade ett ogiltigt bokföringskonto (måste vara klass 1-3) som ignorerades.`)
+    notices.push(makeNotice('articles_account_dropped', 'notice', { count: droppedAccountCount }))
   }
   if (droppedHouseworkCount > 0) {
     warnings.push(`${droppedHouseworkCount} rad${droppedHouseworkCount === 1 ? '' : 'er'} hade ett ROT/RUT-värde som inte är en arbetstyp (t.ex. 0/1/Ja) och som ignorerades: sätt arbetstyp på artikeln efteråt.`)
+    notices.push(makeNotice('articles_housework_dropped', 'notice', { count: droppedHouseworkCount }))
   }
   if (droppedCurrencyCount > 0) {
     warnings.push(`${droppedCurrencyCount} rad${droppedCurrencyCount === 1 ? '' : 'er'} hade en ogiltig valutakod (måste vara tre bokstäver, t.ex. EUR) som ignorerades: priset importeras som SEK.`)
+    notices.push(makeNotice('articles_currency_dropped', 'notice', { count: droppedCurrencyCount }))
   }
   if (rows.length === 0) {
     warnings.push('Inga giltiga artiklar hittades. Kontrollera att namn-/benämningskolumnen är korrekt mappad.')
@@ -244,5 +253,6 @@ export function parseArticlesFile(
     preview_rows: dataRows.slice(0, 5),
     rows,
     warnings,
+    notices,
   }
 }
