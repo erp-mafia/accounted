@@ -7560,6 +7560,8 @@
     "form_vacation_semesterersattning_hint": "12 % läggs på varje lönekörning och bokas mot 7285. Ingen semesterlöneskuld byggs upp — vanligt för tim- och visstidsanställda.",
     "form_vacation_days": "Semesterdagar per år",
     "form_vacation_days_hint": "Lagstadgat minimum: 25 dagar",
+    "form_vacation_pay_rate": "Semesterlön, procentsats",
+    "form_vacation_pay_rate_hint": "Lämna tomt för lagens 12 % (14,4 % vid 30 dagar). Ange kollektivavtalets procentsats, t.ex. 13,5. Lagens nivå gäller alltid som golv.",
     "form_bank_account": "Bankkonto",
     "form_clearing_number": "Clearingnummer",
     "form_account_number": "Kontonummer",
