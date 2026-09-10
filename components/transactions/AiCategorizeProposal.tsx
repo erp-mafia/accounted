@@ -139,15 +139,9 @@ export default function AiCategorizeProposal({ transactionId, open, currentAccou
       </p>
     )
   }
-  if (state.status === 'error') return null
-  if (state.status === 'unconfigured') {
-    return (
-      <p className={line}>
-        <Sparkles className="h-3.5 w-3.5" aria-hidden />
-        {t('ai_unconfigured')}
-      </p>
-    )
-  }
+  // No key configured (self-hosted without AI) or a failed call: the header
+  // stands on its own, a line about the assistant's absence is noise.
+  if (state.status === 'error' || state.status === 'unconfigured') return null
 
   const p = state.proposal
   const band = bandOf(p)
