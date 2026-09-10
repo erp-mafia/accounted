@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { dbError } from '@/lib/errors/db-error'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getOpeningBalances } from './opening-balances'
 import type { TrialBalanceRow } from '@/types'
@@ -120,12 +121,15 @@ async function fetchActivityViaRpc(scope: ActivityScope): Promise<PeriodActivity
     p_exclude_entry_id: scope.obEntryId,
     p_dimensions: scope.dimensionFilter ?? null,
   })
+  // dbError keeps the SQLSTATE so a statement timeout still classifies as
+  // transient downstream (see lib/supabase/fetch-all.ts for the history).
   if (error) {
-    throw new Error(`get_trial_balance_aggregates failed: ${error.message}`)
+    throw dbError(error, 'get_trial_balance_aggregates failed')
   }
 
+  // One jsonb array (no PostgREST max-rows cap; see the migration).
   const activity: PeriodActivity = { rollforward: new Map(), period: new Map() }
-  for (const raw of (data ?? []) as unknown[]) {
+  for (const raw of (Array.isArray(data) ? data : []) as unknown[]) {
     const row = raw as {
       bucket?: unknown
       account_number?: unknown

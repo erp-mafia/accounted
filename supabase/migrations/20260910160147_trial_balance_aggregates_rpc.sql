@@ -41,8 +41,16 @@
 -- explicit company_id predicates are defence in depth for service-role
 -- callers. work_mem is raised for the call so the GROUP BY sorts in memory on
 -- the largest periods.
+--
+-- Returns one jsonb array of {bucket, account_number, debit, credit} rather
+-- than a row set: PostgREST applies its max-rows cap (1000 on hosted
+-- Supabase) to set-returning functions and truncates silently, and a
+-- sub-range report yields up to two rows per account. Same shape as
+-- get_kpi_report_aggregates; amounts are exact numerics in the JSON.
 
-CREATE OR REPLACE FUNCTION public.get_trial_balance_aggregates(
+DROP FUNCTION IF EXISTS public.get_trial_balance_aggregates(uuid, uuid, text, date, date, uuid, jsonb);
+
+CREATE FUNCTION public.get_trial_balance_aggregates(
   p_company_id uuid,
   p_fiscal_period_id uuid,
   p_closing_mode text,
@@ -51,12 +59,7 @@ CREATE OR REPLACE FUNCTION public.get_trial_balance_aggregates(
   p_exclude_entry_id uuid DEFAULT NULL,
   p_dimensions jsonb DEFAULT NULL
 )
-RETURNS TABLE (
-  bucket text,
-  account_number text,
-  debit numeric,
-  credit numeric
-)
+RETURNS jsonb
 LANGUAGE plpgsql
 STABLE
 SECURITY INVOKER
@@ -99,7 +102,7 @@ BEGIN
     v_roll_start := v_period_start;
   END IF;
 
-  RETURN QUERY
+  RETURN (
   WITH ye_reversed AS (
     -- Company-wide, no period filter: a storno in this period can reverse a
     -- year-end entry from another period (mirrors the wave-1 fetch in
@@ -147,16 +150,30 @@ BEGIN
            END AS bucket
     FROM entries e
   )
-  SELECT b.bucket,
-         l.account_number,
-         sum(l.debit_amount) AS debit,
-         sum(l.credit_amount) AS credit
-  FROM public.journal_entry_lines l
-  JOIN bucketed b ON b.id = l.journal_entry_id
-  WHERE b.bucket IS NOT NULL
-    AND (p_dimensions IS NULL OR l.dimensions @> p_dimensions)
-  GROUP BY b.bucket, l.account_number
-  ORDER BY b.bucket, l.account_number;
+  SELECT COALESCE(
+    jsonb_agg(
+      jsonb_build_object(
+        'bucket', t.bucket,
+        'account_number', t.account_number,
+        'debit', t.debit,
+        'credit', t.credit
+      )
+      ORDER BY t.bucket, t.account_number
+    ),
+    '[]'::jsonb
+  )
+  FROM (
+    SELECT b.bucket,
+           l.account_number,
+           sum(l.debit_amount) AS debit,
+           sum(l.credit_amount) AS credit
+    FROM public.journal_entry_lines l
+    JOIN bucketed b ON b.id = l.journal_entry_id
+    WHERE b.bucket IS NOT NULL
+      AND (p_dimensions IS NULL OR l.dimensions @> p_dimensions)
+    GROUP BY b.bucket, l.account_number
+  ) t
+  );
 END;
 $$;
 

@@ -40,8 +40,8 @@ type ClosingMode = 'include' | 'exclude-final' | 'exclude-all-year-end'
 interface AggRow {
   bucket: 'period' | 'rollforward'
   account_number: string
-  debit: string
-  credit: string
+  debit: number
+  credit: number
 }
 
 interface CallOptions {
@@ -51,8 +51,8 @@ interface CallOptions {
   dimensions?: Record<string, string> | null
 }
 
-const CALL_SQL = `SELECT bucket, account_number, debit, credit
-     FROM public.get_trial_balance_aggregates($1, $2, $3, $4, $5, $6, $7::jsonb)`
+// The RPC returns one jsonb array (no PostgREST max-rows cap on the wire).
+const CALL_SQL = `SELECT public.get_trial_balance_aggregates($1, $2, $3, $4, $5, $6, $7::jsonb) AS payload`
 
 function callParams(
   companyId: string,
@@ -77,8 +77,11 @@ async function callRpc(
   mode: ClosingMode,
   opts: CallOptions = {},
 ): Promise<AggRow[]> {
-  const { rows } = await getPool().query<AggRow>(CALL_SQL, callParams(companyId, fiscalPeriodId, mode, opts))
-  return rows
+  const { rows } = await getPool().query<{ payload: AggRow[] }>(
+    CALL_SQL,
+    callParams(companyId, fiscalPeriodId, mode, opts),
+  )
+  return rows[0].payload
 }
 
 /** Map of account -> {debit, credit} for one bucket, amounts as numbers. */
@@ -537,7 +540,88 @@ describe('get_trial_balance_aggregates RPC', () => {
 
     const rows = await callRpc(ctx.companyId, ctx.fiscalPeriodId, 'include')
     const line = rows.find((r) => r.account_number === '1930')!
-    expect(line.debit).toBe('33.63')
+    // jsonb carries the numeric verbatim: 33.63, never 33.629999...
+    expect(line.debit).toBe(33.63)
+  })
+
+  it("'exclude-final' on a CLOSED period with the link set drops the closing entry without raising", async () => {
+    // The actual årsredovisning state: bokslut done, closing entry linked.
+    const ctx = await seedFullScenario()
+    await getPool().query(
+      `UPDATE public.fiscal_periods SET is_closed = true, closed_at = now() WHERE id = $1`,
+      [ctx.fiscalPeriodId],
+    )
+
+    const tb = bucket(
+      await callRpc(ctx.companyId, ctx.fiscalPeriodId, 'exclude-final', { excludeEntryId: ctx.obEntryId }),
+      'period',
+    )
+    expect(tb.get('8999')).toEqual({ debit: 400, credit: 400 })
+    expect(tb.get('3001')).toEqual({ debit: 0, credit: 10700 })
+    expect(tb.get('8910')).toEqual({ debit: 1000, credit: 0 })
+  })
+
+  it('applies the dimension filter inside the rollforward bucket too', async () => {
+    const ctx = await seedCompany()
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 1, entryDate: '2026-02-01',
+      lines: [
+        { account: '3001', debit: 0, credit: 100, dimensions: { '6': 'P001' } },
+        { account: '3001', debit: 0, credit: 40, dimensions: { '6': 'P002' } },
+        { account: '1930', debit: 140, credit: 0 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 2, entryDate: '2026-04-10',
+      lines: [
+        { account: '3001', debit: 0, credit: 9, dimensions: { '6': 'P001' } },
+        { account: '1930', debit: 9, credit: 0 },
+      ],
+    })
+
+    const rows = await callRpc(ctx.companyId, ctx.fiscalPeriodId, 'include', {
+      fromDate: '2026-04-01',
+      toDate: '2026-04-30',
+      dimensions: { '6': 'P001' },
+    })
+    expect(bucket(rows, 'rollforward').get('3001')).toEqual({ debit: 0, credit: 100 })
+    expect(bucket(rows, 'rollforward').has('1930')).toBe(false)
+    expect(bucket(rows, 'period').get('3001')).toEqual({ debit: 0, credit: 9 })
+  })
+
+  it("'exclude-final': a reversed closing and its storno net to zero across the rollforward/period split", async () => {
+    // reverseEntry allows a storno date after the original's, so a sub-range
+    // can put the reversed closing in rollforward and the storno in period.
+    // The caller folds rollforward into IB; IB + period must still net out.
+    const ctx = await seedCompany()
+    const closingEntryId = await insertJournalEntry({
+      ...ctx, voucherNumber: 1, sourceType: 'year_end', status: 'reversed', entryDate: '2026-06-30',
+      lines: [
+        { account: '8999', debit: 5000, credit: 0 },
+        { account: '2099', debit: 0, credit: 5000 },
+      ],
+    })
+    await getPool().query(`UPDATE public.fiscal_periods SET closing_entry_id = $1 WHERE id = $2`, [
+      closingEntryId,
+      ctx.fiscalPeriodId,
+    ])
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 2, sourceType: 'storno', entryDate: '2026-07-15',
+      reversesId: closingEntryId,
+      lines: [
+        { account: '8999', debit: 0, credit: 5000 },
+        { account: '2099', debit: 5000, credit: 0 },
+      ],
+    })
+
+    const rows = await callRpc(ctx.companyId, ctx.fiscalPeriodId, 'exclude-final', {
+      fromDate: '2026-07-01',
+      toDate: '2026-12-31',
+    })
+    expect(bucket(rows, 'rollforward').get('8999')).toEqual({ debit: 5000, credit: 0 })
+    expect(bucket(rows, 'period').get('8999')).toEqual({ debit: 0, credit: 5000 })
+    expect(bucket(rows, 'rollforward').get('2099')).toEqual({ debit: 0, credit: 5000 })
+    expect(bucket(rows, 'period').get('2099')).toEqual({ debit: 5000, credit: 0 })
   })
 
   it('rejects an unknown closing mode', async () => {
@@ -552,15 +636,15 @@ describe('get_trial_balance_aggregates RPC', () => {
     const params = callParams(ctx.companyId, ctx.fiscalPeriodId, 'include', { excludeEntryId: ctx.obEntryId })
 
     const asMember = await withUserContext(ctx.userId, async (client) => {
-      const { rows } = await client.query<AggRow>(CALL_SQL, params)
-      return rows
+      const { rows } = await client.query<{ payload: AggRow[] }>(CALL_SQL, params)
+      return rows[0].payload
     })
     expect(bucket(asMember, 'period').get('1930')).toEqual({ debit: 12500, credit: 3250 })
 
     const stranger = await insertAuthUser()
     const asStranger = await withUserContext(stranger, async (client) => {
-      const { rows } = await client.query<AggRow>(CALL_SQL, params)
-      return rows
+      const { rows } = await client.query<{ payload: AggRow[] }>(CALL_SQL, params)
+      return rows[0].payload
     })
     expect(asStranger).toEqual([])
   })
