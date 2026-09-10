@@ -232,6 +232,7 @@ import type {
 import {
   buildMigrateRequests,
   mergeMigrationResults,
+  migrationProvedGrant,
 } from '@/extensions/general/arcim-migration/lib/migrate-plan'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
@@ -2260,7 +2261,7 @@ function formatSkipReasons(
   if (reasons.duplicate) parts.push(`${reasons.duplicate} fanns redan`)
   if (reasons.outsideFiscalYears) {
     parts.push(
-      `${reasons.outsideFiscalYears} betald${reasons.outsideFiscalYears > 1 ? 'a' : ''} utanför importerade räkenskapsår`,
+      `${reasons.outsideFiscalYears} avslutad${reasons.outsideFiscalYears > 1 ? 'e' : ''} före importerade räkenskapsår`,
     )
   }
   if (reasons.inactive) {
@@ -3156,7 +3157,9 @@ export default function ArcimMigrationWorkspace({
           const res = await fetch('/api/extensions/ext/arcim-migration/migrate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
-            body: JSON.stringify(request.body),
+            // Rows from an earlier request prove the grant for this one, so
+            // a bare 403 on one register stays a step error, not a reconnect.
+            body: JSON.stringify({ ...request.body, grantProven: migrationProvedGrant(merged) }),
           })
 
           if (!res.ok) {

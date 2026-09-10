@@ -92,6 +92,20 @@ describe('POST /migrate: fiscal-year scope and per-step finishing flag', () => {
     expect(orchestratorOptions().fiscalYearScope).toBeNull()
   })
 
+  it('forwards grantProven only when the client asserts it', async () => {
+    const imported = [{ fiscal_year_start: '2026-01-01', fiscal_year_end: '2026-12-31' }]
+    await handler(
+      migrateRequest({ importSuppliers: true, grantProven: true }),
+      buildCtx(imported),
+    )
+    expect(orchestratorOptions().grantProven).toBe(true)
+
+    vi.clearAllMocks()
+    ;(getConsent as Mock).mockResolvedValue({ id: 'consent-1', status: 1, provider: 'visma' })
+    await handler(migrateRequest({ importSuppliers: true, grantProven: 'yes' }), buildCtx(imported))
+    expect(orchestratorOptions().grantProven).toBe(false)
+  })
+
   it('forwards suggestParties and defaults it on for an older client', async () => {
     await handler(
       migrateRequest({ importSalesInvoices: true, suggestParties: false }),

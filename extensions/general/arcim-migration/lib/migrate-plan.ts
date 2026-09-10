@@ -48,6 +48,23 @@ export interface MigrateRequestBody extends Record<MigrateStepKey, boolean> {
   suggestParties: boolean
 }
 
+/**
+ * Whether the results so far prove the grant answers on this token: rows
+ * came back from at least one register. Sent as `grantProven` on the next
+ * request so an opaque 403 there is read as one closed register, exactly as
+ * it was when every step shared a request. See ProviderRunState.
+ */
+export function migrationProvedGrant(results: MigrationResults): boolean {
+  return (
+    results.companyInfo?.imported === true ||
+    (results.customers?.total ?? 0) > 0 ||
+    (results.suppliers?.total ?? 0) > 0 ||
+    (results.salesInvoices?.total ?? 0) > 0 ||
+    (results.supplierInvoices?.total ?? 0) > 0 ||
+    (results.assets?.total ?? 0) > 0
+  )
+}
+
 export interface MigrateRequest {
   step: MigrateStepKey
   label: string

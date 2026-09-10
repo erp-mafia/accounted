@@ -11,8 +11,8 @@ import { fiscalYearScopeFromImports, invoiceWithinScope } from '../invoice-scope
 
 const SCOPE = { start: '2026-01-01', end: '2026-12-31' }
 
-function dto(issueDate: string, paid: boolean) {
-  return { issueDate, paymentStatus: { paid, balance: { value: paid ? 0 : 100, currencyCode: 'SEK' } } }
+function dto(issueDate: string, paid: boolean, lastPaymentDate?: string) {
+  return { issueDate, paymentStatus: { paid, balance: { value: paid ? 0 : 100, currencyCode: 'SEK' }, lastPaymentDate } }
 }
 
 describe('invoiceWithinScope', () => {
@@ -30,6 +30,24 @@ describe('invoiceWithinScope', () => {
 
   it('keeps an unpaid invoice from any year', () => {
     expect(invoiceWithinScope(dto('2024-06-01', false), SCOPE)).toBe(true)
+  })
+
+  it('keeps a prior-year invoice settled inside the scope: it backs the 1510/2440 opening balance', () => {
+    expect(invoiceWithinScope(dto('2025-12-20', true, '2026-01-15'), SCOPE)).toBe(true)
+    expect(invoiceWithinScope(dto('2025-12-20', true, '2026-01-01'), SCOPE)).toBe(true)
+  })
+
+  it('keeps a prior-year invoice settled after the scope for the same reason', () => {
+    expect(invoiceWithinScope(dto('2025-12-20', true, '2027-02-01'), SCOPE)).toBe(true)
+  })
+
+  it('declines a prior-year invoice that was also settled before the scope', () => {
+    expect(invoiceWithinScope(dto('2025-06-20', true, '2025-07-15'), SCOPE)).toBe(false)
+  })
+
+  it('lets the issue date alone decide when the provider gave no payment date', () => {
+    expect(invoiceWithinScope(dto('2025-12-20', true, undefined), SCOPE)).toBe(false)
+    expect(invoiceWithinScope(dto('2025-12-20', true, 'okänt'), SCOPE)).toBe(false)
   })
 
   it('is inclusive at both bounds', () => {

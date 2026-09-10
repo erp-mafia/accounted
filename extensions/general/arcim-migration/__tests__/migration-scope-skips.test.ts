@@ -61,7 +61,15 @@ import {
   fetchSupplierInvoicesHydrated,
 } from '@/lib/providers/provider-data-fetcher'
 import { suggestPartiesForCompany } from '@/lib/parties/suggest'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { insertWithPerRowFallback } from '../lib/insert-fallback'
 import type { SalesInvoiceDto, SupplierInvoiceDto } from '@/lib/providers/dto'
+
+function vismaError(statusCode: number): Error {
+  const e = new Error(`Visma API error: ${statusCode}`) as Error & { statusCode: number }
+  e.statusCode = statusCode
+  return e
+}
 
 const HYDRATION = { needed: 0, hydrated: 0, failed: 0, skippedForBudget: 0 }
 
@@ -182,6 +190,68 @@ describe('executeMigration: fiscal-year scope', () => {
 
     expect(results.salesInvoices).toMatchObject({ total: 1, imported: 1, skipped: 0 })
     expect(results.salesInvoices?.skipReasons?.outsideFiscalYears).toBeUndefined()
+  })
+})
+
+describe('executeMigration: per-step requests (#2469)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(fetchAllRows as Mock).mockResolvedValue([])
+  })
+
+  it('resolves invoices against the customers an earlier request imported instead of re-creating them', async () => {
+    // Request N-1 imported "Kund AB"; this request runs only the sales
+    // invoice step, so the customer step's in-memory maps are empty.
+    const kund = { ...salesDto('1001', '2026-03-01', false), customer: { name: 'Kund AB', identifications: [{ schemeId: 'SE:ORGNR', id: '5560125790' }] } }
+    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({
+      invoices: [kund], hydration: HYDRATION, unhydratedIds: new Set(), excluded: [],
+    })
+    // First register read in the step is the customer register, then invoices.
+    ;(fetchAllRows as Mock)
+      .mockResolvedValueOnce([{ id: 'cust-existing', org_number: '5560125790', name: 'Kund AB' }])
+      .mockResolvedValue([])
+
+    const results = await executeMigration(baseOptions({ importSalesInvoices: true }))
+
+    const tables = (insertWithPerRowFallback as Mock).mock.calls.map((c) => c[1])
+    expect(tables).not.toContain('customers')
+    const invoiceRows = (insertWithPerRowFallback as Mock).mock.calls.find((c) => c[1] === 'invoices')![2]
+    expect(invoiceRows[0].customer_id).toBe('cust-existing')
+    expect(results.salesInvoices).toMatchObject({ imported: 1 })
+  })
+
+  it('resolves supplier invoices against the suppliers an earlier request imported', async () => {
+    const lev = { ...supplierDto('L-1', '2026-03-01', false), supplier: { name: 'Leverantör AB', identifications: [{ schemeId: 'SE:ORGNR', id: '5566778899' }] } }
+    ;(fetchSupplierInvoicesHydrated as Mock).mockResolvedValue({
+      invoices: [lev], hydration: HYDRATION, unhydratedIds: new Set(), excluded: [],
+    })
+    ;(fetchAllRows as Mock)
+      .mockResolvedValueOnce([{ id: 'supp-existing', org_number: '5566778899', name: 'Leverantör AB' }])
+      .mockResolvedValue([])
+
+    await executeMigration(baseOptions({ importSupplierInvoices: true }))
+
+    const tables = (insertWithPerRowFallback as Mock).mock.calls.map((c) => c[1])
+    expect(tables).not.toContain('suppliers')
+    const rows = (insertWithPerRowFallback as Mock).mock.calls.find((c) => c[1] === 'supplier_invoices')![2]
+    expect(rows[0].supplier_id).toBe('supp-existing')
+  })
+
+  it('reads an opaque 403 as one closed register when an earlier request proved the grant', async () => {
+    ;(fetchSupplierInvoicesHydrated as Mock).mockRejectedValue(vismaError(403))
+
+    const results = await executeMigration(baseOptions({ importSupplierInvoices: true, grantProven: true }))
+
+    expect(results.stepErrors).toHaveLength(1)
+    expect(results.stepErrors![0].code).toBe('PROVIDER_RESOURCE_FORBIDDEN')
+  })
+
+  it('still treats a 403 on the first call of a migration as a dead grant', async () => {
+    ;(fetchSupplierInvoicesHydrated as Mock).mockRejectedValue(vismaError(403))
+
+    await expect(
+      executeMigration(baseOptions({ importSupplierInvoices: true })),
+    ).rejects.toMatchObject({ statusCode: 403 })
   })
 })
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildMigrateRequests, mergeMigrationResults } from '../migrate-plan'
+import { buildMigrateRequests, mergeMigrationResults, migrationProvedGrant } from '../migrate-plan'
 import type { MigrationResults } from '../../types'
 
 /**
@@ -88,5 +88,19 @@ describe('mergeMigrationResults', () => {
     const into: MigrationResults = { customers: { total: 1, imported: 1, skipped: 0 } }
     expect(mergeMigrationResults(into, undefined)).toEqual(into)
     expect(mergeMigrationResults(into, null)).toEqual(into)
+  })
+})
+
+describe('migrationProvedGrant', () => {
+  it('is false until some register returned rows', () => {
+    expect(migrationProvedGrant({})).toBe(false)
+    expect(migrationProvedGrant({ customers: { total: 0, imported: 0, skipped: 0 } })).toBe(false)
+    expect(migrationProvedGrant({ companyInfo: { imported: false } })).toBe(false)
+  })
+
+  it('is true once any register answered with rows, imported or skipped', () => {
+    expect(migrationProvedGrant({ customers: { total: 3, imported: 0, skipped: 3 } })).toBe(true)
+    expect(migrationProvedGrant({ suppliers: { total: 1, imported: 1, skipped: 0 } })).toBe(true)
+    expect(migrationProvedGrant({ companyInfo: { imported: true } })).toBe(true)
   })
 })

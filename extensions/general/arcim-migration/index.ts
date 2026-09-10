@@ -1465,6 +1465,9 @@ export const arcimMigrationExtension: Extension = {
           // one finishes the run; an older client that omits this gets the
           // original end-of-request behaviour.
           suggestParties = true,
+          // Set by the wizard once an earlier per-step request received rows
+          // on this grant; only changes how a 403 is classified.
+          grantProven = false,
         } = await request.json() as {
           consentId: string
           importCompanyInfo?: boolean
@@ -1475,6 +1478,7 @@ export const arcimMigrationExtension: Extension = {
           importAssets?: boolean
           reconcileVouchers?: boolean
           suggestParties?: boolean
+          grantProven?: boolean
         }
 
         if (!consentId) {
@@ -1576,6 +1580,7 @@ export const arcimMigrationExtension: Extension = {
             supabase,
             suggestParties,
             fiscalYearScope,
+            grantProven: grantProven === true,
             // The behandlingshistorik rows the sales-invoice step writes need
             // the service role (processing_history has no INSERT policy);
             // built only when that step has rows to write.

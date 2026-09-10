@@ -11,6 +11,11 @@
  *
  * Unpaid invoices are kept from any year: they are open receivables and
  * payables that the user has to follow up on, whichever year booked them.
+ * So is a paid invoice settled on or after the scope's first day: it is
+ * part of the 1510/2440 opening balance and its payment verifikat sits in
+ * the imported ledger, and the kundreskontra as of the opening date has to
+ * agree with that balance (BFNAR 2013:2 kap. 9). Only an invoice that was
+ * both issued and settled before the imported years is declined.
  */
 
 import type { SalesInvoiceDto, SupplierInvoiceDto } from '@/lib/providers/dto'
@@ -28,7 +33,8 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}/
  *
  * No scope means no filter. An invoice whose issue date cannot be read as an
  * ISO date is kept: dropping it silently would hide a mapper defect behind a
- * plausible skip count.
+ * plausible skip count. A payment date the provider did not supply says
+ * nothing, so the issue date alone decides.
  */
 export function invoiceWithinScope(
   dto: Pick<SalesInvoiceDto | SupplierInvoiceDto, 'issueDate' | 'paymentStatus'>,
@@ -36,9 +42,16 @@ export function invoiceWithinScope(
 ): boolean {
   if (!scope) return true
   if (!dto.paymentStatus?.paid) return true
-  const issued = typeof dto.issueDate === 'string' ? dto.issueDate.slice(0, 10) : ''
-  if (!ISO_DATE.test(issued)) return true
-  return issued >= scope.start && issued <= scope.end
+  const issued = isoDay(dto.issueDate)
+  if (!issued) return true
+  if (issued >= scope.start && issued <= scope.end) return true
+  const settled = isoDay(dto.paymentStatus.lastPaymentDate)
+  return settled !== null && settled >= scope.start
+}
+
+function isoDay(value: string | undefined): string | null {
+  const day = typeof value === 'string' ? value.slice(0, 10) : ''
+  return ISO_DATE.test(day) ? day : null
 }
 
 /**
