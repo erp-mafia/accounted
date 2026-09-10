@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { countCompletedSieImports, countInboxItems, countTransactions, readActiveBankConnections } from './hem-reads'
 import AttGoraV2 from '@/components/attgora/AttGoraV2'
 import {
   getWorklistCounts,
@@ -63,23 +64,12 @@ export async function HemV2Section({
     }),
     suggestedMatchesPromise,
     expensePayoutsPromise,
-    supabase
-      .from('bank_connections')
-      .select('id, status, consent_expires, bank_name, last_sie_sweep')
-      .eq('company_id', companyId)
-      .eq('status', 'active'),
-    // The three first-run gates the tree shows (the checklist component
-    // computes the same flags for its own rendering; head counts are cheap
-    // and keep this section independent of the checklist's streaming).
-    setupOpen
-      ? supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId)
-      : Promise.resolve({ count: null as number | null }),
-    setupOpen
-      ? supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed')
-      : Promise.resolve({ count: null as number | null }),
-    setupOpen
-      ? supabase.from('invoice_inbox_items').select('*', { count: 'exact', head: true }).eq('company_id', companyId)
-      : Promise.resolve({ count: null as number | null }),
+    readActiveBankConnections(companyId),
+    // The three first-run gates the tree shows. The checklist island reads
+    // the same three; the request cache in hem-reads.ts makes that one read.
+    setupOpen ? countTransactions(companyId) : Promise.resolve({ count: null as number | null }),
+    setupOpen ? countCompletedSieImports(companyId) : Promise.resolve({ count: null as number | null }),
+    setupOpen ? countInboxItems(companyId) : Promise.resolve({ count: null as number | null }),
   ])
 
   const bankConnections = (bankConnectionsRes.data ?? []) as BankConnectionRow[]

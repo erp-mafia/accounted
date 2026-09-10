@@ -34,7 +34,12 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import { TransactionDrawer, type DrawerAction } from './TransactionDrawer'
+import dynamic from 'next/dynamic'
+import type { DrawerAction } from './TransactionDrawer'
+
+// The drawer, and the document viewer it carries, load on the first expand:
+// the list's own chunk stays free of them.
+const TransactionDrawer = dynamic(() => import('./TransactionDrawer').then((m) => m.TransactionDrawer), { ssr: false })
 import { HUE_DOT_CLASS, type TemplateHue } from '@/lib/bookkeeping/template-group-colors'
 
 /** Shell v2: the top suggestion for an unbooked row, shown in the Kategori cell. */

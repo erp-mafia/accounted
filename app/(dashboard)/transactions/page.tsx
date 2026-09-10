@@ -109,8 +109,9 @@ function revalidateUnderlag(transactionId: string): Promise<unknown> {
   return globalMutate(`/api/transactions/${transactionId}/underlag`)
 }
 
-/** Rows warmed per render pass: enough to cover a screenful, never a whole backlog. */
+/** Rows warmed per pass, taken from the top of the list only: a screenful, never the backlog. */
 const ASSISTANT_WARM_LIMIT = 8
+const ASSISTANT_WARM_WINDOW = 30
 import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -1540,14 +1541,13 @@ export default function TransactionsPage() {
    * of model calls, and it stops on the first refusal: an installation with
    * no AI backend answers 503 once and is then left alone.
    */
-  useEffect(() => {
-    if (!companyId) return
-    if (warmedReadsRef.current.companyId !== companyId) {
-      warmedReadsRef.current = { companyId, ids: new Set() }
-      assistantReadsRef.current = {}
-    }
-    const warmed = warmedReadsRef.current.ids
-    const pending = transactions
+  // The rows worth reading ahead: the top of the list, unbooked, without a
+  // fresh read. A string key, so a refetch that lands the same rows does not
+  // start the sweep again.
+  const warmKey = useMemo(() => {
+    const warmed = warmedReadsRef.current.companyId === companyId ? warmedReadsRef.current.ids : new Set<string>()
+    return transactions
+      .slice(0, ASSISTANT_WARM_WINDOW)
       .filter(
         (tx) =>
           tx.is_business === null &&
@@ -1557,12 +1557,25 @@ export default function TransactionsPage() {
           !(assistantReadsRef.current[tx.id] && readIsFresh(assistantReadsRef.current[tx.id], tx)),
       )
       .slice(0, ASSISTANT_WARM_LIMIT)
-    if (pending.length === 0) return
+      .map((tx) => tx.id)
+      .join(',')
+  }, [companyId, transactions])
 
+  useEffect(() => {
+    if (!companyId || !warmKey) return
+    if (warmedReadsRef.current.companyId !== companyId) {
+      warmedReadsRef.current = { companyId, ids: new Set() }
+      assistantReadsRef.current = {}
+    }
+    const warmed = warmedReadsRef.current.ids
+    const pending = warmKey.split(',').map((id) => transactions.find((tx) => tx.id === id)).filter((tx): tx is TransactionWithInvoice => !!tx)
+
+    // The sweep is background work: it waits for the browser to be idle and
+    // the tab to be visible, so it never competes with the list's own paint.
     let cancelled = false
-    void (async () => {
+    const run = async () => {
       for (const tx of pending) {
-        if (cancelled) return
+        if (cancelled || document.visibilityState !== 'visible') return
         warmed.add(tx.id)
         try {
           const res = await fetch('/api/agent/categorize', {
@@ -1578,11 +1591,19 @@ export default function TransactionsPage() {
           return
         }
       }
-    })()
+    }
+    const idle = typeof window.requestIdleCallback === 'function'
+      ? window.requestIdleCallback(() => void run(), { timeout: 2000 })
+      : window.setTimeout(() => void run(), 1000)
     return () => {
       cancelled = true
+      if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(idle as number)
+      else window.clearTimeout(idle as number)
     }
-  }, [companyId, transactions])
+    // The key already encodes the rows; re-running on the list's identity
+    // would walk the backlog on every realtime echo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, warmKey])
 
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return
@@ -4400,7 +4421,9 @@ export default function TransactionsPage() {
                     <th className={cn(TH_CLASS, 'text-right !pr-0')}>{t('th_status')}</th>
                   </tr>
                 </thead>
-                <tbody className="stagger-enter">
+                {/* data-ph-mask: session replay masks every text node under it in one
+                    lookup instead of walking up from each cell. */}
+                <tbody className="stagger-enter" data-ph-mask="">
                   {inboxItems.map(item =>
                     item.source === 'bank' ? (
                       <TransactionInboxCard
