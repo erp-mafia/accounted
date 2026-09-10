@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
+import { legacyNotices } from '@/lib/import/notices'
 import { fetchAccounts } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
@@ -1425,6 +1426,7 @@ function OpeningBalanceFlow() {
       {obStep === 'edit' && parseResult && (
         <OpeningBalanceEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onContinue={handleEditContinue}
           onBack={() => {
             if (needsMapping) {
@@ -1706,6 +1708,7 @@ function CustomersFlow() {
       {step === 'edit' && parseResult && (
         <CustomersEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
           isLoading={isLoading}
@@ -1963,6 +1966,7 @@ function SuppliersFlow() {
       {step === 'edit' && parseResult && (
         <SuppliersEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
           isLoading={isLoading}
@@ -2208,6 +2212,7 @@ function ArticlesFlow() {
       {step === 'edit' && parseResult && (
         <ArticlesEditStep
           rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
           onExecute={handleExecute}
           onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
           isLoading={isLoading}
