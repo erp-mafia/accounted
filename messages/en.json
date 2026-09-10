@@ -3006,6 +3006,7 @@
     "invoices_help": "Invoice due dates"
   },
   "tx_inbox_card": {
+    "drawer_rec_recent": "Our recommendation · template used lately",
     "drawer_rec_assistant": "Our recommendation · the assistant's read",
     "drawer_rec_rule": "Our recommendation · by your rule",
     "drawer_rec_catalog": "Our recommendation · known pattern",
@@ -3095,6 +3096,7 @@
     "adjustment": "Adjustment"
   },
   "tx_quick_review": {
+    "rec_why_recent": "Template used lately",
     "rec_why_assistant_doc": "The assistant's read of the underlag",
     "rec_why_assistant_row": "The assistant's read of the row",
     "ai_looking": "The assistant is looking at the row…",

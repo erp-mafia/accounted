@@ -98,7 +98,7 @@ import { resolveDetachErrorMessage } from '@/components/transactions/detach-unde
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
-import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import type { AssistantRead } from '@/lib/agent/categorize/read-shape'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
 import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
@@ -440,7 +440,7 @@ interface QuickReviewState {
   // Learned counterparty bag; prefills the review dialog's dimension picker.
   defaultDimensions?: Record<string, string> | null
   /** The row suggestion this review opened from, so the dialog can say why. Null when the person picked. */
-  recommendation?: { source?: 'rule' | 'catalog' | 'counterparty' | 'assistant'; seenCount?: number; confidence?: number } | null
+  recommendation?: { source?: 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant'; seenCount?: number; confidence?: number } | null
   /** Account + VAT to open on instead of the category's defaults (the assistant's pick). */
   defaults?: { account: string; vat: VatTreatment | 'none' }
 }
@@ -749,7 +749,7 @@ export default function TransactionsPage() {
   // (fetchCategorySuggestions), so nothing is computed on click.
   const proposalFor = (tx: TransactionWithInvoice): RowProposal | null => {
     if (tx.journal_entry_id || tx.is_business !== null) return null
-    const s = templateSuggestions[tx.id]?.[0]
+    const s = rowProposal(templateSuggestions[tx.id])
     if (!s) return null
     const account = s.debit_account.startsWith('19') ? s.credit_account : s.debit_account
     const hue = s.group === 'counterparty' || s.group === 'assistant' ? accountHue(account) : templateGroupHue(s.group as TemplateGroup)
@@ -3877,7 +3877,7 @@ export default function TransactionsPage() {
   // Shell v2: Bokför on a row that carries a proposal goes straight to the
   // review with that template set; no picker in between.
   function bookProposal(transaction: TransactionWithInvoice) {
-    const s = templateSuggestions[transaction.id]?.[0]
+    const s = rowProposal(templateSuggestions[transaction.id])
     if (!s) return openCategoryDialog(transaction)
     // A decision the company already made (a rule, a settled counterpart, a
     // sure read of a receipt) books from the row; Ångra sits on the toast.

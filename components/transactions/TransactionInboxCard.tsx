@@ -42,7 +42,7 @@ export interface RowProposal {
   label: string
   hue: TemplateHue
   confidence: number
-  source?: 'rule' | 'catalog' | 'counterparty' | 'assistant'
+  source?: 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant'
   seenCount?: number
 }
 
