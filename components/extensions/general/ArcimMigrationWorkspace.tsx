@@ -230,6 +230,11 @@ import type {
   SkipReasons,
   AssetSkipReasons,
 } from '@/extensions/general/arcim-migration/types'
+import {
+  buildMigrateRequests,
+  mergeMigrationResults,
+  migrationProvedGrant,
+} from '@/extensions/general/arcim-migration/lib/migrate-plan'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
@@ -1945,14 +1950,33 @@ function ResultStep({
   const t = useTranslations('extensions')
   const fiscalYearSpanLabel = useFiscalYearSpanLabel()
   if (error) {
+    // Steps run one request each (#2469), so a failure in a later request
+    // leaves earlier steps' rows in place. Name them: the user must not
+    // re-import what already landed, and must see what still needs a rerun.
+    const completed = completedStepLines(results)
     return (
       <div className="stagger-enter space-y-8">
         <div>
           <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">
-            Migreringen misslyckades
+            {completed.length > 0 ? 'Migreringen avbröts' : 'Migreringen misslyckades'}
           </h2>
           <p className="mt-3 whitespace-pre-line text-sm text-destructive">{error}</p>
         </div>
+        {completed.length > 0 && (
+          <div>
+            <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              Hann slutföras innan felet
+            </h3>
+            <ul className="mt-3 space-y-1 text-sm">
+              {completed.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Kör migreringen igen med de steg som saknas: det som redan finns hoppas över.
+            </p>
+          </div>
+        )}
         <SieFallbackLine message="Du kan istället importera din bokföringsdata manuellt via en SIE-fil." />
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
           <Button variant="outline" className="min-h-11" onClick={onDone}>Klar</Button>
@@ -2330,6 +2354,11 @@ function formatSkipReasons(
   if (!reasons) return undefined
   const parts: string[] = []
   if (reasons.duplicate) parts.push(`${reasons.duplicate} fanns redan`)
+  if (reasons.outsideFiscalYears) {
+    parts.push(
+      `${reasons.outsideFiscalYears} avslutad${reasons.outsideFiscalYears > 1 ? 'e' : ''} före importerade räkenskapsår`,
+    )
+  }
   if (reasons.inactive) {
     parts.push(
       entityType === 'asset'
@@ -2350,6 +2379,26 @@ function formatSkipReasons(
     )
   }
   return parts.length > 0 ? parts.join(', ') : undefined
+}
+
+/**
+ * One line per step that reported a result: what the earlier per-step
+ * requests already wrote before a later one failed.
+ */
+function completedStepLines(results: MigrationResults | null): string[] {
+  if (!results) return []
+  const lines: string[] = []
+  const count = (label: string, r?: { imported: number; skipped: number }) => {
+    if (!r) return
+    lines.push(`${label}: ${r.imported} importerade${r.skipped > 0 ? `, ${r.skipped} hoppades över` : ''}`)
+  }
+  if (results.companyInfo?.imported) lines.push('Företagsinformation: uppdaterad')
+  count('Kunder', results.customers)
+  count('Leverantörer', results.suppliers)
+  count('Kundfakturor', results.salesInvoices)
+  count('Leverantörsfakturor', results.supplierInvoices)
+  count('Anläggningstillgångar', results.assets)
+  return lines
 }
 
 /** A step that failed everything it tried is an error, not a quiet count. */
@@ -3197,42 +3246,62 @@ export default function ArcimMigrationWorkspace({
         setMigrationStep('Importerar kunder, leverantörer och fakturor...')
         setMigrationProgress(55)
 
-        const res = await fetch('/api/extensions/ext/arcim-migration/migrate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
-          body: JSON.stringify({
-            consentId,
-            importCompanyInfo: migrationOptions.importCompanyInfo,
-            importCustomers: migrationOptions.importCustomers,
-            importSuppliers: migrationOptions.importSuppliers,
-            importSalesInvoices: migrationOptions.importSalesInvoices,
-            importSupplierInvoices: migrationOptions.importSupplierInvoices,
-            importAssets: effectiveImportAssets,
-          }),
+        // One request per step: /migrate runs in a function with a 300 s
+        // ceiling, and a register of a few thousand invoices spent all of it
+        // on the earlier steps and the invoice list before writing a single
+        // invoice (#2469). Each step now has the whole budget to itself; a
+        // rerun after a failed step skips the rows the earlier ones wrote.
+        const requests = buildMigrateRequests(consentId, {
+          importCompanyInfo: migrationOptions.importCompanyInfo,
+          importCustomers: migrationOptions.importCustomers,
+          importSuppliers: migrationOptions.importSuppliers,
+          importSalesInvoices: migrationOptions.importSalesInvoices,
+          importSupplierInvoices: migrationOptions.importSupplierInvoices,
+          importAssets: effectiveImportAssets,
         })
+        let merged: MigrationResults = {}
 
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}))
-          throw apiError(data, `HTTP ${res.status}`)
-        }
+        for (const [index, request] of requests.entries()) {
+          setMigrationStep(request.label)
+          // The wizard bar reserves 55-100 for the entity phase (SIE holds
+          // 10-50); each request owns an equal slice of it.
+          const sliceStart = 55 + Math.round((index / requests.length) * 45)
+          const sliceSize = 45 / requests.length
+          setMigrationProgress(sliceStart)
 
-        const contentType = res.headers.get('content-type') ?? ''
-        let results: MigrationResults | undefined
-        if (contentType.includes('application/x-ndjson') && res.body) {
-          results = await consumeMigrationStream(res.body, (currentStep, progress) => {
-            if (currentStep) setMigrationStep(currentStep)
-            // The orchestrator reports 0-100 on its own scale; the wizard bar
-            // reserves 55-100 for the entity phase (SIE holds 10-50).
-            setMigrationProgress(55 + Math.round(progress * 0.45))
+          const res = await fetch('/api/extensions/ext/arcim-migration/migrate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+            // Rows from an earlier request prove the grant for this one, so
+            // a bare 403 on one register stays a step error, not a reconnect.
+            body: JSON.stringify({ ...request.body, grantProven: migrationProvedGrant(merged) }),
           })
-        } else {
-          // Pre-stream server (or a proxy that stripped the stream): the
-          // original single-JSON contract.
-          const data = await res.json()
-          results = data.results as MigrationResults | undefined
+
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}))
+            throw apiError(data, `HTTP ${res.status}`)
+          }
+
+          const contentType = res.headers.get('content-type') ?? ''
+          let results: MigrationResults | undefined
+          if (contentType.includes('application/x-ndjson') && res.body) {
+            results = await consumeMigrationStream(res.body, (currentStep, progress) => {
+              if (currentStep) setMigrationStep(currentStep)
+              // The orchestrator reports 0-100 on its own scale.
+              setMigrationProgress(sliceStart + Math.round((progress / 100) * sliceSize))
+            })
+          } else {
+            // Pre-stream server (or a proxy that stripped the stream): the
+            // original single-JSON contract.
+            const data = await res.json()
+            results = data.results as MigrationResults | undefined
+          }
+          merged = mergeMigrationResults(merged, results)
+          // Show what has landed so far: a later request that fails still
+          // leaves the earlier steps' counts on the result card.
+          setMigrationResults(merged)
         }
-        setMigrationResults(results ?? null)
-        hadStepErrors = (results?.stepErrors?.length ?? 0) > 0
+        hadStepErrors = (merged.stepErrors?.length ?? 0) > 0
       }
 
       // Mark consent as fully accepted now that import is complete
