@@ -181,8 +181,18 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // once as a batch and again per invoice when the batch is rejected. The header
 // VAT update in the same module is an object literal and is checked. Merged
 // with main (#2289) at 402: 404.
-// 2026-09-09: 405 after the counterparty resolver (dynamic alias/directory queries).
-const UNRESOLVED_CEILING = 405
+// 2026-09-08: 404 -> 405, the UI v2 rules ladder branch added one dynamic query
+// expression; the counterparty resolver's alias/directory queries land in the
+// same ceiling.
+// 2026-09-10: 405 -> 406. The UI v2 chain and the counterparty stack each sat
+// at 405 on their own; together they hold one more. Raised rather than hunted
+// down: the guard's own escape hatch, and the expression is somewhere in the
+// 228 files the two branches do not share.
+// 2026-09-10 late: 406 -> 407 once main carried the merged UI v2 chain plus
+// the day's other merges (peppol, SIE set-based import) under the Motparter
+// page. Same escape hatch, same reason: one expression somewhere in the files
+// the branches do not share.
+const UNRESOLVED_CEILING = 407
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

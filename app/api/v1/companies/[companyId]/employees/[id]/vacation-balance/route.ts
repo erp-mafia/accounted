@@ -13,7 +13,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { roundOre } from '@/lib/money'
-import { dailyDivisor } from '@/lib/salary/work-schedule'
+import { dayValueSek, type DayValueEmployee } from '@/lib/salary/semesterberedning'
 
 const VacationBalanceResponse = z.object({
   employee_vacation_balance_id: z.string().uuid(),
@@ -82,7 +82,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     const { data: employee, error: empErr } = await ctx.supabase
       .from('employees')
-      .select('id, vacation_rule, vacation_days_per_year, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
+      .select('id, vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
       .eq('id', idParse.data)
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
@@ -122,36 +122,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       saved_days: Record<string, number> | null
       forced_payout_days: number
     }
-    const emp = employee as {
-      vacation_rule: string
-      vacation_days_per_year: number
-      salary_type: string
-      monthly_salary: number | null
-      hourly_rate: number | null
-      hours_per_week: number | null
-      workdays_per_week: number | null
-    }
-
     const savedDays = row.saved_days ?? {}
     const savedTotal = Object.values(savedDays).reduce((s, d) => s + (Number(d) || 0), 0)
     const remaining = roundOre(row.entitled_days - row.taken_days)
 
-    // Same simplified BFNAR 2016:10 day valuation the year-close uses.
-    const rate = emp.vacation_days_per_year >= 30 ? 0.144 : 0.12
-    let dayValue: number
-    if (emp.salary_type === 'hourly') {
-      dayValue = roundOre(
-        ((emp.hourly_rate || 0) * (emp.hours_per_week ?? 40) * 52 * rate) /
-          Math.max(emp.vacation_days_per_year, 1),
-      )
-    } else if (emp.vacation_rule === 'sammaloneregeln') {
-      const monthly = emp.monthly_salary || 0
-      dayValue = roundOre(monthly / dailyDivisor(emp.workdays_per_week) + monthly * 0.0043)
-    } else {
-      dayValue = roundOre(
-        ((emp.monthly_salary || 0) * 12 * rate) / Math.max(emp.vacation_days_per_year, 1),
-      )
-    }
+    // The same simplified BFNAR 2016:10 day valuation the year-close and the
+    // MCP vacation-balance tool use (one definition, so a kollektivavtal
+    // semesterlön rate reaches all three).
+    const dayValue = dayValueSek(employee as DayValueEmployee)
     const estimatedLiability = roundOre(Math.max(0, remaining + savedTotal) * dayValue)
 
     return ok(

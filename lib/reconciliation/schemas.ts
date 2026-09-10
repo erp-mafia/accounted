@@ -230,6 +230,16 @@ export const ReconciliationItemSchema = z.object({
   entry_status: z.enum(['draft', 'posted', 'reversed']).optional(),
   /** Linked counterpart on the other side, when any. */
   linked_journal_entry_id: z.string().nullable().optional(),
+  /** The linked verifikat's date, label and text, so the ledger side reads as a verifikat and not as an id. */
+  linked_entry: z
+    .object({
+      entry_date: z.string(),
+      voucher_series: z.string().nullable(),
+      voucher_number: z.number().int().nullable(),
+      description: z.string(),
+    })
+    .nullable()
+    .optional(),
   /** Why a linked row is not counted as settled (the entry was reversed or is still a draft). */
   link_problem: z.enum(['entry_reversed', 'entry_draft', 'entry_missing']).nullable().optional(),
   proposal: ReconciliationProposalSchema.nullable().optional(),

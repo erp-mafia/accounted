@@ -32,7 +32,7 @@
  * validation and the bookkeeping engine: nothing here writes to the ledger.
  */
 
-import { getVatRate } from '@/lib/bookkeeping/vat-entries'
+import { getVatRate, isGeneratedVatAccount, isReverseChargeBasisLeg } from '@/lib/bookkeeping/vat-entries'
 import { getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
 import { buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
@@ -44,6 +44,7 @@ import {
 
 
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import type { TransactionCategory, VatTreatment, EntityType, LinePatternEntry } from '@/types'
 
 /**
@@ -120,6 +121,13 @@ export interface ProposalLinesInput {
   /** For multi-line counterparty template bookings */
   linePattern?: LinePatternEntry[]
   settlementAccount?: string
+  /**
+   * The underlag's moms in SEK, booked instead of the rate's: the VAT leg
+   * takes this figure and the net leg absorbs the difference. Mirrors the
+   * server's applyVatAmountOverride. Ignored when the lines have no
+   * rate-based VAT leg (reverse charge, exempt, counterparty patterns).
+   */
+  vatAmountSek?: number
 }
 
 
@@ -150,6 +158,40 @@ export function resolveTemplateAccountsForEntity(
  * engine will book for this proposal, expressed as display/prefill lines.
  */
 export function computeProposalLines(input: ProposalLinesInput): ProposalLine[] {
+  const lines = computeRateLines(input)
+  return input.vatAmountSek != null ? applyVatAmountToLines(lines, input.vatAmountSek, input.amount < 0) : lines
+}
+
+/**
+ * Replace the rate-based VAT leg with the underlag's moms and let the net leg
+ * absorb the difference, so the entry still balances on the gross. Same leg
+ * selection as the server's applyVatAmountOverride: ingående 264x (not the
+ * reverse-charge 2645) on a purchase, utgående 261x-263x on a sale. Lines
+ * without such a leg, or where the net would not stay positive, come back
+ * unchanged.
+ */
+export function applyVatAmountToLines(lines: ProposalLine[], vatAmountSek: number, isExpense: boolean): ProposalLine[] {
+  if (!Number.isFinite(vatAmountSek) || vatAmountSek <= 0) return lines
+  const side = isExpense ? 'debet' : 'kredit'
+  const vatIdx = lines.findIndex((l) =>
+    isExpense
+      ? l.side === 'debet' && l.account.startsWith('264') && l.account !== '2645'
+      : l.side === 'kredit' && /^26[123]/.test(l.account),
+  )
+  if (vatIdx < 0) return lines
+  let netIdx = -1
+  lines.forEach((l, i) => {
+    if (i === vatIdx || l.side !== side || l.settlement || l.account.startsWith('26')) return
+    if (netIdx < 0 || l.amount > lines[netIdx].amount) netIdx = i
+  })
+  if (netIdx < 0) return lines
+  const vat = engineRound(vatAmountSek)
+  const net = engineRound(lines[netIdx].amount + lines[vatIdx].amount - vat)
+  if (net <= 0) return lines
+  return lines.map((l, i) => (i === vatIdx ? { ...l, amount: vat } : i === netIdx ? { ...l, amount: net } : l))
+}
+
+function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
   const {
     amount,
     amountSek,
@@ -437,6 +479,12 @@ export function proposalLinesToFormLines(
     /** Foreign-currency amount of the transaction (absolute). */
     foreignAmount?: number | null
     exchangeRate?: number | null
+    /**
+     * Radtext for the business lines: what the money was for, in the words
+     * the review used. The money leg keeps the bank text and the moms legs
+     * are named by their accounts, so neither needs it.
+     */
+    businessLineDescription?: string
   } = {},
 ): FormLine[] {
   const currencyMeta = buildCurrencyMetadata(opts.currency, opts.foreignAmount, opts.exchangeRate)
@@ -446,14 +494,53 @@ export function proposalLinesToFormLines(
     const amountStr = amount.toFixed(2)
     const isSettlement = line.settlement === true
     const swapAccount = isSettlement && line.account === '1930' && !!opts.settlementAccount
+    // The line that says what the money was for: not the money leg, not a
+    // moms or reverse-charge basis leg.
+    const isBusinessLine =
+      !isSettlement && !isGeneratedVatAccount(line.account) && !isReverseChargeBasisLeg(line.account)
     return {
       account_number: swapAccount && opts.settlementAccount ? opts.settlementAccount : line.account,
       debit_amount: line.side === 'debet' ? amountStr : '',
       credit_amount: line.side === 'kredit' ? amountStr : '',
-      line_description: '',
+      line_description: isBusinessLine ? (opts.businessLineDescription ?? '') : '',
       // Currency metadata belongs on the money leg only, mirroring
       // buildTransactionEntryLines' settlement handling.
       ...(isSettlement ? currencyMeta : {}),
     }
   })
+}
+
+/**
+ * The verifikat a static catalog template books for a total (incl. VAT), as
+ * form lines: the same computation the transactions review shows, so Ny
+ * verifikation and Bokför från mall apply a template exactly the way a bank
+ * row would be booked with it. Expense templates are booked as a payment
+ * out (negative amount); income templates as money in; a transfer books the
+ * template's own debit and credit legs as written.
+ */
+export function staticTemplateToFormLines(
+  template: BookingTemplate,
+  totalAmount: number,
+  entityType?: EntityType,
+): FormLine[] {
+  const accounts = resolveTemplateAccountsForEntity(template, entityType)
+  const abs = Math.abs(totalAmount)
+  if (!(abs > 0) || !accounts.debitAccount || !accounts.creditAccount) return []
+  if (template.direction === 'transfer') {
+    const amount = roundOre(abs).toFixed(2)
+    return [
+      { account_number: accounts.debitAccount, debit_amount: amount, credit_amount: '', line_description: '' },
+      { account_number: accounts.creditAccount, debit_amount: '', credit_amount: amount, line_description: '' },
+    ]
+  }
+  const lines = computeProposalLines({
+    amount: template.direction === 'income' ? abs : -abs,
+    entityType,
+    templateDebitAccount: accounts.debitAccount,
+    templateCreditAccount: accounts.creditAccount,
+    templateVatRate: template.vat_rate,
+    templateVatTreatment: template.vat_treatment,
+    templateSupplierType: template.reverse_charge_supplier_type,
+  })
+  return proposalLinesToFormLines(lines)
 }

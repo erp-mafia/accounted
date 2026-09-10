@@ -1,4 +1,5 @@
 import { after } from 'next/server'
+import { countCompletedSieImports, countInboxItems, countTransactions, readActiveBankConnections } from './hem-reads'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import ResumePane from '@/components/dashboard/ResumePane'
@@ -6,6 +7,7 @@ import { HemNotices } from '@/components/dashboard/HemNotices'
 import {
   getWorklistCounts,
   listExpensePayoutsDue,
+  listSkattekontoPaymentDue,
   listSuggestedMatches,
   SUGGESTED_MATCH_SCAN_CAP,
 } from '@/lib/worklist'
@@ -59,7 +61,10 @@ export async function HemNoticesSection({
     now,
     deferReap: (task) => after(task),
   })
-  return <HemNotices notices={notices} />
+  // The Skatteverket reconnect has its own places (the Konton row and the
+  // Skattekonto page); a line about it over every visit to Att göra was
+  // noise (founder feedback 2026-09-09).
+  return <HemNotices notices={notices.filter((n) => n.category !== 'skv_disconnected')} />
 }
 
 export async function HemChecklistSection({
@@ -94,9 +99,9 @@ export async function HemChecklistSection({
   ] = await Promise.all([
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
-    supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed'),
+    countTransactions(companyId),
+    readActiveBankConnections(companyId),
+    countCompletedSieImports(companyId),
     // Skatteverket connections are per (user, company): filtering on user_id
     // alone made a connection on ANY of the user's companies hide the connect
     // nudge on all of them.
@@ -104,7 +109,7 @@ export async function HemChecklistSection({
     // Any item ever received in the document inbox (email/WhatsApp/upload)
     // marks the receipts checklist step done: same "has ever done X" shape
     // as the other flags above.
-    supabase.from('invoice_inbox_items').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
+    countInboxItems(companyId),
     // Next upcoming momsdeklaration for the checklist's Skatteverket step.
     // Rows are system-generated per company settings; dismissed rows are
     // excluded everywhere deadlines are listed, so here too.
@@ -199,16 +204,29 @@ export async function HemPanesSection({
   // Same pattern for people owed for utlägg: Hem renders one row per person
   // and the worklist count is the list's length.
   const expensePayoutsPromise = listExpensePayoutsDue(supabase, companyId)
-  const [worklist, suggestedMatches, expensePayouts, resumeItems, bankConnectionsRes, postedEntries] =
+  // And for the next uncovered skattekonto charge: Hem renders the Betala
+  // row with amount, bankgiro and OCR; the worklist count is 1 or 0 from it.
+  const skattekontoPaymentPromise = listSkattekontoPaymentDue(supabase, companyId)
+  const [
+    worklist,
+    suggestedMatches,
+    expensePayouts,
+    skattekontoPayment,
+    resumeItems,
+    bankConnectionsRes,
+    postedEntries,
+  ] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
       // sidebar badges, so the numbers can never diverge.
       getWorklistCounts(supabase, companyId, {
         suggestedMatches: suggestedMatchesPromise,
         expensePayoutsDue: expensePayoutsPromise,
+        skattekontoPaymentDue: skattekontoPaymentPromise,
       }),
       suggestedMatchesPromise,
       expensePayoutsPromise,
+      skattekontoPaymentPromise,
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
@@ -242,6 +260,7 @@ export async function HemPanesSection({
         worklist={worklist}
         suggestedMatches={suggestedMatches.slice(0, 5)}
         expensePayouts={expensePayouts}
+        skattekontoPayment={skattekontoPayment}
         expiringBankConnections={expiringBankConnections}
         emptyLedger={emptyLedger}
         hasActiveBankConnection={hasActiveBankConnection}

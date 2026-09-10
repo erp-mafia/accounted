@@ -39,6 +39,20 @@ function emptyResult(): AccountSyncResult {
 }
 
 /**
+ * Rows per INSERT statement in the create pass.
+ *
+ * PostgREST runs every request under the authenticated role's 8 s
+ * statement_timeout, and each chart_of_accounts row fires four row-level
+ * triggers (audit log, writer-role guard, updated_at, known VAT rate) plus the
+ * RLS WITH CHECK. A full-BAS SIE import creates 1 200+ accounts in one go; on
+ * prod (2026-09-09) that single statement took 6.5 s for one company and was
+ * cancelled at 8.2 s for the next, so whether an import went through was a
+ * coin flip. 100 rows keeps every statement an order of magnitude inside the
+ * limit. Exported for the chunking test.
+ */
+export const INSERT_CHUNK_SIZE = 100
+
+/**
  * Build a chart_of_accounts insert row with the richest metadata available:
  * BAS reference when the number is in BAS_REFERENCE (incl. description and
  * k2_excluded), otherwise derived from the account number.
@@ -226,15 +240,30 @@ export async function syncMappedAccounts(
       return buildInsertRow(num, name, basRef, companyId, userId, vatDefaults.get(num))
     })
 
-    const { error: insertError } = await supabase.from('chart_of_accounts').insert(inserts)
-    // A duplicate means a concurrent import (or the replace flow) created the
-    // account between our read and write: the account exists, which is all
-    // this pass guarantees.
-    if (insertError && !insertError.message.includes('duplicate')) {
-      result.error = insertError.message
-      return result
+    // One statement per chunk (see INSERT_CHUNK_SIZE). A chunk that fails
+    // leaves the earlier ones committed, which is safe: the next attempt reads
+    // the chart again and only inserts what is still missing.
+    //
+    // ON CONFLICT (company_id, account_number) DO NOTHING: a concurrent import
+    // (or the replace flow) can create an account between our read and this
+    // write. With a plain INSERT that duplicate rolled back the whole
+    // statement while the caller treated "duplicate" as success, silently
+    // dropping every other account in it. Rows the conflict skipped are not
+    // returned, so `created` counts exactly what landed, chunk by chunk (the
+    // audit_log trigger on chart_of_accounts stays the per-row source of
+    // truth for behandlingshistoriken).
+    for (let i = 0; i < inserts.length; i += INSERT_CHUNK_SIZE) {
+      const chunk = inserts.slice(i, i + INSERT_CHUNK_SIZE)
+      const { data: insertedRows, error: insertError } = await supabase
+        .from('chart_of_accounts')
+        .upsert(chunk, { onConflict: 'company_id,account_number', ignoreDuplicates: true })
+        .select('account_number')
+      if (insertError) {
+        result.error = insertError.message
+        return result
+      }
+      result.created += insertedRows?.length ?? 0
     }
-    result.created = missing.length
   }
 
   const existingVatUpdates = [...vatDefaults]

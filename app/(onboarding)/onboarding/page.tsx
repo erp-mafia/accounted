@@ -9,6 +9,7 @@ import {
 import type { EntityType } from '@/types'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import { mapSetupEntityType as mapTicEntityType } from '@/lib/company-lookup/entity-type-map'
+import { isScbConfigured } from '@/lib/parties/scb/config'
 
 export const dynamic = 'force-dynamic'
 
@@ -123,6 +124,9 @@ export default async function OnboardingPage({
       // A deep-linked orgnr is a deliberate create-this-company pick from the
       // BankID list: don't distract that flow with the invite hint.
       hasPendingInvite={hasPendingInvite && !initialOrgNumber}
+      // SCB credentials are server env: the client learns once whether the
+      // search-as-you-type picker exists in this environment.
+      companySearchEnabled={isScbConfigured()}
     />
   )
 }

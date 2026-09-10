@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ============================================================
 // Mock: table-keyed result queues
@@ -50,10 +50,22 @@ import { generateTrialBalance } from '../trial-balance'
 
 let supabase: ReturnType<typeof makeClient>
 
+// This suite pins the chunked entry-lines path, which is now the
+// REPORTS_TB_RPC=off rollback (issue #2470). The default path (the
+// get_trial_balance_aggregates RPC) is covered by trial-balance-rpc.test.ts;
+// this file goes away together with the flag.
+const savedFlag = process.env.REPORTS_TB_RPC
+
 beforeEach(() => {
   vi.clearAllMocks()
   mockResults = {}
   supabase = makeClient()
+  process.env.REPORTS_TB_RPC = 'off'
+})
+
+afterEach(() => {
+  if (savedFlag === undefined) delete process.env.REPORTS_TB_RPC
+  else process.env.REPORTS_TB_RPC = savedFlag
 })
 
 describe('generateTrialBalance', () => {

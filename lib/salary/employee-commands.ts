@@ -57,6 +57,7 @@ const WRITABLE_COLUMNS = new Set([
   'vacation_rule',
   'vacation_days_per_year',
   'semestertillagg_rate',
+  'vacation_pay_rate',
   'email',
   'phone',
   'address_line1',

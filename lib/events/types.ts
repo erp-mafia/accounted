@@ -145,6 +145,9 @@ export type CoreEvent =
   // Shopify store lifecycle: same audit doctrine as stripe.*/woocommerce.*.
   | { type: 'shopify.connected'; payload: { connectionId: string; shopDomain: string; userId: string; companyId: string } }
   | { type: 'shopify.disconnected'; payload: { connectionId: string; shopDomain: string | null; reason: 'user' | 'revoked_upstream'; userId: string; companyId: string } }
+  // Zettle organization lifecycle: same audit doctrine as shopify.*.
+  | { type: 'zettle.connected'; payload: { connectionId: string; organizationUuid: string; userId: string; companyId: string } }
+  | { type: 'zettle.disconnected'; payload: { connectionId: string; organizationUuid: string | null; reason: 'user' | 'revoked_upstream'; userId: string; companyId: string } }
   // Periods
   | { type: 'period.locked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.unlocked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }

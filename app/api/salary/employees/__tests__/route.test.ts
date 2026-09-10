@@ -232,6 +232,46 @@ describe('POST /api/salary/employees', () => {
     expect(insert).not.toHaveBeenCalled()
   })
 
+  it('inserts the kollektivavtal semesterlön rate as a fraction when provided (#2477)', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(postRequest({ ...CREATE_BASE, vacation_pay_rate: 0.135 }), params)
+
+    expect(res.status).toBe(201)
+    expect(insert.mock.calls[0][0]).toMatchObject({ vacation_pay_rate: 0.135 })
+  })
+
+  it('inserts null vacation_pay_rate (statutory) when the body omits it', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(postRequest(CREATE_BASE), params)
+
+    expect(res.status).toBe(201)
+    expect(insert.mock.calls[0][0]).toMatchObject({ vacation_pay_rate: null })
+  })
+
+  it('returns 400 on a semesterlön rate below the statutory 12 % floor, without inserting', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(postRequest({ ...CREATE_BASE, vacation_pay_rate: 0.1 }), params)
+
+    expect(res.status).toBe(400)
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 on a percentage entered raw (13.5 instead of 0.135), without inserting', async () => {
+    const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
+    authed(supabase)
+
+    const res = await POST(postRequest({ ...CREATE_BASE, vacation_pay_rate: 13.5 }), params)
+
+    expect(res.status).toBe(400)
+    expect(insert).not.toHaveBeenCalled()
+  })
+
   it('inserts null jämkning fields when the body omits them', async () => {
     const { supabase, insert } = supabaseWithInsert({ id: 'emp-new', personnummer: encryptPersonnummer(NEW_PNR) })
     authed(supabase)

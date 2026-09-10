@@ -86,6 +86,10 @@ type RattelseLogRow = {
   // actor is unknown or the lookup failed.
   actor_label: string | null
   created_at: string
+  // 'sie_import': correction history carried by the imported SIE file
+  // (#BTRANS/#RTRANS); the source system's signature stands in for the actor.
+  source?: 'user' | 'sie_import' | null
+  external_signature?: string | null
 }
 
 type PeriodStatus = 'open' | 'locked' | 'closed'
@@ -432,20 +436,32 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const struckDisplayLines = rattelseLog
     .filter((r) => r.rattelse_type === 'lines')
     .flatMap((r) =>
-      (r.struck_lines ?? []).map((s) => ({ ...s, struck_at: r.created_at, struck_by: r.actor_label }))
+      (r.struck_lines ?? []).map((s) => ({
+        ...s,
+        struck_at: r.created_at,
+        struck_by: r.source === 'sie_import' ? (r.external_signature ?? null) : r.actor_label,
+        imported: r.source === 'sie_import',
+      }))
     )
 
   // The struck marker beside a struck row: who and when at a glance, the
-  // date alone when the actor could not be resolved.
-  const struckMarker = (s: { struck_at: string; struck_by: string | null }) =>
-    s.struck_by
+  // date alone when the actor could not be resolved. Imported history has no
+  // "when" (SIE carries only the signature), so it says where instead.
+  const struckMarker = (s: { struck_at: string; struck_by: string | null; imported?: boolean }) => {
+    if (s.imported) {
+      return s.struck_by
+        ? t('struck_marker_imported_by', { actor: s.struck_by })
+        : t('struck_marker_imported')
+    }
+    return s.struck_by
       ? t('struck_marker_by', { date: formatDate(s.struck_at), actor: s.struck_by })
       : t('struck_marker', { date: formatDate(s.struck_at) })
+  }
 
   // Live and struck lines interleaved by original position.
   const displayRows: Array<
     | { kind: 'live'; line: JournalEntryLine }
-    | { kind: 'struck'; line: StruckLineSnapshot & { struck_at: string; struck_by: string | null } }
+    | { kind: 'struck'; line: StruckLineSnapshot & { struck_at: string; struck_by: string | null; imported?: boolean } }
   > = [
     ...lines.map((l) => ({ kind: 'live' as const, line: l })),
     ...struckDisplayLines.map((s) => ({ kind: 'struck' as const, line: s })),
@@ -1027,10 +1043,20 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   {/* data-ph-mask: the actor label is a person's e-mail or name */}
                   <span data-ph-mask="" className="text-muted-foreground">
                     <span className="tabular-nums">{formatDate(row.created_at)}</span>
-                    {row.actor_label ? ` · ${row.actor_label}` : ''}
+                    {row.source === 'sie_import'
+                      ? row.external_signature
+                        ? ` · ${t('rattelse_imported_signature', { actor: row.external_signature })}`
+                        : ''
+                      : row.actor_label
+                        ? ` · ${row.actor_label}`
+                        : ''}
                   </span>
                   <span className="text-xs text-muted-foreground">
-                    {row.rattelse_type === 'metadata' ? t('rattelse_kind_metadata') : t('rattelse_kind_lines')}
+                    {row.source === 'sie_import'
+                      ? t('rattelse_kind_imported')
+                      : row.rattelse_type === 'metadata'
+                        ? t('rattelse_kind_metadata')
+                        : t('rattelse_kind_lines')}
                   </span>
                 </div>
                 {row.rattelse_type === 'metadata' ? (

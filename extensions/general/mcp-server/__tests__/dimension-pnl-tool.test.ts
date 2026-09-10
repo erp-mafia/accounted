@@ -111,6 +111,22 @@ describe('gnubok_get_dimension_pnl: execute', () => {
     })
   })
 
+  it('resolves the period that contains to_date when period_id is omitted (#2185)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'fp-2023', name: '2023', period_start: '2023-01-01', period_end: '2023-12-31' },
+      error: null,
+    })
+    mockGenerate.mockResolvedValueOnce(makeReport() as never)
+
+    await tool.execute({ sie_dim_no: '6', to_date: '2023-06-30' }, 'company-1', 'user-1', supabase as never)
+
+    expect(findCalls('fiscal_periods', 'lte')).toContainEqual(['period_start', '2023-06-30'])
+    expect(mockGenerate).toHaveBeenCalledWith(supabase, 'company-1', 'fp-2023', '6', {
+      toDate: '2023-06-30',
+    })
+  })
+
   it('errors when no fiscal period exists', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: null })

@@ -22,8 +22,8 @@ import { applySettlementAccount } from '../mapping-engine'
 // ============================================================
 
 describe('BOOKING_TEMPLATES data integrity', () => {
-  it('has exactly 60 templates', () => {
-    expect(BOOKING_TEMPLATES).toHaveLength(60)
+  it('has exactly 61 templates', () => {
+    expect(BOOKING_TEMPLATES).toHaveLength(61)
   })
 
   it('all template IDs are unique', () => {
@@ -128,9 +128,9 @@ describe('getTemplatesByMcc', () => {
 })
 
 describe('getTemplateGroups', () => {
-  it('returns all 17 groups', () => {
+  it('returns all 20 groups', () => {
     const groups = getTemplateGroups()
-    expect(groups).toHaveLength(17)
+    expect(groups).toHaveLength(20)
     for (const g of groups) {
       expect(g.group).toBeTruthy()
       expect(g.label_sv).toBeTruthy()
@@ -142,7 +142,7 @@ describe('getTemplateGroups', () => {
   it('every template is in exactly one group', () => {
     const groups = getTemplateGroups()
     const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(60)
+    expect(allTemplates).toHaveLength(61)
   })
 })
 
@@ -802,12 +802,22 @@ describe('new and split templates', () => {
     expect(t!.common).toBe(false)
   })
 
-  it('has representation_internal with account 7622', () => {
+  it('has representation_internal on 7631 with deductible VAT', () => {
+    // 7622 is Sjuk- och hälsovård, ej avdragsgill; personal representation
+    // is 7631, and its VAT is deductible on a base of up to 300 kr/person.
     const t = getTemplateById('representation_internal')
     expect(t).toBeDefined()
-    expect(t!.debit_account).toBe('7622')
-    expect(t!.vat_treatment).toBeNull()
+    expect(t!.debit_account).toBe('7631')
+    expect(t!.vat_treatment).toBe('reduced_12')
     expect(t!.common).toBe(true)
+  })
+
+  it('routes Stripe fees to reverse charge, not to VAT-free bank fees', () => {
+    const t = getTemplateById('payment_fees_eu')
+    expect(t).toBeDefined()
+    expect(t!.debit_account).toBe('6570')
+    expect(t!.vat_treatment).toBe('reverse_charge')
+    expect(getTemplateById('bank_fees')!.keywords).not.toContain('stripe')
   })
 
   it('has shareholder_loan_received (AB, D:1930 K:2393)', () => {

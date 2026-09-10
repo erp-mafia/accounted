@@ -74,6 +74,8 @@ describe('peppolDocumentToExtraction', () => {
         address: 'Wallingatan 33 3tr, 11124 Stockholm',
         bankgiro: null,
         plusgiro: null,
+        iban: null,
+        bic: null,
       },
       invoice: {
         invoiceNumber: '20267497',
@@ -178,6 +180,40 @@ describe('deliverPeppolDocumentToInbox', () => {
     expect(uploadDocumentMock.mock.calls[1][3]).toMatchObject({ name: 'faktura.pdf', type: 'application/pdf' })
     const inserted = calls.find((c) => c.method === 'insert')?.args[0] as Record<string, unknown>
     expect(inserted).toMatchObject({ document_id: 'doc-pdf', user_id: 'user-owner' })
+  })
+
+  it('never files an inbox item without the archived XML: holds the row with the reason instead', async () => {
+    enqueue({ data: null, error: null })                               // no existing inbox item
+    const result = await deliverPeppolDocumentToInbox(service, {
+      row: row({ xml_payload: null, xml_sha256: null }), companyId: 'company-1', document, xml: null,
+    })
+    expect(result).toEqual({ inboxItemId: null, xmlDocumentId: null, holdReason: 'awaiting xml' })
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+    expect(matchSupplierIdMock).not.toHaveBeenCalled()
+    expect(calls.some((c) => c.method === 'insert')).toBe(false)
+  })
+
+  it('holds instead of throwing when the company has no member to own the item', async () => {
+    enqueue({ data: null, error: null })                               // no existing inbox item
+    enqueue({ data: null, error: null })                               // no registration user
+    enqueue({ data: null, error: null })                               // no owner either
+    const result = await deliverPeppolDocumentToInbox(service, { row: row(), companyId: 'company-1', document, xml: XML })
+    expect(result).toEqual({ inboxItemId: null, xmlDocumentId: null, holdReason: 'awaiting owner member' })
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+    expect(calls.some((c) => c.method === 'insert')).toBe(false)
+  })
+
+  it('files a document whose XML was archived on an earlier attempt without re-archiving it', async () => {
+    enqueue({ data: null, error: null })                               // no existing inbox item
+    enqueue({ data: { user_id: 'user-reg' }, error: null })            // registration owner
+    enqueue({ data: { id: 'inbox-3' }, error: null })                  // inbox insert
+    const result = await deliverPeppolDocumentToInbox(service, {
+      row: row({ xml_document_id: 'doc-xml-earlier' }), companyId: 'company-1', document, xml: null,
+    })
+    expect(result).toEqual({ inboxItemId: 'inbox-3', xmlDocumentId: 'doc-xml-earlier' })
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+    const inserted = calls.find((c) => c.method === 'insert')?.args[0] as Record<string, unknown>
+    expect(inserted).toMatchObject({ document_id: 'doc-xml-earlier' })
   })
 
   it('is idempotent: an existing inbox item for the provider document is returned, nothing re-archived', async () => {

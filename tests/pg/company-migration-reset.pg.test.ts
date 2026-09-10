@@ -73,6 +73,8 @@ describe('company migration reset RPCs (pg)', () => {
       legacy_snapshot_224000_authenticated: boolean
       legacy_snapshot_231500_authenticated: boolean
       legacy_snapshot_20260826150000_authenticated: boolean
+      legacy_snapshot_20260909100400_authenticated: boolean
+      legacy_reset_20260909100400_authenticated: boolean
     }>(`
       SELECT
         has_function_privilege(
@@ -124,7 +126,17 @@ describe('company migration reset RPCs (pg)', () => {
           'authenticated',
           'public.company_migration_reset_snapshot_before_20260826150000(uuid)',
           'EXECUTE'
-        ) AS legacy_snapshot_20260826150000_authenticated
+        ) AS legacy_snapshot_20260826150000_authenticated,
+        has_function_privilege(
+          'authenticated',
+          'public.company_migration_reset_snapshot_before_20260909100400(uuid)',
+          'EXECUTE'
+        ) AS legacy_snapshot_20260909100400_authenticated,
+        has_function_privilege(
+          'authenticated',
+          'public.reset_company_for_migration_before_20260909100400(uuid,text,text,boolean,boolean)',
+          'EXECUTE'
+        ) AS legacy_reset_20260909100400_authenticated
     `)
 
     expect(rows[0]).toEqual({
@@ -138,6 +150,8 @@ describe('company migration reset RPCs (pg)', () => {
       legacy_snapshot_224000_authenticated: false,
       legacy_snapshot_231500_authenticated: false,
       legacy_snapshot_20260826150000_authenticated: false,
+      legacy_snapshot_20260909100400_authenticated: false,
+      legacy_reset_20260909100400_authenticated: false,
     })
   })
 
@@ -314,6 +328,20 @@ describe('company migration reset RPCs (pg)', () => {
     )
     const automatedPreview = await preview(automated.userId, automated.companyId)
     expect(automatedPreview.eligibility?.blockers).toContainEqual({
+      code: 'active_integrations_or_schedules',
+      count: 1,
+    })
+
+    // A pending Zettle connection is an integration too (20260909100400 wraps
+    // the snapshot instead of re-issuing its body).
+    const pos = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.zettle_connections (company_id, user_id, status)
+       VALUES ($1, $2, 'pending')`,
+      [pos.companyId, pos.userId],
+    )
+    const posPreview = await preview(pos.userId, pos.companyId)
+    expect(posPreview.eligibility?.blockers).toContainEqual({
       code: 'active_integrations_or_schedules',
       count: 1,
     })

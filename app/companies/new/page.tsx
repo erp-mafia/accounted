@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
 import OnboardingJourney from '@/components/onboarding/journey/OnboardingJourney'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
+import { isScbConfigured } from '@/lib/parties/scb/config'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,7 +34,7 @@ export default async function NewCompanyPage() {
     <div className="min-h-dvh bg-background">
       <SessionTimeoutController />
       <OnboardingBackdrop />
-      <OnboardingJourney teamId={teamId} mode="add" />
+      <OnboardingJourney teamId={teamId} mode="add" companySearchEnabled={isScbConfigured()} />
     </div>
   )
 }

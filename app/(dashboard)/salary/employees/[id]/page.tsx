@@ -22,6 +22,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { vacationPayRateFromPercentInput, vacationPayRateToPercent } from '@/lib/salary/vacation-pay-rate'
 import {
   validateEmployeeBankAccount,
   isValidClearing,
@@ -37,6 +38,8 @@ import { OpeningBalancesPanel } from '@/components/salary/OpeningBalancesPanel'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 import { jamkningPatch } from '@/lib/salary/jamkning-patch'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { useShell } from '@/components/dashboard/ShellProvider'
+import { cn } from '@/lib/utils'
 
 const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
   employee: 'form_employment_type_employee',
@@ -69,6 +72,7 @@ function RequiredMark() {
 
 export default function EmployeeDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
+  const shell = useShell()
   const t = useTranslations('salary_employee')
   const router = useRouter()
   const { toast } = useToast()
@@ -194,6 +198,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       bank_account_number: normalizeBankNumber(account) || undefined,
       vacation_rule: vacationRule,
       vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || undefined,
+      // Always sent: an empty field (or a rule that hides it) clears the
+      // kollektivavtal rate back to the statutory one.
+      vacation_pay_rate: vacationPayRateFromPercentInput(form.get('vacation_pay_rate')),
       // Always sent: {} clears the employee's default dimensions.
       default_dimensions: dimensions,
     }
@@ -293,9 +300,10 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     : null
 
   return (
-    <div className="max-w-2xl space-y-8 stagger-enter">
+    <div className={cn(shell !== 'v2' && 'max-w-2xl', 'space-y-8 stagger-enter')}>
       {/* Header: serif name over a quiet personnummer/type kicker, quiet actions right */}
       <div>
+        {shell !== 'v2' && (
         <Link
           href="/salary/employees"
           className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"
@@ -303,12 +311,13 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
           <ArrowLeft className="h-4 w-4" />
           {t('form_back_to_employees')}
         </Link>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <h1 className="font-display text-2xl leading-8 tracking-tight">
+        )}
+        <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="page-header-lead min-w-0">
+            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
               {employee.first_name} {employee.last_name}
             </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="page-header-meta mt-1 text-sm text-muted-foreground">
               <span className="tabular-nums">{employee.personnummer_masked}</span>
               {' · '}
               {t(EMPLOYMENT_LABEL_KEYS[employee.employment_type])}
@@ -316,7 +325,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
           </div>
 
           {canWrite && (
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="page-header-action flex shrink-0 items-center gap-1">
               <Button
                 variant="ghost"
                 size="sm"
@@ -402,6 +411,11 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         <DefRow label={t('form_vacation_days')}>
           <span className="tabular-nums">{employee.vacation_days_per_year}</span>
         </DefRow>
+        {employee.vacation_pay_rate != null && (
+          <DefRow label={t('form_vacation_pay_rate')}>
+            <span className="tabular-nums">{vacationPayRateToPercent(employee.vacation_pay_rate)} %</span>
+          </DefRow>
+        )}
         {dimensionsEnabled && (
           <DefRow label={t('form_dimensions_title')}>
             {savedDimensionLabel ? (
@@ -651,6 +665,23 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                       />
                       <p className="text-xs text-muted-foreground">{t('form_vacation_days_hint')}</p>
                     </div>
+                    {(vacationRule === 'procentregeln' || vacationRule === 'semesterersattning') && (
+                      <div className="space-y-2">
+                        <Label htmlFor="vacation_pay_rate">{t('form_vacation_pay_rate')}</Label>
+                        <Input
+                          id="vacation_pay_rate"
+                          name="vacation_pay_rate"
+                          type="number"
+                          step="0.01"
+                          min="12"
+                          max="30"
+                          placeholder="12"
+                          defaultValue={vacationPayRateToPercent(employee.vacation_pay_rate)}
+                          disabled={!canWrite}
+                        />
+                        <p className="text-xs text-muted-foreground">{t('form_vacation_pay_rate_hint')}</p>
+                      </div>
+                    )}
                   </div>
                 </section>
 

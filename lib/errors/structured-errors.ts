@@ -450,6 +450,12 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Transaktionen kunde inte hittas.',
     message_en: 'Transaction not found.',
   },
+  TX_CATEGORIZE_INVALID_VAT_AMOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Underlagets moms kunde inte användas för den här bokföringen. Kontrollera beloppet och momssatsen.',
+    message_en: "The document's VAT amount cannot be used for this booking. Check the amount and the VAT treatment.",
+  },
   TRANSACTION_TITLE_LOCKED: {
     httpStatus: 409,
     message_sv:
@@ -1733,6 +1739,35 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Peppol-operatören kunde inte nås just nu. Fakturan har inte skickats; försök igen om en stund.',
     message_en: 'The Peppol access point could not be reached. The invoice has not been sent; try again shortly.',
   },
+  // The SMP lookup itself failed (#2484), as opposed to a lookup that
+  // answered "not registered": the staged delivery stays staged and nothing
+  // terminal is recorded. The route answers 502 when the transport says the
+  // failure is retryable, 422 otherwise.
+  PEPPOL_LOOKUP_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Kunde inte slå upp mottagaren i Peppol-nätverket. Försök igen om en stund.',
+    message_en: 'Could not look up the recipient in the Peppol network. Try again shortly.',
+    retryable: true,
+  },
+  // The hosted service refused the submission for a reason about the sender,
+  // the key or the service (not registered, quota, rate limit, scope,
+  // upstream unconfigured), never about the document (#2484). The delivery
+  // stays resendable; the route composes the hosted text onto the prefix
+  // when the registry knows the code, else this generic pointer.
+  PEPPOL_SEND_PRECONDITION_FAILED: {
+    httpStatus: 409,
+    message_sv: 'Fakturan kunde inte skickas via Peppol ännu: kontrollera Peppol-inställningarna och försök igen.',
+    message_en: 'The invoice could not be sent via Peppol yet: check the Peppol settings and try again.',
+    thrown_message_sv: true,
+  },
+  // stage_peppol_delivery raises P0002 when no fiscal period covers the
+  // invoice date: the delivery row carries a retention basis (BFL 7 kap.)
+  // derived from the period, so it cannot be staged without one.
+  PEPPOL_FISCAL_PERIOD_MISSING: {
+    httpStatus: 422,
+    message_sv: 'Fakturadatumet saknar ett räkenskapsår. Skapa räkenskapsåret innan fakturan skickas via Peppol.',
+    message_en: 'The invoice date falls outside every fiscal year. Create the fiscal year before sending the invoice via Peppol.',
+  },
   // /api/settings/peppol: publishing a company's identifier for receiving.
   PEPPOL_RECEIVING_UNSUPPORTED: {
     httpStatus: 503,
@@ -1763,6 +1798,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 502,
     message_sv: 'Peppol-operatören kunde inte genomföra registreringen. Försök igen om en stund.',
     message_en: 'The Peppol access point could not complete the registration. Try again shortly.',
+    retryable: true,
   },
   PEPPOL_REGISTRATION_NOT_FOUND: {
     httpStatus: 404,
@@ -1795,6 +1831,83 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Alla platser för Peppol-mottagning är upptagna just nu. Hör av dig till support så öppnar vi fler. Att skicka e-fakturor fungerar ändå.',
     message_en: 'All Peppol receiving slots are taken right now. Contact support and we will open more. Sending e-invoices works regardless.',
+  },
+  // The access point gave a verdict on the identifier itself (#2483):
+  // retrying the same registration cannot change it, unlike
+  // PEPPOL_REGISTRATION_FAILED, which is the operational counterpart.
+  PEPPOL_REGISTRATION_REJECTED: {
+    httpStatus: 422,
+    message_sv: 'Registreringen avvisades av Peppol-operatören. Kontakta support om felet kvarstår.',
+    message_en: 'The Peppol access point rejected the registration. Contact support if the problem persists.',
+  },
+  // Hosted connector codes (packages/connect-contract) that a self-hosted
+  // instance in connector mode stores as peppol_registrations.last_error_code
+  // and shows translated. Permanent verdicts first, then transient ones.
+  CONNECTOR_PEPPOL_PARTICIPANT_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Peppol-id:t är redan registrerat via ett annat konto. Kontakta support om det är ert bolag.',
+    message_en: 'The Peppol id is already registered through another account. Contact support if it is your company.',
+  },
+  CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED: {
+    httpStatus: 422,
+    message_sv: 'Peppol-id:t får inte registreras från det här kontot. Kontakta support.',
+    message_en: 'The Peppol id may not be registered from this account. Contact support.',
+  },
+  // The two likeliest send preconditions (#2484): the route composes these
+  // behind PEPPOL_SEND_PRECONDITION_FAILED's prefix.
+  CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED: {
+    httpStatus: 422,
+    message_sv: 'Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Fakturering > E-faktura via Peppol, eller kontakta support.',
+    message_en: 'The company\'s Peppol id is not registered with the access point. Switch on receiving under Settings > Invoicing > E-invoicing via Peppol, or contact support.',
+  },
+  CONNECTOR_SCOPE_MISSING: {
+    httpStatus: 403,
+    message_sv: 'Kopplingsnyckeln saknar Peppol-behörighet. Kontakta support.',
+    message_en: 'The connector key lacks Peppol permission. Contact support.',
+  },
+  CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE: {
+    httpStatus: 409,
+    message_sv: 'Peppol-id:t är redan publicerat hos en annan operatör. Avregistrera det där först.',
+    message_en: 'The Peppol id is already published with another access point. Deregister it there first.',
+  },
+  CONNECTOR_QUOTA_EXCEEDED: {
+    httpStatus: 409,
+    message_sv: 'Kontots Peppol-platser är förbrukade. Hör av dig till support så öppnar vi fler.',
+    message_en: 'The account has used its Peppol slots. Contact support and we will open more.',
+  },
+  CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS: {
+    httpStatus: 409,
+    message_sv: 'En registrering av Peppol-id:t pågår redan. Försök igen om en stund.',
+    message_en: 'A registration of the Peppol id is already in progress. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_NOT_OWNED: {
+    httpStatus: 404,
+    message_sv: 'Peppol-id:t finns inte registrerat hos operatören för det här kontot.',
+    message_en: 'The Peppol id is not registered with the access point for this account.',
+  },
+  CONNECTOR_UPSTREAM_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Peppol-operatören svarade med ett fel. Försök igen om en stund.',
+    message_en: 'The Peppol access point answered with an error. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_UNREACHABLE: {
+    httpStatus: 502,
+    message_sv: 'Tjänsten som förmedlar Peppol kunde inte nås. Försök igen om en stund.',
+    message_en: 'The service that brokers Peppol could not be reached. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_RATE_LIMITED: {
+    httpStatus: 429,
+    message_sv: 'För många Peppol-anrop på kort tid. Vänta en stund och försök igen.',
+    message_en: 'Too many Peppol calls in a short time. Wait a moment and try again.',
+    retryable: true,
+  },
+  CONNECTOR_PROTOCOL_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Svaret från Peppol-tjänsten kunde inte tolkas. Kontakta support om felet kvarstår.',
+    message_en: 'The answer from the Peppol service could not be read. Contact support if the problem persists.',
   },
 }
 

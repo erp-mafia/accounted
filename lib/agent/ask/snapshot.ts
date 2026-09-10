@@ -5,6 +5,7 @@ import {
   resolveEmployeeFacts,
   type EmployeeVerdict,
 } from '@/lib/agent/composer/employee-facts'
+import { loadFiscalYearInventory, renderFiscalYearInventory } from '@/lib/agent/fiscal-years'
 
 /**
  * A compact, always-on grounding block for the single-call assistant.
@@ -58,6 +59,8 @@ export async function buildAssistantSnapshot(
   companyId: string,
 ): Promise<string> {
   const lines: string[] = []
+  // Kicked off with the first round so it costs no extra latency; never rejects.
+  const fiscalYears = loadFiscalYearInventory(supabase, companyId)
 
   try {
     const [{ data }, activeEmployees] = await Promise.all([
@@ -117,6 +120,11 @@ export async function buildAssistantSnapshot(
   } catch {
     // best-effort: skip the deadlines line
   }
+
+  // Which years the ledger holds and how to address them: a company with
+  // several imported years otherwise reads as single-year (#2185).
+  const fiscalYearLine = renderFiscalYearInventory(await fiscalYears)
+  if (fiscalYearLine) lines.push(fiscalYearLine)
 
   return lines.join('\n')
 }

@@ -79,11 +79,11 @@ function makeTemplate(overrides: Record<string, unknown> = {}) {
   }
 }
 
-/** Queue the four queries the route always runs, in order. */
+/** Queue the queries the route always runs, in order. */
 function enqueueBaseQueries() {
   enqueue({ data: [{ id: TX_ID, amount: 217.04, currency: 'SEK', description: 'Ränta' }] }) // transactions
-  enqueue({ data: [] }) // mapping_rules
-  enqueue({ data: [] }) // historical transactions
+  enqueue({ data: [] }) // mapping_rules (company)
+  enqueue({ data: [] }) // mapping_rules (global defaults)
   enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
 }
 
@@ -136,8 +136,8 @@ describe('POST /api/transactions/suggest-categories', () => {
     // 1931 before the reconnect moved the account. The commit guard rewrites
     // 1931 to 1940 and books it, so the suggestion must be offered the same way.
     enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-live' }] })
-    enqueue({ data: [] }) // mapping_rules
-    enqueue({ data: [] }) // historical transactions
+    enqueue({ data: [] }) // mapping_rules (company)
+    enqueue({ data: [] }) // mapping_rules (global defaults)
     enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
@@ -197,8 +197,8 @@ describe('POST /api/transactions/suggest-categories', () => {
     // A transaction still stranded on the orphaned 1931 row: the template
     // learned as 5010 / 1931 is valid for it, the 1931 leg is its bank side.
     enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-orphan' }] })
-    enqueue({ data: [] }) // mapping_rules
-    enqueue({ data: [] }) // historical transactions
+    enqueue({ data: [] }) // mapping_rules (company)
+    enqueue({ data: [] }) // mapping_rules (global defaults)
     enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
