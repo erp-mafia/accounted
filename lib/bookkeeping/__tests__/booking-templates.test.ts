@@ -22,8 +22,8 @@ import { applySettlementAccount } from '../mapping-engine'
 // ============================================================
 
 describe('BOOKING_TEMPLATES data integrity', () => {
-  it('has exactly 61 templates', () => {
-    expect(BOOKING_TEMPLATES).toHaveLength(61)
+  it('has exactly 83 templates', () => {
+    expect(BOOKING_TEMPLATES).toHaveLength(83)
   })
 
   it('all template IDs are unique', () => {
@@ -142,7 +142,7 @@ describe('getTemplateGroups', () => {
   it('every template is in exactly one group', () => {
     const groups = getTemplateGroups()
     const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(61)
+    expect(allTemplates).toHaveLength(83)
   })
 })
 
