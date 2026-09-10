@@ -76,6 +76,7 @@ export const ATT_GORA_TASK_HREF: Record<AttGoraTaskId, string> = {
   reconciliation_due: '/reconciliation',
   expense_payout: '/expenses',
   bank_consent: '/settings/banking',
+  skattekonto_payment_due: '/skattekonto',
 }
 
 /**
@@ -159,7 +160,12 @@ export function buildAttGoraTasks(input: BuildAttGoraInput): AttGoraGroup[] {
   if (include('bank_consent')) bevaka.push(task('bank_consent', 'bevaka'))
   groups.push({ id: 'bevaka', tasks: bevaka })
 
-  groups.push({ id: 'skatt', tasks: [task('deadline_action', 'skatt')] })
+  // Money that has to reach Skatteverket before a date comes before the
+  // declarations that set those dates.
+  const skatt: AttGoraTask[] = []
+  if (include('skattekonto_payment_due')) skatt.push(task('skattekonto_payment_due', 'skatt'))
+  skatt.push(task('deadline_action', 'skatt'))
+  groups.push({ id: 'skatt', tasks: skatt })
 
   return groups
 }

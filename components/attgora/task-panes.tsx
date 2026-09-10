@@ -699,6 +699,8 @@ function paneFor(task: AttGoraTask, ctx: TaskPaneContext) {
       return <BankConsentPane task={task} ctx={ctx} />
     case 'book_skattekonto':
       return <LinkOnlyPane task={task} titleKey="task_book_skattekonto" pageKey="page_transactions" bodyKey="body_book_skattekonto" />
+    case 'skattekonto_payment_due':
+      return <LinkOnlyPane task={task} titleKey="task_skattekonto_payment_due" pageKey="page_skattekonto" bodyKey="body_skattekonto_payment_due" />
     case 'verifikat_missing_document':
       return <LinkOnlyPane task={task} titleKey="task_verifikat_missing_document" pageKey="page_bookkeeping" bodyKey="body_verifikat_missing_document" />
     case 'reconciliation_due':

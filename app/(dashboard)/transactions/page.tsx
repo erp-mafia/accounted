@@ -2865,15 +2865,16 @@ export default function TransactionsPage() {
     setMatchDialogOpen(true)
   }
 
-  function handleSelectRotRutPayoutFromPicker(request: PotentialRotRutPayoutRequest) {
-    if (!invoicePickerTransaction) return
-    // Same handoff as the invoice pick: close the picker, hang the request on
-    // the row and open the ROT/RUT confirm dialog so the user sees the
-    // 19xx / 1513 entry before it is booked.
+  function handleSelectRotRutPayoutFromPicker(requests: PotentialRotRutPayoutRequest[]) {
+    if (!invoicePickerTransaction || requests.length === 0) return
+    // Same handoff as the invoice pick: close the picker, hang the begäran
+    // (one, or the bundle the user ticked) on the row and open the ROT/RUT
+    // confirm dialog so the user sees the 19xx / 1513 entry before it is
+    // booked. The dialog refuses a bundle whose sum is off the row.
     const tx = invoicePickerTransaction
     setInvoicePickerOpen(false)
     setInvoicePickerTransaction(null)
-    setSelectedTransaction({ ...tx, potential_rot_rut_payout: { requests: [request] } })
+    setSelectedTransaction({ ...tx, potential_rot_rut_payout: { requests } })
     setRotRutMatchDialogOpen(true)
   }
 
