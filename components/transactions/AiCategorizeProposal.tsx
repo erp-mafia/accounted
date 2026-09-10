@@ -2,49 +2,27 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import type { TransactionCategory, VatTreatment } from '@/types'
-import { firstSentence, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import AgentAvatar from '@/components/agent/AgentAvatar'
+import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
+import { firstSentence, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import type { TransactionCategory, VatTreatment } from '@/types'
 
 /**
  * The assistant's verdict inside the recommendation header of the review
- * dialog: one line, not a box. It fetches POST /api/agent/categorize (the
- * deterministic candidates, then the model's pick, with the matched
- * receipt's text when there is one) and says one of three things: it
- * agrees with the current pick, it suggests another booking with why and
- * one click to take it, or it finds nothing that fits. It pre-fills the
- * dialog only when the dialog has no template of its own; a rule or a
- * learned counterpart is never overridden by the model. Nothing books here.
+ * dialog: one line, not a box. It reads the assistant's stored read of this
+ * transaction (POST /api/agent/categorize answers with one, fetching only
+ * when the list did not already hand it over) and says one of three things:
+ * it agrees with the current pick, it suggests another booking with why and
+ * one click to take it, or it found nothing that fits. Nothing books here.
  */
-interface CandidateDto {
-  account: string
-  label: string
-  vatTreatment: VatTreatment | 'none' | null
-  source: string
-}
-
-interface ProposalDto {
-  account: string | null
-  category: TransactionCategory | null
-  vatTreatment: VatTreatment | 'none' | null
-  reverseCharge?: boolean
-  confidence: number
-  modelConfidence?: number
-  agreement?: boolean
-  fromCandidate: boolean
-  choice: { kind: 'account' | 'category' | 'needs_review' }
-  reasoning: string
-  candidates: CandidateDto[]
-}
-
 export interface AiProposalMeta {
   account: string
   confidence: number
-  agreement?: boolean
-  modelConfidence?: number
+  agreement: number | null
+  modelConfidence: string | null
   source: string
 }
 
@@ -58,9 +36,9 @@ export interface AssistantPick {
 
 type State =
   | { status: 'loading' }
-  | { status: 'ready'; proposal: ProposalDto }
-  | { status: 'error' }
-  | { status: 'unconfigured' }
+  | { status: 'ready'; read: AssistantRead }
+  /** No AI backend, a failed call, or a read that found nothing: the header stands alone. */
+  | { status: 'silent' }
 
 interface Props {
   transactionId: string
@@ -70,29 +48,20 @@ interface Props {
   hasUnderlag?: boolean
   /** The business account the dialog currently books to, for the agree check. */
   currentAccount?: string | null
-  /** Pre-fill the dialog with the pick when it lands; off when the dialog already has a template. */
+  /** Take the pick as soon as it lands; off when the dialog already has a template of its own. */
   autoApply?: boolean
-  /** Take the pick into the dialog: `auto` when it pre-filled on its own, false when the person clicked Använd. */
+  /** Take the pick into the dialog: `auto` when it landed on its own, false when the person clicked Använd. */
   onTake: (pick: AssistantPick, opts: { auto: boolean }) => void
-  /** Surface the proposal metadata so the dialog can log a calibration sample on book. */
+  /** Surface the read so the dialog can log a calibration sample on book. */
   onProposal?: (meta: AiProposalMeta) => void
-  /** A stored read of this row: shown at once, no fetch. */
+  /** The stored read the list already has: shown at once, no fetch. */
   initial?: AssistantRead | null
 }
 
-/** A stored read in the shape the live route answers with. */
-function fromStoredRead(read: AssistantRead): ProposalDto {
-  return {
-    account: read.account,
-    category: read.category,
-    vatTreatment: read.vat_treatment,
-    reverseCharge: read.reverse_charge,
-    confidence: read.confidence,
-    fromCandidate: read.from_candidate,
-    choice: { kind: read.account ? (read.from_candidate ? 'account' : 'category') : 'needs_review' },
-    reasoning: read.reasoning,
-    candidates: read.candidates.map((c) => ({ account: c.account, label: c.label, vatTreatment: c.vatTreatment, source: c.source })),
-  }
+function pickFrom(read: AssistantRead): AssistantPick | null {
+  if (!read.account) return null
+  const label = read.candidates.find((c) => c.account === read.account)?.label ?? getAccountName(read.account)
+  return { account: read.account, vat: read.vat_treatment ?? 'none', category: read.category, label }
 }
 
 export default function AiCategorizeProposal({
@@ -106,16 +75,17 @@ export default function AiCategorizeProposal({
   initial = null,
 }: Props) {
   const t = useTranslations('tx_quick_review')
-  const [state, setState] = useState<State>(() => (initial ? { status: 'ready', proposal: fromStoredRead(initial) } : { status: 'loading' }))
+  const { identity } = useAgentSheet()
+  const [state, setState] = useState<State>(() => (initial ? { status: 'ready', read: initial } : { status: 'loading' }))
   const [expanded, setExpanded] = useState(false)
-  // Apply the pick to the dialog exactly once per fetch, so the user's later
-  // manual edits are never clobbered by a re-render.
-  const appliedRef = useRef<string | null>(null)
+  // The pick is handed to the dialog once per read, so the person's later
+  // edits are never clobbered by a re-render.
+  const takenRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!open || initial) return
     let alive = true
-    appliedRef.current = null
+    takenRef.current = null
     ;(async () => {
       try {
         const res = await fetch('/api/agent/categorize', {
@@ -124,14 +94,11 @@ export default function AiCategorizeProposal({
           body: JSON.stringify({ transaction_id: transactionId }),
         })
         if (!alive) return
-        if (res.status === 503) return setState({ status: 'unconfigured' })
-        if (!res.ok) return setState({ status: 'error' })
-        const body = (await res.json()) as { data?: ProposalDto }
+        const body = res.ok ? ((await res.json()) as { data?: AssistantRead }) : null
         if (!alive) return
-        if (!body.data) return setState({ status: 'error' })
-        setState({ status: 'ready', proposal: body.data })
+        setState(body?.data ? { status: 'ready', read: body.data } : { status: 'silent' })
       } catch {
-        if (alive) setState({ status: 'error' })
+        if (alive) setState({ status: 'silent' })
       }
     })()
     return () => {
@@ -142,51 +109,56 @@ export default function AiCategorizeProposal({
   const reportedRef = useRef(false)
   useEffect(() => {
     if (state.status !== 'ready') return
-    const p = state.proposal
-    if (!p.account) return
+    const read = state.read
+    const pick = pickFrom(read)
+    if (!pick) return
     if (!reportedRef.current) {
       reportedRef.current = true
-      const source = p.fromCandidate ? (p.candidates.find((c) => c.account === p.account)?.source ?? 'candidate') : 'category'
-      onProposal?.({ account: p.account, confidence: p.confidence, agreement: p.agreement, modelConfidence: p.modelConfidence, source })
+      const source = read.from_candidate
+        ? (read.candidates.find((c) => c.account === read.account)?.source ?? 'candidate')
+        : 'category'
+      onProposal?.({
+        account: pick.account,
+        confidence: read.confidence,
+        agreement: read.agreement,
+        modelConfidence: read.model_confidence,
+        source,
+      })
     }
-    if (!autoApply) return
-    // Only a pick with something behind it (a candidate, or a confident
-    // model read) pre-fills; a low guess waits for the person.
-    if (appliedRef.current === p.account || p.confidence < 0.5) return
-    appliedRef.current = p.account
-    const label = p.candidates.find((c) => c.account === p.account)?.label ?? getAccountName(p.account)
-    onTake({ account: p.account, vat: p.vatTreatment ?? 'none', category: p.category, label }, { auto: true })
+    // Only a pick with something behind it (a candidate, or a confident model
+    // read) fills the dialog on its own; a low guess waits for the person.
+    if (!autoApply || takenRef.current === pick.account || read.confidence < 0.5) return
+    takenRef.current = pick.account
+    onTake(pick, { auto: true })
   }, [state, autoApply, onTake, onProposal])
 
   const line = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground'
+  const mark = <AgentAvatar avatarId={identity.avatarId} size="xs" className="h-4 w-4 flex-none" alt="" />
 
+  if (state.status === 'silent') return null
   if (state.status === 'loading') {
     return (
-      <p className={line}>
-        <Sparkles className="h-3.5 w-3.5 animate-pulse" aria-hidden />
+      <p className={cn(line, 'animate-pulse')}>
+        {mark}
         {hasUnderlag ? t('ai_reading') : t('ai_looking')}
       </p>
     )
   }
-  // No key configured (self-hosted without AI) or a failed call: the header
-  // stands on its own, a line about the assistant's absence is noise.
-  if (state.status === 'error' || state.status === 'unconfigured') return null
 
-  const p = state.proposal
-  const pick = p.account ? (p.candidates.find((c) => c.account === p.account) ?? null) : null
-  const agrees = !!p.account && !!currentAccount && p.account === currentAccount
-  const why = p.reasoning ? (expanded ? p.reasoning : firstSentence(p.reasoning)) : ''
-  const hasMore = !!p.reasoning && why !== p.reasoning.trim()
+  const read = state.read
+  const pick = pickFrom(read)
+  const why = read.reasoning ? (expanded ? read.reasoning : firstSentence(read.reasoning)) : ''
+  const hasMore = !!read.reasoning && why !== read.reasoning.trim()
   const more = hasMore ? (
     <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12px]')} onClick={() => setExpanded((v) => !v)}>
       {expanded ? t('ai_less') : t('ai_more')}
     </button>
   ) : null
 
-  if (!p.account) {
+  if (!pick) {
     return (
       <p className={line}>
-        <Sparkles className="h-3.5 w-3.5" aria-hidden />
+        {mark}
         <span>
           {t('ai_none')}
           {why ? <span className="ml-1">{why}</span> : null}
@@ -196,17 +168,11 @@ export default function AiCategorizeProposal({
     )
   }
 
-  const account = p.account
-  const vat: VatTreatment | 'none' = p.vatTreatment ?? 'none'
-  const label = pick?.label ?? getAccountName(account)
-  const take = () => {
-    appliedRef.current = account
-    onTake({ account, vat, category: p.category, label }, { auto: false })
-  }
+  const agrees = !!currentAccount && pick.account === currentAccount
 
   return (
     <p className={line}>
-      <Sparkles className={cn('h-3.5 w-3.5', agrees && 'text-success')} aria-hidden />
+      {mark}
       {agrees ? (
         <span>
           {t('ai_agrees')}
@@ -214,15 +180,22 @@ export default function AiCategorizeProposal({
         </span>
       ) : (
         <span>
-          {t('ai_instead')} <span className="font-mono text-foreground">{account}</span>
-          {label ? <span className="text-foreground"> {label}</span> : null}
-          {vat === 'reverse_charge' ? <span className="text-foreground"> {t('ai_reverse_charge')}</span> : null}
+          {t('ai_instead')} <span className="font-mono text-foreground">{pick.account}</span>
+          <span className="text-foreground"> {pick.label}</span>
+          {pick.vat === 'reverse_charge' ? <span className="text-foreground"> {t('ai_reverse_charge')}</span> : null}
           {why ? <span className="ml-1">· {why}</span> : null}
         </span>
       )}
       {more}
       {!agrees && (
-        <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12px] font-medium')} onClick={take}>
+        <button
+          type="button"
+          className={cn(QUIET_LINK_CLASS, 'text-[12px] font-medium')}
+          onClick={() => {
+            takenRef.current = pick.account
+            onTake(pick, { auto: false })
+          }}
+        >
           {t('ai_use')}
         </button>
       )}

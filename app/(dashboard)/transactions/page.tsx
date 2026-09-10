@@ -96,8 +96,11 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary } from '@/types'
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
-import type { AssistantRead } from '@/lib/agent/categorize/read-shape'
+import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
+
+/** Rows warmed per render pass: enough to cover a screenful, never a whole backlog. */
+const ASSISTANT_WARM_LIMIT = 8
 import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -469,6 +472,9 @@ export default function TransactionsPage() {
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
   // The assistant's stored reads for the loaded rows: the review opens with one instead of fetching it.
   const [assistantReads, setAssistantReads] = useState<Record<string, AssistantRead>>({})
+  // Rows already sent to the assistant this session (per company), so a
+  // landing read never re-triggers the sweep below.
+  const warmedReadsRef = useRef<{ companyId: string | null; ids: Set<string> }>({ companyId: null, ids: new Set() })
   const [processingId, setProcessingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -502,6 +508,8 @@ export default function TransactionsPage() {
   // "Andra rader" hand-off: the computed proposal lines from QuickReviewDialog,
   // prefilled into TransactionBookingDialog for per-line editing.
   const [bookingDialogProposalLines, setBookingDialogProposalLines] = useState<ProposalLine[] | null>(null)
+  // Radtext for the business lines when the review hands its proposal over.
+  const [bookingDialogLineDescription, setBookingDialogLineDescription] = useState<string | null>(null)
   // Account picked from the template picker's "Konton" search results:
   // prefills the counter line when the manual booking dialog opens.
   const [bookingDialogAccount, setBookingDialogAccount] = useState<string | null>(null)
@@ -1510,6 +1518,58 @@ export default function TransactionsPage() {
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactions, companyId])
+
+  /**
+   * Read the rows the person can see before they open one.
+   *
+   * The ten-minute cron reads the newest transactions fleet-wide; this covers
+   * what is on screen right now (an older row, or one whose receipt arrived
+   * after its read). Sequential and capped, so a long list is never a burst
+   * of model calls, and it stops on the first refusal: an installation with
+   * no AI backend answers 503 once and is then left alone.
+   */
+  useEffect(() => {
+    if (!companyId) return
+    if (warmedReadsRef.current.companyId !== companyId) {
+      warmedReadsRef.current = { companyId, ids: new Set() }
+    }
+    const warmed = warmedReadsRef.current.ids
+    const pending = transactions
+      .filter(
+        (tx) =>
+          tx.is_business === null &&
+          !tx.journal_entry_id &&
+          !tx.is_ignored &&
+          !warmed.has(tx.id) &&
+          !(assistantReads[tx.id] && readIsFresh(assistantReads[tx.id], tx)),
+      )
+      .slice(0, ASSISTANT_WARM_LIMIT)
+    if (pending.length === 0) return
+
+    let cancelled = false
+    void (async () => {
+      for (const tx of pending) {
+        if (cancelled) return
+        warmed.add(tx.id)
+        try {
+          const res = await fetch('/api/agent/categorize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transaction_id: tx.id }),
+          })
+          if (!res.ok) return
+          const body = (await res.json()) as { data?: AssistantRead }
+          if (cancelled || !body.data) return
+          setAssistantReads((prev) => ({ ...prev, [tx.id]: body.data as AssistantRead }))
+        } catch {
+          return
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [companyId, transactions, assistantReads])
 
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return
@@ -3394,6 +3454,7 @@ export default function TransactionsPage() {
     setBookingDialogTransaction(null)
     setBookingDialogTemplate(null)
     setBookingDialogProposalLines(null)
+    setBookingDialogLineDescription(null)
     if (matched) {
       toast({ title: 'Bankhändelsen kopplad', description: 'Ingen ny bokföring skapad.' })
     } else {
@@ -3933,6 +3994,7 @@ export default function TransactionsPage() {
       setBookingDialogTransaction(templatePickerTransaction)
       setBookingDialogTemplate(null)
       setBookingDialogProposalLines(null)
+    setBookingDialogLineDescription(null)
       setBookingDialogAccount(null)
       setBookingDialogOpen(true)
     }
@@ -3950,6 +4012,9 @@ export default function TransactionsPage() {
     setBookingDialogTemplate(null)
     setBookingDialogAccount(null)
     setBookingDialogProposalLines(lines)
+    // The review's own words for what this is: the edit view opens with the
+    // business line already saying it, instead of an empty Radtext.
+    setBookingDialogLineDescription(quickReview?.proposal.name_sv ?? null)
     setBookingDialogOpen(true)
   }
 
@@ -3961,6 +4026,7 @@ export default function TransactionsPage() {
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(null)
     setBookingDialogProposalLines(null)
+    setBookingDialogLineDescription(null)
     setBookingDialogAccount(accountNumber)
     setTemplatePickerOpen(false)
     setBookingDialogOpen(true)
@@ -3974,6 +4040,7 @@ export default function TransactionsPage() {
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(raw)
     setBookingDialogProposalLines(null)
+    setBookingDialogLineDescription(null)
     setBookingDialogAccount(null)
     setTemplatePickerOpen(false)
     setBookingDialogOpen(true)
@@ -4536,12 +4603,14 @@ export default function TransactionsPage() {
             if (!o) {
               setBookingDialogTemplate(null)
               setBookingDialogProposalLines(null)
+    setBookingDialogLineDescription(null)
               setBookingDialogAccount(null)
             }
           }}
           transaction={bookingDialogTransaction}
           preselectedTemplate={bookingDialogTemplate}
           proposalLines={bookingDialogProposalLines}
+          proposalLineDescription={bookingDialogLineDescription}
           preselectedAccount={bookingDialogAccount}
           onBooked={handleTransactionBooked}
         />
