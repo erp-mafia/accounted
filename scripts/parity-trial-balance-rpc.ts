@@ -13,9 +13,10 @@
  *   - one dimension filter per period that has dimension-tagged lines
  *     ('exclude-all-year-end', the P&L convention), sampled up front.
  *
- * A case where BOTH paths throw the same error (the exclude-final fail-closed
- * guard) counts as parity. Anything else that differs is printed and makes
- * the script exit 1. Zero diffs is the merge gate for #2470.
+ * A case where BOTH paths throw the exclude-final fail-closed guard error
+ * (a closed period without closing_entry_id) counts as parity; any other
+ * error, on either or both paths, is a diff. Anything that differs is printed
+ * and makes the script exit 1. Zero diffs is the merge gate for #2470.
  *
  * READ-ONLY: SELECTs and a STABLE RPC through the service role. Safe on prod.
  *
@@ -45,8 +46,29 @@ config({ path: argValue('--env') ?? '.env.local' })
 
 const COMPANY_FILTER = argValue('--company')
 const LIMIT = Number(argValue('--limit') ?? 0) || 0
-const CONCURRENCY = Number(argValue('--concurrency') ?? 4) || 4
 const MAX_PRINTED_DIFFS = 200
+
+/** A non-positive worker count would spawn no workers and report PARITY OK
+ *  after zero checks, so anything but a positive integer is refused. */
+function parseConcurrency(raw: string | null): number {
+  if (raw === null) return 4
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1) {
+    console.error(`--concurrency must be a positive integer, got ${JSON.stringify(raw)}`)
+    process.exit(2)
+  }
+  return n
+}
+const CONCURRENCY = parseConcurrency(argValue('--concurrency'))
+
+/**
+ * The only paired failure that counts as parity: the exclude-final fail-closed
+ * guard (a closed period without closing_entry_id), which both paths raise by
+ * design. Any other error, even when both paths agree on the text, is a diff:
+ * a shared failure in the period, account or opening-balance reads would
+ * otherwise hide an uncompared case.
+ */
+const EXPECTED_PAIRED_ERROR = /missing closing_entry_id/i
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -181,20 +203,24 @@ function casesFor(period: PeriodRef, dimension: Record<string, string> | null): 
 }
 
 /**
- * Sample dimension-tagged lines once and map them to their fiscal period, so
- * the dimension case runs on periods that actually carry dimensions without
- * a per-period scan.
+ * Read every dimension-tagged line once (paginated, no cap) and map each to
+ * its fiscal period, so every period that carries dimensions gets the
+ * dimension case, without a per-period scan.
  */
 async function sampleDimensionsByPeriod(client: SupabaseClient): Promise<Map<string, Record<string, string>>> {
-  const { data: lines, error } = await client
-    .from('journal_entry_lines')
-    .select('journal_entry_id, dimensions')
-    .neq('dimensions', '{}')
-    .limit(2000)
-  if (error) throw new Error(`sampling dimensions: ${error.message}`)
+  const lines = await fetchAllRows<{ id: string; journal_entry_id: string; dimensions: Record<string, string> }>(
+    ({ from, to }) =>
+      client
+        .from('journal_entry_lines')
+        .select('id, journal_entry_id, dimensions')
+        .neq('dimensions', '{}')
+        .order('id', { ascending: true })
+        .range(from, to),
+    { dedupeBy: (r) => r.id },
+  )
 
   const byEntry = new Map<string, Record<string, string>>()
-  for (const line of (lines ?? []) as Array<{ journal_entry_id: string; dimensions: Record<string, string> }>) {
+  for (const line of lines) {
     const [key, value] = Object.entries(line.dimensions ?? {})[0] ?? []
     if (key && typeof value === 'string' && !byEntry.has(line.journal_entry_id)) {
       byEntry.set(line.journal_entry_id, { [key]: value })
@@ -260,7 +286,12 @@ async function main() {
       checks += 1
 
       if (!legacy.ok || !rpc.ok) {
-        if (!legacy.ok && !rpc.ok && legacy.error === rpc.error) {
+        if (
+          !legacy.ok
+          && !rpc.ok
+          && legacy.error === rpc.error
+          && EXPECTED_PAIRED_ERROR.test(legacy.error)
+        ) {
           bothFailed += 1
         } else {
           diffs.push({

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ============================================================
 // Mock Supabase: table-keyed result queues
@@ -47,10 +47,21 @@ import { validateBalanceContinuity } from '../continuity-check'
 
 let supabase: ReturnType<typeof makeClient>
 
+// The fixtures feed the previous period's activity through
+// rpc:get_trial_balance_aggregates, so the RPC path must be selected even
+// when the environment carries REPORTS_TB_RPC=off (issue #2470).
+const savedFlag = process.env.REPORTS_TB_RPC
+
 beforeEach(() => {
   vi.clearAllMocks()
   mockResults = {}
   supabase = makeClient()
+  delete process.env.REPORTS_TB_RPC
+})
+
+afterEach(() => {
+  if (savedFlag === undefined) delete process.env.REPORTS_TB_RPC
+  else process.env.REPORTS_TB_RPC = savedFlag
 })
 
 describe('validateBalanceContinuity', () => {
