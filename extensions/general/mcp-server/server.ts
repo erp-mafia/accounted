@@ -9065,7 +9065,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_suggest_categories',
     keywords: ['konteringsförslag', 'kontering', 'kategorisera'],
     title: 'Suggest Transaction Categories',
-    description: 'Booking proposals for uncategorized transactions, ordered best first per tx_id, each with why, confidence, books_without_review and categorize_args (null = app only).',
+    description: 'Booking proposals for uncategorized transactions, best first per tx_id, each with why, confidence, books_without_review and categorize_args (null = app only).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
