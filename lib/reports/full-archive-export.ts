@@ -972,6 +972,8 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'parties', file: 'parties.json', orderBy: 'created_at' },
   { name: 'party_facts', file: 'party_facts.json', orderBy: 'recorded_at' },
   { name: 'party_identities', file: 'party_identities.json', orderBy: 'created_at' },
+  // Bank-side counterpart names, including the person's own corrections.
+  { name: 'counterparty_aliases', file: 'counterparty_aliases.json', orderBy: 'created_at' },
   { name: 'party_decisions', file: 'party_decisions.json', orderBy: 'created_at' },
   { name: 'articles', file: 'articles.json', orderBy: 'created_at' },
   // Customer invoicing
