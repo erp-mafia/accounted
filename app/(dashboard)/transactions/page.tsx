@@ -480,8 +480,10 @@ export default function TransactionsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
-  // The assistant's stored reads for the loaded rows: the review opens with one instead of fetching it.
-  const [assistantReads, setAssistantReads] = useState<Record<string, AssistantRead>>({})
+  // The assistant's reads for the loaded rows, so the review opens with one
+  // instead of fetching it. A ref, not state: only the review reads them, and
+  // it reads at open time, so a landing read has nothing to re-render.
+  const assistantReadsRef = useRef<Record<string, AssistantRead>>({})
   // Rows already sent to the assistant this session (per company), so a
   // landing read never re-triggers the sweep below.
   const warmedReadsRef = useRef<{ companyId: string | null; ids: Set<string> }>({ companyId: null, ids: new Set() })
@@ -1542,6 +1544,7 @@ export default function TransactionsPage() {
     if (!companyId) return
     if (warmedReadsRef.current.companyId !== companyId) {
       warmedReadsRef.current = { companyId, ids: new Set() }
+      assistantReadsRef.current = {}
     }
     const warmed = warmedReadsRef.current.ids
     const pending = transactions
@@ -1551,7 +1554,7 @@ export default function TransactionsPage() {
           !tx.journal_entry_id &&
           !tx.is_ignored &&
           !warmed.has(tx.id) &&
-          !(assistantReads[tx.id] && readIsFresh(assistantReads[tx.id], tx)),
+          !(assistantReadsRef.current[tx.id] && readIsFresh(assistantReadsRef.current[tx.id], tx)),
       )
       .slice(0, ASSISTANT_WARM_LIMIT)
     if (pending.length === 0) return
@@ -1570,7 +1573,7 @@ export default function TransactionsPage() {
           if (!res.ok) return
           const body = (await res.json()) as { data?: AssistantRead }
           if (cancelled || !body.data) return
-          setAssistantReads((prev) => ({ ...prev, [tx.id]: body.data as AssistantRead }))
+          assistantReadsRef.current[tx.id] = body.data
         } catch {
           return
         }
@@ -1579,7 +1582,7 @@ export default function TransactionsPage() {
     return () => {
       cancelled = true
     }
-  }, [companyId, transactions, assistantReads])
+  }, [companyId, transactions])
 
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return
@@ -1594,7 +1597,7 @@ export default function TransactionsPage() {
       if (data.template_suggestions) {
         setTemplateSuggestions(data.template_suggestions)
       }
-      if (data.assistant_reads) setAssistantReads(data.assistant_reads)
+      if (data.assistant_reads) Object.assign(assistantReadsRef.current, data.assistant_reads)
     } catch {
       // Non-critical
     }
@@ -4764,7 +4767,7 @@ export default function TransactionsPage() {
           entityType={entityType as EntityType}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
-          assistantRead={quickReview ? (assistantReads[quickReview.transaction.id] ?? null) : null}
+          assistantRead={quickReview ? (assistantReadsRef.current[quickReview.transaction.id] ?? null) : null}
           onEditLines={handleEditProposedLines}
         />
       )}
