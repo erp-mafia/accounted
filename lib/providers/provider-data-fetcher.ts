@@ -422,6 +422,30 @@ export interface HydratedInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto
    * absent: the migration must not report them as "the provider had none".
    */
   unhydratedIds: Set<string>;
+  /**
+   * Listed invoices the caller's `select` predicate declined BEFORE the
+   * detail pass, so no budget was spent on them. Absent when no predicate
+   * was given (every listed invoice is in `invoices`).
+   */
+  excluded?: T[];
+}
+
+/**
+ * Caller's choice of which listed invoices are worth a detail fetch. Runs on
+ * the list payload, before hydration, so a declined invoice costs nothing
+ * beyond its share of the list page.
+ */
+export type InvoiceSelect<T extends SalesInvoiceDto | SupplierInvoiceDto> = (dto: T) => boolean;
+
+function partitionBySelect<T extends SalesInvoiceDto | SupplierInvoiceDto>(
+  invoices: T[],
+  select: InvoiceSelect<T> | undefined,
+): { kept: T[]; excluded: T[] } {
+  if (!select) return { kept: invoices, excluded: [] };
+  const kept: T[] = [];
+  const excluded: T[] = [];
+  for (const dto of invoices) (select(dto) ? kept : excluded).push(dto);
+  return { kept, excluded };
 }
 
 /**
@@ -744,9 +768,12 @@ export async function fetchSalesInvoicesHydrated(
   accessToken: string,
   providerCompanyId?: string,
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
+  select?: InvoiceSelect<SalesInvoiceDto>,
 ): Promise<HydratedInvoices<SalesInvoiceDto>> {
-  const invoices = await fetchSalesInvoicesDirect(provider, accessToken, providerCompanyId);
-  return hydrateSalesInvoices(provider, accessToken, providerCompanyId, invoices, budgetMs);
+  const listed = await fetchSalesInvoicesDirect(provider, accessToken, providerCompanyId);
+  const { kept, excluded } = partitionBySelect(listed, select);
+  const hydrated = await hydrateSalesInvoices(provider, accessToken, providerCompanyId, kept, budgetMs);
+  return { ...hydrated, excluded };
 }
 
 /**
@@ -789,11 +816,13 @@ export async function fetchSupplierInvoicesHydrated(
   accessToken: string,
   providerCompanyId?: string,
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
+  select?: InvoiceSelect<SupplierInvoiceDto>,
 ): Promise<HydratedInvoices<SupplierInvoiceDto>> {
-  const invoices = await fetchSupplierInvoicesDirect(provider, accessToken, providerCompanyId);
+  const listed = await fetchSupplierInvoicesDirect(provider, accessToken, providerCompanyId);
+  const { kept, excluded } = partitionBySelect(listed, select);
 
   const { items, report, unhydratedIds } = await hydrateInvoices<SupplierInvoiceDto>(
-    invoices,
+    kept,
     supplierInvoiceNeedsDetail,
     detailFetcher(provider, ResourceType.SupplierInvoices, accessToken, providerCompanyId),
     resourceMapper(provider, ResourceType.SupplierInvoices),
@@ -801,5 +830,5 @@ export async function fetchSupplierInvoicesHydrated(
     budgetMs,
   );
 
-  return { invoices: items, hydration: report, unhydratedIds };
+  return { invoices: items, hydration: report, unhydratedIds, excluded };
 }
