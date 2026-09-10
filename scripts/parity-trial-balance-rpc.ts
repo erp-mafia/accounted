@@ -149,6 +149,7 @@ async function outcome(path: 'legacy' | 'rpc', period: PeriodRef, options: Case[
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err)
       if (!TRANSIENT.test(lastError)) return { ok: false, error: lastError }
+      if (attempt === TRANSIENT_ATTEMPTS) break
       transientRetries += 1
       await sleep(2000 * attempt)
     }
@@ -262,20 +263,19 @@ async function loadDimensionCandidates(client: SupabaseClient): Promise<Map<stri
   return byCompany
 }
 
-/** Probes per period before giving up; bounds the cost for companies with
- *  hundreds of registered objects most periods never use. */
-const MAX_DIMENSION_PROBES = 40
-
 /**
  * The first candidate filter that matches at least one line of the period,
  * found with the RPC itself (jsonb containment on the GIN index, milliseconds
- * per probe). Null when the period carries none of the company's dimensions.
+ * per probe). Every candidate is probed, so null means the period carries
+ * none of the company's registered dimensions: a probe budget would let a
+ * period that uses only a late candidate pass without its dimension case.
+ * The largest prod registry (276 objects) costs about 7 s per period.
  */
 async function findUsedDimension(
   period: PeriodRef,
   candidates: Record<string, string>[],
 ): Promise<Record<string, string> | null> {
-  for (const candidate of candidates.slice(0, MAX_DIMENSION_PROBES)) {
+  for (const candidate of candidates) {
     for (let attempt = 1; attempt <= TRANSIENT_ATTEMPTS; attempt++) {
       const { data, error } = await supabase.rpc('get_trial_balance_aggregates', {
         p_company_id: period.company_id,
