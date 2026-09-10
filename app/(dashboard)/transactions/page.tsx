@@ -101,6 +101,7 @@ import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, Su
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import type { AssistantRead } from '@/lib/agent/categorize/read-shape'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
+import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -4018,7 +4019,7 @@ export default function TransactionsPage() {
     setQuickReview({
       transaction: quickReview.transaction,
       category: pick.category ?? quickReview.category,
-      label: pick.label ? `${pick.account} ${pick.label}` : pick.account,
+      label: `${pick.account} ${pick.label || getAccountName(pick.account)}`,
       template: null,
       templateId: undefined,
       linePattern: null,
@@ -4928,7 +4929,11 @@ export default function TransactionsPage() {
 
       {quickReviewOpen && (
         <QuickReviewDialog
-          key={quickReview?.transaction.id ?? '' + String(quickReview?.category) + String(quickReview?.templateId) + String(quickReview?.template?.id)}
+          // One key per shape of review, not per row: `??` bound looser than
+          // `+` here, so the key was the transaction id alone and a review
+          // reopened on another booking (the assistant's pick) kept the
+          // account and VAT state from the first mount.
+          key={quickReview ? `${quickReview.transaction.id}:${quickReview.category}:${quickReview.templateId ?? ''}:${quickReview.template?.id ?? ''}:${quickReview.defaults?.account ?? ''}` : 'none'}
           open
           onOpenChange={setQuickReviewOpen}
           transaction={quickReview?.transaction ?? null}

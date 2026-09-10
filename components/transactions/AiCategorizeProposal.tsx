@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import type { TransactionCategory, VatTreatment } from '@/types'
 import { firstSentence, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 
 /**
  * The assistant's verdict inside the recommendation header of the review
@@ -203,7 +204,7 @@ export default function AiCategorizeProposal({
 
   const account = p.account
   const vat: VatTreatment | 'none' = p.vatTreatment ?? 'none'
-  const label = pick?.label ?? ''
+  const label = pick?.label ?? getAccountName(account)
   const take = () => {
     if (onUsePick) return onUsePick({ account, vat, category: p.category, label })
     appliedRef.current = account
