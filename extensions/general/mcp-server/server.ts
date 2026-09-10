@@ -19500,6 +19500,21 @@ export const tools: McpTool[] = [
           : allWarnings.length > 0 || orgMatch.match === false
             ? 'ok_with_warnings'
             : 'ok'
+      // Structured twins of the warning strings, with the tier the drop
+      // widget renders (lib/import/notices.ts): a wrong organisation number
+      // is a blocking action, mis-encoded text an action, the rest notices.
+      // Each carries its Swedish text so the widget needs no i18n.
+      const notices: Array<{ code: string; severity: 'info' | 'notice' | 'action'; text: string; blocking?: boolean }> = []
+      if (orgMatch.match === false) {
+        notices.push({
+          code: 'sie_org_mismatch',
+          severity: 'action',
+          blocking: true,
+          text: `Filen tillhör organisationsnummer ${orgMatch.file_org_number ?? '?'}, inte det här företaget (${orgMatch.company_org_number ?? '?'}).`,
+        })
+      }
+      for (const w of encodingWarnings) notices.push({ code: 'sie_encoding_artifacts', severity: 'action', text: w })
+      for (const w of validation.warnings) notices.push({ code: 'legacy', severity: 'notice', text: w })
 
       return {
         verdict,
@@ -19515,7 +19530,7 @@ export const tools: McpTool[] = [
           transaction_line_count: parsed.stats.totalTransactionLines,
           opening_balance_total: preview.openingBalanceTotal ?? null,
         },
-        validation: { valid: validation.valid, errors: validation.errors, warnings: allWarnings },
+        validation: { valid: validation.valid, errors: validation.errors, warnings: allWarnings, notices },
         org_number_match: orgMatch,
         duplicate,
         mappings,

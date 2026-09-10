@@ -1,4 +1,5 @@
 import type { SupplierType } from '@/types'
+import type { ImportNotice } from '@/lib/import/notices'
 
 /** Result of auto-detecting columns in a supplier register file. */
 export interface DetectedSupplierColumns {
@@ -71,6 +72,8 @@ export interface SupplierImportParseResult {
   rows: AnnotatedSupplierRow[]
   duplicate_count: number
   warnings: string[]
+  /** Structured twins of `warnings` (lib/import/notices.ts). */
+  notices?: ImportNotice[]
 }
 
 

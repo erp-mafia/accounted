@@ -1,6 +1,8 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import { makeNotice, noticesFromParseIssues } from '@/lib/import/notices'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -111,48 +113,16 @@ export default function BankFilePreviewStep({
         </Card>
       </div>
 
-      {/* Duplicate rows already in bookkeeping: advisory, ingest skips them */}
-      {duplicateCount > 0 && (
-        <Card>
-          <CardHeader className="py-3">
-            <CardTitle className="text-sm flex items-center gap-2 text-warning">
-              <AlertTriangle className="h-4 w-4" />
-              {t('import_duplicate_rows_title', { count: duplicateCount })}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <p className="text-xs text-muted-foreground">
-              {t('import_duplicate_rows_body')}
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Warnings */}
-      {warnings.length > 0 && (
-        <Card>
-          <CardHeader className="py-3">
-            <CardTitle className="text-sm flex items-center gap-2 text-warning">
-              <AlertTriangle className="h-4 w-4" />
-              {warnings.length} varning{warnings.length !== 1 ? 'ar' : ''}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <div className="space-y-1 max-h-32 overflow-y-auto">
-              {warnings.slice(0, 10).map((issue, i) => (
-                <p key={i} className="text-xs text-muted-foreground">
-                  Rad {issue.row}: {issue.message}
-                </p>
-              ))}
-              {warnings.length > 10 && (
-                <p className="text-xs text-muted-foreground font-medium">
-                  ...och {warnings.length - 10} till
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Duplicate rows (ingest skips them) and rows the parser could not
+          read: one folded list, nothing boxed. */}
+      <ImportNotices
+        notices={[
+          ...(duplicateCount > 0
+            ? [makeNotice('bank_duplicate_rows', 'notice', { count: duplicateCount })]
+            : []),
+          ...noticesFromParseIssues(warnings),
+        ]}
+      />
 
       {/* Transaction preview table */}
       <Card>
