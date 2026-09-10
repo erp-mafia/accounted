@@ -3156,6 +3156,9 @@
     "new_btn": "New transaction"
   },
   "tx_template_picker": {
+    "group_goods": "Goods & Materials",
+    "group_tax": "Tax & VAT",
+    "group_closing": "Year-end",
     "group_premises": "Premises",
     "group_vehicle": "Vehicle",
     "group_it_software": "IT & Software",

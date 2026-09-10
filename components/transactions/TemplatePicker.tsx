@@ -55,6 +55,9 @@ const GROUP_LABEL_KEYS: Record<TemplateGroup, string> = {
   financial: 'group_financial',
   private_transfers: 'group_private_transfers',
   equipment: 'group_equipment',
+  goods: 'group_goods',
+  tax: 'group_tax',
+  closing: 'group_closing',
 }
 
 function getVatLabelKey(template: BookingTemplate): string | null {
