@@ -3106,6 +3106,7 @@
     "ai_agrees": "The assistant agrees.",
     "ai_instead": "The assistant suggests instead",
     "ai_use": "Use",
+    "ai_show_templates": "Show templates",
     "ai_unsure": "The assistant is unsure: {reason}",
     "ai_unconfigured": "The assistant is not configured.",
     "ai_alternatives": "Other accounts",

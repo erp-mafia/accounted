@@ -60,6 +60,12 @@ interface Props {
   autoApply?: boolean
   /** Apply an account + VAT to the dialog fields. */
   onApply: (account: string, vat: VatTreatment | 'none') => void
+  /**
+   * When set, the dialog books through a template and an account cannot be
+   * applied directly: the pick and the alternatives open the template
+   * picker searched on that account instead.
+   */
+  onShowTemplates?: (account: string) => void
   /** Surface the proposal metadata so the dialog can log a calibration sample on book. */
   onProposal?: (meta: AiProposalMeta) => void
 }
@@ -73,7 +79,7 @@ function bandOf(p: ProposalDto): Band {
   return 'review'
 }
 
-export default function AiCategorizeProposal({ transactionId, open, currentAccount, autoApply = true, onApply, onProposal }: Props) {
+export default function AiCategorizeProposal({ transactionId, open, currentAccount, autoApply = true, onApply, onShowTemplates, onProposal }: Props) {
   const t = useTranslations('tx_quick_review')
   const [state, setState] = useState<State>({ status: 'loading' })
   // Apply the pick to the dialog exactly once per fetch, so the user's later
@@ -178,11 +184,12 @@ export default function AiCategorizeProposal({ transactionId, open, currentAccou
               type="button"
               className={cn(QUIET_LINK_CLASS, 'text-[12px]')}
               onClick={() => {
+                if (onShowTemplates) return onShowTemplates(p.account as string)
                 appliedRef.current = p.account
                 onApply(p.account as string, p.vatTreatment ?? 'none')
               }}
             >
-              {t('ai_use')}
+              {onShowTemplates ? t('ai_show_templates') : t('ai_use')}
             </button>
           </>
         )}
@@ -195,6 +202,7 @@ export default function AiCategorizeProposal({ transactionId, open, currentAccou
               key={c.account}
               type="button"
               onClick={() => {
+                if (onShowTemplates) return onShowTemplates(c.account)
                 appliedRef.current = c.account
                 onApply(c.account, c.vatTreatment ?? 'none')
               }}
