@@ -32,7 +32,7 @@
  * validation and the bookkeeping engine: nothing here writes to the ledger.
  */
 
-import { getVatRate } from '@/lib/bookkeeping/vat-entries'
+import { getVatRate, isGeneratedVatAccount, isReverseChargeBasisLeg } from '@/lib/bookkeeping/vat-entries'
 import { getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
 import { buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
@@ -480,6 +480,12 @@ export function proposalLinesToFormLines(
     /** Foreign-currency amount of the transaction (absolute). */
     foreignAmount?: number | null
     exchangeRate?: number | null
+    /**
+     * Radtext for the business lines: what the money was for, in the words
+     * the review used. The money leg keeps the bank text and the moms legs
+     * are named by their accounts, so neither needs it.
+     */
+    businessLineDescription?: string
   } = {},
 ): FormLine[] {
   const currencyMeta = buildCurrencyMetadata(opts.currency, opts.foreignAmount, opts.exchangeRate)
@@ -489,11 +495,15 @@ export function proposalLinesToFormLines(
     const amountStr = amount.toFixed(2)
     const isSettlement = line.settlement === true
     const swapAccount = isSettlement && line.account === '1930' && !!opts.settlementAccount
+    // The line that says what the money was for: not the money leg, not a
+    // moms or reverse-charge basis leg.
+    const isBusinessLine =
+      !isSettlement && !isGeneratedVatAccount(line.account) && !isReverseChargeBasisLeg(line.account)
     return {
       account_number: swapAccount && opts.settlementAccount ? opts.settlementAccount : line.account,
       debit_amount: line.side === 'debet' ? amountStr : '',
       credit_amount: line.side === 'kredit' ? amountStr : '',
-      line_description: '',
+      line_description: isBusinessLine ? (opts.businessLineDescription ?? '') : '',
       // Currency metadata belongs on the money leg only, mirroring
       // buildTransactionEntryLines' settlement handling.
       ...(isSettlement ? currencyMeta : {}),
