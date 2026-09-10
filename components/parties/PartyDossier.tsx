@@ -38,6 +38,12 @@ function Row({ label, value, note }: { label: string; value: React.ReactNode; no
  * "Vad Accounted vet" lists every fact with its source; promotion and
  * merge are one action each and always confirm up front.
  */
+/** The verbatim text an attribute of the profile was read from, as the row's note. */
+function quoteFor(stored: NonNullable<Dossier['profile']>, field: string): string | undefined {
+  const hit = stored.evidence.find((e) => e.field === field)
+  return hit ? `${stored.source_kind === 'document' ? 'underlag' : 'banktext'}: "${hit.quote}"` : undefined
+}
+
 export function PartyDossier({
   partyId,
   period,
@@ -280,6 +286,40 @@ export function PartyDossier({
                   </tbody>
                 </table>
               </section>
+
+              {dossier.profile ? (
+                <section className="space-y-3">
+                  <SectionTitle>{t('section_profile')}</SectionTitle>
+                  <table className="w-full text-[13px]">
+                    <tbody>
+                      {dossier.profile.profile.kind !== 'unknown' ? (
+                        <Row label={t('profile_kind')} value={t(`profile_kind_${dossier.profile.profile.kind}`)} note={quoteFor(dossier.profile, 'kind')} />
+                      ) : null}
+                      {dossier.profile.profile.country ? (
+                        <Row label={t('fact_country')} value={regionName(dossier.profile.profile.country, locale)} note={quoteFor(dossier.profile, 'country')} />
+                      ) : null}
+                      {dossier.profile.profile.sells ? (
+                        <Row label={t('profile_sells')} value={dossier.profile.profile.sells} note={quoteFor(dossier.profile, 'sells')} />
+                      ) : null}
+                      {dossier.profile.profile.industry ? (
+                        <Row label={t('profile_industry')} value={dossier.profile.profile.industry} note={quoteFor(dossier.profile, 'industry')} />
+                      ) : null}
+                      {dossier.profile.profile.typical_account ? (
+                        <Row label={t('profile_account')} value={<AccountNub account={dossier.profile.profile.typical_account} />} note={quoteFor(dossier.profile, 'typical_account')} />
+                      ) : null}
+                      {dossier.profile.profile.vat_posture !== 'unknown' ? (
+                        <Row label={t('profile_vat')} value={t(`profile_vat_${dossier.profile.profile.vat_posture}`)} />
+                      ) : null}
+                      {dossier.profile.profile.recurrence !== 'unknown' ? (
+                        <Row label={t('profile_recurrence')} value={t(`profile_recurrence_${dossier.profile.profile.recurrence}`)} note={quoteFor(dossier.profile, 'recurrence')} />
+                      ) : null}
+                    </tbody>
+                  </table>
+                  <p className="text-[11px] text-muted-foreground">
+                    {dossier.profile.source_kind === 'document' ? t('profile_source_document') : t('profile_source_bank')} · {dossier.profile.model}. {t('profile_note')}
+                  </p>
+                </section>
+              ) : null}
 
               <section className="space-y-3">
                 <SectionTitle>{t('section_vouchers')}</SectionTitle>

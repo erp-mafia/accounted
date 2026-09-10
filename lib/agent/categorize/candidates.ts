@@ -11,6 +11,8 @@ import {
 import { getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
 import type { MappingRule, Transaction, VatTreatment } from '@/types'
 import type { AccountCandidate } from './select-account'
+import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
+import type { CounterpartyProfile } from '@/lib/parties/profile'
 
 /**
  * Tier 1 of the auto-booking cascade: deterministic candidate generation.
@@ -27,11 +29,21 @@ import type { AccountCandidate } from './select-account'
 
 const MAX_HISTORY_ROWS = 200
 
+/**
+ * Weight of the profile's typical account: below every deterministic source,
+ * so the company's own history always outranks what a model believes about
+ * the counterparty, and above nothing, so it still appears for a first-time
+ * counterparty that has no history at all.
+ */
+export const PROFILE_CANDIDATE_CONFIDENCE = 0.35
+
 export async function gatherCandidates(
   supabase: SupabaseClient,
   companyId: string,
   transaction: Transaction,
   limit = 8,
+  /** The cached counterparty profile, when one exists. */
+  profile?: CounterpartyProfile | null,
 ): Promise<AccountCandidate[]> {
   // The company's own rules plus the global (null-company) defaults. Two static
   // queries rather than one dynamic `.or('company_id.eq.<id>,...')`, which the
@@ -104,6 +116,21 @@ export async function gatherCandidates(
       source: s.source,
       confidence: s.confidence,
       matchReason: s.match_reason,
+    })
+  }
+
+  // 3. The counterparty profile's typical account, as a prior with the lowest
+  //    weight. A first-time foreign SaaS supplier gets 5420 on the slate with
+  //    the reason "säljer AI-videogenerering", where before there was nothing.
+  if (profile?.typical_account) {
+    const name = BAS_REFERENCE.find((a) => a.account_number === profile.typical_account)?.account_name ?? profile.typical_account
+    raw.push({
+      account: profile.typical_account,
+      label: name,
+      vatTreatment: null,
+      source: 'counterparty_profile',
+      confidence: PROFILE_CANDIDATE_CONFIDENCE,
+      matchReason: profile.sells ? `profil: säljer ${profile.sells}` : 'profil',
     })
   }
 
