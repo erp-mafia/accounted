@@ -1,93 +1,91 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Sparkles, AlertTriangle } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
-import type { VatTreatment } from '@/types'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import AgentAvatar from '@/components/agent/AgentAvatar'
+import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
+import { getAccountName } from '@/lib/bookkeeping/client-account-names'
+import { firstSentence, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import type { TransactionCategory, VatTreatment } from '@/types'
 
 /**
- * The auto-booking proposal, inline in the quick-review dialog.
- *
- * Fetches POST /api/agent/categorize (Tier 1 deterministic candidates → Tier 2
- * model selector, provider-agnostic) and shows the model's pick with a
- * confidence pill, a short "Varför", and the candidate alternatives. It
- * pre-fills the dialog's account + VAT when it lands on a real account, and
- * clicking an alternative re-applies. Nothing books here — the dialog's own
- * "Bokför" commits through the existing categorize route.
- *
- * i18n: strings are inline Swedish for now (this is the Swedish-answering
- * assistant surface); lift to messages/{sv,en}.json before final merge.
+ * The assistant's verdict inside the recommendation header of the review
+ * dialog: one line, not a box. It reads the assistant's stored read of this
+ * transaction (POST /api/agent/categorize answers with one, fetching only
+ * when the list did not already hand it over) and says one of three things:
+ * it agrees with the current pick, it suggests another booking with why and
+ * one click to take it, or it found nothing that fits. Nothing books here.
  */
-
-interface CandidateDto {
-  account: string
-  label: string
-  vatTreatment: VatTreatment | null
-  source: string
-  confidence: number
-}
-
-interface ProposalDto {
-  account: string | null
-  category: string | null
-  vatTreatment: VatTreatment | null
-  reverseCharge: boolean
-  confidence: number
-  agreement: number
-  modelConfidence: 'high' | 'medium' | 'low'
-  fromCandidate: boolean
-  reasoning: string
-  choice: { kind: 'candidate' | 'category' | 'needs_review' }
-  candidates: CandidateDto[]
-}
-
-/** What the dialog needs to log a calibration sample when the user books. */
 export interface AiProposalMeta {
   account: string
   confidence: number
-  agreement: number
-  modelConfidence: 'high' | 'medium' | 'low'
+  agreement: number | null
+  modelConfidence: string | null
   source: string
+}
+
+/** What the assistant wants booked, complete enough to open a review on. */
+export interface AssistantPick {
+  account: string
+  vat: VatTreatment | 'none'
+  category: TransactionCategory | null
+  label: string
 }
 
 type State =
   | { status: 'loading' }
-  | { status: 'error' }
-  | { status: 'unconfigured' }
-  | { status: 'ready'; proposal: ProposalDto }
+  | { status: 'ready'; read: AssistantRead }
+  /** No AI backend, a failed call, or a read that found nothing: the header stands alone. */
+  | { status: 'silent' }
 
 interface Props {
   transactionId: string
   /** Fetch when the dialog is open. */
   open: boolean
-  /** Apply an account + VAT to the dialog fields. */
-  onApply: (account: string, vat: VatTreatment | 'none') => void
-  /** Surface the proposal metadata so the dialog can log a calibration sample on book. */
+  /** Whether a receipt or invoice is matched: it changes what the loading line says. */
+  hasUnderlag?: boolean
+  /** The business account the dialog currently books to, for the agree check. */
+  currentAccount?: string | null
+  /** Take the pick as soon as it lands; off when the dialog already has a template of its own. */
+  autoApply?: boolean
+  /** Take the pick into the dialog: `auto` when it landed on its own, false when the person clicked Använd. */
+  onTake: (pick: AssistantPick, opts: { auto: boolean }) => void
+  /** Surface the read so the dialog can log a calibration sample on book. */
   onProposal?: (meta: AiProposalMeta) => void
+  /** The stored read the list already has: shown at once, no fetch. */
+  initial?: AssistantRead | null
 }
 
-type Band = 'sure' | 'likely' | 'review'
-function bandOf(p: ProposalDto): Band {
-  if (p.choice.kind === 'needs_review' || !p.account) return 'review'
-  if (p.confidence >= 0.8) return 'sure'
-  if (p.confidence >= 0.5) return 'likely'
-  return 'review'
+function pickFrom(read: AssistantRead): AssistantPick | null {
+  if (!read.account) return null
+  const label = read.candidates.find((c) => c.account === read.account)?.label ?? getAccountName(read.account)
+  return { account: read.account, vat: read.vat_treatment ?? 'none', category: read.category, label }
 }
 
-const BAND_LABEL: Record<Band, string> = { sure: 'Säker', likely: 'Trolig', review: 'Välj konto' }
-
-export default function AiCategorizeProposal({ transactionId, open, onApply, onProposal }: Props) {
-  const [state, setState] = useState<State>({ status: 'loading' })
-  // Apply the pick to the dialog exactly once per fetch, so the user's later
-  // manual edits are never clobbered by a re-render.
-  const appliedRef = useRef<string | null>(null)
+export default function AiCategorizeProposal({
+  transactionId,
+  open,
+  hasUnderlag = false,
+  currentAccount,
+  autoApply = true,
+  onTake,
+  onProposal,
+  initial = null,
+}: Props) {
+  const t = useTranslations('tx_quick_review')
+  const { identity } = useAgentSheet()
+  const [state, setState] = useState<State>(() => (initial ? { status: 'ready', read: initial } : { status: 'loading' }))
+  const [expanded, setExpanded] = useState(false)
+  // The pick is handed to the dialog once per read, so the person's later
+  // edits are never clobbered by a re-render.
+  const takenRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!open) return
+    if (!open || initial) return
     let alive = true
-    appliedRef.current = null
-    // Initial state is already 'loading'; the dialog mounts this fresh per
-    // transaction (keyed on tx.id), so no in-effect reset is needed.
+    takenRef.current = null
     ;(async () => {
       try {
         const res = await fetch('/api/agent/categorize', {
@@ -96,135 +94,111 @@ export default function AiCategorizeProposal({ transactionId, open, onApply, onP
           body: JSON.stringify({ transaction_id: transactionId }),
         })
         if (!alive) return
-        if (res.status === 503) return setState({ status: 'unconfigured' })
-        if (!res.ok) return setState({ status: 'error' })
-        const body = (await res.json()) as { data?: ProposalDto }
+        const body = res.ok ? ((await res.json()) as { data?: AssistantRead }) : null
         if (!alive) return
-        if (!body.data) return setState({ status: 'error' })
-        setState({ status: 'ready', proposal: body.data })
+        setState(body?.data ? { status: 'ready', read: body.data } : { status: 'silent' })
       } catch {
-        if (alive) setState({ status: 'error' })
+        if (alive) setState({ status: 'silent' })
       }
     })()
     return () => {
       alive = false
     }
-  }, [open, transactionId])
+  }, [open, transactionId, initial])
 
   const reportedRef = useRef(false)
-
-  // When a proposal with a real account arrives: surface its metadata to the
-  // dialog (for calibration logging on book) and pre-fill the fields.
   useEffect(() => {
     if (state.status !== 'ready') return
-    const p = state.proposal
-    if (!p.account) return
-
+    const read = state.read
+    const pick = pickFrom(read)
+    if (!pick) return
     if (!reportedRef.current) {
       reportedRef.current = true
-      const source = p.fromCandidate
-        ? (p.candidates.find((c) => c.account === p.account)?.source ?? 'candidate')
+      const source = read.from_candidate
+        ? (read.candidates.find((c) => c.account === read.account)?.source ?? 'candidate')
         : 'category'
       onProposal?.({
-        account: p.account,
-        confidence: p.confidence,
-        agreement: p.agreement,
-        modelConfidence: p.modelConfidence,
+        account: pick.account,
+        confidence: read.confidence,
+        agreement: read.agreement,
+        modelConfidence: read.model_confidence,
         source,
       })
     }
+    // Only a pick with something behind it (a candidate, or a confident model
+    // read) fills the dialog on its own; a low guess waits for the person.
+    if (!autoApply || takenRef.current === pick.account || read.confidence < 0.5) return
+    takenRef.current = pick.account
+    onTake(pick, { auto: true })
+  }, [state, autoApply, onTake, onProposal])
 
-    // Pre-fill only when it's not the low "review" band, and only once.
-    if (appliedRef.current === p.account || bandOf(p) === 'review') return
-    appliedRef.current = p.account
-    onApply(p.account, p.vatTreatment ?? 'none')
-  }, [state, onApply, onProposal])
+  const line = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground'
+  const mark = <AgentAvatar avatarId={identity.avatarId} size="xs" className="h-4 w-4 flex-none" alt="" />
 
+  if (state.status === 'silent') return null
   if (state.status === 'loading') {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-2.5 text-sm text-muted-foreground">
-        <Sparkles className="h-3.5 w-3.5 animate-pulse" />
-        Assistenten föreslår kontering…
-      </div>
+      <p className={cn(line, 'animate-pulse')}>
+        {mark}
+        {hasUnderlag ? t('ai_reading') : t('ai_looking')}
+      </p>
     )
   }
 
-  if (state.status === 'error') return null // fall back silently to the deterministic default
+  const read = state.read
+  const pick = pickFrom(read)
+  const why = read.reasoning ? (expanded ? read.reasoning : firstSentence(read.reasoning)) : ''
+  const hasMore = !!read.reasoning && why !== read.reasoning.trim()
+  const more = hasMore ? (
+    <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12px]')} onClick={() => setExpanded((v) => !v)}>
+      {expanded ? t('ai_less') : t('ai_more')}
+    </button>
+  ) : null
 
-  if (state.status === 'unconfigured') {
+  if (!pick) {
     return (
-      <div className="flex items-start gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-2.5 text-xs text-muted-foreground">
-        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-        Assistenten är inte konfigurerad. Välj konto nedan som vanligt.
-      </div>
+      <p className={line}>
+        {mark}
+        <span>
+          {t('ai_none')}
+          {why ? <span className="ml-1">{why}</span> : null}
+        </span>
+        {more}
+      </p>
     )
   }
 
-  const p = state.proposal
-  const band = bandOf(p)
-  const alternatives = p.candidates.filter((c) => c.account !== p.account).slice(0, 3)
+  const agrees = !!currentAccount && pick.account === currentAccount
 
   return (
-    <div className="rounded-lg border border-border bg-card">
-      <div className="flex items-start justify-between gap-3 px-3 pt-3">
-        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Sparkles className="h-3.5 w-3.5" />
-          Assistentens förslag
-        </div>
-        <span
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium',
-            band === 'sure' && 'bg-success/15 text-success',
-            band === 'likely' && 'bg-warning/15 text-warning',
-            band === 'review' && 'bg-secondary text-muted-foreground',
-          )}
-        >
-          <span
-            className={cn(
-              'h-1.5 w-1.5 rounded-full',
-              band === 'sure' && 'bg-success',
-              band === 'likely' && 'bg-warning',
-              band === 'review' && 'bg-muted-foreground',
-            )}
-          />
-          {BAND_LABEL[band]}
+    <p className={line}>
+      {mark}
+      {agrees ? (
+        <span>
+          {t('ai_agrees')}
+          {why ? <span className="ml-1">{why}</span> : null}
         </span>
-      </div>
-
-      <div className="px-3 pb-3 pt-2">
-        {band === 'review' ? (
-          <p className="text-sm text-foreground">
-            {p.reasoning || 'För lite underlag för att avgöra konto. Välj konto nedan.'}
-          </p>
-        ) : (
-          <>
-            {p.reasoning && (
-              <p className="text-[13px] leading-snug text-muted-foreground">{p.reasoning}</p>
-            )}
-            {alternatives.length > 0 && (
-              <div className="mt-2.5">
-                <p className="mb-1.5 text-[11px] text-muted-foreground">Byt konto:</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {alternatives.map((c) => (
-                    <button
-                      key={c.account}
-                      type="button"
-                      onClick={() => {
-                        appliedRef.current = c.account
-                        onApply(c.account, c.vatTreatment ?? 'none')
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs transition-colors hover:bg-secondary"
-                    >
-                      <span className="font-mono">{c.account}</span>
-                      <span className="text-muted-foreground">{c.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
+      ) : (
+        <span>
+          {t('ai_instead')} <span className="font-mono text-foreground">{pick.account}</span>
+          <span className="text-foreground"> {pick.label}</span>
+          {pick.vat === 'reverse_charge' ? <span className="text-foreground"> {t('ai_reverse_charge')}</span> : null}
+          {why ? <span className="ml-1">· {why}</span> : null}
+        </span>
+      )}
+      {more}
+      {!agrees && (
+        <button
+          type="button"
+          className={cn(QUIET_LINK_CLASS, 'text-[12px] font-medium')}
+          onClick={() => {
+            takenRef.current = pick.account
+            onTake(pick, { auto: false })
+          }}
+        >
+          {t('ai_use')}
+        </button>
+      )}
+    </p>
   )
 }

@@ -54,6 +54,11 @@ export interface SkipReasons {
   inactive?: number
   failed?: number
   noMatch?: number
+  /**
+   * Invoices both issued and settled before the fiscal years the SIE import
+   * covers. Never fetched in detail, never inserted: their ledger is not here.
+   */
+  outsideFiscalYears?: number
 }
 
 /**

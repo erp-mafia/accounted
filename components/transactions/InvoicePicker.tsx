@@ -4,6 +4,8 @@ import { useState, useEffect, useMemo } from 'react'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { Search, FileText, Loader2, Landmark } from 'lucide-react'
@@ -25,9 +27,12 @@ type OpenInvoice = Invoice & { customer?: Customer }
 interface InvoicePickerProps {
   transaction: TransactionWithInvoice
   onSelect: (invoice: OpenInvoice) => void
-  /** Pick an open ROT/RUT begäran instead of an invoice (Skatteverkets
-   *  utbetalning). The section only renders when the company has one. */
-  onSelectRotRutPayout?: (request: PotentialRotRutPayoutRequest) => void
+  /** Pick one or several open ROT/RUT begäran instead of an invoice
+   *  (Skatteverkets utbetalning). A row click hands over that begäran alone;
+   *  the checkboxes build a bundle for a transfer that paid several beslut,
+   *  which the automatic set matcher refuses when two begäran carry the same
+   *  amount (#2425). The section only renders when the company has one. */
+  onSelectRotRutPayout?: (requests: PotentialRotRutPayoutRequest[]) => void
 }
 
 type RotRutRequestRow = {
@@ -52,6 +57,8 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
   const [rotRutRequests, setRotRutRequests] = useState<PotentialRotRutPayoutRequest[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [search, setSearch] = useState('')
+  // Begäran ticked for a bundled handoff; empty until the user ticks one.
+  const [pickedRequestIds, setPickedRequestIds] = useState<ReadonlySet<string>>(() => new Set())
   // Boolean, not the callback: a fresh function identity per parent render
   // must not refetch the list.
   const wantRotRutRequests = !!onSelectRotRutPayout
@@ -183,6 +190,30 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
   // Skatteverket pays out in kronor only; the match route refuses other
   // currencies, so a foreign-currency row must not be offered a begäran.
   const txIsSek = (transaction.currency || 'SEK').toUpperCase() === 'SEK'
+  const pickedRequests = rotRutRequests.filter((request) => pickedRequestIds.has(request.id))
+  const pickedTotal = roundOre(
+    pickedRequests.reduce((sum, request) => sum + expectedRotRutPayoutAmount(request), 0),
+  )
+  const pickedDiff = roundOre(Math.abs(pickedTotal - txAmount))
+  const pickedExact = pickedRequests.length > 0 && pickedDiff < 0.005
+  const togglePicked = (id: string, checked: boolean) => {
+    setPickedRequestIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+  // The settle service books a bundle largest first (the matcher's order):
+  // hand the manual pick over in the same order so the voucher reads alike.
+  const handOverPicked = () => {
+    if (!onSelectRotRutPayout || pickedRequests.length === 0) return
+    onSelectRotRutPayout(
+      [...pickedRequests].sort(
+        (a, b) => expectedRotRutPayoutAmount(b) - expectedRotRutPayoutAmount(a),
+      ),
+    )
+  }
   const rotRutSection =
     onSelectRotRutPayout && txIsSek && rotRutRequests.length > 0 ? (
       <div className="space-y-1.5">
@@ -192,40 +223,75 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
         {rotRutRequests.map((request) => {
           const expected = expectedRotRutPayoutAmount(request)
           const exact = Math.abs(expected - txAmount) < 0.005
+          const picked = pickedRequestIds.has(request.id)
           return (
-            <button
+            <div
               key={request.id}
-              type="button"
-              onClick={() => onSelectRotRutPayout(request)}
               className={cn(
-                'w-full text-left rounded-lg border px-3 py-2.5 transition-colors',
-                'hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring',
+                'flex items-stretch rounded-lg border transition-colors',
                 exact && 'border-success/50 bg-success/5',
+                picked && 'border-primary/40 bg-secondary/40',
               )}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Landmark className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                    <span className="font-medium text-sm">{request.name}</span>
+              <label className="flex cursor-pointer items-center pl-3 pr-1">
+                <Checkbox
+                  checked={picked}
+                  onCheckedChange={(checked) => togglePicked(request.id, checked === true)}
+                  aria-label={t('rot_rut_pick_aria', { name: request.name })}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => onSelectRotRutPayout([request])}
+                className={cn(
+                  'min-w-0 flex-1 rounded-r-lg py-2.5 pl-2 pr-3 text-left transition-colors',
+                  'hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring',
+                )}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <Landmark className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                      <span className="font-medium text-sm">{request.name}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                      {t('rot_rut_request_meta', {
+                        type: request.deduction_type === 'rut' ? 'RUT' : 'ROT',
+                        count: request.invoices.length,
+                      })}
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                    {t('rot_rut_request_meta', {
-                      type: request.deduction_type === 'rut' ? 'RUT' : 'ROT',
-                      count: request.invoices.length,
-                    })}
-                  </p>
+                  <div className="text-right flex-shrink-0">
+                    <p className={cn('text-sm font-medium tabular-nums', exact && 'text-success')}>
+                      {formatCurrency(expected, DOMESTIC_CURRENCY)}
+                    </p>
+                    {exact && <p className="text-[10px] text-success">{t('exact_match')}</p>}
+                  </div>
                 </div>
-                <div className="text-right flex-shrink-0">
-                  <p className={cn('text-sm font-medium tabular-nums', exact && 'text-success')}>
-                    {formatCurrency(expected, DOMESTIC_CURRENCY)}
-                  </p>
-                  {exact && <p className="text-[10px] text-success">{t('exact_match')}</p>}
-                </div>
-              </div>
-            </button>
+              </button>
+            </div>
           )
         })}
+        {pickedRequests.length > 0 && (
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <div className="min-w-0 text-xs">
+              <p className={cn('tabular-nums', pickedExact ? 'text-success' : 'text-muted-foreground')}>
+                {t('rot_rut_picked_sum', {
+                  count: pickedRequests.length,
+                  amount: formatCurrency(pickedTotal, DOMESTIC_CURRENCY),
+                })}
+              </p>
+              {!pickedExact && (
+                <p className="text-attn tabular-nums">
+                  {t('rot_rut_picked_diff', { amount: formatCurrency(pickedDiff, DOMESTIC_CURRENCY) })}
+                </p>
+              )}
+            </div>
+            <Button type="button" size="sm" onClick={handOverPicked}>
+              {t('rot_rut_match_picked', { count: pickedRequests.length })}
+            </Button>
+          </div>
+        )}
       </div>
     ) : null
 

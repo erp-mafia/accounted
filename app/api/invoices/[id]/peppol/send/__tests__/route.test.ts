@@ -21,6 +21,18 @@ const requireAuthMock = vi.fn()
 const serviceRpcMock = vi.fn()
 const issueAndBookMock = vi.fn()
 
+/** One shared logger for the route and its wrapper, so refusal lines can be asserted. */
+const logMock = vi.hoisted(() => {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }
+  log.child.mockImplementation(() => log)
+  return log
+})
+
+vi.mock('@/lib/logger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/logger')>()),
+  createLogger: () => logMock,
+}))
+
 vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
 }))
@@ -117,6 +129,14 @@ const stagedDelivery = {
   created_at: '2026-08-21T10:00:00.000Z',
 }
 
+const acceptedReceipt = {
+  provider: 'qvalia',
+  providerSubmissionId: 'int-1',
+  idempotencyKey: IDEMPOTENCY_KEY,
+  tenantReference: 'company-1',
+  acceptedAt: '2026-08-21T10:00:02.000Z',
+}
+
 function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTransport {
   return {
     provider: 'qvalia',
@@ -126,13 +146,7 @@ function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTranspor
       capabilities: [],
       checkedAt: '2026-08-21T10:00:01.000Z',
     }),
-    submit: vi.fn().mockResolvedValue({
-      provider: 'qvalia',
-      providerSubmissionId: 'int-1',
-      idempotencyKey: IDEMPOTENCY_KEY,
-      tenantReference: 'company-1',
-      acceptedAt: '2026-08-21T10:00:02.000Z',
-    }),
+    submit: vi.fn().mockResolvedValue(acceptedReceipt),
     verifyWebhook: vi.fn().mockResolvedValue([]),
     retrieveEvidence: vi.fn().mockResolvedValue([]),
     ...overrides,
@@ -148,10 +162,20 @@ const accessRow = {
   enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'jakob', disabled_at: null, note: null,
   created_at: '2026-08-21T16:00:00.000Z', updated_at: '2026-08-21T16:00:00.000Z',
 }
+/** The sandbox gate reads company_settings.is_sandbox through the user client before anything else. */
+function realCompany(isSandbox = false) {
+  enqueue({ data: { is_sandbox: isSandbox }, error: null })
+}
 /** Peppol access is per company: grant it (service reads access row, then the send count). */
 function grantAccess(maxSends: number | null = 50, sent = 0) {
   serviceTables.enqueue({ data: { ...accessRow, max_sends: maxSends }, error: null })
   serviceTables.enqueue({ data: null, error: null, count: sent })
+}
+/** The user-client reads a send makes once it is past the gates: invoice, company settings, stage RPC. */
+function stageInvoice(overrides: Partial<ReturnType<typeof makeInvoice>> = {}, delivery: Record<string, unknown> = stagedDelivery) {
+  enqueue({ data: invoiceRow(overrides), error: null })
+  enqueue({ data: company, error: null })
+  enqueue({ data: delivery, error: null })
 }
 
 /** The service-role RPC echoes the event's status back as the projection. */
@@ -168,6 +192,10 @@ function serviceRpcEcho() {
     },
     error: null,
   }))
+}
+
+function connectorFailure(code: string, retryable: boolean, detail: string | null = null) {
+  return new PeppolTransportError('Connector: hosted refusal', { retryable, code, detail })
 }
 
 describe('POST /api/invoices/[id]/peppol/send', () => {
@@ -198,6 +226,10 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     )
   }
 
+  function expectRefusalLogged(code: string) {
+    expect(logMock.info).toHaveBeenCalledWith('peppol send refused', { invoiceId: INVOICE_ID, code })
+  }
+
   it('returns 401 when the caller is not authenticated', async () => {
     unregister = registerPeppolTransport(makeTransport())
     requireAuthMock.mockResolvedValue({
@@ -226,21 +258,44 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     const body = await response.json()
     expect(body.error.code).toBe('PEPPOL_TRANSPORT_UNAVAILABLE')
     expect(body.error.details.reason).toBe('provider_selection_required')
+    expectRefusalLogged('PEPPOL_TRANSPORT_UNAVAILABLE')
+  })
+
+  it('refuses the demo company before it can reach the access point', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    realCompany(true)
+    const response = await send()
+    expect(response.status).toBe(403)
+    const body = await response.json()
+    expect(body.error.code).toBe('PEPPOL_SANDBOX_NOT_ALLOWED')
+    expect(body.error.message).toBe(
+      'Peppol-sändning är inte tillgänglig i demobolaget. Skapa ett riktigt konto för att skicka e-fakturor.',
+    )
+    expect(body.error.message_en).toBe(
+      'Peppol sending is not available in the demo company. Create a real account to send e-invoices.',
+    )
+    expect(transport.lookupRecipient).not.toHaveBeenCalled()
+    expect(transport.submit).not.toHaveBeenCalled()
+    expectRefusalLogged('PEPPOL_SANDBOX_NOT_ALLOWED')
   })
 
   it('refuses a company without a Peppol grant before touching the invoice', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
+    realCompany()
     serviceTables.enqueue({ data: null, error: null })              // no access row
     const response = await send()
     expect(response.status).toBe(403)
     expect((await response.json()).error.code).toBe('PEPPOL_ACCESS_REQUIRED')
     expect(transport.submit).not.toHaveBeenCalled()
+    expectRefusalLogged('PEPPOL_ACCESS_REQUIRED')
   })
 
   it('refuses once the company has used its sending cap', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
+    realCompany()
     grantAccess(5, 5)
     const response = await send()
     expect(response.status).toBe(409)
@@ -248,25 +303,90 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     expect(body.error.code).toBe('PEPPOL_SEND_LIMIT_REACHED')
     expect(body.error.details).toMatchObject({ max_sends: 5, sent_count: 5 })
     expect(transport.submit).not.toHaveBeenCalled()
+    expectRefusalLogged('PEPPOL_SEND_LIMIT_REACHED')
   })
 
   it('returns 404 when the invoice is not in the active company', async () => {
     unregister = registerPeppolTransport(makeTransport())
+    realCompany()
     grantAccess()
     enqueue({ data: null, error: { message: 'not found' } })
     const response = await send()
     expect(response.status).toBe(404)
     expect((await response.json()).error.code).toBe('INVOICE_NOT_FOUND')
+    expectRefusalLogged('INVOICE_NOT_FOUND')
   })
 
   it('rejects cancelled and proforma invoices with a state conflict', async () => {
     unregister = registerPeppolTransport(makeTransport())
+    realCompany()
     grantAccess()
     enqueue({ data: invoiceRow({ status: 'cancelled' }), error: null })
     enqueue({ data: company, error: null })
     const response = await send()
     expect(response.status).toBe(409)
     expect((await response.json()).error.code).toBe('PEPPOL_SEND_INVALID_STATUS')
+    expectRefusalLogged('PEPPOL_SEND_INVALID_STATUS')
+  })
+
+  it('logs which BIS preflight rule stopped the send', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    realCompany()
+    grantAccess()
+    enqueue({ data: invoiceRow({ your_reference: null }), error: null })
+    enqueue({ data: company, error: null })
+
+    const response = await send()
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('VALIDATION_ERROR')
+    expect(transport.lookupRecipient).not.toHaveBeenCalled()
+    expect(logMock.info).toHaveBeenCalledWith('peppol send refused', {
+      invoiceId: INVOICE_ID,
+      code: 'VALIDATION_ERROR',
+      issues: ['BUYER_REFERENCE_REQUIRED'],
+    })
+  })
+
+  it('names the missing fiscal year when the stage RPC has no retention basis for the invoice date', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    realCompany()
+    grantAccess()
+    enqueue({ data: invoiceRow(), error: null })
+    enqueue({ data: company, error: null })
+    enqueue({
+      data: null,
+      error: { code: 'P0002', message: 'Peppol delivery requires a fiscal period retention basis' },
+    })
+
+    const response = await send()
+
+    expect(response.status).toBe(422)
+    const body = await response.json()
+    expect(body.error.code).toBe('PEPPOL_FISCAL_PERIOD_MISSING')
+    expect(body.error.details).toMatchObject({ invoice_date: '2026-08-13' })
+    expect(transport.lookupRecipient).not.toHaveBeenCalled()
+    expect(serviceRpcMock).not.toHaveBeenCalled()
+    expectRefusalLogged('PEPPOL_FISCAL_PERIOD_MISSING')
+  })
+
+  it('keeps the generic mapping for the stage RPC\'s other P0002', async () => {
+    unregister = registerPeppolTransport(makeTransport())
+    realCompany()
+    grantAccess()
+    enqueue({ data: invoiceRow(), error: null })
+    enqueue({ data: company, error: null })
+    enqueue({
+      data: null,
+      error: { code: 'P0002', message: 'invoice not found or not eligible for Peppol staging' },
+    })
+
+    const response = await send()
+
+    expect((await response.json()).error.code).not.toBe('PEPPOL_FISCAL_PERIOD_MISSING')
+    expect(logMock.info).not.toHaveBeenCalledWith('peppol send refused', expect.anything())
   })
 
   it('stops before the network when the recipient has no Peppol registration', async () => {
@@ -279,10 +399,9 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
       }),
     })
     unregister = registerPeppolTransport(transport)
+    realCompany()
     grantAccess()
-    enqueue({ data: invoiceRow(), error: null })
-    enqueue({ data: company, error: null })
-    enqueue({ data: stagedDelivery, error: null })
+    stageInvoice()
 
     const response = await send()
 
@@ -294,13 +413,68 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     expect(serviceRpcMock).not.toHaveBeenCalled()
   })
 
+  it('answers 502 and records nothing terminal when the lookup itself fails transiently', async () => {
+    const transport = makeTransport({
+      lookupRecipient: vi.fn().mockRejectedValue(
+        connectorFailure('CONNECTOR_UNREACHABLE', true, 'ECONNRESET'),
+      ),
+    })
+    unregister = registerPeppolTransport(transport)
+    realCompany()
+    grantAccess()
+    stageInvoice()
+
+    const response = await send()
+
+    expect(response.status).toBe(502)
+    const body = await response.json()
+    expect(body.error.code).toBe('PEPPOL_LOOKUP_FAILED')
+    expect(body.error.details).toEqual({ reason: 'ECONNRESET', code: 'CONNECTOR_UNREACHABLE' })
+    expect(transport.submit).not.toHaveBeenCalled()
+    expect(serviceRpcMock).not.toHaveBeenCalled()
+  })
+
+  it('answers 502 too when the lookup failure is not retryable: a lookup is never a document verdict', async () => {
+    const transport = makeTransport({
+      lookupRecipient: vi.fn().mockRejectedValue(
+        connectorFailure('CONNECTOR_PROTOCOL_ERROR', false, 'participant: Required'),
+      ),
+    })
+    unregister = registerPeppolTransport(transport)
+    realCompany()
+    grantAccess()
+    stageInvoice()
+
+    const response = await send()
+
+    expect(response.status).toBe(502)
+    const body = await response.json()
+    expect(body.error.code).toBe('PEPPOL_LOOKUP_FAILED')
+    expect(body.error.details.code).toBe('CONNECTOR_PROTOCOL_ERROR')
+    expect(serviceRpcMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps the generic handling when the lookup throws something that is not a transport error', async () => {
+    const transport = makeTransport({
+      lookupRecipient: vi.fn().mockRejectedValue(new Error('boom')),
+    })
+    unregister = registerPeppolTransport(transport)
+    realCompany()
+    grantAccess()
+    stageInvoice()
+
+    const response = await send()
+
+    expect(response.status).toBe(500)
+    expect((await response.json()).error.code).not.toBe('PEPPOL_LOOKUP_FAILED')
+  })
+
   it('looks up, submits the staged XML and records the lifecycle for an already issued invoice', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
+    realCompany()
     grantAccess()
-    enqueue({ data: invoiceRow(), error: null })
-    enqueue({ data: company, error: null })
-    enqueue({ data: stagedDelivery, error: null })
+    stageInvoice()
 
     const response = await send()
     const body = await response.json()
@@ -335,15 +509,15 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
       expect((call[1] as Record<string, unknown>).p_provider_tenant_id).toBe('SE5560000000')
     }
     expect(issueAndBookMock).not.toHaveBeenCalled()
+    expect(logMock.info).not.toHaveBeenCalledWith('peppol send refused', expect.anything())
   })
 
   it('issues and books a draft only after the network accepted it', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
+    realCompany()
     grantAccess()
-    enqueue({ data: invoiceRow({ status: 'draft' }), error: null })
-    enqueue({ data: company, error: null })
-    enqueue({ data: stagedDelivery, error: null })
+    stageInvoice({ status: 'draft' })
 
     const response = await send()
     const body = await response.json()
@@ -362,11 +536,10 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
 
   it('reports a failed issuance without pretending the network send did not happen', async () => {
     unregister = registerPeppolTransport(makeTransport())
+    realCompany()
     grantAccess()
     issueAndBookMock.mockResolvedValue({ ok: false, errorCode: 'INVOICE_MARK_SENT_RACE' })
-    enqueue({ data: invoiceRow({ status: 'draft' }), error: null })
-    enqueue({ data: company, error: null })
-    enqueue({ data: stagedDelivery, error: null })
+    stageInvoice({ status: 'draft' })
 
     const response = await send()
     const body = await response.json()
@@ -382,12 +555,13 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
   it('replays idempotently when the exact XML was already handed to the network', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
+    realCompany()
     grantAccess()
-    enqueue({ data: invoiceRow(), error: null })
-    enqueue({ data: company, error: null })
-    enqueue({
-      data: { ...stagedDelivery, provider: 'qvalia', provider_submission_id: 'int-1', status: 'submission_accepted' },
-      error: null,
+    stageInvoice({}, {
+      ...stagedDelivery,
+      provider: 'qvalia',
+      provider_submission_id: 'int-1',
+      status: 'submission_accepted',
     })
 
     const response = await send()
@@ -409,10 +583,9 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
       ),
     })
     unregister = registerPeppolTransport(transport)
+    realCompany()
     grantAccess()
-    enqueue({ data: invoiceRow({ status: 'draft' }), error: null })
-    enqueue({ data: company, error: null })
-    enqueue({ data: stagedDelivery, error: null })
+    stageInvoice({ status: 'draft' })
 
     const response = await send()
     const body = await response.json()
@@ -429,22 +602,51 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     expect(issueAndBookMock).not.toHaveBeenCalled()
   })
 
-  it('records a retryable failure and answers 502 when the access point is unreachable', async () => {
+  it('still records a terminal rejection for a non-retryable CONNECTOR_UPSTREAM_ERROR (the access point refused the document)', async () => {
     const transport = makeTransport({
       submit: vi.fn().mockRejectedValue(
-        new PeppolTransportError('Could not reach Qvalia', { retryable: true }),
+        connectorFailure('CONNECTOR_UPSTREAM_ERROR', false, 'BR-CO-10 Sum of invoice line net amount'),
       ),
     })
     unregister = registerPeppolTransport(transport)
+    realCompany()
     grantAccess()
-    enqueue({ data: invoiceRow(), error: null })
-    enqueue({ data: company, error: null })
-    enqueue({ data: stagedDelivery, error: null })
+    stageInvoice()
+
+    const response = await send()
+    const body = await response.json()
+
+    expect(response.status).toBe(422)
+    expect(body.error.code).toBe('PEPPOL_SUBMISSION_REJECTED')
+    expect(body.error.details).toEqual({
+      reason: 'BR-CO-10 Sum of invoice line net amount',
+      code: 'CONNECTOR_UPSTREAM_ERROR',
+    })
+    const last = serviceRpcMock.mock.calls.at(-1)?.[1] as Record<string, unknown>
+    expect(last).toMatchObject({
+      p_provider_event_code: 'submit_rejected',
+      p_normalized_status: 'failed',
+      p_is_terminal: true,
+    })
+  })
+
+  it('records a retryable failure and answers 502 when the hosted service is unreachable', async () => {
+    const transport = makeTransport({
+      submit: vi.fn().mockRejectedValue(
+        connectorFailure('CONNECTOR_UNREACHABLE', true),
+      ),
+    })
+    unregister = registerPeppolTransport(transport)
+    realCompany()
+    grantAccess()
+    stageInvoice()
 
     const response = await send()
 
     expect(response.status).toBe(502)
-    expect((await response.json()).error.code).toBe('PEPPOL_SUBMISSION_FAILED')
+    const body = await response.json()
+    expect(body.error.code).toBe('PEPPOL_SUBMISSION_FAILED')
+    expect(body.error.details).toEqual({ reason: null, code: 'CONNECTOR_UNREACHABLE' })
     const last = serviceRpcMock.mock.calls.at(-1)?.[1] as Record<string, unknown>
     expect(last).toMatchObject({
       p_provider_event_code: 'submit_failed',
@@ -453,21 +655,160 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     })
   })
 
+  describe('a retryable hosted answer is a plain failure, whatever its code', () => {
+    const transientCodes = [
+      'CONNECTOR_UNREACHABLE',
+      'CONNECTOR_RATE_LIMITED',
+      'CONNECTOR_LEDGER_FAILED',
+      'CONNECTOR_UPSTREAM_UNCONFIGURED',
+      'CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS',
+      'CONNECTOR_UPSTREAM_ERROR',
+      'HTTP_429',
+      'HTTP_502',
+    ]
+
+    it.each(transientCodes)('%s retryable: 502 PEPPOL_SUBMISSION_FAILED, retryable_failure, not terminal', async (code) => {
+      const transport = makeTransport({
+        submit: vi.fn().mockRejectedValue(connectorFailure(code, true, 'busy')),
+      })
+      unregister = registerPeppolTransport(transport)
+      realCompany()
+      grantAccess()
+      stageInvoice()
+
+      const response = await send()
+      const body = await response.json()
+
+      expect(response.status).toBe(502)
+      expect(body.error.code).toBe('PEPPOL_SUBMISSION_FAILED')
+      expect(body.error.details).toEqual({ reason: 'busy', code })
+      const last = serviceRpcMock.mock.calls.at(-1)?.[1] as Record<string, unknown>
+      expect(last).toMatchObject({
+        p_provider_event_code: 'submit_failed',
+        p_normalized_status: 'retryable_failure',
+        p_is_terminal: false,
+      })
+    })
+  })
+
+  describe('a coded non-retryable hosted answer is a precondition, never a verdict on the document', () => {
+    const preconditionCodes = [
+      'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED',
+      'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED',
+      'CONNECTOR_QUOTA_EXCEEDED',
+      'CONNECTOR_SCOPE_MISSING',
+      'CONNECTOR_KEY_INVALID',
+      'CONNECTOR_KEY_SUSPENDED',
+      'CONNECTOR_KEY_MISSING',
+      'CONNECTOR_COMPANY_MISSING',
+      'CONNECTOR_PATH_NOT_ALLOWED',
+      'CONNECTOR_NOT_OWNED',
+      'BAD_REQUEST',
+      'CONNECTOR_PROTOCOL_ERROR',
+      'HTTP_403',
+      'HTTP_404',
+    ]
+
+    it.each(preconditionCodes)('%s stays resendable: 409, retryable_failure, and the same XML is submitted again', async (code) => {
+      const transport = makeTransport({
+        submit: vi.fn()
+          .mockRejectedValueOnce(connectorFailure(code, false, 'hosted detail'))
+          .mockResolvedValueOnce(acceptedReceipt),
+      })
+      unregister = registerPeppolTransport(transport)
+      realCompany()
+      grantAccess()
+      stageInvoice()
+
+      const first = await send()
+      const body = await first.json()
+
+      expect(first.status).toBe(409)
+      expect(body.error.code).toBe('PEPPOL_SEND_PRECONDITION_FAILED')
+      expect(body.error.details).toEqual({ reason: 'hosted detail', code })
+      expect(body.error.message).toMatch(/^Fakturan kunde inte skickas via Peppol ännu: /)
+      const last = serviceRpcMock.mock.calls.at(-1)?.[1] as Record<string, unknown>
+      expect(last).toMatchObject({
+        p_provider_event_code: 'submit_failed',
+        p_normalized_status: 'retryable_failure',
+        p_is_terminal: false,
+      })
+      expect(serviceRpcMock.mock.calls.map((call) => (call[1] as Record<string, unknown>).p_provider_event_code))
+        .not.toContain('submit_rejected')
+
+      // Same XML again: the stage RPC hands back the non-terminal row and
+      // the route goes to the network a second time instead of refusing.
+      realCompany()
+      grantAccess()
+      stageInvoice({}, { ...stagedDelivery, status: 'retryable_failure', status_detail: 'hosted detail' })
+
+      const second = await send()
+
+      expect(second.status).toBe(201)
+      expect(transport.submit).toHaveBeenCalledTimes(2)
+      expect((await second.json()).data.delivery.status).toBe('submission_accepted')
+    })
+
+    it.each([
+      [
+        'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED',
+        'Fakturan kunde inte skickas via Peppol ännu: Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Fakturering > E-faktura via Peppol, eller kontakta support.',
+        "The invoice could not be sent via Peppol yet: The company's Peppol id is not registered with the access point. Switch on receiving under Settings > Invoicing > E-invoicing via Peppol, or contact support.",
+      ],
+      [
+        'CONNECTOR_SCOPE_MISSING',
+        'Fakturan kunde inte skickas via Peppol ännu: Kopplingsnyckeln saknar Peppol-behörighet. Kontakta support.',
+        'The invoice could not be sent via Peppol yet: The connector key lacks Peppol permission. Contact support.',
+      ],
+      [
+        'CONNECTOR_QUOTA_EXCEEDED',
+        'Fakturan kunde inte skickas via Peppol ännu: Kontots Peppol-platser är förbrukade. Hör av dig till support så öppnar vi fler.',
+        'The invoice could not be sent via Peppol yet: The account has used its Peppol slots. Contact support and we will open more.',
+      ],
+    ])('composes the hosted text onto the prefix when the registry knows %s', async (code, sv, en) => {
+      unregister = registerPeppolTransport(makeTransport({
+        submit: vi.fn().mockRejectedValue(connectorFailure(code, false)),
+      }))
+      realCompany()
+      grantAccess()
+      stageInvoice()
+
+      const body = await (await send()).json()
+
+      expect(body.error.message).toBe(sv)
+      expect(body.error.message_en).toBe(en)
+    })
+
+    it('falls back to the settings pointer for a code the registry does not know', async () => {
+      unregister = registerPeppolTransport(makeTransport({
+        submit: vi.fn().mockRejectedValue(connectorFailure('HTTP_403', false)),
+      }))
+      realCompany()
+      grantAccess()
+      stageInvoice()
+
+      const body = await (await send()).json()
+
+      expect(body.error.message).toBe(
+        'Fakturan kunde inte skickas via Peppol ännu: kontrollera Peppol-inställningarna och försök igen.',
+      )
+      expect(body.error.message_en).toBe(
+        'The invoice could not be sent via Peppol yet: check the Peppol settings and try again.',
+      )
+    })
+  })
+
   it('refuses to resend an exact document the access point already rejected', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
+    realCompany()
     grantAccess()
-    enqueue({ data: invoiceRow(), error: null })
-    enqueue({ data: company, error: null })
-    enqueue({
-      data: {
-        ...stagedDelivery,
-        provider: 'qvalia',
-        status: 'failed',
-        status_detail: 'BR-CO-10',
-        terminal_at: '2026-08-21T09:00:00.000Z',
-      },
-      error: null,
+    stageInvoice({}, {
+      ...stagedDelivery,
+      provider: 'qvalia',
+      status: 'failed',
+      status_detail: 'BR-CO-10',
+      terminal_at: '2026-08-21T09:00:00.000Z',
     })
 
     const response = await send()

@@ -99,6 +99,7 @@ import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { useBranding } from '@/lib/branding/brand-context'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { useShell } from '@/components/dashboard/ShellProvider'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
 interface PeppolDeliveryView {
@@ -162,6 +163,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const canEmail = useCapability(CAPABILITY.email_send)
   const { id } = use(params)
   const router = useRouter()
+  const shell = useShell()
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoice_detail')
@@ -1756,7 +1758,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   return (
     <div className="space-y-8 stagger-enter">
       {/* Back link + prev/next record pager on their own quiet row, so the
-          title below keeps a stable position while stepping between records */}
+          title below keeps a stable position while stepping between records.
+          Shell v2: the sidebar says where we are and the pager sits in the
+          top bar, so the row goes. */}
+      {shell !== 'v2' && (
       <div className="flex items-center justify-between gap-4">
         <button
           type="button"
@@ -1772,14 +1777,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           currentId={id}
         />
       </div>
+      )}
 
       {/* Header: serif title with one status element, a quiet meta line, and
-          the next step on the right. Everything else lives in the ⋯ menu. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
+          the next step on the right. Everything else lives in the ⋯ menu.
+          The page-header hooks turn it into the v2 top bar. */}
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             {/* data-ph-mask: the title carries the invoice number */}
-            <h1 data-ph-mask="" className="font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
             {status.exception ? (
               <Badge variant={status.variant}>{status.label}</Badge>
             ) : (
@@ -1792,10 +1799,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </Badge>
             )}
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
+          <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
+          {shell === 'v2' && (
+            <DetailPager
+              contextKey={listContextKey('invoices', company?.id)}
+              basePath="/invoices"
+              currentId={id}
+              className="shrink-0"
+            />
+          )}
           {isEditableDraft && canWrite && (
             <Button variant="outline" asChild>
               <Link href={`/invoices/${invoice.id}/edit`}>

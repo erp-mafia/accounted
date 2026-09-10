@@ -78,10 +78,18 @@ interface SupabaseStub {
   chartAccountNumbers?: string[]
   /** Existing cash_accounts rows for the company (ledger collision validation). */
   cashAccountRows?: Array<{
+    id?: string
     external_uid: string | null
     bank_connection_id: string | null
     ledger_account: string
+    iban?: string | null
+    /** Mirrors the picker's checkbox in that row's connection; absent = live claim. */
+    enabled?: boolean
   }>
+  /** Release-pass updates (rows demoted to manual before the mirror), in order. */
+  cashReleases?: Array<{ payload: Record<string, unknown>; ids: string[] }>
+  /** Error returned by the release-pass update. */
+  cashReleaseError?: { message: string } | null
   /** Completed SIE import overlapping the backfill window (renewal-flood guard). */
   sieImportRow?: { id: string } | null
   /** company_members row for the caller; role 'viewer' disables the sweep. */
@@ -120,6 +128,13 @@ function buildSupabase(stub: SupabaseStub) {
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn(() => Promise.resolve({ data: stub.cashAccountRows ?? [], error: null })),
+          // Release pass: update({...}).in('id', ids) awaited as a thenable.
+          update: vi.fn((payload: Record<string, unknown>) => ({
+            in: vi.fn((_col: string, ids: string[]) => {
+              ;(stub.cashReleases ??= []).push({ payload, ids })
+              return Promise.resolve({ error: stub.cashReleaseError ?? null })
+            }),
+          })),
         }
       }
       // Renewal-flood guard: SIE-overlap probe before the inline backfill.
@@ -1358,6 +1373,229 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(mockAllocate).not.toHaveBeenCalled()
       const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
       expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1940')
+    })
+
+    describe('unchecked accounts hold their ledger only as a soft claim', () => {
+      // The reported dead end (support case 2026-09-09): the wrong bank
+      // account had been synced onto 1930, the user unchecked it and put the
+      // right one on 1930, and the save answered 400 because the unchecked
+      // account still counted as a claim. The picker hides the ledger
+      // dropdown for unchecked rows and disconnect + reconnect re-claims the
+      // same rows by IBAN, so no route led out of it.
+      const RELEASE = { bank_connection_id: null, external_uid: null }
+
+      it('lets a checked account take 1930 from an unchecked one on the same connection', async () => {
+        mockedSync.mockResolvedValue({ requestedFromDate: '2026-01-01', historyNarrowed: false, imported: 0, duplicates: 0, errors: 0 })
+        const stub: SupabaseStub = {
+          authUser: { id: 'user-1' },
+          chartAccountNumbers: ['1930'],
+          cashAccountRows: [
+            { id: 'row-1930', external_uid: 'acc-wrong', bank_connection_id: 'conn-1', ledger_account: '1930' },
+            { id: 'row-1935', external_uid: 'acc-right', bank_connection_id: 'conn-1', ledger_account: '1935' },
+          ],
+          connectionRow: {
+            id: 'conn-1',
+            status: 'pending_selection',
+            accounts_data: [
+              { uid: 'acc-wrong', currency: 'SEK', enabled: true, ledger_account: '1930' },
+              { uid: 'acc-right', currency: 'SEK', enabled: true, ledger_account: '1935' },
+            ],
+          },
+        }
+        const supabase = buildSupabase(stub)
+        const ctx = makeContext(supabase)
+
+        const res = await accountsRoute.handler(
+          makeRequest({
+            connection_id: 'conn-1',
+            enabled_uids: ['acc-right'],
+            account_mappings: [{ uid: 'acc-right', ledger_account: '1930' }],
+          }),
+          ctx
+        )
+
+        expect(res.status).toBe(200)
+        // The unchecked account's row handed over its slot before the mirror ran.
+        expect(stub.cashReleases).toEqual([{ payload: RELEASE, ids: ['row-1930'] }])
+        // accounts_data: the unchecked account no longer pre-fills 1930, the checked one holds it.
+        const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+        const wrong = written.find(a => a.uid === 'acc-wrong')
+        expect(wrong?.enabled).toBe(false)
+        expect(wrong).not.toHaveProperty('ledger_account')
+        expect(written.find(a => a.uid === 'acc-right')?.ledger_account).toBe('1930')
+        // The mirror only touches the checked account; the yielded one has no row to write.
+        expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
+        expect(mockUpsertFromPsd2).toHaveBeenCalledWith(
+          expect.anything(),
+          'company-1',
+          expect.objectContaining({ external_uid: 'acc-right', ledger_account: '1930', enabled: true })
+        )
+        expect(mockAllocate).not.toHaveBeenCalled()
+      })
+
+      it('keeps an unchecked account on its ledger when nobody claims it, mirrored as disabled', async () => {
+        const stub: SupabaseStub = {
+          authUser: { id: 'user-1' },
+          cashAccountRows: [
+            { id: 'row-1930', external_uid: 'acc-1', bank_connection_id: 'conn-1', ledger_account: '1930' },
+            { id: 'row-1935', external_uid: 'acc-2', bank_connection_id: 'conn-1', ledger_account: '1935' },
+          ],
+          connectionRow: {
+            id: 'conn-1',
+            status: 'active',
+            accounts_data: [
+              { uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' },
+              { uid: 'acc-2', currency: 'SEK', enabled: true, ledger_account: '1935' },
+            ],
+          },
+        }
+        const supabase = buildSupabase(stub)
+        const ctx = makeContext(supabase)
+
+        const res = await accountsRoute.handler(
+          makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
+          ctx
+        )
+
+        expect(res.status).toBe(200)
+        expect(stub.cashReleases).toBeUndefined()
+        const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+        expect(written.find(a => a.uid === 'acc-2')).toMatchObject({ enabled: false, ledger_account: '1935' })
+        // Re-checking later lands back on 1935: the row stays, its enabled flag flips off.
+        expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(2)
+        expect(mockUpsertFromPsd2).toHaveBeenCalledWith(
+          expect.anything(),
+          'company-1',
+          expect.objectContaining({ external_uid: 'acc-2', ledger_account: '1935', enabled: false })
+        )
+      })
+
+      it('lets two checked accounts swap ledgers in one save', async () => {
+        const stub: SupabaseStub = {
+          authUser: { id: 'user-1' },
+          chartAccountNumbers: ['1930', '1935'],
+          cashAccountRows: [
+            { id: 'row-1930', external_uid: 'acc-1', bank_connection_id: 'conn-1', ledger_account: '1930' },
+            { id: 'row-1935', external_uid: 'acc-2', bank_connection_id: 'conn-1', ledger_account: '1935' },
+          ],
+          connectionRow: {
+            id: 'conn-1',
+            status: 'active',
+            accounts_data: [
+              { uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' },
+              { uid: 'acc-2', currency: 'SEK', enabled: true, ledger_account: '1935' },
+            ],
+          },
+        }
+        const supabase = buildSupabase(stub)
+        const ctx = makeContext(supabase)
+
+        const res = await accountsRoute.handler(
+          makeRequest({
+            connection_id: 'conn-1',
+            enabled_uids: ['acc-1', 'acc-2'],
+            account_mappings: [
+              { uid: 'acc-1', ledger_account: '1935' },
+              { uid: 'acc-2', ledger_account: '1930' },
+            ],
+          }),
+          ctx
+        )
+
+        expect(res.status).toBe(200)
+        // Both rows are demoted in ONE update, so neither upsert can trip the
+        // (company_id, ledger_account) constraint on the other's old slot.
+        expect(stub.cashReleases).toHaveLength(1)
+        expect([...stub.cashReleases![0].ids].sort()).toEqual(['row-1930', 'row-1935'])
+        const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+        expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1935')
+        expect(written.find(a => a.uid === 'acc-2')?.ledger_account).toBe('1930')
+        const mirrored = mockUpsertFromPsd2.mock.calls.map(c => {
+          const input = c[2] as { external_uid: string; ledger_account: string }
+          return [input.external_uid, input.ledger_account]
+        })
+        expect(mirrored.sort()).toEqual([
+          ['acc-1', '1935'],
+          ['acc-2', '1930'],
+        ])
+      })
+
+      it('lets a mapping take a ledger held by an account that is unchecked in another connection', async () => {
+        mockedSync.mockResolvedValue({ requestedFromDate: '2026-01-01', historyNarrowed: false, imported: 0, duplicates: 0, errors: 0 })
+        const stub: SupabaseStub = {
+          authUser: { id: 'user-1' },
+          chartAccountNumbers: ['1935'],
+          cashAccountRows: [
+            {
+              id: 'row-other',
+              external_uid: 'other-acc',
+              bank_connection_id: 'conn-OTHER',
+              ledger_account: '1935',
+              enabled: false,
+            },
+          ],
+          connectionRow: {
+            id: 'conn-1',
+            status: 'pending_selection',
+            accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+          },
+        }
+        const supabase = buildSupabase(stub)
+        const ctx = makeContext(supabase)
+
+        const res = await accountsRoute.handler(
+          makeRequest({
+            connection_id: 'conn-1',
+            enabled_uids: ['acc-1'],
+            account_mappings: [{ uid: 'acc-1', ledger_account: '1935' }],
+          }),
+          ctx
+        )
+
+        // Contrast with the synced-elsewhere case above, which stays a 400.
+        expect(res.status).toBe(200)
+        expect(stub.cashReleases).toEqual([{ payload: RELEASE, ids: ['row-other'] }])
+        expect(mockUpsertFromPsd2).toHaveBeenCalledWith(
+          expect.anything(),
+          'company-1',
+          expect.objectContaining({ external_uid: 'acc-1', ledger_account: '1935' })
+        )
+      })
+
+      it('returns 500 and persists nothing when the release update fails', async () => {
+        const stub: SupabaseStub = {
+          authUser: { id: 'user-1' },
+          chartAccountNumbers: ['1930'],
+          cashReleaseError: { message: 'boom' },
+          cashAccountRows: [
+            { id: 'row-1930', external_uid: 'acc-wrong', bank_connection_id: 'conn-1', ledger_account: '1930' },
+            { id: 'row-1935', external_uid: 'acc-right', bank_connection_id: 'conn-1', ledger_account: '1935' },
+          ],
+          connectionRow: {
+            id: 'conn-1',
+            status: 'active',
+            accounts_data: [
+              { uid: 'acc-wrong', currency: 'SEK', enabled: true, ledger_account: '1930' },
+              { uid: 'acc-right', currency: 'SEK', enabled: true, ledger_account: '1935' },
+            ],
+          },
+        }
+        const supabase = buildSupabase(stub)
+        const ctx = makeContext(supabase)
+
+        const res = await accountsRoute.handler(
+          makeRequest({
+            connection_id: 'conn-1',
+            enabled_uids: ['acc-right'],
+            account_mappings: [{ uid: 'acc-right', ledger_account: '1930' }],
+          }),
+          ctx
+        )
+
+        expect(res.status).toBe(500)
+        expect(stub.capturedUpdates).toBeUndefined()
+        expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
+      })
     })
 
     it('rejects account_mappings that is not an array', async () => {

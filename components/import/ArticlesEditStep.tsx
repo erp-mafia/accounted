@@ -1,6 +1,8 @@
 'use client'
 
 import { useMemo, useState, useCallback } from 'react'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -25,6 +27,8 @@ interface ArticlesEditStepProps {
   onBack: () => void
   isLoading: boolean
   error: string | null
+  /** What the parser noticed about the file (lib/import/notices.ts). */
+  notices?: ImportNotice[]
 }
 
 const TYPE_LABELS: Record<ArticleType, string> = {
@@ -40,6 +44,7 @@ export default function ArticlesEditStep({
   onBack,
   isLoading,
   error,
+  notices = [],
 }: ArticlesEditStepProps) {
   const [rows, setRows] = useState<EditableArticleRow[]>(() =>
     initialRows.map((r) => ({ ...r, id: newId() })),
@@ -100,7 +105,7 @@ export default function ArticlesEditStep({
         {/* Duplicate handling banner */}
         {liveDuplicateCount > 0 && (
           <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-            <RefreshCw className="h-4 w-4 text-warning mt-0.5 shrink-0" />
+            <RefreshCw className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
             <div className="flex-1 space-y-2">
               <p className="text-sm">
                 <span className="font-medium">{liveDuplicateCount} rader</span> matchar befintliga
@@ -127,17 +132,16 @@ export default function ArticlesEditStep({
           </div>
         )}
 
-        {/* VAT-adjustment notice: rows whose rate was snapped/defaulted */}
-        {adjustedVatCount > 0 && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-            <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
-            <p className="text-sm">
-              <span className="font-medium">{adjustedVatCount} rad{adjustedVatCount === 1 ? '' : 'er'}</span> fick
-              momssatsen omtolkad (avrundad till närmaste giltiga, eller satt till 25 %).
-              Kontrollera de markerade raderna innan du importerar: fel momssats ger fel moms på fakturan.
-            </p>
-          </div>
-        )}
+        {/* What the parser noticed (VAT-inclusive price column, reinterpreted
+            rates, dropped fields): one sentence, the rest folded. */}
+        <ImportNotices
+          notices={[
+            ...(adjustedVatCount > 0
+              ? [makeNotice('vat_reinterpreted', 'action', { count: adjustedVatCount })]
+              : []),
+            ...notices.filter((n) => n.code !== 'articles_vat_rounded' || adjustedVatCount === 0),
+          ]}
+        />
 
         {/* Table */}
         <div className="overflow-x-auto rounded-lg border">
@@ -277,15 +281,7 @@ export default function ArticlesEditStep({
           </table>
         </div>
 
-        {hasErrors && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-            <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
-            <p className="text-sm text-warning">
-              Vissa rader har valideringsfel (markerade i rött). Åtgärda eller ta bort dem
-              innan du fortsätter.
-            </p>
-          </div>
-        )}
+        {hasErrors && <ImportNotices notices={[makeNotice('rows_invalid', 'action')]} />}
 
         {error && (
           <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">

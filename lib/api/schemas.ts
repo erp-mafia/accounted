@@ -1439,6 +1439,16 @@ export const UpdateSupplierInvoiceSchema = z.object({
   notes: z.string().optional(),
 })
 
+/**
+ * PATCH /api/supplier-invoices/[id]/items/[itemId]: move one line to another
+ * expense account. The registration verifikat is corrected inline (BFL 5 kap
+ * 5 §, track 2) in the same call, so the invoice and the ledger never
+ * disagree about where the cost sits.
+ */
+export const SupplierInvoiceItemAccountSchema = z.object({
+  account_number: accountNumberSchema,
+})
+
 // ============================================================
 // Supplier payment batch (betalfil) schemas
 // ============================================================
@@ -1733,6 +1743,10 @@ export const CategorizeTransactionSchema = z
     category: TransactionCategorySchema.optional(),
     template_id: z.string().optional(),
     vat_treatment: VatTreatmentSchema.optional(),
+    // The underlag's actual moms, in the transaction's currency. Replaces the
+    // rate-based VAT line of a category or template booking (see
+    // buildMappingResultFromCategory / applyVatAmountOverride).
+    vat_amount: z.number().positive().optional(),
     account_override: accountNumber.optional(),
     counterparty_template_id: z.string().uuid().optional(),
     // Dimensions bag {sie_dim_no: code} applied to the business lines of the
@@ -1779,7 +1793,7 @@ export const BookTransactionSchema = z
 
 // ── Webshop orders (Orders page) ──────────────────────────────
 
-export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify'])
+export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify', 'zettle'])
 
 export const WebshopOrdersListQuerySchema = z.object({
   platform: WebshopPlatformSchema.optional(),
@@ -3133,6 +3147,11 @@ const EmployeeSchemaBase = z.object({
   vacation_rule: VacationRuleSchema.default('procentregeln'),
   vacation_days_per_year: z.number().int().min(25).max(40).default(25),
   semestertillagg_rate: z.number().min(0).max(0.05).default(0.0043),
+  // Kollektivavtal semesterlön rate as a fraction (0.135 = 13.5 %); null =
+  // statutory 12 % (14.4 % at 30 days). Bounds mirror the DB CHECK and
+  // lib/salary/vacation-pay-rate: below the floor is illegal, above 30 % is
+  // a unit typo.
+  vacation_pay_rate: z.number().min(0.12).max(0.3).nullable().optional(),
   email: z.string().email().optional(),
   phone: z.string().max(20).optional(),
   address_line1: z.string().max(200).optional(),
@@ -3255,6 +3274,7 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
   vacation_rule: VacationRuleSchema,
   vacation_days_per_year: z.number().int().min(25).max(40),
   semestertillagg_rate: z.number().min(0).max(0.05),
+  vacation_pay_rate: z.number().min(0.12).max(0.3).nullable(),
   vaxa_stod_eligible: z.boolean(),
 })
 
@@ -4299,6 +4319,11 @@ export const PartyEnrichSchema = z.object({
 
 export const PartySearchRegistryQuerySchema = z.object({
   q: z.string().max(120).optional(),
+})
+
+/** GET /api/company/search: the onboarding picker's free-text query. */
+export const CompanySearchQuerySchema = z.object({
+  q: z.string().trim().min(3).max(120),
 })
 
 /**

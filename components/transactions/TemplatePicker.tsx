@@ -21,41 +21,58 @@ import {
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import { convertLibraryToBookingTemplate, LIBRARY_TEMPLATE_PREFIX, isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
+import { GROUP_LABEL_KEYS, GROUP_ORDER, libraryTemplateGroup } from '@/lib/bookkeeping/template-groups'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import type { BookingTemplateLibrary, EntityType } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { useAccounts, useBookingTemplates } from '@/lib/reference-data/hooks'
+import { cn } from '@/lib/utils'
+import { HUE_DOT_CLASS, accountHue, templateGroupHue, type TemplateHue } from '@/lib/bookkeeping/template-group-colors'
+
+/** The account a template books against: the leg that is not the cash account. */
+function categoryAccount(debit: string, credit: string): string {
+  return debit.startsWith('19') ? credit : debit
+}
+
+/**
+ * Dense mode (shell v2, the Kick-style picker beside the row): one line per
+ * template with a colour dot for its family, the name, and the account.
+ */
+function DenseRow({
+  hue,
+  name,
+  account,
+  note,
+  selected,
+  onClick,
+}: {
+  hue: TemplateHue
+  name: string
+  account?: string | null
+  note?: string | null
+  selected?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'flex w-full items-center gap-2.5 rounded-sm px-3 py-1.5 text-left text-[13px] transition-colors duration-150 hover:bg-secondary/60',
+        selected && 'bg-secondary',
+      )}
+    >
+      <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', HUE_DOT_CLASS[hue])} aria-hidden />
+      <span className="min-w-0 flex-1 truncate">{name}</span>
+      {note && <span className="shrink-0 text-[10.5px] text-muted-foreground">{note}</span>}
+      {account && <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-muted-foreground">{account}</span>}
+    </button>
+  )
+}
 
 // Cap on the "Konton" search-result group: enough to cover sibling accounts
 // on a number-prefix query without drowning the template results.
 const ACCOUNT_RESULT_LIMIT = 8
-
-const GROUP_ORDER: TemplateGroup[] = [
-  'premises', 'vehicle', 'it_software', 'office_supplies', 'marketing',
-  'travel', 'representation', 'insurance', 'professional_services',
-  'bank_finance', 'telecom', 'education', 'personnel', 'revenue',
-  'financial', 'private_transfers', 'equipment',
-]
-
-const GROUP_LABEL_KEYS: Record<TemplateGroup, string> = {
-  premises: 'group_premises',
-  vehicle: 'group_vehicle',
-  it_software: 'group_it_software',
-  office_supplies: 'group_office_supplies',
-  marketing: 'group_marketing',
-  travel: 'group_travel',
-  representation: 'group_representation',
-  insurance: 'group_insurance',
-  professional_services: 'group_professional_services',
-  bank_finance: 'group_bank_finance',
-  telecom: 'group_telecom',
-  education: 'group_education',
-  personnel: 'group_personnel',
-  revenue: 'group_revenue',
-  financial: 'group_financial',
-  private_transfers: 'group_private_transfers',
-  equipment: 'group_equipment',
-}
 
 function getVatLabelKey(template: BookingTemplate): string | null {
   if (!template.vat_treatment) return null
@@ -91,6 +108,7 @@ interface TemplateCardProps {
   selected: boolean
   onClick: () => void
   compact?: boolean
+  dense?: boolean
 }
 
 interface LibraryTemplateCardProps {
@@ -98,15 +116,23 @@ interface LibraryTemplateCardProps {
   converted: BookingTemplate | null
   selected: boolean
   onClick: () => void
+  dense?: boolean
 }
 
-function LibraryTemplateCard({ raw, converted, selected, onClick }: LibraryTemplateCardProps) {
+function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: LibraryTemplateCardProps) {
   const t = useTranslations('tx_template_picker')
   // Convertible templates render the familiar two-account summary; complex
   // ones list the business legs (the cost/revenue accounts) so the user can
   // recognise the template at a glance, and carry an "opens editor" badge.
   const businessLines = raw.lines.filter((l) => l.type === 'business')
+  // The leg that says what the template is about: a result account (3xxx to
+  // 8xxx) before a balance one, so a salary template reads 7010, not 2710.
+  const shownLine = businessLines.find((l) => /^[3-8]/.test(l.account)) ?? businessLines[0] ?? raw.lines[0]
   const vatLabelKey = converted ? getVatLabelKey(converted) : null
+  if (dense) {
+    const account = converted ? categoryAccount(converted.debit_account, converted.credit_account) : (shownLine?.account ?? null)
+    return <DenseRow hue={templateGroupHue(libraryTemplateGroup(raw))} name={raw.name} account={account} note={vatLabelKey ? t(vatLabelKey) : null} selected={selected} onClick={onClick} />
+  }
 
   return (
     <button
@@ -157,9 +183,21 @@ function LibraryTemplateCard({ raw, converted, selected, onClick }: LibraryTempl
   )
 }
 
-function TemplateCard({ template, selected, onClick, compact }: TemplateCardProps) {
+function TemplateCard({ template, selected, onClick, compact, dense }: TemplateCardProps) {
   const t = useTranslations('tx_template_picker')
   const vatLabelKey = getVatLabelKey(template)
+  if (dense) {
+    return (
+      <DenseRow
+        hue={templateGroupHue(template.group)}
+        name={template.name_sv}
+        account={categoryAccount(template.debit_account, template.credit_account)}
+        note={vatLabelKey ? t(vatLabelKey) : null}
+        selected={selected}
+        onClick={onClick}
+      />
+    )
+  }
 
   return (
     <button
@@ -213,8 +251,11 @@ function TemplateCard({ template, selected, onClick, compact }: TemplateCardProp
 // routes into the manual booking flow with the account prefilled, so typing
 // "5460" or "Förbrukningsmaterial" always yields a path to booking even when
 // no template covers the account.
-function AccountResultCard({ account, onClick }: { account: AccountSearchItem; onClick: () => void }) {
+function AccountResultCard({ account, onClick, dense }: { account: AccountSearchItem; onClick: () => void; dense?: boolean }) {
   const t = useTranslations('tx_template_picker')
+  if (dense) {
+    return <DenseRow hue={accountHue(account.account_number)} name={account.account_name} account={account.account_number} note={t('opens_editor_badge')} onClick={onClick} />
+  }
   return (
     <button
       type="button"
@@ -236,7 +277,8 @@ function AccountResultCard({ account, onClick }: { account: AccountSearchItem; o
 }
 
 interface TemplatePickerProps {
-  direction: 'expense' | 'income'
+  /** Which side of the catalog to show; 'all' for a form with no transaction (Ny verifikation). */
+  direction: 'expense' | 'income' | 'all'
   entityType?: EntityType
   suggestedTemplates?: SuggestedTemplate[]
   onSelect: (template: BookingTemplate) => void
@@ -248,7 +290,16 @@ interface TemplatePickerProps {
   // into the manual booking flow with the account prefilled. Omitting it
   // keeps the picker template-only (and skips the accounts fetch).
   onSelectAccount?: (accountNumber: string) => void
+  /** Shell v2: one line per template, colour dot, no cards (the picker sits beside the row). */
+  dense?: boolean
   selectedTemplateId?: string
+  /**
+   * List the standard library templates (the seeded multi-line ones: lön,
+   * momsredovisning, skattekonto, bokslut) inside their families too. The
+   * transactions picker leaves them out because a bank row books through
+   * the static catalog; a form that writes a whole verifikat wants them.
+   */
+  includeSystemLibrary?: boolean
 }
 
 export default function TemplatePicker({
@@ -259,7 +310,9 @@ export default function TemplatePicker({
   onSelectCounterparty,
   onPickLibraryTemplate,
   onSelectAccount,
+  dense = false,
   selectedTemplateId,
+  includeSystemLibrary = false,
 }: TemplatePickerProps) {
   const t = useTranslations('tx_template_picker')
   const [searchQuery, setSearchQuery] = useState('')
@@ -270,9 +323,15 @@ export default function TemplatePicker({
   // 2-account contract: those get routed through the manual booking dialog
   // instead of the QuickReview single-account path.
   const { templates: libraryTemplates } = useBookingTemplates()
+  // Hidden templates (opted out in Inställningar > Mallar) never surface in
+  // a picker; only the settings panel lists them, for restore.
   const libraryRaw = useMemo(
-    () => libraryTemplates.filter((tt) => !tt.is_system && tt.is_active),
+    () => libraryTemplates.filter((tt) => !tt.is_system && tt.is_active && !tt.is_hidden),
     [libraryTemplates],
+  )
+  const systemRaw = useMemo(
+    () => (includeSystemLibrary ? libraryTemplates.filter((tt) => tt.is_system && tt.is_active && !tt.is_hidden) : []),
+    [libraryTemplates, includeSystemLibrary],
   )
   // The company's active chart, from the session cache (lib/reference-data),
   // so the search field can surface real accounts (issue #1877) without a
@@ -288,6 +347,7 @@ export default function TemplatePicker({
   // Direction filtering applies only to the static "Vanliga mallar" list:   // user-created library templates ignore it (inferred direction is unreliable
   // and users know what they made).
   const templateDirection = direction === 'income' ? 'income' : 'expense'
+  const bothDirections = direction === 'all'
 
   const accountIndex = useMemo(() => buildActiveAccountIndex(chartAccounts), [chartAccounts])
 
@@ -298,17 +358,18 @@ export default function TemplatePicker({
   const convertedById = useMemo(() => {
     const m = new Map<string, BookingTemplate | null>()
     for (const raw of libraryRaw) m.set(raw.id, convertLibraryToBookingTemplate(raw))
+    for (const raw of systemRaw) m.set(raw.id, convertLibraryToBookingTemplate(raw))
     return m
-  }, [libraryRaw])
+  }, [libraryRaw, systemRaw])
 
   const commonTemplates = useMemo(
-    () => getCommonTemplates(entityType, templateDirection),
-    [entityType, templateDirection]
+    () => (bothDirections ? [...getCommonTemplates(entityType, 'expense'), ...getCommonTemplates(entityType, 'income')] : getCommonTemplates(entityType, templateDirection)),
+    [entityType, templateDirection, bothDirections]
   )
 
   const advancedTemplates = useMemo(
-    () => getAdvancedTemplates(entityType, templateDirection),
-    [entityType, templateDirection]
+    () => (bothDirections ? [...getAdvancedTemplates(entityType, 'expense'), ...getAdvancedTemplates(entityType, 'income')] : getAdvancedTemplates(entityType, templateDirection)),
+    [entityType, templateDirection, bothDirections]
   )
 
   // Also include transfer templates in both directions
@@ -341,6 +402,21 @@ export default function TemplatePicker({
     })
   }, [libraryRaw, entityType])
 
+  // The standard library templates, by family, so they sit beside the
+  // catalog templates that book the same kind of thing.
+  const systemGrouped = useMemo(() => {
+    const grouped = new Map<TemplateGroup, BookingTemplateLibrary[]>()
+    for (const tt of systemRaw) {
+      if (entityType && tt.entity_type && tt.entity_type !== 'all' && tt.entity_type !== entityType) continue
+      const group = libraryTemplateGroup(tt)
+      const list = grouped.get(group) ?? []
+      list.push(tt)
+      grouped.set(group, list)
+    }
+    for (const list of grouped.values()) list.sort((a, b) => a.name.localeCompare(b.name, 'sv'))
+    return grouped
+  }, [systemRaw, entityType])
+
   // Convertible templates surface first; within each group, sort by name.
   const sortedLibraryRaw = useMemo(() => {
     return [...relevantLibraryRaw].sort((a, b) => {
@@ -363,7 +439,7 @@ export default function TemplatePicker({
     if (!qTrimmed) return null
     const q = qTrimmed.toLowerCase()
     const isDigits = /^\d+$/.test(qTrimmed)
-    const libraryMatches = sortedLibraryRaw.filter((tt) =>
+    const matchesLibrary = (tt: BookingTemplateLibrary) =>
       tt.name.toLowerCase().includes(q) ||
       (tt.description ?? '').toLowerCase().includes(q) ||
       // An all-digit query also prefix-matches the accounts a user template
@@ -371,19 +447,26 @@ export default function TemplatePicker({
       // lines only, so the settlement leg (typically 1930) and VAT lines do
       // not light up every template.
       (isDigits && tt.lines.some((l) => l.type === 'business' && l.account.startsWith(qTrimmed)))
-    )
+    const libraryMatches = [
+      ...sortedLibraryRaw.filter(matchesLibrary),
+      ...Array.from(systemGrouped.values()).flat().filter(matchesLibrary),
+    ]
     const staticMatches = searchTemplates(searchQuery, entityType).filter((tt) => {
-      return tt.direction === templateDirection || tt.direction === 'transfer'
+      return bothDirections || tt.direction === templateDirection || tt.direction === 'transfer'
     })
     const accountMatches = accountSearchEnabled
       ? searchAccounts(accountIndex, searchQuery, ACCOUNT_RESULT_LIMIT)
       : []
     return { library: libraryMatches, staticTemplates: staticMatches, accounts: accountMatches }
-  }, [searchQuery, entityType, templateDirection, sortedLibraryRaw, accountIndex, accountSearchEnabled])
+  }, [searchQuery, entityType, templateDirection, bothDirections, sortedLibraryRaw, systemGrouped, accountIndex, accountSearchEnabled])
 
   // Group templates by group for display
   const commonGrouped = useMemo(() => groupTemplates(allCommon), [allCommon])
   const advancedGrouped = useMemo(() => groupTemplates(allAdvanced), [allAdvanced])
+  const commonGroups = useMemo(
+    () => GROUP_ORDER.filter((g) => commonGrouped.has(g) || systemGrouped.has(g)),
+    [commonGrouped, systemGrouped],
+  )
 
   const bumpLibraryMru = (libraryId: string) => {
     fetch(`/api/settings/booking-templates/${libraryId}/touch`, { method: 'POST' }).catch(() => {})
@@ -436,7 +519,7 @@ export default function TemplatePicker({
   }, [suggestedTemplates])
   const resolvedSuggestions = useMemo(() => {
     if (!suggestedTemplates) return []
-    return suggestedTemplates.filter(s => !isCounterpartyTemplateId(s.template_id))
+    return suggestedTemplates.filter(s => !isCounterpartyTemplateId(s.template_id) && s.source !== 'assistant')
   }, [suggestedTemplates])
   const hasCounterparty = counterpartySuggestions.length > 0 && !!onSelectCounterparty
   const hasSuggestions = resolvedSuggestions.length > 0
@@ -444,8 +527,8 @@ export default function TemplatePicker({
   return (
     <div className="flex flex-col h-full">
       {/* Search bar */}
-      <div className="relative px-4 pt-3 pb-2">
-        <Search className="absolute left-7 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground mt-0.5" />
+      <div className={dense ? 'relative px-3 pt-2.5 pb-1.5' : 'relative px-4 pt-3 pb-2'}>
+        <Search className={cn('absolute top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground mt-0.5', dense ? 'left-6' : 'left-7')} />
         <Input
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -455,7 +538,7 @@ export default function TemplatePicker({
       </div>
 
       {/* Scrollable content */}
-      <div className="flex-1 overflow-auto px-4 pb-4 space-y-4">
+      <div className={dense ? 'flex-1 overflow-auto px-2 pb-2 space-y-3' : 'flex-1 overflow-auto px-4 pb-4 space-y-4'}>
         {/* Search results */}
         {searchResults !== null ? (
           (() => {
@@ -472,9 +555,10 @@ export default function TemplatePicker({
                       {t('no_results_manual_hint')}
                     </p>
                   )}
-                  <div className="space-y-1.5">
+                  <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
                     {searchResults.library.map((raw) => (
                       <LibraryTemplateCard
+                        dense={dense}
                         key={raw.id}
                         raw={raw}
                         converted={convertedById.get(raw.id) ?? null}
@@ -484,6 +568,7 @@ export default function TemplatePicker({
                     ))}
                     {searchResults.staticTemplates.map((tt) => (
                       <TemplateCard
+                        dense={dense}
                         key={tt.id}
                         template={tt}
                         selected={selectedTemplateId === tt.id}
@@ -497,9 +582,10 @@ export default function TemplatePicker({
                     <p className="text-xs font-medium text-muted-foreground mb-2">
                       {t('accounts_group')}
                     </p>
-                    <div className="space-y-1.5">
+                    <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
                       {searchResults.accounts.map((acc) => (
                         <AccountResultCard
+                          dense={dense}
                           key={acc.account_number}
                           account={acc}
                           onClick={() => onSelectAccount(acc.account_number)}
@@ -522,9 +608,10 @@ export default function TemplatePicker({
                   <Briefcase className="h-3 w-3" />
                   {t('my_templates')}
                 </p>
-                <div className="space-y-1.5">
+                <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
                   {sortedLibraryRaw.map((raw) => (
                     <LibraryTemplateCard
+                      dense={dense}
                       key={raw.id}
                       raw={raw}
                       converted={convertedById.get(raw.id) ?? null}
@@ -540,8 +627,17 @@ export default function TemplatePicker({
             {hasCounterparty && (
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-2">{t('previous_counterparties')}</p>
-                <div className="space-y-1.5">
-                  {counterpartySuggestions.slice(0, 3).map((s) => (
+                <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
+                  {counterpartySuggestions.slice(0, 3).map((s) => dense ? (
+                    <DenseRow
+                      key={s.template_id}
+                      hue={accountHue(s.line_pattern?.find((lp) => lp.type === 'business')?.account ?? categoryAccount(s.debit_account, s.credit_account))}
+                      name={s.name_sv}
+                      account={s.line_pattern?.find((lp) => lp.type === 'business')?.account ?? categoryAccount(s.debit_account, s.credit_account)}
+                      note={s.description_sv}
+                      onClick={() => onSelectCounterparty!(s.template_id)}
+                    />
+                  ) : (
                     <button
                       key={s.template_id}
                       type="button"
@@ -579,7 +675,7 @@ export default function TemplatePicker({
             {hasSuggestions && (
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-2">{t('suggested')}</p>
-                <div className="space-y-1.5">
+                <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
                   {resolvedSuggestions.slice(0, 5).map((s) => {
                     // Find the full template object
                     const fullTemplate = allCommon.find((t) => t.id === s.template_id) ||
@@ -587,6 +683,7 @@ export default function TemplatePicker({
                     if (!fullTemplate) return null
                     return (
                       <TemplateCard
+                        dense={dense}
                         key={s.template_id}
                         template={fullTemplate}
                         selected={selectedTemplateId === s.template_id}
@@ -603,19 +700,30 @@ export default function TemplatePicker({
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-2">{t('common_templates')}</p>
               <div className="space-y-3">
-                {GROUP_ORDER.filter((g) => commonGrouped.has(g)).map((group) => (
+                {commonGroups.map((group) => (
                   <div key={group}>
                     <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-1">
                       {t(GROUP_LABEL_KEYS[group])}
                     </p>
-                    <div className="space-y-1.5">
-                      {commonGrouped.get(group)!.map((t) => (
+                    <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
+                      {(commonGrouped.get(group) ?? []).map((t) => (
                         <TemplateCard
+                          dense={dense}
                           key={t.id}
                           template={t}
                           selected={selectedTemplateId === t.id}
                           onClick={() => handleSelect(t)}
                           compact
+                        />
+                      ))}
+                      {(systemGrouped.get(group) ?? []).map((raw) => (
+                        <LibraryTemplateCard
+                          dense={dense}
+                          key={raw.id}
+                          raw={raw}
+                          converted={convertedById.get(raw.id) ?? null}
+                          selected={selectedTemplateId === (convertedById.get(raw.id)?.id ?? raw.id)}
+                          onClick={() => handleSelectLibraryRaw(raw)}
                         />
                       ))}
                     </div>
@@ -647,9 +755,10 @@ export default function TemplatePicker({
                         <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-1">
                           {t(GROUP_LABEL_KEYS[group])}
                         </p>
-                        <div className="space-y-1.5">
+                        <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
                           {advancedGrouped.get(group)!.map((t) => (
                             <TemplateCard
+                              dense={dense}
                               key={t.id}
                               template={t}
                               selected={selectedTemplateId === t.id}

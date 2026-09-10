@@ -69,6 +69,7 @@ import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
 import { validateDeductionLines } from '@/lib/invoices/rot-rut-rules'
@@ -286,6 +287,9 @@ import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-arc
 import { CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
+import { proposeForTransactions } from '@/lib/transactions/propose'
+import { agentBookingFor, businessAccount, whyTextSv } from '@/lib/bookkeeping/proposal'
+import { booksWithoutReview } from '@/lib/transactions/direct-booking'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { buildDuplicateBookingClaim } from '@/lib/transactions/categorize-core'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
@@ -2650,17 +2654,69 @@ async function countMissingUnderlagInPeriod(
 }
 
 /**
+ * The company's fiscal period that contains an ISO date, or null. A date in a
+ * report call names the year the caller wants: "resultatrapporten för 2023"
+ * arrives as from_date/to_date, not as a period_id the model would first
+ * have to look up (#2185).
+ */
+async function findFiscalPeriodContaining(
+  supabase: SupabaseClient,
+  companyId: string,
+  date: string,
+): Promise<{ id: string; name: string; period_start: string; period_end: string } | null> {
+  const { data } = await supabase
+    .from('fiscal_periods')
+    .select('id, name, period_start, period_end')
+    .eq('company_id', companyId)
+    .lte('period_start', date)
+    .gte('period_end', date)
+    .order('period_start', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return data ?? null
+}
+
+/** "the company's fiscal periods span A to B", for an error that names a date no period covers. */
+async function describeFiscalPeriodSpan(supabase: SupabaseClient, companyId: string): Promise<string> {
+  const { data } = await supabase
+    .from('fiscal_periods')
+    .select('period_start, period_end')
+    .eq('company_id', companyId)
+    .order('period_start', { ascending: true })
+  const rows = (data ?? []) as { period_start: string; period_end: string }[]
+  if (rows.length === 0) return 'the company has no fiscal periods'
+  return `the company's fiscal periods span ${rows[0].period_start} to ${rows[rows.length - 1].period_end}`
+}
+
+/**
  * Resolve the fiscal period a report tool runs against: the caller's
- * `period_id` when given, else the company's most recent period. The period
- * is then re-read scoped to the company, so a foreign id never resolves.
+ * `period_id` when given; else, when the call carries a date (from_date,
+ * as_of_date, ...), the period that contains that date; else the company's
+ * most recent period. An explicit id is re-read scoped to the company, so a
+ * foreign id never resolves.
+ *
+ * The date fallback exists because the previous default (most recent period,
+ * then a loud range check) made every question about an earlier year fail
+ * unless the model had first looked up that year's UUID (#2185).
  */
 async function resolveReportPeriod(
   supabase: SupabaseClient,
   companyId: string,
   periodIdArg: unknown,
   noPeriodsMessage: string,
+  dateHint?: unknown,
 ) {
   let periodId = periodIdArg as string | undefined
+
+  if (!periodId && typeof dateHint === 'string' && ISO_DATE_RE.test(dateHint)) {
+    const containing = await findFiscalPeriodContaining(supabase, companyId, dateHint)
+    if (containing) return containing
+    const span = await describeFiscalPeriodSpan(supabase, companyId)
+    throw new Error(
+      `No fiscal period contains ${dateHint}: ${span}. ` +
+      `Pass a date inside one of them, or that period's period_id (gnubok_list_fiscal_periods).`,
+    )
+  }
 
   if (!periodId) {
     const { data: periods } = await supabase
@@ -8197,7 +8253,13 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      const period = await resolveReportPeriod(supabase, companyId, args.period_id, 'No fiscal periods found. Categorize some transactions first.')
+      const period = await resolveReportPeriod(
+        supabase,
+        companyId,
+        args.period_id,
+        'No fiscal periods found. Categorize some transactions first.',
+        args.from_date ?? args.to_date,
+      )
 
       rejectUnknownArgs(args, ['period_id', 'from_date', 'to_date', 'dimensions'])
       const range = parseReportRangeArgs(args, period, { from: 'from_date', to: 'to_date' })
@@ -9003,7 +9065,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_suggest_categories',
     keywords: ['konteringsförslag', 'kontering', 'kategorisera'],
     title: 'Suggest Transaction Categories',
-    description: 'Suggest categories for uncategorized transactions using mapping rules, patterns, counterparty history and templates. Up to 20 per call. no_signal_transaction_ids = nothing matched; investigate via gnubok_query_journal instead of guessing.',
+    description: 'Booking proposals for uncategorized transactions, best first per tx_id: why, confidence, books_without_review, categorize_args.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9022,13 +9084,17 @@ export const tools: McpTool[] = [
       properties: {
         suggestions: { type: 'object' },
         counterparty_matches: { type: 'object' },
+        proposals: {
+          type: 'object',
+          description: 'tx_id -> proposals; book with categorize_args.',
+        },
         no_signal_transaction_ids: {
           type: 'array',
           items: { type: 'string' },
           description: 'Transactions where no source (rule, pattern, counterparty history, template) matched. An honest empty: do not infer categories from the other rows; investigate the counterparty (e.g. gnubok_query_journal) instead.',
         },
       },
-      required: ['suggestions', 'counterparty_matches', 'no_signal_transaction_ids'],
+      required: ['suggestions', 'counterparty_matches', 'proposals', 'no_signal_transaction_ids'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
@@ -9110,9 +9176,33 @@ export const tools: McpTool[] = [
         .filter((tx) => (suggestions[tx.id]?.length ?? 0) === 0 && !counterpartyResult[tx.id])
         .map((tx) => tx.id)
 
+      // The same proposals the app shows a person, with the arguments this
+      // agent books them with: one recommendation, the same evidence, the
+      // same booking (lib/transactions/propose.ts, lib/bookkeeping/proposal.ts).
+      const { data: companyRow } = await supabase.from('companies').select('entity_type').eq('id', companyId).maybeSingle()
+      const entityType = (companyRow?.entity_type as EntityType | undefined) ?? undefined
+      const { proposals: proposed } = await proposeForTransactions(supabase, companyId, transactions as Transaction[])
+      const proposals: Record<string, unknown[]> = {}
+      for (const tx of transactions as Transaction[]) {
+        proposals[tx.id] = (proposed[tx.id] ?? [])
+          .filter((p) => p.source !== 'recent')
+          .map((p) => ({
+            id: p.template_id,
+            source: p.source,
+            label: p.name_sv,
+            why: whyTextSv(p),
+            confidence: p.confidence,
+            books_without_review: booksWithoutReview(p),
+            account: businessAccount(p),
+            vat_treatment: p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
+            categorize_args: agentBookingFor(p, entityType),
+          }))
+      }
+
       return {
         suggestions,
         counterparty_matches: counterpartyResult,
+        proposals,
         no_signal_transaction_ids: noSignal,
       }
     },
@@ -10123,6 +10213,20 @@ export const tools: McpTool[] = [
       }
 
       let periodId = args.period_id as string | undefined
+      const toDate = args.to_date as string | undefined
+
+      // No period but a date: the period that contains the date (#2185).
+      if (!periodId && typeof toDate === 'string' && ISO_DATE_RE.test(toDate)) {
+        periodId = (
+          await resolveReportPeriod(
+            supabase,
+            companyId,
+            undefined,
+            'No fiscal periods found. Categorize some transactions first to auto-create a period.',
+            toDate,
+          )
+        ).id
+      }
 
       // If no period specified, find the most recent one (same default as
       // gnubok_get_trial_balance).
@@ -10140,8 +10244,6 @@ export const tools: McpTool[] = [
         }
         periodId = periods.id
       }
-
-      const toDate = args.to_date as string | undefined
 
       return await generateDimensionPnl(supabase, companyId, periodId!, sieDimNo, { toDate })
     },
@@ -10165,7 +10267,13 @@ export const tools: McpTool[] = [
     outputSchema: { type: 'object' },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      const period = await resolveReportPeriod(supabase, companyId, args.period_id, 'No fiscal periods found. Create one first.')
+      const period = await resolveReportPeriod(
+        supabase,
+        companyId,
+        args.period_id,
+        'No fiscal periods found. Create one first.',
+        args.as_of_date,
+      )
 
       rejectUnknownArgs(args, ['period_id', 'as_of_date'])
       const range = parseReportRangeArgs(args, period, { to: 'as_of_date' })
@@ -13664,6 +13772,13 @@ export const tools: McpTool[] = [
       }
       const supplierDefaultExpenseAccount = resolvedSupplier.default_expense_account ?? null
 
+      // The scan read the supplier's giro or IBAN with everything else: a
+      // supplier that lacks them takes them now, so the staged invoice can
+      // go into a betalfil once approved. A write, so never on a dry run.
+      if (!dryRun) {
+        await backfillSupplierPaymentDetails(supabase, companyId, supplierId, supplierExt as SupplierPaymentDetails | null)
+      }
+
       // Assemble core invoice fields
       const currency = (invoiceExt?.currency as string) || 'SEK'
       for (const key of ['invoice_date_override', 'due_date_override'] as const) {
@@ -15578,7 +15693,7 @@ export const tools: McpTool[] = [
       const { data: e, error } = await supabase
         .from('employees')
         .select(
-          'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, default_dimensions, is_active',
+          'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vacation_pay_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, default_dimensions, is_active',
         )
         .eq('id', employeeId)
         .eq('company_id', companyId)
@@ -15621,6 +15736,7 @@ export const tools: McpTool[] = [
           vacation_days_per_year: e.vacation_days_per_year,
           vacation_days_saved: e.vacation_days_saved,
           semestertillagg_rate: e.semestertillagg_rate,
+          vacation_pay_rate: e.vacation_pay_rate ?? null,
         },
         vaxa_stod: {
           eligible: e.vaxa_stod_eligible,
@@ -16211,7 +16327,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_employee',
     keywords: ['anställd', 'ny anställd', 'personal'],
     title: 'Create Employee',
-    description: 'Stage creation of a new employee: salary, tax table, bank details, vacation rule. Personnummer is encrypted at staging and never stored in plaintext. Commit via gnubok_approve_pending_operation; then attach to a salary run.',
+    description: 'Stage a new employee (salary, tax table, bank, vacation). Personnummer is encrypted at staging. Commit via gnubok_approve_pending_operation, then attach to a salary run.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16237,6 +16353,7 @@ export const tools: McpTool[] = [
         bank_account_number: { type: 'string' },
         vacation_rule: { type: 'string', enum: ['procentregeln', 'sammaloneregeln', 'semesterersattning', 'none'] },
         vacation_days_per_year: { type: 'number' },
+        vacation_pay_rate: { type: ['number', 'null'], description: 'CBA semesterlön fraction 0.12-0.30 (0.135 = 13.5 %); null = statutory' },
         email: { type: 'string' },
         phone: { type: 'string' },
         vaxa_stod_eligible: { type: 'boolean' },
@@ -16248,7 +16365,7 @@ export const tools: McpTool[] = [
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
-          description: 'Dims bag {sie_dim_no: kod eller namn} tagging this employee\'s salary cost lines on every run. Never auto-created.',
+          description: 'Dims bag {sie_dim_no: kod eller namn} on this employee\'s salary cost lines every run. Never auto-created.',
         },
       },
       required: ['first_name', 'last_name', 'personnummer', 'employment_start'],
@@ -16324,7 +16441,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_update_employee',
     keywords: ['anställd', 'ändra anställd', 'personal'],
     title: 'Update Employee',
-    description: 'Stage an update to an employee\'s payroll config: salary, tax, bank details, vacation rule, jamkning, vaxa-stod. Personnummer cannot be changed. Call gnubok_get_employee first to see current values; commit via gnubok_approve_pending_operation.',
+    description: 'Stage an employee payroll update (salary, tax, bank, vacation, jamkning, vaxa-stod); personnummer is immutable. gnubok_get_employee first; commit via gnubok_approve_pending_operation.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16350,9 +16467,10 @@ export const tools: McpTool[] = [
         bank_account_number: { type: 'string' },
         vacation_rule: { type: 'string', enum: ['procentregeln', 'sammaloneregeln', 'semesterersattning', 'none'] },
         vacation_days_per_year: { type: 'number' },
+        vacation_pay_rate: { type: ['number', 'null'] },
         email: { type: 'string' },
         phone: { type: 'string' },
-        is_active: { type: 'boolean', description: 'false soft-deactivates (BFL retention keeps the row)' },
+        is_active: { type: 'boolean', description: 'false soft-deactivates; row kept (BFL)' },
         vaxa_stod_eligible: { type: 'boolean' },
         vaxa_stod_start: { type: 'string' },
         vaxa_stod_end: { type: 'string' },
@@ -16362,7 +16480,7 @@ export const tools: McpTool[] = [
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
-          description: 'Dims bag {sie_dim_no: kod eller namn} tagging salary cost lines. Replaces the whole bag; {} clears all tags. Omit to keep.',
+          description: 'Dims bag {sie_dim_no: kod eller namn} on salary cost lines; replaces the bag, {} clears, omit to keep',
         },
       },
       required: ['employee_id'],
@@ -16671,7 +16789,7 @@ export const tools: McpTool[] = [
       const { dayValueSek } = await import('@/lib/salary/semesterberedning')
       const { data: employee, error: empErr } = await supabase
         .from('employees')
-        .select('vacation_rule, vacation_days_per_year, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
+        .select('vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
         .eq('id', employeeId)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -19421,6 +19539,21 @@ export const tools: McpTool[] = [
           : allWarnings.length > 0 || orgMatch.match === false
             ? 'ok_with_warnings'
             : 'ok'
+      // Structured twins of the warning strings, with the tier the drop
+      // widget renders (lib/import/notices.ts): a wrong organisation number
+      // is a blocking action, mis-encoded text an action, the rest notices.
+      // Each carries its Swedish text so the widget needs no i18n.
+      const notices: Array<{ code: string; severity: 'info' | 'notice' | 'action'; text: string; blocking?: boolean }> = []
+      if (orgMatch.match === false) {
+        notices.push({
+          code: 'sie_org_mismatch',
+          severity: 'action',
+          blocking: true,
+          text: `Filen tillhör organisationsnummer ${orgMatch.file_org_number ?? '?'}, inte det här företaget (${orgMatch.company_org_number ?? '?'}).`,
+        })
+      }
+      for (const w of encodingWarnings) notices.push({ code: 'sie_encoding_artifacts', severity: 'action', text: w })
+      for (const w of validation.warnings) notices.push({ code: 'legacy', severity: 'notice', text: w })
 
       return {
         verdict,
@@ -19436,7 +19569,7 @@ export const tools: McpTool[] = [
           transaction_line_count: parsed.stats.totalTransactionLines,
           opening_balance_total: preview.openingBalanceTotal ?? null,
         },
-        validation: { valid: validation.valid, errors: validation.errors, warnings: allWarnings },
+        validation: { valid: validation.valid, errors: validation.errors, warnings: allWarnings, notices },
         org_number_match: orgMatch,
         duplicate,
         mappings,

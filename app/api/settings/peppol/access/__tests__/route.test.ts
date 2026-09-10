@@ -7,6 +7,7 @@ const service = createQueuedMockSupabase()
 const requireAuthMock = vi.fn()
 const sendEmailMock = vi.fn()
 const isConfiguredMock = vi.fn()
+const logErrorMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -30,6 +31,15 @@ vi.mock('@/lib/email/service', () => ({
 vi.mock('@/lib/support', () => ({
   getSupportRecipientEmail: () => 'support@example.test',
 }))
+vi.mock('@/lib/logger', () => {
+  const logger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: logErrorMock,
+    child: (): unknown => logger,
+  }
+  return { createLogger: () => logger }
+})
 
 import { POST } from '../route'
 
@@ -107,6 +117,26 @@ describe('POST /api/settings/peppol/access', () => {
     expect(mail.text).toContain('--receive')
     const upsert = service.calls.find((c) => c.method === 'upsert')?.args[0] as Record<string, unknown>
     expect(upsert.request_note).toBe('[vill ta emot e-fakturor] Vi fakturerar Region Skåne')
+  })
+
+  it('still records the request and mails the operators when the settings read fails, with the eligibility unknown', async () => {
+    enqueue({ data: { is_sandbox: false }, error: null })                         // sandbox check
+    service.enqueue({ data: null, error: null })                                  // no access row
+    service.enqueue({ data: requestedRow, error: null })                          // upsert
+    enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }) // company settings
+    service.enqueue({ data: requestedRow, error: null })                          // summary read
+
+    const response = await post({ wants_receiving: true })
+    expect(response.status).toBe(201)
+    expect(sendEmailMock).toHaveBeenCalledTimes(1)
+    const mail = sendEmailMock.mock.calls[0][0] as { text: string; html: string }
+    expect(mail.text).toContain('Kan registreras för mottagning: okänd (bolagsinställningarna kunde inte läsas)')
+    expect(mail.html).toContain('okänd (bolagsinställningarna kunde inte läsas)')
+    expect(mail.text).not.toContain('nej (')
+    expect(logErrorMock).toHaveBeenCalledWith(
+      'peppol access request: company settings read failed',
+      expect.objectContaining({ companyId: 'company-1', reason: 'canceling statement due to statement timeout' }),
+    )
   })
 
   it('is idempotent for a repeated request (no second e-mail) and 409 when already enabled', async () => {

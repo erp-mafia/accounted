@@ -30,7 +30,12 @@ import {
   ShieldCheck,
   Stamp,
 } from 'lucide-react'
-import type { ExpensePayoutDue, SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
+import type {
+  ExpensePayoutDue,
+  SkattekontoPaymentDue,
+  SuggestedMatch,
+  WorklistCounts,
+} from '@/lib/worklist/types'
 
 /**
  * AttGoraSection: the dashboard's unified worklist ("Att göra").
@@ -57,6 +62,8 @@ interface AttGoraSectionProps {
   suggestedMatches: SuggestedMatch[]
   /** People owed for registered, unpaid utlägg: one Betala row each. */
   expensePayouts?: ExpensePayoutDue[]
+  /** The next skattekonto charge the balance does not cover: one Betala row. */
+  skattekontoPayment?: SkattekontoPaymentDue | null
   expiringBankConnections?: ExpiringBankConnection[]
   /**
    * True while the setup checklist is open and the company has zero posted
@@ -119,6 +126,7 @@ export default function AttGoraSection({
   worklist,
   suggestedMatches,
   expensePayouts = [],
+  skattekontoPayment = null,
   expiringBankConnections = [],
   emptyLedger = false,
   hasActiveBankConnection = true,
@@ -218,7 +226,7 @@ export default function AttGoraSection({
     counts.book_skattekonto > 0 ||
     showInboxDocuments ||
     matches.length > 0
-  const betalaRows = expensePayouts.length > 0
+  const betalaRows = expensePayouts.length > 0 || skattekontoPayment !== null
   const granskaRows =
     counts.supplier_invoice_approval > 0 ||
     counts.verifikat_missing_document > 0 ||
@@ -396,6 +404,31 @@ export default function AttGoraSection({
                 <div>
                   <BandHeader>{t('band_betala')}</BandHeader>
                   <div>
+                    {skattekontoPayment && (
+                      <WorklistRow
+                        href="/skattekonto"
+                        icon={Landmark}
+                        label={t('row_skattekonto_payment')}
+                        detail={
+                          skattekontoPayment.ocr
+                            ? t('row_skattekonto_payment_detail', {
+                                bankgiro: skattekontoPayment.bankgiro,
+                                ocr: skattekontoPayment.ocr,
+                                date: formatDate(skattekontoPayment.due),
+                              })
+                            : t('row_skattekonto_payment_detail_no_ocr', {
+                                bankgiro: skattekontoPayment.bankgiro,
+                                date: formatDate(skattekontoPayment.due),
+                              })
+                        }
+                        count={1}
+                        badge={
+                          <span className="text-xs tabular-nums text-muted-foreground">
+                            {formatCurrency(skattekontoPayment.amount)}
+                          </span>
+                        }
+                      />
+                    )}
                     {expensePayouts.map((p) => (
                       <WorklistRow
                         key={p.key}

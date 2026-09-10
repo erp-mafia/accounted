@@ -133,6 +133,11 @@ interface RattelseRow {
   added_lines: unknown
   actor: string | null
   created_at: string
+  /** 'sie_import' = correction history carried by the SIE file (#2427); absent/'user' = made here. */
+  source?: 'user' | 'sie_import' | null
+  sie_import_id?: string | null
+  /** SIE `sign` on the #BTRANS/#RTRANS rows: who corrected in the source system. */
+  external_signature?: string | null
 }
 
 interface MigrationResetRow {
@@ -714,6 +719,31 @@ export function rattelseEvent(
 ): RawBehandlingshistorikEvent {
   const entry = entryById.get(row.journal_entry_id)
   const details: string[] = []
+  if (row.source === 'sie_import') {
+    // History the source system recorded before the migration (SIE 4B
+    // #BTRANS/#RTRANS). Not a rättelse made here: no actor, and the row's
+    // created_at is the import moment, not when the correction happened
+    // (SIE carries who, never when). Labelled apart so behandlingshistoriken
+    // never claims a correction Accounted did not perform.
+    const struck = Array.isArray(row.struck_lines) ? row.struck_lines : []
+    const added = Array.isArray(row.added_lines) ? row.added_lines : []
+    if (struck.length > 0) details.push(`Strukna rader i källsystemet (${struck.length}): ${struck.map(describeLine).join('; ')}`)
+    if (added.length > 0) details.push(`Tillagda rader i källsystemet (${added.length}): ${added.map(describeLine).join('; ')}`)
+    if (row.external_signature) details.push(`Signatur i källsystemet: ${row.external_signature}`)
+    details.push('Tidpunkt = registrering vid SIE-import; rättelsedatum saknas i SIE-formatet')
+    return {
+      id: `rattelse:${row.id}`,
+      occurred_at: toIso(row.created_at)!,
+      category: 'verifikation',
+      code: 'journal_entry.imported_correction_history',
+      event: 'Rättelsehistorik från källsystemet (SIE-import)',
+      object: entry ? voucherLabel(entry.voucher_series, entry.voucher_number) : null,
+      actor: { type: 'system', user_id: null, actor_label: 'SIE-import' },
+      details,
+      source: 'rattelse_log',
+      count: 1,
+    }
+  }
   if (row.rattelse_type === 'metadata') {
     if (!same(row.old_description, row.new_description)) {
       details.push(`Beskrivning: ${fmtValue(row.old_description)} → ${fmtValue(row.new_description)}`)

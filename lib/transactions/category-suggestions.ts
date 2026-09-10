@@ -5,7 +5,8 @@ import {
   formatCounterpartyName,
   toCounterpartyTemplateId,
 } from '@/lib/bookkeeping/counterparty-templates'
-import { findMatchingTemplates, getTemplateById, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
+import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, type BookingTemplate, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
+import { proposalFromTemplate, type BookingProposal, type ProposalSource } from '@/lib/bookkeeping/proposal'
 import type {
   Transaction,
   TransactionCategory,
@@ -112,6 +113,23 @@ export function merchantHistoryFor(
  * every transaction, which agents correctly read as no signal
  * (mcp_optimization_plan P2-1); an empty result is the honest answer.
  */
+/** Whether a mapping rule's pattern (merchant, description, or MCC) hits this transaction. */
+export function mappingRuleMatches(
+  rule: Pick<MappingRule, 'merchant_pattern' | 'description_pattern' | 'mcc_codes'>,
+  transaction: Pick<Transaction, 'merchant_name' | 'description' | 'mcc_code'>,
+): boolean {
+  if (rule.merchant_pattern && transaction.merchant_name) {
+    if (new RegExp(rule.merchant_pattern, 'i').test(transaction.merchant_name)) return true
+  }
+  if (rule.description_pattern) {
+    if (new RegExp(rule.description_pattern, 'i').test(transaction.description)) return true
+  }
+  if (rule.mcc_codes && transaction.mcc_code) {
+    if (rule.mcc_codes.includes(transaction.mcc_code)) return true
+  }
+  return false
+}
+
 export function getSuggestedCategories(
   transaction: Transaction,
   mappingRules: MappingRule[],
@@ -124,27 +142,7 @@ export function getSuggestedCategories(
   for (const rule of mappingRules) {
     if (!rule.is_active) continue
 
-    let matches = false
-
-    if (rule.merchant_pattern && transaction.merchant_name) {
-      const pattern = new RegExp(rule.merchant_pattern, 'i')
-      if (pattern.test(transaction.merchant_name)) {
-        matches = true
-      }
-    }
-
-    if (rule.description_pattern) {
-      const pattern = new RegExp(rule.description_pattern, 'i')
-      if (pattern.test(transaction.description)) {
-        matches = true
-      }
-    }
-
-    if (rule.mcc_codes && transaction.mcc_code) {
-      if (rule.mcc_codes.includes(transaction.mcc_code)) {
-        matches = true
-      }
-    }
+    const matches = mappingRuleMatches(rule, transaction)
 
     if (matches && rule.debit_account && !rule.default_private) {
       // Reverse-lookup: find category from debit account. A rule booking on
@@ -262,28 +260,16 @@ function accountToCategory(account: string, amount: number): string | null {
 // Template Suggestions
 // ============================================================
 
-export interface SuggestedTemplate {
-  template_id: string
-  name_sv: string
-  name_en: string
-  group: string
-  debit_account: string
-  credit_account: string
-  confidence: number
-  description_sv: string
-  risk_level: string
-  requires_review: boolean
-  line_pattern?: LinePatternEntry[] | null
-  // Learned VAT treatment on a single-line counterparty suggestion. Without
-  // it the review dialog previews the verifikation at gross with no moms leg,
-  // while the server books the expense net + 2641. Multi-line suggestions
-  // carry their VAT inside line_pattern instead.
-  vat_treatment?: VatTreatment | null
-  // Learned {sie_dim_no: code} bag on counterparty suggestions: prefills the
-  // review dialog's dimension picker (the server applies it at booking anyway;
-  // surfacing it keeps the user in the loop).
-  default_dimensions?: Record<string, string> | null
-}
+/**
+ * A row suggestion is a BookingProposal (lib/bookkeeping/proposal.ts): the
+ * one object every source produces and every surface consumes. 'rule' is a
+ * mapping rule that MATCHED this transaction; 'recent' is a template a rule
+ * points at, offered because it was used lately, not because anything
+ * matched; 'counterparty' is the learned per-counterpart rule
+ * (categorization_templates); 'assistant' is the model's read.
+ */
+export type SuggestionSource = ProposalSource
+export type SuggestedTemplate = BookingProposal
 
 /**
  * Get recently used templates from mapping rules.
@@ -315,18 +301,9 @@ export function getRecentlyUsedTemplates(
     // Filter by direction
     if (direction && template.direction !== direction && template.direction !== 'transfer') continue
 
-    results.push({
-      template_id: template.id,
-      name_sv: template.name_sv,
-      name_en: template.name_en,
-      group: template.group,
-      debit_account: template.debit_account,
-      credit_account: template.credit_account,
-      confidence: 0.85,
-      description_sv: template.description_sv,
-      risk_level: template.risk_level,
-      requires_review: template.requires_review,
-    })
+    // Used lately, not matched: below any keyword match (at most 0.3), and
+    // never the row's chip (rowProposal skips it); the picker still lists it.
+    results.push(proposalFromTemplate(template, 'recent', 0.1))
 
     if (results.length >= 5) break
   }
@@ -346,9 +323,30 @@ export async function getSuggestedTemplates(
   const seen = new Set<string>()
   const results: SuggestedTemplate[] = []
 
-  // 1. Boost recently-used templates from mapping rules
+  const direction = transaction.amount < 0 ? 'expense' : 'income'
+
+  // 0. The company's rules that match this row: the template the rule
+  //    names, or the catalog template booking to the rule's account.
   if (mappingRules) {
-    const direction = transaction.amount < 0 ? 'expense' : 'income'
+    for (const rule of mappingRules) {
+      if (!rule.is_active || rule.default_private) continue
+      if (!mappingRuleMatches(rule, transaction)) continue
+      const template =
+        (rule.template_id ? getTemplateById(rule.template_id) : undefined) ??
+        (rule.debit_account ? templateForAccount(rule.debit_account, direction, entityType) : undefined)
+      if (!template || seen.has(template.id)) continue
+      seen.add(template.id)
+      results.push({
+        ...proposalFromTemplate(template, 'rule', Math.max(rule.confidence_score || 0, 0.9)),
+        rule_own: !!rule.company_id,
+        rule_requires_review: !!rule.requires_review,
+        requires_review: template.requires_review || !!rule.requires_review,
+      })
+    }
+  }
+
+  // 1. Templates the company's rules point at, used lately
+  if (mappingRules) {
     const recent = getRecentlyUsedTemplates(mappingRules, entityType, direction)
     for (const r of recent) {
       if (!seen.has(r.template_id)) {
@@ -363,18 +361,7 @@ export async function getSuggestedTemplates(
   for (const m of keywordMatches) {
     if (!seen.has(m.template.id)) {
       seen.add(m.template.id)
-      results.push({
-        template_id: m.template.id,
-        name_sv: m.template.name_sv,
-        name_en: m.template.name_en,
-        group: m.template.group,
-        debit_account: m.template.debit_account,
-        credit_account: m.template.credit_account,
-        confidence: m.confidence,
-        description_sv: m.template.description_sv,
-        risk_level: m.template.risk_level,
-        requires_review: m.template.requires_review,
-      })
+      results.push(proposalFromTemplate(m.template, 'catalog', m.confidence))
     }
   }
 
@@ -393,12 +380,35 @@ export async function getSuggestedTemplates(
  * fallbacks. A suggestion that omitted them previously left the dialog with an
  * undefined default account, which crashed the page.
  */
+/**
+ * The suggestion a row wears as its chip and books from its Bokför: the
+ * first one that matched the row itself. A template merely used lately is
+ * a picker convenience, not a recommendation.
+ */
+export function rowProposal(list: SuggestedTemplate[] | undefined): SuggestedTemplate | undefined {
+  return list?.find((s) => s.source !== 'recent')
+}
+
+/** The catalog template that books to this account in this direction, if one does. */
+function templateForAccount(account: string, direction: 'expense' | 'income', entityType?: EntityType): BookingTemplate | undefined {
+  return BOOKING_TEMPLATES.find(
+    (t) =>
+      (t.direction === direction || t.direction === 'transfer') &&
+      (direction === 'expense' ? t.debit_account : t.credit_account) === account &&
+      (!entityType || t.entity_applicability === 'all' || t.entity_applicability === entityType),
+  )
+}
+
 export function buildCounterpartySuggestion(
   template: CategorizationTemplate,
   confidence: number,
 ): SuggestedTemplate {
   return {
     template_id: toCounterpartyTemplateId(template.id),
+    source: 'counterparty',
+    booking: { kind: 'counterparty', counterparty_template_id: template.id },
+    seen_count: template.occurrence_count,
+    rule_mode: template.mode,
     name_sv: formatCounterpartyName(template.counterparty_name),
     name_en: formatCounterpartyName(template.counterparty_name),
     group: 'counterparty',

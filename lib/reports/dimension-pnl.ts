@@ -131,7 +131,7 @@ export async function generateDimensionPnl(
   })
 
   // Bucket raw amounts per (account, code). Only accounts present in the P&L
-  // trial-balance scope count: anything else (balance accounts, 8999) is out.
+  // trial-balance scope count: anything else (balance accounts) is out.
   const buckets = new Map<string, Map<string, { debit: number; credit: number }>>()
   const codesSeen = new Set<string>()
   for (const line of taggedLines) {
@@ -235,10 +235,10 @@ export async function generateDimensionPnl(
   }
 }
 
+// Same scope as resultatrapport's filterPnl, 8999 included (#2455): the
+// Totalt column must reconcile with that report's "Beräknat resultat".
 function filterPnl(rows: TrialBalanceRow[]): TrialBalanceRow[] {
-  return rows.filter(
-    (r) => r.account_class >= 3 && r.account_class <= 8 && r.account_number !== '8999'
-  )
+  return rows.filter((r) => r.account_class >= 3 && r.account_class <= 8)
 }
 
 // credit − debit: revenue positive, expenses negative: resultatrapport's

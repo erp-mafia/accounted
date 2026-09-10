@@ -26,9 +26,14 @@ const CLASS_LABELS: Record<number, string> = {
  * keeps account numbers and is meant for ongoing reconciliation, not for
  * årsbokslut/årsredovisning.
  *
- * Account 8999 is excluded: it's the year-end closing account that moves
- * årets resultat into equity (2099). Including its balance would double-count
- * the result. Same exclusion as generateIncomeStatement.
+ * Account 8999 is listed like any other class-8 account (#2455). It only
+ * carries a balance when the user books or imports the omföring of årets
+ * resultat by hand (our own bokslut verifikat zeroes each P&L account straight
+ * against 2099 and never touches 8999). Listing it makes "Beräknat resultat"
+ * read zero after that omföring, the Fortnox/Visma resultatrapport
+ * convention, and keeps this report in agreement with huvudboken. The formal
+ * Resultaträkning (generateIncomeStatement) still excludes 8999: ÅRL's
+ * uppställningsform has no such line, årets resultat is always computed there.
  */
 export async function generateResultatrapport(
   supabase: SupabaseClient,
@@ -204,12 +209,7 @@ export async function generateResultatrapport(
 }
 
 function filterPnl(rows: TrialBalanceRow[]): TrialBalanceRow[] {
-  return rows.filter(
-    (r) =>
-      r.account_class >= 3 &&
-      r.account_class <= 8 &&
-      r.account_number !== '8999'
-  )
+  return rows.filter((r) => r.account_class >= 3 && r.account_class <= 8)
 }
 
 /**

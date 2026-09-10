@@ -1,4 +1,5 @@
 import type { CustomerType } from '@/types'
+import type { ImportNotice } from '@/lib/import/notices'
 
 /** Result of auto-detecting columns in a customer register file. */
 export interface DetectedCustomerColumns {
@@ -59,6 +60,8 @@ export interface CustomerImportParseResult {
   rows: AnnotatedCustomerRow[]
   duplicate_count: number
   warnings: string[]
+  /** Structured twins of `warnings` (lib/import/notices.ts). */
+  notices?: ImportNotice[]
 }
 
 /** Result of executing the customer import. */

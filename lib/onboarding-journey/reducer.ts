@@ -1,5 +1,5 @@
 import type { CompanySettings, EntityType, MomsPeriod } from '@/types'
-import type { CompanyLookupResult, CompanySearchHit } from '@/lib/company-lookup/types'
+import type { CompanyLookupResult, CompanySearchHit, CompanySuggestion } from '@/lib/company-lookup/types'
 import type {
   CompanyLookupOutcome,
   CompanySearchOutcome,
@@ -121,6 +121,7 @@ export type JourneyAction =
   | { type: 'SEARCH_SUBMITTED'; query: string }
   | { type: 'SEARCH_RESULT'; outcome: CompanySearchOutcome }
   | { type: 'SEARCH_HIT_PICKED'; hit: CompanySearchHit }
+  | { type: 'SUGGESTION_PICKED'; suggestion: CompanySuggestion }
   | { type: 'NOTFOUND_CONTINUE' }
   | { type: 'NOTFOUND_EDIT' }
   | { type: 'CEASED_CONTINUE' }
@@ -371,6 +372,32 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
       return applyLookupFound(withOrgNumber(state, action.hit.orgNumber), action.hit.result)
     }
 
+    case 'SUGGESTION_PICKED': {
+      // A search-as-you-type row (SCB) resolves to an orgnr the same way a
+      // typed one does: the component fires the single TIC lookup next and
+      // LOOKUP_RESULT decides the step. What SCB already knows (name, form)
+      // is prefill for the degraded paths (TIC off, error, not found), and
+      // TIC's answer overrides it when it comes. lookupRan stays false: SCB
+      // says nothing about F-skatt, VAT or the fiscal year.
+      if (state.submitting || state.step !== 'orgnr') return state
+      const { suggestion } = action
+      const mapped = mapSetupEntityType(suggestion.legalEntityType)
+      return stay(state, {
+        settings: {
+          ...state.settings,
+          org_number: suggestion.orgNumber,
+          company_name: suggestion.name,
+          entity_type: mapped ?? state.settings.entity_type,
+        },
+        ticLookup: null,
+        lookupRan: false,
+        lookupNote: 'none',
+        lookupPending: true,
+        searchHits: [],
+        serverError: null,
+      })
+    }
+
     case 'NOTFOUND_CONTINUE': {
       if (state.settings.entity_type) return go(state, nextCompanyStep(state))
       return go(state, 'form')
@@ -379,8 +406,15 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
     case 'NOTFOUND_EDIT':
     case 'CEASED_EDIT': {
       // Back to the orgnr question; the fresh submit re-runs the single lookup.
+      // The abandoned number's name and form go with it (a picked SCB row or
+      // a ceased lookup put them there); BankID's CompanyRoles prefill stays,
+      // it was never about this number.
       return go(state, 'orgnr', {
-        settings: { ...state.settings, org_number: undefined },
+        settings: {
+          ...state.settings,
+          org_number: undefined,
+          ...(state.viaPrefill ? {} : { company_name: undefined, entity_type: undefined }),
+        },
         ticLookup: null,
         lookupRan: false,
         lookupNote: 'none',

@@ -11,6 +11,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { FyPicker } from '@/components/common/FyPicker'
 import { KPIPanes, KPIBreakdown } from '@/components/kpi/KPIStory'
+import { KPIMonthsTable } from '@/components/kpi/KPIMonthsTable'
 import { KPISettingsDialog } from '@/components/kpi/KPISettingsDialog'
 import { saveKPIPreferences } from '@/components/kpi/save-preferences'
 import { loadKPIPreferences } from '@/components/kpi/load-preferences'
@@ -167,7 +168,6 @@ export default function KpiPage() {
                 // overwrite the row with a layout the user never chose.
                 <Button
                   variant="outline"
-                  size="sm"
                   className="gap-1.5"
                   disabled
                   aria-describedby={prefsError ? prefsStatusId : undefined}
@@ -223,6 +223,9 @@ export default function KpiPage() {
               unknown they stay off rather than render defaults as if they
               were the user's. The cost story below reads only the report. */}
           {preferences && <KPIPanes report={report} preferences={preferences} />}
+          {/* Same rule as the panes: a layout flag is only honoured once the
+              stored layout is known. */}
+          {preferences?.showMonthlyTable && <KPIMonthsTable report={report} />}
           <KPIBreakdown report={report} />
         </div>
       )}

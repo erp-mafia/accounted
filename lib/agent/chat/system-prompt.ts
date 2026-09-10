@@ -3,6 +3,11 @@ import { join } from 'node:path'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import type { AgentIntent } from '../intents/types'
+import {
+  FISCAL_YEAR_RULE,
+  renderFiscalYearInventory,
+  type FiscalYearInventoryRow,
+} from '@/lib/agent/fiscal-years'
 
 // Builds the system prompt the chat loop sends to Anthropic.
 //
@@ -41,6 +46,9 @@ interface BuildArgs {
   // relative-time reasoning ("förra månaden", "förfallen", current VAT period)
   // to the real date instead of the model's training cutoff. See swedishToday().
   today: string
+  // The company's räkenskapsår, newest first (lib/agent/fiscal-years.ts).
+  // Optional so a caller that has nothing to say renders no section.
+  fiscalYears?: FiscalYearInventoryRow[]
   supabase: SupabaseClient
 }
 
@@ -213,7 +221,7 @@ async function resolveBodies(
 }
 
 export function buildIdentityBlock(args: BuildArgs): string {
-  const { intent, companyName, firstName, profileSummary, rankedMemory, vatStatus, today } = args
+  const { intent, companyName, firstName, profileSummary, rankedMemory, vatStatus, today, fiscalYears } = args
 
   const lines: string[] = []
   lines.push('# Din roll')
@@ -391,6 +399,20 @@ export function buildIdentityBlock(args: BuildArgs): string {
   lines.push('')
   lines.push('4. **Inga hypoteser om motsatt status.** Spekulera ALDRIG "om du *varit* momsregistrerad hade det blivit X" eller "om du *inte varit* momsregistrerad…": det är källan till hallucinationer mellan turns. Svara för det faktiska tillståndet enligt blocket "Företagets momsstatus" ovan. Om användaren vill ha en hypotetisk genomgång: säg att de kan ändra status i /settings/company och prova om.')
   lines.push('')
+
+  // Which years the ledger holds. The report tools default to the most recent
+  // period, so without this inventory a multi-year ledger read as single-year
+  // to the model and the user concluded the assistant "only sees the period I
+  // am standing in" (#2185). Always-on rather than first-message: the question
+  // about an earlier year tends to come many turns in.
+  const fiscalYearLine = renderFiscalYearInventory(fiscalYears ?? [])
+  if (fiscalYearLine) {
+    lines.push('# Räkenskapsår')
+    lines.push('')
+    lines.push(fiscalYearLine)
+    lines.push(FISCAL_YEAR_RULE)
+    lines.push('')
+  }
 
   if (profileSummary) {
     lines.push('# Företagets profil')

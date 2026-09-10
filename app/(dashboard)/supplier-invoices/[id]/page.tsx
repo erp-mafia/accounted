@@ -31,20 +31,31 @@ import { formatDate, cn } from '@/lib/utils'
 import Link from 'next/link'
 import { AccountNumber } from '@/components/ui/account-number'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
+import dynamic from 'next/dynamic'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+const PaymentFileDialog = dynamic(() => import('@/components/supplier-invoices/PaymentFileDialog'), { ssr: false })
+import { AccountChip } from '@/components/ui/account-chip'
+import { CategoryPopover } from '@/components/transactions/CategoryPopover'
+import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { useCompanySettings } from '@/components/settings/useSettings'
+import useSWR from 'swr'
+import { useShell } from '@/components/dashboard/ShellProvider'
+import { StageSteps } from '@/components/supplier-invoices/StagePipeline'
+import { stagesFor, type InvoiceLifecycle, type SupplierInvoiceLadderStage } from '@/lib/supplier-invoices/stages'
 import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import {
   canApproveSupplierInvoice,
   canMarkSupplierInvoiceBankEntered,
+  isUnsettledSupplierInvoiceStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import type { BASAccount, EntityType } from '@/types'
 
 interface EditableLine {
   account_number: string
@@ -95,9 +106,92 @@ const EXCEPTION_STATUS_VARIANTS: Record<string, 'secondary' | 'outline' | 'warni
   reversed: 'secondary',
 }
 
+
+/**
+ * The account of one invoice line, editable in place the way a category chip
+ * is on a transaction. Committing moves the line and corrects the
+ * registration verifikat inline; the server refuses what the period lock
+ * refuses, and the cell falls back to the old account.
+ */
+function InlineAccountCell({
+  item,
+  editable,
+  entityType,
+  accounts,
+  label,
+  onCommit,
+}: {
+  item: { id: string; account_number: string }
+  editable: boolean
+  entityType: EntityType
+  accounts: BASAccount[]
+  label: string
+  onCommit: (itemId: string, account: string) => Promise<void>
+}) {
+  // The category chip from Transaktioner: the account as a hue dot, its
+  // name and the number, and the same anchored picker (templates, or an
+  // account by search) when it is clicked. A template's debit account is
+  // what the line books to; the picker sits beside the row instead of
+  // swapping the cell for a combobox.
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  const [manual, setManual] = useState('')
+  const accountName = accounts.find((a) => a.account_number === item.account_number)?.account_name ?? null
+  const pick = (account: string) => {
+    setAnchor(null)
+    if (account && account !== item.account_number) void onCommit(item.id, account)
+  }
+  if (!editable) return <AccountChip account={item.account_number} name={accountName} />
+  return (
+    <>
+      <button
+        type="button"
+        className="-mx-1 rounded-full px-1 transition-colors duration-150 hover:bg-secondary/60"
+        aria-label={label}
+        onClick={(e) => {
+          setManual('')
+          setAnchor(e.currentTarget)
+        }}
+      >
+        <AccountChip account={item.account_number} name={accountName} />
+      </button>
+      {anchor && (
+        <CategoryPopover anchor={anchor} onClose={() => setAnchor(null)}>
+          <div className="flex min-h-0 flex-col overflow-hidden">
+            <TemplatePicker
+              direction="expense"
+              entityType={entityType}
+              dense
+              onSelect={(template) => pick(template.debit_account)}
+              onSelectAccount={pick}
+            />
+          </div>
+          {/* Any account in the company's own chart, by number or name: the
+              template search covers the common ones, this covers the rest. */}
+          <div className="border-t border-border/70 bg-background px-3 py-2">
+            <AccountCombobox value={manual} accounts={accounts} onChange={setManual} onCommit={pick} />
+          </div>
+        </CategoryPopover>
+      )}
+    </>
+  )
+}
+
 export default function SupplierInvoiceDetailPage() {
   const { canWrite } = useCanWrite()
   const { settings: companySettings } = useCompanySettings()
+  // Shell v2 (UI v2 PR 6): the invoice's place on the flow, derived server-side.
+  const shell = useShell()
+  const routeParams = useParams()
+  const invoiceIdParam = typeof routeParams.id === 'string' ? routeParams.id : ''
+  const { data: lifecycle, mutate: mutateLifecycle } = useSWR<InvoiceLifecycle | null>(
+    shell === 'v2' && invoiceIdParam ? `/api/supplier-invoices/lifecycle?ids=${invoiceIdParam}` : null,
+    async (url: string) => {
+      const res = await fetch(url)
+      if (!res.ok) return null
+      const json = (await res.json()) as { data: { stages: Record<string, InvoiceLifecycle> } }
+      return json.data.stages[invoiceIdParam] ?? null
+    },
+  )
   const params = useParams()
   const router = useRouter()
   const company = useCompanyOptional()?.company ?? null
@@ -136,6 +230,7 @@ export default function SupplierInvoiceDetailPage() {
       journal_entry_id?: string | null
     }> | null
   >(null)
+  const [isFileDialogOpen, setIsFileDialogOpen] = useState(false)
   const [markPaidPreview, setMarkPaidPreview] = useState<MarkPaidPreview | null>(null)
   const [markPaidPreviewFailed, setMarkPaidPreviewFailed] = useState(false)
   const [isEditingLines, setIsEditingLines] = useState(false)
@@ -561,6 +656,25 @@ export default function SupplierInvoiceDetailPage() {
     )
   }
 
+  const lineAccountEditable = canWrite && isUnsettledSupplierInvoiceStatus(invoice.status) && !isEditingLines
+  async function changeLineAccount(itemId: string, account: string) {
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}/items/${itemId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_number: account }),
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok || body?.error) {
+        toast({ title: t('line_account_change_failed'), description: getErrorMessage(body, { statusCode: res.status, context: 'supplier_invoice' }), variant: 'destructive' })
+        return
+      }
+      toast({ title: t(body?.data?.corrected ? 'line_account_changed_corrected' : 'line_account_changed') })
+      void fetchInvoice()
+    } catch (err) {
+      toast({ title: t('line_account_change_failed'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
+    }
+  }
   const items = (invoice.items || []) as SupplierInvoiceItem[]
   const payments = (invoice.payments || []) as SupplierInvoicePayment[]
   const creditedOriginal =
@@ -620,8 +734,40 @@ export default function SupplierInvoiceDetailPage() {
   // Attest keys off approved_at, not the status: the overdue cron flips
   // unbooked invoices to 'overdue' just by aging, and gating on 'registered'
   // alone left them with no way through attest (#1206).
-  const canApprove = canApproveSupplierInvoice(invoice) && !invoice.is_credit_note
+  // Kontantmetod companies never attest: the debt is not booked before payment.
+  const canApprove =
+    canApproveSupplierInvoice(invoice) && !invoice.is_credit_note && companySettings?.accounting_method !== 'cash'
+  const stripText = (s: SupplierInvoiceLadderStage, state: 'done' | 'now' | 'todo'): string => {
+    if (state === 'todo') return t(`strip_pending_${s}`)
+    switch (s) {
+      case 'incoming':
+        return t('strip_incoming', { date: formatDate(invoice.created_at) })
+      case 'registered':
+        return invoice.registration_journal_entry_id
+          ? t('strip_registered', { date: formatDate(invoice.created_at) })
+          : t('strip_registered_unbooked', { date: formatDate(invoice.created_at) })
+      case 'approved':
+        return invoice.approved_at ? t('strip_approved', { date: formatDate(invoice.approved_at) }) : t('strip_skipped')
+      case 'in_file':
+        return t('strip_in_file', { date: lifecycle?.batch ? formatDate(lifecycle.batch.created_at) : '' })
+      case 'paid':
+        return t('strip_paid', {
+          date: invoice.paid_at ? formatDate(invoice.paid_at) : lifecycle?.paid ? formatDate(lifecycle.paid.date) : '',
+        })
+      case 'reconciled':
+        return t('strip_reconciled', { date: lifecycle?.reconciled_through ? formatDate(lifecycle.reconciled_through) : '' })
+    }
+  }
   const canMarkPaid = ['approved', 'overdue', 'partially_paid'].includes(invoice.status)
+  // After attest the next step is the betalfil to the bank, so that is the
+  // header's one primary while the invoice is attested and in no open file.
+  // Markera betald stays for the person who paid by hand, as a secondary.
+  const canAddToFile =
+    shell === 'v2' &&
+    !invoice.is_credit_note &&
+    ['approved', 'overdue'].includes(invoice.status) &&
+    !!invoice.approved_at &&
+    !lifecycle?.batch
   // "Inlagd i banken" (#2220) sits on the same rows as Markera som betald:
   // it is the step right before it. Viewers see the bock only when it is set.
   const showBankEntered =
@@ -663,6 +809,7 @@ export default function SupplierInvoiceDetailPage() {
     <div className="space-y-8 stagger-enter">
       {/* Back link + prev/next record pager on their own quiet row, so the
           title below keeps a stable position while stepping between records */}
+      {shell !== 'v2' && (
       <div className="flex items-center justify-between gap-4">
         <button
           type="button"
@@ -680,14 +827,15 @@ export default function SupplierInvoiceDetailPage() {
           className="shrink-0"
         />
       </div>
+      )}
 
       {/* Header: serif title with one status element, a quiet meta line, and
           the next step on the right. Everything else lives in the ⋯ menu. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             {/* data-ph-mask: the title carries the supplier's invoice number */}
-            <h1 data-ph-mask="" className="font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
             {status.exception ? (
               <Badge variant={status.variant}>{status.label}</Badge>
             ) : (
@@ -700,10 +848,18 @@ export default function SupplierInvoiceDetailPage() {
               </Badge>
             )}
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
+          <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
+          {shell === 'v2' && (
+            <DetailPager
+              contextKey={listContextKey('supplier-invoices', company?.id)}
+              basePath="/supplier-invoices"
+              currentId={String(params.id)}
+              className="shrink-0"
+            />
+          )}
           {/* The supplier's own document, reviewed in the browser (#1190). */}
           {invoice.document_id && (
             <DocumentViewButton
@@ -728,10 +884,17 @@ export default function SupplierInvoiceDetailPage() {
               {t('approve')}
             </Button>
           )}
+          {canAddToFile && (
+            <Button onClick={() => setIsFileDialogOpen(true)} disabled={isProcessing || !canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
+              {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('add_to_payment_file')}
+            </Button>
+          )}
           {/* The bock (#2220): "I have entered this payment in the bank".
               A labelled checkbox rather than a button, because it is a fact
-              the user records, not an action that posts anything. */}
-          {showBankEntered && (
+              the user records, not an action that posts anything. In v2 it
+              sits in the Betalning section, where the fact belongs. */}
+          {showBankEntered && shell !== 'v2' && (
             <label
               className={cn(
                 'inline-flex h-9 select-none items-center gap-2 px-2 text-[13px]',
@@ -755,7 +918,7 @@ export default function SupplierInvoiceDetailPage() {
               step (an aged-but-unattested invoice can have both). */}
           {canMarkPaid && (
             <Button
-              variant={canApprove ? 'outline' : 'default'}
+              variant={canApprove || canAddToFile ? 'outline' : 'default'}
               onClick={() => setIsPayDialogOpen(true)}
               disabled={isProcessing || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -819,8 +982,60 @@ export default function SupplierInvoiceDetailPage() {
         </div>
       </div>
 
-      {/* Leverantör and Fakturainformation side by side like an invoice head:
-          who sent it on the left, the facts on the right. */}
+      {shell === 'v2' && lifecycle && (
+        <StageSteps
+          stages={stagesFor(companySettings?.accounting_method)}
+          current={lifecycle.stage}
+          detail={stripText}
+        />
+      )}
+
+      {/* Shell v2: the invoice head is one line of facts. The number is the
+          title, the dates that moved are on the strip, so only the supplier
+          and the document facts remain. */}
+      {shell === 'v2' ? (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px] text-muted-foreground" data-ph-mask>
+          {invoice.supplier && (
+            <Link href={`/suppliers/${invoice.supplier.id}`} className="text-foreground hover:underline">
+              {invoice.supplier.name}
+            </Link>
+          )}
+          {invoice.supplier?.org_number && (
+            <span>
+              {t('def_org_number')} <span className="tabular-nums text-foreground">{invoice.supplier.org_number}</span>
+            </span>
+          )}
+          <span>
+            {t('invoice_date_label')} <span className="tabular-nums text-foreground">{formatDate(invoice.invoice_date)}</span>
+          </span>
+          <span>
+            {t('due_date_label')} <span className="tabular-nums text-foreground">{formatDate(invoice.due_date)}</span>
+          </span>
+          <span>
+            {t('arrival_number_label')} <span className="tabular-nums text-foreground">#{invoice.arrival_number}</span>
+          </span>
+          {invoice.payment_reference && (
+            <span>
+              {t('ocr_reference_label')} <span className="tabular-nums text-foreground">{invoice.payment_reference}</span>
+            </span>
+          )}
+          {invoice.reverse_charge && <span>{t('reverse_charge_badge')}</span>}
+          {invoice.is_credit_note && (
+            <span>
+              {t('def_credits')}{' '}
+              {creditedOriginal ? (
+                <Link href={`/supplier-invoices/${creditedOriginal.id}`} className="text-foreground hover:underline">
+                  {creditedOriginal.supplier_invoice_number
+                    ? t('title_invoice', { number: creditedOriginal.supplier_invoice_number })
+                    : t('arrival_header', { number: creditedOriginal.arrival_number })}
+                </Link>
+              ) : (
+                t('credit_note_banner_original_fallback')
+              )}
+            </span>
+          )}
+        </div>
+      ) : (
       <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
         {invoice.supplier && (
           <DetailSection kicker={t('supplier_section_title')}>
@@ -893,6 +1108,7 @@ export default function SupplierInvoiceDetailPage() {
           )}
         </DetailSection>
       </div>
+      )}
 
       {/* Invoice lines: the list-page table idiom straight on the panel, with
           the totals as a right-aligned block and the total in the serif. */}
@@ -922,7 +1138,9 @@ export default function SupplierInvoiceDetailPage() {
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
                   {formatCurrency(item.unit_price, invoice.currency)}
                 </td>
-                <td className={TD_CLASS}><AccountNumber number={item.account_number} /></td>
+                <td className={TD_CLASS}>
+                  <InlineAccountCell item={item} editable={lineAccountEditable} entityType={(company?.entity_type ?? 'aktiebolag') as EntityType} accounts={accounts} label={t('line_account_edit')} onCommit={changeLineAccount} />
+                </td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{Math.round(item.vat_rate * 100)}%</td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
                   {formatCurrency(item.line_total, invoice.currency)}
@@ -983,6 +1201,28 @@ export default function SupplierInvoiceDetailPage() {
       {/* Payment: paid / remaining always, plus the payment events once any
           exist, so a partly paid invoice exposes what is still open. */}
       <DetailSection kicker={t('payment_section')}>
+        {shell === 'v2' && lifecycle?.batch && (
+          <DefRow label={t('payment_file_label')}>
+            <Link href="/supplier-invoices/payment-files" className="hover:underline underline-offset-4">
+              {t('payment_file_created', { date: formatDate(lifecycle.batch.created_at) })}
+            </Link>
+          </DefRow>
+        )}
+        {shell === 'v2' && showBankEntered && !lifecycle?.batch && (
+          <DefRow label={t('bank_entered_label')}>
+            <label className={cn('inline-flex select-none items-center gap-2', canWrite && !isProcessing ? 'cursor-pointer' : 'cursor-default', processingAction === 'bank_entered' && 'opacity-50')}>
+              <Checkbox
+                checked={!!invoice.bank_entered_at}
+                disabled={isProcessing || !canWrite}
+                onCheckedChange={(value) => void handleBankEntered(value === true)}
+                aria-label={t('bank_entered_aria')}
+              />
+              <span className="text-muted-foreground">
+                {invoice.bank_entered_at ? formatDate(invoice.bank_entered_at) : t('bank_entered_hint')}
+              </span>
+            </label>
+          </DefRow>
+        )}
         <DefRow label={t('paid_label')}>
           <span className="tabular-nums">{formatCurrency(invoice.paid_amount, invoice.currency)}</span>
         </DefRow>
@@ -1065,6 +1305,20 @@ export default function SupplierInvoiceDetailPage() {
         </DetailSection>
       )}
 
+      {isFileDialogOpen && (
+        <PaymentFileDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setIsFileDialogOpen(false)
+          }}
+          invoiceIds={[invoice.id]}
+          invoiceLabelById={new Map([[invoice.id, title]])}
+          onCreated={() => {
+            setIsFileDialogOpen(false)
+            void mutateLifecycle()
+          }}
+        />
+      )}
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
       {/* Pay Dialog */}

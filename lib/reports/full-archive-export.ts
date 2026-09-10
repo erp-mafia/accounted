@@ -1191,6 +1191,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   calendar_feeds: 'feed tokens (secrets)',
   capability_grants: 'entitlement state',
   categorize_calibration_samples: 'auto-booking confidence telemetry, not räkenskapsinformation',
+  transaction_assistant_reads: "the assistant's proposal for an unbooked transaction, recomputed on demand; no bookkeeping content",
   chat_messages: 'AI assistant state, not räkenskapsinformation',
   chat_sessions: 'AI assistant state, not räkenskapsinformation',
   company_capability_config: 'entitlement state',
@@ -1254,6 +1255,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   webhooks: 'automation config with signing secrets',
   woocommerce_connections: 'WooCommerce connection state (encrypted API secrets)',
   shopify_connections: 'Shopify connection state (encrypted API secrets)',
+  zettle_connections: 'Zettle connection state (encrypted OAuth refresh token)',
 }
 
 /** Max parent ids per `IN (...)` chunk: keeps the PostgREST URL well under limits. */

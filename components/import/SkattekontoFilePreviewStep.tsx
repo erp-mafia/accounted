@@ -1,6 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import { noticesFromParseIssues } from '@/lib/import/notices'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -195,24 +197,8 @@ export default function SkattekontoFilePreviewStep({
           "some of these are already booked" question before the click. */}
       <p className="text-sm text-muted-foreground">{t('skattekonto_after_import_note')}</p>
 
-      {warnings.length > 0 && (
-        <Card>
-          <CardHeader className="py-3">
-            <CardTitle className="text-sm flex items-center gap-2 text-warning">
-              <AlertTriangle className="h-4 w-4" />
-              {t('skattekonto_issues_title', { count: warnings.length })}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground space-y-1">
-            {warnings.slice(0, 5).map((issue, i) => (
-              <p key={i}>
-                {issue.row > 0 ? `${t('skattekonto_issue_row', { row: issue.row })}: ` : ''}
-                {issue.message}
-              </p>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+      {/* Rows the parser could not fully read: folded, all of them. */}
+      <ImportNotices notices={noticesFromParseIssues(warnings)} />
 
       <Card>
         <CardContent className="p-0">

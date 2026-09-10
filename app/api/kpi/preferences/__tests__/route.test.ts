@@ -178,6 +178,7 @@ describe('PUT /api/kpi/preferences merge semantics', () => {
       visibleKpis: ['kpi_a'],
       kpiOrder: ['kpi_a', 'kpi_b'],
       accountOverrides: { kpi_b: ['4010'] },
+      showMonthlyTable: true,
     })
   })
 
@@ -186,6 +187,7 @@ describe('PUT /api/kpi/preferences merge semantics', () => {
       visibleKpis: ['kpi_z'],
       kpiOrder: ['kpi_z'],
       accountOverrides: { kpi_z: ['3010'] },
+      showMonthlyTable: false,
     }
     const { value } = await put(full, stored)
     expect(value).toEqual(full)
@@ -202,7 +204,18 @@ describe('PUT /api/kpi/preferences merge semantics', () => {
 
   it('an empty body stores the stored value unchanged', async () => {
     const { value } = await put({}, stored)
-    expect(value).toEqual(stored)
+    expect(value).toEqual({ ...stored, showMonthlyTable: true })
+  })
+
+  it('stores showMonthlyTable false and leaves the other keys alone', async () => {
+    const { res, value } = await put({ showMonthlyTable: false }, stored)
+    expect(res.status).toBe(200)
+    expect(value).toEqual({ ...stored, showMonthlyTable: false })
+  })
+
+  it('rejects a non-boolean showMonthlyTable', async () => {
+    const { res } = await put({ showMonthlyTable: 'yes' }, stored)
+    expect(res.status).toBe(400)
   })
 
   it('upserts against the company-scoped unique constraint', async () => {
