@@ -32,6 +32,18 @@ describe('parseSystemNoticeUntil', () => {
     expect(parseSystemNoticeUntil('2026-09-10T12:00:00+02:00', NOW)).toBeNull()
   })
 
+  it('accepts Z and compact offsets, rejects a date-time without any offset', () => {
+    expect(parseSystemNoticeUntil('2026-09-10T21:00:00Z', NOW)).toBe(
+      Date.parse('2026-09-10T23:00:00+02:00'),
+    )
+    expect(parseSystemNoticeUntil('2026-09-10T23:00:00+0200', NOW)).toBe(
+      Date.parse('2026-09-10T23:00:00+02:00'),
+    )
+    // Local-time parse would differ between Vercel (UTC) and a laptop.
+    expect(parseSystemNoticeUntil('2026-09-10T23:00:00', NOW)).toBeNull()
+    expect(parseSystemNoticeUntil('2026-09-10', NOW)).toBeNull()
+  })
+
   it('returns null for unset, blank, or unparseable values', () => {
     expect(parseSystemNoticeUntil(undefined, NOW)).toBeNull()
     expect(parseSystemNoticeUntil(null, NOW)).toBeNull()

@@ -12,9 +12,16 @@
 export const SYSTEM_NOTICE_STORAGE_KEY = 'Accounted:system-notice-dismissed'
 
 /**
+ * A date-time without Z or a numeric offset is parsed as the runtime's local
+ * time, which is UTC on Vercel and whatever the operator's laptop is locally.
+ * Require the offset so the deadline means the same instant everywhere.
+ */
+const HAS_UTC_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/i
+
+/**
  * Parse the raw env value into an epoch ms deadline. Returns null when the
- * value is missing, unparseable, or already in the past, so callers render
- * nothing without a second check.
+ * value is missing, has no UTC offset, is unparseable, or is already in the
+ * past, so callers render nothing without a second check.
  */
 export function parseSystemNoticeUntil(
   raw: string | undefined | null,
@@ -22,6 +29,7 @@ export function parseSystemNoticeUntil(
 ): number | null {
   const trimmed = raw?.trim()
   if (!trimmed) return null
+  if (!HAS_UTC_OFFSET.test(trimmed)) return null
   const until = new Date(trimmed).getTime()
   if (!Number.isFinite(until)) return null
   return until > now ? until : null
