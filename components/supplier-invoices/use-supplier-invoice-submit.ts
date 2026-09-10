@@ -8,6 +8,7 @@ import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { findIllegalVatRateRow } from '@/lib/vat/supplier-invoice-line-checks'
 import { rateToPctString, supplierInvoiceCreateUrl, type SupplierInvoiceFormData } from '@/lib/supplier-invoices/form-payload'
 import { isPersonPayer } from '@/lib/expenses/payer'
+import { shouldAutoApproveSupplierInvoice } from '@/lib/supplier-invoices/auto-approve'
 import type { InvoiceExtractionResult } from '@/types'
 
 // The existing invoice surfaced on a duplicate-number conflict, used to drive
@@ -45,6 +46,8 @@ interface UseSupplierInvoiceSubmitParams {
   ta: ReturnType<typeof useTranslations>
   toast: ReturnType<typeof useToast>['toast']
   isEF: boolean
+  /** company_settings.auto_approve_supplier_invoices; EF ignores and always approves. */
+  autoApproveSupplierInvoices: boolean
   /** Inbox item to convert (route chooser + best-effort field sync-back). */
   inboxItemId: string | null
   originalExtracted: InvoiceExtractionResult | null
@@ -83,6 +86,7 @@ export function useSupplierInvoiceSubmit({
   ta,
   toast,
   isEF,
+  autoApproveSupplierInvoices,
   inboxItemId,
   originalExtracted,
   buildPayload,
@@ -96,6 +100,7 @@ export function useSupplierInvoiceSubmit({
   onExpenseRegistered,
   onMissingField,
 }: UseSupplierInvoiceSubmitParams) {
+  const shouldAutoApprove = shouldAutoApproveSupplierInvoice(isEF, autoApproveSupplierInvoices)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showReview, setShowReview] = useState(false)
   const [pendingData, setPendingData] = useState<SupplierInvoiceFormData | null>(null)
@@ -305,8 +310,9 @@ export function useSupplierInvoiceSubmit({
     }
   }
 
-  // EF: create + auto-approve, no review dialog. Privately-paid invoices land
-  // here too and skip auto-approve since they're already in status='paid'.
+  // EF (and AB with auto-approve): create + auto-approve, no review dialog.
+  // Privately-paid invoices land here too and skip auto-approve since they're
+  // already in status='paid'.
   async function handleDirectSubmit(data: SupplierInvoiceFormData) {
     setIsSubmitting(true)
     await patchInboxFieldsIfChanged(data)
@@ -351,24 +357,29 @@ export function useSupplierInvoiceSubmit({
       return
     }
 
-    // Auto-approve for EF
-    const approveRes = await fetch(`/api/supplier-invoices/${result.data.id}/approve`, { method: 'POST' })
-    if (!approveRes.ok) {
-      toast({
-        title: t('warning_title'),
-        description: t('auto_approve_failed_description'),
-        variant: 'destructive',
-      })
-      finishCreate(result.data.id)
-    } else {
-      toast({ title: t('invoice_registered_title'), description: t('arrival_number_label', { number: result.data.arrival_number }) })
-      finishCreate()
+    if (shouldAutoApprove) {
+      const approveRes = await fetch(`/api/supplier-invoices/${result.data.id}/approve`, { method: 'POST' })
+      if (!approveRes.ok) {
+        toast({
+          title: t('warning_title'),
+          description: t('auto_approve_failed_description'),
+          variant: 'destructive',
+        })
+        finishCreate(result.data.id)
+        setIsSubmitting(false)
+        return
+      }
     }
+
+    toast({ title: t('invoice_registered_title'), description: t('arrival_number_label', { number: result.data.arrival_number }) })
+    finishCreate()
     setIsSubmitting(false)
   }
 
   // AB: create after review dialog. If a bank transaction was picked first
   // (register-and-match flow), also match the new invoice to it.
+  // When auto_approve_supplier_invoices is on, approve before match so the
+  // invoice is ready for payment without a separate Godkänn step.
   async function handleConfirm() {
     if (!pendingData) return
     setIsSubmitting(true)
@@ -381,6 +392,20 @@ export function useSupplierInvoiceSubmit({
       setShowReview(false)
       // Clear dirty state: see comment in handleDirectSubmit.
       reset(pendingData)
+
+      if (shouldAutoApprove && !isPersonPayer(pendingData.payer)) {
+        const approveRes = await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
+        if (!approveRes.ok) {
+          toast({
+            title: t('warning_title'),
+            description: t('auto_approve_failed_description'),
+            variant: 'destructive',
+          })
+          finishCreate(invoiceId)
+          setIsSubmitting(false)
+          return
+        }
+      }
 
       if (pendingTransactionId) {
         const matchRes = await fetch(`/api/transactions/${pendingTransactionId}/match-supplier-invoice`, {
@@ -535,10 +560,12 @@ export function useSupplierInvoiceSubmit({
     const invoiceId = result.data.id
     const arrivalNumber = result.data.arrival_number
 
-    // Auto-approve before matching, so the invoice is in the 'approved' state
-    // that match-supplier-invoice expects (it accepts registered too, but
-    // EF's expectation is fully-booked).
-    await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
+    // Auto-approve before matching when EF (or AB with the setting), so the
+    // invoice is in the 'approved' state that match-supplier-invoice expects
+    // (it accepts registered too, but EF's expectation is fully-booked).
+    if (shouldAutoApprove) {
+      await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
+    }
 
     const matchRes = await fetch(`/api/transactions/${transactionId}/match-supplier-invoice`, {
       method: 'POST',

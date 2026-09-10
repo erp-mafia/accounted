@@ -73,6 +73,7 @@ describe('UpdateCompanySettingsParamsSchema: excluded fields stay excluded', () 
     ['invoice_email_cc_addresses', ['kopia@example.se']],
     ['invoice_email_bcc_addresses', ['dold@example.se']],
     ['defer_invoice_booking', true],
+    ['auto_approve_supplier_invoices', true],
     ['default_voucher_series', 'B'],
     ['org_number', '556677-8899'],
   ]

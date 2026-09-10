@@ -2195,6 +2195,12 @@
     "enable_help": "Visar betalningslänksfältet i fakturaredigeraren. Med Stripe anslutet skapas en betalningslänk automatiskt när fakturan skickas.",
     "toast_save_failed": "Kunde inte spara"
   },
+  "settings_auto_approve_supplier_invoices": {
+    "heading": "Leverantörsfakturor",
+    "enable_label": "Godkänn automatiskt vid registrering",
+    "enable_help": "Sätter godkännande för betalning (attest) direkt när leverantörsfakturan registreras. Enskild firma gör redan detta. För aktiebolag sparar det det manuella Godkänn-steget.",
+    "toast_save_failed": "Kunde inte spara"
+  },
   "settings_peppol": {
     "heading": "E-faktura via Peppol",
     "enable_label": "Ta emot e-fakturor via Peppol",

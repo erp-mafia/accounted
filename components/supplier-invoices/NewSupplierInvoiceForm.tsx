@@ -200,6 +200,7 @@ export default function NewSupplierInvoiceForm({
     setOreRounding,
     dimensionsEnabled,
     vatRegistered,
+    autoApproveSupplierInvoices,
     periods,
     periodsLoaded,
   } = useSupplierInvoiceData()
@@ -1392,6 +1393,7 @@ export default function NewSupplierInvoiceForm({
     ta,
     toast,
     isEF,
+    autoApproveSupplierInvoices,
     inboxItemId: effectiveInboxItemId,
     originalExtracted,
     buildPayload,

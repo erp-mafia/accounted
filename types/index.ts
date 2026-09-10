@@ -522,6 +522,11 @@ export interface CompanySettings {
   // lib/extensions/payment-links.ts, not just in the UI.
   invoice_payment_links_enabled: boolean
 
+  // Opt-in: after registering a leverantörsfaktura, automatically approve it
+  // for payment (approved_at). Default false. Enskild firma still auto-
+  // approves in the dashboard create flow regardless of this flag.
+  auto_approve_supplier_invoices: boolean
+
   // Invoice branding (per-company colors, font, optional header/footer text).
   // Defaults preserve the legacy hardcoded palette so unbranded companies
   // render identically to the pre-branding template.
