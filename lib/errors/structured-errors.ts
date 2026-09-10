@@ -1763,6 +1763,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 502,
     message_sv: 'Peppol-operatören kunde inte genomföra registreringen. Försök igen om en stund.',
     message_en: 'The Peppol access point could not complete the registration. Try again shortly.',
+    retryable: true,
   },
   PEPPOL_REGISTRATION_NOT_FOUND: {
     httpStatus: 404,
@@ -1795,6 +1796,71 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Alla platser för Peppol-mottagning är upptagna just nu. Hör av dig till support så öppnar vi fler. Att skicka e-fakturor fungerar ändå.',
     message_en: 'All Peppol receiving slots are taken right now. Contact support and we will open more. Sending e-invoices works regardless.',
+  },
+  // The access point gave a verdict on the identifier itself (#2483):
+  // retrying the same registration cannot change it, unlike
+  // PEPPOL_REGISTRATION_FAILED, which is the operational counterpart.
+  PEPPOL_REGISTRATION_REJECTED: {
+    httpStatus: 422,
+    message_sv: 'Registreringen avvisades av Peppol-operatören. Kontakta support om felet kvarstår.',
+    message_en: 'The Peppol access point rejected the registration. Contact support if the problem persists.',
+  },
+  // Hosted connector codes (packages/connect-contract) that a self-hosted
+  // instance in connector mode stores as peppol_registrations.last_error_code
+  // and shows translated. Permanent verdicts first, then transient ones.
+  CONNECTOR_PEPPOL_PARTICIPANT_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Peppol-id:t är redan registrerat via ett annat konto. Kontakta support om det är ert bolag.',
+    message_en: 'The Peppol id is already registered through another account. Contact support if it is your company.',
+  },
+  CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED: {
+    httpStatus: 422,
+    message_sv: 'Peppol-id:t får inte registreras från det här kontot. Kontakta support.',
+    message_en: 'The Peppol id may not be registered from this account. Contact support.',
+  },
+  CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE: {
+    httpStatus: 409,
+    message_sv: 'Peppol-id:t är redan publicerat hos en annan operatör. Avregistrera det där först.',
+    message_en: 'The Peppol id is already published with another access point. Deregister it there first.',
+  },
+  CONNECTOR_QUOTA_EXCEEDED: {
+    httpStatus: 409,
+    message_sv: 'Kontots Peppol-platser är förbrukade. Hör av dig till support så öppnar vi fler.',
+    message_en: 'The account has used its Peppol slots. Contact support and we will open more.',
+  },
+  CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS: {
+    httpStatus: 409,
+    message_sv: 'En registrering av Peppol-id:t pågår redan. Försök igen om en stund.',
+    message_en: 'A registration of the Peppol id is already in progress. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_NOT_OWNED: {
+    httpStatus: 404,
+    message_sv: 'Peppol-id:t finns inte registrerat hos operatören för det här kontot.',
+    message_en: 'The Peppol id is not registered with the access point for this account.',
+  },
+  CONNECTOR_UPSTREAM_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Peppol-operatören svarade med ett fel. Försök igen om en stund.',
+    message_en: 'The Peppol access point answered with an error. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_UNREACHABLE: {
+    httpStatus: 502,
+    message_sv: 'Tjänsten som förmedlar Peppol kunde inte nås. Försök igen om en stund.',
+    message_en: 'The service that brokers Peppol could not be reached. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_RATE_LIMITED: {
+    httpStatus: 429,
+    message_sv: 'För många Peppol-anrop på kort tid. Vänta en stund och försök igen.',
+    message_en: 'Too many Peppol calls in a short time. Wait a moment and try again.',
+    retryable: true,
+  },
+  CONNECTOR_PROTOCOL_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Svaret från Peppol-tjänsten kunde inte tolkas. Kontakta support om felet kvarstår.',
+    message_en: 'The answer from the Peppol service could not be read. Contact support if the problem persists.',
   },
 }
 

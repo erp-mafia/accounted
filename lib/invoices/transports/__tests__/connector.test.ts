@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createConnectorPeppolTransport, CONNECTOR_PROVIDER } from '../connector'
-import { isPeppolTransportError } from '@/lib/invoices/peppol-transport'
+import { isPeppolTransportError, type PeppolTransportError } from '@/lib/invoices/peppol-transport'
 
 const upstream = { baseUrl: 'https://app.gnubok.se/api/connect/peppol', key: 'gnubok_ck_test' }
 const participant = { scheme: '0007', identifier: '5561234567' }
@@ -85,17 +85,40 @@ describe('connector Peppol transport', () => {
     }
   })
 
-  it('turns hosted refusals into PeppolTransportErrors carrying the retryable flag and code', async () => {
+  it('turns hosted refusals into PeppolTransportErrors carrying the retryable flag, the code and the bare detail', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ error: 'quota', code: 'CONNECTOR_QUOTA_EXCEEDED', retryable: false }, 403))
+      .mockResolvedValueOnce(jsonResponse({ error: 'quota', code: 'CONNECTOR_QUOTA_EXCEEDED', retryable: false, detail: 'slot 11 of 10' }, 403))
       .mockResolvedValueOnce(jsonResponse({ error: 'busy', code: 'CONNECTOR_RATE_LIMITED' }, 429))
+      .mockResolvedValueOnce(jsonResponse({ error: 'Qvalia answered 500', code: 'CONNECTOR_UPSTREAM_ERROR', detail: 'Something went wrong with the request' }, 502))
+      .mockResolvedValueOnce(new Response('gateway timeout', { status: 504 }))
       .mockRejectedValueOnce(new TypeError('fetch failed'))
     const transport = build(fetchMock as unknown as typeof fetch)
-    await expect(transport.lookupRecipient(participant)).rejects.toSatisfy(
-      (e: unknown) => isPeppolTransportError(e) && e.retryable === false && /CONNECTOR_QUOTA_EXCEEDED/.test(e.detail ?? ''),
-    )
-    await expect(transport.lookupRecipient(participant)).rejects.toSatisfy((e: unknown) => isPeppolTransportError(e) && e.retryable === true)
-    await expect(transport.lookupRecipient(participant)).rejects.toSatisfy((e: unknown) => isPeppolTransportError(e) && e.retryable === true)
+    const failures: unknown[] = []
+    for (let i = 0; i < 5; i += 1) {
+      failures.push(await transport.lookupRecipient(participant).catch((e: unknown) => e))
+    }
+    expect(failures.every(isPeppolTransportError)).toBe(true)
+    const [quota, busy, upstream, plain, network] = failures as PeppolTransportError[]
+    // The code travels on its own; detail is the hosted detail and nothing else.
+    expect(quota).toMatchObject({ retryable: false, code: 'CONNECTOR_QUOTA_EXCEEDED', detail: 'slot 11 of 10', message: 'Connector: quota' })
+    expect(busy).toMatchObject({ retryable: true, code: 'CONNECTOR_RATE_LIMITED', detail: null })
+    expect(upstream).toMatchObject({
+      retryable: true,
+      code: 'CONNECTOR_UPSTREAM_ERROR',
+      detail: 'Something went wrong with the request',
+      message: 'Connector: Qvalia answered 500',
+    })
+    expect(upstream.detail).not.toMatch(/CONNECTOR_UPSTREAM_ERROR/)
+    // No envelope: the status is the code.
+    expect(plain).toMatchObject({ retryable: true, code: 'HTTP_504', detail: null })
+    expect(network).toMatchObject({ retryable: true, code: 'CONNECTOR_UNREACHABLE' })
+  })
+
+  it('codes the missing tenant reference on registration', async () => {
+    const transport = build(vi.fn() as unknown as typeof fetch)
+    await expect(transport.registerRecipient!({
+      participant, businessCard: { companyName: 'AB', countryCode: 'SE' }, documentTypes: [],
+    })).rejects.toMatchObject({ retryable: false, code: 'CONNECTOR_COMPANY_MISSING' })
   })
 
   it('does not verify webhooks: the hosted service owns them', async () => {
@@ -124,7 +147,8 @@ describe('contract validation', () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ reachable: 'maybe' }))
     const transport = build(fetchMock as unknown as typeof fetch)
     await expect(transport.lookupRecipient(participant)).rejects.toSatisfy(
-      (e: unknown) => isPeppolTransportError(e) && e.retryable === false && /unexpected response shape/.test(e.message),
+      (e: unknown) => isPeppolTransportError(e) && e.retryable === false && /unexpected response shape/.test(e.message)
+        && e.code === 'CONNECTOR_PROTOCOL_ERROR',
     )
   })
 })
