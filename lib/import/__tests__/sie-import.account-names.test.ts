@@ -165,10 +165,14 @@ describe('executeSIEImport: account name sync wiring', () => {
 
     const result = await runImport()
 
-    expect(result.warnings).toContain('2 konton bytte namn till namnen från SIE-filen')
+    // Informational, recorded in details (rendered behind the info icon),
+    // never as a warning: it fired on every provider migration and read as
+    // "something went wrong" (#2462).
+    expect(result.accountsRenamed).toBe(2)
+    expect(result.warnings.join(' ')).not.toMatch(/bytte namn/)
   })
 
-  it('uses singular wording for one rename', async () => {
+  it('records a single rename the same way', async () => {
     mockSync.mockResolvedValue({
       created: 0,
       renamed: 1,
@@ -181,7 +185,8 @@ describe('executeSIEImport: account name sync wiring', () => {
 
     const result = await runImport()
 
-    expect(result.warnings).toContain('1 konto bytte namn till namnet från SIE-filen')
+    expect(result.accountsRenamed).toBe(1)
+    expect(result.warnings.join(' ')).not.toMatch(/bytte namn/)
   })
 
   it('warns about failed renames without failing the import step', async () => {
@@ -214,9 +219,10 @@ describe('executeSIEImport: account name sync wiring', () => {
     expect(result.errors).toContain('Failed to create accounts: permission denied')
   })
 
-  it('adds no rename warning when nothing was renamed', async () => {
+  it('records nothing when nothing was renamed', async () => {
     const result = await runImport()
 
+    expect(result.accountsRenamed).toBeUndefined()
     expect(result.warnings.join(' ')).not.toMatch(/bytte namn/)
   })
 

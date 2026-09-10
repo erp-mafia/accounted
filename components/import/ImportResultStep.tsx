@@ -277,6 +277,13 @@ export default function ImportResultStep({
                 <span className="text-sm">{t('result_accounts_created')}</span>
               </div>
               <p className="text-2xl font-display tabular-nums">{result.accountsCreated ?? 0}</p>
+              {result.accountsRenamed !== undefined && result.accountsRenamed > 0 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {result.accountsRenamed === 1
+                    ? '1 konto fick sitt namn från källsystemet'
+                    : `${result.accountsRenamed} konton fick sina namn från källsystemet`}
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -303,10 +310,20 @@ export default function ImportResultStep({
               <div className="text-2xl font-display">
                 {result.openingBalanceEntryId ? (
                   <Badge variant="success">Importerade</Badge>
+                ) : result.details?.openingBalanceSkipped === 'prior_activity' ? (
+                  <Badge variant="secondary">Härledda</Badge>
                 ) : (
                   <Badge variant="secondary">Inga</Badge>
                 )}
               </div>
+              {/* The file's #IB was deliberately not booked: the company already
+                  has posted entries, so this year's IB is the prior year's UB.
+                  Said here, not as a warning (#2462). */}
+              {!result.openingBalanceEntryId && result.details?.openingBalanceSkipped === 'prior_activity' && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Från föregående års utgående balans, eftersom bolaget redan har bokförda verifikationer.
+                </p>
+              )}
             </CardContent>
           </Card>
         </div>
