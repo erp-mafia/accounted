@@ -119,6 +119,10 @@
       "schedule": "30 5 * * *"
     },
     {
+      "path": "/api/extensions/invoice-inbox/arrival-match/cron",
+      "schedule": "15 6 * * *"
+    },
+    {
       "path": "/api/notifications/bookkeeping-digest/cron",
       "schedule": "45 5 * * *"
     },

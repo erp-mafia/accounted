@@ -17,6 +17,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { getMailSearchService } from '@/lib/mail-search/service'
 import { ingestMailCandidate } from './ingest'
+import { fetchRejectedPairs } from '@/lib/underlag/rejections'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
 import { adjudicate } from './adjudicate'
 import { attachSekTotals } from './fx'
@@ -267,7 +268,7 @@ async function fetchPool(
  * the answers already live there, terminal rows are immutable, and a rejection
  * is exactly the durable "no" the hunt must respect.
  */
-async function fetchSuppression(supabase: SupabaseClient, companyId: string) {
+export async function fetchSuppression(supabase: SupabaseClient, companyId: string) {
   const rows = await fetchAllRows<{
     id: string
     status: string
@@ -312,7 +313,7 @@ async function fetchSuppression(supabase: SupabaseClient, companyId: string) {
  * Falling back to any member rather than failing keeps single-admin companies
  * working; a company with no members has nobody to ask and is skipped.
  */
-async function resolveOwnerUserId(
+export async function resolveOwnerUserId(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<string | null> {
@@ -327,7 +328,7 @@ async function resolveOwnerUserId(
   return owner?.user_id ?? (data[0] as { user_id: string }).user_id
 }
 
-function buildTitle(proposal: HuntProposal, fileName: string, tx: HuntTransaction): string {
+export function buildAttachTitle(proposal: HuntProposal, fileName: string, tx: HuntTransaction): string {
   const counterparty = proposal.merchant_name || tx.merchant_name || tx.description || 'okänd motpart'
   return `Koppla underlag: ${fileName} → ${counterparty}`
 }
@@ -340,7 +341,7 @@ function buildTitle(proposal: HuntProposal, fileName: string, tx: HuntTransactio
  * potentially destructive, which would put a warning on a proposal that
  * overwrites nothing.
  */
-function buildPreview(
+export function buildAttachPreview(
   proposal: HuntProposal,
   fileName: string,
   tx: HuntTransaction,
@@ -384,10 +385,17 @@ export async function huntCompany(
     maxMails = MAX_MAILS_READ_PER_RUN,
   } = options
 
-  const [transactions, suppression] = await Promise.all([
+  const [transactions, huntSuppression, rejectedElsewhere] = await Promise.all([
     fetchCandidateTransactions(supabase, companyId),
     fetchSuppression(supabase, companyId),
+    fetchRejectedPairs(supabase, companyId),
   ])
+  // A "no" said in Underlag (a manual unmatch) is as durable as one said on a
+  // proposal; both retire the pair.
+  const suppression = {
+    ...huntSuppression,
+    rejectedPairs: new Set([...huntSuppression.rejectedPairs, ...rejectedElsewhere]),
+  }
   if (transactions.length === 0) {
     return { companyId, candidates: 0, poolSize: 0, proposed: 0 }
   }
@@ -506,13 +514,13 @@ export async function huntCompany(
       company_id: companyId,
       user_id: userId,
       operation_type: OPERATION_TYPE,
-      title: buildTitle(proposal, fileName, tx),
+      title: buildAttachTitle(proposal, fileName, tx),
       params: {
         transaction_id: proposal.transaction_id,
         document_id: proposal.document_id,
       },
       preview_data: {
-        ...buildPreview(proposal, fileName, tx),
+        ...buildAttachPreview(proposal, fileName, tx),
         // Where it came from, when the hunt fetched it out of a mailbox. The
         // reviewer should be able to see that this document was not uploaded
         // by a human without having to go looking.
