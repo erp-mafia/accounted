@@ -352,4 +352,11 @@ describe('resolveEntryKey', () => {
   it('other keys are not commits', () => {
     expect(resolveEntryKey({ ...base, key: 'ArrowDown' })).toEqual({ kind: 'none' })
   })
+
+  it('Shift+Tab navigates backwards and never commits, even with a highlight', () => {
+    expect(resolveEntryKey({ ...base, key: 'Tab', shiftKey: true })).toEqual({ kind: 'none' })
+    expect(
+      resolveEntryKey({ ...base, key: 'Tab', shiftKey: true, open: true, activeIdx: 0, matchCount: 2 }),
+    ).toEqual({ kind: 'none' })
+  })
 })

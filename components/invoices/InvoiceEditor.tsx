@@ -1054,6 +1054,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       // Enter is swallowed so it never submits the form.
       const action = resolveEntryKey({
         key: e.key,
+        shiftKey: e.shiftKey,
         query: entryQuery,
         open: entryOpen,
         activeIdx: entryActiveIdx,
@@ -2923,6 +2924,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           aria-label={t('quantity_label')}
                           className={cn(ENTRY_GHOST_CLASS, 'w-14 text-right')}
                           onMouseDown={(e) => {
+                            if (e.button !== 0) return
                             e.preventDefault()
                             commitEntryToCell(entryQuery.trim(), 'quantity')
                           }}
@@ -2935,6 +2937,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           aria-label={t('unit_label')}
                           className={ENTRY_GHOST_CLASS}
                           onMouseDown={(e) => {
+                            if (e.button !== 0) return
                             e.preventDefault()
                             commitEntryToCell(entryQuery.trim(), 'unit')
                           }}
@@ -2948,6 +2951,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         aria-label={t('unit_price_label')}
                         className={cn(ENTRY_GHOST_CLASS, 'w-full text-right')}
                         onMouseDown={(e) => {
+                          if (e.button !== 0) return
                           e.preventDefault()
                           commitEntryToCell(entryQuery.trim(), 'unit_price')
                         }}
@@ -2961,6 +2965,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           aria-label={t('vat_label')}
                           className={cn(ENTRY_GHOST_CLASS, 'whitespace-nowrap')}
                           onMouseDown={(e) => {
+                            if (e.button !== 0) return
                             e.preventDefault()
                             commitEntryToCell(entryQuery.trim(), 'vat_rate')
                           }}

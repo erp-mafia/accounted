@@ -231,6 +231,8 @@ export type EntryGhostCell = 'quantity' | 'unit' | 'unit_price' | 'vat_rate'
 
 export interface EntryKeyInput {
   key: string
+  /** Shift held: Shift+Tab navigates backwards and never commits. */
+  shiftKey?: boolean
   query: string
   /** The suggestion popover is open. */
   open: boolean
@@ -252,6 +254,7 @@ export type EntryKeyAction =
  */
 export function resolveEntryKey(input: EntryKeyInput): EntryKeyAction {
   if (input.key !== 'Enter' && input.key !== 'Tab') return { kind: 'none' }
+  if (input.key === 'Tab' && input.shiftKey) return { kind: 'none' }
   if (input.open && input.activeIdx >= 0 && input.activeIdx < input.matchCount) {
     return { kind: 'article', index: input.activeIdx }
   }
