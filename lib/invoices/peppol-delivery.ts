@@ -42,6 +42,19 @@ export function sha256Hex(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
+/**
+ * stage_peppol_delivery raises P0002 with this text when no fiscal period
+ * covers the invoice date: the delivery row carries the period's retention
+ * basis (BFL 7 kap.) and cannot exist without one. The match is on the RPC's
+ * free text, so it lives here once for every route that stages. Its other
+ * P0002 (invoice not eligible) is left to the generic mapping.
+ */
+export function isFiscalPeriodMissingError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const { code, message } = err as { code?: unknown; message?: unknown }
+  return code === 'P0002' && typeof message === 'string' && /fiscal period retention basis/i.test(message)
+}
+
 export async function stagePeppolDelivery(args: {
   supabase: SupabaseClient
   companyId: string
