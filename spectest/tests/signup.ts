@@ -39,7 +39,9 @@ export const signUp = env.test("create an account", async (ctx) => {
 
   // Straight into onboarding: no company yet, so MFA enrolment is not forced.
   await b.waitForURL(/\/onboarding/, { waitUntil: "load" });
-  await expect(b.getByText("Vad är ert organisationsnummer?")).toBeVisible();
+  // The first step asks for the company: by name when company search is
+  // configured (the SCB fake is), by org number otherwise (#2452).
+  await expect(b.getByRole("heading", { name: /Vilket företag är det\?|Vad är ert organisationsnummer\?/ })).toBeVisible();
 
   const users = await ctx.svc.supabase.sql<{
     id: string;

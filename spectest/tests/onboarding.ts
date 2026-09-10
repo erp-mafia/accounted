@@ -31,7 +31,8 @@ export const completeOnboarding = env.test(
     const b = await ctx.browser();
 
     // Station 1: FÖRETAGET. One field at a time, Enter to advance.
-    await expect(b.getByText("Vad är ert organisationsnummer?")).toBeVisible();
+    // Titled by company name when company search is configured, by org number otherwise (#2452).
+    await expect(b.getByRole("heading", { name: /Vilket företag är det\?|Vad är ert organisationsnummer\?/ })).toBeVisible();
     await b.locator("input").first().fill(COMPANY.orgNumber);
     await b.keyboard.press("Enter");
 

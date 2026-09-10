@@ -41,7 +41,8 @@ export const onboardWithoutVatRegistration = env.test(
   async (ctx) => {
     const b = await ctx.browser();
 
-    await expect(b.getByText("Vad är ert organisationsnummer?")).toBeVisible();
+    // Titled by company name when company search is configured, by org number otherwise (#2452).
+    await expect(b.getByRole("heading", { name: /Vilket företag är det\?|Vad är ert organisationsnummer\?/ })).toBeVisible();
     await b.locator("input").first().fill(COMPANY.orgNumber);
     await b.keyboard.press("Enter");
 

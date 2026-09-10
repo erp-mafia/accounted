@@ -104,7 +104,7 @@ export const importSieFile = env.test(
     // silent import here would produce a wrong omföringsverifikation at
     // year-end, months later, with nothing pointing back at this moment.
     await expect(
-      b.getByText(/ofullständigt räkenskapsår/),
+      b.getByText(/ofullständigt räkenskapsår|bara en del av räkenskapsåret/),
       "the app warns that the file's vouchers do not cover the whole year",
     ).toBeVisible();
 

@@ -50,7 +50,7 @@ export async function reviewDialog(b: Browser) {
   const review = b.getByRole("dialog").filter({ hasText: "Granska bokföring" });
   // Nothing is posted before the user has seen the entry. That review step
   // is what makes the booking a decision rather than a side effect.
-  await expect(review.getByText("Granska verifikationen innan du bokför")).toBeVisible();
+  await expect(review.getByRole("heading", { name: "Granska bokföring" })).toBeVisible();
   return review;
 }
 
@@ -67,6 +67,10 @@ export const bookTransaction = env.test(
     // The template picker offers BAS-mapped templates. Insättning skattekonto
     // is D 1630 / K 1930.
     const review = await chooseTemplate(b, "Inbetalning skattekonto 16556677-8899", "skattekonto", /Insättning skattekonto/, "1630");
+    // One header says whose pick this is. Chosen from the picker, it is the
+    // person's own; a row suggestion would read "Vår rekommendation".
+    await expect(review).toContainText("Din kontering");
+    await expect(review).toContainText("Vald av dig");
     // The verifikat block is the one statement of how it books.
     await expect(review).toContainText("1630 Skattekonto");
     await expect(review).toContainText("1930 Företagskonto");
