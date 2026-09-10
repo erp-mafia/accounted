@@ -33,12 +33,27 @@ export async function proposeForTransactions(
   const assistant_reads: Record<string, AssistantRead> = {}
   if (transactions.length === 0) return { proposals, assistant_reads }
 
-  const { data: mappingRules } = await supabase
-    .from('mapping_rules')
-    .select('*')
-    .or(`company_id.eq.${companyId},company_id.is.null`)
-    .eq('is_active', true)
-    .order('priority', { ascending: false })
+  // The company's own rules plus the global (null-company) defaults. Two
+  // static queries rather than one dynamic `.or('company_id.eq.<id>,...')`,
+  // which the no-phantom-columns scanner cannot resolve.
+  const [companyRules, globalRules] = await Promise.all([
+    supabase
+      .from('mapping_rules')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .order('priority', { ascending: false }),
+    supabase
+      .from('mapping_rules')
+      .select('*')
+      .is('company_id', null)
+      .eq('is_active', true)
+      .order('priority', { ascending: false }),
+  ])
+  const mappingRules = [
+    ...((companyRules.data ?? []) as MappingRule[]),
+    ...((globalRules.data ?? []) as MappingRule[]),
+  ]
 
   const { data: settings } = await supabase
     .from('company_settings')
@@ -51,7 +66,7 @@ export async function proposeForTransactions(
   const counterpartyMatches = await findCounterpartyTemplatesBatch(supabase, companyId, transactions)
 
   for (const tx of transactions) {
-    proposals[tx.id] = await getSuggestedTemplates(tx, entityType, (mappingRules as MappingRule[] | null) || undefined)
+    proposals[tx.id] = await getSuggestedTemplates(tx, entityType, mappingRules)
   }
 
   // Inject counterparty template matches as top suggestions. A learned
