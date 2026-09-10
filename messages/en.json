@@ -7560,6 +7560,8 @@
     "form_vacation_semesterersattning_hint": "12 % is added to every salary run and booked against 7285. No vacation pay liability builds up — common for hourly and fixed-term employees.",
     "form_vacation_days": "Vacation days per year",
     "form_vacation_days_hint": "Statutory minimum: 25 days",
+    "form_vacation_pay_rate": "Vacation pay percentage",
+    "form_vacation_pay_rate_hint": "Leave empty for the statutory 12 % (14.4 % at 30 days). Enter the collective agreement rate, e.g. 13.5. The statutory rate always applies as a floor.",
     "form_bank_account": "Bank account",
     "form_clearing_number": "Clearing number",
     "form_account_number": "Account number",

@@ -3133,6 +3133,11 @@ const EmployeeSchemaBase = z.object({
   vacation_rule: VacationRuleSchema.default('procentregeln'),
   vacation_days_per_year: z.number().int().min(25).max(40).default(25),
   semestertillagg_rate: z.number().min(0).max(0.05).default(0.0043),
+  // Kollektivavtal semesterlön rate as a fraction (0.135 = 13.5 %); null =
+  // statutory 12 % (14.4 % at 30 days). Bounds mirror the DB CHECK and
+  // lib/salary/vacation-pay-rate: below the floor is illegal, above 30 % is
+  // a unit typo.
+  vacation_pay_rate: z.number().min(0.12).max(0.3).nullable().optional(),
   email: z.string().email().optional(),
   phone: z.string().max(20).optional(),
   address_line1: z.string().max(200).optional(),
@@ -3255,6 +3260,7 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
   vacation_rule: VacationRuleSchema,
   vacation_days_per_year: z.number().int().min(25).max(40),
   semestertillagg_rate: z.number().min(0).max(0.05),
+  vacation_pay_rate: z.number().min(0.12).max(0.3).nullable(),
   vaxa_stod_eligible: z.boolean(),
 })
 
