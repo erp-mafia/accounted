@@ -26,10 +26,8 @@ import { persistUiState } from '@/lib/ui-state/client'
 import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
-import { accountHue, templateGroupHue } from '@/lib/bookkeeping/template-group-colors'
 import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
 import type { RowProposal } from '@/components/transactions/TransactionInboxCard'
-import type { TemplateGroup } from '@/lib/bookkeeping/booking-templates'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
@@ -47,10 +45,9 @@ import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplic
 import { mapWithConcurrency } from '@/lib/concurrency'
 
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
-import { resolveQuickReviewDefaults, type ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
-import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
-import { isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
+import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
+import { accountProposal, categorizeBodyFor, proposalFromTemplate, proposalHue, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { useProposalWhy } from '@/components/transactions/proposal-why'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type {
   TransactionWithInvoice,
@@ -97,7 +94,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { resolveDetachErrorMessage } from '@/components/transactions/detach-underlag'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
+import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary } from '@/types'
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import type { AssistantRead } from '@/lib/agent/categorize/read-shape'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
@@ -431,19 +428,10 @@ async function fetchPotentialMatches(
 
 interface QuickReviewState {
   transaction: TransactionWithInvoice
-  category: TransactionCategory
-  label: string
-  // ReviewTemplate, not BookingTemplate: a learned counterparty template has
-  // no catalog entry, so most BookingTemplate fields are genuinely absent.
-  template: ReviewTemplate | null
-  templateId: string | undefined
-  linePattern: LinePatternEntry[] | null
-  // Learned counterparty bag; prefills the review dialog's dimension picker.
-  defaultDimensions?: Record<string, string> | null
-  /** The row suggestion this review opened from, so the dialog can say why. Null when the person picked. */
-  recommendation?: { source?: 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant'; seenCount?: number; confidence?: number } | null
-  /** Account + VAT to open on instead of the category's defaults (the assistant's pick). */
-  defaults?: { account: string; vat: VatTreatment | 'none' }
+  /** What will be booked and why: one object whoever proposed it (lib/bookkeeping/proposal.ts). */
+  proposal: BookingProposal
+  /** The person chose it from the picker, as opposed to the row's recommendation. */
+  picked: boolean
 }
 
 export default function TransactionsPage() {
@@ -451,6 +439,7 @@ export default function TransactionsPage() {
   const companyId = company?.id ?? null
   const searchParams = useSearchParams()
   const t = useTranslations('transactions')
+  const whyFor = useProposalWhy()
   // Shell v2 (dev_docs/ui_v2_build_plan.md, PR 4): Kategori and Konto columns
   // plus per-user column visibility (ui_state.tx_columns). v1 keeps the
   // five-column row untouched.
@@ -555,9 +544,6 @@ export default function TransactionsPage() {
   // Quick review dialog (suggestion review before booking)
   const [quickReviewOpen, setQuickReviewOpen] = useState(false)
   const [quickReview, setQuickReview] = useState<QuickReviewState | null>(null)
-  // Set by bookProposal right before handleTemplateSelected, so the review
-  // it opens knows the pick came from a suggestion and why.
-  const pendingRecommendation = useRef<QuickReviewState['recommendation']>(null)
 
   // Prong B: prompt to match against an open supplier invoice instead of
   // categorizing direct to 2440. Triggered by a 409 TX_CATEGORIZE_SUGGEST_SI_MATCH.
@@ -752,9 +738,7 @@ export default function TransactionsPage() {
     if (tx.journal_entry_id || tx.is_business !== null) return null
     const s = rowProposal(templateSuggestions[tx.id])
     if (!s) return null
-    const account = s.debit_account.startsWith('19') ? s.credit_account : s.debit_account
-    const hue = s.group === 'counterparty' || s.group === 'assistant' ? accountHue(account) : templateGroupHue(s.group as TemplateGroup)
-    return { label: s.name_sv, hue, confidence: s.confidence, source: s.source, seenCount: s.seen_count }
+    return { label: s.name_sv, hue: proposalHue(s), confidence: s.confidence, why: whyFor(s) }
   }
   const categoryLabelFor = (tx: TransactionWithInvoice): string | null => {
     if (tx.potential_invoice && !tx.invoice_id)
@@ -1850,6 +1834,8 @@ export default function TransactionsPage() {
     vatTreatment?: VatTreatment
     accountOverride?: string
     templateId?: string
+    /** A learned counterpart rule: the server books its stored lines. */
+    counterpartyTemplateId?: string
     inboxItemId?: string
     dimensions?: Record<string, string>
     /** The underlag's moms (transaction currency): sent as vat_amount. */
@@ -1875,7 +1861,7 @@ export default function TransactionsPage() {
     // the batch aggregate would count the row as failed after finishBooking
     // already animated it out of the inbox.
   }): Promise<{ ok: boolean; journalEntryId: string | null }> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
+    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, counterpartyTemplateId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -1887,6 +1873,7 @@ export default function TransactionsPage() {
           vat_treatment: vatTreatment,
           account_override: accountOverride,
           template_id: templateId,
+          ...(counterpartyTemplateId ? { counterparty_template_id: counterpartyTemplateId } : {}),
           inbox_item_id: inboxItemId,
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
           ...(vatAmount != null ? { vat_amount: vatAmount } : {}),
@@ -3863,16 +3850,17 @@ export default function TransactionsPage() {
     setTemplatePickerOpen(true)
   }
 
-  function handleTemplateSelected(template: BookingTemplate, txOverride?: TransactionWithInvoice) {
+  // The one door into the review: a proposal, and whether the person picked it.
+  function openReview(transaction: TransactionWithInvoice, proposal: BookingProposal, picked: boolean) {
     setTemplatePickerOpen(false)
+    setQuickReview({ transaction, proposal, picked })
+    setQuickReviewOpen(true)
+  }
+
+  function handleTemplateSelected(template: BookingTemplate, txOverride?: TransactionWithInvoice) {
     const tx = txOverride ?? templatePickerTransaction
     if (!tx) return
-    // Library templates aren't validated server-side via template_id; the
-    // template's debit/credit + VAT drive the booking through account_override.
-    const templateId = isLibraryTemplateId(template.id) ? undefined : template.id
-    setQuickReview({ transaction: tx, category: template.fallback_category, label: template.name_sv, template, templateId, linePattern: null, recommendation: pendingRecommendation.current })
-    pendingRecommendation.current = null
-    setQuickReviewOpen(true)
+    openReview(tx, proposalFromTemplate(template, 'manual'), true)
   }
 
   // Shell v2: Bokför on a row that carries a proposal goes straight to the
@@ -3883,123 +3871,54 @@ export default function TransactionsPage() {
     // A decision the company already made (a rule, a settled counterpart, a
     // sure read of a receipt) books from the row; Ångra sits on the toast.
     if (booksWithoutReview(s)) return void bookDirect(transaction, s)
-    if (s.source === 'assistant') return openAssistantReview(transaction, s)
-    if (isCounterpartyTemplateId(s.template_id)) return handleOpenTemplateReview(transaction, s.template_id)
-    const template = getTemplateById(s.template_id)
-    if (!template) return openCategoryDialog(transaction)
-    pendingRecommendation.current = { source: s.source, seenCount: s.seen_count, confidence: s.confidence }
-    handleTemplateSelected(template, transaction)
+    openReview(transaction, s, false)
   }
 
-  function directNarration(s: SuggestedTemplate): string {
-    if (s.source === 'rule') return t('direct_why_rule', { name: s.name_sv })
-    if (s.source === 'counterparty') return t('direct_why_counterparty', { name: s.name_sv, count: s.seen_count ?? 0 })
-    return t('direct_why_assistant', { name: s.name_sv })
-  }
-
-  async function bookDirect(transaction: TransactionWithInvoice, s: SuggestedTemplate) {
-    const narration = directNarration(s)
-    if (s.source === 'counterparty') {
-      await bookWithCounterpartyTemplate(transaction.id, extractCounterpartyId(s.template_id), s.default_dimensions ?? undefined, narration)
-      return
-    }
-    if (s.source === 'assistant') {
-      const account = transaction.amount < 0 ? s.debit_account : s.credit_account
-      await runCategorize({
-        id: transaction.id,
-        isBusiness: true,
-        category: s.category ?? 'expense_other',
-        vatTreatment: s.vat_treatment ?? undefined,
-        accountOverride: account,
-        confirmNoMatch: false,
-        narration,
-      })
-      return
-    }
-    const template = getTemplateById(s.template_id)
-    // A library template books through the review (its accounts drive an
-    // override the dialog seeds); only the catalog's own templates go direct.
-    if (!template || isLibraryTemplateId(template.id)) {
-      if (!template) return openCategoryDialog(transaction)
-      pendingRecommendation.current = { source: s.source, seenCount: s.seen_count, confidence: s.confidence }
-      return handleTemplateSelected(template, transaction)
-    }
-    await runCategorize({
+  // Book a proposal exactly as it would be shown: one body for every kind
+  // (lib/bookkeeping/proposal.ts), one call, the same toasts and undo.
+  async function bookProposalNow(
+    transaction: TransactionWithInvoice,
+    proposal: BookingProposal,
+    extras: { dimensions?: Record<string, string>; vatAmount?: number; narration?: string } = {},
+  ): Promise<{ ok: boolean; journalEntryId: string | null }> {
+    const body = categorizeBodyFor(proposal, { dimensions: extras.dimensions, vatAmount: extras.vatAmount })
+    return runCategorize({
       id: transaction.id,
       isBusiness: true,
-      category: template.fallback_category,
-      templateId: template.id,
+      category: body.category,
+      vatTreatment: body.vat_treatment,
+      accountOverride: body.account_override,
+      templateId: body.template_id,
+      counterpartyTemplateId: body.counterparty_template_id,
+      dimensions: body.dimensions,
+      vatAmount: body.vat_amount,
       confirmNoMatch: false,
-      narration,
+      narration: extras.narration,
     })
   }
 
-  // The assistant's read as the review: a category booking seeded with its
-  // account and VAT, the header saying whose pick it is.
-  function openAssistantReview(transaction: TransactionWithInvoice, s: SuggestedTemplate) {
-    const account = transaction.amount < 0 ? s.debit_account : s.credit_account
-    setQuickReview({
-      transaction,
-      category: s.category ?? 'expense_other',
-      label: s.name_sv,
-      template: null,
-      templateId: undefined,
-      linePattern: null,
-      recommendation: { source: 'assistant', confidence: s.confidence },
-      defaults: { account, vat: s.vat_treatment ?? 'none' },
+  async function bookDirect(transaction: TransactionWithInvoice, s: BookingProposal) {
+    await bookProposalNow(transaction, s, {
+      dimensions: s.default_dimensions ?? undefined,
+      narration: `${s.name_sv} · ${whyFor(s)}`,
     })
-    setQuickReviewOpen(true)
   }
 
+  // A counterpart picked in the picker: the same proposal the row carries.
   function handleOpenTemplateReview(transaction: TransactionWithInvoice, templateId: string) {
-    if (isCounterpartyTemplateId(templateId)) {
-      const cpSuggestion = templateSuggestions[transaction.id]?.find(ts => ts.template_id === templateId)
-      if (!cpSuggestion) {
-        // The suggestion list went stale under the open modal (refetch, or the
-        // template was deleted in another tab). Say so instead of swallowing
-        // the click.
-        toast({
-          title: t('counterparty_suggestion_gone_title'),
-          description: t('counterparty_suggestion_gone_description'),
-          variant: 'destructive',
-        })
-        return
-      }
-      setQuickReview({
-        transaction,
-        category: transaction.amount < 0 ? 'expense_other' : 'income_services',
-        label: cpSuggestion.name_sv,
-        // Carry the learned accounts and VAT: they are what the server books
-        // (buildMappingResultFromCounterpartyTemplate) and what the dialog
-        // previews. A counterparty template has no catalog entry, so the rest
-        // of BookingTemplate genuinely does not exist here.
-        template: {
-          id: templateId,
-          name_sv: cpSuggestion.name_sv,
-          debit_account: cpSuggestion.debit_account,
-          credit_account: cpSuggestion.credit_account,
-          vat_treatment: cpSuggestion.vat_treatment ?? null,
-        },
-        templateId: undefined,
-        linePattern: cpSuggestion.line_pattern ?? null,
-        defaultDimensions: cpSuggestion.default_dimensions ?? null,
-        recommendation: { source: cpSuggestion.source ?? 'counterparty', seenCount: cpSuggestion.seen_count, confidence: cpSuggestion.confidence },
+    const proposal = templateSuggestions[transaction.id]?.find((ts) => ts.template_id === templateId)
+    if (!proposal) {
+      // The suggestion list went stale under the open modal (refetch, or the
+      // template was deleted in another tab). Say so instead of swallowing
+      // the click.
+      toast({
+        title: t('counterparty_suggestion_gone_title'),
+        description: t('counterparty_suggestion_gone_description'),
+        variant: 'destructive',
       })
-      setQuickReviewOpen(true)
       return
     }
-
-    const template = getTemplateById(templateId)
-    if (!template) return
-    setQuickReview({
-      transaction,
-      category: template.fallback_category,
-      label: template.name_sv,
-      template,
-      templateId: template.id,
-      linePattern: null,
-    })
-    setQuickReviewOpen(true)
+    openReview(transaction, proposal, true)
   }
 
   function handleChangeTemplate() {
@@ -4011,21 +3930,26 @@ export default function TransactionsPage() {
   }
 
   // The assistant's pick, taken with one click from a review that books
-  // through a template: the same review reopens as a category booking with
-  // the assistant's account and VAT, so the verifikat below shows exactly
-  // what it proposed (reverse charge included) before anything is posted.
+  // through a template: the same review reopens on the assistant's account
+  // and VAT, so the verifikat shows exactly what it proposed (reverse charge
+  // included) before anything is posted.
   function handleUseAssistantPick(pick: AssistantPick) {
     if (!quickReview) return
-    setQuickReview({
-      transaction: quickReview.transaction,
-      category: pick.category ?? quickReview.category,
-      label: `${pick.account} ${pick.label || getAccountName(pick.account)}`,
-      template: null,
-      templateId: undefined,
-      linePattern: null,
-      recommendation: { source: 'assistant' },
-      defaults: { account: pick.account, vat: pick.vat },
-    })
+    const tx = quickReview.transaction
+    openReview(
+      tx,
+      accountProposal({
+        id: `assistant:${tx.id}`,
+        source: 'assistant',
+        account: pick.account,
+        label: pick.label || getAccountName(pick.account),
+        category: pick.category ?? (tx.amount < 0 ? 'expense_other' : 'income_other'),
+        vat_treatment: pick.vat === 'none' ? null : pick.vat,
+        amount: tx.amount,
+        has_underlag: !!tx.document_id,
+      }),
+      false,
+    )
   }
 
   function handleManualBooking() {
@@ -4080,166 +4004,15 @@ export default function TransactionsPage() {
     setBookingDialogOpen(true)
   }
 
-  // Book through a learned counterparty template: the same call the review
-  // makes, shared with the row's direct booking. Returns the verifikat id,
-  // or null when the server refused (the toast or the duplicate dialog
-  // carries the way forward).
-  async function bookWithCounterpartyTemplate(
-    id: string,
-    cpTemplateId: string,
-    dimensions?: Record<string, string>,
-    narration?: string,
-  ): Promise<string | null> {
-      const cpCategorize = async (
-        // Set after the user confirmed the duplicate warning: force is bound
-        // to the reviewed candidate's voucher, same contract as runCategorize.
-        forceOpts?: { expectedDuplicateJournalEntryId: string },
-      ): Promise<{ ok: boolean; journalEntryId: string | null; result: { error?: { code?: string; account_numbers?: string[]; details?: { account_numbers?: string[]; candidate?: BookedDuplicateCandidate } }; journal_entry_id?: string | null; journal_entry_created?: boolean; journal_entry_error?: string | null; category?: TransactionCategory }; status: number }> => {
-        const r = await fetch(`/api/transactions/${id}/categorize`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            is_business: true,
-            counterparty_template_id: cpTemplateId,
-            ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
-            ...(forceOpts
-              ? { force: true, expected_duplicate_journal_entry_id: forceOpts.expectedDuplicateJournalEntryId }
-              : {}),
-          }),
-        })
-        const b = await r.json()
-        return { ok: r.ok, status: r.status, result: b, journalEntryId: b?.journal_entry_id || null }
-      }
-      const { ok: cpOk, status: cpStatus, result, journalEntryId: cpJeId } = await cpCategorize()
-      if (!cpOk) {
-        if (result?.error?.code === 'ACCOUNTS_NOT_IN_CHART') {
-          const accountNumbers: string[] =
-            (Array.isArray(result.error.account_numbers) && result.error.account_numbers) ||
-            (Array.isArray(result.error.details?.account_numbers) && result.error.details?.account_numbers) ||
-            []
-          // Synchronous in-flight flag per toast closure: see same pattern
-          // in runCategorize. Double-click on the counterparty-template
-          // retry would race the second cpCategorize against the first's
-          // verifikation insert.
-          let activateInFlight = false
-          toast({
-            title: 'Kontot finns inte i din kontoplan',
-            description: `Motpartsmallen kräver att följande konton aktiveras: ${accountNumbers.join(', ')}.`,
-            variant: 'destructive',
-            action: accountNumbers.length > 0 ? (
-              <ToastAction altText="Aktivera och bokför" onClick={async () => {
-                if (activateInFlight) return
-                activateInFlight = true
-                try {
-                  const activateRes = await fetch('/api/bookkeeping/accounts/activate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ account_numbers: accountNumbers }),
-                  })
-                  if (!activateRes.ok) {
-                    const errBody = await activateRes.json().catch(() => null)
-                    toast({ title: 'Kunde inte aktivera konton', description: getErrorMessage(errBody, { statusCode: activateRes.status }), variant: 'destructive' })
-                    return
-                  }
-                  const activateBody = await activateRes.json()
-                  if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
-                    toast({ title: 'Kunde inte hitta alla konton', description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`, variant: 'destructive' })
-                    return
-                  }
-                  const retry = await cpCategorize()
-                  // Gate on retry.ok alone: a 200 with null journal_entry_id
-                  // is allowed by the declared type (e.g. already-categorized
-                  // flag flip), and showing "Kategorisering misslyckades"
-                  // after the server returned success is misleading. The state
-                  // update conditionally writes the journal_entry_id when it's
-                  // actually present.
-                  if (retry.ok) {
-                    finishBooking({
-                      id,
-                      isBusiness: true,
-                      category: retry.result?.category,
-                      journalEntryId: retry.journalEntryId,
-                      journalEntryCreated: retry.result?.journal_entry_created,
-                      journalEntryError: retry.result?.journal_entry_error,
-                    })
-                  } else {
-                    toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
-                  }
-                } finally {
-                  activateInFlight = false
-                }
-              }}>
-                Aktivera och bokför
-              </ToastAction>
-            ) : undefined,
-          })
-        } else if (
-          result?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' &&
-          result.error.details?.candidate
-        ) {
-          // Booking-feedback parity with runCategorize: route the duplicate
-          // guard into the dialog (match / ignore / book anyway) instead of
-          // dead-ending it in a destructive toast that offers no way forward.
-          const candidate = result.error.details.candidate
-          setDuplicateWarning({
-            transactionId: id,
-            retry: async () => {
-              const retry = await cpCategorize({
-                expectedDuplicateJournalEntryId: candidate.journal_entry_id,
-              })
-              if (retry.ok) {
-                finishBooking({
-                  id,
-                  isBusiness: true,
-                  category: retry.result?.category,
-                  journalEntryId: retry.journalEntryId,
-                  journalEntryCreated: retry.result?.journal_entry_created,
-                  journalEntryError: retry.result?.journal_entry_error,
-                })
-                return retry.journalEntryId
-              }
-              toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
-              return null
-            },
-            candidate,
-          })
-        } else {
-          toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(result, { context: 'transaction', statusCode: cpStatus }), variant: 'destructive' })
-        }
-        // Close the review dialog on hard errors: the toast (with action if
-        // ACCOUNTS_NOT_IN_CHART) carries the message and the recovery path.
-        // The duplicate branch closes it too: the duplicate dialog takes over.
-        setQuickReviewOpen(false)
-        setQuickReview(null)
-        return null
-      }
-      finishBooking({
-        id,
-        isBusiness: true,
-        category: result?.category,
-        journalEntryId: cpJeId,
-        journalEntryCreated: result?.journal_entry_created,
-        journalEntryError: result?.journal_entry_error,
-        narration,
-      })
-      return cpJeId
-  }
-
   async function handleQuickReviewConfirm(
     id: string,
-    category: TransactionCategory,
-    vatTreatment: VatTreatment | undefined,
-    accountOverride: string | undefined,
-    templateId?: string,
-    dimensions?: Record<string, string>,
-    vatAmount?: number
+    proposal: BookingProposal,
+    extras: { dimensions?: Record<string, string>; vatAmount?: number },
   ): Promise<string | null> {
-    let journalEntryId: string | null
-    if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
-      journalEntryId = await bookWithCounterpartyTemplate(id, extractCounterpartyId(quickReview.template.id), dimensions)
-    } else {
-      journalEntryId = await handleCategorize(id, true, category, vatTreatment, accountOverride, templateId, undefined, dimensions, vatAmount)
-    }
+    const tx = quickReview?.transaction
+    const { journalEntryId } = tx && tx.id === id
+      ? await bookProposalNow(tx, proposal, extras)
+      : { journalEntryId: null }
     // Always close: whether the server created a verifikation, returned a
     // structured 4xx (ACCOUNTS_NOT_IN_CHART, INVALID_MAPPING, …), or hit a
     // partial-success path. The toast from runCategorize already communicates
@@ -4248,13 +4021,6 @@ export default function TransactionsPage() {
     setQuickReview(null)
     return journalEntryId
   }
-
-  // Library and counterparty templates (no templateId) seed the review form
-  // from their own accounts; everything else falls back to the category
-  // defaults. Never undefined: see resolveQuickReviewDefaults.
-  const quickReviewDefaults =
-    quickReview?.defaults ??
-    resolveQuickReviewDefaults(quickReview?.template, quickReview?.templateId, quickReview?.category)
 
   const templatePickerProps: ComponentProps<typeof TemplatePicker> = {
     direction: templatePickerTransaction && templatePickerTransaction.amount < 0 ? 'expense' : 'income',
@@ -4929,24 +4695,15 @@ export default function TransactionsPage() {
 
       {quickReviewOpen && (
         <QuickReviewDialog
-          // One key per shape of review, not per row: `??` bound looser than
-          // `+` here, so the key was the transaction id alone and a review
-          // reopened on another booking (the assistant's pick) kept the
-          // account and VAT state from the first mount.
-          key={quickReview ? `${quickReview.transaction.id}:${quickReview.category}:${quickReview.templateId ?? ''}:${quickReview.template?.id ?? ''}:${quickReview.defaults?.account ?? ''}` : 'none'}
+          // One key per shape of review, not per row, so a review reopened
+          // on another booking (the assistant's pick) starts from it.
+          key={quickReview ? `${quickReview.transaction.id}:${quickReview.proposal.template_id}:${quickReview.proposal.booking.kind}` : 'none'}
           open
           onOpenChange={setQuickReviewOpen}
           transaction={quickReview?.transaction ?? null}
-          category={quickReview?.category ?? null}
-          categoryLabel={quickReview?.label ?? ''}
-          defaultAccount={quickReviewDefaults.account}
-          defaultVat={quickReviewDefaults.vat}
+          proposal={quickReview!.proposal}
+          picked={quickReview?.picked ?? false}
           entityType={entityType as EntityType}
-          template={quickReview?.template ?? null}
-          templateId={quickReview?.templateId}
-          counterpartyLinePattern={quickReview?.linePattern ?? null}
-          counterpartyDefaultDimensions={quickReview?.defaultDimensions ?? null}
-          recommendation={quickReview?.recommendation ?? null}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
           onUseAssistantPick={handleUseAssistantPick}

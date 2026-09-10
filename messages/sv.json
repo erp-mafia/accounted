@@ -3006,11 +3006,7 @@
     "invoices_help": "Förfallodatum för fakturor"
   },
   "tx_inbox_card": {
-    "drawer_rec_recent": "Vår rekommendation · nyligen använd mall",
-    "drawer_rec_assistant": "Vår rekommendation · assistentens läsning",
-    "drawer_rec_rule": "Vår rekommendation · enligt din regel",
-    "drawer_rec_catalog": "Vår rekommendation · känt mönster",
-    "drawer_rec_counterparty": "Vår rekommendation · {count, plural, =1 {bokförd så en gång tidigare} other {bokförd så # gånger tidigare}}",
+    "drawer_rec": "Vår rekommendation · {why}",
     "underlag_heading": "Underlag",
     "underlag_supplier": "Leverantör",
     "underlag_date": "Datum",
@@ -6247,9 +6243,6 @@
     "load_failed": "Kunde inte hämta varumärket. Prova att ladda om sidan."
   },
   "transactions": {
-    "direct_why_rule": "{name} · enligt din regel",
-    "direct_why_counterparty": "{name} · bokförd så {count} gånger tidigare",
-    "direct_why_assistant": "{name} · assistenten läste underlaget",
     "th_category": "Kategori",
     "th_account": "Konto",
     "columns_button": "Kolumner",

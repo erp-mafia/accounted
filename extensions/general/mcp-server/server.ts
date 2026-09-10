@@ -270,6 +270,9 @@ import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-arc
 import { CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
+import { proposeForTransactions } from '@/lib/transactions/propose'
+import { agentBookingFor, businessAccount, whyTextSv } from '@/lib/bookkeeping/proposal'
+import { booksWithoutReview } from '@/lib/transactions/direct-booking'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { buildDuplicateBookingClaim } from '@/lib/transactions/categorize-core'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
@@ -8988,7 +8991,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_suggest_categories',
     keywords: ['konteringsförslag', 'kontering', 'kategorisera'],
     title: 'Suggest Transaction Categories',
-    description: 'Suggest categories for uncategorized transactions using mapping rules, patterns, counterparty history and templates. Up to 20 per call. no_signal_transaction_ids = nothing matched; investigate via gnubok_query_journal instead of guessing.',
+    description: 'Booking proposals for uncategorized transactions. proposals[tx_id] is ordered best first (counterpart, matched rule, assistant, catalog), each with why, confidence, books_without_review and categorize_args for gnubok_categorize_transaction.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9007,13 +9010,17 @@ export const tools: McpTool[] = [
       properties: {
         suggestions: { type: 'object' },
         counterparty_matches: { type: 'object' },
+        proposals: {
+          type: 'object',
+          description: 'tx_id -> ordered proposals; book one via its categorize_args in gnubok_categorize_transaction (null = app only).',
+        },
         no_signal_transaction_ids: {
           type: 'array',
           items: { type: 'string' },
           description: 'Transactions where no source (rule, pattern, counterparty history, template) matched. An honest empty: do not infer categories from the other rows; investigate the counterparty (e.g. gnubok_query_journal) instead.',
         },
       },
-      required: ['suggestions', 'counterparty_matches', 'no_signal_transaction_ids'],
+      required: ['suggestions', 'counterparty_matches', 'proposals', 'no_signal_transaction_ids'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
@@ -9095,9 +9102,33 @@ export const tools: McpTool[] = [
         .filter((tx) => (suggestions[tx.id]?.length ?? 0) === 0 && !counterpartyResult[tx.id])
         .map((tx) => tx.id)
 
+      // The same proposals the app shows a person, with the arguments this
+      // agent books them with: one recommendation, the same evidence, the
+      // same booking (lib/transactions/propose.ts, lib/bookkeeping/proposal.ts).
+      const { data: companyRow } = await supabase.from('companies').select('entity_type').eq('id', companyId).maybeSingle()
+      const entityType = (companyRow?.entity_type as EntityType | undefined) ?? undefined
+      const { proposals: proposed } = await proposeForTransactions(supabase, companyId, transactions as Transaction[])
+      const proposals: Record<string, unknown[]> = {}
+      for (const tx of transactions as Transaction[]) {
+        proposals[tx.id] = (proposed[tx.id] ?? [])
+          .filter((p) => p.source !== 'recent')
+          .map((p) => ({
+            id: p.template_id,
+            source: p.source,
+            label: p.name_sv,
+            why: whyTextSv(p),
+            confidence: p.confidence,
+            books_without_review: booksWithoutReview(p),
+            account: businessAccount(p),
+            vat_treatment: p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
+            categorize_args: agentBookingFor(p, entityType),
+          }))
+      }
+
       return {
         suggestions,
         counterparty_matches: counterpartyResult,
+        proposals,
         no_signal_transaction_ids: noSignal,
       }
     },

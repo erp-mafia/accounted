@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildCounterpartySuggestion } from '../category-suggestions'
-import { resolveQuickReviewDefaults } from '../quick-review-defaults'
+import { categorizeBodyFor, previewInputFor } from '@/lib/bookkeeping/proposal'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import type { CategorizationTemplate } from '@/types'
 
@@ -75,24 +75,16 @@ describe('buildCounterpartySuggestion', () => {
     ).toEqual({ '1': 'KS01' })
   })
 
-  it('feeds the review dialog a defined account, which is what the crash needed', () => {
+  it('previews and books as the learned counterpart, never as a bare category', () => {
     // Exactly the reported case: a Bankavgift line, a "Fee" counterparty with
-    // four prior bookings. The dialog reads defaultAccount off this shape and
-    // immediately calls .startsWith() on it.
+    // four prior bookings. The review previews the learned pair on the
+    // legacy counterparty path and books through the counterparty rule id.
     const s = buildCounterpartySuggestion(makeTemplate(), 0.9)
-    const { account, vat } = resolveQuickReviewDefaults(
-      {
-        id: s.template_id,
-        name_sv: s.name_sv,
-        debit_account: s.debit_account,
-        credit_account: s.credit_account,
-        vat_treatment: s.vat_treatment ?? null,
-      },
-      undefined,
-      'expense_other',
-    )
-    expect(account).toBe('6570')
-    expect(() => account.startsWith('2')).not.toThrow()
-    expect(vat).toBe('none')
+    expect(previewInputFor(s, { amount: -100, amountSek: -100 })).toMatchObject({
+      templateDebitAccount: '6570',
+      templateCreditAccount: '1930',
+      counterpartyLegacy: true,
+    })
+    expect(categorizeBodyFor(s)).toEqual({ is_business: true, counterparty_template_id: '11111111-1111-1111-1111-111111111111' })
   })
 })

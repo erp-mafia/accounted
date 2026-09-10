@@ -42,7 +42,7 @@ interface TransactionDrawerProps {
   accountLogo?: string | null
   categoryLabel: string | null
   /** Why the category chip says what it says, when it is a recommendation. */
-  recommendation?: { source?: 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant'; seenCount?: number } | null
+  proposalWhy?: string | null
   primaryLabel: string
   onPrimary: (anchor: HTMLElement) => void
   onOpenCategory: (anchor: HTMLElement) => void
@@ -64,7 +64,7 @@ export function TransactionDrawer({
   accountLabel,
   accountLogo = null,
   categoryLabel,
-  recommendation,
+  proposalWhy,
   primaryLabel,
   onPrimary,
   onOpenCategory,
@@ -178,18 +178,8 @@ export function TransactionDrawer({
               <span className="truncate">{categoryLabel ?? t('category_pick')}</span>
               <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
             </button>
-            {categoryLabel && recommendation?.source && (
-              <p className="mt-1.5 text-[11.5px] text-muted-foreground">
-                {recommendation.source === 'rule'
-                  ? t('drawer_rec_rule')
-                  : recommendation.source === 'counterparty'
-                    ? t('drawer_rec_counterparty', { count: recommendation.seenCount ?? 1 })
-                    : recommendation.source === 'assistant'
-                      ? t('drawer_rec_assistant')
-                      : recommendation.source === 'recent'
-                        ? t('drawer_rec_recent')
-                        : t('drawer_rec_catalog')}
-              </p>
+            {categoryLabel && proposalWhy && (
+              <p className="mt-1.5 text-[11.5px] text-muted-foreground">{t('drawer_rec', { why: proposalWhy })}</p>
             )}
           </div>
         )}

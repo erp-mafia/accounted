@@ -42,8 +42,8 @@ export interface RowProposal {
   label: string
   hue: TemplateHue
   confidence: number
-  source?: 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant'
-  seenCount?: number
+  /** One line on why, the same words the review header uses. */
+  why: string
 }
 
 // True when the AI tier is active: gates user-facing strings that promise
@@ -586,7 +586,7 @@ export default function TransactionInboxCard({
             transaction={transaction}
             accountLabel={accountLabel}
             categoryLabel={categoryLabel ?? proposal?.label ?? null}
-            recommendation={!categoryLabel && proposal ? { source: proposal.source, seenCount: proposal.seenCount } : null}
+            proposalWhy={!categoryLabel && proposal ? proposal.why : null}
             accountLogo={accountLogo}
             primaryLabel={primaryLabel}
             onPrimary={(anchor) => runPrimary(anchor)}
