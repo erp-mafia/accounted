@@ -2526,13 +2526,12 @@ export async function executeSIEImport(
       return result
     }
     result.accountsCreated = accountSync.created
-    if (accountSync.renamed > 0) {
-      result.warnings.push(
-        accountSync.renamed === 1
-          ? '1 konto bytte namn till namnet från SIE-filen'
-          : `${accountSync.renamed} konton bytte namn till namnen från SIE-filen`
-      )
-    }
+    // Renames are informational (the source system's names replace BAS
+    // defaults) and land in result.accountsRenamed, not in warnings: on
+    // every provider migration they fired for every year and read as
+    // "something went wrong". The per-account list is kept in the import
+    // documentation (BFNAR 2013:2).
+    if (accountSync.renamed > 0) result.accountsRenamed = accountSync.renamed
     if (accountSync.renameFailed > 0) {
       result.warnings.push(
         `${accountSync.renameFailed} kontonamn kunde inte uppdateras från SIE-filen`
@@ -2600,6 +2599,9 @@ export async function executeSIEImport(
     // Track documentation data across import phases
     let ibRoundingAdjustment = 0
     let ibExplanation: 'unallocated_result' | 'excluded_accounts' | 'rounding' | null = null
+    // Set when the file's #IB is deliberately not booked because the company
+    // already has posted entries (see the continuation guard below).
+    let openingBalanceSkipped: 'prior_activity' | null = null
     let migrationAdjustmentInfo = { created: false, deltaAccounts: 0, entryId: null as string | null }
     let voucherNumberMapping: Array<{ sourceId: string; series: string; targetNumber: number }> = []
     let voucherSeriesUsed: string[] = []
@@ -2705,11 +2707,10 @@ export async function executeSIEImport(
         )
 
         if (isContinuationImport) {
-          result.warnings.push(
-            'Ingående balanser hoppades över eftersom bolaget redan har bokförda verifikationer. ' +
-            'Ingående balans för denna period härleds från föregående periods utgående balans. ' +
-            'Stäm av mot SIE-filens #IB om du är osäker.'
-          )
+          // Correct outcome for every year after the first in a multi-year
+          // migration, so it is recorded in details (rendered as info), not
+          // pushed as a warning.
+          openingBalanceSkipped = 'prior_activity'
         } else {
         // Orphan-IB guard (issue #1882): the period pointer above is not
         // proof that no IB voucher exists. replace_sie_import deletes only
@@ -3193,6 +3194,7 @@ export async function executeSIEImport(
         created: true,
         accountsAdjusted: migrationAdjustmentInfo.deltaAccounts,
       } : undefined,
+      openingBalanceSkipped: openingBalanceSkipped ?? undefined,
       retriedBatches: voucherRetryStats.retriedBatches,
       failedBatches: voucherRetryStats.failedBatches,
     }
@@ -3202,15 +3204,22 @@ export async function executeSIEImport(
     // year whose P&L doesn't net to zero (its omföring av årets resultat is
     // missing) corrupts every later derived opening balance by exactly that
     // residual. Checked against the DB (not the file) so it also catches
-    // gaps introduced across separate per-year imports. Non-fatal: a
-    // diagnosis failure never fails the import.
+    // gaps introduced across separate per-year imports. Scoped to periods
+    // before the imported year: only those can leak into this year's
+    // opening balance, and an unscoped walk repeated the same culprit under
+    // every year of a multi-year migration (#2462). Non-fatal: a diagnosis
+    // failure never fails the import.
     try {
-      const untransferred = await findUntransferredResults(supabase, companyId)
+      const untransferred = await findUntransferredResults(
+        supabase,
+        companyId,
+        fiscalYearStart ? { beforePeriodStart: fiscalYearStart } : undefined
+      )
       if (untransferred.length > 0 && result.details) {
         result.details.untransferredResults = untransferred
         for (const culprit of untransferred) {
           result.warnings.push(
-            `Resultatet för ${culprit.period_name} (${formatCurrency(culprit.pl_net, 'SEK', { minimumFractionDigits: 2 })}) har inte förts om till eget kapital — ` +
+            `Resultatet för ${culprit.period_name} (${formatCurrency(culprit.pl_net, 'SEK', { minimumFractionDigits: 2 })}) har inte förts om till eget kapital: ` +
             'senare års balansräkning visar en differens tills omföringen bokförs i det året.'
           )
         }
