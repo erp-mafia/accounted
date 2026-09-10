@@ -29,7 +29,9 @@ import {
   BANKID_FLOW_ID_HEADER,
   signBankIdFlow,
   type BankIdFlowMode,
+  type BankIdFlowResult,
 } from '../lib/bankid-flow-cookie'
+import { sealBankIdResult } from '../lib/bankid-flow-result'
 
 const TEST_KEY = 'a'.repeat(64)
 const TEST_FLOW_ID = 'flow-1'
@@ -39,6 +41,8 @@ async function flowCookie(
   mode: BankIdFlowMode,
   sessionId = 'test-session',
   userId = 'user-1',
+  // The identification /poll sealed into the cookie on completion (#2471).
+  result?: BankIdFlowResult,
 ): Promise<Record<string, string>> {
   const value = await signBankIdFlow({
     version: 1,
@@ -49,6 +53,7 @@ async function flowCookie(
     userId: mode === 'link' ? userId : undefined,
     startedAt: Date.now(),
     expiresAt: Date.now() + 60_000,
+    result,
   })
   return {
     cookie: `${BANKID_FLOW_COOKIE}=${encodeURIComponent(value)}`,
@@ -367,6 +372,42 @@ describe('POST /bankid/link', () => {
 
     expect(status).toBe(400)
     expect(client.from).not.toHaveBeenCalled()
+  })
+
+  it('links from the sealed cookie and never asks TIC to collect (#2471)', async () => {
+    // Same-device linking from /settings/account on a phone takes the same
+    // reload-probe-Fortsätt path as login, and TIC hands the result out at
+    // most twice.
+    mockAuthenticated()
+    vi.mocked(collectBankIdResult).mockRejectedValue(new Error('collect must not be called'))
+    const { admin } = mockServiceClient(
+      [
+        { data: null }, // pnr lookup: not linked anywhere
+        { error: null }, // bankid_identities insert OK
+      ],
+      { has_password: true }
+    )
+    const sealed = sealBankIdResult({
+      personalNumber: '199001011234',
+      givenName: 'Anna',
+      surname: 'Andersson',
+      name: 'Anna Andersson',
+    })
+
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
+      method: 'POST',
+      headers: await flowCookie('link', 'test-session', 'user-1', sealed),
+    })
+    const { status, body } = await parseJsonResponse<{ data?: { linked?: boolean } }>(
+      await findHandler('POST', '/bankid/link')(req)
+    )
+
+    expect(status).toBe(200)
+    expect(body.data?.linked).toBe(true)
+    expect(collectBankIdResult).not.toHaveBeenCalled()
+    expect(admin.updateUserById).toHaveBeenCalledWith('user-1', {
+      app_metadata: { has_password: true, bankid_linked: true },
+    })
   })
 
   it('merges app_metadata so an existing has_password: true survives linking', async () => {

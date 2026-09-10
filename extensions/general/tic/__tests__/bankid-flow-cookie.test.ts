@@ -157,6 +157,30 @@ describe('sign / verify', () => {
     expect(await verifyBankIdFlow(signed, process.env, T0)).toBeNull()
   })
 
+  it('carries a sealed identification, and still verifies without one', async () => {
+    // /poll seals the completed identification into the cookie (#2471);
+    // cookies minted before the field existed must keep verifying.
+    const sealed = { ...STATE, result: { enc: 'AbC-_123', completedAt: T0 + 5000 } }
+    expect(await verifyBankIdFlow(await signBankIdFlow(sealed), process.env, T0 + 6000)).toEqual(sealed)
+    expect(await verifyBankIdFlow(await signBankIdFlow(STATE), process.env, T0 + 6000)).toEqual(STATE)
+  })
+
+  it('rejects a seal that is not the shape this server produces', async () => {
+    const bad = [
+      { enc: '', completedAt: T0 },
+      { enc: 'not base64url!', completedAt: T0 },
+      { enc: 'a'.repeat(2049), completedAt: T0 },
+      { enc: 'AbC', completedAt: 'soon' },
+      { enc: 'AbC', completedAt: Number.NaN },
+      'AbC',
+      42,
+    ]
+    for (const result of bad) {
+      const signed = await signBankIdFlow({ ...STATE, result: result as never })
+      expect(await verifyBankIdFlow(signed, process.env, T0), JSON.stringify(result)).toBeNull()
+    }
+  })
+
   it('refuses to run without a signing secret rather than falling back to unsigned', async () => {
     const empty = {}
     await expect(signBankIdFlow(STATE, empty)).rejects.toThrow(/requires BANKID_ENCRYPTION_KEY/)
