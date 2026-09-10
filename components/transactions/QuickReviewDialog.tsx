@@ -649,8 +649,8 @@ export default function QuickReviewDialog({
                   : recommendation?.source === 'assistant'
                     ? (documentId ? t('rec_why_assistant_doc') : t('rec_why_assistant_row'))
                     : t('rec_why_manual')}
-            {ruleLine ? ` · ${ruleLine}` : ''}
           </p>
+          {ruleLine && <p className="text-[12px] leading-snug text-muted-foreground">{ruleLine}</p>}
           {/* The assistant's read, unless this review already is its pick. */}
           {tx.id && recommendation?.source !== 'assistant' && (
             <AiCategorizeProposal
