@@ -3092,6 +3092,8 @@
     "adjustment": "Adjustment"
   },
   "tx_quick_review": {
+    "changed_from": "Changed from {label}. Check the account and VAT below.",
+    "changed_undo": "Undo",
     "vat_doc_booked": "is booked",
     "vat_proposal_booked": "the proposal books {amount}",
     "vat_use_proposal": "Use the proposal's {amount}",

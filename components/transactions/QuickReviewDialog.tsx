@@ -24,7 +24,7 @@ import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-d
 import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, Inbox, FileText, X } from 'lucide-react'
 import { computeProposalLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine, ProposalLinesInput } from '@/lib/bookkeeping/proposal-lines'
-import { businessAccount, previewInputFor, templateBehind, withAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { accountProposal, businessAccount, previewInputFor, templateBehind, withAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { useProposalWhy } from './proposal-why'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import JournalEntryPreview from './JournalEntryPreview'
@@ -59,8 +59,6 @@ interface QuickReviewDialogProps {
     extras: { dimensions?: Record<string, string>; vatAmount?: number },
   ) => Promise<string | null>
   onChangeTemplate?: () => void
-  /** Reopen the review on the assistant's booking when the current one books through a template. */
-  onUseAssistantPick?: (pick: AssistantPick) => void
   /** The assistant's stored read of this row, when one exists: the line opens with it instead of fetching. */
   assistantRead?: AssistantRead | null
   /**
@@ -83,7 +81,6 @@ export default function QuickReviewDialog({
   entityType,
   onConfirm,
   onChangeTemplate,
-  onUseAssistantPick,
   assistantRead = null,
   onEditLines,
 }: QuickReviewDialogProps) {
@@ -96,6 +93,9 @@ export default function QuickReviewDialog({
   // turns it into an account booking; everything below (header, preview,
   // confirm) reads this and nothing else.
   const [proposal, setProposal] = useState<BookingProposal>(initialProposal)
+  // What the review showed before the person took the assistant's pick: the
+  // change line names it and Ångra restores it. Null until a pick is taken.
+  const [previous, setPrevious] = useState<BookingProposal | null>(null)
   const catalogTemplate = templateBehind(proposal)
   const accountOverride = proposal.booking.kind === 'account' ? proposal.booking.account : ''
   const vatTreatment: VatTreatment | 'none' = proposal.booking.kind === 'account' ? proposal.booking.vat_treatment : 'none'
@@ -156,6 +156,24 @@ export default function QuickReviewDialog({
       return withAccount(p, account, account.startsWith('2') ? 'exempt' : current, amountForLegs)
     })
   }, [amountForLegs])
+  // The assistant's pick, taken into this review: the proposal becomes the
+  // account it named with its VAT. A pick that pre-filled on its own leaves
+  // nothing to undo; one the person clicked keeps the previous proposal.
+  const takeAssistantPick = useCallback((pick: AssistantPick, opts: { auto: boolean }) => {
+    setProposal((p) => {
+      if (!opts.auto) setPrevious(p)
+      return accountProposal({
+        id: `assistant:${transaction?.id ?? ''}`,
+        source: 'assistant',
+        account: pick.account,
+        label: pick.label,
+        category: pick.category ?? (p.booking.kind === 'counterparty' ? (amountForLegs < 0 ? 'expense_other' : 'income_other') : p.booking.category),
+        vat_treatment: pick.account.startsWith('2') || pick.vat === 'none' ? 'exempt' : pick.vat,
+        amount: amountForLegs,
+        has_underlag: !!transaction?.document_id,
+      })
+    })
+  }, [amountForLegs, transaction?.id, transaction?.document_id])
   const setVatTreatment = useCallback((v: VatTreatment | 'none') => {
     setProposal((p) => withAccount(p, p.booking.kind === 'account' ? p.booking.account : businessAccount(p), v === 'none' ? 'exempt' : v, amountForLegs))
   }, [amountForLegs])
@@ -333,6 +351,14 @@ export default function QuickReviewDialog({
   // Computed once per render: gates the affordance (no lines, no link) and is
   // the exact payload the link hands over.
   const proposalLines = onEditLines ? computeProposalLines(proposalInput) : []
+  // The lines the previous proposal did not have: marked in the preview so
+  // the change is seen, not inferred.
+  const changedAccounts = previous
+    ? (() => {
+        const before = new Set(computeProposalLines(previewInputFor(previous, { amount: tx.amount, amountSek: sekAmount, entityType })).map((l) => l.account))
+        return computeProposalLines(proposalInput).map((l) => l.account).filter((a) => !before.has(a))
+      })()
+    : []
 
   function handleEditLines() {
     if (!onEditLines || proposalLines.length === 0) return
@@ -562,6 +588,21 @@ export default function QuickReviewDialog({
           <p className="text-[12.5px] text-muted-foreground">{whyFor(proposal)}</p>
           {ruleLine && <p className="text-[12px] leading-snug text-muted-foreground">{ruleLine}</p>}
           {/* The assistant's read, unless this review already is its pick. */}
+          {previous && (
+            <p className="flex flex-wrap items-center gap-x-2 text-[12.5px] text-foreground">
+              <span>{t('changed_from', { label: `${previous.name_sv} ${businessAccount(previous)}` })}</span>
+              <button
+                type="button"
+                className={cn(QUIET_LINK_CLASS, 'text-[12px]')}
+                onClick={() => {
+                  setProposal(previous)
+                  setPrevious(null)
+                }}
+              >
+                {t('changed_undo')}
+              </button>
+            </p>
+          )}
           {tx.id && proposal.source !== 'assistant' && (
             <AiCategorizeProposal
               key={tx.id}
@@ -571,15 +612,8 @@ export default function QuickReviewDialog({
               initial={assistantRead && readIsFresh(assistantRead, tx) ? assistantRead : null}
               currentAccount={currentAccount}
               autoApply={!isTemplateBooking}
-              // A template books its own lines, so an account the assistant
-              // names cannot be dropped in; taking the pick reopens the
-              // review on the assistant's booking. Without a template the
-              // account and VAT apply in place.
-              onUsePick={isTemplateBooking && onUseAssistantPick ? onUseAssistantPick : undefined}
               onProposal={setAiProposal}
-              onApply={(account, vat) => {
-                setProposal((p) => withAccount(p, account, account.startsWith('2') || vat === 'none' ? 'exempt' : vat, amountForLegs))
-              }}
+              onTake={takeAssistantPick}
             />
           )}
         </div>
@@ -588,7 +622,7 @@ export default function QuickReviewDialog({
             otherwise we'd render a verifikation in the wrong currency. */}
         {!sekConversionMissing && !rateLoading && (
           <div>
-            <JournalEntryPreview {...proposalInput} />
+            <JournalEntryPreview {...proposalInput} changedAccounts={changedAccounts} />
             {/* "Andra rader": send the computed lines into the manual booking
                 dialog for per-line editing. Offered on every proposal surface
                 (AI suggestion, static template, counterparty pattern). */}

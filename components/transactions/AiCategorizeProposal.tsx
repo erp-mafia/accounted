@@ -72,14 +72,8 @@ interface Props {
   currentAccount?: string | null
   /** Pre-fill the dialog with the pick when it lands; off when the dialog already has a template. */
   autoApply?: boolean
-  /** Apply an account + VAT to the dialog fields (the flow without a template). */
-  onApply: (account: string, vat: VatTreatment | 'none') => void
-  /**
-   * When set, the dialog books through a template and an account cannot be
-   * dropped into it: taking the pick reopens the review on the assistant's
-   * booking instead.
-   */
-  onUsePick?: (pick: AssistantPick) => void
+  /** Take the pick into the dialog: `auto` when it pre-filled on its own, false when the person clicked Använd. */
+  onTake: (pick: AssistantPick, opts: { auto: boolean }) => void
   /** Surface the proposal metadata so the dialog can log a calibration sample on book. */
   onProposal?: (meta: AiProposalMeta) => void
   /** A stored read of this row: shown at once, no fetch. */
@@ -107,8 +101,7 @@ export default function AiCategorizeProposal({
   hasUnderlag = false,
   currentAccount,
   autoApply = true,
-  onApply,
-  onUsePick,
+  onTake,
   onProposal,
   initial = null,
 }: Props) {
@@ -161,8 +154,9 @@ export default function AiCategorizeProposal({
     // model read) pre-fills; a low guess waits for the person.
     if (appliedRef.current === p.account || p.confidence < 0.5) return
     appliedRef.current = p.account
-    onApply(p.account, p.vatTreatment ?? 'none')
-  }, [state, autoApply, onApply, onProposal])
+    const label = p.candidates.find((c) => c.account === p.account)?.label ?? getAccountName(p.account)
+    onTake({ account: p.account, vat: p.vatTreatment ?? 'none', category: p.category, label }, { auto: true })
+  }, [state, autoApply, onTake, onProposal])
 
   const line = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground'
 
@@ -206,9 +200,8 @@ export default function AiCategorizeProposal({
   const vat: VatTreatment | 'none' = p.vatTreatment ?? 'none'
   const label = pick?.label ?? getAccountName(account)
   const take = () => {
-    if (onUsePick) return onUsePick({ account, vat, category: p.category, label })
     appliedRef.current = account
-    onApply(account, vat)
+    onTake({ account, vat, category: p.category, label }, { auto: false })
   }
 
   return (
