@@ -1482,8 +1482,52 @@ describe('POST /bankid/poll: the sealed identification (#2471)', () => {
     expect(body.data.status).toBe('complete')
     expect(body.data.user).toEqual({ givenName: 'Anna', surname: 'Andersson' })
     expect(pollBankIdSession).not.toHaveBeenCalled()
-    // Already sealed: the cookie is left as it is, its window was set then.
-    expect(response.headers.getSetCookie()).toEqual([])
+  })
+
+  it('re-issues the sealed cookie on every completed poll, so the e-mail budget runs from the last poll', async () => {
+    // On a reloaded iPhone tab the mount probe sees completion first and the
+    // Fortsätt tap polls again minutes later. The signup e-mail window must
+    // run from that tap, as it did before the seal existed, and the seal must
+    // ride along unchanged.
+    vi.mocked(pollBankIdSession).mockRejectedValue(new Error('TIC must not be asked'))
+    const sealed = sealBankIdResult(ANNA)
+
+    const response = await findPollHandler()(
+      createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+        method: 'POST',
+        headers: await flowCookie('signup', 'test-session', 'user-1', sealed),
+        body: { mode: 'signup' },
+      })
+    )
+
+    const flow = await reissuedFlow(response)
+    expect(flow).not.toBeNull()
+    expect(flow!.result).toEqual(sealed)
+    expect(flow!.expiresAt).toBeGreaterThan(Date.now() + 800_000)
+  })
+
+  it('still answers complete, unsealed, when the deployment has no encryption key', async () => {
+    // Login never needed BANKID_ENCRYPTION_KEY before the seal existed and
+    // the cookie signer has its own fallbacks. Without the key the routes
+    // must behave as before: one collect against TIC, never a 500 here.
+    vi.stubEnv('BANKID_ENCRYPTION_KEY', '')
+    vi.stubEnv('SESSION_TIMEOUT_SECRET', 'signing-only-secret')
+    vi.mocked(pollBankIdSession).mockResolvedValue({ status: 'complete', user: ANNA } as never)
+
+    const response = await findPollHandler()(
+      createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+        method: 'POST',
+        headers: await flowCookie('login'),
+        body: { mode: 'login' },
+      })
+    )
+    const { status, body } = await parseJsonResponse<{ data: { status: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('complete')
+    const flow = await reissuedFlow(response)
+    expect(flow).not.toBeNull()
+    expect(flow!.result).toBeUndefined()
   })
 
   it('a probe on a sealed cookie still withholds the holder name', async () => {

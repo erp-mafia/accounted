@@ -48,7 +48,7 @@ import {
 import { sendBankIdSignupConfirmation } from './lib/bankid-confirmation-mail'
 import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
 import { openBankIdResult, sealBankIdResult } from './lib/bankid-flow-result'
-import type { BankIdFlowState } from './lib/bankid-flow-cookie'
+import type { BankIdFlowResult, BankIdFlowState } from './lib/bankid-flow-cookie'
 import type { BankIdUser } from './lib/bankid-types'
 import {
   evaluateBrandSignupGate,
@@ -225,6 +225,25 @@ async function consumeBankIdSession(
  * neither has it, and the caller refuses: TIC hands a completed result out at
  * most twice, so there is nothing left to retry (#2471).
  */
+/**
+ * Seal for the cookie, or undefined when sealing is impossible: no user on
+ * the poll answer, or no BANKID_ENCRYPTION_KEY in this deployment (login never
+ * needed the key before this seal existed; signing has its own fallbacks).
+ * Undefined means the routes behave as they did before the seal: one collect
+ * against TIC, which still works on every path that spends two fetches.
+ */
+function sealIfPossible(user: BankIdUser | undefined): BankIdFlowResult | undefined {
+  if (!user?.personalNumber) return undefined
+  try {
+    return sealBankIdResult(user)
+  } catch (error) {
+    log.warn('poll: could not seal the identification, falling back to collect', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return undefined
+  }
+}
+
 async function completedUserFor(
   flow: BankIdFlowState,
   route: 'complete' | 'link',
@@ -1106,16 +1125,17 @@ export const ticExtension: Extension = {
           // reason as the dead-session branch above: the Set-Cookie cannot be
           // aimed at one flow, so a late response would delete a newer one.
           // The client settles on this status, and the cookie expires.
-          if (result.status === 'complete' && !sealed) {
-            // First observation of completion. Seal the identification into
-            // the cookie so no later read has to ask TIC, and re-issue with the
-            // longer window: what remains is the signup e-mail step, which is
-            // a person typing, and a user hunting for the right address must
-            // not have the session expire under them. A cookie that already
-            // carries the seal is left alone; its window was set then.
+          if (result.status === 'complete') {
+            // Identification is done; what remains is the signup e-mail step,
+            // which is a person typing. Re-issue with the longer window on
+            // EVERY completed poll, sealed or not, so the budget runs from the
+            // last poll the person made (the Fortsätt tap on a reloaded tab),
+            // not from the mount probe that happened to see completion first;
+            // MAX_TOTAL_LIFE caps the chain. The first observation also seals
+            // the identification so no later read has to ask TIC.
             await setBankIdFlowCookies(response, {
               ...flow,
-              result: result.user?.personalNumber ? sealBankIdResult(result.user) : undefined,
+              result: flow.result ?? sealIfPossible(result.user),
               expiresAt: Date.now() + FLOW_VERIFIED_WINDOW_SECONDS * 1000,
             })
           }
