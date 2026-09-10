@@ -9089,6 +9089,7 @@
     "sie_next_period_locked": "Nästa räkenskapsår ({period}) är låst, så dess ingående balanser kunde inte synkas om. Lås upp perioden och importera igen.",
     "sie_next_ib_resync_failed": "Ingående balanser för nästa räkenskapsår kunde inte synkas om ({reason}). Kontrollera och justera dem manuellt.",
     "sie_no_doc_mark_failed": "Importerade verifikat kunde inte markeras som \"Inget underlag krävs\": markera dem manuellt i bokföringslistan.",
+    "sie_untransferred_result": "{period}: årets resultat på {amount} är inte omfört till eget kapital. Senare års balansräkning visar en differens tills omföringen bokförs (konto 8999 mot t.ex. 2099).",
     "sie_encoding_artifacts": "{count, plural, one {# textfält ser felkodat ut} other {# textfält ser felkodade ut}} (tecken som ” eller „ i stället för å, ä, ö). Granska kontonamn och verifikationstexter.",
     "sie_org_mismatch": "Filen tillhör organisationsnummer {fileOrg}, inte det här företaget ({companyOrg}).",
     "articles_price_incl_vat": "Priskolumnen \"{header}\" verkar vara inklusive moms, men priser importeras exklusive moms. Kontrollera värdena.",

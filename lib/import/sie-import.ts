@@ -2075,7 +2075,8 @@ export async function finalizeImportRecord(
       'SIE-filen innehåller inga verifikationer för räkenskapsåret: inget ' +
       'att importera. Räkenskapsåret är skapat och redo att bokföras i.',
     )
-    result.notices?.push(makeNotice('sie_no_vouchers', 'info'))
+    result.notices ??= []
+    result.notices.push(makeNotice('sie_no_vouchers', 'info'))
   } else if (noEntriesCreated) {
     result.success = false
     if (result.errors.length === 0) {
@@ -2874,7 +2875,7 @@ export async function executeSIEImport(
               warn(
                 `Exkluderade systemkonton har IB-saldon på totalt ${ibValidation.excludedAccountsTotal} SEK. ` +
                 `Differensen (${ibValidation.roundingAdjustment} SEK) bokförs på konto 2099.`,
-                makeNotice('sie_ib_excluded_accounts', 'notice', {
+                makeNotice('sie_ib_excluded_accounts', 'action', {
                   total: sek(ibValidation.excludedAccountsTotal),
                   diff: sek(ibValidation.roundingAdjustment),
                 })
@@ -3247,9 +3248,7 @@ export async function executeSIEImport(
       failedBatches: voucherRetryStats.failedBatches,
     }
 
-    // Every warning pushed so far without a structured twin (paths not yet
-    // migrated to warn()) folds into the notice tier verbatim.
-    result.notices!.push(...legacyNotices(result.warnings.filter((w) => !noticedWarnings.has(w))))
+    const warningsBeforeDiagnosis = result.warnings.length
 
     // Untransferred prior-year results — the root cause of "balansräkningen
     // balanserar inte" after multi-year migrations. Any non-latest fiscal
@@ -3272,6 +3271,25 @@ export async function executeSIEImport(
     } catch (diagnosisError) {
       console.error('[sie-import] untransferred-results check failed (non-fatal):', diagnosisError)
     }
+
+    // The diagnosis above pushes one string per untransferred period. Their
+    // structured twin comes from details (one action per period); every
+    // other warning without a twin (paths not yet migrated to warn()) folds
+    // into the notice tier verbatim.
+    const diagnosisWarnings = new Set(result.warnings.slice(warningsBeforeDiagnosis))
+    for (const culprit of result.details?.untransferredResults ?? []) {
+      result.notices!.push(
+        makeNotice('sie_untransferred_result', 'action', {
+          period: culprit.period_name,
+          amount: sek(culprit.pl_net),
+        })
+      )
+    }
+    result.notices!.push(
+      ...legacyNotices(
+        result.warnings.filter((w) => !noticedWarnings.has(w) && !diagnosisWarnings.has(w))
+      )
+    )
 
     // Set success before finalizing
     result.success = result.errors.length === 0

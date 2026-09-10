@@ -122,7 +122,7 @@ export function parseArticlesFile(
       preview_rows: [],
       rows: [],
       warnings: ['Filen innehåller för få rader.'],
-      notices: [],
+      notices: [makeNotice('legacy', 'notice', { text: 'Filen innehåller för få rader.' })],
     }
   }
 
@@ -242,6 +242,11 @@ export function parseArticlesFile(
   }
   if (rows.length === 0) {
     warnings.push('Inga giltiga artiklar hittades. Kontrollera att namn-/benämningskolumnen är korrekt mappad.')
+    notices.push(
+      makeNotice('legacy', 'notice', {
+        text: 'Inga giltiga artiklar hittades. Kontrollera att namn-/benämningskolumnen är korrekt mappad.',
+      })
+    )
   }
 
   return {

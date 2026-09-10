@@ -9089,6 +9089,7 @@
     "sie_next_period_locked": "The next fiscal year ({period}) is locked, so its opening balances could not be re-synced. Unlock the period and import again.",
     "sie_next_ib_resync_failed": "Opening balances for the next fiscal year could not be re-synced ({reason}). Check and adjust them manually.",
     "sie_no_doc_mark_failed": "Imported vouchers could not be marked \"No document required\": mark them manually in the bookkeeping list.",
+    "sie_untransferred_result": "{period}: the result of {amount} has not been transferred to equity. Later balance sheets show a difference until the transfer is booked (account 8999 against e.g. 2099).",
     "sie_encoding_artifacts": "{count, plural, one {# text field looks mis-encoded} other {# text fields look mis-encoded}} (characters like ” or „ instead of å, ä, ö). Review account names and voucher texts.",
     "sie_org_mismatch": "The file belongs to organisation number {fileOrg}, not this company ({companyOrg}).",
     "articles_price_incl_vat": "The price column \"{header}\" looks VAT-inclusive, but prices are imported excluding VAT. Check the values.",

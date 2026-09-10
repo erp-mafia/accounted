@@ -73,11 +73,12 @@ export default function ImportResultStep({
   const skipped = result.details?.skippedVouchers
   const untransferred = result.details?.untransferredResults
 
-  // The skipped-voucher and IB-resync cards below render those facts with
-  // their own explanations, so their notice codes are excluded here by
-  // code, never by matching Swedish sentences.
+  // The skipped-voucher, untransferred-result and IB-resync cards below
+  // render those facts with their own explanations, so their notice codes
+  // are excluded here by code, never by matching Swedish sentences.
   const notices = resolveNotices(result, [
     'sie_vouchers_skipped',
+    'sie_untransferred_result',
     'sie_next_ib_resynced',
     'sie_next_period_locked',
   ])
