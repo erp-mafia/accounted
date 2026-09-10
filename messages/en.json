@@ -3006,6 +3006,9 @@
     "invoices_help": "Invoice due dates"
   },
   "tx_inbox_card": {
+    "drawer_rec_rule": "Our recommendation · by your rule",
+    "drawer_rec_catalog": "Our recommendation · known pattern",
+    "drawer_rec_counterparty": "Our recommendation · {count, plural, =1 {booked like this once before} other {booked like this # times before}}",
     "underlag_heading": "Document",
     "underlag_supplier": "Supplier",
     "underlag_date": "Date",
@@ -3091,6 +3094,21 @@
     "adjustment": "Adjustment"
   },
   "tx_quick_review": {
+    "rec_kicker": "Our recommendation",
+    "rec_kicker_manual": "Your booking",
+    "rec_change": "Change",
+    "rec_why_rule": "By your rule",
+    "rec_why_catalog": "Known pattern in the bank text",
+    "rec_why_counterparty": "{count, plural, =1 {Booked like this once before} other {Booked like this # times before}}",
+    "rec_why_manual": "Chosen by you",
+    "rec_confidence": "{percent} % sure",
+    "ai_reading": "The assistant is reading the underlag…",
+    "ai_agrees": "The assistant agrees.",
+    "ai_instead": "The assistant suggests instead",
+    "ai_use": "Use",
+    "ai_unsure": "The assistant is unsure: {reason}",
+    "ai_unconfigured": "The assistant is not configured.",
+    "ai_alternatives": "Other accounts",
     "underlag_missing_title": "No document for {amount}.",
     "underlag_missing_body": "Every voucher needs a receipt or an invoice (BFL 5 kap. 7 §). Fetch it now, or post without one and add it later.",
     "underlag_fetch": "Fetch the document",

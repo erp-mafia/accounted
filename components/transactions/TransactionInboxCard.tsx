@@ -42,6 +42,8 @@ export interface RowProposal {
   label: string
   hue: TemplateHue
   confidence: number
+  source?: 'rule' | 'catalog' | 'counterparty'
+  seenCount?: number
 }
 
 // True when the AI tier is active: gates user-facing strings that promise
@@ -584,6 +586,7 @@ export default function TransactionInboxCard({
             transaction={transaction}
             accountLabel={accountLabel}
             categoryLabel={categoryLabel ?? proposal?.label ?? null}
+            recommendation={!categoryLabel && proposal ? { source: proposal.source, seenCount: proposal.seenCount } : null}
             accountLogo={accountLogo}
             primaryLabel={primaryLabel}
             onPrimary={(anchor) => runPrimary(anchor)}

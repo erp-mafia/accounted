@@ -6,6 +6,7 @@ import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -77,7 +78,8 @@ interface QuickReviewDialogProps {
    * Shell v2 with a template already chosen: the list proposed it, so a
    * second "assistenten föreslår" line here read as a contradiction.
    */
-  hideAiProposal?: boolean
+  /** Why this template is the pick: the source of the row's suggestion, when there was one. */
+  recommendation?: { source?: 'rule' | 'catalog' | 'counterparty'; seenCount?: number; confidence?: number } | null
   /**
    * "Andra rader": hand the COMPUTED proposal lines (exactly what the
    * verifikation preview shows) to the parent, which routes them into
@@ -104,7 +106,7 @@ export default function QuickReviewDialog({
   counterpartyDefaultDimensions,
   onConfirm,
   onChangeTemplate,
-  hideAiProposal = false,
+  recommendation = null,
   onEditLines,
 }: QuickReviewDialogProps) {
   const t = useTranslations('tx_quick_review')
@@ -596,47 +598,56 @@ export default function QuickReviewDialog({
           </div>
         )}
 
-        {/* AI booking proposal: pre-fills account + VAT and explains why.
-            Falls back silently to the deterministic defaults on error. */}
-        {tx.id && !hideAiProposal && (
-          <AiCategorizeProposal
-            key={tx.id}
-            transactionId={tx.id}
-            open={open}
-            onProposal={setAiProposal}
-            onApply={(account, vat) => {
-              handleAccountChange(account)
-              // handleAccountChange clears VAT for class-2 accounts; for the
-              // rest, apply the proposed treatment.
-              if (!account.startsWith('2')) setVatTreatment(vat)
-            }}
-          />
-        )}
-
-        {/* Template or Category */}
-        <div>
-          <label className="text-sm font-medium text-muted-foreground">
-            {isCounterpartyTemplate ? t('label_counterparty_template') : template ? t('label_template') : t('label_category')}
-          </label>
-          <div className="mt-1 flex items-center gap-2">
-            <span className="text-sm font-medium text-foreground">
-              {template ? template.name_sv : categoryLabel}
+        {/* One header says what will be booked and why: the pick, the source
+            of the recommendation, and beneath it the assistant's verdict on
+            it. The verifikat block further down is the proof. */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              {recommendation?.source ? t('rec_kicker') : t('rec_kicker_manual')}
             </span>
+            {onChangeTemplate && !hasCounterpartyPattern && (
+              <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')} onClick={onChangeTemplate}>
+                {t('rec_change')}
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[15px] font-medium text-foreground">{template ? template.name_sv : categoryLabel}</span>
             {patternDimsLabel && (
               <Badge data-ph-mask="" variant="secondary" className="font-mono tabular-nums">
                 {patternDimsLabel}
               </Badge>
             )}
-            {onChangeTemplate && !hasCounterpartyPattern && (
-              <button
-                type="button"
-                className="text-xs text-primary hover:underline"
-                onClick={onChangeTemplate}
-              >
-                {t('change_template')}
-              </button>
-            )}
           </div>
+          <p className="text-[12.5px] text-muted-foreground">
+            {recommendation?.source === 'rule'
+              ? t('rec_why_rule')
+              : recommendation?.source === 'counterparty'
+                ? t('rec_why_counterparty', { count: recommendation.seenCount ?? 1 })
+                : recommendation?.source === 'catalog'
+                  ? t('rec_why_catalog')
+                  : t('rec_why_manual')}
+            {recommendation?.confidence != null && recommendation.confidence > 0 && recommendation.confidence < 1
+              ? ` · ${t('rec_confidence', { percent: Math.round(recommendation.confidence * 100) })}`
+              : ''}
+          </p>
+          {tx.id && (
+            <AiCategorizeProposal
+              key={tx.id}
+              transactionId={tx.id}
+              open={open}
+              currentAccount={entityAccounts.debitAccount && entityAccounts.creditAccount ? (entityAccounts.debitAccount.startsWith('19') ? entityAccounts.creditAccount : entityAccounts.debitAccount) : accountOverride || null}
+              autoApply={!template}
+              onProposal={setAiProposal}
+              onApply={(account, vat) => {
+                handleAccountChange(account)
+                // handleAccountChange clears VAT for class-2 accounts; for the
+                // rest, apply the proposed treatment.
+                if (!account.startsWith('2')) setVatTreatment(vat)
+              }}
+            />
+          )}
         </div>
 
         {/* Template special rules */}

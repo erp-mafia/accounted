@@ -436,6 +436,8 @@ interface QuickReviewState {
   linePattern: LinePatternEntry[] | null
   // Learned counterparty bag; prefills the review dialog's dimension picker.
   defaultDimensions?: Record<string, string> | null
+  /** The row suggestion this review opened from, so the dialog can say why. Null when the person picked. */
+  recommendation?: { source?: 'rule' | 'catalog' | 'counterparty'; seenCount?: number; confidence?: number } | null
 }
 
 export default function TransactionsPage() {
@@ -545,6 +547,9 @@ export default function TransactionsPage() {
   // Quick review dialog (suggestion review before booking)
   const [quickReviewOpen, setQuickReviewOpen] = useState(false)
   const [quickReview, setQuickReview] = useState<QuickReviewState | null>(null)
+  // Set by bookProposal right before handleTemplateSelected, so the review
+  // it opens knows the pick came from a suggestion and why.
+  const pendingRecommendation = useRef<QuickReviewState['recommendation']>(null)
 
   // Prong B: prompt to match against an open supplier invoice instead of
   // categorizing direct to 2440. Triggered by a 409 TX_CATEGORIZE_SUGGEST_SI_MATCH.
@@ -741,7 +746,7 @@ export default function TransactionsPage() {
     if (!s) return null
     const account = s.debit_account.startsWith('19') ? s.credit_account : s.debit_account
     const hue = s.group === 'counterparty' ? accountHue(account) : templateGroupHue(s.group as TemplateGroup)
-    return { label: s.name_sv, hue, confidence: s.confidence }
+    return { label: s.name_sv, hue, confidence: s.confidence, source: s.source, seenCount: s.seen_count }
   }
   const categoryLabelFor = (tx: TransactionWithInvoice): string | null => {
     if (tx.potential_invoice && !tx.invoice_id)
@@ -3850,7 +3855,8 @@ export default function TransactionsPage() {
     // Library templates aren't validated server-side via template_id; the
     // template's debit/credit + VAT drive the booking through account_override.
     const templateId = isLibraryTemplateId(template.id) ? undefined : template.id
-    setQuickReview({ transaction: tx, category: template.fallback_category, label: template.name_sv, template, templateId, linePattern: null })
+    setQuickReview({ transaction: tx, category: template.fallback_category, label: template.name_sv, template, templateId, linePattern: null, recommendation: pendingRecommendation.current })
+    pendingRecommendation.current = null
     setQuickReviewOpen(true)
   }
 
@@ -3862,6 +3868,7 @@ export default function TransactionsPage() {
     if (isCounterpartyTemplateId(s.template_id)) return handleOpenTemplateReview(transaction, s.template_id)
     const template = getTemplateById(s.template_id)
     if (!template) return openCategoryDialog(transaction)
+    pendingRecommendation.current = { source: s.source, seenCount: s.seen_count, confidence: s.confidence }
     handleTemplateSelected(template, transaction)
   }
 
@@ -3897,6 +3904,7 @@ export default function TransactionsPage() {
         templateId: undefined,
         linePattern: cpSuggestion.line_pattern ?? null,
         defaultDimensions: cpSuggestion.default_dimensions ?? null,
+        recommendation: { source: cpSuggestion.source ?? 'counterparty', seenCount: cpSuggestion.seen_count, confidence: cpSuggestion.confidence },
       })
       setQuickReviewOpen(true)
       return
@@ -4826,7 +4834,7 @@ export default function TransactionsPage() {
           templateId={quickReview?.templateId}
           counterpartyLinePattern={quickReview?.linePattern ?? null}
           counterpartyDefaultDimensions={quickReview?.defaultDimensions ?? null}
-          hideAiProposal={shell === 'v2' && !!quickReview?.template}
+          recommendation={quickReview?.recommendation ?? null}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
           onEditLines={handleEditProposedLines}

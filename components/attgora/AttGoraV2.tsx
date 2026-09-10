@@ -15,7 +15,6 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   buildAttGoraTasks,
   firstOpenTask,
-  openTaskTotal,
   type AttGoraGroup,
   type AttGoraSetupFlags,
   type AttGoraTask,
@@ -23,6 +22,8 @@ import {
 } from '@/lib/worklist/tasks-v2'
 import type { ExpensePayoutDue, SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 import { TaskPane, type ExpiringBankConnection, type TaskPaneContext } from './task-panes'
+
+const CLAUDE_HANDOVER = false
 
 interface AttGoraV2Props {
   worklist: WorklistCounts
@@ -152,11 +153,8 @@ export default function AttGoraV2({
     refreshCounts: () => void refreshCounts(),
   }
 
-  const total = openTaskTotal(groups)
   // Progress is counted in tasks, not items: "4 av 9 klara" is a race a
   // person can win this month; 325 items is a pile.
-  const taskTotal = allTasks.length
-  const taskDone = allTasks.filter((x) => x.state === 'done').length
 
   const depDone = (id: AttGoraTaskId) => allTasks.find((x) => x.id === id)?.state === 'done'
 
@@ -183,33 +181,8 @@ export default function AttGoraV2({
           aria-label={t('tree_label')}
           className="border-b border-border/60 px-2 py-3 md:overflow-y-auto md:border-b-0 md:border-r"
         >
-          <div className="flex items-center justify-between px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            <span>{t('tree_heading')}</span>
-            <span className="tabular-nums" data-ph-mask>
-              {total > 0 ? t('sub_open', { count: total }) : t('sub_done')}
-            </span>
-          </div>
-          {/* The bar fills as tasks close; the line under it names the score. */}
-          {taskTotal > 0 && (
-            <div className="mb-3 px-3" data-ph-mask>
-              <div
-                className="h-1 w-full overflow-hidden rounded-full bg-secondary"
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={taskTotal}
-                aria-valuenow={taskDone}
-                aria-label={t('progress_aria', { done: taskDone, total: taskTotal })}
-              >
-                <div
-                  className={cn('h-full rounded-full transition-[width] duration-500', taskDone === taskTotal ? 'bg-success' : 'bg-foreground')}
-                  style={{ width: `${Math.round((taskDone / taskTotal) * 100)}%` }}
-                />
-              </div>
-              <div className="mt-1.5 text-[11px] tabular-nums text-muted-foreground">
-                {taskDone === taskTotal ? t('progress_all_done') : t('progress_line', { done: taskDone, total: taskTotal })}
-              </div>
-            </div>
-          )}
+          {/* The groups carry their own counts; a heading and a score bar above
+              them said the same thing twice (founder call 2026-09-10). */}
           {groups.map((g) => (
             <div key={g.id} className="mb-3">
               <div className="px-3 py-1 text-[12.5px] font-medium">
@@ -271,7 +244,9 @@ export default function AttGoraV2({
               task={selected}
               ctx={ctx}
               assistant={
-                claudeConnected ? (
+                // Held back until the hand-over carries the rows themselves
+                // (founder call 2026-09-10); the plumbing stays for that day.
+                !CLAUDE_HANDOVER ? null : claudeConnected ? (
                   <Button
                     variant="outline"
                     size="sm"

@@ -3006,6 +3006,9 @@
     "invoices_help": "Förfallodatum för fakturor"
   },
   "tx_inbox_card": {
+    "drawer_rec_rule": "Vår rekommendation · enligt din regel",
+    "drawer_rec_catalog": "Vår rekommendation · känt mönster",
+    "drawer_rec_counterparty": "Vår rekommendation · {count, plural, =1 {bokförd så en gång tidigare} other {bokförd så # gånger tidigare}}",
     "underlag_heading": "Underlag",
     "underlag_supplier": "Leverantör",
     "underlag_date": "Datum",
@@ -3091,6 +3094,21 @@
     "adjustment": "Justering"
   },
   "tx_quick_review": {
+    "rec_kicker": "Vår rekommendation",
+    "rec_kicker_manual": "Din kontering",
+    "rec_change": "Byt",
+    "rec_why_rule": "Enligt din regel",
+    "rec_why_catalog": "Känt mönster i bankens text",
+    "rec_why_counterparty": "{count, plural, =1 {Bokförd så en gång tidigare} other {Bokförd så # gånger tidigare}}",
+    "rec_why_manual": "Vald av dig",
+    "rec_confidence": "{percent} % säker",
+    "ai_reading": "Assistenten läser underlaget…",
+    "ai_agrees": "Assistenten håller med.",
+    "ai_instead": "Assistenten föreslår i stället",
+    "ai_use": "Använd",
+    "ai_unsure": "Assistenten är osäker: {reason}",
+    "ai_unconfigured": "Assistenten är inte konfigurerad.",
+    "ai_alternatives": "Andra konton",
     "underlag_missing_title": "Inget underlag för {amount}.",
     "underlag_missing_body": "Varje verifikat ska ha ett kvitto eller en faktura (BFL 5 kap. 7 §). Hämta det nu, eller bokför utan och komplettera senare.",
     "underlag_fetch": "Hämta underlag",
