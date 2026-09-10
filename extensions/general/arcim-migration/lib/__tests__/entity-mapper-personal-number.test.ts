@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { looksLikePersonnummer, mapCustomer } from '../entity-mapper'
+import { fitsPersonalNumberColumn, mapCustomer } from '../entity-mapper'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import type { CustomerDto } from '@/lib/providers/dto'
 
@@ -7,8 +7,9 @@ import type { CustomerDto } from '@/lib/providers/dto'
  * #2469: customers_personal_number_check bounds the ciphertext length, so an
  * individual whose identity number is shorter than a personnummer (a birth
  * date, a customer number in the wrong field) failed the insert and the
- * whole row was dropped. Only a personnummer-shaped value is encrypted into
- * the column; anything else stays readable in the notes.
+ * whole row was dropped. Everything the column can hold is encrypted into
+ * it (so a mistyped personnummer never lands in plaintext); only a value
+ * that cannot be a personnummer stays readable in the notes.
  */
 
 function individual(number: string | null, note?: string): CustomerDto {
@@ -26,25 +27,42 @@ function individual(number: string | null, note?: string): CustomerDto {
   }
 }
 
-describe('looksLikePersonnummer', () => {
-  it('accepts 10 and 12 digits with or without a separator', () => {
-    expect(looksLikePersonnummer('8501011234')).toBe(true)
-    expect(looksLikePersonnummer('850101-1234')).toBe(true)
-    expect(looksLikePersonnummer('198501011234')).toBe(true)
-    expect(looksLikePersonnummer('19850101-1234')).toBe(true)
-    expect(looksLikePersonnummer('850101+1234')).toBe(true)
+describe('fitsPersonalNumberColumn', () => {
+  it('accepts every personnummer spelling, mistyped ones included', () => {
+    expect(fitsPersonalNumberColumn('8501011234')).toBe(true)
+    expect(fitsPersonalNumberColumn('850101-1234')).toBe(true)
+    expect(fitsPersonalNumberColumn('198501011234')).toBe(true)
+    expect(fitsPersonalNumberColumn('19850101-1234')).toBe(true)
+    expect(fitsPersonalNumberColumn('850101+1234')).toBe(true)
+    // One digit short or long: still personnummer-like, still encrypted.
+    expect(fitsPersonalNumberColumn('19850101-123')).toBe(true)
+    expect(fitsPersonalNumberColumn('85010112345')).toBe(true)
+    expect(fitsPersonalNumberColumn('K-12345678')).toBe(true)
   })
 
-  it('rejects anything else', () => {
-    expect(looksLikePersonnummer('850101')).toBe(false)
-    expect(looksLikePersonnummer('1234')).toBe(false)
-    expect(looksLikePersonnummer('')).toBe(false)
-    expect(looksLikePersonnummer('85010112345')).toBe(false)
-    expect(looksLikePersonnummer('K-12345678')).toBe(false)
+  it('rejects only what the column cannot hold', () => {
+    expect(fitsPersonalNumberColumn('850101')).toBe(false)
+    expect(fitsPersonalNumberColumn('1234')).toBe(false)
+    expect(fitsPersonalNumberColumn('')).toBe(false)
+    expect(fitsPersonalNumberColumn('x'.repeat(100))).toBe(false)
+  })
+
+  it('matches the check constraint on the ciphertext length', () => {
+    for (const value of ['8501011234', 'x'.repeat(99)]) {
+      const row = mapCustomer(individual(value), 'user-1', 'company-1')
+      expect(row.personal_number).toMatch(/^[0-9a-f]{76,255}$/)
+    }
   })
 })
 
 describe('mapCustomer: personal_number shape guard', () => {
+  it('encrypts a mistyped personnummer too, never leaving it in plaintext', () => {
+    const row = mapCustomer(individual('19850101-123'), 'user-1', 'company-1')
+
+    expect(row.personal_number).toMatch(/^[0-9a-f]{76,255}$/)
+    expect(row.notes).toBeNull()
+  })
+
   it('encrypts a personnummer-shaped identity number into personal_number', () => {
     const row = mapCustomer(individual('850101-1234'), 'user-1', 'company-1')
 

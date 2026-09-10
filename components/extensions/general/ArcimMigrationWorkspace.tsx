@@ -1879,14 +1879,33 @@ function ResultStep({
   const t = useTranslations('extensions')
   const fiscalYearSpanLabel = useFiscalYearSpanLabel()
   if (error) {
+    // Steps run one request each (#2469), so a failure in a later request
+    // leaves earlier steps' rows in place. Name them: the user must not
+    // re-import what already landed, and must see what still needs a rerun.
+    const completed = completedStepLines(results)
     return (
       <div className="stagger-enter space-y-8">
         <div>
           <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">
-            Migreringen misslyckades
+            {completed.length > 0 ? 'Migreringen avbröts' : 'Migreringen misslyckades'}
           </h2>
           <p className="mt-3 whitespace-pre-line text-sm text-destructive">{error}</p>
         </div>
+        {completed.length > 0 && (
+          <div>
+            <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              Hann slutföras innan felet
+            </h3>
+            <ul className="mt-3 space-y-1 text-sm">
+              {completed.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Kör migreringen igen med de steg som saknas: det som redan finns hoppas över.
+            </p>
+          </div>
+        )}
         <SieFallbackLine message="Du kan istället importera din bokföringsdata manuellt via en SIE-fil." />
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
           <Button variant="outline" className="min-h-11" onClick={onDone}>Klar</Button>
@@ -2284,6 +2303,26 @@ function formatSkipReasons(
     )
   }
   return parts.length > 0 ? parts.join(', ') : undefined
+}
+
+/**
+ * One line per step that reported a result: what the earlier per-step
+ * requests already wrote before a later one failed.
+ */
+function completedStepLines(results: MigrationResults | null): string[] {
+  if (!results) return []
+  const lines: string[] = []
+  const count = (label: string, r?: { imported: number; skipped: number }) => {
+    if (!r) return
+    lines.push(`${label}: ${r.imported} importerade${r.skipped > 0 ? `, ${r.skipped} hoppades över` : ''}`)
+  }
+  if (results.companyInfo?.imported) lines.push('Företagsinformation: uppdaterad')
+  count('Kunder', results.customers)
+  count('Leverantörer', results.suppliers)
+  count('Kundfakturor', results.salesInvoices)
+  count('Leverantörsfakturor', results.supplierInvoices)
+  count('Anläggningstillgångar', results.assets)
+  return lines
 }
 
 /** A step that failed everything it tried is an error, not a quiet count. */

@@ -614,11 +614,13 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
   // two per plaintext char: an identity number shorter than a personnummer
   // (a 6-digit birth date, a customer number typed into the wrong field)
   // encrypts to something the column rejects, and the row was lost with it
-  // (#2469). Only a personnummer-shaped value goes into the column; anything
-  // else is kept readable in the notes so the user can decide.
+  // (#2469). Everything the column can hold is encrypted into it, a mistyped
+  // or oddly separated personnummer included, so no personnummer-like value
+  // ever lands in plaintext; only a value that cannot be a personnummer at
+  // all (too short, or absurdly long) is kept readable in the notes.
   const personalNumber = isIndividual ? number : null
   const storablePersonalNumber =
-    personalNumber && looksLikePersonnummer(personalNumber) ? personalNumber : null
+    personalNumber && fitsPersonalNumberColumn(personalNumber) ? personalNumber : null
   const unstorableIdentityNote =
     personalNumber && !storablePersonalNumber
       ? `Identitetsnummer i källsystemet: ${personalNumber}`
@@ -645,13 +647,15 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
 }
 
 /**
- * A Swedish personnummer or samordningsnummer as providers spell it: 10 or
- * 12 digits with an optional separator (850101-1234, 19850101+1234,
- * 198501011234). Shape only; the value is never validated further here.
+ * Whether the encrypted form of `value` satisfies customers_personal_number_check
+ * (`^[0-9a-f]{76,255}$`, migration 20260726110000). AES-256-GCM hex is 56
+ * chars plus two per plaintext char, so the column holds plaintexts of 10 to
+ * 99 chars. A shortest personnummer is 10 digits, so every personnummer-like
+ * value, mistyped or not, fits; a value below the floor cannot be one.
  */
-export function looksLikePersonnummer(value: string): boolean {
-  const digits = value.replace(/[\s+-]/g, '')
-  return /^\d{10}$|^\d{12}$/.test(digits)
+export function fitsPersonalNumberColumn(value: string): boolean {
+  const length = value.trim().length
+  return length >= 10 && length <= 99
 }
 
 export function mapSupplier(dto: SupplierDto, userId: string, companyId: string): Record<string, unknown> {

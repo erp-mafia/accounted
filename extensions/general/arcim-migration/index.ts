@@ -1561,11 +1561,20 @@ export const arcimMigrationExtension: Extension = {
           // API, or the guard above was not triggered) means no filter.
           let fiscalYearScope: FiscalYearScope | null = null
           if (importSalesInvoices || importSupplierInvoices) {
-            const { data: importedYears } = await supabase
+            const { data: importedYears, error: importedYearsError } = await supabase
               .from('sie_imports')
               .select('fiscal_year_start, fiscal_year_end')
               .eq('company_id', companyId)
               .eq('status', 'completed')
+            if (importedYearsError) {
+              // A failed read must not degrade into "no scope, import the
+              // whole register": that is the slow path this scope exists
+              // to avoid, and it would run without the user knowing.
+              log.error('arcim migrate: could not read the imported fiscal years', importedYearsError)
+              return errorResponseFromCode('PROVIDER_MIGRATE_FAILED', moduleLog, {
+                details: { reason: importedYearsError.message },
+              })
+            }
             fiscalYearScope = fiscalYearScopeFromImports(
               importedYears as { fiscal_year_start: string | null; fiscal_year_end: string | null }[] | null,
             )

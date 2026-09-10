@@ -49,9 +49,17 @@ export function invoiceWithinScope(
   return settled !== null && settled >= scope.start
 }
 
+/**
+ * The YYYY-MM-DD part of an ISO date or timestamp, or null when it is not a
+ * real calendar day (2025-13-01, 2025-02-30): those must fall into the
+ * "unreadable, keep" path, not into a lexical comparison that would
+ * silently decline the invoice.
+ */
 function isoDay(value: string | undefined): string | null {
   const day = typeof value === 'string' ? value.slice(0, 10) : ''
-  return ISO_DATE.test(day) ? day : null
+  if (!ISO_DATE.test(day)) return null
+  const parsed = new Date(`${day}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === day ? day : null
 }
 
 /**

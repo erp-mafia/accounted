@@ -68,6 +68,13 @@ describe('invoiceWithinScope', () => {
     expect(invoiceWithinScope(dto('', true), SCOPE)).toBe(true)
     expect(invoiceWithinScope(dto('14/03/2025', true), SCOPE)).toBe(true)
   })
+
+  it('treats a date-shaped value that is not a calendar day as unreadable', () => {
+    expect(invoiceWithinScope(dto('2025-13-01', true), SCOPE)).toBe(true)
+    expect(invoiceWithinScope(dto('2025-02-30', true), SCOPE)).toBe(true)
+    // A real day before the scope still declines, so the check is not a blanket keep.
+    expect(invoiceWithinScope(dto('2025-02-28', true), SCOPE)).toBe(false)
+  })
 })
 
 describe('fiscalYearScopeFromImports', () => {

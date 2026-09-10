@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
-import { createMockSupabase, createMockRequest } from '@/tests/helpers'
+import { createMockSupabase, createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 /**
@@ -81,6 +81,25 @@ describe('POST /migrate: fiscal-year scope and per-step finishing flag', () => {
 
     expect(res.status).toBe(200)
     expect(orchestratorOptions().fiscalYearScope).toEqual({ start: '2025-01-01', end: '2026-12-31' })
+  })
+
+  it('fails the request instead of importing the whole register when the fiscal-year read errors', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    // Guard's count query succeeds; the scope query fails.
+    enqueueMany([
+      { count: 1 },
+      { data: null, error: { message: 'connection reset' } },
+    ])
+    ;(supabase as unknown as { auth: { getUser: Mock } }).auth.getUser
+      .mockResolvedValue({ data: { user: { id: 'user-1' } } })
+    const ctx = { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+
+    const res = await handler(migrateRequest({ importSalesInvoices: true }), ctx)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBeGreaterThanOrEqual(400)
+    expect(body.error.code).toBe('PROVIDER_MIGRATE_FAILED')
+    expect(executeMigration).not.toHaveBeenCalled()
   })
 
   it('passes no scope when the request runs no invoice step', async () => {
