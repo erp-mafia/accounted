@@ -3092,10 +3092,10 @@
     "adjustment": "Adjustment"
   },
   "tx_quick_review": {
+    "vat_doc_wins": "Booked with the underlag's VAT {amount}.",
+    "vat_rate_wins": "Booked with the rate's VAT {amount}.",
     "changed_from": "Changed from {label}. Check the account and VAT below.",
     "changed_undo": "Undo",
-    "vat_doc_booked": "is booked",
-    "vat_proposal_booked": "the proposal books {amount}",
     "vat_use_proposal": "Use the proposal's {amount}",
     "vat_use_doc_amount": "Use the underlag's {amount}",
     "rec_why_recent": "Template used lately",
@@ -3121,8 +3121,6 @@
     "underlag_missing_body": "Every voucher needs a receipt or an invoice (BFL 5 kap. 7 §). Fetch it now, or post without one and add it later.",
     "underlag_fetch": "Fetch the document",
     "book_without_underlag": "Post without a document",
-    "vat_from_doc": "VAT per the document: {amount}",
-    "vat_doc_source": "{source, select, pinned {attached to the row} matched {matched in the inbox} other {}}",
     "exchange_rate_fetch_failed": "Could not fetch the exchange rate.",
     "title": "Review posting",
     "description_template": "Review the journal entry before posting",
