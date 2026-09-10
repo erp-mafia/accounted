@@ -76,32 +76,26 @@ export function CounterpartList({
         <tbody className="stagger-enter">
           {rows.map((row, i) => {
             const mine = row.status === 'confirmed'
-            // The heading for a group, on its first row, and only when the
-            // other group is on screen too.
-            const heading =
-              mixed && (i === 0 || (rows[i - 1]!.status === 'confirmed') !== mine)
-                ? mine
-                  ? t('cp_group_mine', { count: confirmedCount })
-                  : t('cp_group_new', { count: rows.length - confirmedCount })
-                : null
+            // The register carries no heading: the column header already says
+            // what the rows are. The recognised ones get a section break, on
+            // their first row, only when the register is on screen above them.
+            const startsNewGroup = mixed && !mine && (i === 0 || rows[i - 1]!.status === 'confirmed')
             const whyKey = !row.partyId && row.source ? WHY_KEY[row.source as keyof typeof WHY_KEY] : undefined
             const why = row.status === 'suggested' && row.reason ? reasonText(t, row.reason, row.rhythm, row.orgNumber) : whyKey ? t(whyKey) : null
             // A reading with no party has no dossier to open, so its why stays on the line.
             const detail = [row.what, row.rail ? t('cp_via', { rail: row.rail }) : null, row.country && row.country !== 'SE' ? regionName(row.country, locale) : null, row.partyId ? null : why]
               .filter(Boolean)
               .join(' · ')
-            const chip =
-              row.status === 'suggested' ? t('cp_status_suggested') : row.status === 'read' ? t('cp_status_read') : row.status === 'tentative' ? t('cp_status_tentative') : null
+            const chip = row.status === 'read' ? t('cp_status_read') : row.status === 'tentative' ? t('cp_status_tentative') : null
             return (
               <Fragment key={row.id}>
-              {heading ? (
+              {startsNewGroup ? (
                 <tr>
-                  <th
-                    colSpan={7}
-                    scope="colgroup"
-                    className="px-3 pb-1.5 pt-6 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground first:pt-0"
-                  >
-                    {heading}
+                  <th colSpan={7} scope="colgroup" className="px-4 pb-2 pt-10 text-left font-normal">
+                    <div className="border-t border-border pt-5">
+                      <p className="text-[13px] font-semibold text-foreground">{t('cp_group_new', { count: rows.length - confirmedCount })}</p>
+                      <p className="mt-0.5 text-[12px] text-muted-foreground">{t('cp_group_new_desc')}</p>
+                    </div>
                   </th>
                 </tr>
               ) : null}
@@ -125,14 +119,6 @@ export function CounterpartList({
                         ) : (
                           <span className="truncate text-foreground">{row.name}</span>
                         )}
-                        {row.roles.map((role) => (
-                          <span
-                            key={role}
-                            className="rounded-full border border-border px-2 py-0.5 text-[11px] leading-none whitespace-nowrap text-muted-foreground"
-                          >
-                            {role === 'supplier' ? t('cp_role_supplier') : t('cp_role_customer')}
-                          </span>
-                        ))}
                         {chip ? (
                           <span
                             className={cn(

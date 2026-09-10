@@ -8723,10 +8723,8 @@
     "unsigned": "Ej signerad"
   },
   "parties": {
-    "cp_group_mine": "Dina motparter ({count})",
+    "cp_group_new_desc": "Motparter som bokföringen känner igen men som inte finns i ditt register än. Lägg upp dem som leverantör eller kund från raden, eller avfärda dem.",
     "cp_group_new": "Nya, känns igen i bokföringen ({count})",
-    "cp_role_supplier": "Leverantör",
-    "cp_role_customer": "Kund",
     "dossier_seen_as": "Sett som {names}",
     "title": "Förslag från bokföringen",
     "help": "Motparter som dina verifikat och underlag pekar ut men som inte finns bland dina leverantörer och kunder. Förslagen skapas från bokföringen; Uppdatera förslag hämtar det som tillkommit sedan sist. Lägg upp så läggs de upp med uppgifterna från underlagen. Ingenting bokförs, och det går att ångra i 30 dagar.",
@@ -8976,7 +8974,6 @@
     "cp_th_in": "In",
     "cp_th_out": "Ut",
     "cp_th_last": "Senast",
-    "cp_status_suggested": "ny",
     "cp_status_read": "läst ur texten",
     "cp_status_tentative": "osäker",
     "cp_via": "via {rail}",

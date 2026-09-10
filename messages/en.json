@@ -8723,10 +8723,8 @@
     "unsigned": "Not signed off"
   },
   "parties": {
-    "cp_group_mine": "Your counterparts ({count})",
+    "cp_group_new_desc": "Counterparts the books recognise that are not in your register yet. Set them up as a supplier or customer from the row, or dismiss them.",
     "cp_group_new": "New, recognised in the books ({count})",
-    "cp_role_supplier": "Supplier",
-    "cp_role_customer": "Customer",
     "dossier_seen_as": "Seen as {names}",
     "title": "Suggestions from the books",
     "help": "Counterparts your vouchers and documents point to that are not among your suppliers and customers yet. Suggestions are built from the books; Update suggestions picks up what arrived since last time. Add and they are created with the details from the documents. Nothing is posted, and it can be undone for 30 days.",
@@ -8976,7 +8974,6 @@
     "cp_th_in": "In",
     "cp_th_out": "Out",
     "cp_th_last": "Last",
-    "cp_status_suggested": "new",
     "cp_status_read": "read from the text",
     "cp_status_tentative": "uncertain",
     "cp_via": "via {rail}",

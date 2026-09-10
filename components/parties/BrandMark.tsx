@@ -31,7 +31,7 @@ export function BrandMark({ name, size = 22, className }: { name: string; size?:
   return (
     <span
       aria-hidden
-      className={cn('inline-flex flex-none items-center justify-center rounded-full font-semibold tracking-tight', className)}
+      className={cn('inline-flex flex-none items-center justify-center rounded-full font-semibold leading-none tracking-tight', className)}
       style={{
         width: size,
         height: size,
