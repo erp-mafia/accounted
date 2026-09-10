@@ -1,65 +1,63 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Sparkles, AlertTriangle } from 'lucide-react'
+import { useTranslations } from 'next-intl'
+import { Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import type { VatTreatment } from '@/types'
 
 /**
- * The auto-booking proposal, inline in the quick-review dialog.
- *
- * Fetches POST /api/agent/categorize (Tier 1 deterministic candidates → Tier 2
- * model selector, provider-agnostic) and shows the model's pick with a
- * confidence pill, a short "Varför", and the candidate alternatives. It
- * pre-fills the dialog's account + VAT when it lands on a real account, and
- * clicking an alternative re-applies. Nothing books here — the dialog's own
- * "Bokför" commits through the existing categorize route.
- *
- * i18n: strings are inline Swedish for now (this is the Swedish-answering
- * assistant surface); lift to messages/{sv,en}.json before final merge.
+ * The assistant's verdict inside the recommendation header of the review
+ * dialog: one line, not a box. It fetches POST /api/agent/categorize (the
+ * deterministic candidates, then the model's pick, with the matched
+ * receipt's text when there is one) and says one of three things: it
+ * agrees with the current pick, it suggests another account (with why and
+ * a way to take it), or it is unsure. It pre-fills the dialog only when the
+ * dialog has no template of its own; a rule or a learned counterpart is
+ * never overridden by the model. Nothing books here.
  */
-
 interface CandidateDto {
   account: string
   label: string
-  vatTreatment: VatTreatment | null
+  vatTreatment: VatTreatment | 'none' | null
   source: string
-  confidence: number
 }
 
 interface ProposalDto {
   account: string | null
-  category: string | null
-  vatTreatment: VatTreatment | null
-  reverseCharge: boolean
+  vatTreatment: VatTreatment | 'none' | null
   confidence: number
-  agreement: number
-  modelConfidence: 'high' | 'medium' | 'low'
+  modelConfidence?: number
+  agreement?: boolean
   fromCandidate: boolean
+  choice: { kind: 'account' | 'needs_review' }
   reasoning: string
-  choice: { kind: 'candidate' | 'category' | 'needs_review' }
   candidates: CandidateDto[]
 }
 
-/** What the dialog needs to log a calibration sample when the user books. */
 export interface AiProposalMeta {
   account: string
   confidence: number
-  agreement: number
-  modelConfidence: 'high' | 'medium' | 'low'
+  agreement?: boolean
+  modelConfidence?: number
   source: string
 }
 
 type State =
   | { status: 'loading' }
+  | { status: 'ready'; proposal: ProposalDto }
   | { status: 'error' }
   | { status: 'unconfigured' }
-  | { status: 'ready'; proposal: ProposalDto }
 
 interface Props {
   transactionId: string
   /** Fetch when the dialog is open. */
   open: boolean
+  /** The business account the dialog currently books to, for the agree check. */
+  currentAccount?: string | null
+  /** Pre-fill the dialog with the pick when it lands; off when the dialog already has a template. */
+  autoApply?: boolean
   /** Apply an account + VAT to the dialog fields. */
   onApply: (account: string, vat: VatTreatment | 'none') => void
   /** Surface the proposal metadata so the dialog can log a calibration sample on book. */
@@ -67,6 +65,7 @@ interface Props {
 }
 
 type Band = 'sure' | 'likely' | 'review'
+
 function bandOf(p: ProposalDto): Band {
   if (p.choice.kind === 'needs_review' || !p.account) return 'review'
   if (p.confidence >= 0.8) return 'sure'
@@ -74,9 +73,8 @@ function bandOf(p: ProposalDto): Band {
   return 'review'
 }
 
-const BAND_LABEL: Record<Band, string> = { sure: 'Säker', likely: 'Trolig', review: 'Välj konto' }
-
-export default function AiCategorizeProposal({ transactionId, open, onApply, onProposal }: Props) {
+export default function AiCategorizeProposal({ transactionId, open, currentAccount, autoApply = true, onApply, onProposal }: Props) {
+  const t = useTranslations('tx_quick_review')
   const [state, setState] = useState<State>({ status: 'loading' })
   // Apply the pick to the dialog exactly once per fetch, so the user's later
   // manual edits are never clobbered by a re-render.
@@ -86,8 +84,6 @@ export default function AiCategorizeProposal({ transactionId, open, onApply, onP
     if (!open) return
     let alive = true
     appliedRef.current = null
-    // Initial state is already 'loading'; the dialog mounts this fresh per
-    // transaction (keyed on tx.id), so no in-effect reset is needed.
     ;(async () => {
       try {
         const res = await fetch('/api/agent/categorize', {
@@ -112,119 +108,103 @@ export default function AiCategorizeProposal({ transactionId, open, onApply, onP
   }, [open, transactionId])
 
   const reportedRef = useRef(false)
-
-  // When a proposal with a real account arrives: surface its metadata to the
-  // dialog (for calibration logging on book) and pre-fill the fields.
   useEffect(() => {
     if (state.status !== 'ready') return
     const p = state.proposal
     if (!p.account) return
-
     if (!reportedRef.current) {
       reportedRef.current = true
-      const source = p.fromCandidate
-        ? (p.candidates.find((c) => c.account === p.account)?.source ?? 'candidate')
-        : 'category'
-      onProposal?.({
-        account: p.account,
-        confidence: p.confidence,
-        agreement: p.agreement,
-        modelConfidence: p.modelConfidence,
-        source,
-      })
+      const source = p.fromCandidate ? (p.candidates.find((c) => c.account === p.account)?.source ?? 'candidate') : 'category'
+      onProposal?.({ account: p.account, confidence: p.confidence, agreement: p.agreement, modelConfidence: p.modelConfidence, source })
     }
-
-    // Pre-fill only when it's not the low "review" band, and only once.
+    if (!autoApply) return
     if (appliedRef.current === p.account || bandOf(p) === 'review') return
     appliedRef.current = p.account
     onApply(p.account, p.vatTreatment ?? 'none')
-  }, [state, onApply, onProposal])
+  }, [state, autoApply, onApply, onProposal])
+
+  const line = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground'
 
   if (state.status === 'loading') {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-2.5 text-sm text-muted-foreground">
-        <Sparkles className="h-3.5 w-3.5 animate-pulse" />
-        Assistenten föreslår kontering…
-      </div>
+      <p className={line}>
+        <Sparkles className="h-3.5 w-3.5 animate-pulse" aria-hidden />
+        {t('ai_reading')}
+      </p>
     )
   }
-
-  if (state.status === 'error') return null // fall back silently to the deterministic default
-
+  if (state.status === 'error') return null
   if (state.status === 'unconfigured') {
     return (
-      <div className="flex items-start gap-2 rounded-lg border border-border bg-secondary/30 px-3 py-2.5 text-xs text-muted-foreground">
-        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-        Assistenten är inte konfigurerad. Välj konto nedan som vanligt.
-      </div>
+      <p className={line}>
+        <Sparkles className="h-3.5 w-3.5" aria-hidden />
+        {t('ai_unconfigured')}
+      </p>
     )
   }
 
   const p = state.proposal
   const band = bandOf(p)
-  const alternatives = p.candidates.filter((c) => c.account !== p.account).slice(0, 3)
+  const pick = p.account ? (p.candidates.find((c) => c.account === p.account) ?? null) : null
+  const agrees = !!p.account && !!currentAccount && p.account === currentAccount
+  const alternatives = p.candidates.filter((c) => c.account !== p.account && c.account !== currentAccount).slice(0, 3)
+
+  if (band === 'review') {
+    return (
+      <p className={line}>
+        <Sparkles className="h-3.5 w-3.5" aria-hidden />
+        {t('ai_unsure', { reason: p.reasoning || '' })}
+      </p>
+    )
+  }
 
   return (
-    <div className="rounded-lg border border-border bg-card">
-      <div className="flex items-start justify-between gap-3 px-3 pt-3">
-        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Sparkles className="h-3.5 w-3.5" />
-          Assistentens förslag
-        </div>
-        <span
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium',
-            band === 'sure' && 'bg-success/15 text-success',
-            band === 'likely' && 'bg-warning/15 text-warning',
-            band === 'review' && 'bg-secondary text-muted-foreground',
-          )}
-        >
-          <span
-            className={cn(
-              'h-1.5 w-1.5 rounded-full',
-              band === 'sure' && 'bg-success',
-              band === 'likely' && 'bg-warning',
-              band === 'review' && 'bg-muted-foreground',
-            )}
-          />
-          {BAND_LABEL[band]}
-        </span>
-      </div>
-
-      <div className="px-3 pb-3 pt-2">
-        {band === 'review' ? (
-          <p className="text-sm text-foreground">
-            {p.reasoning || 'För lite underlag för att avgöra konto. Välj konto nedan.'}
-          </p>
+    <div className="space-y-1">
+      <p className={line}>
+        <Sparkles className={cn('h-3.5 w-3.5', agrees && 'text-success')} aria-hidden />
+        {agrees ? (
+          <span>
+            {t('ai_agrees')}
+            {p.reasoning ? <span className="ml-1">{p.reasoning}</span> : null}
+          </span>
         ) : (
           <>
-            {p.reasoning && (
-              <p className="text-[13px] leading-snug text-muted-foreground">{p.reasoning}</p>
-            )}
-            {alternatives.length > 0 && (
-              <div className="mt-2.5">
-                <p className="mb-1.5 text-[11px] text-muted-foreground">Byt konto:</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {alternatives.map((c) => (
-                    <button
-                      key={c.account}
-                      type="button"
-                      onClick={() => {
-                        appliedRef.current = c.account
-                        onApply(c.account, c.vatTreatment ?? 'none')
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs transition-colors hover:bg-secondary"
-                    >
-                      <span className="font-mono">{c.account}</span>
-                      <span className="text-muted-foreground">{c.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+            <span>
+              {t('ai_instead')} <span className="font-mono text-foreground">{p.account}</span>
+              {pick?.label ? <span className="text-foreground"> {pick.label}</span> : null}
+              {p.reasoning ? <span className="ml-1">· {p.reasoning}</span> : null}
+            </span>
+            <button
+              type="button"
+              className={cn(QUIET_LINK_CLASS, 'text-[12px]')}
+              onClick={() => {
+                appliedRef.current = p.account
+                onApply(p.account as string, p.vatTreatment ?? 'none')
+              }}
+            >
+              {t('ai_use')}
+            </button>
           </>
         )}
-      </div>
+      </p>
+      {alternatives.length > 0 && (
+        <p className={line}>
+          <span>{t('ai_alternatives')}:</span>
+          {alternatives.map((c) => (
+            <button
+              key={c.account}
+              type="button"
+              onClick={() => {
+                appliedRef.current = c.account
+                onApply(c.account, c.vatTreatment ?? 'none')
+              }}
+              className={cn(QUIET_LINK_CLASS, 'text-[12px]')}
+            >
+              <span className="font-mono">{c.account}</span> {c.label}
+            </button>
+          ))}
+        </p>
+      )}
     </div>
   )
 }
