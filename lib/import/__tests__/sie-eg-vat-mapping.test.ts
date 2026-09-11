@@ -24,6 +24,22 @@ import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
  */
 const FIXTURE = join(__dirname, 'fixtures', 'eg-eu-bas97.se')
 
+/**
+ * Run the fixture through the same chain the import wizard runs, in the same
+ * order: detect the encoding, decode the bytes, parse the SIE records, suggest
+ * the account mappings against BAS 2026, then enrich those mappings with VAT
+ * treatments. Returns all three stages so a test can assert on the decode and
+ * on the resulting momskod without repeating the wiring.
+ *
+ * Called per test rather than memoised in a beforeAll: it costs well under a
+ * millisecond on an 856-byte fixture, and a shared mutable result is how one
+ * test's assertion starts depending on another's having run first.
+ *
+ * The empty second argument to enrichAccountMappingsWithVat is the company's
+ * existing chart. Empty is the case under test: a first import, where no
+ * account carries a stored default_vat_treatment yet, so every suggestion has
+ * to come from the label.
+ */
 function runImportChain() {
   const buf = readFileSync(FIXTURE)
   const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
