@@ -9299,9 +9299,10 @@ export const tools: McpTool[] = [
 
       // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
       // 1000 rows and a full BAS 2026 chart holds ~1290 accounts. Paging is on
-      // the unique account_number (fetchAllRows ordering invariant); sort_order
-      // is fetched only to restore the BAS canonical display order afterwards,
-      // then stripped so the row shape stays unchanged.
+      // the unique account_number (fetchAllRows ordering invariant), and that
+      // is also the returned order: account_number IS the BAS sequence.
+      // sort_order is not (every seeded account carries 0), so it is neither
+      // fetched nor used.
       interface ChartAccountRow {
         account_number: string
         account_name: string
@@ -9311,14 +9312,13 @@ export const tools: McpTool[] = [
         normal_balance: string
         is_active: boolean
         description: string | null
-        sort_order: number | null
       }
-      let rows: ChartAccountRow[]
+      let accounts: ChartAccountRow[]
       try {
-        rows = await fetchAllRows<ChartAccountRow>(({ from, to }) => {
+        accounts = await fetchAllRows<ChartAccountRow>(({ from, to }) => {
           let query = supabase
             .from('chart_of_accounts')
-            .select('account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description, sort_order')
+            .select('account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description')
             .eq('company_id', companyId)
           if (activeOnly) query = query.eq('is_active', true)
           if (accountClass !== undefined) query = query.eq('account_class', accountClass)
@@ -9327,15 +9327,6 @@ export const tools: McpTool[] = [
       } catch (error) {
         throw dbError(error)
       }
-
-      // Postgres ordered by sort_order ascending with nulls last; keep that
-      // visible order, tie-breaking on account_number for determinism.
-      rows.sort(
-        (a, b) =>
-          (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER) ||
-          a.account_number.localeCompare(b.account_number)
-      )
-      const accounts = rows.map(({ sort_order: _sortOrder, ...rest }) => rest)
 
       return { accounts, count: accounts.length }
     },

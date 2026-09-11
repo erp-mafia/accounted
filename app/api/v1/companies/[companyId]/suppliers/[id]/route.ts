@@ -15,7 +15,7 @@
 import { z } from 'zod'
 import { noContent, ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
-import { parseExpand } from '@/lib/api/v1/expand'
+import { parseExpand, expandQueryShape } from '@/lib/api/v1/expand'
 import { PartyForApiSchema, expandParty } from '@/lib/parties/party-api'
 import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -118,6 +118,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: z.object(expandQueryShape(ALLOWED_EXPAND)) },
   response: { success: dataEnvelope(SupplierDetail) },
 })
 

@@ -20,6 +20,23 @@ const DATE = ISO_DATE_RE
 
 const AccountsResponse = z.object({ accounts: z.array(ReconciliationAccountSchema) })
 
+const ListQuery = z.object({
+  date_from: z
+    .string()
+    .regex(DATE)
+    .optional()
+    .describe('YYYY-MM-DD. Start of the bank bridge window. Default: 1 January of the current year.'),
+  date_to: z
+    .string()
+    .regex(DATE)
+    .optional()
+    .describe('YYYY-MM-DD. End of the bank bridge window. Default: today.'),
+  with_status: z
+    .enum(['true', 'false'])
+    .optional()
+    .describe('false returns the list without computing status per account (one reconciliation per account). Default: true.'),
+})
+
 registerEndpoint({
   operation: 'reconciliation.accounts.list',
   method: 'GET',
@@ -83,6 +100,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: dataEnvelope(AccountsResponse) },
 })
 
@@ -90,12 +108,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'reconciliation.accounts.list',
   async (request, ctx) => {
     const url = new URL(request.url)
-    const Filters = z.object({
-      date_from: z.string().regex(DATE).optional(),
-      date_to: z.string().regex(DATE).optional(),
-      with_status: z.enum(['true', 'false']).optional(),
-    })
-    const parsed = Filters.safeParse({
+    const parsed = ListQuery.safeParse({
       date_from: url.searchParams.get('date_from') ?? undefined,
       date_to: url.searchParams.get('date_to') ?? undefined,
       with_status: url.searchParams.get('with_status') ?? undefined,

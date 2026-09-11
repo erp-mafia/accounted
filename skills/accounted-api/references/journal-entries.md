@@ -26,6 +26,12 @@ Cursor-paginated list of journal entries ordered by created_at DESC, id ASC (new
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `fiscal_period_id` | query | `string` | no | Only entries in this fiscal period (id from GET /fiscal-periods). |
+| `status` | query | `"draft" \| "posted" \| "cancelled"` | no | draft, posted or cancelled. Default: every status except cancelled. |
+| `date_from` | query | `string` | no | YYYY-MM-DD. Entries whose entry_date (verifikationsdatum) is on or after this date. |
+| `date_to` | query | `string` | no | YYYY-MM-DD. Entries whose entry_date is on or before this date. |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
 
 Response `200`:
 ```ts
@@ -34,7 +40,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -73,7 +79,7 @@ Example response `200`:
 **Create a draft journal entry (verifikation).**
 `scope:bookkeeping:write · risk:high · idempotent · dry-run · reversible`
 
-Creates a draft journal entry via the engine's createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run validates balance + account-chart membership + period date constraints without inserting any row.
+Creates a draft journal entry via the engine's createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance, the period lock and the lines' accounts against the chart without inserting any row, so it fails with ACCOUNTS_NOT_IN_CHART for the same accounts the live call would reject.
 
 **Use when:** You're posting an arbitrary verifikation (manual journal entries, accrual reversals, period closing adjustments) outside the invoicing / supplier-invoice / transaction flows.
 **Do not use for:** Bookkeeping flows that have a dedicated endpoint (invoices, supplier-invoices, transactions). Editing an existing posted entry: use /correct instead.
@@ -82,13 +88,14 @@ Creates a draft journal entry via the engine's createDraftEntry(). The draft has
 - Idempotency-Key is mandatory.
 - Lines must sum to zero (Σ debit = Σ credit). Engine rejects with JOURNAL_ENTRY_NOT_BALANCED on imbalance.
 - entry_date must fall within fiscal_period_id's [period_start, period_end]; otherwise ENTRY_DATE_OUTSIDE_FISCAL_PERIOD.
-- All account_numbers must be active in the chart_of_accounts; otherwise ACCOUNTS_NOT_IN_CHART.
+- Every account_number must resolve in the company's chart of accounts: a standard BAS 2026 account that is not in the chart yet is added automatically, but a deactivated account, or a non-BAS number the chart does not contain, fails with ACCOUNTS_NOT_IN_CHART.
 - voucher_series defaults to "A" if omitted. Must be a single uppercase letter.
 - This creates a DRAFT only: call POST /{id}/commit to assign the voucher_number and post atomically.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -140,16 +147,16 @@ Response `200`:
     status: "draft" | "posted" | "cancelled",
     source_type: string,
     created_at: string,
-    notes: string,
-    reverses_id: string,
-    reversed_by_id: string,
-    correction_of_id: string,
-    lines: { id: string, account_number: string, debit_amount: number, credit_amount: number, line_description: string, currency: string, amount_in_currency: number, exchange_rate: number, tax_code: string, cost_center: string, project: string }[]
+    notes: string | null,
+    reverses_id: string | null,
+    reversed_by_id: string | null,
+    correction_of_id: string | null,
+    lines: { id: string, account_number: string, debit_amount: number, credit_amount: number, line_description: string | null, currency: string | null, amount_in_currency: number | null, exchange_rate: number | null, tax_code: string | null, cost_center: string | null, project: string | null }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -206,19 +213,19 @@ Response `200`:
     description: string,
     status: "draft" | "posted" | "cancelled",
     source_type: string,
-    source_id: string,
-    notes: string,
-    reverses_id: string,
-    reversed_by_id: string,
-    correction_of_id: string,
-    lines: { id: string, account_number: string, debit_amount: number, credit_amount: number, line_description: string, currency: string, amount_in_currency: number, exchange_rate: number, tax_code: string, cost_center: string, project: string, sort_order: number }[],
+    source_id: string | null,
+    notes: string | null,
+    reverses_id: string | null,
+    reversed_by_id: string | null,
+    correction_of_id: string | null,
+    lines: { id: string, account_number: string, debit_amount: number, credit_amount: number, line_description: string | null, currency: string | null, amount_in_currency: number | null, exchange_rate: number | null, tax_code: string | null, cost_center: string | null, project: string | null, sort_order: number }[],
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -279,6 +286,7 @@ Atomically advances the voucher series and flips the draft to posted. The vouche
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -287,7 +295,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -335,6 +343,7 @@ Per Bokföringslagen 5 kap 5 §, posted entries cannot be modified. This endpoin
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -379,7 +388,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -427,6 +436,7 @@ Creates a reversing journal entry that nullifies the original. The original rema
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -454,7 +464,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -500,6 +510,7 @@ Bulk-create endpoint mirroring /invoices/bulk-create and /suppliers/bulk-create.
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -544,7 +555,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -599,6 +610,7 @@ Records an explanation for one or more missing voucher numbers in a series. Requ
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -637,7 +649,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>

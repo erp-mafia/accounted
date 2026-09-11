@@ -13,7 +13,11 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { loadPeriodFromQuery, safeGenerate } from '@/lib/api/v1/report-period'
+import {
+  loadPeriodFromQuery,
+  safeGenerate,
+  ReportPeriodQueryShape,
+} from '@/lib/api/v1/report-period'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
 
 registerEndpoint({
@@ -42,6 +46,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: z.object({ ...ReportPeriodQueryShape }) },
   response: { success: dataEnvelope(z.unknown()) },
 })
 

@@ -20,6 +20,23 @@
  *   if (expand.has('customer')) { ... }
  */
 
+import { z } from 'zod'
+
+/**
+ * The `expand` query parameter as the endpoint registry documents it (spread
+ * into a route's `request.query` next to the parseExpand call that reads it).
+ */
+export function expandQueryShape(allowed: readonly string[]) {
+  return {
+    expand: z
+      .string()
+      .optional()
+      .describe(
+        `Comma-separated related records to embed: ${allowed.join(', ')}. An unknown key returns 400 VALIDATION_ERROR.`,
+      ),
+  }
+}
+
 export interface ParseExpandResult<K extends string> {
   ok: true
   expand: Set<K>

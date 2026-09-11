@@ -23,6 +23,7 @@ import {
   decodeDefaultCursor,
   encodeDefaultCursor,
   parsePaginationParams,
+  PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -63,6 +64,22 @@ const EmployeesListResponse = listEnvelope(EmployeeSummary)
 // value never leaves this projection.
 const EMPLOYEE_SUMMARY_COLUMNS =
   'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, salary_type, monthly_salary, hourly_rate, f_skatt_status, is_active, created_at'
+
+const ListFilters = z.object({
+  employment_type: EmploymentType.optional().describe('Only employees with this employment type.'),
+  search: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Case-insensitive match anywhere in the first or last name, 1-200 characters.'),
+  include_inactive: z
+    .enum(['true', 'false'])
+    .optional()
+    .describe('true also returns inactive employees. Default: active only.'),
+})
+
+const ListQuery = ListFilters.extend(PaginationQueryShape)
 
 registerEndpoint({
   operation: 'employees.list',
@@ -107,6 +124,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: EmployeesListResponse },
 })
 
@@ -117,12 +135,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
-    const FiltersSchema = z.object({
-      employment_type: EmploymentType.optional(),
-      search: z.string().min(1).max(200).optional(),
-      include_inactive: z.enum(['true', 'false']).optional(),
-    })
-    const filtersResult = FiltersSchema.safeParse({
+    const filtersResult = ListFilters.safeParse({
       employment_type: url.searchParams.get('employment_type') ?? undefined,
       search: url.searchParams.get('search') ?? undefined,
       include_inactive: url.searchParams.get('include_inactive') ?? undefined,

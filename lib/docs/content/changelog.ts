@@ -35,6 +35,20 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Chart of accounts (2026-09)
+
+- **Order** (2026-09-11): \`GET /accounts\` returns accounts in \`account_number\` order, the BAS sequence it always documented. It used to sort by the stored \`sort_order\`, which is \`0\` on every account seeded at company creation, so the seeded accounts came first and the rest followed.
+- **Class filter**: \`?class\` accepts any digit \`0\`-\`9\`, the first digit of \`account_number\`. Class \`9\` appears on internal accounts carried over from an imported chart and could not be filtered on before.
+- **Schema**: the response schema lists the \`account_type\` values (\`untaxed_reserves\` included), \`normal_balance\` and \`default_vat_treatment\`. No field was added or removed, and the API version date is unchanged.
+- **Journal entry dry runs**: \`POST /journal-entries?dry_run=true\` now resolves the lines' accounts against the chart and fails with \`400 ACCOUNTS_NOT_IN_CHART\` for a deactivated account or a non-BAS number the chart does not contain, the same verdict as the live call. A standard BAS account that is not in the chart yet still passes: the live call adds it.
+
+### OpenAPI spec and reference pages (2026-09)
+
+- **Query parameters in the spec**: \`/api/v1/openapi.json\` now lists every endpoint's query parameters (filters, pagination \`cursor\` / \`limit\`, report \`period_id\` and date ranges, \`expand\`) with type, requiredness and description, and \`dry_run\` on every dry-run-capable endpoint. Before, the spec carried path parameters only.
+- **Nullable fields**: nullable fields are published as \`type: [T, "null"]\` (OpenAPI 3.1). Before, they read as non-null, so a strict generated client could reject a valid response.
+- **Reference pages**: each endpoint section shows its query parameters, request body fields and response fields. New pages: Bank accounts (\`/cash-accounts\`, \`/bank-connections\`), Skatteverket (filed VAT declarations) and Health; company settings are on Companies, vacation-year close on Salary runs.
+- Documentation only: no request or response changed, and the API version date is unchanged.
+
 ### Reconciliation, account-keyed (2026-08)
 
 - **Accounts**: \`GET /reconciliation/accounts\` lists every account with an outside truth (bank accounts as \`bank:<cash_account_id>\`, the skattekonto as \`skattekonto\`) with status; \`GET .../accounts/{accountKey}\` is the bridge (outside balance, ledger, difference, unexplained, explanatory lines, counts, latest sign-off); \`GET .../accounts/{accountKey}/items\` the rows behind it, bucketed (proposed, unmatched_external, unmatched_ledger, matched, ignored, upcoming).
@@ -47,7 +61,7 @@ The first stable release of the public REST API. Six phases of development cover
 
 Backfilled 2026-08-26 from merged PRs. Every item is additive (new endpoints, optional fields, optional filters): the API version date stays \`${API_V1_VERSION}\`.
 
-- **Custom date ranges on reports** (#1909, 2026-08-25): \`GET /reports/income-statement\` and \`GET /reports/balance-sheet\` accept optional \`from_date\` / \`to_date\` (\`YYYY-MM-DD\`, both inside the fiscal period named by \`period_id\`, \`from_date <= to_date\`); the balance sheet also takes \`as_of\` as an alias for \`to_date\`. Omit both for the whole period, as before. These routes now reject unknown query parameters with \`400 VALIDATION_ERROR\` (\`unknown_params\` + \`allowed_params\` in details) instead of silently returning a full-period report.
+- **Custom date ranges on reports** (#1909, 2026-08-25): \`GET /reports/income-statement\` accepts optional \`from_date\` / \`to_date\` (\`YYYY-MM-DD\`, both inside the fiscal period named by \`period_id\`, \`from_date <= to_date\`). \`GET /reports/balance-sheet\` is a position, so it takes only \`to_date\` (or its alias \`as_of\`) and refuses \`from_date\`. Omit them for the whole period, as before. These routes now reject unknown query parameters with \`400 VALIDATION_ERROR\` (\`unknown_params\` + \`allowed_params\` in details) instead of silently returning a full-period report.
 - **Report PDFs** (#1909): \`GET /reports/balance-sheet/pdf\` and \`GET /reports/income-statement/pdf\` return \`application/pdf\`, byte-equivalent to the dashboard export, with the same \`period_id\` and range parameters. Scope \`reports:read\`.
 - **Company creation** (#1864, 2026-08-25): \`POST /api/v1/companies\` (scope \`companies:write\`) creates a company and sets it up in one call: owner membership, BAS chart of accounts for the company form, compliance settings, the first fiscal period and the automatic tax deadlines. A VAT-registered company must send \`moms_period\`. Not idempotent, and \`Idempotency-Key\` is not honoured on this company-less route: list \`GET /api/v1/companies\` before retrying.
 - **Filed VAT declarations** (#1773, 2026-08-21): \`GET /skatteverket/vat-declarations?period_type=&year=&period=\` (scope \`compliance:read\`) reads one period's momsdeklaration as Skatteverket has it on file: \`submitted\` (SKV inlämnat) and \`decided\` (SKV beslutat), each \`null\` when nothing is on file. Live read, requires an active Skatteverket connection on the company.

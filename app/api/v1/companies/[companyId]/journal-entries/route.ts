@@ -20,6 +20,7 @@ import {
   decodeDefaultCursor,
   encodeDefaultCursor,
   parsePaginationParams,
+  PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -29,7 +30,8 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { createDraftEntry, validateBalance } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 
 const JE_LINE_COLUMNS =
   'id, account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, cost_center, project, sort_order'
@@ -74,6 +76,29 @@ const JournalEntryDetail = JournalEntrySummary.extend({
   lines: z.array(JournalEntryLine),
 })
 
+const ListFilters = z.object({
+  fiscal_period_id: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('Only entries in this fiscal period (id from GET /fiscal-periods).'),
+  status: JournalEntryStatus.optional().describe(
+    'draft, posted or cancelled. Default: every status except cancelled.',
+  ),
+  date_from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe('YYYY-MM-DD. Entries whose entry_date (verifikationsdatum) is on or after this date.'),
+  date_to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe('YYYY-MM-DD. Entries whose entry_date is on or before this date.'),
+})
+
+const ListQuery = ListFilters.extend(PaginationQueryShape)
+
 registerEndpoint({
   operation: 'journal-entries.list',
   method: 'GET',
@@ -114,6 +139,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: JournalEntriesListResponse },
 })
 
@@ -124,13 +150,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
-    const FiltersSchema = z.object({
-      fiscal_period_id: z.string().uuid().optional(),
-      status: JournalEntryStatus.optional(),
-      date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-      date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    })
-    const fr = FiltersSchema.safeParse({
+    const fr = ListFilters.safeParse({
       fiscal_period_id: url.searchParams.get('fiscal_period_id') ?? undefined,
       status: url.searchParams.get('status') ?? undefined,
       date_from: url.searchParams.get('date_from') ?? undefined,
@@ -223,7 +243,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/journal-entries',
   summary: 'Create a draft journal entry (verifikation).',
   description:
-    'Creates a draft journal entry via the engine\'s createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run validates balance + account-chart membership + period date constraints without inserting any row.',
+    'Creates a draft journal entry via the engine\'s createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance, the period lock and the lines\' accounts against the chart without inserting any row, so it fails with ACCOUNTS_NOT_IN_CHART for the same accounts the live call would reject.',
   useWhen:
     'You\'re posting an arbitrary verifikation (manual journal entries, accrual reversals, period closing adjustments) outside the invoicing / supplier-invoice / transaction flows.',
   doNotUseFor:
@@ -232,7 +252,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'Lines must sum to zero (Σ debit = Σ credit). Engine rejects with JOURNAL_ENTRY_NOT_BALANCED on imbalance.',
     'entry_date must fall within fiscal_period_id\'s [period_start, period_end]; otherwise ENTRY_DATE_OUTSIDE_FISCAL_PERIOD.',
-    'All account_numbers must be active in the chart_of_accounts; otherwise ACCOUNTS_NOT_IN_CHART.',
+    'Every account_number must resolve in the company\'s chart of accounts: a standard BAS 2026 account that is not in the chart yet is added automatically, but a deactivated account, or a non-BAS number the chart does not contain, fails with ACCOUNTS_NOT_IN_CHART.',
     'voucher_series defaults to "A" if omitted. Must be a single uppercase letter.',
     'This creates a DRAFT only: call POST /{id}/commit to assign the voucher_number and post atomically.',
   ],
@@ -304,8 +324,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     if (ctx.dryRun) {
       // Dry-run preview: report the balanced lines + would-be header. No row
-      // is inserted, so the engine's per-line account-id resolution doesn't
-      // happen: chart-lookup failures will only be reported on live commit.
+      // is inserted, so the engine never resolves the lines' accounts; the
+      // read-only check below reaches the same verdict the live call would.
+      // A standard BAS account absent from the chart passes (the engine seeds
+      // it on the live call); a deactivated or unknown number does not.
+      const missingAccounts = await findUnresolvableAccounts(
+        ctx.supabase,
+        ctx.companyId!,
+        input.lines.map((l) => l.account_number),
+      )
+      if (missingAccounts.length > 0) {
+        return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), ctx.log, {
+          requestId: ctx.requestId,
+        })
+      }
       return dryRunPreview(
         {
           status: 'draft' as const,
