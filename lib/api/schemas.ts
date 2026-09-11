@@ -334,8 +334,11 @@ export const VoucherSequenceNextQuerySchema = z.object({
   date: isoDate.optional(),
 })
 
+// Mirrors chart_of_accounts_account_type_check. untaxed_reserves is the 21xx
+// group (obeskattade reserver); without it every 21xx account the Kontoplan
+// dialog derived was refused (#2514).
 export const AccountTypeSchema = z.enum([
-  'asset', 'equity', 'liability', 'revenue', 'expense',
+  'asset', 'equity', 'liability', 'untaxed_reserves', 'revenue', 'expense',
 ])
 
 export const NormalBalanceSchema = z.enum(['debit', 'credit'])

@@ -35,6 +35,13 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Chart of accounts (2026-09)
+
+- **Order** (2026-09-11): \`GET /accounts\` returns accounts in \`account_number\` order, the BAS sequence it always documented. It used to sort by the stored \`sort_order\`, which is \`0\` on every account seeded at company creation, so the seeded accounts came first and the rest followed.
+- **Class filter**: \`?class\` accepts any digit \`0\`-\`9\`, the first digit of \`account_number\`. Class \`9\` appears on internal accounts carried over from an imported chart and could not be filtered on before.
+- **Schema**: the response schema lists the \`account_type\` values (\`untaxed_reserves\` included), \`normal_balance\` and \`default_vat_treatment\`. No field was added or removed, and the API version date is unchanged.
+- **Journal entry dry runs**: \`POST /journal-entries?dry_run=true\` now resolves the lines' accounts against the chart and fails with \`400 ACCOUNTS_NOT_IN_CHART\` for a deactivated account or a non-BAS number the chart does not contain, the same verdict as the live call. A standard BAS account that is not in the chart yet still passes: the live call adds it.
+
 ### Reconciliation, account-keyed (2026-08)
 
 - **Accounts**: \`GET /reconciliation/accounts\` lists every account with an outside truth (bank accounts as \`bank:<cash_account_id>\`, the skattekonto as \`skattekonto\`) with status; \`GET .../accounts/{accountKey}\` is the bridge (outside balance, ledger, difference, unexplained, explanatory lines, counts, latest sign-off); \`GET .../accounts/{accountKey}/items\` the rows behind it, bucketed (proposed, unmatched_external, unmatched_ledger, matched, ignored, upcoming).
