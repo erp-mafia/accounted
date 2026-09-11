@@ -2,6 +2,8 @@ import { type SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { syncAccountTransactions } from '@/extensions/general/enable-banking/lib/sync'
+import { emitBankSyncFailed } from '@/extensions/general/enable-banking/lib/sync-failure-event'
+import { eventBus } from '@/lib/events/bus'
 import {
   runUnattendedReconciliationSweep,
   toSweepSummary,
@@ -396,6 +398,20 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       const isTransient = error instanceof AspspUnavailableError || error instanceof ConnectorSyncError
       const failureStatus = isSessionDead ? 'expired' : 'error'
       const failureMessage = isSessionDead ? REAUTH_REQUIRED_MESSAGE : SYNC_FAILED_MESSAGE
+
+      // One durable row per failed sync, whichever branch below answers
+      // (feedback seq 340107): the log lines here expire, error_message is
+      // the same sentence for every cause. status is the row's state after
+      // this handler: untouched for a transient failure.
+      await emitBankSyncFailed(eventBus.emit.bind(eventBus), {
+        connectionId: connection.id,
+        companyId: connection.company_id,
+        userId: connection.user_id,
+        bankName: connection.bank_name,
+        status: isTransient ? connection.status : failureStatus,
+        trigger: 'cron',
+        error,
+      })
 
       // An expired PSD2 consent is the normal end of a bank grant and the row
       // is flipped to 'expired' for the user to reconnect: a warning, not an
