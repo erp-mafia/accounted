@@ -47,10 +47,12 @@
 --    cash_accounts and imported underlag reference those rows, so they stay;
 --    the consent was the erased person's, so what made it usable is shredded
 --    and status becomes 'revoked' (the bank sync and the mail search read only
---    status = 'active'). Bank rows in an archived migration-reset source
---    company are skipped: block_migration_reset_source_mutation makes them
---    immutable and would abort the whole deletion, and the same trigger
---    already blocks every sync write to them.
+--    status = 'active'). That includes an archived migration-reset source
+--    company: block_migration_reset_source_mutation keeps its records
+--    unchanged and now lets exactly one change through on bank_connections,
+--    the revoke that shreds the consent (status 'revoked', credentials and
+--    accounts_data NULL, the rest of the row identical). A consent is not an
+--    accounting record, and an erased user must not keep one anywhere.
 -- 4. Retained: company-owned records, above all bookkeeping under BFL 7 kap.
 --    2 § and its processing history. They point at the tombstone id and carry
 --    no personal data of the erased user. tests/pg/account-erasure.pg.test.ts
@@ -69,6 +71,56 @@
 -- Clearing the email ends the re-signup block the tombstone used to give: the
 -- same address can now register a new, empty account. That is a product
 -- preference, not a retention basis; see DECISIONS.md 2026-09-10.
+
+-- Migration-reset source companies are retention containers (20260818084050):
+-- their rows stay unchanged. The one change let through is revoking a bank
+-- consent, which alters no accounting-shaped data and is what erasure needs
+-- (header, point 3). The IFs are nested because NEW.session_id only exists on
+-- bank_connections and AND gives no evaluation-order guarantee.
+CREATE OR REPLACE FUNCTION public.block_migration_reset_source_mutation()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_old_company_id uuid;
+  v_new_company_id uuid;
+  v_revoke_columns text[] := ARRAY['status', 'session_id', 'authorization_id', 'oauth_state', 'accounts_data', 'updated_at'];
+BEGIN
+  IF TG_OP IN ('UPDATE', 'DELETE') THEN
+    v_old_company_id := OLD.company_id;
+  END IF;
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    v_new_company_id := NEW.company_id;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.company_migration_resets
+    WHERE source_company_id IN (v_old_company_id, v_new_company_id)
+  ) THEN
+    IF TG_TABLE_NAME = 'bank_connections' AND TG_OP = 'UPDATE' THEN
+      IF NEW.status = 'revoked'
+         AND NEW.session_id IS NULL
+         AND NEW.authorization_id IS NULL
+         AND NEW.oauth_state IS NULL
+         AND NEW.accounts_data IS NULL
+         AND (to_jsonb(NEW) - v_revoke_columns) = (to_jsonb(OLD) - v_revoke_columns)
+      THEN
+        RETURN NEW;
+      END IF;
+    END IF;
+
+    RAISE EXCEPTION 'Archived migration reset source records are immutable';
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$function$;
 
 CREATE OR REPLACE FUNCTION public.erase_user_personal_data(target_user_id uuid)
  RETURNS void
@@ -128,11 +180,7 @@ BEGIN
           OR b.session_id IS NOT NULL
           OR b.authorization_id IS NOT NULL
           OR b.oauth_state IS NOT NULL
-          OR b.accounts_data IS NOT NULL)
-     AND NOT EXISTS (
-       SELECT 1 FROM public.company_migration_resets r
-        WHERE r.source_company_id = b.company_id
-     );
+          OR b.accounts_data IS NOT NULL);
 
   -- The mailbox may be the person's own: its address goes too. A per-row
   -- placeholder keeps the (company_id, provider, email_address) index unique.

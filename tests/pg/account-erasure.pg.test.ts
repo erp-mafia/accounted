@@ -236,9 +236,11 @@ describe('account erasure (pg)', () => {
     const { rows } = await getPool().query<{ def: string }>(
       `SELECT pg_get_functiondef('public.erase_user_personal_data(uuid)'::regprocedure) AS def`,
     )
-    const def = rows[0]!.def
+    // Strip comments first, then require a real DELETE or UPDATE on the table:
+    // a mention in a comment or a join must not count as erasing it.
+    const body = rows[0]!.def.replace(/--[^\n]*/g, '')
     const missing = [...new Set([...ERASED].map((fk) => fk.split('.')[0]!))].filter(
-      (table) => !new RegExp(`public\\.${table}\\b`).test(def),
+      (table) => !new RegExp(`\\b(DELETE\\s+FROM|UPDATE)\\s+public\\.${table}\\b`, 'i').test(body),
     )
     expect(missing).toEqual([])
   })
@@ -507,6 +509,60 @@ describe('account erasure (pg)', () => {
         [bankRows[0]!.id],
       )
       expect(again[0]!.status).toBe('revoked')
+    })
+  })
+  it('revokes a bank consent in a migration-reset source company and keeps the archive otherwise immutable', async () => {
+    const userId = await insertAuthUser()
+    const sourceCompanyId = await insertCompany({ createdBy: userId, name: 'Reset Source AB' })
+    const replacementCompanyId = await insertCompany({ createdBy: userId, name: 'Reset Replacement AB' })
+    await insertCompanyMember({ companyId: sourceCompanyId, userId, role: 'owner' })
+    await getPool().query(`UPDATE public.companies SET archived_at = now() WHERE id = $1`, [sourceCompanyId])
+
+    await withUserContext(userId, async (client) => {
+      await client.query('RESET ROLE')
+      // The connection goes in before the reset row: the archive refuses inserts too.
+      const { rows: bankRows } = await client.query<{ id: string }>(
+        `INSERT INTO public.bank_connections (user_id, company_id, provider, status, session_id, authorization_id, oauth_state, accounts_data)
+         VALUES ($1, $2, 'seb-se', 'active', 'session-1', 'authorization-1', 'state-1', '[{"iban": "SE0000000000000000000000"}]'::jsonb)
+         RETURNING id`,
+        [userId, sourceCompanyId],
+      )
+      const bankId = bankRows[0]!.id
+      await client.query(
+        `INSERT INTO public.company_migration_resets (source_company_id, replacement_company_id, reason, confirmation_snapshot, source_counts)
+         VALUES ($1, $2, 'pg-real erasure test of a reset source', '{}'::jsonb, '{}'::jsonb)`,
+        [sourceCompanyId, replacementCompanyId],
+      )
+
+      // A revoke that also changes anything else is still refused.
+      await client.query('SAVEPOINT archive_guard')
+      await expect(
+        client.query(
+          `UPDATE public.bank_connections
+              SET status = 'revoked', session_id = NULL, authorization_id = NULL, oauth_state = NULL,
+                  accounts_data = NULL, bank_name = 'changed'
+            WHERE id = $1`,
+          [bankId],
+        ),
+      ).rejects.toThrow(/immutable/i)
+      await client.query('ROLLBACK TO SAVEPOINT archive_guard')
+
+      await client.query('SET LOCAL ROLE authenticated')
+      await client.query('SELECT public.anonymize_user_account($1)', [userId])
+      await client.query('RESET ROLE')
+
+      const { rows: bank } = await client.query(
+        `SELECT status, session_id, authorization_id, oauth_state, accounts_data
+         FROM public.bank_connections WHERE id = $1`,
+        [bankId],
+      )
+      expect(bank[0]).toEqual({
+        status: 'revoked',
+        session_id: null,
+        authorization_id: null,
+        oauth_state: null,
+        accounts_data: null,
+      })
     })
   })
 })
