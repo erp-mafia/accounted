@@ -9,11 +9,9 @@ import { insertAuthUser, insertCompany, insertCompanyMember, insertFiscalPeriod 
  * Accounted never deletes auth.users: account deletion keeps the row as a
  * banned tombstone so BFL-retained bookkeeping keeps its foreign keys. No
  * `REFERENCES auth.users ON DELETE CASCADE` therefore ever fires, and personal
- * data is erased only where public.erase_user_personal_data says so. A prod
- * audit on 2026-09-10 found erased users' plaintext personnummer
- * (bankid_enrichment), live PSD2 consents, Skatteverket tokens, assistant
- * conversations, Google profiles and sessions left behind, all in tables that
- * were added after the RPC was written.
+ * data is erased only where public.erase_user_personal_data says so. Tables
+ * added after the RPC was first written were therefore not cleaned up until
+ * migration *_complete_account_erasure.sql.
  *
  * The first test is the ratchet that stops that recurring: every foreign key
  * from public to auth.users must be classified here, so a new user-keyed table

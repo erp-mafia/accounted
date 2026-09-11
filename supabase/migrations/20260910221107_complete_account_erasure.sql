@@ -6,26 +6,14 @@
 -- app/api/account/delete/route.ts -> anonymize_user_account plus a ~100-year
 -- ban, which keeps the auth row as a tombstone so BFL-retained bookkeeping
 -- keeps its foreign keys. No `REFERENCES auth.users ON DELETE CASCADE` in the
--- schema therefore ever fires, and erasure reached only the tables someone
--- remembered to list in the RPC. Migration 20260803090000 closed that gap for
--- WhatsApp. A prod audit on 2026-09-10 found the rest, across the 33
--- tombstones that existed then:
---   * bankid_enrichment (12 rows). For an enskild näringsidkare, TIC's
---     CompanyRoles carries the owner's personnummer as the first 12 digits of
---     companyRegistrationNumber, so 6 erased users still had a plaintext
---     personnummer on file after the encrypted copy in bankid_identities had
---     been deleted.
---   * bank_connections. PSD2 consents given with the erased person's BankID
---     kept syncing: 6 still active, last sync on the day of the audit.
---   * skatteverket_tokens (6), agent_conversations (22, plus messages),
---     agent_rate_counters (76), auth.flow_state (8), auth.one_time_tokens (2).
---   * auth.identities: 33 rows; the 4 Google identities kept the Google
---     profile (full_name, name, avatar_url, picture).
---   * auth.sessions (13) and their refresh tokens were never ended: the
---     route's auth.admin.signOut() takes a JWT, not a user id.
---   * auth.users.email was kept indefinitely to block re-signup, while the
---     published privacy policy promised account data is removed at most 30
---     days after the deletion request.
+-- schema therefore ever fires, and cleanup reaches only the tables the RPC
+-- names. Migration 20260803090000 added the WhatsApp channel to that list.
+-- This migration covers the rest: user-scoped tables added since (BankID
+-- company roles, bank and mail consents, Skatteverket tokens, assistant
+-- conversations, per-user settings and operational state), GoTrue's own rows
+-- (sessions, refresh tokens, identities, MFA factors) and the email address on
+-- the tombstone. The route's auth.admin.signOut() call could not end sessions
+-- (it expects a JWT, not a user id), so sessions are ended here as well.
 --
 -- WHAT
 -- ----

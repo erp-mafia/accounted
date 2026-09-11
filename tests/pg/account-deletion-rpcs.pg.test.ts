@@ -132,8 +132,8 @@ describe('account deletion RPCs (pg)', () => {
     // Migration 20260724150000: the route-level updateUserById "wipe" was a
     // silent no-op (GoTrue merges metadata maps), so the tombstone kept the
     // user's full name. The RPC now scrubs auth.users directly. Since
-    // *_complete_account_erasure.sql the email is cleared as well: keeping it
-    // indefinitely contradicted the published retention period.
+    // *_complete_account_erasure.sql the email is cleared as well, in line
+    // with the published retention period.
     const userId = await insertAuthUser()
     await getPool().query(
       `UPDATE auth.users

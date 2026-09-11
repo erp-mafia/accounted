@@ -101,8 +101,8 @@ export async function POST(request: Request) {
   // MERGES metadata maps, so an updateUserById(..., { user_metadata: {} })
   // wipe is a silent no-op (found on prod 2026-07-24), and
   // auth.admin.signOut() takes the user's JWT, not a user id, so the former
-  // signOut(user.id, 'global') call ended no session (13 were still live on
-  // prod tombstones on 2026-09-10). Both jobs live in the RPC.
+  // signOut(user.id, 'global') call could not end sessions. Both jobs live in
+  // the RPC.
   const service = createServiceClient()
   try {
     const { error: banError } = await service.auth.admin.updateUserById(user.id, {
