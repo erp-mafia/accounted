@@ -203,15 +203,18 @@ describe('list tools: PostgREST 1000-row cap (fetchAllRows paging)', () => {
     }
   }
 
-  it('gnubok_list_accounts returns all 1290 accounts across two pages, ordered on account_number', async () => {
+  it('gnubok_list_accounts returns all 1290 accounts across two pages, in account_number order', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     // Page 1: exactly PAGE_SIZE rows so fetchAllRows requests a second page.
-    // Account 1000 gets a null sort_order (custom account): the JS re-sort
-    // must put it last (Postgres nulls-last semantics).
+    // The pages arrive in account_number order, as Postgres returns them.
+    // 1510 and 2050 carry sort_order 0 like every seeded account; none of
+    // these may move: sort_order is not the BAS sequence.
     const page1 = Array.from({ length: 1000 }, (_, i) =>
-      makeChartRow(1000 + i, i === 0 ? null : 1000 + i),
+      makeChartRow(1000 + i, 1000 + i === 1510 ? 0 : 1000 + i),
     )
-    const page2 = Array.from({ length: 290 }, (_, i) => makeChartRow(2000 + i))
+    const page2 = Array.from({ length: 290 }, (_, i) =>
+      makeChartRow(2000 + i, 2000 + i === 2050 ? 0 : 2000 + i),
+    )
     enqueue({ data: page1 })
     enqueue({ data: page2 })
 
@@ -221,7 +224,6 @@ describe('list tools: PostgREST 1000-row cap (fetchAllRows paging)', () => {
     }
 
     expect(result.count).toBe(1290)
-    expect(result.accounts).toHaveLength(1290)
     // Paging invariant: ordered on the UNIQUE account_number, two ranges.
     expect(findCalls('chart_of_accounts', 'order')).toEqual([
       ['account_number', { ascending: true }],
@@ -231,12 +233,15 @@ describe('list tools: PostgREST 1000-row cap (fetchAllRows paging)', () => {
       [0, 999],
       [1000, 1999],
     ])
-    // Visible order: sort_order ascending with nulls last, as before the fix.
-    expect(result.accounts[0].account_number).toBe('1001')
-    expect(result.accounts[1288].account_number).toBe('2289')
-    expect(result.accounts[1289].account_number).toBe('1000')
-    // sort_order was fetched only for the re-sort and must not leak out.
-    expect('sort_order' in result.accounts[0]).toBe(false)
+    expect(result.accounts.map((a) => a.account_number)).toEqual(
+      [...page1, ...page2].map((a) => a.account_number),
+    )
+    expect(result.accounts[510].account_number).toBe('1510')
+    expect(result.accounts[1050].account_number).toBe('2050')
+    // sort_order is no longer selected at all.
+    for (const [columns] of findCalls('chart_of_accounts', 'select')) {
+      expect(String(columns)).not.toContain('sort_order')
+    }
   })
 
   it('gnubok_list_customers pages on id and re-sorts by name', async () => {
@@ -321,7 +326,9 @@ describe('list tools: PostgREST 1000-row cap (fetchAllRows paging)', () => {
 
   it('gnubok_list_accounts returns a single short page unchanged', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: [makeChartRow(1930), makeChartRow(1910)] })
+    // 1910 is seeded (sort_order 0) and 1930 user-added: Postgres returns
+    // them in account_number order and the tool must keep it.
+    enqueue({ data: [makeChartRow(1910, 0), makeChartRow(1930)] })
 
     const result = (await listAccounts.execute(
       { account_class: 1 },
@@ -339,7 +346,7 @@ describe('list tools: PostgREST 1000-row cap (fetchAllRows paging)', () => {
         ['account_class', 1],
       ]),
     )
-    // Re-sorted by sort_order: 1910 before 1930.
+    expect(findCalls('chart_of_accounts', 'order')).toEqual([['account_number', { ascending: true }]])
     expect(result.accounts.map((a) => a.account_number)).toEqual(['1910', '1930'])
   })
 })
