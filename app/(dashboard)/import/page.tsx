@@ -52,6 +52,12 @@ import type {
   AnnotatedArticleRow,
   DetectedArticleColumns,
 } from '@/lib/import/articles/types'
+import type {
+  EmployeeImportParseResult,
+  AnnotatedEmployeeRow,
+  DetectedEmployeeColumns,
+} from '@/lib/import/employees/types'
+import { EMPLOYEE_TEMPLATE_HEADERS } from '@/lib/import/employees/labels'
 
 import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
 import { applyMappingOverride } from '@/lib/import/account-mapper'
@@ -115,6 +121,7 @@ const RegisterUploadStep = dynamic(() => import('@/components/import/RegisterUpl
 const CustomersEditStep = dynamic(() => import('@/components/import/CustomersEditStep'), { loading: ImportStepLoading })
 const SuppliersEditStep = dynamic(() => import('@/components/import/SuppliersEditStep'), { loading: ImportStepLoading })
 const ArticlesEditStep = dynamic(() => import('@/components/import/ArticlesEditStep'), { loading: ImportStepLoading })
+const EmployeesEditStep = dynamic(() => import('@/components/import/EmployeesEditStep'), { loading: ImportStepLoading })
 const RegisterResultStep = dynamic(() => import('@/components/import/RegisterResultStep'), { loading: ImportStepLoading })
 const SkattekontoFileUploadStep = dynamic(() => import('@/components/import/SkattekontoFileUploadStep'), { loading: ImportStepLoading })
 const SkattekontoFilePreviewStep = dynamic(() => import('@/components/import/SkattekontoFilePreviewStep'), { loading: ImportStepLoading })
@@ -2235,17 +2242,259 @@ function ArticlesFlow() {
 // CSV/Excel Data Import Wizard, entity selector + sub-flow
 // ============================================================
 
-type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers' | 'articles'
+// ============================================================
+// Employees Flow (entity = "employees" inside CSVDataImportWizard)
+// ============================================================
+
+type EmployeeColumnKey = Exclude<keyof DetectedEmployeeColumns, 'confidence'>
+
+const EMPLOYEE_COLUMN_SPECS: RegisterColumnSpec<EmployeeColumnKey>[] = [
+  { key: 'personnummer_col', label: 'Personnummer', required: true },
+  { key: 'first_name_col', label: 'Förnamn', required: false },
+  { key: 'last_name_col', label: 'Efternamn', required: false },
+  { key: 'full_name_col', label: 'Namn (för- och efternamn i en kolumn)', required: false },
+  { key: 'employment_start_col', label: 'Anställningsdatum', required: false },
+  { key: 'employment_degree_col', label: 'Sysselsättningsgrad (%)', required: false },
+  { key: 'salary_type_col', label: 'Löneform', required: false },
+  { key: 'monthly_salary_col', label: 'Månadslön', required: false },
+  { key: 'hourly_rate_col', label: 'Timlön', required: false },
+  { key: 'tax_table_col', label: 'Skattetabell', required: false },
+  { key: 'tax_column_col', label: 'Skattekolumn', required: false },
+  { key: 'municipality_col', label: 'Kommun', required: false },
+  { key: 'clearing_number_col', label: 'Clearingnummer', required: false },
+  { key: 'bank_account_col', label: 'Kontonummer', required: false },
+  { key: 'email_col', label: 'E-post', required: false },
+  { key: 'phone_col', label: 'Telefon', required: false },
+  { key: 'vacation_days_col', label: 'Semesterdagar per år', required: false },
+  { key: 'hours_per_week_col', label: 'Timmar per vecka', required: false },
+  { key: 'ytd_gross_col', label: 'Ingående bruttolön', required: false },
+  { key: 'ytd_tax_col', label: 'Ingående skatt', required: false },
+  { key: 'ytd_net_col', label: 'Ingående nettolön', required: false },
+  { key: 'vacation_paid_days_remaining_col', label: 'Kvarvarande semesterdagar', required: false },
+  { key: 'cutover_date_col', label: 'Brytdatum', required: false },
+]
+
+/** Header-only CSV (UTF-8 BOM, semicolons) that the detector maps 1:1. */
+function downloadEmployeeTemplate() {
+  const csv = '﻿' + EMPLOYEE_TEMPLATE_HEADERS.join(';') + '\r\n'
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'anstallda-mall.csv'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+function EmployeesFlow() {
+  const { toast } = useToast()
+  const t = useTranslations('import_employees')
+
+  const [step, setStep] = useState<RegisterStep>('upload')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [parseResult, setParseResult] = useState<EmployeeImportParseResult | null>(null)
+  const [executeResult, setExecuteResult] = useState<RegisterResult | null>(null)
+
+  const needsMapping = parseResult && parseResult.detected_columns.confidence < 0.8
+  const steps: RegisterStep[] = needsMapping
+    ? ['upload', 'column_mapping', 'edit', 'result']
+    : ['upload', 'edit', 'result']
+  const currentStepIndex = steps.indexOf(step)
+  const progress = ((currentStepIndex + 1) / steps.length) * 100
+
+  const parseFile = useCallback(async (selectedFile: File, overrides?: DetectedEmployeeColumns) => {
+    const formData = new FormData()
+    formData.append('file', selectedFile)
+    if (overrides) formData.append('column_overrides', JSON.stringify(overrides))
+    const res = await fetch('/api/import/employees/parse', { method: 'POST', body: formData })
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error(data.error?.message_sv || getErrorMessage(data.error) || data.error || t('error_parse'))
+    }
+    return data.data as EmployeeImportParseResult
+  }, [t])
+
+  const handleFileSelect = useCallback(async (selectedFile: File) => {
+    setError(null)
+    setIsLoading(true)
+    setFile(selectedFile)
+    try {
+      const result = await parseFile(selectedFile)
+      setParseResult(result)
+      if (result.rows.length === 0) {
+        setError(t('error_no_rows'))
+        return
+      }
+      toast({
+        title: t('toast_parsed_title'),
+        description: t('toast_parsed_description', { count: result.rows.length, duplicates: result.duplicate_count }),
+      })
+      setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
+    } catch (err) {
+      setError(err instanceof Error ? getErrorMessage(err) : t('error_parse'))
+    } finally {
+      setIsLoading(false)
+    }
+  }, [parseFile, t, toast])
+
+  const handleColumnMappingConfirm = useCallback(async (
+    mapping: Record<EmployeeColumnKey, number | null>,
+  ) => {
+    if (!file) return
+    setIsLoading(true)
+    setError(null)
+    try {
+      const overrides: DetectedEmployeeColumns = { ...mapping, confidence: 1 }
+      const result = await parseFile(file, overrides)
+      setParseResult(result)
+      setStep('edit')
+    } catch (err) {
+      setError(err instanceof Error ? getErrorMessage(err) : t('error_parse'))
+    } finally {
+      setIsLoading(false)
+    }
+  }, [file, parseFile, t])
+
+  const handleExecute = useCallback(async (rows: AnnotatedEmployeeRow[]) => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/import/employees/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rows: rows.map((r) => ({
+            row_index: r.row_index,
+            employee: r.employee,
+            opening_balances: r.opening_balances,
+          })),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error?.message_sv || getErrorMessage(data.error) || t('error_execute'))
+        return
+      }
+      const r = data.data as RegisterResult
+      setExecuteResult(r)
+      setStep('result')
+      toast({
+        title: r.success ? t('toast_done_title') : t('toast_done_partial_title'),
+        description: t('toast_done_description', { created: r.created, skipped: r.skipped, failed: r.failed }),
+        variant: r.success ? 'default' : 'destructive',
+      })
+    } catch (err) {
+      setError(err instanceof Error ? getErrorMessage(err) : t('error_execute'))
+    } finally {
+      setIsLoading(false)
+    }
+  }, [t, toast])
+
+  const handleNewImport = () => {
+    setStep('upload')
+    setFile(null)
+    setParseResult(null)
+    setExecuteResult(null)
+    setError(null)
+  }
+
+  const initialMapping = parseResult
+    ? columnsToMapping<EmployeeColumnKey>(parseResult.detected_columns as unknown as { [key: string]: unknown }, EMPLOYEE_COLUMN_SPECS)
+    : null
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardContent className="pt-6">
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="sm:hidden text-primary font-medium">
+                Steg {currentStepIndex + 1}/{steps.length}: {REGISTER_STEP_LABELS[step]}
+              </span>
+              {steps.map((s, i) => (
+                <span
+                  key={s}
+                  className={cn(
+                    'hidden sm:inline',
+                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
+                  )}
+                >
+                  {REGISTER_STEP_LABELS[s]}
+                </span>
+              ))}
+            </div>
+            <Progress value={progress} className="h-2" />
+          </div>
+        </CardContent>
+      </Card>
+
+      {step === 'upload' && (
+        <>
+          <RegisterUploadStep
+            entity="employees"
+            onFileSelect={handleFileSelect}
+            isLoading={isLoading}
+            error={error}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-4 px-1 text-sm text-muted-foreground">
+            <span>{t('template_hint')}</span>
+            <Button variant="outline" size="sm" onClick={downloadEmployeeTemplate}>
+              <Download className="mr-2 h-4 w-4" />
+              {t('template_button')}
+            </Button>
+          </div>
+        </>
+      )}
+
+      {step === 'column_mapping' && parseResult && initialMapping && (
+        <RegisterColumnMappingStep<EmployeeColumnKey>
+          headers={parseResult.headers}
+          previewRows={parseResult.preview_rows}
+          specs={EMPLOYEE_COLUMN_SPECS}
+          initial={initialMapping}
+          onConfirm={handleColumnMappingConfirm}
+          onBack={() => setStep('upload')}
+        />
+      )}
+
+      {step === 'edit' && parseResult && (
+        <EmployeesEditStep
+          rows={parseResult.rows}
+          notices={parseResult.notices ?? legacyNotices(parseResult.warnings)}
+          onExecute={handleExecute}
+          onBack={() => setStep(needsMapping ? 'column_mapping' : 'upload')}
+          isLoading={isLoading}
+          error={error}
+        />
+      )}
+
+      {step === 'result' && executeResult && (
+        <RegisterResultStep
+          entity="employees"
+          result={executeResult}
+          onNewImport={handleNewImport}
+        />
+      )}
+    </div>
+  )
+}
+
+type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers' | 'articles' | 'employees'
 
 const ENTITY_OPTIONS: { value: CSVDataEntity; label: string }[] = [
   { value: 'opening_balance', label: 'Ingående balanser' },
   { value: 'customers', label: 'Kunder' },
   { value: 'suppliers', label: 'Leverantörer' },
   { value: 'articles', label: 'Artiklar' },
+  { value: 'employees', label: 'Anställda' },
 ]
 
-function CSVDataImportWizard() {
-  const [entity, setEntity] = useState<CSVDataEntity | null>('opening_balance')
+function CSVDataImportWizard({ initialEntity }: { initialEntity?: CSVDataEntity }) {
+  const [entity, setEntity] = useState<CSVDataEntity | null>(initialEntity ?? 'opening_balance')
 
   return (
     <div className="space-y-6">
@@ -2296,6 +2545,7 @@ function CSVDataImportWizard() {
       {entity === 'customers' && <CustomersFlow key="cust-flow" />}
       {entity === 'suppliers' && <SuppliersFlow key="supp-flow" />}
       {entity === 'articles' && <ArticlesFlow key="art-flow" />}
+      {entity === 'employees' && <EmployeesFlow key="emp-flow" />}
     </div>
   )
 }
@@ -2335,6 +2585,8 @@ export default function ImportPage() {
   const { isSandbox, role } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
   const [initialProvider, setInitialProvider] = useState<string | null>(null)
+  // Deep link into one register of the CSV wizard (e.g. Anställda > Importera).
+  const [csvEntity, setCsvEntity] = useState<CSVDataEntity | null>(null)
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
@@ -2380,6 +2632,10 @@ export default function ImportPage() {
         modeParam === 'migration' && !isSandbox ? searchParams.get('provider') : null
       )
     }
+    const entityParam = searchParams.get('entity')
+    setCsvEntity(
+      ENTITY_OPTIONS.some((o) => o.value === entityParam) ? (entityParam as CSVDataEntity) : null,
+    )
     const viewParam = searchParams.get('view')
     if (viewParam === 'export' || viewParam === 'import') {
       setView(viewParam)
@@ -2790,7 +3046,7 @@ export default function ImportPage() {
           exactly the manual path the SIE preview offers on an IB imbalance. */}
       {mode === 'sie' && <SIEImportWizard onOpenManualOpeningBalances={() => setMode('csv_data')} />}
       {mode === 'underlag' && <UnderlagImportWizard />}
-      {mode === 'csv_data' && <CSVDataImportWizard />}
+      {mode === 'csv_data' && <CSVDataImportWizard initialEntity={csvEntity ?? undefined} />}
       {mode === 'migration' && (
         <MigrationWizard userId={userId} initialProvider={initialProvider ?? undefined} />
       )}

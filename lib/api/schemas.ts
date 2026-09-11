@@ -3015,6 +3015,25 @@ export const CustomerImportExecuteSchema = z.object({
   update_duplicates: z.boolean(),
 })
 
+/**
+ * Employee register import. The body is deliberately loose: every row is
+ * re-validated inside the route with CreateEmployeeSchema and
+ * OpeningBalancesFieldsSchema so one bad row fails on its own line instead
+ * of rejecting the whole file with a 400.
+ */
+export const EmployeeImportExecuteSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        row_index: z.number().int(),
+        employee: z.record(z.string(), z.unknown()),
+        opening_balances: z.record(z.string(), z.unknown()).nullable().optional(),
+      }),
+    )
+    .min(1, 'At least one row is required')
+    .max(500),
+})
+
 const ImportedSupplierRowSchema = z.object({
   row_index: z.number().int(),
   name: z.string().min(1),

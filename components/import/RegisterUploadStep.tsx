@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Upload, FileSpreadsheet, AlertCircle, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export type RegisterEntity = 'customers' | 'suppliers' | 'articles'
+export type RegisterEntity = 'customers' | 'suppliers' | 'articles' | 'employees'
 
 interface RegisterUploadStepProps {
   entity: RegisterEntity
@@ -29,6 +29,13 @@ const COPY: Record<RegisterEntity, { title: string; description: string; hint: s
       'Ladda upp en Excel- eller CSV-fil med ditt leverantörsregister. Filen bör innehålla minst en kolumn med leverantörsnamn.',
     hint:
       'Vanliga kolumner identifieras automatiskt: t.ex. "Namn", "Orgnr", "Bankgiro", "Plusgiro", "IBAN", "E-post".',
+  },
+  employees: {
+    title: 'Ladda upp fil med anställda',
+    description:
+      'Ladda upp en Excel- eller CSV-fil med ditt personalregister, till exempel en export från ditt gamla lönesystem. Filen behöver minst namn, personnummer, anställningsdatum, lön och skattetabell (eller kommun).',
+    hint:
+      'Vanliga kolumner identifieras automatiskt: t.ex. "Förnamn", "Efternamn", "Personnummer", "Anställningsdatum", "Månadslön", "Timlön", "Skattetabell", "Kommun", "Clearingnummer", "Kontonummer". Ingående saldon ("Ingående bruttolön", "Ingående skatt", "Kvarvarande semesterdagar", "Brytdatum") tas med om de finns.',
   },
   articles: {
     title: 'Ladda upp fil med artiklar',
