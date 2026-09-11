@@ -147,6 +147,54 @@ describe('tic-client', () => {
       expect(calledUrl).toContain('q%3D5595719864')
     })
 
+    // Lens holds one document per registration of the same person (…0001,
+    // …0002) and ranks them by text relevance. Prefer the active one; among
+    // equals, the most recently registered.
+    it('prefers the active registration when a personnummer matches several enskilda firmor', async () => {
+      const closed2012 = {
+        companyId: 1,
+        registrationNumber: '1982083002390002',
+        names: [{ nameOrIdentifier: 'Old Firm', companyNamingType: 'legalName' }],
+        legalEntityType: 'Enskild näringsidkare',
+        registrationDate: 1239667200,
+        isCeased: true,
+      }
+      const current = {
+        companyId: 2,
+        registrationNumber: '1982083002390003',
+        names: [{ nameOrIdentifier: 'Current Firm', companyNamingType: 'legalName' }],
+        legalEntityType: 'Enskild näringsidkare',
+        registrationDate: 1770000000,
+        isCeased: false,
+      }
+      vi.mocked(fetch).mockResolvedValue(
+        new Response(
+          JSON.stringify({ found: 2, hits: [{ document: closed2012 }, { document: current }], facet_counts: [] })
+        )
+      )
+
+      const result = await searchCompanyByOrgNumber('820830-0239')
+      expect(result).toEqual(current)
+    })
+
+    it('falls back to the most recent registration when every match is ceased', async () => {
+      const older = {
+        companyId: 1,
+        registrationNumber: '1982083002390001',
+        names: [{ nameOrIdentifier: 'First Firm', companyNamingType: 'legalName' }],
+        legalEntityType: 'Enskild näringsidkare',
+        registrationDate: 986774400,
+        isCeased: true,
+      }
+      const newer = { ...older, companyId: 2, registrationNumber: '1982083002390002', registrationDate: 1239667200 }
+      vi.mocked(fetch).mockResolvedValue(
+        new Response(JSON.stringify({ found: 2, hits: [{ document: newer }, { document: older }], facet_counts: [] }))
+      )
+
+      const result = await searchCompanyByOrgNumber('820830-0239')
+      expect(result?.registrationNumber).toBe('1982083002390002')
+    })
+
     it('returns null when no hits', async () => {
       vi.mocked(fetch).mockResolvedValue(
         new Response(JSON.stringify({ found: 0, hits: [], facet_counts: [] }))
