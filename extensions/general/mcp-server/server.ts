@@ -15001,26 +15001,58 @@ export const tools: McpTool[] = [
     name: 'gnubok_get_salary_run',
     keywords: ['lön', 'lönekörning', 'löner'],
     title: 'Get Salary Run',
-    description: 'Get salary run with status, totals, per-employee breakdown (gross, tax, net, avgifter, vacation accrual) and step-by-step calculation breakdown.',
+    description: 'Get a salary run by id, or by period_year + period_month: status, totals, per-employee gross/tax/net/avgifter/vacation accrual and the calculation breakdown.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        salary_run_id: { type: 'string', description: 'UUID of the salary run' },
+        salary_run_id: { type: 'string' },
+        period_year: { type: 'number' },
+        period_month: { type: 'number', description: '1-12' },
       },
-      required: ['salary_run_id'],
     },
     outputSchema: { type: 'object' },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
-      const id = args.salary_run_id as string
-      const { data: run, error } = await supabase
-        .from('salary_runs')
-        .select('*')
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .single()
-      if (error || !run) throw new Error('Salary run not found')
+      const byId = typeof args.salary_run_id === 'string' && args.salary_run_id.length > 0
+      const byPeriod = args.period_year !== undefined || args.period_month !== undefined
+      if (byId === byPeriod) {
+        throw new Error('Pass either salary_run_id or period_year + period_month')
+      }
+      let run: Record<string, unknown>
+      if (byId) {
+        const { data, error } = await supabase
+          .from('salary_runs')
+          .select('*')
+          .eq('id', args.salary_run_id as string)
+          .eq('company_id', companyId)
+          .single()
+        if (error || !data) throw new Error('Salary run not found')
+        run = data as Record<string, unknown>
+      } else {
+        const periodYear = args.period_year as number
+        const periodMonth = args.period_month as number
+        if (!Number.isInteger(periodYear) || !Number.isInteger(periodMonth) || periodMonth < 1 || periodMonth > 12) {
+          throw new Error('period_year must be an integer year and period_month 1-12')
+        }
+        // The partial unique index (status != corrected) leaves at most one
+        // live run per period; a corrected original coexists with its
+        // correction, so exclude it explicitly.
+        const { data, error } = await supabase
+          .from('salary_runs')
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('period_year', periodYear)
+          .eq('period_month', periodMonth)
+          .neq('status', 'corrected')
+          .maybeSingle()
+        if (error) throw dbError(error)
+        if (!data) {
+          throw new Error(`No salary run for ${periodYear}-${String(periodMonth).padStart(2, '0')}`)
+        }
+        run = data as Record<string, unknown>
+      }
+      const id = run.id as string
       const { data: employees } = await supabase
         .from('salary_run_employees')
         // The embed deliberately excludes personnummer_last4: the mask plus
@@ -15980,7 +16012,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_set_run_salary',
     keywords: ['lön', 'lönekörning', 'månadslön', 'ändra lön'],
     title: 'Set This Month\'s Salary',
-    description: 'Stage this run\'s base salary for one employee in a DRAFT salary run (per-run value; the employee\'s fixed salary is untouched). For variable pay, e.g. owner salary; 0 = nollkörning. Commit via gnubok_approve_pending_operation, then gnubok_calculate_salary_run.',
+    description: 'Stage this run\'s pay for one employee in a DRAFT run: monthly_salary (monthly-paid; 0 = nollkörning) or hours_worked (hourly-paid, no calendar days in the period). Employee record untouched. Commit via gnubok_approve_pending_operation, then gnubok_calculate_salary_run.',
     // Default catalog: gnubok_call_tool only bridges READ tools, so a
     // search-only WRITE is uncallable on Claude.ai (the update_customer
     // lesson, #1876/#1986), and update_payslip_line's description plus the
@@ -15990,34 +16022,45 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        salary_run_id: { type: 'string', description: 'UUID of the salary run (must be draft)' },
-        employee_id: { type: 'string', description: 'UUID of the employee on the run' },
-        monthly_salary: { type: 'number', description: 'This month\'s gross base salary (SEK, 0 to 10 000 000; 0 books a nollkörning). Monthly employees only: hourly gross derives from hours worked.' },
+        salary_run_id: { type: 'string', description: 'Draft run' },
+        employee_id: { type: 'string' },
+        monthly_salary: { type: 'number', description: 'Gross base salary this month, SEK 0 to 10 000 000' },
+        hours_worked: { type: 'number', description: 'Hours this month, 0 to 744' },
       },
-      required: ['salary_run_id', 'employee_id', 'monthly_salary'],
+      required: ['salary_run_id', 'employee_id'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
-      const { salary_run_id, employee_id, monthly_salary } = args as {
-        salary_run_id: string; employee_id: string; monthly_salary: number
+      const { salary_run_id, employee_id, monthly_salary, hours_worked } = args as {
+        salary_run_id: string; employee_id: string; monthly_salary?: number; hours_worked?: number
       }
       if (!salary_run_id || !employee_id) {
         throw new Error('salary_run_id and employee_id are required')
       }
-      if (typeof monthly_salary !== 'number' || !Number.isFinite(monthly_salary) || monthly_salary < 0) {
+      const hasMonthly = monthly_salary !== undefined
+      const hasHours = hours_worked !== undefined
+      if (hasMonthly === hasHours) {
+        throw new Error('Pass exactly one of monthly_salary or hours_worked')
+      }
+      if (hasMonthly && (typeof monthly_salary !== 'number' || !Number.isFinite(monthly_salary) || monthly_salary < 0)) {
         throw new Error('monthly_salary must be a number >= 0')
       }
+      if (hasHours && (typeof hours_worked !== 'number' || !Number.isFinite(hours_worked) || hours_worked < 0)) {
+        throw new Error('hours_worked must be a number >= 0')
+      }
 
-      // Preflight via the shared service in dry-run: verifies draft status and
-      // that the employee is on the run, and yields old/new salary for the
-      // preview. No writes here: the commit path re-runs the service for real.
+      // Preflight via the shared service in dry-run: verifies draft status,
+      // that the employee is on the run and is paid the way the field
+      // implies (hours only when no calendar days exist for the period), and
+      // yields old/new values for the preview. No writes here: the commit
+      // path re-runs the service for real.
       const { setRunEmployeeSalary } = await import('@/lib/salary/run-employees')
       const preflight = await setRunEmployeeSalary(supabase, {
         companyId,
         salaryRunId: salary_run_id,
         employeeId: employee_id,
-        monthlySalary: monthly_salary,
+        ...(hasMonthly ? { monthlySalary: monthly_salary } : { hoursWorked: hours_worked }),
         dryRun: true,
       })
       if (!preflight.ok) {
@@ -16040,22 +16083,35 @@ export const tools: McpTool[] = [
       ])
       const employeeName = emp ? `${emp.first_name} ${emp.last_name}` : employee_id
 
+      const title = hasHours
+        ? `Sätt månadens timmar: ${employeeName} ${preflight.data.previous_hours_worked ?? 0} h → ${preflight.data.hours_worked ?? 0} h`
+        : `Sätt månadens lön: ${employeeName} ${preflight.data.previous_monthly_salary} kr → ${preflight.data.monthly_salary} kr`
       return stagePendingOperation(
         supabase, companyId, userId, 'set_run_salary',
-        `Sätt månadens lön: ${employeeName} ${preflight.data.previous_monthly_salary} kr → ${preflight.data.monthly_salary} kr`,
-        { salary_run_id, employee_id, monthly_salary: preflight.data.monthly_salary },
+        title,
+        hasHours
+          ? { salary_run_id, employee_id, hours_worked: preflight.data.hours_worked }
+          : { salary_run_id, employee_id, monthly_salary: preflight.data.monthly_salary },
         {
           salary_run_id,
           salary_run_employee_id: preflight.data.salary_run_employee_id,
           employee_id,
           employee_name: employeeName,
-          previous_monthly_salary: preflight.data.previous_monthly_salary,
-          new_monthly_salary: preflight.data.monthly_salary,
           salary_type: preflight.data.salary_type,
+          ...(hasHours
+            ? {
+                previous_hours_worked: preflight.data.previous_hours_worked,
+                new_hours_worked: preflight.data.hours_worked,
+                hourly_rate: preflight.data.hourly_rate,
+              }
+            : {
+                previous_monthly_salary: preflight.data.previous_monthly_salary,
+                new_monthly_salary: preflight.data.monthly_salary,
+              }),
         },
         actor,
         {
-          description: 'After approval, recalculate the run so gross, tax and totals reflect this month\'s salary.',
+          description: 'After approval, recalculate the run so gross, tax and totals reflect this month\'s pay.',
           tool: 'gnubok_calculate_salary_run',
         },
         run?.payment_date ? { dateForPeriodCheck: run.payment_date as string } : {},

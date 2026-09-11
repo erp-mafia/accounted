@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createSalaryRunWithEmployees } from '../create-run'
+import { createSalaryRunWithEmployees, SalaryRunExistsError } from '../create-run'
 
 vi.mock('../account-mapping', () => ({
   getLineItemAccount: vi.fn(() => '7210'),
@@ -139,5 +139,69 @@ describe('createSalaryRunWithEmployees', () => {
     ).rejects.toThrow('line item boom')
 
     expect(deletes).toContain('salary_runs')
+  })
+})
+
+describe('duplicate period (23505)', () => {
+  /** Insert trips the partial unique index; the re-select finds the winner. */
+  function duplicateDb(existing: { id: string; status: string } | null) {
+    const filters: unknown[][] = []
+    const chain: Record<string, unknown> = {}
+    for (const m of ['eq', 'neq', 'limit']) {
+      chain[m] = (...args: unknown[]) => {
+        filters.push([m, ...args])
+        return chain
+      }
+    }
+    chain.maybeSingle = async () => ({ data: existing, error: null })
+    const client = {
+      from: (table: string) => ({
+        insert: () => ({
+          select: () => ({
+            single: async () => ({
+              data: null,
+              error: { code: '23505', message: `duplicate key value violates unique constraint on ${table}` },
+            }),
+          }),
+        }),
+        select: () => chain,
+        delete: () => ({ eq: () => ({ eq: async () => ({ data: null, error: null }) }) }),
+      }),
+    }
+    return { client: client as unknown as SupabaseClient, filters }
+  }
+
+  it('throws SalaryRunExistsError naming the existing run and its status', async () => {
+    const { client, filters } = duplicateDb({ id: 'run-existing', status: 'review' })
+    const err = await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 6,
+      paymentDate: '2026-06-25',
+    }).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(SalaryRunExistsError)
+    const typed = err as SalaryRunExistsError
+    expect(typed.existingId).toBe('run-existing')
+    expect(typed.existingStatus).toBe('review')
+    expect(typed.message).toBe('Salary run already exists for this period (id run-existing, status review)')
+    // Corrected originals coexist with their correction: the lookup skips them.
+    expect(filters).toEqual([
+      ['eq', 'company_id', 'company-1'],
+      ['eq', 'period_year', 2026],
+      ['eq', 'period_month', 6],
+      ['neq', 'status', 'corrected'],
+      ['limit', 1],
+    ])
+  })
+
+  it('keeps the bare message when the winner cannot be read back', async () => {
+    const { client } = duplicateDb(null)
+    await expect(
+      createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+        periodYear: 2026,
+        periodMonth: 6,
+        paymentDate: '2026-06-25',
+      }),
+    ).rejects.toThrow('Salary run already exists for this period')
   })
 })

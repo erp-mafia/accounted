@@ -3372,6 +3372,16 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Lönekörningen måste vara ett utkast för att ändra anställda eller månadens lön.',
     message_en: 'The salary run must be a draft to change its employees or this month\'s salary.',
   },
+  SALARY_RUN_SALARY_FIELD_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Månadslön kan bara sättas för månadsavlönade och arbetade timmar bara för timavlönade.',
+    message_en: 'monthly_salary applies to monthly-paid employees and hours_worked to hourly-paid employees only.',
+  },
+  SALARY_RUN_HOURS_FROM_CALENDAR: {
+    httpStatus: 409,
+    message_sv: 'Timmarna för perioden hämtas från kalendern: ändra de arbetade dagarna i stället.',
+    message_en: 'Hours for this period come from the calendar of worked days: change those days instead.',
+  },
   ABSENCE_RANGE_TOO_LARGE: {
     httpStatus: 400,
     message_sv: 'Frånvarointervallet är för stort. Max 92 dagar per anrop.',

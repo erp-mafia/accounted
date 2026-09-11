@@ -20,6 +20,9 @@ export type RunEmployeeResult<T> =
   | { ok: true; data: T }
   | { ok: false; code: string; details?: Record<string, unknown> }
 
+/** Upper bound for hours in one pay month: 31 days of 24 hours. */
+export const HOURS_WORKED_MAX = 744
+
 export interface SalaryRunEmployeeRow {
   id: string
   salary_run_id: string
@@ -39,10 +42,10 @@ async function assertRunDraftForRoster(
   supabase: SupabaseClient,
   companyId: string,
   salaryRunId: string,
-): Promise<RunEmployeeResult<{ id: string; status: string }>> {
+): Promise<RunEmployeeResult<{ id: string; status: string; period_year: number; period_month: number }>> {
   const { data: run, error } = await supabase
     .from('salary_runs')
-    .select('id, status')
+    .select('id, status, period_year, period_month')
     .eq('id', salaryRunId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -60,7 +63,7 @@ async function assertRunDraftForRoster(
       details: { current_status: (run as { status: string }).status },
     }
   }
-  return { ok: true, data: run as { id: string; status: string } }
+  return { ok: true, data: run as { id: string; status: string; period_year: number; period_month: number } }
 }
 
 export async function addEmployeeToRun(
@@ -192,6 +195,11 @@ export interface SetRunSalaryData {
   employment_degree: number
   previous_monthly_salary: number
   monthly_salary: number
+  /** Hourly employees: the per-run hours before and after this change. */
+  previous_hours_worked: number | null
+  hours_worked: number | null
+  /** Hourly employees: the rate the Timlön display line is priced at. */
+  hourly_rate: number | null
 }
 
 /**
@@ -207,18 +215,32 @@ export async function setRunEmployeeSalary(
     companyId: string
     salaryRunId: string
     employeeId: string
-    monthlySalary: number
+    /** Monthly-paid employees: this run's gross base salary. */
+    monthlySalary?: number
+    /** Hourly-paid employees: this run's hours (only when the period has no
+     * calendar days, which the calculation would otherwise derive from). */
+    hoursWorked?: number
     /** Validate + resolve only; return the would-be change without writing. */
     dryRun?: boolean
   },
 ): Promise<RunEmployeeResult<SetRunSalaryData>> {
-  // Single enforcement point for the salary bound: the cookie route's Zod
-  // schema, the v1 body schema and the MCP tool all funnel through here. The
+  const hasMonthly = args.monthlySalary !== undefined
+  const hasHours = args.hoursWorked !== undefined
+  if (hasMonthly === hasHours) {
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { message: 'Pass exactly one of monthly_salary or hours_worked' },
+    }
+  }
+  // Single enforcement point for the bounds: the cookie route's Zod schema,
+  // the v1 body schema and the MCP tool all funnel through here. The salary
   // cap also keeps roundOre far away from Infinity (1e307 * 100 overflows).
   if (
-    !Number.isFinite(args.monthlySalary) ||
-    args.monthlySalary < 0 ||
-    args.monthlySalary > SALARY_OVERRIDE_MAX
+    hasMonthly &&
+    (!Number.isFinite(args.monthlySalary) ||
+      (args.monthlySalary as number) < 0 ||
+      (args.monthlySalary as number) > SALARY_OVERRIDE_MAX)
   ) {
     return {
       ok: false,
@@ -226,14 +248,24 @@ export async function setRunEmployeeSalary(
       details: { field: 'monthly_salary', max: SALARY_OVERRIDE_MAX },
     }
   }
+  if (
+    hasHours &&
+    (!Number.isFinite(args.hoursWorked) ||
+      (args.hoursWorked as number) < 0 ||
+      (args.hoursWorked as number) > HOURS_WORKED_MAX)
+  ) {
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { field: 'hours_worked', max: HOURS_WORKED_MAX },
+    }
+  }
   const gate = await assertRunDraftForRoster(supabase, args.companyId, args.salaryRunId)
   if (!gate.ok) return gate
 
-  const monthly = roundOre(args.monthlySalary)
-
   const { data: sre, error: sreError } = await supabase
     .from('salary_run_employees')
-    .select('id, employee_id, salary_type, employment_degree, monthly_salary')
+    .select('id, employee_id, salary_type, employment_degree, monthly_salary, hours_worked')
     .eq('salary_run_id', args.salaryRunId)
     .eq('employee_id', args.employeeId)
     .eq('company_id', args.companyId)
@@ -256,6 +288,65 @@ export async function setRunEmployeeSalary(
     salary_type: string
     employment_degree: number
     monthly_salary: number
+    hours_worked: number | null
+  }
+
+  // The field must match how the employee is paid: a monthly figure on an
+  // hourly row would be ignored by the engine (hourly gross = rate x hours)
+  // and hours on a monthly row would never price anything.
+  if ((hasMonthly && row.salary_type !== 'monthly') || (hasHours && row.salary_type !== 'hourly')) {
+    return {
+      ok: false,
+      code: 'SALARY_RUN_SALARY_FIELD_MISMATCH',
+      details: { salary_type: row.salary_type },
+    }
+  }
+
+  const monthly = hasMonthly ? roundOre(args.monthlySalary as number) : row.monthly_salary
+  const hours = hasHours ? roundOre(args.hoursWorked as number) : row.hours_worked
+  let hourlyRate: number | null = null
+
+  if (hasHours) {
+    // Calendar days win at calculation time (run-calculation derives
+    // hours_worked from salary_worked_days when any exist in the period), so
+    // a per-run override would be silently discarded. Refuse instead of
+    // staging a change that cannot take effect.
+    const periodStart = `${gate.data.period_year}-${String(gate.data.period_month).padStart(2, '0')}-01`
+    const periodEnd = new Date(Date.UTC(gate.data.period_year, gate.data.period_month, 0))
+      .toISOString()
+      .slice(0, 10)
+    const { data: workedDays, error: workedError } = await supabase
+      .from('salary_worked_days')
+      .select('hours')
+      .eq('company_id', args.companyId)
+      .eq('employee_id', args.employeeId)
+      .gte('work_date', periodStart)
+      .lte('work_date', periodEnd)
+    if (workedError) {
+      return { ok: false, code: 'INTERNAL_ERROR', details: { message: workedError.message } }
+    }
+    const calendarHours = ((workedDays ?? []) as Array<{ hours: number | string }>).reduce(
+      (sum, d) => roundOre(sum + Number(d.hours)),
+      0,
+    )
+    if (calendarHours > 0) {
+      return {
+        ok: false,
+        code: 'SALARY_RUN_HOURS_FROM_CALENDAR',
+        details: { calendar_hours: calendarHours, period_start: periodStart, period_end: periodEnd },
+      }
+    }
+
+    const { data: employee, error: empError } = await supabase
+      .from('employees')
+      .select('hourly_rate')
+      .eq('id', args.employeeId)
+      .eq('company_id', args.companyId)
+      .maybeSingle()
+    if (empError) {
+      return { ok: false, code: 'INTERNAL_ERROR', details: { message: empError.message } }
+    }
+    hourlyRate = (employee as { hourly_rate: number | null } | null)?.hourly_rate ?? null
   }
 
   const data: SetRunSalaryData = {
@@ -265,6 +356,9 @@ export async function setRunEmployeeSalary(
     employment_degree: row.employment_degree,
     previous_monthly_salary: row.monthly_salary,
     monthly_salary: monthly,
+    previous_hours_worked: row.hours_worked,
+    hours_worked: hours,
+    hourly_rate: hourlyRate,
   }
 
   if (args.dryRun) {
@@ -278,7 +372,11 @@ export async function setRunEmployeeSalary(
   // instead of silently booking gross/tax derived from the old salary.
   const { error: updError } = await supabase
     .from('salary_run_employees')
-    .update({ monthly_salary: monthly, calculation_breakdown: null })
+    .update(
+      hasHours
+        ? { hours_worked: hours, calculation_breakdown: null }
+        : { monthly_salary: monthly, calculation_breakdown: null },
+    )
     .eq('id', row.id)
     .eq('company_id', args.companyId)
 
@@ -296,7 +394,7 @@ export async function setRunEmployeeSalary(
   // must not fail the request: the salary write above has already committed,
   // and reporting failure for an applied change is worse than a briefly stale
   // display row (matches the pre-refactor route behavior).
-  if (row.salary_type === 'monthly') {
+  if (hasMonthly) {
     const baseAmount = roundOre(monthly * (row.employment_degree / 100))
     await supabase
       .from('salary_line_items')
@@ -304,6 +402,14 @@ export async function setRunEmployeeSalary(
       .eq('salary_run_employee_id', row.id)
       .eq('company_id', args.companyId)
       .eq('item_type', 'monthly_salary')
+  } else {
+    const baseAmount = roundOre((hourlyRate || 0) * (hours || 0))
+    await supabase
+      .from('salary_line_items')
+      .update({ amount: baseAmount, quantity: hours, unit_price: hourlyRate })
+      .eq('salary_run_employee_id', row.id)
+      .eq('company_id', args.companyId)
+      .eq('item_type', 'hourly_salary')
   }
 
   return { ok: true, data }

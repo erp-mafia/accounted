@@ -148,11 +148,24 @@ export const POST = withRouteContext(
       employeeCount = created.employeeCount
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown error'
-      // Race with a concurrent create — the lib maps 23505 to this message.
-      if (message.includes('already exists')) {
+      // Race with a concurrent create: the lib throws SalaryRunExistsError
+      // (checked by name, not instanceof, so a mocked module still matches)
+      // carrying the winner's id; the message fallback covers older shapes.
+      const existsErr =
+        err instanceof Error && err.name === 'SalaryRunExistsError'
+          ? (err as Error & { existingId?: string | null; existingStatus?: string | null })
+          : null
+      if (existsErr || message.includes('already exists')) {
         return errorResponseFromCode('CONFLICT', log, {
           requestId,
-          details: { reason: 'salary_run_exists_for_period', periodYear, periodMonth },
+          details: {
+            reason: 'salary_run_exists_for_period',
+            periodYear,
+            periodMonth,
+            ...(existsErr?.existingId
+              ? { existingId: existsErr.existingId, existingStatus: existsErr.existingStatus ?? null }
+              : {}),
+          },
         })
       }
       log.error('salary run create failed', err as Error)
