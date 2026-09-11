@@ -28,6 +28,7 @@ import {
   decodeDefaultCursor,
   encodeDefaultCursor,
   parsePaginationParams,
+  PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -86,6 +87,28 @@ const SI_SUMMARY_COLUMNS =
 
 const SUPPLIER_NAME_ONLY_COLUMNS = 'id, name'
 
+const ListFilters = z.object({
+  status: SupplierInvoiceStatus.optional().describe('Only supplier invoices in this status.'),
+  supplier_id: z.string().uuid().optional().describe('Only invoices from this supplier (id).'),
+  currency: z
+    .string()
+    .regex(/^[A-Z]{3}$/, 'currency must be a 3-letter ISO-4217 code')
+    .optional()
+    .describe('3-letter ISO 4217 code, uppercase (e.g. SEK, EUR).'),
+  date_from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'date_from must be ISO YYYY-MM-DD')
+    .optional()
+    .describe('YYYY-MM-DD. Invoices with invoice_date on or after this date.'),
+  date_to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'date_to must be ISO YYYY-MM-DD')
+    .optional()
+    .describe('YYYY-MM-DD. Invoices with invoice_date on or before this date.'),
+})
+
+const ListQuery = ListFilters.extend(PaginationQueryShape)
+
 registerEndpoint({
   operation: 'supplier-invoices.list',
   method: 'GET',
@@ -135,6 +158,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: SupplierInvoicesListResponse },
 })
 
@@ -145,14 +169,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
-    const FiltersSchema = z.object({
-      status: SupplierInvoiceStatus.optional(),
-      supplier_id: z.string().uuid().optional(),
-      currency: z.string().regex(/^[A-Z]{3}$/, 'currency must be a 3-letter ISO-4217 code').optional(),
-      date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date_from must be ISO YYYY-MM-DD').optional(),
-      date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date_to must be ISO YYYY-MM-DD').optional(),
-    })
-    const filtersResult = FiltersSchema.safeParse({
+    const filtersResult = ListFilters.safeParse({
       status: url.searchParams.get('status') ?? undefined,
       supplier_id: url.searchParams.get('supplier_id') ?? undefined,
       currency: url.searchParams.get('currency') ?? undefined,

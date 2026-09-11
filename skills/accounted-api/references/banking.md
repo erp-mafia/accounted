@@ -31,12 +31,12 @@ Response `200`:
 ```ts
 {
   data: {
-    bank_connections: { connection_id: string, bank: string, status: "pending" | "pending_selection" | "active" | "expired" | "error", since: string, last_synced_at: string, consent_expires: string, error_message: string }[]
+    bank_connections: { connection_id: string, bank: string | null, status: "pending" | "pending_selection" | "active" | "expired" | "error", since: string, last_synced_at: string | null, consent_expires: string | null, error_message: string | null }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -96,7 +96,7 @@ Response `200`:
 {
   data: {
     connection_id: string,
-    bank: string,
+    bank: string | null,
     imported: number,
     duplicates: number,
     from_date: string,
@@ -106,7 +106,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -153,17 +153,18 @@ Returns the company's cash accounts (bank accounts, kassa) with their BAS ledger
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `enabled_only` | query | `"true" \| "false"` | no | true returns only enabled accounts. Default: all accounts. |
 
 Response `200`:
 ```ts
 {
   data: {
-    cash_accounts: { cash_account_id: string, ledger_account: string, name: string, currency: string, iban: string, is_primary: boolean, enabled: boolean, source: "enable_banking" | "manual" | "sie_import", balance: number, available_balance: number, balance_updated_at: string }[]
+    cash_accounts: { cash_account_id: string, ledger_account: string, name: string | null, currency: string, iban: string | null, is_primary: boolean, enabled: boolean, source: "enable_banking" | "manual" | "sie_import", balance: number | null, available_balance: number | null, balance_updated_at: string | null }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -221,6 +222,7 @@ Accepts a bank statement file (UTF-8 / UTF-16 / Windows-1252, up to 10 MB) as mu
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `format` | query | `"nordea" \| "nordea_business" \| "seb" \| "swedbank" \| "handelsbanken" \| "lansforsakringar" \| "ica_banken" \| "skandia" \| "lunar" \| "northmill" \| "wise" \| "wise_statement" \| "generic_csv" \| "camt053"` | no | Force this bank file format instead of auto-detection. Omit to auto-detect. |
 
 Response `200`:
 ```ts
@@ -229,7 +231,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -285,7 +287,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -331,17 +333,20 @@ Returns one row per reconcilable account (bank:<cash_account_id> for each enable
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `date_from` | query | `string` | no | YYYY-MM-DD. Start of the bank bridge window. Default: 1 January of the current year. |
+| `date_to` | query | `string` | no | YYYY-MM-DD. End of the bank bridge window. Default: today. |
+| `with_status` | query | `"true" \| "false"` | no | false returns the list without computing status per account (one reconciliation per account). Default: true. |
 
 Response `200`:
 ```ts
 {
   data: {
-    accounts: { account_key: string, kind: "bank" | "skattekonto" | "manual", account_number: string, name: string, currency: string, logo_url: string, source: { type: "psd2" | "bank_file" | "skatteverket_api" | "skatteverket_file" | "manual", synced_at: string, stale: boolean }, status: { state: "reconciled" | "open" | "stale" | "not_configured", as_of: string, unexplained_difference: number, open_counts: { proposed: number, unmatched_external: number, unmatched_ledger: number } }, superseded_by: string, signed_off_through?: string }[]
+    accounts: { account_key: string, kind: "bank" | "skattekonto" | "manual", account_number: string, name: string, currency: string, logo_url: string | null, source: { type: "psd2" | "bank_file" | "skatteverket_api" | "skatteverket_file" | "manual", synced_at: string | null, stale: boolean }, status: { state: "reconciled" | "open" | "stale" | "not_configured", as_of: string, unexplained_difference: number | null, open_counts: { proposed: number, unmatched_external: number, unmatched_ledger: number } } | null, superseded_by: string | null, signed_off_through?: string | null }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -433,6 +438,8 @@ Returns external_balance (Skatteverket saldo; null for bank accounts until a sta
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `accountKey` | path | `string` | yes |  |
+| `date_from` | query | `string` | no | YYYY-MM-DD. Bank: start of the bridge window (default 1 January of the current year). Skattekonto: scopes the item lists only; the bridge is anchored at the saldo snapshot. |
+| `date_to` | query | `string` | no | YYYY-MM-DD. Bank: end of the bridge window (default today). Skattekonto: scopes the item lists only. |
 
 Response `200`:
 ```ts
@@ -442,25 +449,25 @@ Response `200`:
     kind: "bank" | "skattekonto" | "manual",
     account_number: string,
     currency: string,
-    window: { from: string, to: string },
+    window: { from: string | null, to: string | null },
     as_of: string,
     stale: boolean,
-    external_balance: number,
-    ledger_balance: number,
-    difference: number,
-    unexplained_difference: number,
+    external_balance: number | null,
+    ledger_balance: number | null,
+    difference: number | null,
+    unexplained_difference: number | null,
     is_reconciled: boolean,
-    bridge: { key: string, label_sv: string, label_en: string, amount: number, count: number, items_bucket: string }[],
+    bridge: { key: string, label_sv: string, label_en: string, amount: number, count: number | null, items_bucket: string | null }[],
     counts: { proposed: number, unmatched_external: number, unmatched_ledger: number, matched: number, ignored: number },
-    skattekonto: { saldo_skatteverket: number, fetched_at: string, history_start: string, opening_difference: number, upcoming_count: number, upcoming_total: number, ledger_balance_before_start: number },
-    bank: Record<string, unknown>,
-    manual?: { period_id: string, period_start: string, period_end: string, opening_balance: number, movement: number, closing_balance: number, specification: { provider: "ar" | "ap" | "vacation", label_sv: string, label_en: string, amount: number, unconverted_fx_count: number } },
-    signoff?: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string }
+    skattekonto: { saldo_skatteverket: number | null, fetched_at: string | null, history_start: string | null, opening_difference: number | null, upcoming_count: number, upcoming_total: number, ledger_balance_before_start: number | null } | null,
+    bank: Record<string, unknown> | null,
+    manual?: { period_id: string, period_start: string, period_end: string, opening_balance: number, movement: number, closing_balance: number, specification: { provider: "ar" | "ap" | "vacation", label_sv: string, label_en: string, amount: number, unconverted_fx_count: number } | null } | null,
+    signoff?: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null } | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -568,22 +575,27 @@ Returns reconciliation items for one account. ?bucket selects one of proposed | 
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `accountKey` | path | `string` | yes |  |
+| `bucket` | query | `"proposed" \| "unmatched_external" \| "unmatched_ledger" \| "matched" \| "ignored" \| "upcoming"` | no | Only this bucket. Default: every open bucket first, then matched. |
+| `date_from` | query | `string` | no | YYYY-MM-DD. Scopes the lists; rows before it still count in older_unmatched_count. |
+| `date_to` | query | `string` | no | YYYY-MM-DD. Scopes the lists. |
+| `limit` | query | `number` | no | Page size, 1-200 (default 50). |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's next_cursor. Omit for the first page. |
 
 Response `200`:
 ```ts
 {
   data: {
-    items: { item_id: string, item_type: "skattekonto_transaction" | "transaction" | "journal_entry", side: "external" | "ledger", bucket: "proposed" | "unmatched_external" | "unmatched_ledger" | "matched" | "ignored" | "upcoming", date: string, description: string, amount: number, currency: string, voucher_number?: number, voucher_series?: string, entry_status?: "draft" | "posted" | "reversed", linked_journal_entry_id?: string, linked_entry?: { entry_date: string, voucher_series: string, voucher_number: number, description: string }, link_problem?: "entry_reversed" | "entry_draft" | "entry_missing", proposal?: { journal_entry_id: string, voucher_number: number, voucher_series: string, entry_date: string, description: string, entry_status: "draft" | "posted" | "reversed", confidence: number, reasons: string[], vouchers?: { journal_entry_id: {...}, voucher_number: {...}, voucher_series: {...}, entry_date: {...}, description: {...}, amount: {...} }[] }, awaiting_external?: boolean, actions: ("match" | "unmatch" | "book" | "ignore" | "unignore" | "review")[] }[],
+    items: { item_id: string, item_type: "skattekonto_transaction" | "transaction" | "journal_entry", side: "external" | "ledger", bucket: "proposed" | "unmatched_external" | "unmatched_ledger" | "matched" | "ignored" | "upcoming", date: string, description: string, amount: number, currency: string, voucher_number?: number | null, voucher_series?: string | null, entry_status?: "draft" | "posted" | "reversed", linked_journal_entry_id?: string | null, linked_entry?: { entry_date: string, voucher_series: string | null, voucher_number: number | null, description: string } | null, link_problem?: "entry_reversed" | "entry_draft" | "entry_missing" | null, proposal?: { journal_entry_id: string, voucher_number: number | null, voucher_series: string | null, entry_date: string, description: string, entry_status: "draft" | "posted" | "reversed", confidence: number, reasons: string[], vouchers?: { journal_entry_id: string, voucher_number: number | null, voucher_series: string | null, entry_date: string, description: string, amount: number }[] } | null, awaiting_external?: boolean, actions: ("match" | "unmatch" | "book" | "ignore" | "unignore" | "review")[] }[],
     count: number,
     total_count: number,
     has_more: boolean,
-    next_cursor: string,
+    next_cursor: string | null,
     older_unmatched_count: number
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -659,6 +671,7 @@ Sets the ignore flag on one outside row (bank transaction or skattekonto row). B
 | `companyId` | path | `string` | yes |  |
 | `accountKey` | path | `string` | yes |  |
 | `itemId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -679,7 +692,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -723,6 +736,7 @@ Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id], allocations? }] }
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `accountKey` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -748,12 +762,12 @@ Response `200`:
     dry_run: boolean,
     considered: number,
     applied: { external_id: string, journal_entry_id: string, via?: "line" | "entry_total", allocated_amount?: number }[],
-    skipped: { pair: { external_ids: string[], journal_entry_ids: string[], allocations?: { journal_entry_id: {...}, amount: {...} }[] }, code: string, message: string }[]
+    skipped: { pair: { external_ids: string[], journal_entry_ids: string[], allocations?: { journal_entry_id: string, amount: number }[] }, code: string, message: string }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -817,15 +831,16 @@ Clears the link on one outside row (bank transaction or skattekonto row). The ve
 | `companyId` | path | `string` | yes |  |
 | `accountKey` | path | `string` | yes |  |
 | `linkId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
 {
-  data: { external_id: string, previous_journal_entry_id: string },
+  data: { external_id: string, previous_journal_entry_id: string | null },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -868,6 +883,7 @@ Body: { external_ids: [transaction ids], journal_entry_id, kind: "bank_fee" | "i
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `accountKey` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -905,7 +921,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -954,17 +970,19 @@ Every "avstämt t.o.m." sign-off on the account, newest first. Active ones by de
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `accountKey` | path | `string` | yes |  |
+| `limit` | query | `number` | no | Maximum number of sign-offs, at most 200 (default 50). |
+| `include_reopened` | query | `string` | no | true or 1 also returns reopened (undone) sign-offs with their reopen stamp. Default: active only. |
 
 Response `200`:
 ```ts
 {
   data: {
-    signoffs: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string }[]
+    signoffs: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1021,10 +1039,11 @@ Body: { through_date: "YYYY-MM-DD", note?, force?, external_balance? }. Recomput
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `accountKey` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
-{ through_date: string, note?: string, force?: boolean, external_balance?: number }
+{ through_date: string, note?: string | null, force?: boolean, external_balance?: number | null }
 ```
 
 Example request:
@@ -1039,13 +1058,13 @@ Response `200`:
 {
   data: {
     dry_run: boolean,
-    signoff?: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string },
-    would_sign?: { account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, is_reconciled: boolean, forced: boolean, previous_through_date: string }
+    signoff?: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null },
+    would_sign?: { account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, is_reconciled: boolean, forced: boolean, previous_through_date: string | null }
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1101,10 +1120,11 @@ Body: { reason? }. Stamps the sign-off reopened_at/by/reason; nothing is deleted
 | `companyId` | path | `string` | yes |  |
 | `accountKey` | path | `string` | yes |  |
 | `signoffId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
-{ reason?: string }
+{ reason?: string | null }
 ```
 
 Example request:
@@ -1118,12 +1138,12 @@ Response `200`:
 ```ts
 {
   data: {
-    signoff: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string }
+    signoff: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null }
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1179,6 +1199,7 @@ Walks all unbooked bank transactions in the requested date range and pairs them 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -1198,7 +1219,7 @@ Response `200`:
 ```ts
 {
   data: {
-    matches: { transaction_id: string, transaction_date: string, transaction_description: string, transaction_amount: number, journal_entry_id: string, voucher_number: number, voucher_series: string, entry_date: string, entry_description: string, method: string, confidence: number }[],
+    matches: { transaction_id: string, transaction_date: string, transaction_description: string | null, transaction_amount: number, journal_entry_id: string, voucher_number: number | null, voucher_series: string | null, entry_date: string, entry_description: string | null, method: string, confidence: number }[],
     applied: number,
     errors: number,
     skipped_below_threshold: number
@@ -1206,7 +1227,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1252,6 +1273,9 @@ Returns matched / unmatched counts and the balance delta between the bank ledger
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `date_from` | query | `string` | no | YYYY-MM-DD. Window start (inclusive). Omit for no lower bound. |
+| `date_to` | query | `string` | no | YYYY-MM-DD. Window end (inclusive). Omit for no upper bound. |
+| `account_number` | query | `string` | no | Settlement account (4-digit BAS number of a bank account, e.g. 1932). Default: 1930. Any other number must belong to one of the company's cash accounts. |
 
 Response `200`:
 ```ts
@@ -1270,13 +1294,13 @@ Response `200`:
     unmatched_transaction_count: number,
     unmatched_transaction_total: number,
     unmatched_gl_line_count: number,
-    unmatched_gl_line_total: number,
-    unexplained_difference: number
+    unmatched_gl_line_total: number | null,
+    unexplained_difference: number | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1318,7 +1342,7 @@ Example response `200`:
 **List transactions for a company.**
 `scope:transactions:read · risk:low · idempotent`
 
-Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imported first; the `date` column is the transaction date and is filterable but not the sort key). Filter by ?status=booked|unbooked, ?currency, ?date_from / ?date_to, ?search (description ilike).
+Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imported first; the `date` column is the transaction date and is filterable but not the sort key). Filter by ?status=booked|unbooked, ?currency, ?date_from / ?date_to, ?search (description or merchant name, case-insensitive), ?cash_account_id.
 
 **Use when:** You need to walk a company's bank ledger: building a categorization queue, reconciling against external statements, or sampling for audit.
 **Do not use for:** Looking up one transaction by id (use the detail endpoint). Reconciliation status (use /reconciliation/bank/status).
@@ -1331,15 +1355,23 @@ Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imp
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `status` | query | `"booked" \| "unbooked"` | no | booked: linked to a verifikat (journal_entry_id set). unbooked: not yet booked. Default: both. |
+| `currency` | query | `string` | no | Only transactions in this currency code (e.g. SEK). |
+| `date_from` | query | `string` | no | YYYY-MM-DD. Transactions dated on or after this date. |
+| `date_to` | query | `string` | no | YYYY-MM-DD. Transactions dated on or before this date. |
+| `search` | query | `string` | no | Case-insensitive match anywhere in the description or merchant name, 1-200 characters. |
+| `cash_account_id` | query | `string` | no | Only transactions on this bank account (id from GET /cash-accounts). |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, date: string, description: string, amount: number, currency: string, reference: string, merchant_name: string, journal_entry_id: string, invoice_id: string, supplier_invoice_id: string, is_business: boolean, category: string, import_source: string, cash_account_id: string, created_at: string }[],
+  data: { id: string, date: string, description: string | null, amount: number, currency: string, reference: string | null, merchant_name: string | null, journal_entry_id: string | null, invoice_id: string | null, supplier_invoice_id: string | null, is_business: boolean | null, category: string | null, import_source: string | null, cash_account_id: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1398,32 +1430,32 @@ Response `200`:
   data: {
     id: string,
     date: string,
-    description: string,
+    description: string | null,
     amount: number,
     currency: string,
-    amount_sek: number,
-    reference: string,
-    merchant_name: string,
-    counterparty_account: string,
-    journal_entry_id: string,
-    invoice_id: string,
-    supplier_invoice_id: string,
-    potential_invoice_id: string,
-    is_business: boolean,
-    category: string,
-    receipt_id: string,
-    document_id: string,
-    external_id: string,
-    import_source: string,
-    reconciliation_method: string,
-    cash_account_id: string,
+    amount_sek: number | null,
+    reference: string | null,
+    merchant_name: string | null,
+    counterparty_account: string | null,
+    journal_entry_id: string | null,
+    invoice_id: string | null,
+    supplier_invoice_id: string | null,
+    potential_invoice_id: string | null,
+    is_business: boolean | null,
+    category: string | null,
+    receipt_id: string | null,
+    document_id: string | null,
+    external_id: string | null,
+    import_source: string | null,
+    reconciliation_method: string | null,
+    cash_account_id: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1470,6 +1502,7 @@ Resolves the BAS account mapping for the transaction (via category, booking temp
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -1505,16 +1538,16 @@ Response `200`:
   data: {
     success: boolean,
     journal_entry_created: boolean,
-    journal_entry_id: string,
-    journal_entry_error: string,
-    document_link_warning?: string,
+    journal_entry_id: string | null,
+    journal_entry_error: string | null,
+    document_link_warning?: string | null,
     category: string,
     already_had_journal_entry?: boolean
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1559,6 +1592,7 @@ Marks an unbooked bank transaction as ignored so it leaves the "to book" funnels
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -1567,7 +1601,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1610,6 +1644,7 @@ Clears the ignore flag set by POST on the same path. The row comes back into the
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -1618,7 +1653,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1689,16 +1724,16 @@ Response `200`:
   data: {
     success: boolean,
     invoice_status: string,
-    paid_at: string,
+    paid_at: string | null,
     paid_amount: number,
     remaining_amount: number,
-    journal_entry_id: string,
-    category: string
+    journal_entry_id: string | null,
+    category: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1770,12 +1805,12 @@ Response `200`:
     invoice_status: string,
     paid_amount: number,
     remaining_amount: number,
-    journal_entry_id: string
+    journal_entry_id: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1821,6 +1856,7 @@ Storno the transaction's journal entry (BFL 5 kap 5 §: posted entries are never
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -1829,7 +1865,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1871,6 +1907,7 @@ Per-item categorization mirroring the single :categorize endpoint. Same `{ resul
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -1905,7 +1942,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1962,11 +1999,12 @@ Runs the same ingest pipeline as the dashboard CSV importer and the PSD2 bank sy
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
 {
-  transactions: { date: string, description: string, amount: number, currency: string, external_id: string, mcc_code?: number, merchant_name?: string, reference?: string, import_source?: string }[],
+  transactions: { date: string, description: string, amount: number, currency: string, external_id: string, mcc_code?: number | null, merchant_name?: string | null, reference?: string | null, import_source?: string }[],
   skip_auto_categorization?: boolean,
   settlement_account?: string,
   raw_insert_only?: boolean
@@ -2004,7 +2042,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>

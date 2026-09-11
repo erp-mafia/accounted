@@ -14,7 +14,7 @@ import {
   ReconciliationItemBucketSchema,
   ReconciliationItemSchema,
 } from '@/lib/reconciliation/schemas'
-import { listAccountItems, MAX_ITEMS_LIMIT } from '@/lib/reconciliation/items'
+import { listAccountItems, MAX_ITEMS_LIMIT, DEFAULT_ITEMS_LIMIT } from '@/lib/reconciliation/items'
 import { ISO_DATE_RE } from '@/lib/invariants'
 
 const DATE = ISO_DATE_RE
@@ -40,6 +40,29 @@ const ItemsResponse = z.object({
   next_cursor: z.string().nullable(),
   /** Unmatched rows dated before date_from: counted so a window can never hide work. */
   older_unmatched_count: z.number().int(),
+})
+
+const ItemsQuery = z.object({
+  bucket: ReconciliationItemBucketSchema.optional().describe(
+    'Only this bucket. Default: every open bucket first, then matched.',
+  ),
+  date_from: z
+    .string()
+    .regex(DATE)
+    .optional()
+    .describe('YYYY-MM-DD. Scopes the lists; rows before it still count in older_unmatched_count.'),
+  date_to: z.string().regex(DATE).optional().describe('YYYY-MM-DD. Scopes the lists.'),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_ITEMS_LIMIT)
+    .optional()
+    .describe(`Page size, 1-${MAX_ITEMS_LIMIT} (default ${DEFAULT_ITEMS_LIMIT}).`),
+  cursor: z
+    .string()
+    .optional()
+    .describe('Opaque cursor from the previous page\'s next_cursor. Omit for the first page.'),
 })
 
 registerEndpoint({
@@ -99,6 +122,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ItemsQuery },
   response: { success: dataEnvelope(ItemsResponse) },
 })
 
@@ -113,14 +137,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; accountKey: 
       })
     }
     const url = new URL(request.url)
-    const Filters = z.object({
-      bucket: ReconciliationItemBucketSchema.optional(),
-      date_from: z.string().regex(DATE).optional(),
-      date_to: z.string().regex(DATE).optional(),
-      limit: z.coerce.number().int().min(1).max(MAX_ITEMS_LIMIT).optional(),
-      cursor: z.string().optional(),
-    })
-    const parsed = Filters.safeParse({
+    const parsed = ItemsQuery.safeParse({
       bucket: url.searchParams.get('bucket') ?? undefined,
       date_from: url.searchParams.get('date_from') ?? undefined,
       date_to: url.searchParams.get('date_to') ?? undefined,

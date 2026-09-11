@@ -16,6 +16,26 @@ import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
 import { UUID_RE } from '@/lib/invariants/uuid'
 
+/**
+ * The query parameters loadPeriodFromQuery and parseReportDateRange read, as
+ * the endpoint registry documents them (spread into a report route's
+ * `request.query`). The helpers stay the parsers; these shapes describe them.
+ */
+export const ReportPeriodQueryShape = {
+  period_id: z.string().describe('Fiscal period id (from GET /fiscal-periods). Required.'),
+}
+
+export const ReportDateRangeQueryShape = {
+  from_date: z
+    .string()
+    .optional()
+    .describe('YYYY-MM-DD, inside the fiscal period. Omit with to_date for the whole period.'),
+  to_date: z
+    .string()
+    .optional()
+    .describe('YYYY-MM-DD, inside the fiscal period and not before from_date.'),
+}
+
 export interface FiscalPeriodRow {
   id: string
   period_start: string

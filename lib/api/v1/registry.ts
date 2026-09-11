@@ -237,7 +237,7 @@ export function getEndpointByConcretePath(
 // uuid, array, optional, enum, literal, date-string. When the registry
 // surface grows past Phase 2, swap this for @asteasolutions/zod-to-openapi.
 
-interface JsonSchema {
+export interface JsonSchema {
   type?: string | string[]
   properties?: Record<string, JsonSchema>
   required?: string[]
@@ -247,9 +247,43 @@ interface JsonSchema {
   format?: string
   description?: string
   additionalProperties?: boolean | JsonSchema
+  anyOf?: JsonSchema[]
+  oneOf?: JsonSchema[]
 }
 
-function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
+/**
+ * Convert a registry Zod schema to the JSON Schema the spec, the generated
+ * skill and the docs pages publish. Exported for the docs builder
+ * (lib/docs/content/reference.ts), which renders the same shapes as tables.
+ */
+export function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
+  const out = convertZod(schema)
+  // `.describe()` text (Zod 4 keeps it in the global registry and reads it
+  // back through `.description`) documents a field or query parameter.
+  const description = (schema as unknown as { description?: string }).description
+  return description && !out.description ? { ...out, description } : out
+}
+
+/**
+ * OpenAPI 3.1 has no `nullable` keyword: null is a member of `type` (and of
+ * `enum`, when there is one). Dropping it published every nullable field as
+ * non-null, so strict generated clients rejected valid responses (#2515).
+ */
+function withNull(schema: JsonSchema): JsonSchema {
+  if (Array.isArray(schema.enum)) {
+    const type = typeof schema.type === 'string' ? [schema.type, 'null'] : schema.type
+    return { ...schema, ...(type ? { type } : {}), enum: [...schema.enum, null] }
+  }
+  if (typeof schema.type === 'string') return { ...schema, type: [schema.type, 'null'] }
+  if (Array.isArray(schema.type)) {
+    return schema.type.includes('null') ? schema : { ...schema, type: [...schema.type, 'null'] }
+  }
+  // An empty schema already accepts null.
+  if (Object.keys(schema).length === 0) return schema
+  return { anyOf: [schema, { type: 'null' }] }
+}
+
+function convertZod(schema: ZodTypeAny): JsonSchema {
   const def = (schema as unknown as { _def: { typeName?: string; type?: string } })._def
 
   // Zod 4 uses string discriminators on _def.type ('string', 'object', etc.).
@@ -272,10 +306,13 @@ function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
         ?? (def as { type?: ZodTypeAny }).type
       return { type: 'array', items: inner ? zodToJsonSchema(inner) : {} }
     }
+    case 'nullable':
+    case 'ZodNullable': {
+      const inner = (def as { innerType: ZodTypeAny }).innerType
+      return withNull(zodToJsonSchema(inner))
+    }
     case 'optional':
     case 'ZodOptional':
-    case 'nullable':
-    case 'ZodNullable':
     // A `.default()` field accepts the inner type on input; the object case
     // below additionally treats it as not-required.
     case 'default':
@@ -374,6 +411,42 @@ interface OpenApiSpec {
 
 const SCHEME_NAME = 'ApiKey'
 
+export interface QueryParameter {
+  name: string
+  required: boolean
+  description?: string
+  schema: JsonSchema
+}
+
+/**
+ * The endpoint's query parameters, from its registered `request.query`
+ * schema. The spec used to derive parameters from the path pattern only, so
+ * every list filter lived in prose and nowhere a client generator could see
+ * it (#2515). Shared with the docs builder so the page and the spec agree.
+ */
+export function queryParameters(def: EndpointDefinition): QueryParameter[] {
+  const params: QueryParameter[] = []
+  if (def.request?.query) {
+    const json = zodToJsonSchema(def.request.query)
+    const required = new Set(json.required ?? [])
+    for (const [name, prop] of Object.entries(json.properties ?? {})) {
+      const { description, ...schema } = prop
+      params.push({ name, required: required.has(name), ...(description ? { description } : {}), schema })
+    }
+  }
+  // withApiV1 reads ?dry_run on every request (lib/api/v1/with-api-v1.ts);
+  // only the endpoints that honour it advertise it.
+  if (def.dryRunSupported && !params.some((p) => p.name === 'dry_run')) {
+    params.push({
+      name: 'dry_run',
+      required: false,
+      description: 'true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits.',
+      schema: { type: 'string' },
+    })
+  }
+  return params
+}
+
 export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
   const paths: OpenApiSpec['paths'] = {}
 
@@ -409,12 +482,21 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
     // Path parameters, derived from the `:param` pattern itself so every
     // templated segment is declared even though routes don't register a
     // params schema. All v1 path params are string ids.
-    const parameters = [...def.path.matchAll(/:([^/]+)/g)].map(([, name]) => ({
-      name,
-      in: 'path',
-      required: true,
-      schema: { type: 'string' },
-    }))
+    const parameters: Array<Record<string, unknown>> = [
+      ...[...def.path.matchAll(/:([^/]+)/g)].map(([, name]) => ({
+        name,
+        in: 'path',
+        required: true,
+        schema: { type: 'string' },
+      })),
+      ...queryParameters(def).map(({ name, required, description, schema }) => ({
+        name,
+        in: 'query',
+        required,
+        ...(description ? { description } : {}),
+        schema,
+      })),
+    ]
 
     // Request body from the registered Zod schema. In multipart bodies a
     // part registered as `z.unknown()` is by convention the binary file part

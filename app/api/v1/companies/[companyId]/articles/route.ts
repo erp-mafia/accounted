@@ -39,6 +39,14 @@ const ArticleShape = z.object({
 const ARTICLE_COLUMNS =
   'id, article_number, name, name_en, type, unit, price_excl_vat, currency, vat_rate, revenue_account, cost_price, ean, housework_type, notes, active, created_at, updated_at'
 
+// Documents the parameter the handler reads (it validates true/false itself).
+const ListQuery = z.object({
+  include_inactive: z
+    .enum(['true', 'false'])
+    .optional()
+    .describe('true also returns inactive articles. Default: active only.'),
+})
+
 registerEndpoint({
   operation: 'articles.list',
   method: 'GET',
@@ -90,6 +98,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: dataEnvelope(z.object({ articles: z.array(ArticleShape) })) },
 })
 

@@ -3,8 +3,8 @@
  *
  * Render the balansräkning as application/pdf, byte-equivalent to the
  * dashboard's PDF export. Supports the same optional `as_of` (alias for
- * `to_date`) / `from_date` / `to_date` range as the JSON endpoint, so an
- * agent can fetch the balance position at e.g. the latest month-end.
+ * `to_date`) as the JSON endpoint, so an agent can fetch the balance
+ * position at e.g. the latest month-end. No `from_date`: see ALLOWED_PARAMS.
  */
 
 import { z } from 'zod'
@@ -17,6 +17,7 @@ import {
   loadPeriodFromQuery,
   loadRangeFromQuery,
   safeGenerate,
+  ReportPeriodQueryShape,
 } from '@/lib/api/v1/report-period'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
@@ -31,6 +32,16 @@ import type { CompanySettings } from '@/types'
 // window (see the JSON route). as_of is the natural spelling; to_date is
 // accepted as its synonym for consistency with the income statement.
 const ALLOWED_PARAMS = ['period_id', 'to_date', 'as_of'] as const
+
+// The accepted parameters, as ALLOWED_PARAMS gates them.
+const ReportQuery = z.object({
+  ...ReportPeriodQueryShape,
+  to_date: z
+    .string()
+    .optional()
+    .describe('YYYY-MM-DD inside the fiscal period: the position as of this date. Default: the period end.'),
+  as_of: z.string().optional().describe('Alias for to_date. Pass one or the other, not both.'),
+})
 
 registerEndpoint({
   operation: 'reports.balance-sheet.pdf',
@@ -59,6 +70,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ReportQuery },
   response: {
     success: z.unknown(), // Marker: binary response, see contentType.
     contentType: 'application/pdf',

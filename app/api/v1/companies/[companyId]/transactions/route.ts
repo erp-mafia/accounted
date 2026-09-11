@@ -12,6 +12,7 @@ import {
   decodeDefaultCursor,
   encodeDefaultCursor,
   parsePaginationParams,
+  PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -44,13 +45,44 @@ const TRANSACTION_SUMMARY_COLUMNS =
   'journal_entry_id, invoice_id, supplier_invoice_id, is_business, category, ' +
   'import_source, cash_account_id, created_at'
 
+const ListFilters = z.object({
+  status: z
+    .enum(['booked', 'unbooked'])
+    .optional()
+    .describe('booked: linked to a verifikat (journal_entry_id set). unbooked: not yet booked. Default: both.'),
+  currency: z.string().min(1).max(8).optional().describe('Only transactions in this currency code (e.g. SEK).'),
+  date_from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe('YYYY-MM-DD. Transactions dated on or after this date.'),
+  date_to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe('YYYY-MM-DD. Transactions dated on or before this date.'),
+  search: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Case-insensitive match anywhere in the description or merchant name, 1-200 characters.'),
+  cash_account_id: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('Only transactions on this bank account (id from GET /cash-accounts).'),
+})
+
+const ListQuery = ListFilters.extend(PaginationQueryShape)
+
 registerEndpoint({
   operation: 'transactions.list',
   method: 'GET',
   path: '/api/v1/companies/:companyId/transactions',
   summary: 'List transactions for a company.',
   description:
-    'Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imported first; the `date` column is the transaction date and is filterable but not the sort key). Filter by ?status=booked|unbooked, ?currency, ?date_from / ?date_to, ?search (description ilike).',
+    'Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imported first; the `date` column is the transaction date and is filterable but not the sort key). Filter by ?status=booked|unbooked, ?currency, ?date_from / ?date_to, ?search (description or merchant name, case-insensitive), ?cash_account_id.',
   useWhen:
     'You need to walk a company\'s bank ledger: building a categorization queue, reconciling against external statements, or sampling for audit.',
   doNotUseFor:
@@ -83,6 +115,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: TransactionListResponse },
 })
 
@@ -93,21 +126,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
-    const FiltersSchema = z.object({
-      status: z.enum(['booked', 'unbooked']).optional(),
-      currency: z.string().min(1).max(8).optional(),
-      date_from: z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/)
-        .optional(),
-      date_to: z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/)
-        .optional(),
-      search: z.string().min(1).max(200).optional(),
-      cash_account_id: z.string().uuid().optional(),
-    })
-    const filtersResult = FiltersSchema.safeParse({
+    const filtersResult = ListFilters.safeParse({
       status: url.searchParams.get('status') ?? undefined,
       currency: url.searchParams.get('currency') ?? undefined,
       date_from: url.searchParams.get('date_from') ?? undefined,

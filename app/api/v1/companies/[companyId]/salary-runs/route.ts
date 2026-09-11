@@ -19,6 +19,7 @@ import {
   decodeDefaultCursor,
   encodeDefaultCursor,
   parsePaginationParams,
+  PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -53,6 +54,19 @@ const SalaryRunsListResponse = listEnvelope(SalaryRunSummary)
 
 const SALARY_RUN_SUMMARY_COLUMNS =
   'id, period_year, period_month, payment_date, status, voucher_series, total_gross, total_tax, total_net, total_avgifter, total_employer_cost, agi_generated_at, agi_submitted_at, approved_at, paid_at, booked_at, created_at'
+
+const ListFilters = z.object({
+  period_year: z.coerce
+    .number()
+    .int()
+    .min(2020)
+    .max(2100)
+    .optional()
+    .describe('Only runs for this payroll year (2020-2100).'),
+  status: SalaryRunStatus.optional().describe('Only runs in this status.'),
+})
+
+const ListQuery = ListFilters.extend(PaginationQueryShape)
 
 registerEndpoint({
   operation: 'salary-runs.list',
@@ -95,6 +109,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: SalaryRunsListResponse },
 })
 
@@ -105,11 +120,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
-    const FiltersSchema = z.object({
-      period_year: z.coerce.number().int().min(2020).max(2100).optional(),
-      status: SalaryRunStatus.optional(),
-    })
-    const filtersResult = FiltersSchema.safeParse({
+    const filtersResult = ListFilters.safeParse({
       period_year: url.searchParams.get('period_year') ?? undefined,
       status: url.searchParams.get('status') ?? undefined,
     })

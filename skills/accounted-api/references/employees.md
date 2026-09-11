@@ -25,15 +25,20 @@ Returns active employees in created-first order. Pass ?include_inactive=true to 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `employment_type` | query | `"employee" \| "company_owner" \| "board_member"` | no | Only employees with this employment type. |
+| `search` | query | `string` | no | Case-insensitive match anywhere in the first or last name, 1-200 characters. |
+| `include_inactive` | query | `"true" \| "false"` | no | true also returns inactive employees. Default: active only. |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, first_name: string, last_name: string, personnummer_masked: string, employment_type: "employee" | "company_owner" | "board_member", employment_start: string, employment_end: string, salary_type: "monthly" | "hourly", monthly_salary: number, hourly_rate: number, f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified", is_active: boolean, created_at: string }[],
+  data: { id: string, first_name: string, last_name: string, personnummer_masked: string, employment_type: "employee" | "company_owner" | "board_member", employment_start: string, employment_end: string | null, salary_type: "monthly" | "hourly", monthly_salary: number | null, hourly_rate: number | null, f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified", is_active: boolean, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -92,6 +97,7 @@ Creates a new employee for the company. Requires Idempotency-Key (UUID). Support
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -118,7 +124,7 @@ Request body:
   vacation_rule?: "procentregeln" | "sammaloneregeln" | "none" | "semesterersattning",
   vacation_days_per_year?: number,
   semestertillagg_rate?: number,
-  vacation_pay_rate?: number,
+  vacation_pay_rate?: number | null,
   email?: string,
   phone?: string,
   address_line1?: string,
@@ -127,9 +133,9 @@ Request body:
   vaxa_stod_eligible?: boolean,
   vaxa_stod_start?: string,
   vaxa_stod_end?: string,
-  jamkning_percentage?: number,
-  jamkning_valid_from?: string,
-  jamkning_valid_to?: string,
+  jamkning_percentage?: number | null,
+  jamkning_valid_from?: string | null,
+  jamkning_valid_to?: string | null,
   default_dimensions?: Record<string, string>
 }
 ```
@@ -160,14 +166,14 @@ Response `200`:
     personnummer_masked: string,
     employment_type: "employee" | "company_owner" | "board_member",
     employment_start: string,
-    employment_end: string,
+    employment_end: string | null,
     employment_degree: number,
     salary_type: "monthly" | "hourly",
-    monthly_salary: number,
-    hourly_rate: number,
-    tax_table_number: number,
-    tax_column: number,
-    tax_municipality: string,
+    monthly_salary: number | null,
+    hourly_rate: number | null,
+    tax_table_number: number | null,
+    tax_column: number | null,
+    tax_municipality: string | null,
     is_sidoinkomst: boolean,
     f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified",
     vacation_rule: string,
@@ -178,7 +184,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -249,35 +255,35 @@ Response `200`:
     personnummer: string,
     employment_type: "employee" | "company_owner" | "board_member",
     employment_start: string,
-    employment_end: string,
+    employment_end: string | null,
     employment_degree: number,
     hours_per_week: number,
     workdays_per_week: number,
     salary_type: "monthly" | "hourly",
-    monthly_salary: number,
-    hourly_rate: number,
-    tax_table_number: number,
-    tax_column: number,
-    tax_municipality: string,
+    monthly_salary: number | null,
+    hourly_rate: number | null,
+    tax_table_number: number | null,
+    tax_column: number | null,
+    tax_municipality: string | null,
     is_sidoinkomst: boolean,
     f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified",
-    clearing_number: string,
-    bank_account_number: string,
+    clearing_number: string | null,
+    bank_account_number: string | null,
     vacation_rule: string,
     vacation_days_per_year: number,
     semestertillagg_rate: number,
-    vacation_pay_rate: number,
-    email: string,
-    phone: string,
-    address_line1: string,
-    postal_code: string,
-    city: string,
+    vacation_pay_rate: number | null,
+    email: string | null,
+    phone: string | null,
+    address_line1: string | null,
+    postal_code: string | null,
+    city: string | null,
     vaxa_stod_eligible: boolean,
-    vaxa_stod_start: string,
-    vaxa_stod_end: string,
-    jamkning_percentage: number,
-    jamkning_valid_from: string,
-    jamkning_valid_to: string,
+    vaxa_stod_start: string | null,
+    vaxa_stod_end: string | null,
+    jamkning_percentage: number | null,
+    jamkning_valid_from: string | null,
+    jamkning_valid_to: string | null,
     default_dimensions: Record<string, string>,
     is_active: boolean,
     created_at: string,
@@ -286,7 +292,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -338,6 +344,7 @@ Partial update of an employee. Only the fields supplied in the body are changed.
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -364,7 +371,7 @@ Request body:
   vacation_rule?: "procentregeln" | "sammaloneregeln" | "none" | "semesterersattning",
   vacation_days_per_year?: number,
   semestertillagg_rate?: number,
-  vacation_pay_rate?: number,
+  vacation_pay_rate?: number | null,
   email?: string,
   phone?: string,
   address_line1?: string,
@@ -373,9 +380,9 @@ Request body:
   vaxa_stod_eligible?: boolean,
   vaxa_stod_start?: string,
   vaxa_stod_end?: string,
-  jamkning_percentage?: number,
-  jamkning_valid_from?: string,
-  jamkning_valid_to?: string,
+  jamkning_percentage?: number | null,
+  jamkning_valid_from?: string | null,
+  jamkning_valid_to?: string | null,
   default_dimensions?: Record<string, string>
 }
 ```
@@ -397,35 +404,35 @@ Response `200`:
     last_name: string,
     employment_type: "employee" | "company_owner" | "board_member",
     employment_start: string,
-    employment_end: string,
+    employment_end: string | null,
     employment_degree: number,
     hours_per_week: number,
     workdays_per_week: number,
     salary_type: "monthly" | "hourly",
-    monthly_salary: number,
-    hourly_rate: number,
-    tax_table_number: number,
-    tax_column: number,
-    tax_municipality: string,
+    monthly_salary: number | null,
+    hourly_rate: number | null,
+    tax_table_number: number | null,
+    tax_column: number | null,
+    tax_municipality: string | null,
     is_sidoinkomst: boolean,
     f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified",
-    clearing_number: string,
-    bank_account_number: string,
+    clearing_number: string | null,
+    bank_account_number: string | null,
     vacation_rule: string,
     vacation_days_per_year: number,
     semestertillagg_rate: number,
-    vacation_pay_rate: number,
-    email: string,
-    phone: string,
-    address_line1: string,
-    postal_code: string,
-    city: string,
+    vacation_pay_rate: number | null,
+    email: string | null,
+    phone: string | null,
+    address_line1: string | null,
+    postal_code: string | null,
+    city: string | null,
     vaxa_stod_eligible: boolean,
-    vaxa_stod_start: string,
-    vaxa_stod_end: string,
-    jamkning_percentage: number,
-    jamkning_valid_from: string,
-    jamkning_valid_to: string,
+    vaxa_stod_start: string | null,
+    vaxa_stod_end: string | null,
+    jamkning_percentage: number | null,
+    jamkning_valid_from: string | null,
+    jamkning_valid_to: string | null,
     default_dimensions: Record<string, string>,
     is_active: boolean,
     created_at: string,
@@ -435,7 +442,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -474,6 +481,7 @@ Sets `is_active=false`. The row is preserved because past salary runs reference 
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `204`.
 
@@ -498,15 +506,18 @@ Returns per-day absence rows (sick, vab, parental, ...) between ?from and ?to (i
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `from` | query | `string` | yes | YYYY-MM-DD. First day of the range (inclusive). Required. |
+| `to` | query | `string` | yes | YYYY-MM-DD. Last day of the range (inclusive), not before from. Required. |
+| `type` | query | `"sick" \| "vab" \| "parental" \| "pregnancy" \| "care_relative" \| "study" \| "unpaid_leave" \| "other_leave"` | no | Only days of this absence type. Default: every type. |
 
 Response `200`:
 ```ts
 {
-  data: { salary_absence_day_id: string, absence_date: string, absence_type: "sick" | "vab" | "parental" | "pregnancy" | "care_relative" | "study" | "unpaid_leave" | "other_leave", hours: number, notes: string, salary_run_employee_id: string, created_at: string, updated_at: string }[],
+  data: { salary_absence_day_id: string, absence_date: string, absence_type: "sick" | "vab" | "parental" | "pregnancy" | "care_relative" | "study" | "unpaid_leave" | "other_leave", hours: number, notes: string | null, salary_run_employee_id: string | null, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -555,6 +566,7 @@ Expands [from, to] (max 92 days) to per-day rows and upserts them on the natural
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -582,12 +594,12 @@ Response `200`:
 {
   data: {
     count: number,
-    days: { salary_absence_day_id?: string, absence_date: string, absence_type: "sick" | "vab" | "parental" | "pregnancy" | "care_relative" | "study" | "unpaid_leave" | "other_leave", hours: number, notes?: string, salary_run_employee_id?: string, created_at?: string, updated_at?: string }[]
+    days: { salary_absence_day_id?: string, absence_date: string, absence_type: "sick" | "vab" | "parental" | "pregnancy" | "care_relative" | "study" | "unpaid_leave" | "other_leave", hours: number, notes?: string | null, salary_run_employee_id?: string | null, created_at?: string, updated_at?: string }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -635,6 +647,10 @@ Deletes per-day absence rows between ?from and ?to (inclusive), optionally filte
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `from` | query | `string` | yes | YYYY-MM-DD. First day of the range (inclusive). Required. |
+| `to` | query | `string` | yes | YYYY-MM-DD. Last day of the range (inclusive), not before from. Required. |
+| `type` | query | `"sick" \| "vab" \| "parental" \| "pregnancy" \| "care_relative" \| "study" \| "unpaid_leave" \| "other_leave"` | no | Only days of this absence type. Default: every type. |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -643,7 +659,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -689,7 +705,7 @@ Response `200`:
 ```ts
 {
   data: {
-    employee_opening_balances_id: string,
+    employee_opening_balances_id: string | null,
     employee_id: string,
     cutover_date: string,
     ytd_gross: number,
@@ -702,12 +718,12 @@ Response `200`:
     opening_semester_liability_avgifter: number,
     karens_periods_adjustment: number,
     locked: boolean,
-    locked_by_run_id: string
+    locked_by_run_id: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -754,6 +770,7 @@ Full-replace upsert of the cutover state: YTD gross/tax/net for the cutover year
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -792,7 +809,7 @@ Response `200`:
 ```ts
 {
   data: {
-    employee_opening_balances_id: string,
+    employee_opening_balances_id: string | null,
     employee_id: string,
     cutover_date: string,
     ytd_gross: number,
@@ -805,12 +822,12 @@ Response `200`:
     opening_semester_liability_avgifter: number,
     karens_periods_adjustment: number,
     locked: boolean,
-    locked_by_run_id: string
+    locked_by_run_id: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -874,7 +891,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -924,6 +941,7 @@ Upserts opening balances for up to 200 employees in one call. Validation is all-
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -952,12 +970,12 @@ Response `200`:
 {
   data: {
     count: number,
-    rows: { employee_opening_balances_id: string, employee_id: string, cutover_date: string, locked: boolean }[]
+    rows: { employee_opening_balances_id: string | null, employee_id: string, cutover_date: string, locked: boolean }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1006,6 +1024,7 @@ Rolls every active employee's vacation balances into the next year (only days ab
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -1022,11 +1041,11 @@ Example request:
 Response `200`:
 ```ts
 {
-  data: { vacation_year_closure_id: string, adjustment_entry_id: string, report?: unknown },
+  data: { vacation_year_closure_id: string, adjustment_entry_id: string | null, report?: unknown },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
