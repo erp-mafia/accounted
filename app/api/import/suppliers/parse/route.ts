@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server'
 import { parseSuppliersFile } from '@/lib/import/suppliers/parser'
-import { normalizeOrgNumber, normalizeEmail } from '@/lib/import/shared/column-utils'
+import { normalizeEmail } from '@/lib/import/shared/column-utils'
+import { orgNumberKey } from '@/lib/invariants/org-number'
+
+// Same dedup key as the execute route (#2391): the Swedish 10-digit key when
+// the value is one, else the value as typed.
+const orgDedupKey = (value: string | null): string | null =>
+  orgNumberKey(value) ?? (value?.trim() || null)
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -68,7 +74,7 @@ export const POST = withRouteContext(
       const byOrg = new Map<string, { id: string; name: string }>()
       const byEmail = new Map<string, { id: string; name: string }>()
       for (const s of existing) {
-        const org = normalizeOrgNumber(s.org_number)
+        const org = orgDedupKey(s.org_number)
         if (org) byOrg.set(org, { id: s.id, name: s.name })
         const email = normalizeEmail(s.email)
         if (email) byEmail.set(email, { id: s.id, name: s.name })
@@ -76,7 +82,7 @@ export const POST = withRouteContext(
 
       let duplicateCount = 0
       const annotated: AnnotatedSupplierRow[] = parsed.rows.map((r) => {
-        const orgKey = normalizeOrgNumber(r.org_number)
+        const orgKey = orgDedupKey(r.org_number)
         const emailKey = normalizeEmail(r.email)
         let match: AnnotatedSupplierRow['duplicate_match'] = null
         if (orgKey && byOrg.has(orgKey)) {

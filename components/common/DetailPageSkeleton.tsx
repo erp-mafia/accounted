@@ -1,4 +1,8 @@
+'use client'
+
 import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/ui/page-header'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import { cn } from '@/lib/utils'
 
 interface DetailPageSkeletonProps {
@@ -18,6 +22,39 @@ interface DetailPageSkeletonProps {
  * on the most-travelled drill-down path).
  */
 export function DetailPageSkeleton({ cards = 2, wide = false, className }: DetailPageSkeletonProps) {
+  const shell = useShell()
+  if (shell === 'v2') {
+    // Shell v2: the title and its pills sit in the bar, the facts on one line
+    // under it, then sections of label and value rows edge to edge. No back
+    // link, no cards: the page that follows has neither.
+    return (
+      <div className={cn('space-y-8', className)} aria-busy="true" aria-live="polite">
+        <PageHeader
+          title={<Skeleton className="h-4 w-56" />}
+          action={
+            <div className="flex gap-2">
+              <Skeleton className="h-9 w-28 rounded-full" />
+              <Skeleton className="h-9 w-24 rounded-full" />
+            </div>
+          }
+        />
+        <Skeleton className="h-3.5 w-80" />
+        <div className="space-y-8">
+          {Array.from({ length: cards }, (_, i) => (
+            <div key={i} className="space-y-0">
+              <Skeleton className="mb-3 h-3 w-24" />
+              {[0, 1, 2].map((j) => (
+                <div key={j} className="flex items-center gap-8 border-b border-border/60 py-3">
+                  <Skeleton className="h-3.5 w-32" />
+                  <Skeleton className="h-3.5 w-48" />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
   return (
     <div className={cn('space-y-8', className)} aria-busy="true" aria-live="polite">
       {/* Back link */}

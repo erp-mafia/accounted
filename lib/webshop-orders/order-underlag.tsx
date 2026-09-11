@@ -58,6 +58,7 @@ export interface OrderUnderlagModel {
 const PLATFORM_LABELS: Record<string, string> = {
   woocommerce: 'WooCommerce',
   shopify: 'Shopify',
+  zettle: 'Zettle',
 }
 
 function vatRateLabel(rate: number | null): string {

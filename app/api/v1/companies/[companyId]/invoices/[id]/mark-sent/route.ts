@@ -39,6 +39,7 @@
  */
 
 import { z } from 'zod'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
@@ -255,7 +256,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const accountingMethod = companySettings.accounting_method ?? 'accrual'
-    const entityType = (companySettings.entity_type ?? 'enskild_firma') as EntityType
+    const entityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, companySettings.entity_type)
     const isRealInvoice = !typed.document_type || typed.document_type === 'invoice'
     // #967: kontantmetoden and defer_invoice_booking companies mark sent
     // WITHOUT booking (same gate as the dashboard, issue-and-book-invoice.ts).

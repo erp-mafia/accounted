@@ -110,6 +110,8 @@ export default function WooCommerceSettingsPanel() {
         const message =
           error === 'denied' ? t('error_denied')
           : error === 'wrong_user' ? t('error_wrong_user')
+          : error === 'expired' ? t('error_expired')
+          : error === 'conflict' ? t('error_conflict')
           : t('error_generic')
         toast({ title: t('connect_failed_title'), description: message, variant: 'destructive' })
       }

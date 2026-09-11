@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ENTITY_TYPES } from '@/lib/company/entity-type'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
@@ -9,6 +10,7 @@ import {
   fiscalYearSchema,
 } from '@/lib/invariants/zod'
 import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
@@ -191,7 +193,7 @@ function validateAccrualPeriod(
 // Enum schemas (matching types/index.ts)
 // ============================================================
 
-export const EntityTypeSchema = z.enum(['enskild_firma', 'aktiebolag'])
+export const EntityTypeSchema = z.enum(ENTITY_TYPES)
 
 export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
 
@@ -294,6 +296,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'webshop_order',
   'expense_claim',
   'expense_payout',
+  'rot_rut_reclaim',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
@@ -710,6 +713,15 @@ export const RotRutSettleSchema = z.object({
     .string()
     .regex(/^19\d{2}$/, 'Bankkontot måste vara ett BAS 19xx-konto')
     .optional(),
+})
+
+/**
+ * POST /api/rot-rut/payout-requests/[id]/reclaim: book the share Skatteverket
+ * refused back onto the customer(s). The amounts come from the recorded
+ * beslut, never from the body; only the booking date is the caller's.
+ */
+export const RotRutReclaimSchema = z.object({
+  booking_date: isoDate,
 })
 
 // The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst
@@ -1201,6 +1213,17 @@ function emptyStringAsUndefined<T extends z.ZodTypeAny>(inner: T) {
   )
 }
 
+/**
+ * suppliers.org_number is stored as the 10-digit key (#2391): the form asks
+ * for XXXXXX-XXXX and the AI extractor emits bare digits, and the matcher
+ * compares through the same key, so storage is canonical whatever the caller
+ * typed. Only Swedish-shaped input (10 or 12 digits once separators are
+ * stripped) is rewritten; a foreign registration number or an unrecognised
+ * value is stored as typed, because eu_business and non_eu_business
+ * suppliers keep their home-registry number in this column.
+ */
+const supplierOrgNumber = z.string().transform((v) => orgNumberKey(v) ?? v.trim())
+
 export const CreateSupplierSchema = z.object({
   name: z.string().min(1, 'Supplier name is required'),
   supplier_type: SupplierTypeSchema,
@@ -1211,7 +1234,7 @@ export const CreateSupplierSchema = z.object({
   postal_code: z.string().optional(),
   city: z.string().optional(),
   country: CountryCodeSchema,
-  org_number: z.string().optional(),
+  org_number: supplierOrgNumber.optional(),
   vat_number: z.string().optional(),
   bankgiro: z.string().optional(),
   plusgiro: z.string().optional(),
@@ -1414,6 +1437,16 @@ export const UpdateSupplierInvoiceSchema = z.object({
   delivery_date: optionalIsoDate,
   payment_reference: z.string().optional(),
   notes: z.string().optional(),
+})
+
+/**
+ * PATCH /api/supplier-invoices/[id]/items/[itemId]: move one line to another
+ * expense account. The registration verifikat is corrected inline (BFL 5 kap
+ * 5 §, track 2) in the same call, so the invoice and the ledger never
+ * disagree about where the cost sits.
+ */
+export const SupplierInvoiceItemAccountSchema = z.object({
+  account_number: accountNumberSchema,
 })
 
 // ============================================================
@@ -1710,6 +1743,10 @@ export const CategorizeTransactionSchema = z
     category: TransactionCategorySchema.optional(),
     template_id: z.string().optional(),
     vat_treatment: VatTreatmentSchema.optional(),
+    // The underlag's actual moms, in the transaction's currency. Replaces the
+    // rate-based VAT line of a category or template booking (see
+    // buildMappingResultFromCategory / applyVatAmountOverride).
+    vat_amount: z.number().positive().optional(),
     account_override: accountNumber.optional(),
     counterparty_template_id: z.string().uuid().optional(),
     // Dimensions bag {sie_dim_no: code} applied to the business lines of the
@@ -1756,7 +1793,7 @@ export const BookTransactionSchema = z
 
 // ── Webshop orders (Orders page) ──────────────────────────────
 
-export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify'])
+export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify', 'zettle'])
 
 export const WebshopOrdersListQuerySchema = z.object({
   platform: WebshopPlatformSchema.optional(),
@@ -3110,6 +3147,11 @@ const EmployeeSchemaBase = z.object({
   vacation_rule: VacationRuleSchema.default('procentregeln'),
   vacation_days_per_year: z.number().int().min(25).max(40).default(25),
   semestertillagg_rate: z.number().min(0).max(0.05).default(0.0043),
+  // Kollektivavtal semesterlön rate as a fraction (0.135 = 13.5 %); null =
+  // statutory 12 % (14.4 % at 30 days). Bounds mirror the DB CHECK and
+  // lib/salary/vacation-pay-rate: below the floor is illegal, above 30 % is
+  // a unit typo.
+  vacation_pay_rate: z.number().min(0.12).max(0.3).nullable().optional(),
   email: z.string().email().optional(),
   phone: z.string().max(20).optional(),
   address_line1: z.string().max(200).optional(),
@@ -3232,6 +3274,7 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
   vacation_rule: VacationRuleSchema,
   vacation_days_per_year: z.number().int().min(25).max(40),
   semestertillagg_rate: z.number().min(0).max(0.05),
+  vacation_pay_rate: z.number().min(0.12).max(0.3).nullable(),
   vaxa_stod_eligible: z.boolean(),
 })
 
@@ -4232,7 +4275,7 @@ export const SalesOrderListQuerySchema = z.object({
 // ── Parties (Kontakter register) ───────────────────────────────────────────
 
 export const PartiesRegisterQuerySchema = z.object({
-  view: z.enum(['suggested', 'observed']).optional(),
+  view: z.enum(['suggested', 'observed', 'all']).optional(),
   q: z.string().max(120).optional(),
   period: z.enum(['12m', 'all']).optional(),
 })
@@ -4278,6 +4321,11 @@ export const PartySearchRegistryQuerySchema = z.object({
   q: z.string().max(120).optional(),
 })
 
+/** GET /api/company/search: the onboarding picker's free-text query. */
+export const CompanySearchQuerySchema = z.object({
+  q: z.string().trim().min(3).max(120),
+})
+
 /**
  * GET /api/parties/registry: the org number a customer or supplier form is
  * being filled for. Shape, check digit and the legal-person rule are one
@@ -4291,3 +4339,25 @@ export const PartyRegistryLookupQuerySchema = z.object({
 export const PartyUndoMergeSchema = z.object({
   decisionId: uuid,
 })
+
+// ── Parties (Motparter list + aliases) ────────────────────────────────────
+
+export const PartiesListQuerySchema = z.object({
+  q: z.string().max(120).optional(),
+  period: z.enum(['12m', 'all']).optional(),
+})
+
+/**
+ * POST /api/parties/aliases: what a person says about the bank strings the
+ * resolver named. rename: these strings mean <name>. not_same: the reading
+ * was wrong and nothing is known. Both supersede the live rows and stamp the
+ * outcome on them, so the resolver's decision stays in the log.
+ */
+export const PartyAliasActionSchema = z
+  .object({
+    aliasKeys: z.array(z.string().min(1).max(300)).min(1).max(50),
+    action: z.enum(['rename', 'not_same']),
+    name: z.string().trim().min(1).max(200).optional(),
+  })
+  .refine((v) => v.action !== 'rename' || !!v.name, { message: 'name is required for rename', path: ['name'] })
+

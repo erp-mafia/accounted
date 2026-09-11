@@ -15,7 +15,8 @@ import {
 } from '@/components/ui/dialog'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { Loader2, Trash2, Plus, ChevronDown, Download, Upload, Pencil, Copy, Eye, EyeOff } from 'lucide-react'
-import { TEMPLATE_CATEGORY_LABELS, convertLibraryToBookingTemplate } from '@/lib/bookkeeping/template-library'
+import { convertLibraryToBookingTemplate } from '@/lib/bookkeeping/template-library'
+import { GROUP_LABEL_KEYS, libraryTemplateGroup } from '@/lib/bookkeeping/template-groups'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { downloadFile } from '@/lib/browser/download-file'
@@ -27,6 +28,7 @@ import { useBookingTemplates } from '@/lib/reference-data/hooks'
 
 export function BookingTemplatesPanel() {
   const t = useTranslations('settings_booking_templates')
+  const tGroup = useTranslations('tx_template_picker')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -35,6 +37,7 @@ export function BookingTemplatesPanel() {
     all: t('entity_all'),
     enskild_firma: t('entity_enskild_firma'),
     aktiebolag: t('entity_aktiebolag'),
+    ideell_forening: t('entity_ideell_forening'),
   }
 
   // The panel renders the same session-cached list the pickers use
@@ -303,7 +306,7 @@ export function BookingTemplatesPanel() {
                     <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
                       <span className="truncate text-sm text-muted-foreground">{tt.name}</span>
                       <span className="text-xs text-muted-foreground">
-                        {TEMPLATE_CATEGORY_LABELS[tt.category]}
+                        {tGroup(GROUP_LABEL_KEYS[libraryTemplateGroup(tt)])}
                         {tt.entity_type !== 'all' && ` · ${ENTITY_LABELS[tt.entity_type]}`}
                       </span>
                     </span>
@@ -429,6 +432,7 @@ function TemplateSection({
   entityLabels: Record<string, string>
 }) {
   const t = useTranslations('settings_booking_templates')
+  const tGroup = useTranslations('tx_template_picker')
   const tCommon = useTranslations('common')
   return (
     <SettingsGroup>
@@ -459,7 +463,7 @@ function TemplateSection({
                   <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
                     <span className="truncate text-sm">{tt.name}</span>
                     <span className="text-xs text-muted-foreground">
-                      {TEMPLATE_CATEGORY_LABELS[tt.category]}
+                      {tGroup(GROUP_LABEL_KEYS[libraryTemplateGroup(tt)])}
                       {tt.entity_type !== 'all' && ` · ${entityLabels[tt.entity_type]}`}
                     </span>
                     {!isConvertible && (

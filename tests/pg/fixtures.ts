@@ -21,7 +21,7 @@ export async function insertAuthUser(id: string = randomUUID()): Promise<string>
 export async function insertCompany(params: {
   createdBy: string
   name?: string
-  entityType?: 'enskild_firma' | 'aktiebolag'
+  entityType?: 'enskild_firma' | 'aktiebolag' | 'ideell_forening'
 }): Promise<string> {
   const id = randomUUID()
   await getPool().query(

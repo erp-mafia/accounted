@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -8,8 +8,19 @@ import { createCompanyFromOnboarding } from '@/lib/company/actions'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 import { deriveFirstYearDefaults } from '@/lib/company/first-year-defaults'
 import { parseStartMonthDay } from '@/lib/company/first-year-defaults'
-import { fetchCompanyLookup } from '@/lib/company-lookup/fetch-company-lookup'
+import {
+  fetchCompanyLookup,
+  fetchCompanySearch,
+  fetchCompanySuggestions,
+} from '@/lib/company-lookup/fetch-company-lookup'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import {
+  COMPANY_SEARCH_MIN_CHARS,
+  type CompanySearchHit,
+  type CompanySuggestion,
+} from '@/lib/company-lookup/types'
+import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
+import { formatOrgNumber } from '@/lib/utils'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useBranding } from '@/lib/branding/brand-context'
 import posthog from 'posthog-js'
@@ -31,7 +42,18 @@ import {
   type FirstYearEndOption,
 } from '@/lib/onboarding-journey/fiscal-options'
 import type { EntityType } from '@/types'
+import { isEntityTypeCreatable, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
+
+/** Display order of the form picker (AB first, as before); flags filter it. */
+const FORM_PICKER_ORDER: EntityType[] = ['aktiebolag', 'enskild_firma', 'ideell_forening']
+
+/** i18n key per legal form for the picker chips and the summary card. */
+const FORM_LABEL_KEY: Record<EntityType, 'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening'> = {
+  aktiebolag: 'journey_form_ab',
+  enskild_firma: 'journey_form_ef',
+  ideell_forening: 'journey_form_forening',
+}
 import JourneyTrack from './JourneyTrack'
 import Question from './Question'
 import ChipRow from './ChipRow'
@@ -47,11 +69,21 @@ import './journey.css'
  * wizard sends today.
  *
  * TIC budget: fetchCompanyLookup fires exactly once per confirmed orgnr
- * (Enter, or the auto-submitted BankID deep link). No debounce-per-key,
- * no roster prefetch. The advisory dup check is an internal endpoint.
+ * (Enter, the auto-submitted BankID deep link, or a picked suggestion).
+ * The search-as-you-type picker under the field is SCB (free), never TIC.
+ * The advisory dup check is an internal endpoint.
  */
 
 const STATION_FRACS = [0.07, 0.285, 0.5, 0.715, 0.93]
+
+/** Keystroke-to-search delay for the SCB picker: long enough to skip the
+ *  middle of a word, short enough to feel live. */
+const SUGGEST_DEBOUNCE_MS = 300
+
+/** Digits, spaces and dashes only: the orgnr path, never a name search. */
+function looksLikeOrgNumber(raw: string): boolean {
+  return /^[\d\s-]+$/.test(raw.trim())
+}
 
 const LOG = '[onboarding-journey]'
 function logError(message: string, extra?: Record<string, unknown>) {
@@ -87,6 +119,9 @@ interface OnboardingJourneyProps {
    *  likely landed here by mistake (lost invite cookie), so the first
    *  question carries a "join via the link in the email" hint. */
   hasPendingInvite?: boolean
+  /** SCB credentials exist in this environment: the orgnr field suggests
+   *  companies while a name is typed. Off: the field is orgnr-or-Enter. */
+  companySearchEnabled?: boolean
 }
 
 export default function OnboardingJourney({
@@ -96,6 +131,7 @@ export default function OnboardingJourney({
   initialEntityType,
   initialLegalName,
   hasPendingInvite = false,
+  companySearchEnabled = false,
 }: OnboardingJourneyProps) {
   const router = useRouter()
   const t = useTranslations('onboarding')
@@ -119,6 +155,17 @@ export default function OnboardingJourney({
   const [monogram, setMonogram] = useState<string | null>(null)
   const [dupName, setDupName] = useState<string | null>(null)
   const [dupElsewhere, setDupElsewhere] = useState(false)
+  // The SCB picker: rows for the current text, whether SCB cut the list,
+  // and the keyboard-highlighted row (-1: none, Enter runs the Enter path).
+  const [suggestions, setSuggestions] = useState<CompanySuggestion[]>([])
+  const [suggestTruncated, setSuggestTruncated] = useState(false)
+  const [suggestActive, setSuggestActive] = useState(-1)
+  // Set once the environment answers 503: stops every further call.
+  const suggestDisabled = useRef(!companySearchEnabled)
+  // The text the user last confirmed (Enter, or a picked row): the picker
+  // does not reopen for it, so the #2421 chip row or the nomatch note
+  // stands alone until the text changes.
+  const lastConfirmed = useRef<string | null>(null)
 
   const station = stationOfStep(state.step)
   const entity = state.settings.entity_type
@@ -145,30 +192,169 @@ export default function OnboardingJourney({
 
   // One lookup per confirmed orgnr: fired from the submit handler, never
   // from typing. The dup check (internal endpoint) rides along, advisory.
+  const shakeOrg = useCallback(() => {
+    setOrgShake(true)
+    window.setTimeout(() => setOrgShake(false), 400)
+  }, [])
+
+  const checkDuplicate = useCallback((orgNumber: string) => {
+    setDupName(null)
+    setDupElsewhere(false)
+    fetch(`/api/company/check-org-number?org_number=${encodeURIComponent(orgNumber)}`)
+      .then(async (res) => {
+        if (!res.ok) return
+        const { data } = await res.json()
+        setDupName(data?.companies?.[0]?.name ?? null)
+        setDupElsewhere(Boolean(data?.exists_elsewhere))
+      })
+      .catch(() => {})
+  }, [])
+
+  // The one field takes either an orgnr or a company name. Digits (with
+  // dashes/spaces) are always the orgnr path, so a mistyped number shakes
+  // instead of turning into a name search; anything else is a name.
   const submitOrg = useCallback(
     (raw: string) => {
-      const normalized = normalizeOrgNumber(raw)
-      if (normalized === null) {
-        setOrgShake(true)
-        window.setTimeout(() => setOrgShake(false), 400)
+      const trimmed = raw.trim()
+      const looksNumeric = /^[\d\s-]+$/.test(trimmed)
+      if (looksNumeric) {
+        if (normalizeOrgNumber(trimmed) === null) {
+          shakeOrg()
+          return
+        }
+        dispatch({ type: 'ORG_SUBMITTED', orgNumber: trimmed })
+        fetchCompanyLookup(trimmed, { ticEnabled }).then((outcome) => {
+          dispatch({ type: 'LOOKUP_RESULT', outcome })
+        })
+        checkDuplicate(trimmed)
         return
       }
+      if (!ticEnabled || trimmed.length < COMPANY_SEARCH_MIN_CHARS) {
+        shakeOrg()
+        return
+      }
+      // A previous orgnr's "you already have X" note must not sit above the
+      // chip row; the pick re-checks for the number it resolves to.
       setDupName(null)
       setDupElsewhere(false)
-      dispatch({ type: 'ORG_SUBMITTED', orgNumber: raw })
-      fetchCompanyLookup(raw, { ticEnabled }).then((outcome) => {
+      lastConfirmed.current = trimmed
+      dispatch({ type: 'SEARCH_SUBMITTED', query: trimmed })
+      fetchCompanySearch(trimmed, { ticEnabled }).then((outcome) => {
+        dispatch({ type: 'SEARCH_RESULT', outcome })
+        if (outcome.status === 'found' && outcome.hits.length === 1) {
+          checkDuplicate(outcome.hits[0].orgNumber)
+        }
+      })
+    },
+    [ticEnabled, shakeOrg, checkDuplicate],
+  )
+
+  // The field keeps the name the user typed: writing the picked number into
+  // it would print a sole trader's personnummer in plain text on Back, the
+  // one thing the chip row avoids. Back re-searches the name instead.
+  const pickSearchHit = useCallback(
+    (hit: CompanySearchHit) => {
+      dispatch({ type: 'SEARCH_HIT_PICKED', hit })
+      checkDuplicate(hit.orgNumber)
+    },
+    [checkDuplicate],
+  )
+
+  // Search-as-you-type: SCB per debounced keystroke while the text is a
+  // name of three or more characters. A newer keystroke aborts the request
+  // in flight, and a response for text the user has since left is dropped,
+  // so the list never lags behind the field. Costs no TIC. Quiet while the
+  // Enter path shows its chip row and for text already confirmed.
+  useEffect(() => {
+    const query = orgInput.trim()
+    if (
+      suggestDisabled.current ||
+      state.step !== 'orgnr' ||
+      state.lookupPending ||
+      state.searchHits.length > 0 ||
+      query === lastConfirmed.current
+    ) {
+      setSuggestions([])
+      setSuggestTruncated(false)
+      setSuggestActive(-1)
+      return
+    }
+    if (query.length < COMPANY_SEARCH_MIN_CHARS || looksLikeOrgNumber(query)) {
+      setSuggestions([])
+      setSuggestTruncated(false)
+      setSuggestActive(-1)
+      return
+    }
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      fetchCompanySuggestions(query, { signal: controller.signal }).then((outcome) => {
+        if (controller.signal.aborted) return
+        if (outcome.status === 'disabled') suggestDisabled.current = true
+        const rows = outcome.status === 'found' ? outcome.suggestions : []
+        setSuggestions(rows)
+        setSuggestTruncated(outcome.status === 'found' || outcome.status === 'empty' ? outcome.truncated : false)
+        setSuggestActive(-1)
+      })
+    }, SUGGEST_DEBOUNCE_MS)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [orgInput, state.step, state.lookupPending, state.searchHits.length])
+
+  // A picked suggestion is an orgnr the user confirmed: the same single TIC
+  // lookup as Enter on a typed number, plus the advisory dup check. The
+  // field shows the company's name, never its number (a sole trader's is
+  // their personnummer); on Back the name stands until the user edits it.
+  const pickSuggestion = useCallback(
+    (suggestion: CompanySuggestion) => {
+      setSuggestions([])
+      setSuggestTruncated(false)
+      setSuggestActive(-1)
+      lastConfirmed.current = suggestion.name.trim()
+      setOrgInput(suggestion.name)
+      setDupName(null)
+      setDupElsewhere(false)
+      dispatch({ type: 'SUGGESTION_PICKED', suggestion })
+      fetchCompanyLookup(suggestion.orgNumber, { ticEnabled }).then((outcome) => {
         dispatch({ type: 'LOOKUP_RESULT', outcome })
       })
-      fetch(`/api/company/check-org-number?org_number=${encodeURIComponent(raw)}`)
-        .then(async (res) => {
-          if (!res.ok) return
-          const { data } = await res.json()
-          setDupName(data?.companies?.[0]?.name ?? null)
-          setDupElsewhere(Boolean(data?.exists_elsewhere))
-        })
-        .catch(() => {})
+      checkDuplicate(suggestion.orgNumber)
     },
-    [ticEnabled],
+    [ticEnabled, checkDuplicate],
+  )
+
+  const onOrgKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLInputElement>) => {
+      if (state.lookupPending) return
+      const open = suggestions.length > 0
+      if (open && e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSuggestActive((i) => (i + 1) % suggestions.length)
+        return
+      }
+      if (open && e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSuggestActive((i) => (i <= 0 ? suggestions.length - 1 : i - 1))
+        return
+      }
+      if (open && e.key === 'Escape') {
+        e.preventDefault()
+        setSuggestions([])
+        setSuggestActive(-1)
+        return
+      }
+      if (e.key === 'Enter') {
+        const active = suggestActive >= 0 ? suggestions[suggestActive] : undefined
+        if (active) {
+          e.preventDefault()
+          pickSuggestion(active)
+          return
+        }
+        submitOrg(orgInput)
+      }
+    },
+    [state.lookupPending, suggestions, suggestActive, pickSuggestion, submitOrg, orgInput],
   )
 
   // BankID deep link: auto-submit the orgnr once on mount (the single
@@ -335,7 +521,7 @@ export default function OnboardingJourney({
     const lk = state.ticLookup
     if (!lk || station > 0) return []
     const facts: { text: string; warn?: boolean }[] = []
-    if (entity) facts.push({ text: entity === 'aktiebolag' ? t('journey_form_ab') : t('journey_form_ef') })
+    if (entity) facts.push({ text: t(FORM_LABEL_KEY[entity]) })
     if (lk.address?.city) facts.push({ text: lk.address.city })
     if (lk.sniCodes[0]?.name) facts.push({ text: lk.sniCodes[0].name })
     if (lk.registration.fTax) facts.push({ text: 'F-skatt' })
@@ -354,34 +540,106 @@ export default function OnboardingJourney({
       case 'orgnr':
         return (
           <Question
-            title={t('journey_orgnr_title')}
+            title={companySearchEnabled || ticEnabled ? t('journey_company_title') : t('journey_orgnr_title')}
             sub={hasPendingInvite ? t('journey_pending_invite_note') : undefined}
             attn={
               state.serverError === 'org_number_invalid'
                 ? t('journey_err_org_invalid')
                 : state.lookupNote === 'error'
                   ? t('journey_lookup_error')
-                  : undefined
+                  : state.lookupNote === 'nomatch'
+                    ? t('journey_search_nomatch')
+                    : undefined
             }
           >
             <div className={`jny-biginput${orgShake ? ' is-err' : ''}`} style={{ marginTop: 26 }}>
               <input
                 value={orgInput}
-                inputMode="numeric"
-                placeholder="556677-8899"
+                inputMode="text"
+                placeholder={companySearchEnabled || ticEnabled ? t('journey_company_placeholder') : '556677-8899'}
                 aria-label={t('step2_org_number_label')}
                 autoComplete="off"
                 autoFocus
                 disabled={state.lookupPending}
-                onChange={(e) => setOrgInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !state.lookupPending) submitOrg(orgInput)
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={suggestions.length > 0}
+                aria-controls="jny-suggest-list"
+                aria-activedescendant={suggestActive >= 0 ? `jny-suggest-${suggestActive}` : undefined}
+                onChange={(e) => {
+                  // A highlight belongs to the rows for the previous text.
+                  setSuggestActive(-1)
+                  setOrgInput(e.target.value)
                 }}
+                onKeyDown={onOrgKeyDown}
               />
             </div>
-            <p className="jny-enterhint">
-              {t('journey_press')} <b>Enter</b>
-            </p>
+            {/* In flow, not floated: the step scrolls (overflow-y: auto), so an
+                absolutely positioned list would be clipped to the field. */}
+            {suggestions.length > 0 ? (
+              <>
+                <ul id="jny-suggest-list" role="listbox" aria-label={t('journey_suggest_label')} className="jny-suggest">
+                  {suggestions.map((s, i) => {
+                    // A sole trader's org number is their personnummer:
+                    // the row names the form instead, never the number.
+                    const isSoleTrader = mapEntityType(s.legalEntityType) === 'enskild_firma'
+                    const ident = isSoleTrader ? t('journey_form_ef') : formatOrgNumber(s.orgNumber)
+                    const sub = [ident, s.city, s.active ? null : t('journey_suggest_inactive')]
+                      .filter(Boolean)
+                      .join(' · ')
+                    return (
+                      <li
+                        key={s.orgNumber}
+                        id={`jny-suggest-${i}`}
+                        role="option"
+                        aria-selected={i === suggestActive}
+                        className={`${i === suggestActive ? 'is-active' : ''}${s.active ? '' : ' is-inactive'}`}
+                        onMouseEnter={() => setSuggestActive(i)}
+                        // mousedown, not click: the input's blur must not close the list first.
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          pickSuggestion(s)
+                        }}
+                      >
+                        <span className="jny-sug-name">{s.name}</span>
+                        <span className="jny-sug-sub">{sub}</span>
+                      </li>
+                    )
+                  })}
+                </ul>
+                {suggestTruncated ? <p className="jny-enterhint">{t('journey_suggest_more')}</p> : null}
+              </>
+            ) : suggestTruncated ? (
+              // SCB counted a flood for a short prefix and sent no rows.
+              <p className="jny-enterhint">{t('journey_suggest_more')}</p>
+            ) : state.searchHits.length > 1 ? (
+              <>
+                <p className="jny-enterhint">{t('journey_search_pick')}</p>
+                <ChipRow
+                  options={state.searchHits.map((h) => {
+                    // A sole trader's org number is their personnummer: the
+                    // chip names the form instead, never the number.
+                    const isSoleTrader = mapEntityType(h.result.legalEntityType) === 'enskild_firma'
+                    const ident = isSoleTrader ? t('journey_form_ef') : formatOrgNumber(h.orgNumber)
+                    const city = h.result.address?.city
+                    return {
+                      key: h.orgNumber,
+                      label: h.result.companyName || ident,
+                      rec: h.result.companyName ? `${ident}${city ? ` · ${city}` : ''}` : undefined,
+                    }
+                  })}
+                  onPick={(k) => {
+                    const hit = state.searchHits.find((h) => h.orgNumber === k)
+                    if (hit) pickSearchHit(hit)
+                  }}
+                  {...flyProps}
+                />
+              </>
+            ) : (
+              <p className="jny-enterhint">
+                {t('journey_press')} <b>Enter</b>
+              </p>
+            )}
           </Question>
         )
 
@@ -421,10 +679,10 @@ export default function OnboardingJourney({
         return (
           <Question title={t('journey_form_title')} info={t('journey_form_info')}>
             <ChipRow
-              options={[
-                { key: 'aktiebolag', label: t('journey_form_ab') },
-                { key: 'enskild_firma', label: t('journey_form_ef') },
-              ]}
+              options={FORM_PICKER_ORDER.filter(isEntityTypeCreatable).map((key) => ({
+                key,
+                label: t(FORM_LABEL_KEY[key]),
+              }))}
               onPick={(k) => dispatch({ type: 'ENTITY_PICKED', entityType: k as EntityType })}
               {...flyProps}
             />
@@ -1036,11 +1294,11 @@ function DoneStep({
   const s = state.settings
   const shortName = (s.company_name ?? '').split(' ')[0] || ''
   const rows: [string, string][] = [
-    [t('journey_card_form'), s.entity_type === 'aktiebolag' ? t('journey_form_ab') : t('journey_form_ef')],
+    [t('journey_card_form'), s.entity_type ? t(FORM_LABEL_KEY[s.entity_type]) : ''],
   ]
   if (s.org_number) {
     rows.push([
-      s.entity_type === 'enskild_firma' ? t('journey_card_persnr') : t('journey_card_orgnr'),
+      s.entity_type && usesPersonnummerAsOrgNumber(s.entity_type) ? t('journey_card_persnr') : t('journey_card_orgnr'),
       s.org_number,
     ])
   }

@@ -29,6 +29,7 @@ import {
 } from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
+import { fiscalYearScopeFromImports, type FiscalYearScope } from './lib/invoice-scope'
 import {
   FortnoxDocumentScopesRequiredError,
   importProviderDocuments,
@@ -46,6 +47,10 @@ import { loadMappings, generateImportPreview, executeSIEImport, findOverlappingP
 import { buildMappingTargets } from './lib/mapping-targets'
 import type { ProviderName } from '@/lib/providers/types'
 import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
+import {
+  buildLundifyActivationUrl,
+  getBjornLundenActivationKey,
+} from '@/lib/providers/bjornlunden/activation'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import {
@@ -196,6 +201,26 @@ async function buildArcimOAuthUrl(
     documentScopes: options?.documentScopes,
   })
   return url
+}
+
+/**
+ * Lundify activation URL for a Björn Lundén consent, or null when BL has not
+ * issued this install an activation key (self-hosted, or a listing that is
+ * not released). Same state row as the OAuth providers: Lundify echoes the
+ * code back as `extra`, and the callback resolves the consent from that row
+ * exactly as it resolves an OAuth `state`. The manual User-Key field stays
+ * next to the button, so a customer who activated inside Lundify already can
+ * still paste the key.
+ */
+async function buildBjornLundenActivationUrl(
+  consentId: string,
+  initiatedByUserId: string,
+  origin: string,
+): Promise<string | null> {
+  const activationKey = getBjornLundenActivationKey()
+  if (!activationKey) return null
+  const otc = await generateOtc(consentId, initiatedByUserId, origin)
+  return buildLundifyActivationUrl(activationKey, resolveArcimCallbackUrl('bjornlunden'), otc.code)
 }
 
 /**
@@ -410,10 +435,15 @@ export const arcimMigrationExtension: Extension = {
                 })
               }
               // Token-based providers re-authorize by re-entering credentials
+              // (Björn Lundén also through Lundify's activation redirect).
+              const activationUrl = provider === 'bjornlunden'
+                ? await buildBjornLundenActivationUrl(stale.id, user.id, await resolveOAuthOrigin(request))
+                : null
               return NextResponse.json({
                 consentId: stale.id,
                 authType: 'token',
                 reconnect: true,
+                ...(activationUrl ? { activationUrl } : {}),
               })
             }
             // No existing consent to revive: fall through to a normal connect.
@@ -492,10 +522,16 @@ export const arcimMigrationExtension: Extension = {
               authUrl,
             })
           } else {
-            // Token-based providers: consent is ready for direct use
+            // Token-based providers: consent is ready for direct use. Björn
+            // Lundén additionally gets the Lundify activation URL when BL has
+            // issued an activation key, so the User-Key never has to be pasted.
+            const activationUrl = provider === 'bjornlunden'
+              ? await buildBjornLundenActivationUrl(consent.id, user.id, await resolveOAuthOrigin(request))
+              : null
             return NextResponse.json({
               consentId: consent.id,
               authType: 'token',
+              ...(activationUrl ? { activationUrl } : {}),
             })
           }
         } catch (error) {
@@ -625,7 +661,18 @@ export const arcimMigrationExtension: Extension = {
         const url = new URL(request.url)
         let code = url.searchParams.get('code')
         const handoff = url.searchParams.get('handoff')
-        const stateRaw = url.searchParams.get('state')
+        let stateRaw = url.searchParams.get('state')
+        // Lundify's activation redirect (Björn Lundén) comes back as
+        // `?publicKey={User-Key}&extra={our state}` instead of code/state.
+        // Fold it into the OAuth-shaped locals so the atomic state
+        // consumption, initiator binding and white-label handoff below run
+        // unchanged; only the final exchange step differs.
+        const lundifyPublicKey = url.searchParams.get('publicKey')
+        const lundifyExtra = url.searchParams.get('extra')
+        if (!code && !handoff && lundifyPublicKey && lundifyExtra) {
+          code = lundifyPublicKey
+          stateRaw = lundifyExtra
+        }
         const oauthError = url.searchParams.get('error')
         const oauthErrorDescription = url.searchParams.get('error_description')
         const currentOrigin = requestOrigin(request)
@@ -792,12 +839,26 @@ export const arcimMigrationExtension: Extension = {
           if (providerError !== null) return respondWithError(providerError, consentId)
           if (!code) return respondWithError(STATE_REJECTED_MESSAGE)
 
-          // Must match the redirect_uri the authorization request was built
-          // with, so both come from resolveArcimCallbackUrl.
-          const redirectUri = resolveArcimCallbackUrl(provider)
+          if (provider === 'bjornlunden') {
+            // Lundify handed back the company's User-Key. Same probe-then-store
+            // path as the manual field (client-credentials token, /details
+            // probe, scope verdict), owned by the consent's own company: the
+            // consent came from the server-written state row, not the query.
+            await submitProviderToken(
+              consentId,
+              provider,
+              'client_credentials',
+              code,
+              resolvedState.companyId,
+            )
+          } else {
+            // Must match the redirect_uri the authorization request was built
+            // with, so both come from resolveArcimCallbackUrl.
+            const redirectUri = resolveArcimCallbackUrl(provider)
 
-          // Exchange OAuth code directly with the provider
-          await exchangeAuthToken(consentId, provider, code, redirectUri)
+            // Exchange OAuth code directly with the provider
+            await exchangeAuthToken(consentId, provider, code, redirectUri)
+          }
 
           // Return an HTML page that notifies the opener tab and closes itself
           const successUrl = `${responseOrigin}/import?migration=connected&consentId=${encodeURIComponent(consentId)}`
@@ -834,6 +895,19 @@ export const arcimMigrationExtension: Extension = {
           if (error instanceof ProviderCompanyMismatchError) {
             return respondWithError(
               getErrorEntry('PROVIDER_COMPANY_MISMATCH')?.message_sv ?? error.message,
+              callbackConsentId,
+            )
+          }
+          // Björn Lundén via Lundify: the User-Key probe has the same three
+          // verdicts as /submit-token, so show the same registry sentences.
+          if (error instanceof ProviderTokenInvalidError) {
+            const registryCode = error.kind === 'integration-not-activated'
+              ? 'BL_INTEGRATION_NOT_ACTIVATED'
+              : error.kind === 'company-key-not-found'
+                ? 'BL_COMPANY_KEY_NOT_FOUND'
+                : 'PROVIDER_TOKEN_INVALID'
+            return respondWithError(
+              getErrorEntry(registryCode)?.message_sv ?? error.message,
               callbackConsentId,
             )
           }
@@ -1387,6 +1461,13 @@ export const arcimMigrationExtension: Extension = {
           // always sends it explicitly.
           importAssets = false,
           reconcileVouchers = true,
+          // The wizard sends one request per step (#2469) and only the last
+          // one finishes the run; an older client that omits this gets the
+          // original end-of-request behaviour.
+          suggestParties = true,
+          // Set by the wizard once an earlier per-step request received rows
+          // on this grant; only changes how a 403 is classified.
+          grantProven = false,
         } = await request.json() as {
           consentId: string
           importCompanyInfo?: boolean
@@ -1396,6 +1477,8 @@ export const arcimMigrationExtension: Extension = {
           importSupplierInvoices?: boolean
           importAssets?: boolean
           reconcileVouchers?: boolean
+          suggestParties?: boolean
+          grantProven?: boolean
         }
 
         if (!consentId) {
@@ -1472,6 +1555,31 @@ export const arcimMigrationExtension: Extension = {
             })
           }
 
+          // The invoice steps only pay for invoices whose ledger is here: the
+          // fiscal years the completed SIE imports cover. Read only when an
+          // invoice step runs; no completed import (Fortnox pulls SIE over the
+          // API, or the guard above was not triggered) means no filter.
+          let fiscalYearScope: FiscalYearScope | null = null
+          if (importSalesInvoices || importSupplierInvoices) {
+            const { data: importedYears, error: importedYearsError } = await supabase
+              .from('sie_imports')
+              .select('fiscal_year_start, fiscal_year_end')
+              .eq('company_id', companyId)
+              .eq('status', 'completed')
+            if (importedYearsError) {
+              // A failed read must not degrade into "no scope, import the
+              // whole register": that is the slow path this scope exists
+              // to avoid, and it would run without the user knowing.
+              log.error('arcim migrate: could not read the imported fiscal years', importedYearsError)
+              return errorResponseFromCode('PROVIDER_MIGRATE_FAILED', moduleLog, {
+                details: { reason: importedYearsError.message },
+              })
+            }
+            fiscalYearScope = fiscalYearScopeFromImports(
+              importedYears as { fiscal_year_start: string | null; fiscal_year_end: string | null }[] | null,
+            )
+          }
+
           log.info(`Starting migration for user ${user.id} from ${consent.provider}`)
 
           const migrationOptions = {
@@ -1479,6 +1587,9 @@ export const arcimMigrationExtension: Extension = {
             companyId,
             userId: user.id,
             supabase,
+            suggestParties,
+            fiscalYearScope,
+            grantProven: grantProven === true,
             // The behandlingshistorik rows the sales-invoice step writes need
             // the service role (processing_history has no INSERT policy);
             // built only when that step has rows to write.

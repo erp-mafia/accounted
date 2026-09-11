@@ -126,7 +126,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
       expect(result.debit_account).toBe('6540')
     })
 
@@ -144,7 +144,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
       expect(result.debit_account).toBe('6540')
     })
 
@@ -164,7 +164,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
       expect(result.debit_account).toBe('6540')
     })
 
@@ -182,7 +182,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
       expect(result.debit_account).toBe('6991') // default expense fallback
     })
 
@@ -192,7 +192,7 @@ describe('mapping-engine', () => {
       const tx = makeTransaction({ amount: -100, merchant_name: 'Unknown' })
       mockResult({ data: [], error: null })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       expect(result.debit_account).toBe('6991')
       expect(result.credit_account).toBe('1930')
@@ -206,7 +206,7 @@ describe('mapping-engine', () => {
       const tx = makeTransaction({ amount: 500, merchant_name: 'Unknown' })
       mockResult({ data: [], error: null })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       expect(result.debit_account).toBe('1930')
       expect(result.credit_account).toBe('3900')
@@ -345,7 +345,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
       // 30,000 > 28,650 (2024 half-PBB) → should capitalize to 1250
       expect(result.debit_account).toBe('1250')
     })
@@ -395,7 +395,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
       // 29,000 < 29,400 (2025 half-PBB) → should NOT capitalize
       expect(result.debit_account).toBe('5410')
     })
@@ -444,7 +444,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       expect(result.debit_account).toBe('5410')
       expect(result.credit_account).toBe('1930')
@@ -495,7 +495,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       // Fiktiv-moms pair + basbelopp pair = 4 lines (FK004 guard)
       expect(result.vat_lines).toHaveLength(4)
@@ -552,7 +552,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       // Only fiktiv-moms pair: basbelopp already covered by the expense line
       expect(result.vat_lines).toHaveLength(2)
@@ -609,7 +609,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       // 100 EUR at 11 = 1100 kr gross; 25% extraction = 220 kr, not 20
       expect(result.vat_lines).toHaveLength(1)
@@ -665,7 +665,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       // 950 kr gross: fiktiv moms 237.50, basbelopp 950 (not 25/100 off USD)
       expect(result.vat_lines).toHaveLength(4)
@@ -728,7 +728,7 @@ describe('mapping-engine', () => {
       })
       mockResult({ data: [makeRule()], error: null })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       expect(result.debit_account).toBe('1250')
       expect(result.requires_review).toBe(false)
@@ -745,7 +745,7 @@ describe('mapping-engine', () => {
       })
       mockResult({ data: [makeRule()], error: null })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       expect(result.debit_account).toBe('5410')
       expect(result.requires_review).toBe(false)
@@ -765,7 +765,7 @@ describe('mapping-engine', () => {
       })
       mockResult({ data: [makeRule()], error: null })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       expect(result.debit_account).toBe('1250')
       expect(result.requires_review).toBe(false)
@@ -784,7 +784,7 @@ describe('mapping-engine', () => {
       })
       mockResult({ data: [makeRule()], error: null })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       expect(result.debit_account).toBe('1250')
     })
@@ -802,7 +802,7 @@ describe('mapping-engine', () => {
       })
       mockResult({ data: [makeRule()], error: null })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       // The rule alone would auto-book (confidence 0.9, requires_review false).
       // Without a SEK value the capitalization branch is a guess, so the
@@ -825,7 +825,7 @@ describe('mapping-engine', () => {
       })
       mockResult({ data: [makeRule({ capitalized_debit_account: null })], error: null })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       // No capitalization decision to make: the missing rate is irrelevant.
       expect(result.debit_account).toBe('5410')
@@ -857,7 +857,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       // No match: falls through to the uncategorized default.
       expect(result.rule).toBeNull()
@@ -889,7 +889,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       expect(result.debit_account).toBe('5410')
       expect(result.confidence).toBe(0.9)
@@ -917,7 +917,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       // The band is unevaluable, so the rule does not apply. The transaction
       // lands in the uncategorized default where the user picks it up.
@@ -946,7 +946,7 @@ describe('mapping-engine', () => {
         error: null,
       })
 
-      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx, 'enskild_firma')
 
       expect(result.debit_account).toBe('5410')
     })

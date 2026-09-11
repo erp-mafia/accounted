@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
+import { ShellProvider } from '@/components/dashboard/ShellProvider'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
 import AnalyticsIdentify from '@/components/AnalyticsIdentify'
 import { computeIdentityHash } from '@/lib/analytics/identity-hash'
@@ -11,6 +12,8 @@ import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
+import { SystemNoticeBanner } from '@/components/dashboard/SystemNoticeBanner'
+import { parseSystemNoticeUntil } from '@/components/dashboard/system-notice'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
 import MultiUserGraceBanner from '@/components/billing/MultiUserGraceBanner'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
@@ -33,7 +36,8 @@ import {
   resolveCockpitHref,
 } from '@/lib/company/home-domain'
 import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
-import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
+import type { AccountingFramework, EntityType, CompanyRole, Team, DashboardShell } from '@/types'
+import { parseEntityType } from '@/lib/company/entity-type'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
@@ -122,6 +126,14 @@ export default async function DashboardLayout({
   const isNoCompanyAllowed = NO_COMPANY_ALLOWED_PATHS.some((p) =>
     pathname.startsWith(p)
   )
+
+  // Operator-set system notice (NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL): null when
+  // unset or expired, so the banner is not even rendered outside its window.
+  // Computed before the shell branches below so every signed-in user sees it,
+  // byrå consultants and stale-cookie sessions included.
+  const systemNoticeUntil = parseSystemNoticeUntil(process.env.NEXT_PUBLIC_SYSTEM_NOTICE_UNTIL)
+  const systemNoticeBanner =
+    systemNoticeUntil !== null ? <SystemNoticeBanner until={systemNoticeUntil} /> : null
 
   // Team now carries `kind` directly (types/index.ts, WL-08).
   const membershipRows = teamMemberships
@@ -213,6 +225,7 @@ export default async function DashboardLayout({
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
+            {systemNoticeBanner}
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -371,6 +384,7 @@ export default async function DashboardLayout({
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
+            {systemNoticeBanner}
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -398,13 +412,10 @@ export default async function DashboardLayout({
 
   // Resolve entity type the same way the report engines and
   // getCompanyEntityType do: company_settings is read-primary, companies is the
-  // canonical fallback, then default to enskild_firma. Mirroring it onto the
-  // active company keeps the settings rail (useSettingsNavItems, which reads
-  // context) and the sidebar in agreement on who is an employer. #782
-  const entityType =
-    (settings?.entity_type as EntityType) ||
-    (companyRow.entity_type as EntityType) ||
-    'enskild_firma'
+  // canonical (NOT NULL) fallback; never a guessed default. Mirroring it onto
+  // the active company keeps the settings rail (useSettingsNavItems, which
+  // reads context) and the sidebar in agreement on who is an employer. #782
+  const entityType: EntityType = parseEntityType(settings?.entity_type ?? companyRow.entity_type)
   const paysSalaries = settings?.pays_salaries ?? false
   // Dimensions register visibility (Kostnadsställen & projekt nav row). Same
   // mechanism as paysSalaries: UI gate only, never load-bearing for
@@ -485,6 +496,11 @@ export default async function DashboardLayout({
   // flip the data attribute client-side and persist via /api/user/ui-state.
   const uiState = (userPrefs?.ui_state ?? {}) as import('@/types').UserUiState
   const navCollapsed = uiState.nav_collapsed === true
+  // Shell v2 is the default (UI v2 PR 9a, cutover step one). Standard (v1)
+  // stays selectable under Inställningar → Konto → Layout until v1 is removed.
+  // Rendered as data-shell on the panel so the CSS in globals.css can restyle
+  // PageHeader without touching page code.
+  const shell: DashboardShell = uiState.shell === 'v1' ? 'v1' : 'v2'
 
   const allCompanyEntries = (allMemberships || [])
     .filter((m) => m.companies)
@@ -575,7 +591,7 @@ export default async function DashboardLayout({
         <div
           id="dash-shell"
           className="min-h-dvh bg-frame md:flex md:flex-col"
-          style={{ '--nav-w': navCollapsed ? '64px' : '248px' } as React.CSSProperties}
+          style={{ '--nav-w': shell === 'v2' ? '220px' : navCollapsed ? '64px' : '248px' } as React.CSSProperties}
         >
           {/* Skip to content link for keyboard/screen reader users */}
           <a
@@ -586,6 +602,7 @@ export default async function DashboardLayout({
             Hoppa till innehåll
           </a>
           {isSandbox && <SandboxBanner />}
+          {systemNoticeBanner}
           {graceBanner && (
             <MultiUserGraceBanner
               graceEndsAt={graceBanner.graceEndsAt}
@@ -608,9 +625,11 @@ export default async function DashboardLayout({
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
             initialUiState={uiState}
+            shell={shell}
           />
-          <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
-            <MainContainer companyId={companyId}>
+          <main id="main-content" className={MAIN_PANEL_CLASS} role="main" data-shell={shell}>
+            <ShellProvider shell={shell}>
+            <MainContainer companyId={companyId} shell={shell}>
               {showSignpost ? (
                 <HomeDomainSignpost
                   activeCompanyName={displayName}
@@ -624,6 +643,7 @@ export default async function DashboardLayout({
                 children
               )}
             </MainContainer>
+            </ShellProvider>
           </main>
           {/* One-time expired-trial notice. Sandbox/anonymous demo users have
               no billing (their companies carry trial grants too), so the gate

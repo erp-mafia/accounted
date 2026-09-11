@@ -13,6 +13,7 @@ vi.mock('../categories', () => ({
   countPendingOperations: vi.fn().mockResolvedValue(2),
   countReconciliationDue: vi.fn().mockResolvedValue(1),
   countExpensePayoutsDue: vi.fn().mockResolvedValue(2),
+  countSkattekontoPaymentDue: vi.fn().mockResolvedValue(1),
 }))
 
 import { getWorklistCounts } from '../aggregate'
@@ -38,6 +39,7 @@ describe('getWorklistCounts', () => {
       pending_operations: 2,
       reconciliation_due: 1,
       expense_payout: 2,
+      skattekonto_payment_due: 1,
     })
   })
 
@@ -61,10 +63,23 @@ describe('getWorklistCounts', () => {
     expect(countExpensePayoutsDue).not.toHaveBeenCalled()
   })
 
+  it('takes the skattekonto payment count from a caller-supplied value instead of rescanning', async () => {
+    const { countSkattekontoPaymentDue } = await import('../categories')
+    const due = { due: '2026-09-12', amount: 1000 } as never
+    const withDue = await getWorklistCounts(supabase, 'company-1', {
+      skattekontoPaymentDue: Promise.resolve(due),
+    })
+    expect(withDue.counts.skattekonto_payment_due).toBe(1)
+    // null is a value ("nothing to pay in"), not an absent option.
+    const without = await getWorklistCounts(supabase, 'company-1', { skattekontoPaymentDue: null })
+    expect(without.counts.skattekonto_payment_due).toBe(0)
+    expect(countSkattekontoPaymentDue).not.toHaveBeenCalled()
+  })
+
   it('excludes suggested_match from the total (subset of book_transaction)', async () => {
     const { total } = await getWorklistCounts(supabase, 'company-1')
-    // 4 + 7 + 6 + 1 + 3 + 5 + 1 + 2 + 1 + 2 (people owed for utlägg), without
-    // the 2 suggested matches.
-    expect(total).toBe(32)
+    // 4 + 7 + 6 + 1 + 3 + 5 + 1 + 2 + 1 + 2 (people owed for utlägg) + 1
+    // (skattekonto payment), without the 2 suggested matches.
+    expect(total).toBe(33)
   })
 })

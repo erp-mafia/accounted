@@ -10,6 +10,7 @@ import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
+import { orgNumberKey } from '@/lib/invariants/org-number'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import type { Currency, CustomerType, ExchangeRate, SupplierType, VatTreatment } from '@/types'
 import type {
@@ -59,6 +60,11 @@ function getOrgNumber(party: PartyDto): string | null {
   const seOrg = party.identifications?.find(i => i.schemeId === 'SE:ORGNR')
   if (seOrg) return seOrg.id
   return party.legalEntity?.companyId || null
+}
+
+function canonicalSupplierOrgNumber(value: string | null): string | null {
+  if (!value) return null
+  return orgNumberKey(value) ?? value
 }
 
 const EU_COUNTRIES = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'EL', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SI', 'SK']
@@ -603,6 +609,19 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
   // (migration 20260726110000) accepts AES-256-GCM hex and nothing else, so
   // writing the identity number in plaintext here aborts the whole import with
   // 23514 the moment a Privatperson appears in the source data.
+  //
+  // The same check bounds the ciphertext length, which is 56 hex chars plus
+  // two per plaintext char: an identity number shorter than a personnummer
+  // (a 6-digit birth date, a customer number typed into the wrong field)
+  // encrypts to something the column rejects, and the row was lost with it
+  // (#2469). Everything the column can hold is encrypted into it, a mistyped
+  // or oddly separated personnummer included, so no personnummer-like value
+  // ever lands in plaintext. A value the column cannot hold (too short to be
+  // a personnummer, or absurdly long) is omitted: the row still imports, and
+  // an identity number is never written to a plaintext field.
+  const personalNumber = isIndividual ? number : null
+  const storablePersonalNumber =
+    personalNumber && fitsPersonalNumberColumn(personalNumber) ? personalNumber : null
   return {
     user_id: userId,
     company_id: companyId,
@@ -615,12 +634,24 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
     invoice_email_bcc_addresses: dto.invoiceEmailBccAddresses ?? null,
     ...addr,
     org_number: isIndividual ? null : number,
-    personal_number: isIndividual ? encryptCustomerPersonalNumber(number) : null,
+    personal_number: encryptCustomerPersonalNumber(storablePersonalNumber),
     vat_number: dto.vatNumber || null,
     vat_number_validated: false,
     default_payment_terms: dto.defaultPaymentTermsDays || 30,
     notes: dto.note || null,
   }
+}
+
+/**
+ * Whether the encrypted form of `value` satisfies customers_personal_number_check
+ * (`^[0-9a-f]{76,255}$`, migration 20260726110000). AES-256-GCM hex is 56
+ * chars plus two per plaintext char, so the column holds plaintexts of 10 to
+ * 99 chars. A shortest personnummer is 10 digits, so every personnummer-like
+ * value, mistyped or not, fits; a value below the floor cannot be one.
+ */
+export function fitsPersonalNumberColumn(value: string): boolean {
+  const length = value.trim().length
+  return length >= 10 && length <= 99
 }
 
 export function mapSupplier(dto: SupplierDto, userId: string, companyId: string): Record<string, unknown> {
@@ -633,7 +664,9 @@ export function mapSupplier(dto: SupplierDto, userId: string, companyId: string)
     email: dto.party.contact?.email || null,
     phone: dto.party.contact?.telephone || null,
     ...addr,
-    org_number: getOrgNumber(dto.party),
+    // suppliers.org_number holds the 10-digit key (#2391); a provider sends
+    // its own spelling ('556677-8899').
+    org_number: canonicalSupplierOrgNumber(getOrgNumber(dto.party)),
     vat_number: dto.vatNumber || null,
     bankgiro: dto.bankGiro || null,
     plusgiro: dto.plusGiro || null,

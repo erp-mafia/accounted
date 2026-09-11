@@ -146,6 +146,7 @@ describe('recordateEntry', () => {
       { data: null, error: null },                                                                  // 8 post corrected
       { data: [{ id: 'orig-1' }], error: null },                                                    // 9 CAS
       { data: null, error: null },                                                                  // 10 relink transactions
+      { data: null, error: null },                                                                  // 10b relink voucher links (#2364)
       { data: null, error: null },                                                                  // 11 relink documents
       { data: { ...reversalEntry, lines: [] }, error: null },                                       // 12 final reversal
       { data: { ...correctedEntry, lines: [] }, error: null },                                      // 13 final corrected

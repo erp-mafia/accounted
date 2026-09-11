@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { renderToBuffer } from '@react-pdf/renderer'
@@ -362,7 +363,7 @@ export const POST = withRouteContext(
     // the email and later archived as underlag. Override status to 'sent' on
     // the in-memory copy: the DB flip happens after email delivery (line
     // ~185), but if we render with the stale 'draft' status the customer
-    // receives a PDF stamped "UTKAST: inte en giltig faktura".
+    // receives a PDF stamped "UTKAST".
     const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
@@ -449,7 +450,7 @@ export const POST = withRouteContext(
         userId: user.id,
         creditNote: invoice as CreditNote,
         originalInvoice,
-        entityType: ((company as CompanySettings).entity_type as EntityType) || 'enskild_firma',
+        entityType: await resolveCompanyEntityType(supabase, companyId!, (company as CompanySettings).entity_type),
         accountingMethod: ((company as Record<string, unknown>).accounting_method || 'accrual') as AccountingMethod,
         log: opLog,
       })

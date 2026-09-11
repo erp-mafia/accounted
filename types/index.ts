@@ -1,5 +1,7 @@
-// Entity types
-export type EntityType = 'enskild_firma' | 'aktiebolag'
+// Entity types (legal forms). Every form-dependent fact goes through
+// lib/company/entity-type.ts (byEntityType): adding a member here must
+// fail compilation there until each site has an answer for it.
+export type EntityType = 'enskild_firma' | 'aktiebolag' | 'ideell_forening'
 
 // Swedish accounting framework. K2 (BFNAR 2016:10) is the default simplified
 // ruleset for smaller AB; K3 (BFNAR 2012:1) is the principles-based ruleset
@@ -188,7 +190,15 @@ export interface UserUiState {
   // (companyId -> ISO timestamp of the ack). Lives on the user so each
   // member of a company sees the notice once.
   trial_expired_ack?: Record<string, string>
+  // Dashboard shell. 'v2' is the full-bleed frame with the page title in a
+  // top bar (founder decision 2026-09-07, dev_docs/ui_v2_build_plan.md).
+  // Absent or 'v1' keeps the centered max-w-5xl panel until v2 is default.
+  shell?: DashboardShell
+  // Transaktioner column visibility in shell v2 (lib/transactions/columns-v2).
+  tx_columns?: { hidden?: string[] }
 }
+
+export type DashboardShell = 'v1' | 'v2'
 
 export type AgentPanelMode = 'docked' | 'floating'
 
@@ -1036,7 +1046,7 @@ export interface SalesOrder {
   /** OR-<n>, allocated at creation by generate_sales_order_number. */
   order_number: string | null
   status: SalesOrderStatus
-  /** Proforma the order was converted from, if any. */
+  /** Proforma or quote (offert) the order was converted from, if any. */
   source_invoice_id: string | null
   order_date: string
   requested_delivery_date: string | null
@@ -1457,6 +1467,12 @@ export interface Invoice {
   deduction_total?: number
   deduction_personnummer_encrypted?: string | null
   deduction_personnummer_last4?: string | null
+  // The part of `deduction_total` Skatteverket refused and that was moved
+  // back onto the customer by a rot_rut_reclaim voucher (debit 1510 / credit
+  // 1513). The document keeps its printed deduction; the customer share is
+  // total - deduction_total + deduction_reclaimed_total (customer-share.ts).
+  // NOT NULL DEFAULT 0 in the schema; optional here for legacy fixtures.
+  deduction_reclaimed_total?: number
 
   // Default dimensions bag ({sie_dim_no: code}) applied to every journal line
   // generated from this invoice (issuance, payment, credit); item-level
@@ -1836,6 +1852,10 @@ export type JournalEntrySourceType =
   | 'webshop_order'
   | 'expense_claim'
   | 'expense_payout'
+  // Skatteverket refused (part of) a ROT/RUT begäran: the refused share moves
+  // from 1513 back onto the customer (debit 1510 / credit 1513) and the
+  // invoice reopens for that amount. lib/invoices/rot-rut-reclaim.ts.
+  | 'rot_rut_reclaim'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -2141,6 +2161,11 @@ export interface CategorizationTemplate {
   last_seen_date: string | null
   source: CategorizationTemplateSource
   is_active: boolean
+  // Rules ladder (migration 20260907120000): mode is kept in step with
+  // is_active by a trigger; corrections counts changed proposals.
+  mode: 'proposed' | 'propose' | 'auto' | 'paused'
+  corrections: number
+  paused_at: string | null
   created_at: string
   updated_at: string
 }
@@ -2551,6 +2576,10 @@ export type PendingOperationType =
   // Semesterårsavslut: rolls vacation balances into the next year and may
   // post a 2920/2940 drift-adjustment verifikation (Phase 3).
   | 'vacation_year_close'
+  // Match an income bank row to the ROT/RUT begäran Skatteverket paid with it
+  // (one or several, #2239): one voucher debit 19xx / credit 1513 per begäran,
+  // the row linked, every begäran marked settled (gnubok_settle_rot_rut_payout).
+  | 'settle_rot_rut_payout'
 // 'failed_partial' (issue #842, DB CHECK widened in 20260722134114): terminal
 // state for ops whose executor posted an irreversible side-effect (voucher,
 // credit note) and then failed a later step. Not re-committable, not pending
@@ -3824,9 +3853,9 @@ export interface IngestResult {
   shadow_date_drift_candidates?: number
 }
 
-// ── Webshop orders (Orders page; synced by the woocommerce/shopify extensions) ──
+// ── Webshop orders (Orders page; synced by the woocommerce/shopify/zettle extensions) ──
 
-export type WebshopPlatform = 'woocommerce' | 'shopify'
+export type WebshopPlatform = 'woocommerce' | 'shopify' | 'zettle'
 export type WebshopOrderRowType = 'order' | 'refund'
 
 /** One VAT rate bucket of an order, in the order's currency. */
@@ -3957,6 +3986,9 @@ export interface InvoiceExtractionResult {
     address: string | null
     bankgiro: string | null
     plusgiro: string | null
+    /** Payment details for a foreign supplier; read since 2026-09 so a betalfil can carry it. */
+    iban?: string | null
+    bic?: string | null
   }
   invoice: {
     invoiceNumber: string | null
@@ -4055,6 +4087,12 @@ export interface KPIPreferences {
   visibleKpis: string[]
   kpiOrder: string[]
   accountOverrides: Record<string, string[]>
+  /**
+   * The month-by-month table (income, expenses, net) under the panes. A
+   * boolean rather than a KPI_DEFINITIONS id on purpose: every stored row
+   * already carries a complete kpiOrder, which would hide a new id (#2196).
+   */
+  showMonthlyTable: boolean
 }
 
 // ============================================================
@@ -4139,6 +4177,8 @@ export interface Employee {
   vacation_days_per_year: number
   vacation_days_saved: number
   semestertillagg_rate: number
+  /** Kollektivavtal semesterlön rate (0.135 = 13.5 %); null = statutory. */
+  vacation_pay_rate: number | null
   // Arbetsschema-lite: weekly schedule driving the hourly/daily divisors
   // (173/21 at the defaults). employment_degree keeps prorating base salary;
   // these ONLY drive divisors.

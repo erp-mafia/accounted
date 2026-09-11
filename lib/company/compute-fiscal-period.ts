@@ -1,5 +1,6 @@
 import { parseDateParts, validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
 import type { CompanySettings } from '@/types'
+import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
 
 export interface ComputedFiscalPeriod {
   error: string | null
@@ -38,7 +39,7 @@ export function computeFiscalPeriod(
       : `Första räkenskapsåret ${startYear}/${endYear}`
   } else {
     let startMonth = (s.fiscal_year_start_month as number) || 1
-    if (s.entity_type === 'enskild_firma') startMonth = 1
+    if (isEntityType(s.entity_type) && fiscalYearLockedToCalendar(s.entity_type)) startMonth = 1
     const currentYear = new Date().getFullYear()
     startStr = `${currentYear}-${String(startMonth).padStart(2, '0')}-01`
 

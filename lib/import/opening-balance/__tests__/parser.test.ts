@@ -159,6 +159,11 @@ describe('parseOpeningBalanceFile', () => {
     expect(row1930!.debit_amount).toBe(50000)
     expect(result.rows.length).toBe(2) // 1930 (merged) + 2099
     expect(result.warnings.some((w) => w.includes('1930'))).toBe(true)
+    expect(result.notices).toContainEqual({
+      code: 'ob_duplicate_account',
+      severity: 'notice',
+      params: { account: '1930' },
+    })
   })
 
   it('preserves validation_errors from every duplicated row when merging', async () => {

@@ -212,6 +212,15 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       description: 'Recalculate the lines so totals are equal before retrying.',
     },
   },
+  JOURNAL_LINE_NEGATIVE_AMOUNT: {
+    httpStatus: 400,
+    message_sv: 'En verifikationsrad har ett negativt belopp. Boka beloppet på motsatt sida i stället.',
+    message_en: 'A journal line has a negative amount. Book it on the opposite side instead.',
+    remediation: {
+      description:
+        'Every line carries one non-negative side: move a negative debit to credit_amount (and vice versa) before retrying.',
+    },
+  },
   FISCAL_PERIOD_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Räkenskapsperioden kunde inte hittas.',
@@ -440,6 +449,12 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     httpStatus: 404,
     message_sv: 'Transaktionen kunde inte hittas.',
     message_en: 'Transaction not found.',
+  },
+  TX_CATEGORIZE_INVALID_VAT_AMOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Underlagets moms kunde inte användas för den här bokföringen. Kontrollera beloppet och momssatsen.',
+    message_en: "The document's VAT amount cannot be used for this booking. Check the amount and the VAT treatment.",
   },
   TRANSACTION_TITLE_LOCKED: {
     httpStatus: 409,
@@ -1033,6 +1048,62 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Beloppet stämmer inte med de valda utläggen. Välj de utlägg som överföringen täcker.',
     message_en: 'The amount does not match the selected expense claims. Pick the claims this transfer covers.',
   },
+  // Reclaim: Skatteverkets avslag booked back onto the customer
+  ROT_RUT_RECLAIM_NO_BESLUT: {
+    httpStatus: 400,
+    message_sv:
+      'Skatteverkets beslut är inte registrerat för begäran. Importera beslutsfilen eller registrera beslutet först.',
+    message_en:
+      "Skatteverket's decision is not recorded for this request. Import the decision file or record the decision first.",
+  },
+  ROT_RUT_RECLAIM_NOTHING_REFUSED: {
+    httpStatus: 400,
+    message_sv: 'Skatteverket beviljade hela begäran: det finns inget nekat belopp att bokföra.',
+    message_en: 'Skatteverket approved the whole request: there is no refused amount to book.',
+  },
+  ROT_RUT_RECLAIM_ALREADY_DONE: {
+    httpStatus: 409,
+    message_sv: 'Det nekade beloppet är redan bokfört för den här begäran.',
+    message_en: 'The refused amount has already been booked for this request.',
+  },
+  ROT_RUT_RECLAIM_SPLIT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv:
+      'Beslutet är registrerat som en totalsumma för flera fakturor. Importera Skatteverkets beslutsfil så att det nekade beloppet kan fördelas per faktura.',
+    message_en:
+      "The decision was recorded as one total for several invoices. Import Skatteverket's decision file so the refused amount can be split per invoice.",
+  },
+  ROT_RUT_RECLAIM_INVOICE_NOT_BOOKED: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan har ingen verifikation, så det finns ingen fordran på konto 1513 att flytta. Bokför fakturan först.',
+    message_en:
+      'The invoice has no voucher, so there is no receivable on account 1513 to move. Book the invoice first.',
+  },
+  ROT_RUT_RECLAIM_INVOICE_NOT_OPEN: {
+    httpStatus: 400,
+    message_sv: 'Fakturan är makulerad eller krediterad och kan inte öppnas igen för det nekade beloppet.',
+    message_en: 'The invoice is cancelled or credited and cannot be reopened for the refused amount.',
+  },
+  ROT_RUT_RECLAIM_CURRENCY: {
+    httpStatus: 400,
+    message_sv: 'Det nekade beloppet kan bara bokföras för fakturor i SEK.',
+    message_en: 'The refused amount can only be booked for invoices in SEK.',
+  },
+  ROT_RUT_RECLAIM_INVOICE_REREQUESTED: {
+    httpStatus: 409,
+    message_sv:
+      'Minst en faktura i begäran ingår i en senare begäran som inte är avslagen. Det nekade beloppet kan inte bokföras på kunden när Skatteverket prövar fakturan igen.',
+    message_en:
+      'At least one invoice in this request is part of a later request that is not rejected. The refused amount cannot be booked onto the customer while Skatteverket is reviewing the invoice again.',
+  },
+  ROT_RUT_RECLAIM_RACE: {
+    httpStatus: 409,
+    message_sv:
+      'Det nekade beloppet hann redan bokföras av en annan åtgärd. Verifikationen som skapades kan inte kopplas: kontrollera bokföringen på konto 1513 och 1510.',
+    message_en:
+      'The refused amount was already booked by another action. The voucher that was created could not be attached: check the bookkeeping on accounts 1513 and 1510.',
+  },
   ROT_RUT_FILE_CREATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Filen kunde inte skapas.',
@@ -1074,6 +1145,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Fakturan har redan krediterats.',
     message_en: 'Invoice has already been credited.',
+  },
+  INVOICE_CREDIT_ROT_RUT_RECLAIMED: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan har ett nekat ROT/RUT-avdrag bokfört som kundfordran. Makulera den bokningen (verifikationen med nekat avdrag) innan fakturan krediteras, annars stämmer inte kreditfakturans fördelning mellan konto 1510 och 1513.',
+    message_en:
+      'The invoice carries a refused ROT/RUT deduction booked as a customer receivable. Reverse that voucher before crediting the invoice, otherwise the credit note splits 1510 and 1513 wrongly.',
   },
   INVOICE_CREDIT_NOT_SENT: {
     httpStatus: 400,
@@ -1335,6 +1413,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Offerten är redan fakturerad och kan inte ändras.',
     message_en: 'This quote has already been invoiced and can no longer change.',
   },
+  INVOICE_QUOTE_ALREADY_ORDERED: {
+    httpStatus: 409,
+    message_sv: 'Offerten har redan en kundorder. Fakturera från kundordern i stället.',
+    message_en: 'This quote already has a sales order. Invoice from the sales order instead.',
+  },
   INVOICE_CONVERT_NOT_CONVERTIBLE: {
     httpStatus: 400,
     message_sv: 'Endast proformafakturor och offerter kan omvandlas till faktura.',
@@ -1583,13 +1666,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   SALES_ORDER_SOURCE_NOT_PROFORMA: {
     httpStatus: 400,
-    message_sv: 'Bara en proformafaktura kan omvandlas till kundorder.',
-    message_en: 'Only a proforma invoice can be converted into a sales order.',
+    message_sv: 'Bara en proformafaktura eller offert kan omvandlas till kundorder.',
+    message_en: 'Only a proforma invoice or a quote can be converted into a sales order.',
   },
   SALES_ORDER_SOURCE_UNSUPPORTED_LINES: {
     httpStatus: 400,
-    message_sv: 'Proformafakturan innehåller rader som inte kan föras över till en kundorder (ROT/RUT-avdrag, periodisering eller negativt antal). Skapa kundordern manuellt.',
-    message_en: 'The proforma has lines that cannot be carried into a sales order (ROT/RUT deduction, accrual period or negative quantity). Create the sales order manually.',
+    message_sv: 'Underlaget innehåller rader som inte kan föras över till en kundorder (ROT/RUT-avdrag, periodisering eller negativt antal). Skapa kundordern manuellt.',
+    message_en: 'The source document has lines that cannot be carried into a sales order (ROT/RUT deduction, accrual period or negative quantity). Create the sales order manually.',
   },
   SALES_ORDER_CUSTOMER_VAT_CHANGED: {
     httpStatus: 409,
@@ -1603,8 +1686,15 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   SALES_ORDER_SOURCE_ALREADY_CONVERTED: {
     httpStatus: 409,
-    message_sv: 'Proformafakturan har redan omvandlats till en kundorder.',
-    message_en: 'The proforma has already been converted into a sales order.',
+    message_sv: 'Underlaget har redan en kundorder.',
+    message_en: 'The source document already has a sales order.',
+  },
+  SALES_ORDER_INVOICE_FX_RATE_UNAVAILABLE: {
+    httpStatus: 502,
+    message_sv:
+      'Kunde inte hämta växelkursen från Riksbanken för leverans-/fakturadatumet. Fakturan har inte skapats: en gissad kurs får inte bokföras. Försök igen om en stund.',
+    message_en:
+      'Could not fetch the Riksbanken exchange rate for the delivery/invoice date. No invoice was created: a guessed rate must not be booked. Try again shortly.',
   },
   // POST /api/invoices/{id}/peppol/send. The Access Point is an environment
   // decision (PEPPOL_TRANSPORT_PROVIDER + adapter credentials); the product
@@ -1649,6 +1739,35 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Peppol-operatören kunde inte nås just nu. Fakturan har inte skickats; försök igen om en stund.',
     message_en: 'The Peppol access point could not be reached. The invoice has not been sent; try again shortly.',
   },
+  // The SMP lookup itself failed (#2484), as opposed to a lookup that
+  // answered "not registered": the staged delivery stays staged and nothing
+  // terminal is recorded. The route answers 502 when the transport says the
+  // failure is retryable, 422 otherwise.
+  PEPPOL_LOOKUP_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Kunde inte slå upp mottagaren i Peppol-nätverket. Försök igen om en stund.',
+    message_en: 'Could not look up the recipient in the Peppol network. Try again shortly.',
+    retryable: true,
+  },
+  // The hosted service refused the submission for a reason about the sender,
+  // the key or the service (not registered, quota, rate limit, scope,
+  // upstream unconfigured), never about the document (#2484). The delivery
+  // stays resendable; the route composes the hosted text onto the prefix
+  // when the registry knows the code, else this generic pointer.
+  PEPPOL_SEND_PRECONDITION_FAILED: {
+    httpStatus: 409,
+    message_sv: 'Fakturan kunde inte skickas via Peppol ännu: kontrollera Peppol-inställningarna och försök igen.',
+    message_en: 'The invoice could not be sent via Peppol yet: check the Peppol settings and try again.',
+    thrown_message_sv: true,
+  },
+  // stage_peppol_delivery raises P0002 when no fiscal period covers the
+  // invoice date: the delivery row carries a retention basis (BFL 7 kap.)
+  // derived from the period, so it cannot be staged without one.
+  PEPPOL_FISCAL_PERIOD_MISSING: {
+    httpStatus: 422,
+    message_sv: 'Fakturadatumet saknar ett räkenskapsår. Skapa räkenskapsåret innan fakturan skickas via Peppol.',
+    message_en: 'The invoice date falls outside every fiscal year. Create the fiscal year before sending the invoice via Peppol.',
+  },
   // /api/settings/peppol: publishing a company's identifier for receiving.
   PEPPOL_RECEIVING_UNSUPPORTED: {
     httpStatus: 503,
@@ -1679,6 +1798,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 502,
     message_sv: 'Peppol-operatören kunde inte genomföra registreringen. Försök igen om en stund.',
     message_en: 'The Peppol access point could not complete the registration. Try again shortly.',
+    retryable: true,
   },
   PEPPOL_REGISTRATION_NOT_FOUND: {
     httpStatus: 404,
@@ -1711,6 +1831,83 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Alla platser för Peppol-mottagning är upptagna just nu. Hör av dig till support så öppnar vi fler. Att skicka e-fakturor fungerar ändå.',
     message_en: 'All Peppol receiving slots are taken right now. Contact support and we will open more. Sending e-invoices works regardless.',
+  },
+  // The access point gave a verdict on the identifier itself (#2483):
+  // retrying the same registration cannot change it, unlike
+  // PEPPOL_REGISTRATION_FAILED, which is the operational counterpart.
+  PEPPOL_REGISTRATION_REJECTED: {
+    httpStatus: 422,
+    message_sv: 'Registreringen avvisades av Peppol-operatören. Kontakta support om felet kvarstår.',
+    message_en: 'The Peppol access point rejected the registration. Contact support if the problem persists.',
+  },
+  // Hosted connector codes (packages/connect-contract) that a self-hosted
+  // instance in connector mode stores as peppol_registrations.last_error_code
+  // and shows translated. Permanent verdicts first, then transient ones.
+  CONNECTOR_PEPPOL_PARTICIPANT_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Peppol-id:t är redan registrerat via ett annat konto. Kontakta support om det är ert bolag.',
+    message_en: 'The Peppol id is already registered through another account. Contact support if it is your company.',
+  },
+  CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED: {
+    httpStatus: 422,
+    message_sv: 'Peppol-id:t får inte registreras från det här kontot. Kontakta support.',
+    message_en: 'The Peppol id may not be registered from this account. Contact support.',
+  },
+  // The two likeliest send preconditions (#2484): the route composes these
+  // behind PEPPOL_SEND_PRECONDITION_FAILED's prefix.
+  CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED: {
+    httpStatus: 422,
+    message_sv: 'Bolagets Peppol-id är inte registrerat hos operatören. Slå på mottagning under Inställningar > Fakturering > E-faktura via Peppol, eller kontakta support.',
+    message_en: 'The company\'s Peppol id is not registered with the access point. Switch on receiving under Settings > Invoicing > E-invoicing via Peppol, or contact support.',
+  },
+  CONNECTOR_SCOPE_MISSING: {
+    httpStatus: 403,
+    message_sv: 'Kopplingsnyckeln saknar Peppol-behörighet. Kontakta support.',
+    message_en: 'The connector key lacks Peppol permission. Contact support.',
+  },
+  CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE: {
+    httpStatus: 409,
+    message_sv: 'Peppol-id:t är redan publicerat hos en annan operatör. Avregistrera det där först.',
+    message_en: 'The Peppol id is already published with another access point. Deregister it there first.',
+  },
+  CONNECTOR_QUOTA_EXCEEDED: {
+    httpStatus: 409,
+    message_sv: 'Kontots Peppol-platser är förbrukade. Hör av dig till support så öppnar vi fler.',
+    message_en: 'The account has used its Peppol slots. Contact support and we will open more.',
+  },
+  CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS: {
+    httpStatus: 409,
+    message_sv: 'En registrering av Peppol-id:t pågår redan. Försök igen om en stund.',
+    message_en: 'A registration of the Peppol id is already in progress. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_NOT_OWNED: {
+    httpStatus: 404,
+    message_sv: 'Peppol-id:t finns inte registrerat hos operatören för det här kontot.',
+    message_en: 'The Peppol id is not registered with the access point for this account.',
+  },
+  CONNECTOR_UPSTREAM_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Peppol-operatören svarade med ett fel. Försök igen om en stund.',
+    message_en: 'The Peppol access point answered with an error. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_UNREACHABLE: {
+    httpStatus: 502,
+    message_sv: 'Tjänsten som förmedlar Peppol kunde inte nås. Försök igen om en stund.',
+    message_en: 'The service that brokers Peppol could not be reached. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_RATE_LIMITED: {
+    httpStatus: 429,
+    message_sv: 'För många Peppol-anrop på kort tid. Vänta en stund och försök igen.',
+    message_en: 'Too many Peppol calls in a short time. Wait a moment and try again.',
+    retryable: true,
+  },
+  CONNECTOR_PROTOCOL_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Svaret från Peppol-tjänsten kunde inte tolkas. Kontakta support om felet kvarstår.',
+    message_en: 'The answer from the Peppol service could not be read. Contact support if the problem persists.',
   },
 }
 

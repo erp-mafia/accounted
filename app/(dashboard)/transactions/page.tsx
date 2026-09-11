@@ -1,7 +1,7 @@
 'use client'
 
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
@@ -19,7 +19,16 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { Loader2 } from 'lucide-react'
+import { Loader2, SlidersHorizontal, Check } from 'lucide-react'
+import { useShell } from '@/components/dashboard/ShellProvider'
+import { useUiState } from '@/lib/hooks/use-ui-state'
+import { persistUiState } from '@/lib/ui-state/client'
+import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
+import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import { CategoryPopover } from '@/components/transactions/CategoryPopover'
+import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import type { RowProposal } from '@/components/transactions/TransactionInboxCard'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
@@ -36,10 +45,9 @@ import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplic
 import { mapWithConcurrency } from '@/lib/concurrency'
 
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
-import { resolveQuickReviewDefaults, type ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
-import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
-import { isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
+import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
+import { categorizeBodyFor, proposalFromTemplate, proposalHue, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { useProposalWhy } from '@/components/transactions/proposal-why'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type {
   TransactionWithInvoice,
@@ -86,8 +94,24 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { resolveDetachErrorMessage } from '@/components/transactions/detach-underlag'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
-import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary } from '@/types'
+import { mutate as globalMutate } from 'swr'
+import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import { booksWithoutReview } from '@/lib/transactions/direct-booking'
+
+/**
+ * Tell the drawer and the review to re-read a row's underlag. They read it
+ * through SWR on this key, so an attach or a detach elsewhere on the page
+ * has to say so or the receipt only appears on the next revalidation.
+ */
+function revalidateUnderlag(transactionId: string): Promise<unknown> {
+  return globalMutate(`/api/transactions/${transactionId}/underlag`)
+}
+
+/** Rows warmed per pass, taken from the top of the list only: a screenful, never the backlog. */
+const ASSISTANT_WARM_LIMIT = 8
+const ASSISTANT_WARM_WINDOW = 30
 import { fetchMigrationCoverageEnd } from '@/lib/transactions/migration-coverage'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -416,15 +440,10 @@ async function fetchPotentialMatches(
 
 interface QuickReviewState {
   transaction: TransactionWithInvoice
-  category: TransactionCategory
-  label: string
-  // ReviewTemplate, not BookingTemplate: a learned counterparty template has
-  // no catalog entry, so most BookingTemplate fields are genuinely absent.
-  template: ReviewTemplate | null
-  templateId: string | undefined
-  linePattern: LinePatternEntry[] | null
-  // Learned counterparty bag; prefills the review dialog's dimension picker.
-  defaultDimensions?: Record<string, string> | null
+  /** What will be booked and why: one object whoever proposed it (lib/bookkeeping/proposal.ts). */
+  proposal: BookingProposal
+  /** The person chose it from the picker, as opposed to the row's recommendation. */
+  picked: boolean
 }
 
 export default function TransactionsPage() {
@@ -432,6 +451,29 @@ export default function TransactionsPage() {
   const companyId = company?.id ?? null
   const searchParams = useSearchParams()
   const t = useTranslations('transactions')
+  const whyFor = useProposalWhy()
+  // Shell v2 (dev_docs/ui_v2_build_plan.md, PR 4): Kategori and Konto columns
+  // plus per-user column visibility (ui_state.tx_columns). v1 keeps the
+  // five-column row untouched.
+  const shell = useShell()
+  const tSkvCard = useTranslations('tx_skattekonto_card')
+  const { uiState } = useUiState()
+  const [hiddenColumns, setHiddenColumns] = useState<string[] | null>(null)
+  const txColumns = useMemo(
+    () =>
+      shell === 'v2'
+        ? resolveTxColumns({ hidden: hiddenColumns ?? uiState?.tx_columns?.hidden })
+        : null,
+    [shell, hiddenColumns, uiState?.tx_columns?.hidden],
+  )
+  const setColumnsHidden = (next: string[]) => {
+    setHiddenColumns(next)
+    persistUiState({ tx_columns: { hidden: next } })
+  }
+  const toggleColumn = (id: TxColumnId) => {
+    const current = hiddenColumns ?? uiState?.tx_columns?.hidden ?? []
+    setColumnsHidden(current.includes(id) ? current.filter((c) => c !== id) : [...current, id])
+  }
   const tDetach = useTranslations('tx_detach')
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -439,6 +481,13 @@ export default function TransactionsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
+  // The assistant's reads for the loaded rows, so the review opens with one
+  // instead of fetching it. A ref, not state: only the review reads them, and
+  // it reads at open time, so a landing read has nothing to re-render.
+  const assistantReadsRef = useRef<Record<string, AssistantRead>>({})
+  // Rows already sent to the assistant this session (per company), so a
+  // landing read never re-triggers the sweep below.
+  const warmedReadsRef = useRef<{ companyId: string | null; ids: Set<string> }>({ companyId: null, ids: new Set() })
   const [processingId, setProcessingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -472,6 +521,8 @@ export default function TransactionsPage() {
   // "Andra rader" hand-off: the computed proposal lines from QuickReviewDialog,
   // prefilled into TransactionBookingDialog for per-line editing.
   const [bookingDialogProposalLines, setBookingDialogProposalLines] = useState<ProposalLine[] | null>(null)
+  // Radtext for the business lines when the review hands its proposal over.
+  const [bookingDialogLineDescription, setBookingDialogLineDescription] = useState<string | null>(null)
   // Account picked from the template picker's "Konton" search results:
   // prefills the counter line when the manual booking dialog opens.
   const [bookingDialogAccount, setBookingDialogAccount] = useState<string | null>(null)
@@ -491,6 +542,8 @@ export default function TransactionsPage() {
   // Template picker dialog
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
   const [templatePickerTransaction, setTemplatePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  // Shell v2: the element the picker opens beside (chip or Bokför button); null = the dialog.
+  const [templatePickerAnchor, setTemplatePickerAnchor] = useState<HTMLElement | null>(null)
   // The picker renders non-modal (agent sheet stays usable); hand-restore
   // page modality while it is open. See useDashShellInert in ui/dialog.tsx.
   useDashShellInert(templatePickerOpen)
@@ -681,6 +734,40 @@ export default function TransactionsPage() {
   // and seeded by the dashboard layout (lib/reference-data), so the chooser
   // renders populated on the first paint. Bank sync invalidates the entry.
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
+  // v2 column texts. Konto = bank plus the account's last digits (or its
+  // ledger account); Kategori = the match hint the row already carries, or
+  // null so the cell prompts "Välj kategori".
+  const accountLabelFor = (tx: TransactionWithInvoice): string | null => {
+    const acct = tx.cash_account_id ? cashAccounts.find((a) => a.id === tx.cash_account_id) : undefined
+    if (!acct) return null
+    const bank = acct.bank_name || acct.name || ''
+    const tail = acct.account_number ? `••${acct.account_number.slice(-4)}` : acct.ledger_account
+    return `${bank} ${tail}`.trim()
+  }
+  // Shell v2: the brand mark next to the Konto text (bank, Stripe, Skatteverket).
+  const accountLogoFor = (tx: TransactionWithInvoice): string | null => {
+    const acct = tx.cash_account_id ? cashAccounts.find((a) => a.id === tx.cash_account_id) : undefined
+    return acct ? bankLogoUrl(acct.bank_name, acct.name) : null
+  }
+  // Shell v2: the top suggestion (counterparty template, then keyword/MCC)
+  // stands in the Kategori cell so the person sees what Bokför will do
+  // before clicking anything. Suggestions arrive with the list
+  // (fetchCategorySuggestions), so nothing is computed on click.
+  const proposalFor = (tx: TransactionWithInvoice): RowProposal | null => {
+    if (tx.journal_entry_id || tx.is_business !== null) return null
+    const s = rowProposal(templateSuggestions[tx.id])
+    if (!s) return null
+    return { label: s.name_sv, hue: proposalHue(s), confidence: s.confidence, why: whyFor(s) }
+  }
+  const categoryLabelFor = (tx: TransactionWithInvoice): string | null => {
+    if (tx.potential_invoice && !tx.invoice_id)
+      return t('cat_hint_invoice', { number: tx.potential_invoice.invoice_number ?? '' })
+    if (tx.potential_supplier_invoice) return t('cat_hint_supplier_invoice')
+    if (tx.potential_rot_rut_payout) return t('cat_hint_rot_rut')
+    if (tx.potential_expense_payout) return t('cat_hint_expense')
+    if (tx.potential_voucher) return t('cat_hint_voucher')
+    return null
+  }
 
   const { toast } = useToast()
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
@@ -1445,6 +1532,79 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactions, companyId])
 
+  /**
+   * Read the rows the person can see before they open one.
+   *
+   * The ten-minute cron reads the newest transactions fleet-wide; this covers
+   * what is on screen right now (an older row, or one whose receipt arrived
+   * after its read). Sequential and capped, so a long list is never a burst
+   * of model calls, and it stops on the first refusal: an installation with
+   * no AI backend answers 503 once and is then left alone.
+   */
+  // The rows worth reading ahead: the top of the list, unbooked, without a
+  // fresh read. A string key, so a refetch that lands the same rows does not
+  // start the sweep again.
+  const warmKey = useMemo(() => {
+    const warmed = warmedReadsRef.current.companyId === companyId ? warmedReadsRef.current.ids : new Set<string>()
+    return transactions
+      .slice(0, ASSISTANT_WARM_WINDOW)
+      .filter(
+        (tx) =>
+          tx.is_business === null &&
+          !tx.journal_entry_id &&
+          !tx.is_ignored &&
+          !warmed.has(tx.id) &&
+          !(assistantReadsRef.current[tx.id] && readIsFresh(assistantReadsRef.current[tx.id], tx)),
+      )
+      .slice(0, ASSISTANT_WARM_LIMIT)
+      .map((tx) => tx.id)
+      .join(',')
+  }, [companyId, transactions])
+
+  useEffect(() => {
+    if (!companyId || !warmKey) return
+    if (warmedReadsRef.current.companyId !== companyId) {
+      warmedReadsRef.current = { companyId, ids: new Set() }
+      assistantReadsRef.current = {}
+    }
+    const warmed = warmedReadsRef.current.ids
+    const pending = warmKey.split(',').map((id) => transactions.find((tx) => tx.id === id)).filter((tx): tx is TransactionWithInvoice => !!tx)
+
+    // The sweep is background work: it waits for the browser to be idle and
+    // the tab to be visible, so it never competes with the list's own paint.
+    let cancelled = false
+    const run = async () => {
+      for (const tx of pending) {
+        if (cancelled || document.visibilityState !== 'visible') return
+        warmed.add(tx.id)
+        try {
+          const res = await fetch('/api/agent/categorize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transaction_id: tx.id }),
+          })
+          if (!res.ok) return
+          const body = (await res.json()) as { data?: AssistantRead }
+          if (cancelled || !body.data) return
+          assistantReadsRef.current[tx.id] = body.data
+        } catch {
+          return
+        }
+      }
+    }
+    const idle = typeof window.requestIdleCallback === 'function'
+      ? window.requestIdleCallback(() => void run(), { timeout: 2000 })
+      : window.setTimeout(() => void run(), 1000)
+    return () => {
+      cancelled = true
+      if (typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(idle as number)
+      else window.clearTimeout(idle as number)
+    }
+    // The key already encodes the rows; re-running on the list's identity
+    // would walk the backlog on every realtime echo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, warmKey])
+
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return
     try {
@@ -1458,6 +1618,7 @@ export default function TransactionsPage() {
       if (data.template_suggestions) {
         setTemplateSuggestions(data.template_suggestions)
       }
+      if (data.assistant_reads) Object.assign(assistantReadsRef.current, data.assistant_reads)
     } catch {
       // Non-critical
     }
@@ -1624,8 +1785,8 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactions.length])
 
-  const handleCategorize: CategorizeHandler = async (id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions) => {
-    const outcome = await runCategorize({ id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch: false })
+  const handleCategorize: CategorizeHandler = async (id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, vatAmount) => {
+    const outcome = await runCategorize({ id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, vatAmount, confirmNoMatch: false })
     return outcome.journalEntryId
   }
 
@@ -1666,8 +1827,10 @@ export default function TransactionsPage() {
     // but leave the narration to the caller's single aggregate toast instead
     // of stacking one toast per row.
     silent?: boolean
+    /** What was booked and why, for a booking that skipped the review. */
+    narration?: string
   }) {
-    const { id, isBusiness, category, journalEntryId, journalEntryCreated, journalEntryError, silent } = args
+    const { id, isBusiness, category, journalEntryId, journalEntryCreated, journalEntryError, silent, narration } = args
     // A completed Ångra must win over the delayed patch below. The undo has
     // already storno-reversed the verifikat server-side, so re-applying the
     // booked shape afterwards would show a journal_entry_id that no longer
@@ -1685,6 +1848,7 @@ export default function TransactionsPage() {
     } else if (journalEntryCreated) {
       toast({
         title: 'Bokförd',
+        description: narration,
         action: (
           <ToastAction altText="Ångra kategorisering" onClick={async () => {
             try {
@@ -1762,8 +1926,12 @@ export default function TransactionsPage() {
     vatTreatment?: VatTreatment
     accountOverride?: string
     templateId?: string
+    /** A learned counterpart rule: the server books its stored lines. */
+    counterpartyTemplateId?: string
     inboxItemId?: string
     dimensions?: Record<string, string>
+    /** The underlag's moms (transaction currency): sent as vat_amount. */
+    vatAmount?: number
     confirmNoMatch: boolean
     // Set after the user confirms the booking-time duplicate warning. force
     // bypasses the guard; the bypass is bound to the reviewed candidate's
@@ -1777,13 +1945,15 @@ export default function TransactionsPage() {
     // duplicate warning, activate-account) keep their dialogs/actions: they
     // are the only way forward for those rows.
     silent?: boolean
+    /** What was booked and why, shown on the Bokförd toast of a booking that skipped the review. */
+    narration?: string
     // ok distinguishes "the server accepted the categorization" from "nothing
     // happened". A 2xx with a null journal_entry_id is a real success (e.g. an
     // already-categorized flag flip), so the id alone cannot carry that signal:
     // the batch aggregate would count the row as failed after finishBooking
     // already animated it out of the inbox.
   }): Promise<{ ok: boolean; journalEntryId: string | null }> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent } = args
+    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, counterpartyTemplateId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -1795,8 +1965,10 @@ export default function TransactionsPage() {
           vat_treatment: vatTreatment,
           account_override: accountOverride,
           template_id: templateId,
+          ...(counterpartyTemplateId ? { counterparty_template_id: counterpartyTemplateId } : {}),
           inbox_item_id: inboxItemId,
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
+          ...(vatAmount != null ? { vat_amount: vatAmount } : {}),
           ...(confirmNoMatch ? { confirm_no_match: true } : {}),
           ...(force && expectedDuplicateJournalEntryId
             ? { force: true, expected_duplicate_journal_entry_id: expectedDuplicateJournalEntryId }
@@ -2032,6 +2204,7 @@ export default function TransactionsPage() {
         journalEntryCreated: result.journal_entry_created,
         journalEntryError: result.journal_entry_error,
         silent,
+        narration,
       })
 
       return { ok: true, journalEntryId: result.journal_entry_id || null }
@@ -2713,15 +2886,16 @@ export default function TransactionsPage() {
     setMatchDialogOpen(true)
   }
 
-  function handleSelectRotRutPayoutFromPicker(request: PotentialRotRutPayoutRequest) {
-    if (!invoicePickerTransaction) return
-    // Same handoff as the invoice pick: close the picker, hang the request on
-    // the row and open the ROT/RUT confirm dialog so the user sees the
-    // 19xx / 1513 entry before it is booked.
+  function handleSelectRotRutPayoutFromPicker(requests: PotentialRotRutPayoutRequest[]) {
+    if (!invoicePickerTransaction || requests.length === 0) return
+    // Same handoff as the invoice pick: close the picker, hang the begäran
+    // (one, or the bundle the user ticked) on the row and open the ROT/RUT
+    // confirm dialog so the user sees the 19xx / 1513 entry before it is
+    // booked. The dialog refuses a bundle whose sum is off the row.
     const tx = invoicePickerTransaction
     setInvoicePickerOpen(false)
     setInvoicePickerTransaction(null)
-    setSelectedTransaction({ ...tx, potential_rot_rut_payout: { requests: [request] } })
+    setSelectedTransaction({ ...tx, potential_rot_rut_payout: { requests } })
     setRotRutMatchDialogOpen(true)
   }
 
@@ -3315,6 +3489,7 @@ export default function TransactionsPage() {
     setBookingDialogTransaction(null)
     setBookingDialogTemplate(null)
     setBookingDialogProposalLines(null)
+    setBookingDialogLineDescription(null)
     if (matched) {
       toast({ title: 'Bankhändelsen kopplad', description: 'Ingen ny bokföring skapad.' })
     } else {
@@ -3330,6 +3505,9 @@ export default function TransactionsPage() {
     setTransactions((prev) =>
       prev.map((t) => (t.id === transactionId ? { ...t, document_id: documentId } : t))
     )
+    // The drawer and the review read the underlag through SWR; without this
+    // the receipt only appeared there on the next revalidation.
+    void revalidateUnderlag(transactionId)
     // Booked row: the attach route propagated the doc onto the verifikation,
     // so flip the JE status optimistically too. Read the JE id off the
     // dialog's own subject (attachDocTx), not the transactions snapshot:
@@ -3381,6 +3559,7 @@ export default function TransactionsPage() {
       setTransactions((prev) =>
         prev.map((row) => (row.id === tx.id ? { ...row, document_id: null } : row))
       )
+      void revalidateUnderlag(tx.id)
       // The attach dialog renders its "already attached" hint off its own
       // snapshot of the row, not the list.
       setAttachDocTx((prev) => (prev?.id === tx.id ? { ...prev, document_id: null } : prev))
@@ -3763,70 +3942,81 @@ export default function TransactionsPage() {
     setMatchDialogOpen(true)
   }
 
-  function openCategoryDialog(transaction: TransactionWithInvoice) {
+  function openCategoryDialog(transaction: TransactionWithInvoice, anchor?: HTMLElement) {
     setTemplatePickerTransaction(transaction)
+    setTemplatePickerAnchor(shell === 'v2' ? (anchor ?? null) : null)
     setTemplatePickerOpen(true)
   }
 
-  function handleTemplateSelected(template: BookingTemplate) {
+  // The one door into the review: a proposal, and whether the person picked it.
+  function openReview(transaction: TransactionWithInvoice, proposal: BookingProposal, picked: boolean) {
     setTemplatePickerOpen(false)
-    const tx = templatePickerTransaction
-    if (!tx) return
-    // Library templates aren't validated server-side via template_id; the
-    // template's debit/credit + VAT drive the booking through account_override.
-    const templateId = isLibraryTemplateId(template.id) ? undefined : template.id
-    setQuickReview({ transaction: tx, category: template.fallback_category, label: template.name_sv, template, templateId, linePattern: null })
+    setQuickReview({ transaction, proposal, picked })
     setQuickReviewOpen(true)
   }
 
+  function handleTemplateSelected(template: BookingTemplate, txOverride?: TransactionWithInvoice) {
+    const tx = txOverride ?? templatePickerTransaction
+    if (!tx) return
+    openReview(tx, proposalFromTemplate(template, 'manual'), true)
+  }
+
+  // Shell v2: Bokför on a row that carries a proposal goes straight to the
+  // review with that template set; no picker in between.
+  function bookProposal(transaction: TransactionWithInvoice) {
+    const s = rowProposal(templateSuggestions[transaction.id])
+    if (!s) return openCategoryDialog(transaction)
+    // A decision the company already made (a rule, a settled counterpart, a
+    // sure read of a receipt) books from the row; Ångra sits on the toast.
+    if (booksWithoutReview(s)) return void bookDirect(transaction, s)
+    openReview(transaction, s, false)
+  }
+
+  // Book a proposal exactly as it would be shown: one body for every kind
+  // (lib/bookkeeping/proposal.ts), one call, the same toasts and undo.
+  async function bookProposalNow(
+    transaction: TransactionWithInvoice,
+    proposal: BookingProposal,
+    extras: { dimensions?: Record<string, string>; vatAmount?: number; narration?: string } = {},
+  ): Promise<{ ok: boolean; journalEntryId: string | null }> {
+    const body = categorizeBodyFor(proposal, { dimensions: extras.dimensions, vatAmount: extras.vatAmount })
+    return runCategorize({
+      id: transaction.id,
+      isBusiness: true,
+      category: body.category,
+      vatTreatment: body.vat_treatment,
+      accountOverride: body.account_override,
+      templateId: body.template_id,
+      counterpartyTemplateId: body.counterparty_template_id,
+      dimensions: body.dimensions,
+      vatAmount: body.vat_amount,
+      confirmNoMatch: false,
+      narration: extras.narration,
+    })
+  }
+
+  async function bookDirect(transaction: TransactionWithInvoice, s: BookingProposal) {
+    await bookProposalNow(transaction, s, {
+      dimensions: s.default_dimensions ?? undefined,
+      narration: `${s.name_sv} · ${whyFor(s)}`,
+    })
+  }
+
+  // A counterpart picked in the picker: the same proposal the row carries.
   function handleOpenTemplateReview(transaction: TransactionWithInvoice, templateId: string) {
-    if (isCounterpartyTemplateId(templateId)) {
-      const cpSuggestion = templateSuggestions[transaction.id]?.find(ts => ts.template_id === templateId)
-      if (!cpSuggestion) {
-        // The suggestion list went stale under the open modal (refetch, or the
-        // template was deleted in another tab). Say so instead of swallowing
-        // the click.
-        toast({
-          title: t('counterparty_suggestion_gone_title'),
-          description: t('counterparty_suggestion_gone_description'),
-          variant: 'destructive',
-        })
-        return
-      }
-      setQuickReview({
-        transaction,
-        category: transaction.amount < 0 ? 'expense_other' : 'income_services',
-        label: cpSuggestion.name_sv,
-        // Carry the learned accounts and VAT: they are what the server books
-        // (buildMappingResultFromCounterpartyTemplate) and what the dialog
-        // previews. A counterparty template has no catalog entry, so the rest
-        // of BookingTemplate genuinely does not exist here.
-        template: {
-          id: templateId,
-          name_sv: cpSuggestion.name_sv,
-          debit_account: cpSuggestion.debit_account,
-          credit_account: cpSuggestion.credit_account,
-          vat_treatment: cpSuggestion.vat_treatment ?? null,
-        },
-        templateId: undefined,
-        linePattern: cpSuggestion.line_pattern ?? null,
-        defaultDimensions: cpSuggestion.default_dimensions ?? null,
+    const proposal = templateSuggestions[transaction.id]?.find((ts) => ts.template_id === templateId)
+    if (!proposal) {
+      // The suggestion list went stale under the open modal (refetch, or the
+      // template was deleted in another tab). Say so instead of swallowing
+      // the click.
+      toast({
+        title: t('counterparty_suggestion_gone_title'),
+        description: t('counterparty_suggestion_gone_description'),
+        variant: 'destructive',
       })
-      setQuickReviewOpen(true)
       return
     }
-
-    const template = getTemplateById(templateId)
-    if (!template) return
-    setQuickReview({
-      transaction,
-      category: template.fallback_category,
-      label: template.name_sv,
-      template,
-      templateId: template.id,
-      linePattern: null,
-    })
-    setQuickReviewOpen(true)
+    openReview(transaction, proposal, true)
   }
 
   function handleChangeTemplate() {
@@ -3843,6 +4033,7 @@ export default function TransactionsPage() {
       setBookingDialogTransaction(templatePickerTransaction)
       setBookingDialogTemplate(null)
       setBookingDialogProposalLines(null)
+    setBookingDialogLineDescription(null)
       setBookingDialogAccount(null)
       setBookingDialogOpen(true)
     }
@@ -3860,6 +4051,9 @@ export default function TransactionsPage() {
     setBookingDialogTemplate(null)
     setBookingDialogAccount(null)
     setBookingDialogProposalLines(lines)
+    // The review's own words for what this is: the edit view opens with the
+    // business line already saying it, instead of an empty Radtext.
+    setBookingDialogLineDescription(quickReview?.proposal.name_sv ?? null)
     setBookingDialogOpen(true)
   }
 
@@ -3871,6 +4065,7 @@ export default function TransactionsPage() {
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(null)
     setBookingDialogProposalLines(null)
+    setBookingDialogLineDescription(null)
     setBookingDialogAccount(accountNumber)
     setTemplatePickerOpen(false)
     setBookingDialogOpen(true)
@@ -3884,6 +4079,7 @@ export default function TransactionsPage() {
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(raw)
     setBookingDialogProposalLines(null)
+    setBookingDialogLineDescription(null)
     setBookingDialogAccount(null)
     setTemplatePickerOpen(false)
     setBookingDialogOpen(true)
@@ -3891,150 +4087,13 @@ export default function TransactionsPage() {
 
   async function handleQuickReviewConfirm(
     id: string,
-    category: TransactionCategory,
-    vatTreatment: VatTreatment | undefined,
-    accountOverride: string | undefined,
-    templateId?: string,
-    dimensions?: Record<string, string>
+    proposal: BookingProposal,
+    extras: { dimensions?: Record<string, string>; vatAmount?: number },
   ): Promise<string | null> {
-    let journalEntryId: string | null
-    if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
-      const cpTemplateId = extractCounterpartyId(quickReview.template.id)
-      const cpCategorize = async (
-        // Set after the user confirmed the duplicate warning: force is bound
-        // to the reviewed candidate's voucher, same contract as runCategorize.
-        forceOpts?: { expectedDuplicateJournalEntryId: string },
-      ): Promise<{ ok: boolean; journalEntryId: string | null; result: { error?: { code?: string; account_numbers?: string[]; details?: { account_numbers?: string[]; candidate?: BookedDuplicateCandidate } }; journal_entry_id?: string | null; journal_entry_created?: boolean; journal_entry_error?: string | null; category?: TransactionCategory }; status: number }> => {
-        const r = await fetch(`/api/transactions/${id}/categorize`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            is_business: true,
-            counterparty_template_id: cpTemplateId,
-            ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
-            ...(forceOpts
-              ? { force: true, expected_duplicate_journal_entry_id: forceOpts.expectedDuplicateJournalEntryId }
-              : {}),
-          }),
-        })
-        const b = await r.json()
-        return { ok: r.ok, status: r.status, result: b, journalEntryId: b?.journal_entry_id || null }
-      }
-      const { ok: cpOk, status: cpStatus, result, journalEntryId: cpJeId } = await cpCategorize()
-      if (!cpOk) {
-        if (result?.error?.code === 'ACCOUNTS_NOT_IN_CHART') {
-          const accountNumbers: string[] =
-            (Array.isArray(result.error.account_numbers) && result.error.account_numbers) ||
-            (Array.isArray(result.error.details?.account_numbers) && result.error.details?.account_numbers) ||
-            []
-          // Synchronous in-flight flag per toast closure: see same pattern
-          // in runCategorize. Double-click on the counterparty-template
-          // retry would race the second cpCategorize against the first's
-          // verifikation insert.
-          let activateInFlight = false
-          toast({
-            title: 'Kontot finns inte i din kontoplan',
-            description: `Motpartsmallen kräver att följande konton aktiveras: ${accountNumbers.join(', ')}.`,
-            variant: 'destructive',
-            action: accountNumbers.length > 0 ? (
-              <ToastAction altText="Aktivera och bokför" onClick={async () => {
-                if (activateInFlight) return
-                activateInFlight = true
-                try {
-                  const activateRes = await fetch('/api/bookkeeping/accounts/activate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ account_numbers: accountNumbers }),
-                  })
-                  if (!activateRes.ok) {
-                    const errBody = await activateRes.json().catch(() => null)
-                    toast({ title: 'Kunde inte aktivera konton', description: getErrorMessage(errBody, { statusCode: activateRes.status }), variant: 'destructive' })
-                    return
-                  }
-                  const activateBody = await activateRes.json()
-                  if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
-                    toast({ title: 'Kunde inte hitta alla konton', description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`, variant: 'destructive' })
-                    return
-                  }
-                  const retry = await cpCategorize()
-                  // Gate on retry.ok alone: a 200 with null journal_entry_id
-                  // is allowed by the declared type (e.g. already-categorized
-                  // flag flip), and showing "Kategorisering misslyckades"
-                  // after the server returned success is misleading. The state
-                  // update conditionally writes the journal_entry_id when it's
-                  // actually present.
-                  if (retry.ok) {
-                    finishBooking({
-                      id,
-                      isBusiness: true,
-                      category: retry.result?.category,
-                      journalEntryId: retry.journalEntryId,
-                      journalEntryCreated: retry.result?.journal_entry_created,
-                      journalEntryError: retry.result?.journal_entry_error,
-                    })
-                  } else {
-                    toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
-                  }
-                } finally {
-                  activateInFlight = false
-                }
-              }}>
-                Aktivera och bokför
-              </ToastAction>
-            ) : undefined,
-          })
-        } else if (
-          result?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' &&
-          result.error.details?.candidate
-        ) {
-          // Booking-feedback parity with runCategorize: route the duplicate
-          // guard into the dialog (match / ignore / book anyway) instead of
-          // dead-ending it in a destructive toast that offers no way forward.
-          const candidate = result.error.details.candidate
-          setDuplicateWarning({
-            transactionId: id,
-            retry: async () => {
-              const retry = await cpCategorize({
-                expectedDuplicateJournalEntryId: candidate.journal_entry_id,
-              })
-              if (retry.ok) {
-                finishBooking({
-                  id,
-                  isBusiness: true,
-                  category: retry.result?.category,
-                  journalEntryId: retry.journalEntryId,
-                  journalEntryCreated: retry.result?.journal_entry_created,
-                  journalEntryError: retry.result?.journal_entry_error,
-                })
-                return retry.journalEntryId
-              }
-              toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
-              return null
-            },
-            candidate,
-          })
-        } else {
-          toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(result, { context: 'transaction', statusCode: cpStatus }), variant: 'destructive' })
-        }
-        // Close the review dialog on hard errors: the toast (with action if
-        // ACCOUNTS_NOT_IN_CHART) carries the message and the recovery path.
-        // The duplicate branch closes it too: the duplicate dialog takes over.
-        setQuickReviewOpen(false)
-        setQuickReview(null)
-        return null
-      }
-      finishBooking({
-        id,
-        isBusiness: true,
-        category: result?.category,
-        journalEntryId: cpJeId,
-        journalEntryCreated: result?.journal_entry_created,
-        journalEntryError: result?.journal_entry_error,
-      })
-      journalEntryId = cpJeId
-    } else {
-      journalEntryId = await handleCategorize(id, true, category, vatTreatment, accountOverride, templateId, undefined, dimensions)
-    }
+    const tx = quickReview?.transaction
+    const { journalEntryId } = tx && tx.id === id
+      ? await bookProposalNow(tx, proposal, extras)
+      : { journalEntryId: null }
     // Always close: whether the server created a verifikation, returned a
     // structured 4xx (ACCOUNTS_NOT_IN_CHART, INVALID_MAPPING, …), or hit a
     // partial-success path. The toast from runCategorize already communicates
@@ -4044,13 +4103,50 @@ export default function TransactionsPage() {
     return journalEntryId
   }
 
-  // Library and counterparty templates (no templateId) seed the review form
-  // from their own accounts; everything else falls back to the category
-  // defaults. Never undefined: see resolveQuickReviewDefaults.
-  const quickReviewDefaults = resolveQuickReviewDefaults(
-    quickReview?.template,
-    quickReview?.templateId,
-    quickReview?.category,
+  const templatePickerProps: ComponentProps<typeof TemplatePicker> = {
+    direction: templatePickerTransaction && templatePickerTransaction.amount < 0 ? 'expense' : 'income',
+    entityType: entityType as EntityType,
+    suggestedTemplates: templatePickerTransaction ? templateSuggestions[templatePickerTransaction.id] : undefined,
+    onSelect: handleTemplateSelected,
+    onSelectCounterparty: (templateId: string) => {
+              if (!templatePickerTransaction) return
+              setTemplatePickerOpen(false)
+              handleOpenTemplateReview(templatePickerTransaction, templateId)
+    },
+    onPickLibraryTemplate: handlePickLibraryTemplate,
+    onSelectAccount: handlePickAccount,
+  }
+  // Alternate paths as quiet links (concept vact): the templates are the
+  // main content, not three stacked buttons.
+  const templatePickerLinks = (
+    <>
+            <button type="button" className={QUIET_LINK_CLASS} onClick={handleManualBooking}>
+              Bokför manuellt
+            </button>
+            {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
+                onClick={() => {
+                  const tx = templatePickerTransaction
+                  setTemplatePickerOpen(false)
+                  setInvoicePickerTransaction(tx)
+                  setInvoicePickerOpen(true)
+                }}
+              >
+                Matcha med faktura
+              </button>
+            )}
+            {templatePickerTransaction && (
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
+                onClick={() => void handleIgnoreTransaction(templatePickerTransaction)}
+              >
+                Ignorera transaktionen
+              </button>
+            )}
+    </>
   )
 
   return (
@@ -4059,15 +4155,12 @@ export default function TransactionsPage() {
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
 
-      {skvNeedsReconnect ? (
-        // Shown on every source filter, not just 'skatteverket'. The original
-        // gate (feedback 2026-08-14) predates the deletion of the
-        // connection-expired email (DECISIONS 2026-08-25), which left the
-        // banner as the ONLY proactive channel a web-only user has for a dead
-        // Skatteverket connection. A filter most users never select is not a
-        // channel, and hiding it is what let a dead connection sit unnoticed
-        // for days. The line is not noise: it renders only while the
-        // connection is actually broken and disappears the moment it works.
+      {skvNeedsReconnect && sourceFilter === 'skatteverket' ? (
+        // Only while the person is looking at Skatteverket's rows. The dead
+        // connection has its own channel on the Skattekonto page and the
+        // Konton row (lib/notices predicate), so a line on every visit to the
+        // bank list was noise (founder feedback 2026-09-09). The line still
+        // renders only while the connection is actually broken.
         <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/tax' }}>
           {t('skv_reconnect_body')}
         </AttnLine>
@@ -4112,6 +4205,35 @@ export default function TransactionsPage() {
             and on a brutet rakenskapsar they were not momsdeklaration
             quarters, so they misled more than they scoped. */}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {/* Shell v2: column visibility, persisted per user. */}
+          {txColumns && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  aria-label={t('columns_button')}
+                  title={t('columns_button')}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[12rem]">
+                {TX_COLUMNS.filter((c) => c.optional).map((c) => (
+                  <DropdownMenuItem
+                    key={c.id}
+                    onSelect={(e) => e.preventDefault()}
+                    onClick={() => toggleColumn(c.id)}
+                  >
+                    <Check className={cn('h-4 w-4', txColumns.has(c.id) ? 'opacity-100' : 'opacity-0')} />
+                    {t(c.labelKey)}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuItem onClick={() => setColumnsHidden([])}>{t('columns_reset')}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {/* Quiet cue that a scope change is reconciling behind the rendered
               list (the list itself never swaps to a skeleton for it). */}
           {isScopeRefreshing && (
@@ -4189,7 +4311,17 @@ export default function TransactionsPage() {
                 selected via the hover checkboxes, then it pops in with the
                 count and the batch actions. */}
             {(selectedIds.size > 0 || skvSelectedIds.size > 0) && (
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+              <div
+                className={cn(
+                  'flex items-center gap-x-5 gap-y-2 text-[12.5px] animate-fade-in',
+                  shell === 'v2'
+                    ? // Shell v2: a floating bar centred over the panel (concept
+                      // .floatbar), so it stays in view however far down the
+                      // selection reaches and the list does not shift under it.
+                      'fixed bottom-4 left-1/2 z-30 max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-x-auto whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 shadow-lg md:left-[calc(50%+var(--nav-w)/2)]'
+                    : 'flex-wrap border-b border-border px-1 py-2.5',
+                )}
+              >
                 {batchProgress ? (
                   <span className="flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -4272,18 +4404,26 @@ export default function TransactionsPage() {
                 checkbox/chevron hang into the page margins without being
                 clipped by the overflow container, while the columns stay
                 flush with the page edges. */}
-            <div className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8">
+            <div className={cn('overflow-x-auto', txColumns ? '-mx-4 px-4 md:-mx-6 md:px-6' : '-mx-5 px-5 md:-mx-8 md:px-8')}>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
-                    <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
-                    <th className={cn(TH_CLASS, '!pl-0')}>{t('th_date')}</th>
+                    <th className={cn(TH_CLASS, txColumns ? 'w-7 !pl-0 !pr-2' : 'w-0 !p-0')} aria-hidden="true"></th>
+                    {(!txColumns || txColumns.has('date')) && (
+                      <th className={cn(TH_CLASS, '!pl-0')}>{t('th_date')}</th>
+                    )}
                     <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
-                    <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                    {txColumns?.has('category') && <th className={TH_CLASS}>{t('th_category')}</th>}
+                    {txColumns?.has('account') && <th className={TH_CLASS}>{t('th_account')}</th>}
+                    {(!txColumns || txColumns.has('amount')) && (
+                      <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                    )}
                     <th className={cn(TH_CLASS, 'text-right !pr-0')}>{t('th_status')}</th>
                   </tr>
                 </thead>
-                <tbody className="stagger-enter">
+                {/* data-ph-mask: session replay masks every text node under it in one
+                    lookup instead of walking up from each cell. */}
+                <tbody className="stagger-enter" data-ph-mask="">
                   {inboxItems.map(item =>
                     item.source === 'bank' ? (
                       <TransactionInboxCard
@@ -4314,6 +4454,12 @@ export default function TransactionsPage() {
                         cashAccounts={cashAccounts}
                         onToggleSelect={toggleBatchSelect}
                         preMigrationCutoff={sieCoverageEnd}
+                        columns={txColumns ?? undefined}
+                        accountLabel={txColumns ? accountLabelFor(item.data) : null}
+                        categoryLabel={txColumns ? categoryLabelFor(item.data) : null}
+                        accountLogo={txColumns ? accountLogoFor(item.data) : null}
+                        proposal={txColumns ? proposalFor(item.data) : null}
+                        onBookProposal={txColumns ? bookProposal : undefined}
                       />
                     ) : (
                       <SkattekontoInboxCard
@@ -4329,6 +4475,9 @@ export default function TransactionsPage() {
                         onBokfor={handleSkvBokfor}
                         onMatch={r => setSkvMatchTarget(r)}
                         onIgnore={handleSkvIgnore}
+                        columns={txColumns ?? undefined}
+                        accountLabel={txColumns ? tSkvCard('account_label', { account: SKATTEKONTO_ACCOUNT }) : null}
+                        accountLogo={txColumns ? '/logos/skatteverket_color.svg' : null}
                       />
                     ),
                   )}
@@ -4384,7 +4533,9 @@ export default function TransactionsPage() {
           rows + bank sync status/actions + the Bankavstämning path (the
           ignore flows point users there). */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 text-xs text-muted-foreground">
-        {mode === 'inbox' && (
+        {/* The count only when there is one: "Inget att hantera" over an
+            empty list says what the empty list already says. */}
+        {mode === 'inbox' && inboxItems.length > 0 && (
           <span className="tabular-nums">{t('footer_to_handle', { count: inboxItems.length })}</span>
         )}
         {mode === 'inbox' && pendingOutsideCount > 0 && (
@@ -4495,12 +4646,14 @@ export default function TransactionsPage() {
             if (!o) {
               setBookingDialogTemplate(null)
               setBookingDialogProposalLines(null)
+    setBookingDialogLineDescription(null)
               setBookingDialogAccount(null)
             }
           }}
           transaction={bookingDialogTransaction}
           preselectedTemplate={bookingDialogTemplate}
           proposalLines={bookingDialogProposalLines}
+          proposalLineDescription={bookingDialogLineDescription}
           preselectedAccount={bookingDialogAccount}
           onBooked={handleTransactionBooked}
         />
@@ -4523,7 +4676,28 @@ export default function TransactionsPage() {
           Esc and veil-click still close: the picker holds no user input.
           Clicks in the assistant don't dismiss: data-agent-ui counts as
           inside (see DialogContent). */}
-      {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen} modal={false}>
+      {/* The picker's props, shared by the v2 popover and the v1 dialog. */}
+      {templatePickerOpen && shell === 'v2' && templatePickerAnchor && (
+        <CategoryPopover anchor={templatePickerAnchor} onClose={() => setTemplatePickerOpen(false)}>
+          <div className="flex items-center justify-between gap-3 border-b border-border/70 px-3 py-2 text-[12.5px]">
+            {templatePickerTransaction && (
+              <>
+                <span className="truncate" data-ph-mask>{templatePickerTransaction.description}</span>
+                <span className="shrink-0 font-medium tabular-nums" data-ph-mask>
+                  {templatePickerTransaction.amount > 0 ? '+' : ''}{formatCurrency(templatePickerTransaction.amount, templatePickerTransaction.currency)}
+                </span>
+              </>
+            )}
+          </div>
+          <div className="flex min-h-0 flex-col overflow-hidden">
+            <TemplatePicker {...templatePickerProps} dense />
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/70 bg-background px-3 py-2">
+            {templatePickerLinks}
+          </div>
+        </CategoryPopover>
+      )}
+      {templatePickerOpen && !(shell === 'v2' && templatePickerAnchor) && <Dialog open onOpenChange={setTemplatePickerOpen} modal={false}>
         <DialogVeil />
         {/* Width capped at the space left of a docked sheet (--agent-sheet-w
             is docked-only) so the picker never clips off-screen left on
@@ -4543,46 +4717,9 @@ export default function TransactionsPage() {
           {/* Alternate paths as quiet links (concept vact): the templates are
               the main content, not three stacked buttons. */}
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-            <button type="button" className={QUIET_LINK_CLASS} onClick={handleManualBooking}>
-              Bokför manuellt
-            </button>
-            {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
-              <button
-                type="button"
-                className={QUIET_LINK_CLASS}
-                onClick={() => {
-                  const tx = templatePickerTransaction
-                  setTemplatePickerOpen(false)
-                  setInvoicePickerTransaction(tx)
-                  setInvoicePickerOpen(true)
-                }}
-              >
-                Matcha med faktura
-              </button>
-            )}
-            {templatePickerTransaction && (
-              <button
-                type="button"
-                className={QUIET_LINK_CLASS}
-                onClick={() => void handleIgnoreTransaction(templatePickerTransaction)}
-              >
-                Ignorera transaktionen
-              </button>
-            )}
+            {templatePickerLinks}
           </div>
-          <TemplatePicker
-            direction={templatePickerTransaction && templatePickerTransaction.amount < 0 ? 'expense' : 'income'}
-            entityType={entityType as EntityType}
-            suggestedTemplates={templatePickerTransaction ? templateSuggestions[templatePickerTransaction.id] : undefined}
-            onSelect={handleTemplateSelected}
-            onSelectCounterparty={(templateId) => {
-              if (!templatePickerTransaction) return
-              setTemplatePickerOpen(false)
-              handleOpenTemplateReview(templatePickerTransaction, templateId)
-            }}
-            onPickLibraryTemplate={handlePickLibraryTemplate}
-            onSelectAccount={handlePickAccount}
-          />
+          <TemplatePicker {...templatePickerProps} />
         </DialogContent>
       </Dialog>}
 
@@ -4645,21 +4782,18 @@ export default function TransactionsPage() {
 
       {quickReviewOpen && (
         <QuickReviewDialog
-          key={quickReview?.transaction.id ?? '' + String(quickReview?.category) + String(quickReview?.templateId) + String(quickReview?.template?.id)}
+          // One key per shape of review, not per row, so a review reopened
+          // on another booking (the assistant's pick) starts from it.
+          key={quickReview ? `${quickReview.transaction.id}:${quickReview.proposal.template_id}:${quickReview.proposal.booking.kind}` : 'none'}
           open
           onOpenChange={setQuickReviewOpen}
           transaction={quickReview?.transaction ?? null}
-          category={quickReview?.category ?? null}
-          categoryLabel={quickReview?.label ?? ''}
-          defaultAccount={quickReviewDefaults.account}
-          defaultVat={quickReviewDefaults.vat}
+          proposal={quickReview!.proposal}
+          picked={quickReview?.picked ?? false}
           entityType={entityType as EntityType}
-          template={quickReview?.template ?? null}
-          templateId={quickReview?.templateId}
-          counterpartyLinePattern={quickReview?.linePattern ?? null}
-          counterpartyDefaultDimensions={quickReview?.defaultDimensions ?? null}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
+          assistantRead={quickReview ? (assistantReadsRef.current[quickReview.transaction.id] ?? null) : null}
           onEditLines={handleEditProposedLines}
         />
       )}

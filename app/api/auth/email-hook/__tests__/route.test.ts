@@ -10,12 +10,19 @@ import type { Brand } from '@/lib/branding/resolve'
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
-const resolveBrandByHostMock = vi.hoisted(() => vi.fn())
+const resolveBrandResultByHostMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/branding/resolve', () => ({
-  resolveBrandByHost: resolveBrandByHostMock,
+  resolveBrandByHost: vi.fn(),
+  // The one registry read: the trusted-origin resolver classifies the
+  // redirect_to host through it, and the hook reads the sender brand from it.
+  resolveBrandResultByHost: (...args: unknown[]) => resolveBrandResultByHostMock(...args),
   // Imported by lib/email/brand-sender (not called on the hook path).
   resolveBrandForCompany: vi.fn(),
 }))
+
+const CANONICAL = 'https://app.gnubok.se'
+/** The one registered brand host in these tests; everything else is unknown. */
+const BRAND_HOST = 'app.siffra.se'
 
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appName: 'Accounted', appUrl: 'https://app.gnubok.se' }),
@@ -87,15 +94,23 @@ function hookPayload(overrides?: {
   })
 }
 
+const ORIGINAL_APP_URL = process.env.NEXT_PUBLIC_APP_URL
+
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.SUPABASE_SEND_EMAIL_HOOK_SECRET = SECRET
-  resolveBrandByHostMock.mockResolvedValue(null)
+  process.env.NEXT_PUBLIC_APP_URL = CANONICAL
+  resolveBrandResultByHostMock.mockImplementation(async (host: string) => ({
+    brand: host === BRAND_HOST ? makeBrand() : null,
+    lookupFailed: false,
+  }))
   sendEmailMock.mockResolvedValue({ success: true, messageId: 'msg-1' })
 })
 
 afterEach(() => {
   delete process.env.SUPABASE_SEND_EMAIL_HOOK_SECRET
+  if (ORIGINAL_APP_URL === undefined) delete process.env.NEXT_PUBLIC_APP_URL
+  else process.env.NEXT_PUBLIC_APP_URL = ORIGINAL_APP_URL
 })
 
 describe('POST /api/auth/email-hook', () => {
@@ -138,7 +153,6 @@ describe('POST /api/auth/email-hook', () => {
   })
 
   it('brands the mail from the redirect_to host and rides the verified brand sender', async () => {
-    resolveBrandByHostMock.mockResolvedValue(makeBrand())
     const res = await POST(
       signedRequest(
         hookPayload({
@@ -150,7 +164,7 @@ describe('POST /api/auth/email-hook', () => {
       ),
     )
     expect(res.status).toBe(200)
-    expect(resolveBrandByHostMock).toHaveBeenCalledWith('app.siffra.se')
+    expect(resolveBrandResultByHostMock).toHaveBeenCalledWith('app.siffra.se')
 
     const options = sendEmailMock.mock.calls[0][0]
     expect(options.fromName).toBe('Siffra')
@@ -163,7 +177,10 @@ describe('POST /api/auth/email-hook', () => {
   })
 
   it('uses the via-fallback for a brand without a verified sender domain', async () => {
-    resolveBrandByHostMock.mockResolvedValue(makeBrand({ senderDomainStatus: 'pending' }))
+    resolveBrandResultByHostMock.mockResolvedValue({
+      brand: makeBrand({ senderDomainStatus: 'pending' }),
+      lookupFailed: false,
+    })
     await POST(
       signedRequest(
         hookPayload({
@@ -237,5 +254,107 @@ describe('POST /api/auth/email-hook', () => {
     sendEmailMock.mockResolvedValue({ success: false, error: 'provider down' })
     const res = await POST(signedRequest(hookPayload()))
     expect(res.status).toBe(500)
+  })
+
+  describe('redirect_to destinations (signature proves the sender, not the destination)', () => {
+    it.each([
+      ['an unknown host', 'https://evil.example/auth/callback?next=/reset-password'],
+      ['a lookalike of a registered host', 'https://app.siffra.se.evil.example/auth/callback'],
+      ['a registered host on a non-default port', 'https://app.siffra.se:8443/auth/callback'],
+      ['a credential-bearing URL', 'https://app.siffra.se@evil.example/auth/callback'],
+      // URL.origin drops userinfo: the host alone would pass as trusted.
+      ['credentials on a registered host', 'https://evil.example@app.siffra.se/auth/callback?next=/x'],
+      ['credentials on the canonical host', 'https://user:pw@app.gnubok.se/auth/callback?next=/x'],
+      ['a malformed value', 'not a url'],
+    ])('links %s to the canonical callback without the requested path', async (_label, redirectTo) => {
+      const res = await POST(
+        signedRequest(hookPayload({ email_data: { redirect_to: redirectTo } })),
+      )
+      expect(res.status).toBe(200)
+
+      const options = sendEmailMock.mock.calls[0][0]
+      expect(options.text).toContain(
+        'https://app.gnubok.se/auth/callback?token_hash=hash-1&type=recovery',
+      )
+      expect(options.text).not.toContain('evil.example')
+      expect(options.text).not.toContain(':8443')
+      expect(options.text).not.toContain('next=')
+      // Canonical link means canonical sender: brand and destination agree.
+      expect(options.fromName).toBeUndefined()
+      expect(options.fromAddress).toBeUndefined()
+    })
+
+    it('upgrades http on a registered brand host to https and drops the requested path', async () => {
+      await POST(
+        signedRequest(
+          hookPayload({
+            email_data: { redirect_to: 'http://app.siffra.se/auth/callback?next=/settings' },
+          }),
+        ),
+      )
+      const options = sendEmailMock.mock.calls[0][0]
+      expect(options.text).toContain(
+        'https://app.siffra.se/auth/callback?token_hash=hash-1&type=recovery',
+      )
+      expect(options.text).not.toContain('http://')
+      expect(options.text).not.toContain('next=')
+      expect(options.fromName).toBe('Siffra')
+    })
+
+    it('keeps the requested path on a registered brand host', async () => {
+      await POST(
+        signedRequest(
+          hookPayload({
+            email_data: { redirect_to: 'https://app.siffra.se/auth/callback?next=%2Freset-password' },
+          }),
+        ),
+      )
+      const options = sendEmailMock.mock.calls[0][0]
+      expect(options.text).toContain(
+        'https://app.siffra.se/auth/callback?next=%2Freset-password&token_hash=hash-1',
+      )
+      expect(options.fromName).toBe('Siffra')
+    })
+
+    it('falls back to the canonical callback when redirect_to is missing', async () => {
+      await POST(signedRequest(hookPayload({ email_data: { redirect_to: undefined } })))
+      const options = sendEmailMock.mock.calls[0][0]
+      expect(options.text).toContain('https://app.gnubok.se/auth/callback?token_hash=hash-1')
+    })
+
+    it('returns 500 without sending when the brand read fails after the origin resolved', async () => {
+      // First read (origin classification) succeeds, second (sender) fails:
+      // never platform-branded mail carrying a brand link.
+      resolveBrandResultByHostMock
+        .mockResolvedValueOnce({ brand: makeBrand(), lookupFailed: false })
+        .mockResolvedValueOnce({ brand: null, lookupFailed: true })
+      const res = await POST(
+        signedRequest(
+          hookPayload({ email_data: { redirect_to: 'https://app.siffra.se/auth/callback' } }),
+        ),
+      )
+      expect(res.status).toBe(500)
+      expect(sendEmailMock).not.toHaveBeenCalled()
+    })
+
+    it('still sends canonical mail when the brand read fails on the canonical origin', async () => {
+      resolveBrandResultByHostMock.mockResolvedValue({ brand: null, lookupFailed: true })
+      const res = await POST(signedRequest(hookPayload()))
+      expect(res.status).toBe(200)
+      const options = sendEmailMock.mock.calls[0][0]
+      expect(options.text).toContain('https://app.gnubok.se/auth/callback?next=%2Freset-password')
+      expect(options.fromName).toBeUndefined()
+    })
+
+    it('returns 500 without sending when the brand registry cannot be read', async () => {
+      resolveBrandResultByHostMock.mockResolvedValue({ brand: null, lookupFailed: true })
+      const res = await POST(
+        signedRequest(
+          hookPayload({ email_data: { redirect_to: 'https://app.siffra.se/auth/callback' } }),
+        ),
+      )
+      expect(res.status).toBe(500)
+      expect(sendEmailMock).not.toHaveBeenCalled()
+    })
   })
 })

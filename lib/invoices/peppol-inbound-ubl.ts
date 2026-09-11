@@ -14,6 +14,8 @@
  * field is odd.
  */
 
+import { isPeppolScheme, normalizePeppolIdentifier } from '@/lib/invoices/peppol-identifiers'
+
 export type UblJsonNode = Record<string, unknown>
 
 export interface PeppolInboundEndpoint {
@@ -197,8 +199,12 @@ function readEndpoint(party: UblJsonNode | null): PeppolInboundEndpoint | null {
   const endpoint = ublFirst(party, 'EndpointID')
   const identifier = ublNodeText(endpoint)
   const scheme = ublAttr(endpoint, 'schemeID')
-  if (!identifier || !scheme) return null
-  return { scheme, identifier: identifier.replace(/\s/g, '') }
+  // The archive's CHECK constraints accept four-digit ICD schemes only; an
+  // endpoint with anything else is treated as absent rather than let one
+  // odd sender block the archive.
+  if (!identifier || !scheme || !isPeppolScheme(scheme)) return null
+  const normalized = normalizePeppolIdentifier(scheme.trim(), identifier)
+  return normalized ? { scheme: scheme.trim(), identifier: normalized } : null
 }
 
 function readParty(root: UblJsonNode | null, container: string, warnings: string[]): PeppolInboundParty {

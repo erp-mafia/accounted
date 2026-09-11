@@ -25,6 +25,7 @@
  * resolve it, not because the amount already is kronor.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
@@ -378,7 +379,7 @@ export async function categorizeMatchedTransaction(
   const { data: settings } = await supabase
     .from('company_settings').select('entity_type, fiscal_year_start_month').eq('company_id', companyId).single()
 
-  const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+  const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
   const fiscalYearStartMonth = settings?.fiscal_year_start_month ?? 1
 
   let mappingResult = buildMappingResultFromCategory(

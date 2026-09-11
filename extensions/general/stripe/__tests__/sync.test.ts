@@ -232,12 +232,13 @@ describe('syncStripeConnection', () => {
     })
   })
 
-  it('falls back to accrual/enskild_firma when the company has no settings row', async () => {
+  it('falls back to accrual and the companies.entity_type row when the company has no settings row', async () => {
     stubEvents([makeEvent(makeSession())])
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'spe-1' }] }) // claim insert
     enqueue({ data: payableInvoice() }) // invoice by payment link
     enqueue({ data: null }) // company_settings: no row (maybeSingle -> null, no error)
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // companies: canonical form, never a guessed default
     enqueue({ data: null }) // event row finalize
     enqueue({ data: null }) // cursor update
 

@@ -99,6 +99,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       if (updateError.message?.includes('INVOICE_QUOTE_ALREADY_INVOICED')) {
         return errorResponseFromCode('INVOICE_QUOTE_ALREADY_INVOICED', log, { requestId })
       }
+      // Same guard: a live kundorder created from the quote locks it too.
+      if (updateError.message?.includes('INVOICE_QUOTE_ALREADY_ORDERED')) {
+        return errorResponseFromCode('INVOICE_QUOTE_ALREADY_ORDERED', log, { requestId })
+      }
       log.error('quote status update failed', updateError, { quoteId: id })
       return errorResponse(updateError, log, { requestId })
     }

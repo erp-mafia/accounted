@@ -34,7 +34,8 @@
           "whatsapp-inbox",
           "woocommerce",
           "stripe",
-          "shopify"
+          "shopify",
+          "zettle"
         ]
       },
       "description": "Extension IDs to enable. Each ID must match a manifest.json in the extensions/ directory."

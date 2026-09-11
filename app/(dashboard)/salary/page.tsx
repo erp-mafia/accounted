@@ -110,8 +110,8 @@ export default function SalaryPage() {
   const periodOf = (r: SalaryRun) => `${r.period_year}-${String(r.period_month).padStart(2, '0')}`
 
   const header = (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+    <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
       <div className="flex items-center gap-4">
         <Link href="/salary/employees" className={QUIET_LINK_CLASS}>
           {t('employees')}
@@ -213,7 +213,9 @@ export default function SalaryPage() {
                             {periodOf(run)}
                           </Link>
                         </td>
-                        <td className={cn(TD_CLASS, 'max-w-0 w-full whitespace-nowrap')}>
+                        {/* overflow-hidden: see #2003, nothing in this cell
+                            truncates so it must clip. */}
+                        <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden whitespace-nowrap')}>
                           <span className="inline-flex items-center gap-2">
                             {run.status === 'booked' ? (
                               <span className="text-muted-foreground">{t('status_booked')}</span>

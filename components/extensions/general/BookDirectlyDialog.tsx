@@ -20,7 +20,7 @@ import { roundOre } from '@/lib/money'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
-import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
+import TemplateApplyButton from '@/components/bookkeeping/TemplateApplyButton'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
@@ -86,6 +86,7 @@ const TEMPLATE_ENTITY_LABELS: Record<string, string> = {
   all: 'Alla',
   enskild_firma: 'Enskild firma',
   aktiebolag: 'Aktiebolag',
+  ideell_forening: 'Ideell förening',
 }
 
 interface Props {
@@ -965,9 +966,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   <Plus className="h-3.5 w-3.5 mr-1.5" />
                   Lägg till rad
                 </Button>
-                <BookingTemplatePicker
+                <TemplateApplyButton
                   onApply={handleTemplateApply}
                   entityType={company?.entity_type}
+                  disabled={isSubmitting}
                   defaultAmount={
                     selectedTransactionAmount != null
                       ? Math.abs(selectedTransactionAmount)

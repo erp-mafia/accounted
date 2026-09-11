@@ -529,8 +529,8 @@ export default function ChartOfAccountsManager() {
 
   // Page header + toolbar render even while loading so the chrome is stable.
   const header = (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <h1 className="font-display text-2xl leading-8 tracking-tight">{tNav('chart_of_accounts')}</h1>
+    <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{tNav('chart_of_accounts')}</h1>
       <div className="flex items-center gap-4">
         <Badge variant="outline" className="font-normal">{t('bas_version_chip')}</Badge>
         <button type="button" className={QUIET_LINK_CLASS} onClick={() => setPruneDialogOpen(true)}>
@@ -748,7 +748,9 @@ export default function ChartOfAccountsManager() {
                               <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
                                 <AccountNumber number={account.account_number} name={account.account_name} />
                               </td>
-                              <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                              {/* overflow-hidden: see #2003, the shrink-0
+                                  markers cannot truncate. */}
+                              <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
                                 <span className="flex min-w-0 items-center gap-1.5">
                                   <span className="truncate">{account.account_name}</span>
                                   {account.is_system_account && (

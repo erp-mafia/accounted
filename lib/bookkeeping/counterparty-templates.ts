@@ -32,7 +32,7 @@ const log = createLogger('counterparty-templates')
  * trailing period label on a bank-feed description ("Ngrok Mars", "Spotify
  * januari") rather than as part of the merchant's identity.
  */
-const TRAILING_MONTH_TOKENS = new Set([
+export const TRAILING_MONTH_TOKENS = new Set([
   'jan', 'feb', 'mar', 'apr', 'maj', 'may', 'jun', 'jul', 'aug', 'sep', 'sept',
   'okt', 'oct', 'nov', 'dec',
   'januari', 'februari', 'mars', 'april', 'juni', 'juli', 'augusti',
@@ -50,7 +50,7 @@ const TRAILING_MONTH_TOKENS = new Set([
  * all-caps initials (so 3-letter brands like SEB/ICA and any lowercased word
  * survive), and always keeps at least one core token (never strips to empty).
  */
-function stripTrailingNoiseTokens(s: string): string {
+export function stripTrailingNoiseTokens(s: string): string {
   const tokens = s.trim().split(/\s+/).filter(Boolean)
   while (tokens.length > 1) {
     const last = tokens[tokens.length - 1]
@@ -324,18 +324,37 @@ export async function findCounterpartyTemplatesBatch(
 
   const templates = allTemplates as CategorizationTemplate[]
 
-  // Build alias lookup: lowercase alias → template
+  // Build alias lookup: lowercase alias → template. An alias that equals
+  // another template's canonical counterparty_name (only reachable through a
+  // user rename) must not shadow that template when a bank line is exactly
+  // that string: the canonical owner wins.
+  const canonicalOwner = new Map<string, CategorizationTemplate>()
+  for (const tmpl of templates) {
+    canonicalOwner.set(tmpl.counterparty_name, tmpl)
+  }
   const aliasMap = new Map<string, CategorizationTemplate>()
   for (const tmpl of templates) {
     for (const alias of tmpl.counterparty_aliases || []) {
+      const owner = canonicalOwner.get(alias)
+      if (owner && owner.id !== tmpl.id) continue
       aliasMap.set(alias, tmpl)
     }
   }
 
-  // Build normalized name lookup
+  // Build normalized name lookup. A user rename (PATCH
+  // /api/settings/counterparty-templates) moves the bank-derived key into
+  // counterparty_aliases; without the alias leg here, a template renamed to a
+  // human label ("musik") would keep learning through findTemplateByKey but
+  // never be proposed again, since the alias tier above only sees raw
+  // descriptors. A real counterparty_name always wins over an alias.
   const nameMap = new Map<string, CategorizationTemplate>()
   for (const tmpl of templates) {
     nameMap.set(tmpl.counterparty_name, tmpl)
+  }
+  for (const tmpl of templates) {
+    for (const alias of tmpl.counterparty_aliases || []) {
+      if (!nameMap.has(alias)) nameMap.set(alias, tmpl)
+    }
   }
 
   for (const tx of transactions) {
@@ -753,6 +772,38 @@ export interface TemplateUpsertParams {
 }
 
 /**
+ * Find the template that owns a learned key: by counterparty_name first,
+ * then by alias. A user rename moves the old key into counterparty_aliases
+ * (PATCH /api/settings/counterparty-templates), so the alias leg is what
+ * keeps re-approvals landing on the renamed row instead of inserting a
+ * second template under the bank-derived name.
+ */
+async function findTemplateByKey(
+  supabase: SupabaseClient,
+  companyId: string,
+  counterpartyName: string
+): Promise<CategorizationTemplate | null> {
+  const { data: byName } = await supabase
+    .from('categorization_templates')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('counterparty_name', counterpartyName)
+    .maybeSingle()
+  if (byName) return byName as CategorizationTemplate
+
+  const { data: byAlias } = await supabase
+    .from('categorization_templates')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .contains('counterparty_aliases', [counterpartyName])
+    .order('occurrence_count', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return (byAlias as CategorizationTemplate | null) ?? null
+}
+
+/**
  * Low-level insert-or-update for a counterparty template.
  *
  * - existingTemplate undefined → DB lookup by (companyId, counterpartyName)
@@ -781,13 +832,7 @@ export async function insertOrUpdateTemplate(
   // Resolve existing template
   let existing: CategorizationTemplate | null = null
   if (existingTemplate === undefined) {
-    const { data } = await supabase
-      .from('categorization_templates')
-      .select('*')
-      .eq('company_id', companyId)
-      .eq('counterparty_name', params.counterpartyName)
-      .maybeSingle()
-    existing = data as CategorizationTemplate | null
+    existing = await findTemplateByKey(supabase, companyId, params.counterpartyName)
   } else {
     existing = existingTemplate
   }
@@ -843,6 +888,9 @@ export async function insertOrUpdateTemplate(
           last_seen_date: params.lastSeenDate,
           source: newSource,
           counterparty_aliases: mergedAliases,
+          // Rules ladder: a changed proposal is a correction the Regler page
+          // shows next to the hit count (migration 20260907121500).
+          corrections: (existing.corrections ?? 0) + 1,
           line_pattern: params.linePattern !== undefined ? params.linePattern : existing.line_pattern,
           ...(params.defaultDimensions && Object.keys(params.defaultDimensions).length > 0
             ? { default_dimensions: params.defaultDimensions }
@@ -1370,10 +1418,18 @@ export async function populateTemplatesFromSieVouchers(
     .eq('company_id', companyId)
     .eq('is_active', true)
 
+  // Keyed by counterparty_name, then by alias: a renamed template keeps its
+  // old bank-derived key as an alias (see findTemplateByKey), and a SIE
+  // re-import must update that row rather than insert a duplicate.
   const templateMap = new Map<string, CategorizationTemplate>()
   if (existingTemplates) {
     for (const t of existingTemplates) {
       templateMap.set(t.counterparty_name, t as CategorizationTemplate)
+    }
+    for (const t of existingTemplates) {
+      for (const alias of (t.counterparty_aliases as string[] | null) || []) {
+        if (!templateMap.has(alias)) templateMap.set(alias, t as CategorizationTemplate)
+      }
     }
   }
 

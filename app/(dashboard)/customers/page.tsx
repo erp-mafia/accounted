@@ -247,8 +247,8 @@ function CustomersPageInner() {
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 25): title + export + Ny kund */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <div className="flex items-center gap-2">
           <ReportExportMenu
             size="default"
@@ -352,7 +352,9 @@ function CustomersPageInner() {
                       className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
                       onClick={() => router.push(`/customers/${customer.id}`)}
                     >
-                      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                      {/* overflow-hidden: see #2003, the shrink-0 verified
+                          badge cannot truncate. */}
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
                         <span className="flex min-w-0 items-center gap-2">
                           <Link
                             href={`/customers/${customer.id}`}

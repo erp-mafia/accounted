@@ -875,3 +875,16 @@ describe('deadline + helpers', () => {
     expect(xml).toMatch(/<ns2:Fastighetsbeteckning>TEST 1:7<\/ns2:Fastighetsbeteckning>\s*<ns2:UtfortArbete>\s*<ns2:GlasPlatarbete>/)
   })
 })
+
+describe('evaluateInvoiceForFile: reclaimed deduction (rot_rut_reclaim)', () => {
+  it('DEDUCTION_RECLAIMED blocks an invoice whose refused share was booked onto the customer', () => {
+    const result = evaluateInvoiceForFile('rot', makeRotInvoice({ deduction_reclaimed_total: 1000 }))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.blocker.code).toBe('DEDUCTION_RECLAIMED')
+  })
+
+  it('a zero or absent reclaimed total changes nothing', () => {
+    expect(evaluateInvoiceForFile('rot', makeRotInvoice({ deduction_reclaimed_total: 0 })).ok).toBe(true)
+    expect(evaluateInvoiceForFile('rot', makeRotInvoice()).ok).toBe(true)
+  })
+})

@@ -12,7 +12,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { buildArsredovisningData } from '@/lib/bokslut/arsredovisning/build-data'
 import { listSignatureRequests } from '@/lib/bokslut/arsredovisning/signature-service'
-import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
+import { resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
+import { getMedelantalOverride } from '@/lib/bokslut/arsredovisning/narrative-service'
 import { mapTrialBalancesToK2, type TrialBalancePair } from './k2-mapper'
 import { resolveEntryPoint } from './taxonomy/entry-points'
 import type {
@@ -89,6 +90,7 @@ export async function buildIxbrlInput(
   // Previous period: trial balances for jämförelsesiffror (same full/
   // pre-closing split as the current year).
   let previousPeriod: { start: string; end: string } | null = null
+  let previousPeriodId: string | null = null
   let previousTb: TrialBalancePair | null = null
   if (period.previous_period_id) {
     const { data: prev } = await supabase
@@ -99,6 +101,7 @@ export async function buildIxbrlInput(
       .maybeSingle()
     if (prev) {
       previousPeriod = { start: prev.period_start, end: prev.period_end }
+      previousPeriodId = prev.id
       try {
         const [prevFull, prevPreClosing] = await Promise.all([
           generateTrialBalance(supabase, companyId, prev.id, { closingEntry: 'include' }),
@@ -326,16 +329,23 @@ export async function buildIxbrlInput(
   }
 
   // ---- medelantal anställda ---------------------------------------------------
-  // Compute BOTH years with the real FTE helper (the same one the PDF note
-  // uses) over the employees table. The note-prose regex stays only as a
-  // last-resort fallback when the employees query fails.
+  // Compute BOTH years with the same resolver the PDF note uses: a manual
+  // override on arsredovisning_narratives for that period wins, otherwise
+  // the FTE average over the employees table. The note-prose regex stays
+  // only as a last-resort fallback when the employees query fails.
   let medelantalAnstallda: { current: number; previous: number | null }
-  const { data: employeeRows, error: employeesError } = await supabase
-    .from('employees')
-    .select('employment_start, employment_end, employment_degree')
-    .eq('company_id', companyId)
+  const [{ data: employeeRows, error: employeesError }, previousOverride] = await Promise.all([
+    supabase
+      .from('employees')
+      .select('employment_start, employment_end, employment_degree')
+      .eq('company_id', companyId),
+    previousPeriodId ? getMedelantalOverride(supabase, companyId, previousPeriodId) : null,
+  ])
   if (employeesError) {
-    medelantalAnstallda = extractMedelantal(pdfData.noter, null)
+    // The note already embeds the current year's override; last year's
+    // manual figure is still worth showing when only the employees read
+    // failed.
+    medelantalAnstallda = extractMedelantal(pdfData.noter, previousOverride)
   } else {
     const employees = (employeeRows ?? []) as Array<{
       employment_start: string
@@ -343,9 +353,19 @@ export async function buildIxbrlInput(
       employment_degree: number
     }>
     medelantalAnstallda = {
-      current: computeMedelantalAnstallda(employees, period.period_start, period.period_end),
+      current: resolveMedelantalAnstallda(
+        pdfData.disclosures.medelantal_anstallda_override,
+        employees,
+        period.period_start,
+        period.period_end,
+      ),
       previous: previousPeriod
-        ? computeMedelantalAnstallda(employees, previousPeriod.start, previousPeriod.end)
+        ? resolveMedelantalAnstallda(
+            previousOverride,
+            employees,
+            previousPeriod.start,
+            previousPeriod.end,
+          )
         : null,
     }
   }

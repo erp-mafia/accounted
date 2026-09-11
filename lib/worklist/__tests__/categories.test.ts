@@ -14,6 +14,8 @@ import {
   countVerifikatMissingDocument,
   listExpensePayoutsDue,
   listExpensePayoutSuggestions,
+  listSkattekontoPaymentDue,
+  countSkattekontoPaymentDue,
   listRotRutPayoutSetSuggestions,
   listSuggestedMatches,
 } from '../categories'
@@ -697,5 +699,116 @@ describe('listExpensePayoutSuggestions', () => {
     enqueue({ data: [] })
     await expect(listExpensePayoutSuggestions(supabase, COMPANY)).resolves.toEqual([])
     expect(mockSupabase.from).not.toHaveBeenCalledWith('transactions')
+  })
+})
+
+describe('listSkattekontoPaymentDue', () => {
+  const TODAY = '2026-09-08'
+  const company = { org_number: '559547-0021', entity_type: 'aktiebolag' }
+  // Queue order follows the function's `from` calls: upcoming rows and the
+  // balance snapshot (one parallel wave), then the company, then the OCR
+  // resolver's own snapshot read.
+  const snapshot = (saldoSkatteverket: number) => ({
+    data: { value: { saldo: { saldoSkatteverket }, fetchedAt: 1757300000000 } },
+  })
+
+  it('returns null when Skatteverket has no upcoming charge', async () => {
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    await expect(listSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+    expect(mockSupabase.from).toHaveBeenCalledWith('skattekonto_transactions')
+    expect(findCalls('skattekonto_transactions', 'eq')).toContainEqual(['status', 'upcoming'])
+    // Ignored rows are not filtered out: Skatteverket draws them regardless.
+    expect(findCalls('skattekonto_transactions', 'eq')).not.toContainEqual(['is_ignored', false])
+  })
+
+  it('returns null when the synced saldo covers the next charge', async () => {
+    enqueue({
+      data: [
+        { transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -12000 },
+        { transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -3000 },
+      ],
+    })
+    enqueue(snapshot(15000))
+    await expect(listSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+    // No company or OCR read once nothing has to be paid in.
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('companies')
+  })
+
+  it('reports the shortfall on the earliest due date with bankgiro and OCR', async () => {
+    enqueue({
+      data: [
+        // A later charge: not part of the next payment.
+        { transaktionsdatum: '2026-10-12', forfallodatum: '2026-10-12', belopp_skatteverket: -9000 },
+        { transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: '-12000.50' },
+        { transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -3000 },
+        // Already drawn: a due date before today belongs to book_skattekonto.
+        { transaktionsdatum: '2026-09-01', forfallodatum: '2026-09-01', belopp_skatteverket: -500 },
+      ],
+    })
+    enqueue(snapshot(4000.25))
+    enqueue({ data: company })
+    // OCR resolver: no reported OCR in the snapshot, so it is derived.
+    enqueue({ data: null })
+    await expect(listSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toEqual({
+      due: '2026-09-12',
+      charge: 15000.5,
+      balance: 4000.25,
+      amount: 11000.25,
+      count: 2,
+      ocr: '1655954700217',
+      bankgiro: '5050-1055',
+    })
+  })
+
+  it('shows the full charge when no balance snapshot exists', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: null, belopp_skatteverket: -2500 }],
+    })
+    enqueue({ data: null })
+    enqueue({ data: company })
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ due: '2026-09-12', charge: 2500, balance: null, amount: 2500, count: 1 })
+  })
+
+  it('adds a negative saldo (a debt) to the amount to pay in', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
+    })
+    enqueue(snapshot(-250))
+    enqueue({ data: company })
+    enqueue({ data: null })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ charge: 1000, balance: -250, amount: 1250 })
+  })
+
+  it('keeps the row without an OCR when the company has no org number', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
+    })
+    enqueue({ data: null })
+    enqueue({ data: { org_number: null, entity_type: 'aktiebolag' } })
+    const due = await listSkattekontoPaymentDue(supabase, COMPANY, TODAY)
+    expect(due).toMatchObject({ amount: 1000, ocr: null, bankgiro: '5050-1055' })
+  })
+
+  it('soft-fails to null on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    enqueue({ data: null })
+    await expect(listSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+  })
+
+  it('counts 1 when a payment is due and 0 otherwise', async () => {
+    enqueue({
+      data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
+    })
+    enqueue({ data: null })
+    enqueue({ data: company })
+    enqueue({ data: null })
+    await expect(countSkattekontoPaymentDue(supabase, COMPANY)).resolves.toBe(1)
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    await expect(countSkattekontoPaymentDue(supabase, COMPANY)).resolves.toBe(0)
   })
 })

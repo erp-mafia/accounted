@@ -47,7 +47,9 @@ import {
   signBankIdFlow,
   verifyBankIdFlow,
   type BankIdFlowMode,
+  type BankIdFlowResult,
 } from '../lib/bankid-flow-cookie'
+import { openBankIdResult, sealBankIdResult } from '../lib/bankid-flow-result'
 
 const TEST_KEY = 'a'.repeat(64)
 const TEST_FLOW_ID = 'flow-1'
@@ -61,6 +63,8 @@ async function flowCookie(
   mode: BankIdFlowMode,
   sessionId = 'test-session',
   userId = 'user-1',
+  // The identification /poll sealed into the cookie on completion (#2471).
+  result?: BankIdFlowResult,
 ): Promise<Record<string, string>> {
   const value = await signBankIdFlow({
     version: 1,
@@ -71,6 +75,7 @@ async function flowCookie(
     userId: mode === 'link' ? userId : undefined,
     startedAt: Date.now(),
     expiresAt: Date.now() + 60_000,
+    result,
   })
   return {
     cookie: `${BANKID_FLOW_COOKIE}=${encodeURIComponent(value)}`,
@@ -159,6 +164,23 @@ function mockServiceClient(
 
 /** A verified identity row, as every pre-2026-09 row is after the backfill. */
 const VERIFIED_AT = '2026-01-01T00:00:00Z'
+
+const ANNA = {
+  personalNumber: '199001011234',
+  givenName: 'Anna',
+  surname: 'Andersson',
+  name: 'Anna Andersson',
+}
+
+/** The flow cookie a response re-issued, decoded and verified, or null. */
+async function reissuedFlow(response: Response) {
+  const header = response.headers
+    .getSetCookie()
+    .find((c) => c.startsWith(`${BANKID_FLOW_COOKIE}=`) && !/Max-Age=0/i.test(c))
+  if (!header) return null
+  const value = decodeURIComponent(header.slice(BANKID_FLOW_COOKIE.length + 1).split(';')[0])
+  return verifyBankIdFlow(value)
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -295,7 +317,6 @@ describe('POST /bankid/complete', () => {
         supabase: client,
         email: 'fresh@example.com',
         host: 'app.gnubok.se',
-        proto: 'https',
       })
       expect(admin.deleteUser).not.toHaveBeenCalled()
     })
@@ -859,6 +880,89 @@ describe('POST /bankid/complete', () => {
     })
   })
 
+  describe('the sealed identification (#2471)', () => {
+    // TIC hands a completed result out at most twice. On iPhone Safari the
+    // reload probe and the Fortsätt poll spent both, and /complete's collect
+    // got `collected` with no user: 400, cookie cleared, identification lost.
+    it('login: completes from the sealed cookie and never asks TIC to collect', async () => {
+      vi.mocked(collectBankIdResult).mockRejectedValue(new Error('collect must not be called'))
+      const { admin } = mockServiceClient([
+        { data: { user_id: 'existing-user', email_verified_at: VERIFIED_AT } },
+      ])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('login', 'test-session', 'user-1', sealBankIdResult(ANNA)),
+      })
+      const { status, body } = await parseJsonResponse<{ data?: { tokenHash?: string } }>(
+        await findCompleteHandler()(req)
+      )
+
+      expect(status).toBe(200)
+      expect(body.data?.tokenHash).toBe('magic-token-hash')
+      expect(collectBankIdResult).not.toHaveBeenCalled()
+      expect(admin.generateLink).toHaveBeenCalledWith({ type: 'magiclink', email: 'existing@example.com' })
+    })
+
+    it('signup: creates the account from the sealed cookie, with the raw personnummer it needs', async () => {
+      vi.mocked(collectBankIdResult).mockRejectedValue(new Error('collect must not be called'))
+      const { admin, client } = mockServiceClient([
+        { data: null, error: { code: 'PGRST116' } }, // bankid_identities lookup: not linked
+        { error: null }, // bankid_identities insert
+      ])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('signup', 'test-session', 'user-1', sealBankIdResult(ANNA)),
+        body: { email: 'anna@example.com' },
+      })
+      const { status } = await parseJsonResponse(await findCompleteHandler()(req))
+
+      expect(status).toBe(200)
+      expect(collectBankIdResult).not.toHaveBeenCalled()
+      expect(admin.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'anna@example.com', user_metadata: { full_name: 'Anna Andersson' } })
+      )
+      expect(client.from).toHaveBeenCalledWith('bankid_identities')
+      expect(sendBankIdSignupConfirmation).toHaveBeenCalledOnce()
+    })
+
+    it('asks TIC to collect exactly once for a cookie minted before the seal existed', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      mockServiceClient([{ data: { user_id: 'existing-user', email_verified_at: VERIFIED_AT } }])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('login'),
+      })
+      const { status } = await parseJsonResponse(await findCompleteHandler()(req))
+
+      expect(status).toBe(200)
+      expect(collectBankIdResult).toHaveBeenCalledOnce()
+    })
+
+    it('refuses and clears the flow when TIC answers collected and nothing is sealed', async () => {
+      // Nothing left to retry: a third fetch never succeeds. The person
+      // starts over rather than staring at a spinner.
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession({ status: 'collected', user: undefined }))
+      mockServiceClient([])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('login'),
+      })
+      const response = await findCompleteHandler()(req)
+      const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error).toBe('session_invalid')
+      const cleared = response.headers
+        .getSetCookie()
+        .some((c) => c.startsWith(`${BANKID_FLOW_COOKIE}=`) && /Max-Age=0/i.test(c))
+      expect(cleared).toBe(true)
+    })
+  })
+
   describe('input validation', () => {
     it('returns 400 session_invalid when BankID session is not complete', async () => {
       vi.mocked(collectBankIdResult).mockResolvedValue(
@@ -1327,6 +1431,144 @@ describe('POST /bankid/poll', () => {
     expect(reissued).toBeDefined()
     const maxAge = Number(/Max-Age=(\d+)/i.exec(reissued!)?.[1])
     expect(maxAge).toBeGreaterThan(300)
+  })
+})
+
+describe('POST /bankid/poll: the sealed identification (#2471)', () => {
+  function findPollHandler() {
+    const route = ticExtension.apiRoutes!.find(
+      (r) => r.method === 'POST' && r.path === '/bankid/poll'
+    )
+    if (!route) throw new Error('POST /bankid/poll route not found')
+    return route.handler
+  }
+
+  it('seals the identification into the re-issued cookie the first time TIC reports completion', async () => {
+    vi.mocked(pollBankIdSession).mockResolvedValue({ status: 'complete', user: ANNA } as never)
+
+    const response = await findPollHandler()(
+      createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+        method: 'POST',
+        headers: await flowCookie('login'),
+        body: { mode: 'login' },
+      })
+    )
+
+    const flow = await reissuedFlow(response)
+    expect(flow).not.toBeNull()
+    expect(flow!.result).toBeDefined()
+    expect(openBankIdResult(flow!)).toEqual(ANNA)
+    // Same guarantee as before: the personnummer never reaches the client.
+    expect(await response.clone().text()).not.toContain('199001011234')
+  })
+
+  it('answers complete from the sealed cookie and never asks TIC again', async () => {
+    // The iPhone reload probe and the Fortsätt poll were the two deliveries
+    // TIC allows. Neither may cost one now.
+    vi.mocked(pollBankIdSession).mockRejectedValue(new Error('TIC must not be asked'))
+
+    const response = await findPollHandler()(
+      createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+        method: 'POST',
+        headers: await flowCookie('signup', 'test-session', 'user-1', sealBankIdResult(ANNA)),
+        body: { mode: 'signup' },
+      })
+    )
+    const { status, body } = await parseJsonResponse<{
+      data: { status: string; user?: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('complete')
+    expect(body.data.user).toEqual({ givenName: 'Anna', surname: 'Andersson' })
+    expect(pollBankIdSession).not.toHaveBeenCalled()
+  })
+
+  it('re-issues the sealed cookie on every completed poll, so the e-mail budget runs from the last poll', async () => {
+    // On a reloaded iPhone tab the mount probe sees completion first and the
+    // Fortsätt tap polls again minutes later. The signup e-mail window must
+    // run from that tap, as it did before the seal existed, and the seal must
+    // ride along unchanged.
+    vi.mocked(pollBankIdSession).mockRejectedValue(new Error('TIC must not be asked'))
+    const sealed = sealBankIdResult(ANNA)
+
+    const response = await findPollHandler()(
+      createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+        method: 'POST',
+        headers: await flowCookie('signup', 'test-session', 'user-1', sealed),
+        body: { mode: 'signup' },
+      })
+    )
+
+    const flow = await reissuedFlow(response)
+    expect(flow).not.toBeNull()
+    expect(flow!.result).toEqual(sealed)
+    expect(flow!.expiresAt).toBeGreaterThan(Date.now() + 800_000)
+  })
+
+  it('still answers complete, unsealed, when the deployment has no encryption key', async () => {
+    // Login never needed BANKID_ENCRYPTION_KEY before the seal existed and
+    // the cookie signer has its own fallbacks. Without the key the routes
+    // must behave as before: one collect against TIC, never a 500 here.
+    vi.stubEnv('BANKID_ENCRYPTION_KEY', '')
+    vi.stubEnv('SESSION_TIMEOUT_SECRET', 'signing-only-secret')
+    vi.mocked(pollBankIdSession).mockResolvedValue({ status: 'complete', user: ANNA } as never)
+
+    const response = await findPollHandler()(
+      createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+        method: 'POST',
+        headers: await flowCookie('login'),
+        body: { mode: 'login' },
+      })
+    )
+    const { status, body } = await parseJsonResponse<{ data: { status: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('complete')
+    const flow = await reissuedFlow(response)
+    expect(flow).not.toBeNull()
+    expect(flow!.result).toBeUndefined()
+  })
+
+  it('a probe on a sealed cookie still withholds the holder name', async () => {
+    vi.mocked(pollBankIdSession).mockRejectedValue(new Error('TIC must not be asked'))
+
+    const { body } = await parseJsonResponse<{ data: { status: string; flowId?: string; user?: unknown } }>(
+      await findPollHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+          method: 'POST',
+          headers: await flowCookie('login', 'test-session', 'user-1', sealBankIdResult(ANNA)),
+          body: { mode: 'login', probe: true },
+        })
+      )
+    )
+
+    expect(body.data.status).toBe('complete')
+    expect(body.data.flowId).toBe(TEST_FLOW_ID)
+    expect(body.data.user).toBeUndefined()
+    expect(pollBankIdSession).not.toHaveBeenCalled()
+  })
+
+  it('turns TIC collected into failed when nothing is sealed, instead of leaving the tab polling', async () => {
+    vi.mocked(pollBankIdSession).mockResolvedValue({ status: 'collected' } as never)
+
+    const response = await findPollHandler()(
+      createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+        method: 'POST',
+        headers: await flowCookie('login'),
+        body: { mode: 'login' },
+      })
+    )
+    const { status, body } = await parseJsonResponse<{ data: { status: string; message?: string; user?: unknown } }>(
+      response
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('failed')
+    expect(body.data.message).toMatch(/Försök igen/u)
+    expect(body.data.user).toBeUndefined()
+    // Not settled here: an untargeted clear could delete a newer flow.
+    expect(response.headers.getSetCookie()).toEqual([])
   })
 })
 

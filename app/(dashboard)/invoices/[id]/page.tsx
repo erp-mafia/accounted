@@ -34,6 +34,10 @@ import {
   type PaymentVoucherRef,
 } from '@/lib/invoices/payment-history-gap'
 import { effectiveQuoteStatus, isQuoteExpired } from '@/lib/invoices/quote-status'
+import {
+  draftDownloadDecision,
+  type DraftDownloadDecision,
+} from '@/lib/invoices/draft-download-decision'
 import type { QuoteStatus } from '@/types'
 import {
   invoiceDocumentCaveat,
@@ -95,6 +99,7 @@ import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { useBranding } from '@/lib/branding/brand-context'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { useShell } from '@/components/dashboard/ShellProvider'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
 interface PeppolDeliveryView {
@@ -158,6 +163,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const canEmail = useCapability(CAPABILITY.email_send)
   const { id } = use(params)
   const router = useRouter()
+  const shell = useShell()
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoice_detail')
@@ -231,12 +237,46 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Offert: the invoice created from this quote (converted_from_id points
   // back here), and the accept/decline round trip.
   const [quoteInvoice, setQuoteInvoice] = useState<Invoice | null>(null)
+  // Offert -> kundorder: the live order created from this quote, if any. Its
+  // presence locks the decision and moves invoicing to the order.
+  const [quoteOrder, setQuoteOrder] = useState<{ id: string; order_number: string | null } | null>(null)
+  const [showExpiredOrderDialog, setShowExpiredOrderDialog] = useState(false)
   const [isDeciding, setIsDeciding] = useState(false)
   const [showExpiredAcceptDialog, setShowExpiredAcceptDialog] = useState(false)
   const [showExpiredConvertDialog, setShowExpiredConvertDialog] = useState(false)
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
   const [showSendDialog, setShowSendDialog] = useState(false)
   const [sendDialogMode, setSendDialogMode] = useState<'email' | 'manual'>('email')
+  // #2399: "Ladda ner PDF" on a document that is not issued yet. The render
+  // carries the UTKAST stamp, so the page asks before the file exists and
+  // offers the path to the real document.
+  const [draftDownloadPrompt, setDraftDownloadPrompt] = useState<Exclude<
+    DraftDownloadDecision,
+    'download'
+  > | null>(null)
+  // Set when the user picked "... och ladda ner" in that prompt: the manual
+  // send dialog's success then queues the download of the issued document.
+  const [downloadAfterSend, setDownloadAfterSend] = useState(false)
+  // The id of the invoice whose issued PDF is wanted, not a flag: the detail
+  // pager keeps this component mounted across ArrowLeft/ArrowRight, so a
+  // queue bound to "whatever is mounted" would download the neighbour.
+  const [downloadQueued, setDownloadQueued] = useState<string | null>(null)
+  // The issued document is downloaded once the refetch after mark-sent has
+  // landed: only then does the source resolver see the new status and the
+  // archived copy, and the toast names the real document, not the draft.
+  useEffect(() => {
+    if (!downloadQueued || !invoice) return
+    if (invoice.id !== downloadQueued) {
+      // Paged away before the download ran: drop it rather than hand over
+      // another invoice's file.
+      setDownloadQueued(null)
+      return
+    }
+    if (invoice.status === 'draft') return
+    setDownloadQueued(null)
+    void downloadPDF()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [downloadQueued, invoice])
   const [isConverting, setIsConverting] = useState(false)
   const [isCreatingOrder, setIsCreatingOrder] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -548,7 +588,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               .order('created_at', { ascending: false })
               .limit(1)
           : Promise.resolve(null),
-      ]).then(([personnummerMasked, creditNoteRes, originalRes, convertedRes, invoicedRes]) => {
+        data.document_type === 'quote'
+          ? supabase
+              .from('sales_orders')
+              .select('id, order_number')
+              .eq('source_invoice_id', id)
+              .neq('status', 'cancelled')
+              .order('created_at', { ascending: false })
+              .limit(1)
+          : Promise.resolve(null),
+      ]).then(([personnummerMasked, creditNoteRes, originalRes, convertedRes, invoicedRes, orderedRes]) => {
         // Deferred writes need the same guard: they land after first paint
         // and would otherwise attach the previous invoice's related documents
         // to the one the pager has since navigated to.
@@ -562,6 +611,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           setConvertedFromInvoice(convertedRes.data as Invoice)
         }
         setQuoteInvoice((invoicedRes?.data?.[0] as Invoice | undefined) ?? null)
+        setQuoteOrder(
+          (orderedRes?.data?.[0] as { id: string; order_number: string | null } | undefined) ?? null,
+        )
       })
   }
 
@@ -666,15 +718,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       // Awaited: the acting button keeps its pending state until the page
       // reflects the new status (the refetch runs behind the mounted content).
       await fetchInvoice()
+      return true
     } catch (error) {
       toast({
         title: t('status_update_failed_title'),
         description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
         variant: 'destructive',
       })
+      return false
+    } finally {
+      setIsUpdating(false)
     }
-
-    setIsUpdating(false)
   }
 
   function openSendDialog(mode: 'email' | 'manual') {
@@ -717,8 +771,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsConverting(false)
   }
 
-  // Proforma -> draft kundorder (sibling of convertToInvoice). The proforma is
-  // cancelled by the service; the user lands on the new order.
+  /** "Skapa order" on an expired open quote confirms the lapse first, like
+   *  startQuoteConvert; an accepted quote past valid_until converts directly. */
+  function startQuoteOrder() {
+    if (!invoice) return
+    if (isQuoteExpired(invoice)) {
+      setShowExpiredOrderDialog(true)
+      return
+    }
+    void convertToOrder()
+  }
+
+  // Proforma or offert -> draft kundorder (sibling of convertToInvoice). The
+  // service cancels the proforma or marks the quote accepted; the user lands
+  // on the new order.
   async function convertToOrder() {
     if (!invoice) return
     setIsCreatingOrder(true)
@@ -914,9 +980,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     })
   }
 
-  async function downloadPDF() {
+  async function downloadPDF(options?: { asDraft?: boolean }) {
     if (!invoice) return
     setPdfArchiveIssue(null)
+    // Not issued yet: the render is stamped UTKAST. Ask before the file
+    // exists (#2399); `asDraft` is the prompt's own "Ladda ner utkast".
+    const decision = draftDownloadDecision(invoice)
+    if (decision !== 'download' && !options?.asDraft) {
+      setPdfIntent('download')
+      setDraftDownloadPrompt(decision)
+      return
+    }
     await runInvoiceDownload(
       resolveInvoicePdfSource({
         invoiceId: invoice.id,
@@ -1233,9 +1307,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
-  function previewPDF() {
+  function previewPDF(options?: { asDraft?: boolean }) {
     if (!invoice) return
     setPdfArchiveIssue(null)
+    // Same guard as the download: the browser viewer has its own save
+    // button, so an unwarned preview is an unwarned download (#2399).
+    const decision = draftDownloadDecision(invoice)
+    if (decision !== 'download' && !options?.asDraft) {
+      setPdfIntent('preview')
+      setDraftDownloadPrompt(decision)
+      return
+    }
     void runInvoicePreview(
       resolveInvoicePdfSource({
         invoiceId: invoice.id,
@@ -1415,7 +1497,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Offert: the effective status (expired is derived, never stored) and what
   // can still happen to it. Once an invoice exists the decision is final.
   const quoteStatus = isQuote ? effectiveQuoteStatus(invoice) : null
-  const canDecideQuote = isQuote && invoice.status !== 'cancelled' && !quoteInvoice
+  const canDecideQuote = isQuote && invoice.status !== 'cancelled' && !quoteInvoice && !quoteOrder
   const canConvertQuote = canDecideQuote && quoteStatus !== 'declined'
   // #1693: only a fully paid faktura has a betalningsbekräftelse to offer.
   const canSendPaymentConfirmation = isPaymentConfirmationEligible(invoice)
@@ -1444,6 +1526,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const booksOnIssue = isCreditNote
     ? !!originalInvoice && creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
     : accountingMethod === 'accrual' && !deferInvoiceBooking
+  // Only a faktura (or kreditfaktura) books at issue. Proformas, offerter and
+  // följesedlar are marked sent without a verifikat in every accounting
+  // method (issue-and-book-invoice: isRealInvoice), so their labels must not
+  // promise one.
+  const issuesByBooking = booksOnIssue && isRealInvoice
   // #967: sent under deferred booking; ekonomi books the revenue verifikat
   // from here afterwards.
   const canBookAfterwards =
@@ -1671,7 +1758,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   return (
     <div className="space-y-8 stagger-enter">
       {/* Back link + prev/next record pager on their own quiet row, so the
-          title below keeps a stable position while stepping between records */}
+          title below keeps a stable position while stepping between records.
+          Shell v2: the sidebar says where we are and the pager sits in the
+          top bar, so the row goes. */}
+      {shell !== 'v2' && (
       <div className="flex items-center justify-between gap-4">
         <button
           type="button"
@@ -1687,14 +1777,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           currentId={id}
         />
       </div>
+      )}
 
       {/* Header: serif title with one status element, a quiet meta line, and
-          the next step on the right. Everything else lives in the ⋯ menu. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
+          the next step on the right. Everything else lives in the ⋯ menu.
+          The page-header hooks turn it into the v2 top bar. */}
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             {/* data-ph-mask: the title carries the invoice number */}
-            <h1 data-ph-mask="" className="font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">{title}</h1>
             {status.exception ? (
               <Badge variant={status.variant}>{status.label}</Badge>
             ) : (
@@ -1707,10 +1799,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </Badge>
             )}
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
+          <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
+          {shell === 'v2' && (
+            <DetailPager
+              contextKey={listContextKey('invoices', company?.id)}
+              basePath="/invoices"
+              currentId={id}
+              className="shrink-0"
+            />
+          )}
           {isEditableDraft && canWrite && (
             <Button variant="outline" asChild>
               <Link href={`/invoices/${invoice.id}/edit`}>
@@ -1721,7 +1821,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
           {/* Review in the browser (#1190); the download lives in the menu. */}
           {!isSelfBilled && (
-            <Button variant="outline" onClick={previewPDF}>
+            <Button variant="outline" onClick={() => previewPDF()}>
               <Eye className="mr-2 h-4 w-4" />
               {t('preview_pdf')}
             </Button>
@@ -1773,11 +1873,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('quote_create_invoice')}
             </Button>
           )}
-          {isProforma && invoice.status !== 'cancelled' && (
+          {((isProforma && invoice.status !== 'cancelled') || canConvertQuote) && (
             <Button
               variant="outline"
-              onClick={convertToOrder}
-              disabled={isCreatingOrder || !canWrite}
+              onClick={isQuote ? startQuoteOrder : convertToOrder}
+              disabled={isCreatingOrder || isConverting || isDeciding || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {isCreatingOrder ? (
@@ -1808,7 +1908,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Mail className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t(booksOnIssue && !isQuote ? 'send_via_email_and_book' : 'send_via_email')}
+                {t(issuesByBooking ? 'send_via_email_and_book' : 'send_via_email')}
               </Button>
             ) : (
               <Button
@@ -1817,7 +1917,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Send className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t(booksOnIssue && !isQuote ? 'mark_sent_and_book' : 'mark_as_sent')}
+                {t(issuesByBooking ? 'mark_sent_and_book' : 'mark_as_sent')}
               </Button>
             )
           )}
@@ -2229,6 +2329,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </Link>
             </DefRow>
           )}
+          {isQuote && quoteOrder && (
+            <DefRow label={t('def_sales_order')}>
+              <Link href={`/sales-orders/${quoteOrder.id}`} className="hover:underline">
+                {quoteOrder.order_number ?? t('open_sales_order')}
+              </Link>
+            </DefRow>
+          )}
           {invoice.sales_order_id && (
             <DefRow label={t('def_sales_order')}>
               <Link href={`/sales-orders/${invoice.sales_order_id}`} className="hover:underline">
@@ -2333,9 +2440,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 <span className="text-muted-foreground">{t('deduction_row', { kind: deductionKindLabel })}</span>
                 <span>{formatCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency)}</span>
               </div>
+              {/* Skatteverket refused (part of) the deduction and the reclaim
+                  voucher moved it back onto the customer: the printed
+                  deduction stands, the refused share is the customer's again. */}
+              {(invoice.deduction_reclaimed_total ?? 0) > 0 && (
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">{t('deduction_reclaimed_row')}</span>
+                  <span>{formatCurrency(Math.abs(invoice.deduction_reclaimed_total ?? 0), invoice.currency)}</span>
+                </div>
+              )}
               <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2">
                 <span>{t('amount_to_pay')}</span>
-                <span className="font-display text-xl">{formatCurrency(amountToPay.toPay, invoice.currency)}</span>
+                <span className="font-display text-xl">
+                  {formatCurrency(
+                    Math.round((amountToPay.toPay + Math.abs(invoice.deduction_reclaimed_total ?? 0)) * 100) / 100,
+                    invoice.currency,
+                  )}
+                </span>
               </div>
             </>
           ) : (
@@ -2666,6 +2787,67 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </DialogContent>
       </Dialog>
 
+      {/* #2399: the document is not issued, so its PDF carries the UTKAST
+          stamp. Say so before the file exists and offer the path to the real
+          document: the same manual mark-sent (and book) as the primary
+          button. "Ladda ner utkast" stays a working choice (soft guard). */}
+      <Dialog
+        open={draftDownloadPrompt !== null}
+        onOpenChange={(open) => {
+          if (!open) setDraftDownloadPrompt(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {draftDownloadPrompt === 'confirm_draft'
+                ? t('draft_download_unnumbered_title')
+                : t(issuesByBooking ? 'draft_download_book_title' : 'draft_download_send_title')}
+            </DialogTitle>
+            <DialogDescription>
+              {draftDownloadPrompt === 'confirm_draft'
+                ? t('draft_download_unnumbered_desc')
+                : t(issuesByBooking ? 'draft_download_book_desc' : 'draft_download_send_desc')}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDraftDownloadPrompt(null)}>
+              {tCommon('cancel')}
+            </Button>
+            <Button
+              variant={draftDownloadPrompt === 'offer_issue' && canWrite ? 'secondary' : 'default'}
+              onClick={() => {
+                setDraftDownloadPrompt(null)
+                // Honour what was asked for: open the viewer, or save the file.
+                if (pdfIntent === 'preview') previewPDF({ asDraft: true })
+                else void downloadPDF({ asDraft: true })
+              }}
+            >
+              {t(pdfIntent === 'preview' ? 'draft_download_preview_action' : 'draft_download_draft_action')}
+            </Button>
+            {draftDownloadPrompt === 'offer_issue' && canWrite && (
+              <Button
+                disabled={isUpdating}
+                onClick={async () => {
+                  setDraftDownloadPrompt(null)
+                  if (isDeliveryNote) {
+                    // Följesedel: no send dialog, the primary button is a
+                    // plain status flip. Queue only once it succeeded.
+                    const invoiceId = invoice.id
+                    if (await updateStatus('sent')) setDownloadQueued(invoiceId)
+                    return
+                  }
+                  setDownloadAfterSend(true)
+                  openSendDialog('manual')
+                }}
+              >
+                {t(issuesByBooking ? 'draft_download_book_action' : 'draft_download_send_action')}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* The archived PDF the customer received could not be produced. Nothing
           has been downloaded at this point: a re-render is a different
           document, so the user chooses it deliberately or not at all. */}
@@ -2724,10 +2906,31 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {invoice && (
         <SendInvoiceDialog
           open={showSendDialog}
-          onOpenChange={setShowSendDialog}
+          onOpenChange={(open) => {
+            setShowSendDialog(open)
+            // Cancelled: the download the user chained onto it is off too.
+            if (!open) setDownloadAfterSend(false)
+          }}
           invoice={invoice}
           mode={sendDialogMode}
-          onSuccess={() => fetchInvoice()}
+          onSuccess={(result) => {
+            if (downloadAfterSend) {
+              setDownloadAfterSend(false)
+              // A partial success (archive or periodisering failed) shows a
+              // warning to act on; a download toast would evict it (one toast
+              // at a time), so the chained download is dropped there.
+              if (!result?.partial) setDownloadQueued(invoice.id)
+            }
+            fetchInvoice()
+          }}
+          // The toast's "Ladda ner PDF" queues the download rather than
+          // starting it: the invoice in this closure is still the draft, and
+          // the id pins it to this invoice if the user pages on meanwhile.
+          manualSuccessAction={
+            downloadAfterSend || invoice.is_self_billed
+              ? undefined
+              : { label: t('download_pdf'), onClick: () => setDownloadQueued(invoice.id) }
+          }
         />
       )}
 
@@ -2745,6 +2948,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         onConfirm={async () => {
           setShowExpiredConvertDialog(false)
           await convertToInvoice()
+        }}
+      />
+
+      <ConfirmDialog
+        open={showExpiredOrderDialog}
+        onOpenChange={setShowExpiredOrderDialog}
+        title={t('quote_expired_order_title')}
+        description={t('quote_expired_order_description', {
+          date: formatDate(invoice.valid_until ?? invoice.due_date),
+        })}
+        confirmLabel={t('create_order')}
+        onConfirm={async () => {
+          setShowExpiredOrderDialog(false)
+          await convertToOrder()
         }}
       />
 

@@ -100,7 +100,8 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
   return (
     <Dialog open={open} onOpenChange={handleOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-1.5">
+        {/* Same height as the year picker beside it (founder review 2026-09-07). */}
+        <Button variant="outline" className="gap-1.5">
           <Settings2 className="h-3.5 w-3.5" />
           {t('customize')}
         </Button>
@@ -210,6 +211,25 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
               </div>
             )
           })}
+          {/* The month table is a layout flag, not a metric: its own row
+              after the KPI list, no expand panel, no account override. */}
+          <div className="rounded-lg border border-border p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{t('settings_monthly_table_label')}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t('settings_monthly_table_description')}
+                </p>
+              </div>
+              <Switch
+                checked={draft.showMonthlyTable}
+                onCheckedChange={(checked) =>
+                  setDraft((prev) => ({ ...prev, showMonthlyTable: checked }))
+                }
+                aria-label={t('settings_monthly_table_label')}
+              />
+            </div>
+          </div>
         </div>
 
         <div className="flex items-center justify-between pt-2 border-t mt-2">

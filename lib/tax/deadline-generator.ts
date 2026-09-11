@@ -5,6 +5,7 @@
 import { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { isEntityType } from '@/lib/company/entity-type'
 import type { TaxDeadlineType, DeadlineStatus } from '@/types'
 
 const log = createLogger('deadline-generator')
@@ -94,7 +95,7 @@ export function hasTaxRelevantFields(body: Record<string, unknown>): boolean {
 export function toDeadlineSettings(
   settings: Partial<CompanySettingsForDeadlines>,
 ): CompanySettingsForDeadlines {
-  if (settings.entity_type !== 'aktiebolag' && settings.entity_type !== 'enskild_firma') {
+  if (!isEntityType(settings.entity_type)) {
     throw new Error('Company entity type is required to generate tax deadlines')
   }
 

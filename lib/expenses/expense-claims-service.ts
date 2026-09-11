@@ -27,6 +27,7 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import { roundOre, sumOre } from '@/lib/money'
+import { ownerSettlementAccount, parseEntityType } from '@/lib/company/entity-type'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 
@@ -128,7 +129,7 @@ export async function registerExpenseClaim(
     .eq('id', companyId)
     .single()
   if (!company?.entity_type) return { ok: false, code: 'COMPANY_NOT_FOUND' }
-  const ownerLiability = company.entity_type === 'enskild_firma' ? '2018' : '2893'
+  const ownerLiability = ownerSettlementAccount(parseEntityType(company.entity_type), 'contribution')
   let claimantName = input.claimant_name?.trim() ?? ''
   let employeeId: string | null = null
   let liability: string = ownerLiability

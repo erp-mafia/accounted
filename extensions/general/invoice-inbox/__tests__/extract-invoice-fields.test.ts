@@ -54,6 +54,8 @@ const VALID_RESULT = {
     address: '548 Market Street, San Francisco, CA 94104',
     bankgiro: null,
     plusgiro: null,
+    iban: null,
+    bic: null,
   },
   invoice: {
     invoiceNumber: '06655767-0007',
@@ -236,6 +238,31 @@ describe('extractInvoiceFields', () => {
     const content = call.messages[0].content
     expect(content[0].type).toBe('image')
     expect(content[0].source.media_type).toBe('image/jpeg')
+  })
+
+  it('tells the model that a receipt carries its purchase date in invoiceDate', async () => {
+    // Prod, last 30 days as of 2026-09-08: supplier invoices lost invoiceDate
+    // on 0.4% of items, receipts on 46% (75% via WhatsApp), while purchaseTime
+    // was filled on nearly every one of those receipts. The field was described
+    // as a bare ISO date under the invoice block, right next to a purchaseTime
+    // rule marked "receipts only", and the model took the asymmetry literally.
+    // Pin the receipt rule so a prompt edit cannot silently drop it again.
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({
+      buffer: Buffer.from('JPEG'),
+      mimeType: 'image/jpeg',
+      fileName: 'kvitto.jpg',
+    })
+    const call = mockCreate.mock.calls[0][0]
+    const system: string =
+      typeof call.system === 'string'
+        ? call.system
+        : call.system.map((block: { text: string }) => block.text).join('\n')
+    expect(system).toContain(
+      '"invoiceDate": string | null,      // ISO date YYYY-MM-DD: the invoice date, or on a receipt the purchase date printed on it'
+    )
+    expect(system).toContain('- invoiceDate on receipts: the purchase date printed on the receipt')
+    expect(system).toContain('The field is NOT invoice-only')
   })
 
   it('sends document content for a PDF upload', async () => {
@@ -628,6 +655,8 @@ describe('extractInvoiceFields', () => {
           address: 'Provgatan 1, 111 11 Teststad',
           bankgiro: null,
           plusgiro: null,
+          iban: null,
+          bic: null,
         },
       })
     )
@@ -644,6 +673,8 @@ describe('extractInvoiceFields', () => {
       address: null,
       bankgiro: null,
       plusgiro: null,
+      iban: null,
+      bic: null,
     })
     // Only the supplier block is affected.
     expect(data.totals.total).toBe(6.25)
@@ -712,6 +743,8 @@ describe('stripOwnCompanyAsSupplier', () => {
     address: null,
     bankgiro: null,
     plusgiro: null,
+    iban: null,
+    bic: null,
   }
   const own = { orgNumber: '556677-8899', name: 'Testbrand AB' }
 
@@ -762,6 +795,8 @@ describe('stripOwnCompanyAsSupplier', () => {
       address: null,
       bankgiro: null,
       plusgiro: null,
+      iban: null,
+      bic: null,
     }
     expect(stripOwnCompanyAsSupplier(withSupplier(supplier), own).supplier).toEqual(supplier)
   })
@@ -774,6 +809,8 @@ describe('stripOwnCompanyAsSupplier', () => {
       address: null,
       bankgiro: null,
       plusgiro: null,
+      iban: null,
+      bic: null,
     }
     expect(stripOwnCompanyAsSupplier(withSupplier(supplier), own).supplier).toEqual(supplier)
   })

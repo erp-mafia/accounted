@@ -1294,7 +1294,7 @@ export const enableBankingExtension: Extension = {
 
         const { data: companyCashRows } = await supabase
           .from('cash_accounts')
-          .select('id, external_uid, bank_connection_id, ledger_account, iban')
+          .select('id, external_uid, bank_connection_id, ledger_account, iban, enabled')
           .eq('company_id', companyId)
         const cashRows = (companyCashRows ?? []) as Array<{
           id: string
@@ -1302,6 +1302,7 @@ export const enableBankingExtension: Extension = {
           bank_connection_id: string | null
           ledger_account: string
           iban: string | null
+          enabled: boolean | null
         }>
 
         // Rows that already represent one of THIS connection's accounts, matched
@@ -1337,6 +1338,12 @@ export const enableBankingExtension: Extension = {
         // and upsertFromPsd2 promotes them in place too. Excluding them here
         // is the self-heal path for companies whose bank was disconnected
         // before disconnect started releasing ledger claims.
+        //
+        // Only ENABLED foreign rows count as live claims. A row whose account
+        // was unchecked in that connection's picker is not being synced onto
+        // the ledger; it keeps the slot only until someone who is syncing asks
+        // for it (the release pass below hands it over). This mirrors how
+        // session sharing already treats claims (see lib/session-sharing.ts).
         const foreignConnectionIds = [
           ...new Set(
             cashRows
@@ -1356,6 +1363,7 @@ export const enableBankingExtension: Extension = {
                 r.bank_connection_id !== null &&
                 r.bank_connection_id !== connection.id &&
                 !revokedConnectionIds.has(r.bank_connection_id) &&
+                r.enabled !== false &&
                 // Same IBAN as one of this connection's accounts: the same
                 // physical account under a stale owner, not a foreign claim.
                 !ownIbanRowIds.has(r.id)
@@ -1368,13 +1376,50 @@ export const enableBankingExtension: Extension = {
         const duplicateLedgers = new Set<string>()
         const conflictingLedgers = new Set<string>()
 
-        // First pass: accounts with an explicit or previously mirrored ledger.
+        // First pass: CHECKED accounts with an explicit or previously mirrored
+        // ledger. These are the hard claims: two of them on one ledger is a
+        // user error (400), and one of them on a ledger another connection is
+        // syncing onto is a conflict (400).
         for (const a of updatedAccounts) {
+          if (!enabledSet.has(a.uid)) continue
           const ledger = a.ledger_account ?? existingLedgerByUid.get(a.uid)
           if (!ledger) continue
           if (usedLedgers.has(ledger)) duplicateLedgers.add(ledger)
           if (foreignConnectedLedgers.has(ledger) && existingLedgerByUid.get(a.uid) !== ledger) {
             conflictingLedgers.add(ledger)
+          }
+          usedLedgers.add(ledger)
+          effectiveLedgerByUid.set(a.uid, ledger)
+        }
+
+        // UNCHECKED accounts hold their ledger only as a soft claim: the slot
+        // stays theirs (so re-checking lands back on the same BAS account and
+        // the row's enabled flag flips off in the mirror) unless a checked
+        // account wants it, in which case they yield. Without this, moving
+        // 1930 from the wrong bank account to the right one was impossible:
+        // the picker hides the ledger dropdown for unchecked rows, the
+        // unchecked row still counted as a claim, and disconnect + reconnect
+        // re-claims the same rows by IBAN, so every route ended in a 400.
+        const yieldedUids = new Set<string>()
+        for (const a of updatedAccounts) {
+          if (enabledSet.has(a.uid)) continue
+          const ledger =
+            a.ledger_account ??
+            existingLedgerByUid.get(a.uid) ??
+            reuseRowByUid.get(a.uid)?.ledger_account
+          if (!ledger) {
+            // See neverMirroredDisabledUids above: a disabled account that has
+            // never held a ledger or a mirrored row gets neither allocated nor
+            // mirrored by this save.
+            neverMirroredDisabledUids.add(a.uid)
+            continue
+          }
+          const contested =
+            usedLedgers.has(ledger) ||
+            (foreignConnectedLedgers.has(ledger) && existingLedgerByUid.get(a.uid) !== ledger)
+          if (contested) {
+            yieldedUids.add(a.uid)
+            continue
           }
           usedLedgers.add(ledger)
           effectiveLedgerByUid.set(a.uid, ledger)
@@ -1399,20 +1444,15 @@ export const enableBankingExtension: Extension = {
           )
         }
 
-        // Second pass: allocate a free slot for accounts with no ledger at all
-        // (legacy connections mirrored before allocation existed, or mappings
-        // explicitly cleared). Allocation failure must never block selection
-        // save — fall back to the pre-allocator behavior (1930) and let the
-        // mirror pass surface any collision per-account, as before.
+        // Second pass: allocate a free slot for CHECKED accounts with no ledger
+        // at all (legacy connections mirrored before allocation existed, or
+        // mappings explicitly cleared). Unchecked accounts were all settled
+        // above: kept, yielded, or never mirrored. Allocation failure must
+        // never block selection save — fall back to the pre-allocator behavior
+        // (1930) and let the mirror pass surface any collision per-account, as
+        // before.
         for (const a of updatedAccounts) {
-          if (effectiveLedgerByUid.has(a.uid)) continue
-          // See neverMirroredDisabledUids above: a disabled account that has
-          // never held a ledger or a mirrored row gets neither allocated nor
-          // mirrored by this save.
-          if (!enabledSet.has(a.uid) && !reuseRowByUid.has(a.uid)) {
-            neverMirroredDisabledUids.add(a.uid)
-            continue
-          }
+          if (!enabledSet.has(a.uid) || effectiveLedgerByUid.has(a.uid)) continue
           let allocated: string | null = null
           try {
             const resolved = await resolvePsd2LedgerAccount(supabase, companyId, user.id, {
@@ -1437,9 +1477,68 @@ export const enableBankingExtension: Extension = {
         // accounts_data mirrors the resolved assignment so the picker
         // pre-fills reality on the next open. Skipped disabled accounts keep
         // no assignment: their slot is only claimed if they are ever enabled.
+        // Yielded accounts lose theirs: the picker must not pre-fill a ledger
+        // that now belongs to another account.
         for (const a of updatedAccounts) {
           if (neverMirroredDisabledUids.has(a.uid)) continue
+          if (yieldedUids.has(a.uid)) {
+            delete a.ledger_account
+            continue
+          }
           a.ledger_account = effectiveLedgerByUid.get(a.uid)
+        }
+
+        // Release pass: rows that hold a ledger a checked account is about to
+        // take must stop being PSD2-bound first, or the mirror's upsert trips
+        // UNIQUE (company_id, ledger_account) and the failure is swallowed
+        // per-account (accounts_data ahead of cash_accounts). Demoting them to
+        // manual (bank_connection_id/external_uid NULL) keeps the row id, so
+        // transactions.cash_account_id links and the ledger's history stay
+        // put, and upsertFromPsd2 then promotes the manual holder in place for
+        // the claimant. Three kinds of holder are released: this connection's
+        // own row for an account that yielded (unchecked) or moved (two
+        // checked accounts swapping ledgers), and another connection's row for
+        // an account unchecked there. Manual and revoked holders are already
+        // promotable; a live foreign holder was rejected above.
+        const claimantByLedger = new Map<string, string>()
+        for (const a of updatedAccounts) {
+          if (!enabledSet.has(a.uid)) continue
+          const ledger = effectiveLedgerByUid.get(a.uid)
+          if (ledger) claimantByLedger.set(ledger, a.uid)
+        }
+        const releaseRowIds = cashRows
+          .filter(r => {
+            const claimant = claimantByLedger.get(r.ledger_account)
+            if (!claimant) return false
+            if (r.bank_connection_id === null) return false
+            if (revokedConnectionIds.has(r.bank_connection_id)) return false
+            // The claimant's own row under a stale uid (re-authorization
+            // changed the provider ids): promoted via reuse, not released.
+            if (reuseRowByUid.get(claimant)?.id === r.id) return false
+            if (r.bank_connection_id === connection.id) return r.external_uid !== claimant
+            return r.enabled === false
+          })
+          .map(r => r.id)
+        if (releaseRowIds.length > 0) {
+          const { error: releaseError } = await supabase
+            .from('cash_accounts')
+            .update({ bank_connection_id: null, external_uid: null })
+            .in('id', releaseRowIds)
+          if (releaseError) {
+            // Nothing persisted yet (accounts_data is written below): fail
+            // loudly rather than save a selection the mirror cannot honor.
+            log.error('[enable-banking] Failed to release ledger claims on selection save', {
+              errorMessage: releaseError.message,
+              connectionId: connection.id,
+              releaseRowIds,
+              userId: user.id,
+              companyId,
+            })
+            return NextResponse.json(
+              { error: 'Kunde inte frigöra bokföringskontot från det tidigare bankkontot. Försök igen.' },
+              { status: 500 }
+            )
+          }
         }
 
         // State machine: only transition pending_selection → active. Once
@@ -1475,7 +1574,9 @@ export const enableBankingExtension: Extension = {
           for (const a of updatedAccounts) {
             // Never-mirrored disabled accounts (callback-guard leftovers the
             // user did not enable) get no cash_accounts row: see above.
-            if (neverMirroredDisabledUids.has(a.uid)) continue
+            // Yielded accounts have no ledger any more; their old row was
+            // released above and is promoted by the claimant's upsert.
+            if (neverMirroredDisabledUids.has(a.uid) || yieldedUids.has(a.uid)) continue
             const ledgerAccount = a.ledger_account ?? '1930'
             // Only reuse the IBAN-matched row when it already sits on the
             // ledger we are about to write. If the user deliberately remapped

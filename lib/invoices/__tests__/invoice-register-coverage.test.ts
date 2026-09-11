@@ -53,7 +53,7 @@ describe('fetchInvoiceRegisterCoverage', () => {
     expect(findCall('journal_entries', 'not')).toEqual([
       'source_type',
       'in',
-      '("invoice_created","invoice_paid","invoice_cash_payment","credit_note","reminder_fee","rot_rut_payout","storno","correction")',
+      '("invoice_created","invoice_paid","invoice_cash_payment","credit_note","reminder_fee","rot_rut_payout","rot_rut_reclaim","storno","correction")',
     ])
     // AR-scoped and DEBIT-only: an advance payment crediting 1510 before the
     // first invoice is not evidence of register-external invoices.

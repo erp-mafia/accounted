@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
+import { parseEntityType } from '@/lib/company/entity-type'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { agiGetKvittenser } from './agi-client'
 import { resolveReadAuth } from './resolve-auth'
@@ -84,7 +85,7 @@ export async function reconcileAgiDeclaration(
 
   const arbetsgivare = formatRedovisare(
     settings.org_number as string,
-    settings.entity_type as 'enskild_firma' | 'aktiebolag',
+    parseEntityType(settings.entity_type),
   )
 
   const kvittRes = await agiGetKvittenser(resolved.auth, arbetsgivare, period)

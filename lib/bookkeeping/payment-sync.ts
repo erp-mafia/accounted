@@ -153,7 +153,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
 
     const { data: customerInvoice } = await supabase
       .from('invoices')
-      .select('paid_amount, total, due_date, deduction_total')
+      .select('paid_amount, total, due_date, deduction_total, deduction_reclaimed_total')
       .eq('id', entry.source_id)
       .eq('company_id', companyId)
       .single()
@@ -185,12 +185,20 @@ export async function syncInvoiceStatusFromPaymentEntry(
       // one shared definition (lib/invoices/customer-share.ts); the
       // Math.max(0, ...) mirrors the guard's GREATEST(0, ...) because this
       // value is persisted into the column.
-      const deductionTotal =
-        (customerInvoice as { deduction_total?: number | null }).deduction_total ?? 0
+      // A refused deduction that a rot_rut_reclaim voucher moved back onto
+      // the customer is the customer's again: without this term a storno of
+      // any payment on a reopened invoice wrote a remaining short by the
+      // reclaimed share and no path could settle it (skeptic #2397 R1).
+      const { deduction_total: deductionTotal = 0, deduction_reclaimed_total: reclaimedTotal = 0 } =
+        customerInvoice as { deduction_total?: number | null; deduction_reclaimed_total?: number | null }
       const newRemaining = Math.max(
         0,
         invoiceCustomerOutstanding(
-          { total: customerInvoice.total, deduction_total: deductionTotal },
+          {
+            total: customerInvoice.total,
+            deduction_total: deductionTotal ?? 0,
+            deduction_reclaimed_total: reclaimedTotal ?? 0,
+          },
           safePaidAmount,
         ),
       )

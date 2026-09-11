@@ -24,8 +24,10 @@ import {
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import type { Currency, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 
 ensureInitialized()
 
@@ -86,7 +88,7 @@ export const POST = withRouteContext(
     // created_journal_entry_id; the route adds created_supplier_invoice_id).
     // The extension's convert endpoint registers on 2440 only, so routing the
     // person-paid case through it would silently drop who paid.
-    let inboxItem: { id: string; document_id: string | null } | null = null
+    let inboxItem: { id: string; document_id: string | null; extracted_data: Record<string, unknown> | null } | null = null
     if (body.inbox_item_id) {
       if (!paidPrivately) {
         return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
@@ -96,7 +98,7 @@ export const POST = withRouteContext(
       }
       const { data: item, error: itemError } = await supabase
         .from('invoice_inbox_items')
-        .select('id, document_id, created_supplier_invoice_id, created_journal_entry_id')
+        .select('id, document_id, created_supplier_invoice_id, created_journal_entry_id, extracted_data')
         .eq('id', body.inbox_item_id)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -112,7 +114,11 @@ export const POST = withRouteContext(
           details: { reason: 'inbox item is already booked' },
         })
       }
-      inboxItem = { id: item.id as string, document_id: (item.document_id as string | null) ?? null }
+      inboxItem = {
+        id: item.id as string,
+        document_id: (item.document_id as string | null) ?? null,
+        extracted_data: (item.extracted_data as Record<string, unknown> | null) ?? null,
+      }
     }
     const documentId = inboxItem ? inboxItem.document_id : body.document_id ?? null
 
@@ -248,10 +254,19 @@ export const POST = withRouteContext(
       return errorResponseFromCode('SUPPLIER_NOT_FOUND', log, { requestId })
     }
 
+    // The scan read the supplier's giro or IBAN along with everything else;
+    // a supplier that lacks them takes them now, so the invoice can go into
+    // a betalfil without a detour to the supplier card.
+    const scannedSupplier = (inboxItem?.extracted_data as { supplier?: SupplierPaymentDetails } | null)?.supplier
+    if (scannedSupplier) {
+      const written = await backfillSupplierPaymentDetails(supabase, companyId, supplier.id as string, scannedSupplier)
+      if (Object.keys(written).length > 0) log.info('supplier payment details filled from the scanned invoice', { supplierId: supplier.id, fields: Object.keys(written) })
+    }
+
     // Entity type drives the credit account for privately-paid invoices:
     // AB → 2893 (skuld till aktieägare), EF → 2018 (egen insättning). Loaded
     // up front so we can fail early if the company row is missing.
-    let entityType: 'aktiebolag' | 'enskild_firma' | null = null
+    let entityType: EntityType | null = null
     if (paidPrivately) {
       const { data: company } = await supabase
         .from('companies')
@@ -264,7 +279,7 @@ export const POST = withRouteContext(
           details: { reason: 'company entity_type missing, cannot pick owner account' },
         })
       }
-      entityType = company.entity_type as 'aktiebolag' | 'enskild_firma'
+      entityType = parseEntityType(company.entity_type)
       if (body.employee_id) {
         // Checked before the arrival-number sequence is touched: a claim the
         // service would refuse must not burn an ankomstnummer.

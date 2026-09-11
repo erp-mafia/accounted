@@ -1,4 +1,5 @@
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { z } from 'zod'
@@ -98,6 +99,7 @@ import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-with
 import { lookupPortal } from '@/lib/receipt-hunt/portal-directory'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
+import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { simpleParser } from 'mailparser'
 import type { InboxChannelContext, InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
@@ -2592,6 +2594,12 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Supplier not found' }, { status: 404 })
         }
 
+        // The scan read the supplier's giro or IBAN with everything else: a
+        // supplier that lacks them takes them now, so the invoice can go
+        // into a betalfil without a detour to the supplier card.
+        const scannedSupplier = (item.extracted_data as { supplier?: SupplierPaymentDetails } | null)?.supplier
+        if (scannedSupplier) await backfillSupplierPaymentDetails(ctx.supabase, ctx.companyId, supplier.id as string, scannedSupplier)
+
         // Särskild löneskatt (SLP): same guards as /api/supplier-invoices.
         // The 7533/2514 pair is only lawful on 741x pension premiums and
         // cannot be combined with periodisering on the same row.
@@ -3339,10 +3347,14 @@ export const invoiceInboxExtension: Extension = {
             .select('entity_type')
             .eq('company_id', ctx.companyId)
             .maybeSingle()
-          // Same default as categorize-core. Leaving it undefined silently
-          // proposed enskild-firma accounts to aktiebolag: 2013 instead of
-          // 2893 for an owner expense, 6991 instead of 7610 for a course.
-          const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+          // Resolved, never defaulted: a guessed form proposes the wrong
+          // owner account (2013 vs 2893 vs 2890) and the wrong course
+          // account (6991 vs 7610).
+          const entityType: EntityType = await resolveCompanyEntityType(
+            ctx.supabase,
+            ctx.companyId,
+            settings?.entity_type,
+          )
 
           const settlementAccount = await resolveSettlementAccount(
             ctx.supabase,

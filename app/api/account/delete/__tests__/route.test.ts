@@ -112,7 +112,7 @@ describe('POST /api/account/delete', () => {
     expect(body.blockers).toEqual([{ id: 'c1', name: 'Acme AB' }])
   })
 
-  it('anonymizes, bans, signs out, and emits event on happy path', async () => {
+  it('anonymizes, bans, and emits event on happy path', async () => {
     const { rpc } = mockAuth({ id: 'user-1', email: 'u@example.com' })
     const { updateUserById, adminSignOut } = mockServiceClient()
 
@@ -140,15 +140,17 @@ describe('POST /api/account/delete', () => {
       expect.objectContaining({ ban_duration: expect.any(String) })
     )
     const updatePayload = updateUserById.mock.calls[0][1]
-    // Email must NOT be scrubbed: retaining it is what blocks re-signup
-    // with the same address. Recovery goes through support instead.
+    // The route only bans. The email is cleared by the RPC, together with
+    // the identities and sessions.
     expect(updatePayload).not.toHaveProperty('email')
     // Metadata is NOT wiped here: GoTrue merges metadata maps, so passing {}
     // was a no-op. The anonymize_user_account RPC scrubs auth.users directly
     // (migration 20260724150000).
     expect(updatePayload).not.toHaveProperty('user_metadata')
     expect(updatePayload).not.toHaveProperty('app_metadata')
-    expect(adminSignOut).toHaveBeenCalledWith('user-1', 'global')
+    // auth.admin.signOut() takes a JWT, not a user id: sessions are deleted
+    // by the RPC instead.
+    expect(adminSignOut).not.toHaveBeenCalled()
     expect(emitted).toHaveLength(1)
     expect(emitted[0]).toMatchObject({ userId: 'user-1' })
   })

@@ -3,6 +3,7 @@ import type { TaxTableRate } from './tax-tables'
 import { lookupTaxAmount, calculateJamkningTax, calculateSidoinkomstTax } from './tax-tables'
 import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
 import { TAX_FREE_REIMBURSEMENT_TYPES } from './account-mapping'
+import { resolveVacationPayRate } from './vacation-pay-rate'
 import type { SalaryLineItemType } from '@/types'
 
 // ============================================================
@@ -35,6 +36,10 @@ export interface SalaryCalculationInput {
   vacationRule: 'procentregeln' | 'sammaloneregeln' | 'none' | 'semesterersattning'
   vacationDaysPerYear: number
   semestertillaggRate: number
+  /** Kollektivavtal semesterlön rate as a fraction (0.135 = 13.5 %), or
+   *  null/undefined for the statutory 12 % (14.4 % at 30 days). Read only
+   *  under procentregeln and semesterersättning (lib/salary/vacation-pay-rate). */
+  vacationPayRate?: number | null
   /** Work-schedule daily-rate divisor (arbetsschema-lite). Defaults to the
    *  legacy 21 (5-day week); callers with a part-time schedule pass
    *  dailyDivisor(workdays_per_week) from lib/salary/work-schedule. Feeds the
@@ -371,11 +376,12 @@ export function calculateSalary(
 
   // ─── Step 4b: Semesterersättning (paid out directly per cycle) ───
   // When vacation_rule = 'semesterersattning' the employer pays 12% (or 14.4%
-  // for 30+ days) on top of each paycheck instead of accruing semesterlöneskuld.
-  // It's part of bruttolön and counts for both tax and avgifter basis.
+  // for 30+ days, or the kollektivavtal rate) on top of each paycheck instead
+  // of accruing semesterlöneskuld. It's part of bruttolön and counts for both
+  // tax and avgifter basis.
   let vacationCompensation = 0
   if (input.vacationRule === 'semesterersattning') {
-    const rate = input.vacationDaysPerYear >= 30 ? 0.144 : 0.12
+    const rate = resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate)
     const compensationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems))
     vacationCompensation = r(compensationBasis * rate)
     steps.push({
@@ -590,12 +596,12 @@ export function calculateSalary(
     vacationAccrual = 0
     steps.push({
       label: 'Semesteravsättning (semesterersättning betald direkt)',
-      formula: 'ingen avsättning: 12 % betalas ut på varje lön',
+      formula: `ingen avsättning: ${fmtPct(resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate))} betalas ut på varje lön`,
       input: {},
       output: 0,
     })
   } else if (input.vacationRule === 'procentregeln') {
-    const rate = input.vacationDaysPerYear >= 30 ? 0.144 : 0.12
+    const rate = resolveVacationPayRate(input.vacationDaysPerYear, input.vacationPayRate)
     vacationAccrual = r(vacationBasis * rate)
     steps.push({
       label: `Semesteravsättning (procentregeln ${fmtPct(rate)})`,
@@ -869,6 +875,8 @@ export function calculateVacationAccrual(params: {
   vacationRule: 'procentregeln' | 'sammaloneregeln' | 'none' | 'semesterersattning'
   vacationDaysPerYear: number
   semestertillaggRate: number
+  /** Kollektivavtal rate override; see SalaryCalculationInput.vacationPayRate. */
+  vacationPayRate?: number | null
   vacationBasis: number
 }): { accrual: number; steps: CalculationStep[] } {
   const steps: CalculationStep[] = []
@@ -886,7 +894,7 @@ export function calculateVacationAccrual(params: {
   if (params.vacationRule === 'semesterersattning') {
     steps.push({
       label: 'Semesteravsättning (semesterersättning betald direkt)',
-      formula: 'ingen avsättning: 12 % betalas ut på varje lön',
+      formula: `ingen avsättning: ${fmtPct(resolveVacationPayRate(params.vacationDaysPerYear, params.vacationPayRate))} betalas ut på varje lön`,
       input: {},
       output: 0,
     })
@@ -894,7 +902,7 @@ export function calculateVacationAccrual(params: {
   }
 
   if (params.vacationRule === 'procentregeln') {
-    const rate = params.vacationDaysPerYear >= 30 ? 0.144 : 0.12
+    const rate = resolveVacationPayRate(params.vacationDaysPerYear, params.vacationPayRate)
     const accrual = r(params.vacationBasis * rate)
     steps.push({
       label: `Semesteravsättning (procentregeln ${fmtPct(rate)})`,

@@ -106,6 +106,13 @@ export default function PaymentBookingDialog({
   // debit, accrual against a 1510 credit.
   const accountingMethod: 'accrual' | 'cash' =
     companySettings?.accounting_method === 'cash' ? 'cash' : 'accrual'
+  // An invoice that already carries a verifikat (booked at issue, or a
+  // kontantmetod invoice whose payment entry recognised the revenue and that
+  // a ROT/RUT reclaim later reopened) is settled by clearing 1510: proposing
+  // the cash shape again would recognise the revenue twice, and the
+  // existing-voucher picker must look for a 1510 clearing for the same
+  // reason. Same rule as resolveInvoicePaymentSourceType.
+  const proposalMethod: 'accrual' | 'cash' = invoice.journal_entry_id ? 'accrual' : accountingMethod
   // The bank account the invoice asked to be paid to (1930 when none was
   // chosen): the proposed debit lands there, same as the route's default.
   const { cashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
@@ -178,12 +185,13 @@ export default function PaymentBookingDialog({
             default_dimensions: invoice.default_dimensions,
             ore_rounding: invoice.ore_rounding,
             deduction_total: invoice.deduction_total,
+            deduction_reclaimed_total: invoice.deduction_reclaimed_total,
             // #1717: lets the proposal clear the actual remaining on a
             // partially_paid invoice (öre write-off when < 1 kr remains).
             paid_amount: invoice.paid_amount,
             remaining_amount: invoice.remaining_amount,
           },
-          accountingMethod,
+          accountingMethod: proposalMethod,
           entityType,
           paymentAccount: chosenPaymentAccount,
           companyOreRounding:
@@ -452,7 +460,7 @@ export default function PaymentBookingDialog({
               <LinkVoucherPicker
                 invoiceId={invoice.id}
                 invoiceCurrency={invoice.currency}
-                accountingMethod={accountingMethod}
+                accountingMethod={proposalMethod}
                 onLinked={() => {
                   onOpenChange(false)
                   onSuccess()

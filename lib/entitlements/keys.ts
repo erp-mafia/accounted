@@ -34,6 +34,8 @@ export const CAPABILITY = {
   woocommerce_sync: 'woocommerce_sync',
   /** Shopify store sync: orders/refunds imported as a transaction feed. */
   shopify_sync: 'shopify_sync',
+  /** Zettle purchase sync: paid purchases/refunds imported as a webshop_orders feed. */
+  zettle_sync: 'zettle_sync',
   /**
    * Multiple people working in one company. Without it only the OWNER can
    * enter the company: every other membership goes dormant (never deleted)
@@ -80,6 +82,7 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.stripe_payments,
   CAPABILITY.woocommerce_sync,
   CAPABILITY.shopify_sync,
+  CAPABILITY.zettle_sync,
   // Founder decision (2026-09-01): multiple users per company is paid.
   // Trial-seeded and Stripe-synced like the rest; enforcement is the
   // owner-only dormancy rule in lib/entitlements/multi-user.ts.
