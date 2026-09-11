@@ -32,6 +32,7 @@ import {
   SYNC_FAILED_MESSAGE,
 } from './api-client'
 import { incrementalLookbackDays } from './cron-lookback'
+import { emitBankSyncFailed } from './sync-failure-event'
 import { updateBalancesFromSync } from '@/lib/cash-accounts/service'
 import { eventBus } from '@/lib/events/bus'
 import {
@@ -262,6 +263,19 @@ export async function triggerConnectionSync(
       last_synced_at: syncedAt,
     }
   } catch (error) {
+    // One durable row per failed sync, whichever branch below answers
+    // (feedback seq 340107). status is the row's state after this handler:
+    // expired for a dead session, unchanged for everything else.
+    await emitBankSyncFailed(eventBus.emit.bind(eventBus), {
+      connectionId: connection.id as string,
+      companyId,
+      userId,
+      bankName: (connection.bank_name as string | null) ?? null,
+      status: error instanceof SessionExpiredError ? 'expired' : (connection.status as string),
+      trigger: 'agent',
+      error,
+    })
+
     if (error instanceof SessionExpiredError) {
       log.warn('agent-triggered bank sync: session expired', { connectionId })
       await supabase

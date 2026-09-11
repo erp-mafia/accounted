@@ -52,7 +52,10 @@ vi.mock('@/lib/salary/run-calculation', () => ({
   runSalaryCalculation: mocks.runSalaryCalculation,
 }))
 
-vi.mock('@/lib/salary/salary-entries', () => ({
+// The rows -> engine-input mapper stays real (the call args are the contract
+// under test); only the posting is mocked.
+vi.mock('@/lib/salary/salary-entries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/salary-entries')>()),
   createSalaryRunEntries: mocks.createSalaryRunEntries,
 }))
 

@@ -70,6 +70,9 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'bank_connection.revoked',
   'bank_connection.superseded',
   'bank_connection.cash_account_mirror_failed',
+  // Every failed bank sync (cron, manual, agent): the server log line was
+  // the only trace and it expires (feedback seq 340107).
+  'bank_connection.sync_failed',
 ]
 
 // Excluded (with reasoning):

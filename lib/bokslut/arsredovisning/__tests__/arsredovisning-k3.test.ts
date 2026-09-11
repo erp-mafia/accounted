@@ -31,7 +31,7 @@ vi.mock('@/lib/supabase/fetch-all', () => ({
   fetchAllRows: mockFetchAllRows,
 }))
 
-import { buildArsredovisningData } from '../build-data'
+import { buildArsredovisningData, resolveMedelantalNote } from '../build-data'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
@@ -814,5 +814,86 @@ describe('buildArsredovisningData: comparison year without bookkeeping', () => {
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
 
     expect(data.warnings.find((w) => w.startsWith('Föregående räkenskapsår'))).toBeUndefined()
+  })
+})
+
+describe('buildArsredovisningData: medelantal anställda missing vs zero (feedback seq 366434)', () => {
+  const SALARY_ROW = {
+    account_number: '7210',
+    account_name: 'Löner till tjänstemän',
+    account_class: 7,
+    opening_debit: 0,
+    opening_credit: 0,
+    period_debit: 480_000,
+    period_credit: 480_000,
+    closing_debit: 480_000,
+    closing_credit: 480_000,
+  }
+
+  function plantSalaryYear() {
+    mockedTrialBalance.mockResolvedValue({
+      rows: [SALARY_ROW],
+      totalDebit: 480_000,
+      totalCredit: 480_000,
+      isBalanced: true,
+    })
+  }
+
+  it.each(['k2', 'k3'] as const)(
+    '%s: salary posted, no employees, no override: the note says the figure is missing and the preview flags it',
+    async (framework) => {
+      plantSalaryYear()
+      const supabase = makeSupabase({ accountingFramework: framework })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Medelantal anställda')
+      expect(note?.body).toBe(
+        'Uppgift om medelantal anställda saknas: ange antalet under Årsredovisning (not Medelantal anställda).',
+      )
+      expect(note?.body).not.toContain('inte haft några anställda')
+      expect(data.warnings.some((w) => w.includes('7000-7399') && w.includes('Medelantal anställda'))).toBe(true)
+    },
+  )
+
+  it.each(['k2', 'k3'] as const)(
+    '%s: an explicit override of 0 next to posted salary is the user\'s statement: "inga anställda", no warning',
+    async (framework) => {
+      plantSalaryYear()
+      const supabase = makeSupabase({ accountingFramework: framework, medelantalOverride: 0 })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Medelantal anställda')
+      expect(note?.body).toBe('Bolaget har inte haft några anställda under räkenskapsåret.')
+      expect(data.warnings.some((w) => w.includes('Medelantal anställda'))).toBe(false)
+    },
+  )
+
+  it.each(['k2', 'k3'] as const)(
+    '%s: no salary posted and no employees still reads "inga anställda" without a warning',
+    async (framework) => {
+      const supabase = makeSupabase({ accountingFramework: framework })
+      // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+      const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+      const note = data.noter.find((n) => n.title === 'Medelantal anställda')
+      expect(note?.body).toBe('Bolaget har inte haft några anställda under räkenskapsåret.')
+      expect(data.warnings.some((w) => w.includes('Medelantal anställda'))).toBe(false)
+    },
+  )
+
+  it('resolveMedelantalNote: reads period activity on 7000-7399 only', () => {
+    const row = (account: string, debit: number, credit: number) => ({
+      account_number: account,
+      period_debit: debit,
+      period_credit: credit,
+    })
+    const missing = resolveMedelantalNote({ medelantal: 0, hasOverride: false, tbFullRows: [row('7010', 100, 0)] })
+    expect(missing.body).toContain('saknas')
+    expect(missing.warning).toContain('7000-7399')
+    // 7510 (arbetsgivaravgifter) alone, or a 7xxx row with no activity, is not salary.
+    expect(resolveMedelantalNote({ medelantal: 0, hasOverride: false, tbFullRows: [row('7510', 100, 0)] }).warning).toBeNull()
+    expect(resolveMedelantalNote({ medelantal: 0, hasOverride: false, tbFullRows: [row('7210', 0, 0)] }).warning).toBeNull()
+    expect(resolveMedelantalNote({ medelantal: 2, hasOverride: false, tbFullRows: [] }).body).toBe(
+      'Under räkenskapsåret har medeltalet anställda uppgått till 2.',
+    )
   })
 })

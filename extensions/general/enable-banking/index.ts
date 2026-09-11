@@ -16,6 +16,7 @@ import {
   type ASPSP,
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
+import { emitBankSyncFailed } from './lib/sync-failure-event'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions, countLiveSiblings } from './lib/session-sharing'
 import {
@@ -948,6 +949,22 @@ export const enableBankingExtension: Extension = {
             history_from: historyFrom,
           })
         } catch (error) {
+          // One durable row per failed sync, whichever branch below answers
+          // (feedback seq 340107). status is the row's state after this
+          // handler: expired for a dead session, unchanged otherwise.
+          const emitFailed =
+            ctx?.emit ??
+            (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
+          await emitBankSyncFailed(emitFailed, {
+            connectionId: connection.id,
+            companyId,
+            userId: user.id,
+            bankName: connection.bank_name,
+            status: error instanceof SessionExpiredError ? 'expired' : connection.status,
+            trigger: 'manual',
+            error,
+          })
+
           // The bank refused a window it has answered before, or every
           // narrower one: not a dead session and not a broken connection, so
           // the row is left alone (no 'error', no renewal advice) and the
