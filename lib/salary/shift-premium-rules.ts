@@ -29,8 +29,8 @@ export type ShiftPremiumRuleResult<T> =
   | { ok: true; data: T }
   | { ok: false; code: string; details?: Record<string, unknown> }
 
-const RULE_COLUMNS =
-  'id, company_id, name, applies_to_all_employees, applies_to_employee_ids, day_of_week, start_time, end_time, premium_percent, item_type, priority, is_active, created_at, updated_at, created_by'
+// The select list is repeated as a literal at every call site on purpose:
+// tests/schema/no-phantom-columns.test.ts can only check literal strings.
 
 /** 'HH:MM:SS' (Postgres TIME) to 'HH:MM'. Already-short values pass through. */
 export function toClockTime(value: string): string {
@@ -55,7 +55,9 @@ export async function listShiftPremiumRules(
 ): Promise<ShiftPremiumRuleResult<ShiftPremiumRule[]>> {
   let query = supabase
     .from('shift_premium_rules')
-    .select(RULE_COLUMNS)
+    .select(
+      'id, company_id, name, applies_to_all_employees, applies_to_employee_ids, day_of_week, start_time, end_time, premium_percent, item_type, priority, is_active, created_at, updated_at, created_by',
+    )
     .eq('company_id', args.companyId)
   if (!args.includeInactive) query = query.eq('is_active', true)
 
@@ -72,7 +74,9 @@ export async function getShiftPremiumRule(
 ): Promise<ShiftPremiumRuleResult<ShiftPremiumRule>> {
   const { data, error } = await supabase
     .from('shift_premium_rules')
-    .select(RULE_COLUMNS)
+    .select(
+      'id, company_id, name, applies_to_all_employees, applies_to_employee_ids, day_of_week, start_time, end_time, premium_percent, item_type, priority, is_active, created_at, updated_at, created_by',
+    )
     .eq('company_id', args.companyId)
     .eq('id', args.ruleId)
     .maybeSingle()
@@ -133,7 +137,9 @@ export async function createShiftPremiumRule(
       applies_to_employee_ids: input.applies_to_employee_ids,
       is_active: input.is_active,
     })
-    .select(RULE_COLUMNS)
+    .select(
+      'id, company_id, name, applies_to_all_employees, applies_to_employee_ids, day_of_week, start_time, end_time, premium_percent, item_type, priority, is_active, created_at, updated_at, created_by',
+    )
     .single()
   if (error || !data) {
     return {
@@ -175,15 +181,28 @@ export async function updateShiftPremiumRule(
     }
   }
 
-  const updates: Record<string, unknown> = { ...input }
-  if (input.day_of_week) updates.day_of_week = [...input.day_of_week].sort((a, b) => a - b)
-
+  // Literal keys with undefined for untouched fields: JSON serialisation
+  // drops them, so PostgREST only sees the patched columns, and the phantom
+  // column scanner can read every key.
   const { data, error } = await supabase
     .from('shift_premium_rules')
-    .update(updates)
+    .update({
+      name: input.name,
+      day_of_week: input.day_of_week ? [...input.day_of_week].sort((a, b) => a - b) : undefined,
+      start_time: input.start_time,
+      end_time: input.end_time,
+      premium_percent: input.premium_percent,
+      item_type: input.item_type,
+      priority: input.priority,
+      applies_to_all_employees: input.applies_to_all_employees,
+      applies_to_employee_ids: input.applies_to_employee_ids,
+      is_active: input.is_active,
+    })
     .eq('company_id', companyId)
     .eq('id', ruleId)
-    .select(RULE_COLUMNS)
+    .select(
+      'id, company_id, name, applies_to_all_employees, applies_to_employee_ids, day_of_week, start_time, end_time, premium_percent, item_type, priority, is_active, created_at, updated_at, created_by',
+    )
     .single()
   if (error || !data) {
     if (error?.code === 'PGRST116') return { ok: false, code: 'SHIFT_PREMIUM_RULE_NOT_FOUND' }
