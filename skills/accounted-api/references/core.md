@@ -21,14 +21,19 @@ Returns every non-archived company the API key user is a member of, together wit
 - Multi-company keys (e.g. consultants) will see >1 result. Always pass the correct companyId in subsequent paths.
 - Archived companies are excluded; if a company disappears the user has been removed from it or it was archived.
 
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
+
 Response `200`:
 ```ts
 {
-  data: { id: string, name: string, org_number: string, entity_type: string, role: "owner" | "admin" | "member" | "viewer", created_at: string }[],
+  data: { id: string, name: string, org_number: string | null, entity_type: string, role: "owner" | "admin" | "member" | "viewer", created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -78,6 +83,10 @@ Creates a new company owned by the API key user (or attached to one of their tea
 - org_number is required for a VAT-registered company (the invoice momsregistreringsnummer derives from it), and f_skatt must be stated explicitly: F-skatt approval is never assumed.
 - accounting_method may be omitted: it then defaults by form (aktiebolag accrual, enskild firma cash) and the response shows the resolved value. The cash default is only legal when turnover normally stays under 3 MSEK (BFL 4 kap 4 §): send accrual explicitly for a larger enskild firma.
 
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
 Request body:
 ```ts
 {
@@ -85,7 +94,7 @@ Request body:
   entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening",
   org_number?: string,
   vat_registered: boolean,
-  moms_period?: "monthly" | "quarterly" | "yearly",
+  moms_period?: "monthly" | "quarterly" | "yearly" | null,
   accounting_method?: "accrual" | "cash",
   f_skatt: boolean,
   fiscal_year_start_month?: number,
@@ -117,17 +126,17 @@ Response `200`:
     id: string,
     name: string,
     entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening",
-    org_number: string,
+    org_number: string | null,
     vat_registered: boolean,
-    moms_period: "monthly" | "quarterly" | "yearly",
+    moms_period: "monthly" | "quarterly" | "yearly" | null,
     accounting_method: "accrual" | "cash",
     fiscal_period: { start_date: string, end_date: string, name: string },
-    team_id: string
+    team_id: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -181,19 +190,20 @@ Patches the company payment details (bank account, Bankgiro, Plusgiro, Swish, IB
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
 {
-  bank_name?: string,
-  clearing_number?: string | "",
-  account_number?: string | "",
-  bankgiro?: string | "",
-  plusgiro?: string | "",
-  swish?: string,
-  iban?: string | "",
-  bic?: string | "",
-  contact_person?: string,
+  bank_name?: string | null,
+  clearing_number?: string | null | "",
+  account_number?: string | null | "",
+  bankgiro?: string | null | "",
+  plusgiro?: string | null | "",
+  swish?: string | null,
+  iban?: string | null | "",
+  bic?: string | null | "",
+  contact_person?: string | null,
   email?: string | "",
   phone?: string,
   website?: string | "",
@@ -217,24 +227,24 @@ Response `200`:
 {
   data: {
     company_id: string,
-    bank_name: string,
-    clearing_number: string,
-    account_number: string,
-    bankgiro: string,
-    plusgiro: string,
-    swish: string,
-    iban: string,
-    bic: string,
-    contact_person: string,
-    email: string,
-    phone: string,
-    website: string,
+    bank_name: string | null,
+    clearing_number: string | null,
+    account_number: string | null,
+    bankgiro: string | null,
+    plusgiro: string | null,
+    swish: string | null,
+    iban: string | null,
+    bic: string | null,
+    contact_person: string | null,
+    email: string | null,
+    phone: string | null,
+    website: string | null,
     invoice_email_texts: { sv?: { subject?: string, greeting?: string, body?: string, signoff?: string }, en?: { subject?: string, greeting?: string, body?: string, signoff?: string } }
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -290,7 +300,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -345,15 +355,15 @@ Response `200`:
     progress?: Record<string, unknown>,
     result?: unknown,
     error: { code?: string, message?: string, details?: unknown },
-    started_at: string,
-    completed_at: string,
+    started_at: string | null,
+    completed_at: string | null,
     poll_url: string,
     webhook_event: "operation.completed"
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>

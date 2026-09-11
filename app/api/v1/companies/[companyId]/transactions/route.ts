@@ -82,7 +82,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/transactions',
   summary: 'List transactions for a company.',
   description:
-    'Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imported first; the `date` column is the transaction date and is filterable but not the sort key). Filter by ?status=booked|unbooked, ?currency, ?date_from / ?date_to, ?search (description ilike).',
+    'Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imported first; the `date` column is the transaction date and is filterable but not the sort key). Filter by ?status=booked|unbooked, ?currency, ?date_from / ?date_to, ?search (description or merchant name, case-insensitive), ?cash_account_id.',
   useWhen:
     'You need to walk a company\'s bank ledger: building a categorization queue, reconciling against external statements, or sampling for audit.',
   doNotUseFor:

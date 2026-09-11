@@ -29,17 +29,19 @@ Returns the company's own chart of accounts (kontoplan), ordered by account_numb
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `class` | query | `string` | no | Account class, the first digit of account_number (0-9). BAS uses 1-8; 9 appears only on internal accounts carried over from an imported chart. |
+| `active` | query | `"true" \| "false"` | no | false also returns deactivated accounts. Default: active accounts only. |
 
 Response `200`:
 ```ts
 {
   data: {
-    accounts: { account_number: string, account_name: string, account_class: number, account_group: string, account_type: "asset" | "equity" | "liability" | "untaxed_reserves" | "revenue" | "expense", normal_balance: "debit" | "credit", is_system_account: boolean, is_active: boolean, description: string, default_vat_code: string, default_vat_rate: number, default_vat_treatment: "standard_25" | "reduced_12" | "reduced_6" | "exempt" | "reverse_charge_domestic" | "reverse_charge_eu_goods" | "reverse_charge_eu_services" | "reverse_charge_non_eu_services" | "export_goods" | "export_services" | "vmb" | "rental_voluntary" | "oss", sru_code: string, sort_order: number }[]
+    accounts: { account_number: string, account_name: string, account_class: number, account_group: string, account_type: "asset" | "equity" | "liability" | "untaxed_reserves" | "revenue" | "expense", normal_balance: "debit" | "credit", is_system_account: boolean, is_active: boolean, description: string | null, default_vat_code: string | null, default_vat_rate: number | null, default_vat_treatment: "standard_25" | "reduced_12" | "reduced_6" | "exempt" | "reverse_charge_domestic" | "reverse_charge_eu_goods" | "reverse_charge_eu_services" | "reverse_charge_non_eu_services" | "export_goods" | "export_services" | "vmb" | "rental_voluntary" | "oss" | null, sru_code: string | null, sort_order: number | null }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -114,6 +116,8 @@ Generalised pre-flight that consolidates the Accounted pre-close validators unde
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `type` | query | `"year_end_readiness" \| "voucher_gaps"` | yes | Which check to run. |
+| `fiscal_period_id` | query | `string` | yes | Fiscal period to check (id from GET /fiscal-periods). Both current check types require it. |
 
 Response `200`:
 ```ts
@@ -129,7 +133,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -192,12 +196,12 @@ Response `200`:
 ```ts
 {
   data: {
-    dimensions: { id: string, sie_dim_no: number, name: string, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number, values: { id: string, code: string, name: string, is_active: boolean, start_date: string, end_date: string }[] }[]
+    dimensions: { id: string, sie_dim_no: number, name: string, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number, values: { id: string, code: string, name: string, is_active: boolean, start_date: string | null, end_date: string | null }[] }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -260,10 +264,17 @@ Registers a new value (SIE #OBJEKT) under a dimension: e.g. a new project code u
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
-{ code: string, name: string, is_active?: boolean, start_date?: string, end_date?: string }
+{
+  code: string,
+  name: string,
+  is_active?: boolean,
+  start_date?: string | null,
+  end_date?: string | null
+}
 ```
 
 Example request:
@@ -278,19 +289,19 @@ Response `200`:
 ```ts
 {
   data: {
-    id: string,
+    id: string | null,
     dimension_id: string,
     code: string,
     name: string,
     is_active: boolean,
-    start_date: string,
-    end_date: string,
-    created_at: string
+    start_date: string | null,
+    end_date: string | null,
+    created_at: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -341,10 +352,11 @@ Sparse update of a dimension value (SIE #OBJEKT): name, is_active (false = archi
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `valueId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
-{ name?: string, is_active?: boolean, start_date?: string, end_date?: string }
+{ name?: string, is_active?: boolean, start_date?: string | null, end_date?: string | null }
 ```
 
 Example request:
@@ -364,13 +376,13 @@ Response `200`:
     code: string,
     name: string,
     is_active: boolean,
-    start_date: string,
-    end_date: string
+    start_date: string | null,
+    end_date: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -427,7 +439,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -474,12 +486,12 @@ Response `200`:
 ```ts
 {
   data: {
-    fiscal_periods: { id: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string, locked_at: string, previous_period_id: string, created_at: string, duration_days: number, exceeds_18_months: boolean }[]
+    fiscal_periods: { id: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string | null, locked_at: string | null, previous_period_id: string | null, created_at: string, duration_days: number, exceeds_18_months: boolean }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -538,7 +550,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -608,7 +620,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -662,7 +674,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -726,7 +738,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -785,7 +797,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -831,6 +843,10 @@ Fetches the momsdeklaration for one period as Skatteverket has it on file: `subm
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_type` | query | `"monthly" \| "quarterly" \| "yearly"` | yes |  |
+| `year` | query | `number` | yes |  |
+| `period` | query | `number` | yes |  |
+| `state` | query | `"submitted" \| "decided" \| "both"` | no |  |
 
 Response `200`:
 ```ts
@@ -839,7 +855,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
