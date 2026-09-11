@@ -9,7 +9,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Utdelning på andelar i koncernföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -20,7 +20,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Utdelning på andelar i dotterföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -31,7 +31,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Emissionsinsats, koncernföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -42,7 +42,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultat vid försäljning av andelar i koncernföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -53,7 +53,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultatandelar från handelsbolag (dotterföretag)',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -64,7 +64,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av andelar i och långfristiga fordringar hos koncernföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -75,7 +75,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av andelar i dotterföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -86,7 +86,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av långfristiga fordringar hos moderföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -97,7 +97,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av långfristiga fordringar hos dotterföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -108,7 +108,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av andelar i och långfristiga fordringar hos koncernföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -119,7 +119,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av andelar i dotterföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -130,7 +130,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av långfristiga fordringar hos moderföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -141,7 +141,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av långfristiga fordringar hos dotterföretag',
-    sru_code: '7370',
+    sru_code: '7414',
     k2_excluded: false,
   },
   {
@@ -152,7 +152,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Utdelningar på andelar i intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -163,7 +163,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Utdelningar på andelar i intresseföretag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -174,7 +174,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Utdelningar på andelar i gemensamt styrda företag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -185,7 +185,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Utdelningar på andelar i övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -196,7 +196,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Emissionsinsats, intresseföretag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -207,7 +207,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Emissionsinsats, gemensamt styrda företag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -218,7 +218,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Emissionsinsats, övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -229,7 +229,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultat vid försäljning av andelar i intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -240,7 +240,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultat vid försäljning av andelar i intresseföretag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -251,7 +251,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultat vid försäljning av andelar i gemensamt styrda företag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -262,7 +262,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultat vid försäljning av andelar i övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -273,7 +273,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultatandelar från handelsbolag (intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i)',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -284,7 +284,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultatandelar från handelsbolag (intresseföretag)',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -295,7 +295,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultatandelar från handelsbolag (gemensamt styrda företag)',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -306,7 +306,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultatandelar från handelsbolag (övriga företag som det finns ett ägarintresse i)',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -317,7 +317,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av andelar i och långfristiga fordringar hos intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -328,7 +328,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av andelar i intresseföretag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -339,7 +339,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av långfristiga fordringar hos intresseföretag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -350,7 +350,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av andelar i gemensamt styrda företag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -361,7 +361,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av långfristiga fordringar hos gemensamt styrda företag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -372,7 +372,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av andelar i övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -383,7 +383,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av långfristiga fordringar hos övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -394,7 +394,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av andelar i och långfristiga fordringar hos intresseföretag och gemensamt styrda företag samt övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -405,7 +405,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av andelar i intresseföretag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -416,7 +416,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av långfristiga fordringar hos intresseföretag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -427,7 +427,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av andelar i gemensamt styrda företag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -438,7 +438,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av långfristiga fordringar hos gemensamt styrda företag',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -449,7 +449,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av andelar i övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -460,7 +460,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av långfristiga fordringar hos övriga företag som det finns ett ägarintresse i',
-    sru_code: '7370',
+    sru_code: '7415',
     k2_excluded: false,
   },
   {
@@ -471,7 +471,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Utdelningar på andelar i andra företag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -482,7 +482,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Utdelningar, andra företag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -493,7 +493,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Insatsemissioner, andra företag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -504,7 +504,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultat vid försäljning av värdepapper i och långfristiga fordringar hos andra företag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -515,7 +515,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultat vid försäljning av andelar i andra företag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -526,7 +526,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultat vid försäljning av långfristiga fordringar hos andra företag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -537,7 +537,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultat vid försäljning av derivat (långfristiga värdepappersinnehav)',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -548,7 +548,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Valutakursdifferenser på långfristiga fordringar',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -559,7 +559,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Valutakursvinster på långfristiga fordringar',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -570,7 +570,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Valutakursförluster på långfristiga fordringar',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -581,7 +581,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultatandelar från handelsbolag (andra företag)',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -592,7 +592,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter från långfristiga fordringar hos och värdepapper i andra företag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -603,7 +603,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter från långfristiga fordringar',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -614,7 +614,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter från övriga värdepapper',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -625,7 +625,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Skattefria ränteintäkter, långfristiga tillgångar',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -636,7 +636,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Avkastningsskatt kapitalplacering',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -647,7 +647,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter från långfristiga fordringar hos koncernföretag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -658,7 +658,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter från långfristiga fordringar hos moderföretag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -669,7 +669,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter från långfristiga fordringar hos dotterföretag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -680,7 +680,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter från långfristiga fordringar hos andra koncernföretag',
-    sru_code: '7370',
+    sru_code: '7423',
     k2_excluded: false,
   },
   {
@@ -691,7 +691,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av innehav av andelar i och långfristiga fordringar hos andra företag',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: false,
   },
   {
@@ -702,7 +702,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av andelar i andra företag',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: false,
   },
   {
@@ -713,7 +713,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av långfristiga fordringar hos andra företag',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: false,
   },
   {
@@ -724,7 +724,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av övriga värdepapper hos andra företag',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: false,
   },
   {
@@ -735,7 +735,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av andelar i och långfristiga fordringar hos andra företag',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: false,
   },
   {
@@ -746,7 +746,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av andelar i andra företag',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: false,
   },
   {
@@ -757,7 +757,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av långfristiga fordringar hos andra företag',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: false,
   },
   {
@@ -768,7 +768,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av övriga värdepapper i andra företag',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: false,
   },
   {
@@ -779,7 +779,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Värdering till verkligt värde, anläggningstillgångar',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: true,
   },
   {
@@ -790,7 +790,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Orealiserade värdeförändringar på anläggningstillgångar',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: true,
   },
   {
@@ -801,7 +801,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Orealiserade värdeförändringar på derivatinstrument',
-    sru_code: '7370',
+    sru_code: '7416',
     k2_excluded: true,
   },
   {
@@ -812,7 +812,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränta på bankkontosaldo, sparkonton och utlånade pengar.',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -823,7 +823,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter från bank',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -834,7 +834,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter från kortfristiga placeringar',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -845,7 +845,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter från kortfristiga fordringar',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -856,7 +856,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Skattefria ränteintäkter',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -867,7 +867,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ränteintäkter för dold räntekompensation',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -878,7 +878,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Övriga ränteintäkter från omsättningstillgångar',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -889,7 +889,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Värdering till verkligt värde, omsättningstillgångar',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: true,
   },
   {
@@ -900,7 +900,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Orealiserade värdeförändringar på omsättningstillgångar',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: true,
   },
   {
@@ -911,7 +911,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Orealiserade värdeförändringar på derivatinstrument (oms.-tillg.)',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: true,
   },
   {
@@ -922,7 +922,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Valutakursdifferenser på kortfristiga fordringar och placeringar',
-    sru_code: '7313',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -933,7 +933,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Valutakursvinster på kortfristiga fordringar och placeringar',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -944,7 +944,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Valutakursförluster på kortfristiga fordringar och placeringar',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -955,7 +955,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Utdelningar på kortfristiga placeringar',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -966,7 +966,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Resultat vid försäljning av kortfristiga placeringar',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -977,7 +977,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Övriga ränteintäkter från koncernföretag',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -988,7 +988,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Övriga ränteintäkter från moderföretag',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -999,7 +999,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Övriga ränteintäkter från dotterföretag',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -1010,7 +1010,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Övriga ränteintäkter från andra koncernföretag',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -1021,7 +1021,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Nedskrivningar av kortfristiga placeringar',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -1032,7 +1032,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföringar av nedskrivningar av kortfristiga placeringar',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -1043,7 +1043,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Övriga finansiella intäkter',
-    sru_code: '7370',
+    sru_code: '7417',
     k2_excluded: false,
   },
   {
@@ -1054,7 +1054,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader (gruppkonto)',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1065,7 +1065,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Ränta på lån, krediter och övriga skulder till kreditgivare.',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1076,7 +1076,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader för obligations-, förlags- och konvertibla lån',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1087,7 +1087,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntedel i årets pensionskostnad',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1098,7 +1098,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader för kontokredit',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1109,7 +1109,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader för andra skulder till kreditinstitut',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1120,7 +1120,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader för dold räntekompensation m.m.',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: true,
   },
   {
@@ -1131,7 +1131,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avdragspost för räntesubventioner',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1142,7 +1142,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga räntekostnader för långfristiga skulder',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1153,7 +1153,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader för kortfristiga skulder',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1164,7 +1164,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader till kreditinstitut',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1175,7 +1175,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Dröjsmålsräntor för leverantörsskulder',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1186,7 +1186,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader för skatter och avgifter',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1197,7 +1197,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader byggnadskreditiv',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1208,7 +1208,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga räntekostnader för kortfristiga skulder',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1219,7 +1219,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Valutakursdifferenser på skulder',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1230,7 +1230,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Valutakursvinster på skulder',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1241,7 +1241,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Valutakursförluster på skulder',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1252,7 +1252,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Erhållna räntebidrag',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1263,7 +1263,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Orealiserade värdeförändringar på skulder',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: true,
   },
   {
@@ -1274,7 +1274,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Orealiserade värdeförändringar på skulder',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: true,
   },
   {
@@ -1285,7 +1285,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Orealiserade värdeförändringar på säkringsinstrument',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: true,
   },
   {
@@ -1296,7 +1296,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader till koncernföretag',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1307,7 +1307,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader till moderföretag',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1318,7 +1318,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader till dotterföretag',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1329,7 +1329,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Räntekostnader till andra koncernföretag',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1340,7 +1340,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Aktiverade ränteutgifter',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: true,
   },
   {
@@ -1351,7 +1351,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga skuldrelaterade poster',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1362,7 +1362,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Erhållet ackord på skulder till kreditinstitut m.m.',
-    sru_code: '7323',
+    sru_code: '7522',
     k2_excluded: false,
   },
   {
@@ -1373,7 +1373,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Förändring av periodiseringsfond.',
-    sru_code: '7380',
+    sru_code: null,
     k2_excluded: false,
   },
   {
@@ -1384,7 +1384,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Avsättning till periodiseringsfond',
-    sru_code: '7380',
+    sru_code: '7525',
     k2_excluded: false,
   },
   {
@@ -1395,7 +1395,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföring från periodiseringsfond',
-    sru_code: '7380',
+    sru_code: '7420',
     k2_excluded: false,
   },
   {
@@ -1406,7 +1406,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Mottagna koncernbidrag',
-    sru_code: '7380',
+    sru_code: '7419',
     k2_excluded: false,
   },
   {
@@ -1417,7 +1417,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Lämnade koncernbidrag',
-    sru_code: '7380',
+    sru_code: '7524',
     k2_excluded: false,
   },
   {
@@ -1428,7 +1428,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Lämnade gottgörelser',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1439,7 +1439,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Förändring av överavskrivningar.',
-    sru_code: '7380',
+    sru_code: '7421',
     k2_excluded: false,
   },
   {
@@ -1450,7 +1450,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Förändring av överavskrivningar, immateriella anläggningstillgångar',
-    sru_code: '7380',
+    sru_code: '7421',
     k2_excluded: false,
   },
   {
@@ -1461,7 +1461,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Förändring av överavskrivningar, byggnader och markanläggningar',
-    sru_code: '7380',
+    sru_code: '7421',
     k2_excluded: false,
   },
   {
@@ -1472,7 +1472,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Förändring av överavskrivningar, maskiner respektive inventarier',
-    sru_code: '7380',
+    sru_code: '7421',
     k2_excluded: false,
   },
   {
@@ -1483,7 +1483,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Förändring av ersättningsfond',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1494,7 +1494,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Avsättning till ersättningsfond för inventarier',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1505,7 +1505,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Avsättning till ersättningsfond för byggnader och markanläggningar',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1516,7 +1516,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'debit',
     description: 'Avsättning till ersättningsfond för djurlager i jordbruk och renskötsel',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1527,7 +1527,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ianspråktagande av ersättningsfond för avskrivningar',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1538,7 +1538,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Ianspråktagande av ersättningsfond för annat än avskrivningar',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1549,7 +1549,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Återföring från ersättningsfond',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1560,7 +1560,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Övriga bokslutsdispositioner',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1571,7 +1571,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Nedskrivningar av konsolideringskaraktär av anläggningstillgångar',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1582,7 +1582,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Förändring av lagerreserv',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1593,7 +1593,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'revenue',
     normal_balance: 'credit',
     description: 'Övriga bokslutsdispositioner',
-    sru_code: '7380',
+    sru_code: '7422',
     k2_excluded: false,
   },
   {
@@ -1604,7 +1604,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Beräknad inkomstskatt på det skattepliktiga resultatet för räkenskapsåret.',
-    sru_code: '7380',
+    sru_code: '7528',
     k2_excluded: false,
   },
   {
@@ -1615,7 +1615,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Skatt på grund av ändrad beskattning',
-    sru_code: '7380',
+    sru_code: '7528',
     k2_excluded: false,
   },
   {
@@ -1626,7 +1626,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Restituerad skatt',
-    sru_code: '7380',
+    sru_code: '7528',
     k2_excluded: false,
   },
   {
@@ -1637,7 +1637,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Uppskjuten skatt',
-    sru_code: '7380',
+    sru_code: '7528',
     k2_excluded: true,
   },
   {
@@ -1648,7 +1648,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga skatter',
-    sru_code: '7380',
+    sru_code: '7528',
     k2_excluded: false,
   },
   {
@@ -1659,7 +1659,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Resultat',
-    sru_code: '7380',
+    sru_code: null,
     k2_excluded: false,
   },
   {
@@ -1670,7 +1670,7 @@ export const CLASS_8_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Slutresultatkonto som visar vinst eller förlust efter alla intäkter och kostnader.',
-    sru_code: '7380',
+    sru_code: '7450',
     k2_excluded: false,
   },
 ]
