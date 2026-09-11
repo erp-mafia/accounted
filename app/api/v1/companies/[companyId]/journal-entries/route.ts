@@ -29,7 +29,8 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { createDraftEntry, validateBalance } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 
 const JE_LINE_COLUMNS =
   'id, account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, cost_center, project, sort_order'
@@ -223,7 +224,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/journal-entries',
   summary: 'Create a draft journal entry (verifikation).',
   description:
-    'Creates a draft journal entry via the engine\'s createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance and the period lock without inserting any row; accounts are resolved against the chart only on the live call, so ACCOUNTS_NOT_IN_CHART never surfaces in a dry-run.',
+    'Creates a draft journal entry via the engine\'s createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance, the period lock and the lines\' accounts against the chart without inserting any row, so it fails with ACCOUNTS_NOT_IN_CHART for the same accounts the live call would reject.',
   useWhen:
     'You\'re posting an arbitrary verifikation (manual journal entries, accrual reversals, period closing adjustments) outside the invoicing / supplier-invoice / transaction flows.',
   doNotUseFor:
@@ -304,8 +305,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     if (ctx.dryRun) {
       // Dry-run preview: report the balanced lines + would-be header. No row
-      // is inserted, so the engine's per-line account-id resolution doesn't
-      // happen: chart-lookup failures will only be reported on live commit.
+      // is inserted, so the engine never resolves the lines' accounts; the
+      // read-only check below reaches the same verdict the live call would.
+      // A standard BAS account absent from the chart passes (the engine seeds
+      // it on the live call); a deactivated or unknown number does not.
+      const missingAccounts = await findUnresolvableAccounts(
+        ctx.supabase,
+        ctx.companyId!,
+        input.lines.map((l) => l.account_number),
+      )
+      if (missingAccounts.length > 0) {
+        return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), ctx.log, {
+          requestId: ctx.requestId,
+        })
+      }
       return dryRunPreview(
         {
           status: 'draft' as const,

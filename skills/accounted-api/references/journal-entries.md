@@ -73,7 +73,7 @@ Example response `200`:
 **Create a draft journal entry (verifikation).**
 `scope:bookkeeping:write · risk:high · idempotent · dry-run · reversible`
 
-Creates a draft journal entry via the engine's createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance and the period lock without inserting any row; accounts are resolved against the chart only on the live call, so ACCOUNTS_NOT_IN_CHART never surfaces in a dry-run.
+Creates a draft journal entry via the engine's createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance, the period lock and the lines' accounts against the chart without inserting any row, so it fails with ACCOUNTS_NOT_IN_CHART for the same accounts the live call would reject.
 
 **Use when:** You're posting an arbitrary verifikation (manual journal entries, accrual reversals, period closing adjustments) outside the invoicing / supplier-invoice / transaction flows.
 **Do not use for:** Bookkeeping flows that have a dedicated endpoint (invoices, supplier-invoices, transactions). Editing an existing posted entry: use /correct instead.

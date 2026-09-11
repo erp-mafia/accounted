@@ -21,8 +21,7 @@ const Account = z.object({
   // another system can carry class 9 (internal accounts).
   account_class: z.number().int().min(0).max(9),
   account_group: z.string(),
-  // Mirrors chart_of_accounts_account_type_check. The shared
-  // AccountTypeSchema lacks untaxed_reserves, so it cannot describe reads.
+  // Mirrors chart_of_accounts_account_type_check (untaxed_reserves = 21xx).
   account_type: z.enum(['asset', 'equity', 'liability', 'untaxed_reserves', 'revenue', 'expense']),
   normal_balance: z.enum(['debit', 'credit']),
   is_system_account: z.boolean(),
