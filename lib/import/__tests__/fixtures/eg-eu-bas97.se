@@ -1,0 +1,30 @@
+#FLAGGA 0
+#PROGRAM "Spiris Bokforing & Fakturering" 7.5.0.0
+#FORMAT PC8
+#GEN 20260911
+#SIETYP 4
+#ORGNR 556000-0001
+#FNAMN "EG Testbolag AB"
+#RAR 0 20250101 20251231
+#KPTYP EUBAS97
+#VALUTA SEK
+#KONTO 1930 "F”retagskonto"
+#KONTO 3045 "F”rs„ljn tj„nst utanf”r EG momsfri"
+#KONTO 3046 "F”rs„ljn tj„nst till EG 25%"
+#KONTO 3048 "F”rs„ljn tj„nst EG momsfri"
+#KONTO 3055 "F”rs„ljn varor utanf”r EG momsfri"
+#KONTO 3056 "F”rs„ljn varor till EG 25% momspliktig"
+#KONTO 3057 "Treparts f”rs„ljn varor till EG 25%"
+#KONTO 3058 "F”rs„ljn varor EG momsfri"
+#KONTO 4056 "Ink”p varor 25% EG"
+#KONTO 4057 "Ink”p varor 12% EG"
+#KONTO 4058 "Ink”p varor EG 6%"
+#KONTO 4059 "Ink”p varor EG momsfri"
+#IB 0 1930 0.00
+#UB 0 1930 1000.00
+#RES 0 3058 -1000.00
+#VER "A" "1" 20250115 "EU-f”rs„ljning"
+{
+	#TRANS 1930 {} 1000.00
+	#TRANS 3058 {} -1000.00
+}
