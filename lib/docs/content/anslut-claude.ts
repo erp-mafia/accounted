@@ -93,7 +93,7 @@ claude mcp add --transport http accounted \\
 
 Bäst när du hellre använder en långlivad API-nyckel än OAuth-flödet, eller när du skriptar.
 
-1. Skapa en API-nyckel i Accounted under **Inställningar → API & MCP**. Använd en \`gnubok_sk_test_*\`-nyckel mot sandlådan medan du utvärderar och byt till \`gnubok_sk_live_*\` för skarp data.
+1. Skapa en API-nyckel i Accounted under **Inställningar → API & MCP**. En \`gnubok_sk_test_*\`-nyckel läser ditt riktiga bolag men tvingar varje skrivning till dry-run, så den är säker medan du utvärderar; byt till en skarp nyckel (\`gnubok_sk_*\`, utan \`test_\`) när skrivningar ska bokföras.
 2. Lägg till bryggan i din \`claude_desktop_config.json\`:
    \`\`\`json
    {
@@ -118,7 +118,7 @@ Nyckelvärdet börjar fortfarande med \`gnubok_sk_\`. Det är ett stabilt kredit
 
 ## Testa med de här frågorna
 
-Alla tre går mot den deterministiska sandlådan (använd en \`gnubok_sk_test_*\`-nyckel, eller gör sandlådebolaget aktivt i appen innan du loggar in från Claude). De går igenom hela läsvägen utan att bokföra något.
+Alla tre är rena läsningar och säkra att köra mot ditt riktiga bolag (med en \`gnubok_sk_test_*\`-nyckel kan inget bokföras alls). De går igenom hela läsvägen utan att boka något.
 
 1. **"Visa mina okonterade banktransaktioner och föreslå konteringar."**
    Claude kallar \`accounted_list_uncategorized_transactions\` och sedan \`accounted_suggest_categories\` och går igenom förslagen med dig. Godkänner du ett förslag läggs en \`accounted_categorize_transaction\` upp som pending operation. Ingenting bokförs förrän du bekräftar.
@@ -132,7 +132,7 @@ Alla tre går mot den deterministiska sandlådan (använd en \`gnubok_sk_test_*\
 En snabb genomgång som visar att anslutningen fungerar innan du släpper in den på skarp data. Kör stegen i ordning. Varje steg säger vad du gör och vad du ska se.
 
 1. **Anslut.** Väg A med **Endast läs** valt på godkännandesidan, väg B, eller väg C med en \`gnubok_sk_test_*\`-nyckel. → Claude listar Accounteds verktyg (rubriker som *List Uncategorized Transactions* och *VAT Declaration (Momsdeklaration)*).
-2. **Kontrollera bolaget.** Fråga *"Vilket bolag är jag ansluten till?"* → Claude namnger sandlådebolaget (till exempel **Sandlådan Konsult**).
+2. **Kontrollera bolaget.** Fråga *"Vilket bolag är jag ansluten till?"* → Claude namnger bolaget som nyckeln eller samtycket gäller.
 3. **Kör fråga 1** (okonterade och konteringsförslag). → En lista med okonterade rader plus förslag. Ingen bokföring sker.
 4. **Kör fråga 2** (förfallna fakturor). → Minst en förfallen kundfaktura med åldersfördelning.
 5. **Kör fråga 3** (moms och kan jag stänga). → Momsdeklarationens rutor plus en **icke-tom lista med stopp** från \`accounted_vat_close_check\` (okonterade transaktioner, en ej godkänd leverantörsfaktura och en större utgift utan kvitto).

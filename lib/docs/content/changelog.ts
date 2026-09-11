@@ -13,7 +13,7 @@ The first stable release of the public REST API. Six phases of development cover
 ### Authentication + discovery (Phase 1)
 
 - API key auth via \`Authorization: Bearer gnubok_sk_<random>\` (live keys) / \`gnubok_sk_test_<random>\` (test keys). 100 RPM rate limit per key.
-- \`gnubok_sk_test_*\` keys bound to deterministic sandbox companies.
+- \`gnubok_sk_test_*\` keys: same company as a live key, every write forced into dry-run (\`X-Gnubok-Mode: test\`). There is no separate sandbox company or host.
 - Scope-based authorisation per endpoint (\`invoices:read\`, \`payroll:write\`, \`webhooks:manage\`, ...).
 - Discovery: \`GET /llms.txt\`, \`GET /api/v1/openapi.json\`, \`GET /.well-known/skills/index.json\`.
 - Health: \`GET /api/v1/health\`.

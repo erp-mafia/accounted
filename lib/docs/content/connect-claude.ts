@@ -86,7 +86,7 @@ claude mcp add --transport http accounted \\
 
 Best for Claude Desktop on a machine where you'd rather use a long-lived API key than the OAuth flow, or for scripting.
 
-1. Mint an API key in the Accounted dashboard under **Settings → API & MCP** (\`/settings/api\`). Use a \`gnubok_sk_test_*\` key against the sandbox while you evaluate; switch to \`gnubok_sk_live_*\` for real data.
+1. Mint an API key in the Accounted dashboard under **Settings → API & MCP** (\`/settings/api\`). A \`gnubok_sk_test_*\` key reads your real company but forces every write into dry-run, so it is safe while you evaluate; switch to a live key (\`gnubok_sk_*\`, no \`test_\` infix) when you want writes to commit.
 2. Add the stdio bridge to your \`claude_desktop_config.json\`:
    \`\`\`json
    {
@@ -113,7 +113,7 @@ continue to work without changes.
 
 ## Try these prompts
 
-All three run against the deterministic sandbox seed (use a \`gnubok_sk_test_*\` key, or make the sandbox company the active company in the app before you sign in from Claude). They exercise the read path end-to-end without booking anything.
+All three are read-only and safe to run against your real company (with a \`gnubok_sk_test_*\` key nothing can be booked at all). They exercise the read path end-to-end without booking anything.
 
 1. **"Show my uncategorized bank transactions and suggest categories."**
    Claude calls \`accounted_list_uncategorized_transactions\` then \`accounted_suggest_categories\` and walks you through the proposals. Approving one stages an \`accounted_categorize_transaction\` pending operation: nothing is booked until you confirm.
@@ -127,7 +127,7 @@ All three run against the deterministic sandbox seed (use a \`gnubok_sk_test_*\`
 A quick end-to-end pass to confirm the connection works before you trust it with real data. Run the steps in order; each lists what you do and what you should see.
 
 1. **Connect.** Use Path A (choose **Endast läs** on the consent page), Path B, or Path C with a \`gnubok_sk_test_*\` key. → Claude lists the Accounted tools (titles like *List Uncategorized Transactions*, *VAT Declaration (Momsdeklaration)*).
-2. **Confirm the company.** Ask *"Which company am I connected to?"* → Claude names the sandbox company (e.g. **Sandlådan Konsult**).
+2. **Confirm the company.** Ask *"Which company am I connected to?"* → Claude names the company the key or consent was issued for.
 3. **Run prompt 1** (*uncategorized + suggest categories*). → A list of uncategorised rows plus category suggestions; no booking happens.
 4. **Run prompt 2** (*overdue invoices*). → At least one overdue customer invoice with aging.
 5. **Run prompt 3** (*VAT report + can I close*). → Momsdeklaration rutor returned; \`accounted_vat_close_check\` reports a **non-empty blocker list** (uncategorised transactions, an unapproved leverantörsfaktura, and a high-value business expense without a receipt).
