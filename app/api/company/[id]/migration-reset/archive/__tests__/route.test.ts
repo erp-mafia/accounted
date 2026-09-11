@@ -20,17 +20,17 @@ vi.mock('@/lib/company/context', () => ({
 
 vi.mock('@/lib/reports/full-archive-export', () => ({
   estimateArchiveSize: vi.fn(),
-  generateBaseDataArchive: vi.fn(),
+  generateFullArchive: vi.fn(),
 }))
 
 import {
   estimateArchiveSize,
-  generateBaseDataArchive,
+  generateFullArchive,
 } from '@/lib/reports/full-archive-export'
 import { GET } from '../route'
 
 const mockEstimate = vi.mocked(estimateArchiveSize)
-const mockGenerate = vi.mocked(generateBaseDataArchive)
+const mockGenerate = vi.mocked(generateFullArchive)
 const params = { params: Promise.resolve({ id: 'company-1' }) }
 
 function enqueueAuthorizedArchive() {
@@ -151,6 +151,7 @@ describe('GET /api/company/[id]/migration-reset/archive', () => {
     )
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockGenerate).toHaveBeenCalledWith(archiveSupabase, 'source-1', {
+      scope: 'all',
       include_documents: true,
     })
   })
@@ -191,6 +192,7 @@ describe('GET /api/company/[id]/migration-reset/archive', () => {
 
     expect(response.status).toBe(200)
     expect(mockGenerate).toHaveBeenCalledWith(archiveSupabase, 'source-1', {
+      scope: 'all',
       include_documents: false,
     })
   })

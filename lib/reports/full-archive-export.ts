@@ -141,9 +141,8 @@ async function buildFullArchive(
       ? await fetchAllPeriods(supabase, companyId)
       : [await fetchSinglePeriod(supabase, companyId, options.period_id)]
 
-  if (periods.length === 0) {
-    throw new Error('No fiscal periods found')
-  }
+  // A retained source can have documents and company history before its first
+  // fiscal year. An all-company archive must keep that material accessible too.
 
   const zip = new JSZip()
 
@@ -186,7 +185,7 @@ async function buildFullArchive(
 
   if (options.include_documents !== false) {
     await writeDocuments(zip, supabase, companyId, periods, options.scope)
-    await writeReconciliationAttachments(zip, supabase, companyId, periods)
+    if (periods.length) await writeReconciliationAttachments(zip, supabase, companyId, periods)
   }
 
   if (options.scope === 'all') {

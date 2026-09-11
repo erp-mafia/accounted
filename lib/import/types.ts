@@ -390,6 +390,15 @@ export interface ImportResult {
   // If the next period's IB needed resync but we couldn't do it (locked,
   // closed, or no existing IB), the human-readable reason.
   nextPeriodIBResyncSkipped?: { reason: string; nextPeriodName: string } | null
+  // Durable imports leave adjacent-year balances unchanged and request review.
+  nextPeriodOpeningBalanceReview?: {
+    nextPeriodId: string
+    nextPeriodName: string
+    openingBalanceEntryId: string
+    importId: string
+    reviewToken: string
+    reason: 'import' | 'undo'
+  } | null
 
   // Populated when the file carried dimension data (#DIM/#OBJEKT/object
   // lists): what landed in the registry and whether the import flipped

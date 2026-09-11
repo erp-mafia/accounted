@@ -20,6 +20,7 @@ import type { FiscalPeriod } from '@/types'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { FiscalYearResetDialog } from '@/components/settings/FiscalYearResetDialog'
 import { FiscalYearEditDialog } from '@/components/settings/FiscalYearEditDialog'
+import { SIEOpeningBalanceReview } from '@/components/settings/SIEOpeningBalanceReview'
 import { suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -152,14 +153,15 @@ export function FiscalYearsManager() {
           const closedExternally = status === 'closed' && p.closed_externally === true
           const canReopen = canManage && closedExternally && !p.closing_entry_id
           return (
-            <div key={p.id} className="flex items-center gap-3 border-b border-border px-1 py-3">
+            <div key={p.id} className="flex flex-col items-start gap-3 border-b border-border px-1 py-3 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
                 <span className="text-sm font-medium">{p.name}</span>
                 <span className="ml-2 text-sm text-muted-foreground tabular-nums">
                   {formatDate(p.period_start)} - {formatDate(p.period_end)}
                 </span>
               </div>
-              <div className="flex shrink-0 items-center gap-3">
+              <div className="flex max-w-full shrink-0 flex-wrap items-center gap-3">
+                <SIEOpeningBalanceReview period={p} canManage={canManage} />
                 {status === 'open' ? (
                   <span className="text-xs text-muted-foreground">{t('fy_status_open')}</span>
                 ) : (

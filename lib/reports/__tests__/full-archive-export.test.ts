@@ -10,6 +10,8 @@ import {
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { generateTrialBalance } from '../trial-balance'
+import { generateSIEExport } from '../sie-export'
+import { generateJournalRegister } from '../journal-register'
 import type { AuditLogEntry } from '@/types'
 
 vi.mock('../sie-export', () => ({
@@ -438,6 +440,26 @@ describe('generateFullArchive', () => {
   })
 
   describe('scope: all', () => {
+    it('keeps current retained vouchers and their linked PDF without depending on an original import file', async () => {
+      const entry={id:'retained-entry',voucher_number:17,voucher_series:'A',status:'posted',description:'Retained voucher'}
+      vi.mocked(generateSIEExport).mockResolvedValueOnce('#FLAGGA 0\n#VER A 17 20240601 "Retained voucher"\n{\n#TRANS 1930 {} 100\n#TRANS 2091 {} -100\n}')
+      vi.mocked(generateJournalRegister).mockResolvedValueOnce({entries:[entry],total_entries:1,total_debit:100,total_credit:100,
+        period:{start:'2024-01-01',end:'2024-12-31'}} as any)
+      enqueueMany([
+        {data:COMPANY_ROW},{data:[PERIOD_2024]},
+        {data:[{id:'retained-doc',file_name:'retained.pdf',storage_path:'p/retained.pdf',journal_entry_id:entry.id,
+          journal_entries:{voucher_number:17,voucher_series:'A',entry_date:'2024-06-01'}}]},
+        {data:[{id:entry.id,fiscal_period_id:PERIOD_2024.id}]},
+        {data:[]}, // no original SIE source file
+      ])
+      const zip=await JSZip.loadAsync(await generateFullArchive(supabase as any,'company-1',{scope:'all'}))
+      expect(await zip.file('sie/2024-01-01_2024-12-31.se')!.async('text')).toContain('#VER A 17')
+      const register=JSON.parse(await zip.file('rapporter/2024-01-01_2024-12-31/grundbok.json')!.async('text'))
+      expect(register.entries).toContainEqual(entry)
+      expect(zip.file('dokument/2024/A17_retained.pdf')).not.toBeNull()
+      const documents=JSON.parse(await zip.file('dokument/manifest.json')!.async('text'))
+      expect(documents[0]).toMatchObject({journal_entry_id:entry.id,status:'downloaded'})
+    })
     it('generates per-period SIE files and report subfolders', async () => {
       enqueueMany([
         { data: COMPANY_ROW },
@@ -624,15 +646,15 @@ describe('generateFullArchive', () => {
       expect(zip.file('dokument/2024/A5_kvitto_doc-coll.pdf')).not.toBeNull()
     })
 
-    it('throws when no fiscal periods exist', async () => {
+    it('keeps an archived company readable even before its first fiscal period', async () => {
       enqueueMany([
         { data: COMPANY_ROW },
         { data: [] },
       ])
 
-      await expect(
-        generateFullArchive(supabase as any, 'company-1', { scope: 'all' })
-      ).rejects.toThrow('No fiscal periods found')
+      const zip=await JSZip.loadAsync(await generateFullArchive(supabase as any, 'company-1', { scope: 'all' }))
+      expect(zip.file('revision/behandlingshistorik.json')).not.toBeNull()
+      expect(zip.file('dokument/manifest.json')).not.toBeNull()
     })
 
     it.each([false, true])('includes imported SIE sources and master data (original-byte manifest: %s)', async (durable) => {

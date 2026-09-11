@@ -64,7 +64,7 @@ The migrations have been applied only to the designated erp-base staging branch
    coordinated cutover: the first provenance guard makes old one-shot writes
    fail closed, and later migrations revoke the old import/undo/replace RPCs.
    Reverting application code alone is not a database rollback.
-2. Resolve the open product decisions below and get Emil's specific approval
+2. Get Emil's specific approval
    for production DDL. Schedule the cutover, pause import intake, and verify
    no legacy import/undo/replace call remains in flight. Do not guess from an
    HTTP timeout that the database finished.
@@ -175,6 +175,7 @@ Repeatable runners use explicit staging credentials in ignored files:
 ```sh
 node scripts/sie-import/test-staging.mjs lib/import/__tests__/sie-job.pg.test.ts
 node scripts/sie-import/test-staging.mjs tests/pg/sie-duplicate-repair.pg.test.ts tests/pg/sie-repair-race.pg.test.ts
+node --import tsx scripts/sie-import/acceptance-manual-review.ts
 node --import tsx scripts/sie-import/acceptance-staging.ts
 node scripts/sie-import/benchmark-staging.mjs --compare-audit
 node scripts/sie-import/run-next-staging.mjs build
@@ -200,25 +201,50 @@ stage-versus-bank-match race. Retired period-delete tests were replaced with
 rejection and retained-history tests; core writer regression cases exercise the
 new private writer.
 
+The final follow-up passed 53 real-Postgres tests covering the job protocol and
+both reset flows, and 49 archive tests. The manual-review HTTP acceptance
+confirmed unchanged adjacent-year header/lines through completion and undo,
+review renewal after undo, and stale-token rejection in 45 ms on the repeated
+run. Browser verification also passed review acknowledgment, retained-history
+reset refusal, navigation to the existing archive flow and both dialogs at
+390 px without horizontal overflow. No automatic cross-year bookkeeping write
+is made.
+
 The full unit run encountered Windows path/line-ending failures and
 shell-check loader failures. All seven remaining failing files were reproduced
 on a clean detached checkout of base commit `91ab339a8`: nine failed tests and
 four loader errors. The touched processing-history newline assertion was fixed.
-The final affected-area run passes 4,255 tests in 312 files; two tests are skipped. Broader staging tests also expose missing party and
+The core affected-area run passed 4,255 tests in 312 files. The final follow-up
+run passed 4,188 tests in 253 files; two tests were skipped in each run. These
+overlapping runs must not be added together. Production build, lint, the type
+error ratchet and API guards passed after the follow-up. Broader staging tests
+also expose missing party and
 account-erasure schema/functions, auth-schema DDL restrictions, and older
 ledger-key/consent-erasure implementations unrelated to this branch. Record final check results with the PR; do not label these suites green
 without resolving or demonstrating their baseline status.
 
-## Open decisions and work requiring elapsed time or production approval
+## Approved follow-up choices
 
-- Earlier-year import currently resynchronizes the next year's opening balance
-  in the legacy path. The new job needs an explicit decision between preserving
-  that behavior with exact cross-year undo, and flagging the next balance for
-  review. The new worker does not silently rewrite a second year's vouchers.
-- Fiscal-year reset currently deletes after a retained snapshot. Decide whether
-  durable-import years should use the existing archive-and-start-fresh company
-  flow or a separate retained-history year reset. The new retention guard
-  refuses deletion of owned batch entries.
+- Emil chose manual review of the adjacent year's existing opening balance.
+  Import completion atomically records the review in the result and manifest,
+  marks the adjacent period, and leaves its vouchers unchanged. Settings and the
+  global notice expose the review. Owner/admin acknowledgment records who and
+  when, checks the review token and current entry, and changes no journal data.
+  Source undo renews the review token; a stale acknowledgment returns a conflict.
+  This is an advisory review, separate from the unfinished-import hold.
+- For reset, Emil delegated the retention choice. Years containing durable
+  imports or reviewed repairs refuse destructive reset, including after storno.
+  Owners are directed to the existing whole-company archive/start-fresh flow;
+  administrators are told that the owner must act. The archive's eligibility
+  and execution reject unresolved durable imports and undos. The retained-source
+  download now includes all fiscal-period reports, current SIE exports and
+  linked documents, as well as source files and processing history. Existing
+  owner/reset-link authorization and download size limits remain in force.
+- This preserves original records and their corrections together, consistent
+  with BFNAR 2013:2 points 2.17-2.18 and the retention guidance in
+  [BFN's bookkeeping guidance](https://www.bfn.se/wp-content/uploads/vl13-2-bokforing.pdf).
+
+## Work requiring elapsed time or production approval
 - Production repair, historical source-key uniqueness, legacy reconciliation,
   customer notices, compact-audit enablement and alert delivery are not live.
 - Index pruning needs a week of data; sustained Large-tier load still needs

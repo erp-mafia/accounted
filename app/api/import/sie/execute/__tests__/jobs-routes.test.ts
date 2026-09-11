@@ -87,4 +87,9 @@ describe('durable SIE HTTP boundaries',()=>{
     expect(response.headers.get('Cache-Control')).toBe('no-store')
     expect((await response.json()).data[0].import_hold).toBe(job.id)
   })
+  it('returns manual-review flags after the import hold is released',async()=>{
+    queued.enqueue({data:[{id:'period',name:'2027',import_hold:null,opening_balance_review_token:'review'}]})
+    const response=await routes.holds(new Request('https://example.test/api/import/sie/holds'))
+    expect((await response.json()).data[0]).toMatchObject({import_hold:null,opening_balance_review_token:'review'})
+  })
 })
