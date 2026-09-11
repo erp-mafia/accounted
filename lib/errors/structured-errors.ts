@@ -3463,6 +3463,22 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'En anställd med samma personnummer finns redan.',
     message_en: 'An employee with that personnummer already exists.',
   },
+  // OB / overtime premium rules (shift_premium_rules) made configurable.
+  SHIFT_PREMIUM_RULE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'OB-regeln kunde inte hittas.',
+    message_en: 'Premium rule not found.',
+  },
+  SHIFT_PREMIUM_RULE_EMPLOYEE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'En eller flera valda anställda finns inte i företaget.',
+    message_en: 'One or more selected employees do not belong to the company.',
+  },
+  SHIFT_PREMIUM_RULE_SCOPE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Välj antingen alla anställda eller minst en namngiven anställd.',
+    message_en: 'Choose either all employees or at least one named employee.',
+  },
   // A production deployment without PERSONNUMMER_ENCRYPTION_KEY: every
   // employee create (and every decrypt-on-read) throws before touching the
   // database. Deliberately not INTERNAL_ERROR: it is a configuration gap, not

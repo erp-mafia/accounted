@@ -14,6 +14,7 @@ import {
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { TaxTableStatus } from '@/components/salary/TaxTableStatus'
+import { ShiftPremiumRulesPanel } from '@/components/salary/ShiftPremiumRulesPanel'
 import { Switch } from '@/components/ui/switch'
 import { useSettings } from '@/components/settings/useSettings'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -182,6 +183,10 @@ export function SalarySettingsContent() {
           <TaxTableStatus />
         </SettingsRow>
       </SettingsGroup>
+
+      {/* OB / overtime rules: own fetch/save cycle, outside the form so the
+          dirty-form save bar never reacts to it. */}
+      <ShiftPremiumRulesPanel />
 
       {/* Vacation is configured per employee; this row only points there. */}
       <SettingsGroup label={t('vacation_heading')}>

@@ -120,6 +120,9 @@ import '@/app/api/v1/companies/[companyId]/employees/[id]/absence/route'
 // Payroll gap-closure 2.3: cutover opening balances (single + atomic bulk).
 import '@/app/api/v1/companies/[companyId]/employees/[id]/opening-balances/route'
 import '@/app/api/v1/companies/[companyId]/employees/opening-balances/route'
+// OB / overtime premium rules (shift_premium_rules): list/create + update/delete.
+import '@/app/api/v1/companies/[companyId]/salary/premium-rules/route'
+import '@/app/api/v1/companies/[companyId]/salary/premium-rules/[id]/route'
 
 // Payroll gap-closure 3.4: vacation ledger + year close.
 import '@/app/api/v1/companies/[companyId]/employees/[id]/vacation-balance/route'
