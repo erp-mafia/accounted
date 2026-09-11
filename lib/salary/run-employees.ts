@@ -370,15 +370,19 @@ export async function setRunEmployeeSalary(
   // advanceAndBookSalaryRun) refuse roster rows without a breakdown, so a
   // salary change after a calculation forces a recalculation before booking
   // instead of silently booking gross/tax derived from the old salary.
-  const { error: updError } = await supabase
-    .from('salary_run_employees')
-    .update(
-      hasHours
-        ? { hours_worked: hours, calculation_breakdown: null }
-        : { monthly_salary: monthly, calculation_breakdown: null },
-    )
-    .eq('id', row.id)
-    .eq('company_id', args.companyId)
+  // Two literal payloads (not one conditional expression) so the
+  // no-phantom-columns scanner can resolve every column statically.
+  const { error: updError } = hasHours
+    ? await supabase
+        .from('salary_run_employees')
+        .update({ hours_worked: hours, calculation_breakdown: null })
+        .eq('id', row.id)
+        .eq('company_id', args.companyId)
+    : await supabase
+        .from('salary_run_employees')
+        .update({ monthly_salary: monthly, calculation_breakdown: null })
+        .eq('id', row.id)
+        .eq('company_id', args.companyId)
 
   if (updError) {
     return {
