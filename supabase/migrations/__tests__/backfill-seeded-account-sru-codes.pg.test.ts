@@ -16,8 +16,9 @@ import { getPool } from '@/tests/pg/setup'
  *   - the seeded accounts that are NULL on purpose stay NULL
  *   - a code on a system account is never overwritten
  *   - accounts the user created (is_system_account = false) are untouched
- *   - no audit rows (tax-form label, transaction-local skip flag)
- *   - idempotent (re-run is a no-op, updated_at does not move)
+ *   - one audit row per updated account, tagged as the system and this
+ *     migration, never as the company's user (behandlingshistorik)
+ *   - idempotent (re-run is a no-op: no new audit rows, updated_at does not move)
  */
 
 const BACKFILL_SQL = readFileSync(
@@ -139,7 +140,7 @@ describe('backfill_seeded_account_sru_codes', () => {
     expect((await sruByNumber(companyId))['1930']).toBeNull()
   })
 
-  it('writes no audit rows and is a no-op on re-run', async () => {
+  it('audits each change as the system, not the user, and is a no-op on re-run', async () => {
     const { userId, companyId } = await seedCompany()
     await insertAccount({ userId, companyId, number: '1510', isSystem: true, sruCode: null })
     const pool = getPool()
@@ -148,14 +149,22 @@ describe('backfill_seeded_account_sru_codes', () => {
       [companyId],
     )
     const recordId = idRows[0].id
-    const auditCount = async () =>
+    const updateAudits = async () =>
       (
-        await pool.query<{ n: number }>(
-          `SELECT count(*)::int AS n FROM public.audit_log
-            WHERE table_name = 'chart_of_accounts' AND record_id = $1`,
+        await pool.query<{
+          actor_type: string
+          actor_label: string | null
+          company_id: string
+          old_sru: string | null
+          new_sru: string | null
+        }>(
+          `SELECT actor_type, actor_label, company_id,
+                  old_state->>'sru_code' AS old_sru, new_state->>'sru_code' AS new_sru
+             FROM public.audit_log
+            WHERE table_name = 'chart_of_accounts' AND record_id = $1 AND action = 'UPDATE'`,
           [recordId],
         )
-      ).rows[0].n
+      ).rows
     const updatedAt = async () =>
       (
         await pool.query<{ updated_at: Date }>(
@@ -164,14 +173,23 @@ describe('backfill_seeded_account_sru_codes', () => {
         )
       ).rows[0].updated_at.toISOString()
 
-    const auditBefore = await auditCount()
+    expect(await updateAudits()).toHaveLength(0)
     await runBackfill()
     expect((await sruByNumber(companyId))['1510']).toBe('7251')
-    expect(await auditCount()).toBe(auditBefore)
+    const audits = await updateAudits()
+    expect(audits).toHaveLength(1)
+    expect(audits[0]).toMatchObject({
+      actor_type: 'system',
+      actor_label: 'migration 20260911190100 backfill_seeded_account_sru_codes',
+      company_id: companyId,
+      old_sru: null,
+      new_sru: '7251',
+    })
 
     const firstUpdatedAt = await updatedAt()
     await runBackfill()
     expect(await updatedAt()).toBe(firstUpdatedAt)
+    expect(await updateAudits()).toHaveLength(1)
     expect((await sruByNumber(companyId))['1510']).toBe('7251')
   })
 })

@@ -29,16 +29,20 @@
 -- equity 2010/2013/2018 (the NE-bilaga, not INK2) and ideell förening
 -- 2067/2068/2069/2890 (INK3, not modelled).
 --
--- Explicit transaction so SET LOCAL holds: write_audit_log honours the
--- transaction-local gnubok.sandbox_cleanup flag and skips the per-row audit
--- rows. sru_code is a tax-form label, not bookkeeping; both SRU backfills of
--- 2026-09-11 were applied the same way. The rows' updated_at still moves, so
--- the change is visible per row. Re-running is a no-op: the rows it sets are
--- no longer NULL.
+-- Audited on purpose: audit_chart_of_accounts writes one audit_log row per
+-- updated account, which is the behandlingshistorik entry for this kontoplan
+-- change (BFNAR 2013:2 p. 9.16). The two larger SRU backfills of 2026-09-11
+-- skipped audit because of their size (~330k rows); at 21,840 rows the trail
+-- costs a few tens of MB and nothing justifies dropping it. The rows are
+-- tagged actor_type 'system' with this migration as the label (the
+-- 20260726120000 pattern), so they never read as something the company's
+-- user did. Explicit transaction so the SET LOCALs hold for the UPDATE.
+-- Re-running is a no-op: the rows it sets are no longer NULL.
 
 BEGIN;
 
-SET LOCAL gnubok.sandbox_cleanup = 'true';
+SET LOCAL gnubok.actor_type = 'system';
+SET LOCAL gnubok.actor_label = 'migration 20260911190100 backfill_seeded_account_sru_codes';
 
 UPDATE public.chart_of_accounts
 SET sru_code = CASE account_number
