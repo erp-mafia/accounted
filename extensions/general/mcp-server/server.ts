@@ -1394,7 +1394,13 @@ async function categorizeTransactionCore(
     .single()
 
   if (fetchError || !transaction) {
-    throw new Error('Transaction not found. Check the transaction_id is correct.')
+    // Only bank rows live in `transactions`. A skattekonto_transactions id
+    // (Skatteverket tax account) lands here as NOT_FOUND and agents concluded
+    // the row could not be booked (feedback seq 382367): name the right tool.
+    throw new Error(
+      'Transaction not found. Check the transaction_id is correct. ' +
+        'A skattekonto row (Skatteverket tax account: ränta, avgift, preliminärskatt, moms) is not a bank transaction: book it with gnubok_book_skattekonto_row or gnubok_book_skattekonto_rows (find them via gnubok_search_tools "skattekonto").',
+    )
   }
 
   // Underlag guard: if the transaction has an attached document with
@@ -2455,6 +2461,7 @@ export const YEAR_END_BLOCKER_KIND: Record<YearEndBlockerCode, string> = {
   PERIOD_NOT_FOUND: 'period_not_found',
   PERIOD_NOT_ENDED: 'period_not_ended',
   PERIOD_ALREADY_CLOSED: 'period_already_closed',
+  PERIOD_LOCKED: 'period_locked',
   CLOSING_ENTRY_EXISTS: 'closing_entry_exists',
   DRAFT_ENTRIES: 'draft_entries',
   UNEXPLAINED_VOUCHER_GAP: 'unexplained_voucher_gap',
@@ -5902,7 +5909,13 @@ export const tools: McpTool[] = [
       const accountOverride =
         args.account_override === undefined ? undefined : String(args.account_override).trim()
       if (accountOverride !== undefined && !ACCOUNT_NUMBER_RE.test(accountOverride)) {
-        throw new Error('account_override must be exactly 4 digits, e.g. "4020".')
+        // "2710,2731"-style values are the usual way an agent asks for a split
+        // here (feedback seq 371965): say where a split actually lives.
+        throw new Error(
+          'account_override must be exactly 4 digits, e.g. "4020": it books the whole business side on ONE account. ' +
+            'To split a bank transaction over several accounts (e.g. a Skatteverket payment clearing 2710 + 2731), use gnubok_bulk_book_transactions with new_entry.lines (the bank leg is added automatically), ' +
+            'or gnubok_create_voucher for the lines and then gnubok_bulk_book_transactions with existing_journal_entry_id.',
+        )
       }
 
       // Presence guard (hosts don't always enforce inputSchema `required`).
@@ -11675,7 +11688,18 @@ export const tools: McpTool[] = [
       const booked = txs.find((t) => t.journal_entry_id != null)
       if (booked) throw new Error(`Transaction ${booked.id} is already booked`)
       const dates = new Set(txs.map((t) => t.date))
-      if (dates.size > 1) throw new Error('All transactions must share the same date')
+      // Both refusals below are legal limits, not technical ones: a reader who
+      // takes them for the latter proposes a monthly samlingsverifikat next
+      // (feedback seq 378710 / 382660). Say the statute and the split.
+      if (dates.size > 1) {
+        throw Object.assign(
+          new Error(
+            'All transactions must share the same date: BFL 5 kap 6 § tredje stycket allows a gemensam verifikation only for likartade affärshändelser on the same day, ' +
+              'so a monthly samlingsverifikat is not a legal option. Group the tx_ids by date and call gnubok_bulk_book_transactions once per date.',
+          ),
+          { code: 'BULK_BOOK_DATE_MISMATCH' },
+        )
+      }
       // Reject zero-amount txs (round-8 / A.8.28). The direction computation
       // below treats amount === 0 as 'expense' (amount > 0 is false), which
       // would then mis-classify a real income tx in the same batch. Mirrors
@@ -11684,7 +11708,13 @@ export const tools: McpTool[] = [
       if (zeroAmountTx) throw new Error(`Transaction ${zeroAmountTx.id} has zero amount`)
       const direction = txs[0]!.amount > 0 ? 'income' : 'expense'
       if (txs.some((t) => (direction === 'income' ? t.amount < 0 : t.amount > 0))) {
-        throw new Error('All transactions must share the same direction (all income or all expense)')
+        throw Object.assign(
+          new Error(
+            'All transactions must share the same direction (all income or all expense): BFL 5 kap 6 § tredje stycket allows a gemensam verifikation only for likartade affärshändelser, ' +
+              'and an inflow and an outflow are not alike. Call gnubok_bulk_book_transactions once for the income rows and once for the expense rows.',
+          ),
+          { code: 'BULK_BOOK_DIRECTION_MISMATCH' },
+        )
       }
       // Currency homogeneity (swedish-compliance): a samlingsverifikat
       // combining e.g. SEK + EUR txs without explicit FX lines violates
@@ -12949,9 +12979,17 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_book_skattekonto_row',
+    // Search-only tool: without keywords, "skattekonto ränta" or "book
+    // skattekonto interest" matched nothing and agents reported a missing
+    // tool (feedback seq 382367). Event types and counter accounts below are
+    // the seeded skattekonto_rules (migration 20260519100000). No keyword may
+    // contain "skattekonto": the name already matches it, and a bare
+    // "skattekonto" query must keep ranking the reconciliation status bridge
+    // first (search-tools.test.ts), which a keyword hit would outscore.
+    keywords: ['ränta', 'intäktsränta', 'kostnadsränta', 'skattetillägg', 'förseningsavgift', 'avgift', 'preliminärskatt', 'interest', 'tax account', '8314', '8423', '6992'],
     title: 'Book Skattekonto Row',
     description:
-      'Book one settled skattekonto row as a posted verifikat: 1630 against the counter account matched from skattekonto rules. Refused for already-booked, ignored, upcoming or rule-less rows. Stages; booking happens at approval. dry_run previews.',
+      'Book one settled skattekonto row as a verifikat: 1630 against the rule-matched counter account (intäktsränta 8314, kostnadsränta 8423, skattetillägg/förseningsavgift 6992, prelskatt 2510, moms 2650). Refuses booked/ignored/upcoming/rule-less rows. Stages; dry_run previews.',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
@@ -13041,9 +13079,10 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_book_skattekonto_rows',
+    keywords: ['ränta', 'intäktsränta', 'kostnadsränta', 'skattetillägg', 'förseningsavgift', 'avgift', 'preliminärskatt', 'interest', 'tax account', '8314', '8423', '6992'],
     title: 'Book Skattekonto Rows (Batch)',
     description:
-      'Book up to 200 settled skattekonto rows as posted verifikat (1630 + rule-matched counter account per row). Unbookable rows (already booked, ignored, upcoming, no rule) are skipped and listed in the preview. Stages; booking happens at approval. dry_run previews.',
+      'Book up to 200 settled skattekonto rows as verifikat (1630 + rule-matched counter account per row: ränta 8314/8423, skattetillägg/förseningsavgift 6992, prelskatt 2510, moms 2650). Unbookable rows (booked/ignored/upcoming/no rule) are skipped and listed. Stages; dry_run previews.',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
@@ -17137,7 +17176,7 @@ export const tools: McpTool[] = [
         },
         actor,
         {
-          description: 'After locking, run year-end closing before the period can be closed via gnubok_close_period. Verify balances first with gnubok_get_trial_balance.',
+          description: 'A lock only freezes the period; it is not a step before bokslut. If the intent is year-end, reject this operation and call gnubok_run_year_end on the unlocked period: it posts the closing entry, then locks and closes the period and seeds the next period\'s opening balances itself, and it refuses a pre-locked period. Otherwise verify balances with gnubok_get_trial_balance.',
           tool: 'gnubok_get_trial_balance',
           args: { fiscal_period_id: fiscalPeriodId },
         }
@@ -18297,7 +18336,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_run_year_end',
     keywords: ['bokslut', 'årsbokslut', 'årsavslut', 'stäng året'],
     title: 'Run Year-End Closing (Bokslut)',
-    description: 'Stage year-end closing: zero result accounts (class 3-8) into 2099, lock period, create next period, seed opening balances. High-risk, always staged.',
+    description: 'Stage bokslut on an OPEN period (never lock first): zeroes class 3-8 into 2099, then locks, closes and seeds next period IB. High-risk, always staged.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -18319,6 +18358,20 @@ export const tools: McpTool[] = [
 
       if (!period) throw new Error('Fiscal period not found')
       if (period.is_closed) throw new Error('Period is already closed')
+      // The closing entry posts INTO the period and the service locks it
+      // itself (executeYearEndClosing step 7), so a lock taken beforehand
+      // would only fail at approval as the trigger's "Cannot write to
+      // locked/closed fiscal period". Refuse at stage time with the fix
+      // (feedback seq 392722: the skill used to prescribe lock first).
+      if (period.locked_at) {
+        throw Object.assign(
+          new Error(
+            'Period is already locked: gnubok_run_year_end posts the closing entry into the period and then locks and closes it itself, so it must run on an unlocked period. ' +
+              'Unlock with gnubok_unlock_period and call gnubok_run_year_end again; do not lock first.',
+          ),
+          { code: 'PERIOD_LOCK_ALREADY_LOCKED' },
+        )
+      }
 
       return stagePendingOperation(supabase, companyId, userId, 'run_year_end',
         `Bokslut: ${period.name}`,
@@ -18327,13 +18380,12 @@ export const tools: McpTool[] = [
           period_name: period.name,
           period_start: period.period_start,
           period_end: period.period_end,
-          will: 'zero result accounts into 2099, lock period, create next period, generate opening balances',
+          will: 'zero result accounts into 2099, lock period, close period, create next period, generate opening balances',
         },
         actor,
         {
-          description: 'After year-end, the period is locked and ready for closing via gnubok_close_period.',
-          tool: 'gnubok_close_period',
-          args: { fiscal_period_id: fiscalPeriodId },
+          description: 'After approval the period is locked AND closed and the next period carries its opening balances: gnubok_lock_period, gnubok_close_period and gnubok_set_opening_balances are not follow-up steps (they refuse with already locked / already closed). Next: confirm the state with gnubok_list_fiscal_periods, then review the next period\'s opening balances with gnubok_get_balance_sheet.',
+          tool: 'gnubok_list_fiscal_periods',
         }
       )
     },
@@ -22813,7 +22865,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
             '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) opens the approval queue where the user approves/rejects with a click. All also return structured data; other clients ignore the UI and use the data.',
-            '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each write stages for human approval; closing is irreversible per BFL.',
+            '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',
             '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
             '',

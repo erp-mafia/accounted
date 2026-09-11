@@ -115,6 +115,14 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     null, // null = extract the Swedish message directly from the raw error text
   ],
   [
+    /Period is already closed/i,
+    'Perioden är redan stängd: bokslutet är genomfört och perioden kan inte öppnas igen.',
+  ],
+  [
+    /Period is already locked/i,
+    'Perioden är redan låst.',
+  ],
+  [
     /Cannot attach documents to entries in a locked/i,
     'Kan inte bifoga dokument till verifikationer i en låst period.',
   ],
