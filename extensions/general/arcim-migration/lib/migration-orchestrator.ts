@@ -225,6 +225,48 @@ function getOrgNumberFromParty(party: PartyDto): string | null {
 const orgMapKey = (value: string): string => orgNumberKey(value) ?? value
 
 /**
+ * Lookback for the per-chunk register re-read. `created_at` defaults to the
+ * insert's transaction start, so a row whose insert began before our
+ * snapshot read but committed after it carries a timestamp older than the
+ * snapshot; the margin covers that and clock skew between the function and
+ * the database. Rows the margin re-reads are already in the maps.
+ */
+const REGISTER_DELTA_LOOKBACK_MS = 30_000
+
+const registerDeltaCursor = (): string =>
+  new Date(Date.now() - REGISTER_DELTA_LOOKBACK_MS).toISOString()
+
+type PartyRegisterRow = { id: string; org_number: string | null; name: string | null }
+
+/**
+ * Rows of the customer or supplier register that landed after `sinceIso`.
+ *
+ * The existing-row snapshot is taken once at step start, so a second request
+ * for the same step (a double submit, or a retry while the first request is
+ * still inserting) sees none of the first request's rows and inserts them
+ * again: 987 duplicate customers and 9 duplicate suppliers in one company
+ * (2026-09-10). Re-reading the delta right before each chunk narrows the
+ * window to one chunk's insert. The durable fix is a unique index on
+ * (company_id, org_number), which is a founder call (DECISIONS.md).
+ */
+async function fetchPartyRowsSince(
+  supabase: SupabaseClient,
+  table: 'customers' | 'suppliers',
+  companyId: string,
+  sinceIso: string,
+): Promise<PartyRegisterRow[]> {
+  return fetchAllRows<PartyRegisterRow>(({ from, to }) =>
+    supabase
+      .from(table)
+      .select('id, org_number, name')
+      .eq('company_id', companyId)
+      .gt('created_at', sinceIso)
+      .order('id', { ascending: true })
+      .range(from, to)
+  )
+}
+
+/**
  * Log a foreign-currency document that was imported WITHOUT a SEK conversion.
  *
  * It is still imported (dropping it would lose räkenskapsinformation), but it
@@ -372,6 +414,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           org_number: string | null
           name: string | null
         }
+        const customerSnapshotAt = registerDeltaCursor()
         const existingCustomers = await fetchAllRows<ExistingCustomer>(
           ({ from, to }) =>
             supabase
@@ -408,6 +451,19 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         // in-run key set every repeat would be inserted again.
         const pendingCustomerKeys = new Set<string>()
 
+        // Dedup against already-imported records: prefer org-number, but fall
+        // back to name when the party has no org-number. Otherwise org-less
+        // customers (private persons) are re-created on every re-sync, since
+        // the org-number map can never match them.
+        const existingCustomerIdFor = (party: PartyDto): string | undefined => {
+          const orgNumber = getOrgNumberFromParty(party)
+          return orgNumber
+            ? orgNumberToCustomerId.get(orgNumber)
+            : party.name
+              ? nameToCustomerId.get(party.name)
+              : undefined
+        }
+
         for (const customer of customers) {
           if (!customer.active) {
             skipReasons.inactive = (skipReasons.inactive ?? 0) + 1
@@ -415,16 +471,8 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             continue
           }
 
-          // Dedup against already-imported records: prefer org-number, but fall
-          // back to name when the party has no org-number. Otherwise org-less
-          // customers (private persons) are re-created on every re-sync, since
-          // the org-number map can never match them.
           const orgNumber = getOrgNumberFromParty(customer.party)
-          const existingCustomerId = orgNumber
-            ? orgNumberToCustomerId.get(orgNumber)
-            : customer.party.name
-              ? nameToCustomerId.get(customer.party.name)
-              : undefined
+          const existingCustomerId = existingCustomerIdFor(customer.party)
           if (existingCustomerId) {
             customerIdMap.set(customer.id, existingCustomerId)
             const existingCustomer = existingCustomerById.get(existingCustomerId)
@@ -452,14 +500,36 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           pending.push({ dto: customer, row: mapCustomer(customer, userId, companyId) })
         }
 
+        let customerDeltaSince = customerSnapshotAt
         for (const batch of chunk(pending, INSERT_CHUNK_SIZE)) {
+          // Rows another request wrote since the snapshot (or since the
+          // previous chunk) go through the same dedupe as the snapshot rows.
+          const deltaCursor = registerDeltaCursor()
+          for (const row of await fetchPartyRowsSince(supabase, 'customers', companyId, customerDeltaSince)) {
+            if (row.org_number && !orgNumberToCustomerId.has(row.org_number)) orgNumberToCustomerId.set(row.org_number, row.id)
+            if (row.name && !nameToCustomerId.has(row.name)) nameToCustomerId.set(row.name, row.id)
+          }
+          customerDeltaSince = deltaCursor
+          const toInsert: PendingCustomer[] = []
+          for (const candidate of batch) {
+            const appearedId = existingCustomerIdFor(candidate.dto.party)
+            if (appearedId) {
+              customerIdMap.set(candidate.dto.id, appearedId)
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+              continue
+            }
+            toInsert.push(candidate)
+          }
+          if (toInsert.length === 0) continue
+
           const outcome = await insertWithPerRowFallback(
-            supabase, 'customers', batch.map((p) => p.row), 'id, org_number, name'
+            supabase, 'customers', toInsert.map((p) => p.row), 'id, org_number, name'
           )
 
           if (outcome.failedCount > 0) {
             console.error(
-              `[migration] Customer insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+              `[migration] Customer insert failed for ${outcome.failedCount} of ${toInsert.length} rows:`,
               outcome.firstError
             )
             skipReasons.failed = (skipReasons.failed ?? 0) + outcome.failedCount
@@ -467,10 +537,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             errorSample ??= outcome.firstError
           }
 
-          for (let i = 0; i < batch.length; i++) {
+          for (let i = 0; i < toInsert.length; i++) {
             const insertedRow = outcome.returned[i]
             if (!insertedRow) continue
-            const providerId = batch[i].dto.id
+            const providerId = toInsert[i].dto.id
             const newId = insertedRow.id as string
             customerIdMap.set(providerId, newId)
             if (insertedRow.org_number) orgNumberToCustomerId.set(insertedRow.org_number as string, newId)
@@ -551,6 +621,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         const suppliers = await fetchSuppliersDirect(provider, accessToken, providerCompanyId)
         if (suppliers.length > 0) runState.grantProven = true
 
+        const supplierSnapshotAt = registerDeltaCursor()
         const existingSuppliers = await fetchAllRows<{ id: string; org_number: string | null; name: string | null }>(
           ({ from, to }) =>
             supabase
@@ -576,6 +647,17 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         // Same in-run repeat guard as customers.
         const pendingSupplierKeys = new Set<string>()
 
+        // Same org-number-then-name dedup as customers, so org-less suppliers
+        // (e.g. PostNord, IKANO BANK) aren't duplicated on every re-sync.
+        const existingSupplierIdFor = (party: PartyDto): string | undefined => {
+          const orgNumber = getOrgNumberFromParty(party)
+          return orgNumber
+            ? orgNumberToSupplierId.get(orgMapKey(orgNumber))
+            : party.name
+              ? nameToSupplierId.get(party.name)
+              : undefined
+        }
+
         for (const supplier of suppliers) {
           if (!supplier.active) {
             skipReasons.inactive = (skipReasons.inactive ?? 0) + 1
@@ -583,14 +665,8 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             continue
           }
 
-          // Same org-number-then-name dedup as customers, so org-less suppliers
-          // (e.g. PostNord, IKANO BANK) aren't duplicated on every re-sync.
           const orgNumber = getOrgNumberFromParty(supplier.party)
-          const existingSupplierId = orgNumber
-            ? orgNumberToSupplierId.get(orgMapKey(orgNumber))
-            : supplier.party.name
-              ? nameToSupplierId.get(supplier.party.name)
-              : undefined
+          const existingSupplierId = existingSupplierIdFor(supplier.party)
           if (existingSupplierId) {
             supplierIdMap.set(supplier.id, existingSupplierId)
             skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
@@ -611,14 +687,37 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           pending.push({ dto: supplier, row: mapSupplier(supplier, userId, companyId) })
         }
 
+        let supplierDeltaSince = supplierSnapshotAt
         for (const batch of chunk(pending, INSERT_CHUNK_SIZE)) {
+          // Same per-chunk delta re-read as customers.
+          const deltaCursor = registerDeltaCursor()
+          for (const row of await fetchPartyRowsSince(supabase, 'suppliers', companyId, supplierDeltaSince)) {
+            if (row.org_number && !orgNumberToSupplierId.has(orgMapKey(row.org_number))) {
+              orgNumberToSupplierId.set(orgMapKey(row.org_number), row.id)
+            }
+            if (row.name && !nameToSupplierId.has(row.name)) nameToSupplierId.set(row.name, row.id)
+          }
+          supplierDeltaSince = deltaCursor
+          const toInsert: PendingSupplier[] = []
+          for (const candidate of batch) {
+            const appearedId = existingSupplierIdFor(candidate.dto.party)
+            if (appearedId) {
+              supplierIdMap.set(candidate.dto.id, appearedId)
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+              continue
+            }
+            toInsert.push(candidate)
+          }
+          if (toInsert.length === 0) continue
+
           const outcome = await insertWithPerRowFallback(
-            supabase, 'suppliers', batch.map((p) => p.row), 'id, org_number, name'
+            supabase, 'suppliers', toInsert.map((p) => p.row), 'id, org_number, name'
           )
 
           if (outcome.failedCount > 0) {
             console.error(
-              `[migration] Supplier insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+              `[migration] Supplier insert failed for ${outcome.failedCount} of ${toInsert.length} rows:`,
               outcome.firstError
             )
             skipReasons.failed = (skipReasons.failed ?? 0) + outcome.failedCount
@@ -626,10 +725,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             errorSample ??= outcome.firstError
           }
 
-          for (let i = 0; i < batch.length; i++) {
+          for (let i = 0; i < toInsert.length; i++) {
             const insertedRow = outcome.returned[i]
             if (!insertedRow) continue
-            const providerId = batch[i].dto.id
+            const providerId = toInsert[i].dto.id
             const newId = insertedRow.id as string
             supplierIdMap.set(providerId, newId)
             if (insertedRow.org_number) orgNumberToSupplierId.set(orgMapKey(insertedRow.org_number as string), newId)

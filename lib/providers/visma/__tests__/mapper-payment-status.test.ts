@@ -79,6 +79,35 @@ describe('mapVismaToSupplierInvoice payment status', () => {
     expect(dto.paymentStatus.paid).toBe(false)
   })
 
+  it('PaymentStatus Unpaid (3) with a PRESENT RemainingAmount of 0 stays open at the full total', () => {
+    // Company 5208b894 (2026-09-10): every invoice Visma reported as unpaid
+    // landed as paid because a present zero was read as the open balance.
+    const dto = mapVismaToSupplierInvoice(supplierRaw({ PaymentStatus: 3, RemainingAmount: 0 }))
+    expect(dto.paymentStatus.paid).toBe(false)
+    expect(dto.paymentStatus.balance.value).toBe(1250)
+    expect(dto.paymentStatus.source).toBe('enum')
+    expect(dto.status).toBe('booked')
+  })
+
+  it('PaymentStatus OverDue (7) with RemainingAmountInvoiceCurrency 0 is overdue at the full total', () => {
+    const dto = mapVismaToSupplierInvoice(supplierRaw({ PaymentStatus: 7, RemainingAmountInvoiceCurrency: 0 }))
+    expect(dto.paymentStatus.paid).toBe(false)
+    expect(dto.paymentStatus.balance.value).toBe(1250)
+    expect(dto.status).toBe('overdue')
+  })
+
+  it('PaymentStatus Paid (6) with RemainingAmount 0 is settled', () => {
+    const dto = mapVismaToSupplierInvoice(supplierRaw({ PaymentStatus: 6, RemainingAmount: 0 }))
+    expect(dto.paymentStatus.paid).toBe(true)
+    expect(dto.paymentStatus.balance.value).toBe(0)
+    expect(dto.status).toBe('paid')
+  })
+
+  it('labels a balance-derived paid flag as such when the enum is absent', () => {
+    expect(mapVismaToSupplierInvoice(supplierRaw({ RemainingAmount: 0 })).paymentStatus.source).toBe('balance')
+    expect(mapVismaToSupplierInvoice(supplierRaw()).paymentStatus.source).toBe('balance')
+  })
+
   it('partial payment with RemainingAmount present keeps the real balance', () => {
     const dto = mapVismaToSupplierInvoice(supplierRaw({ PaymentStatus: 5, RemainingAmount: 250 }))
     expect(dto.paymentStatus.paid).toBe(false)
@@ -123,6 +152,14 @@ describe('mapVismaToSalesInvoice payment status', () => {
     const dto = mapVismaToSalesInvoice(salesRaw({ PaymentStatus: 1, IsBooked: true }))
     expect(dto.paymentStatus.paid).toBe(false)
     expect(dto.paymentStatus.balance.value).toBe(75000)
+    expect(dto.status).toBe('booked')
+  })
+
+  it('PaymentStatus Unpaid (1) with a PRESENT RemainingAmount of 0 stays open at the full total', () => {
+    const dto = mapVismaToSalesInvoice(salesRaw({ PaymentStatus: 1, RemainingAmount: 0, IsBooked: true }))
+    expect(dto.paymentStatus.paid).toBe(false)
+    expect(dto.paymentStatus.balance.value).toBe(75000)
+    expect(dto.paymentStatus.source).toBe('enum')
     expect(dto.status).toBe('booked')
   })
 
