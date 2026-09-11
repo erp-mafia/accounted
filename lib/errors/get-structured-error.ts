@@ -167,6 +167,29 @@ function inferCode(message: string): string | null {
   return null
 }
 
+/**
+ * A thrown error may carry its own remediation when the fix depends on the
+ * call site (which inbox item to repair, which tool re-stages it) and the
+ * registry entry is shared with surfaces where that hint would be wrong.
+ * Only a well-formed hint is honored; anything else falls back to the
+ * registry.
+ */
+function extractRemediation(error: unknown): StructuredErrorRemediation | null {
+  if (typeof error !== 'object' || error === null) return null
+  const raw = (error as Record<string, unknown>).remediation
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const hint = raw as Record<string, unknown>
+  if (typeof hint.description !== 'string' || hint.description.trim() === '') return null
+  return {
+    description: hint.description,
+    ...(typeof hint.tool === 'string' ? { tool: hint.tool } : {}),
+    ...(typeof hint.resource === 'string' ? { resource: hint.resource } : {}),
+    ...(typeof hint.args === 'object' && hint.args !== null && !Array.isArray(hint.args)
+      ? { args: hint.args as Record<string, unknown> }
+      : {}),
+  }
+}
+
 function extractEnglishMessage(error: unknown): string {
   if (typeof error === 'string') return error
   if (error instanceof Error) return error.message
@@ -203,7 +226,8 @@ export function getStructuredError(
   if (code === 'UNKNOWN_ERROR' && transient) code = 'TRANSIENT_ERROR'
 
   const entry = getErrorEntry(code)
-  let remediation = entry?.remediation
+  // The throw site knows more than the registry when it attaches a hint.
+  let remediation = extractRemediation(error) ?? entry?.remediation
 
   // Specialize INSUFFICIENT_SCOPE with the actual scope name when known.
   if (code === 'INSUFFICIENT_SCOPE' && options.attemptedScope && remediation) {

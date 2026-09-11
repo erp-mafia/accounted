@@ -379,6 +379,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
           supplier_id: 'supplier-1',
           supplier_invoice_number: 'INV-100',
           invoice_date: '2026-05-15',
+          due_date: '2026-06-14',
           currency: 'SEK',
           // String values where numbers are required: Number(x) || 0 used to
           // silently produce a zero-value invoice.
@@ -833,5 +834,142 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox honours def
     })
     expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
     expect(linkToJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('commitPendingOperation: create_supplier_invoice_from_inbox: input violations surface as SI_CREATE_INVALID_INPUT', () => {
+  // Prod 2026-09-10 08:54:12Z and 08:55:08Z (inbox item
+  // 9a91271b-83e3-41ad-a542-8da3d29c1175, a SEB bank fee with no due date
+  // on the document): the INSERT failed with "null value in column
+  // \"due_date\" of relation \"supplier_invoices\" violates not-null
+  // constraint", the executor mapped only 23505, and the agent saw a bare
+  // "Failed to create supplier invoice" twice. Staging now defaults the date;
+  // this covers the executor half so a stale or tampered op is still
+  // actionable.
+
+  it('rejects a staged op with no due_date before burning an ankomstnummer', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp()
+    const params = { ...(op.params as Record<string, unknown>) }
+    delete params.due_date
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(result.error).toMatch(/due_date/)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('maps PG 23502 (not_null_violation) to SI_CREATE_INVALID_INPUT naming the column', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'supplier-1', name: 'SEB', supplier_type: 'swedish_business' },
+      error: null,
+    })
+    enqueue({ data: 42, error: null }) // arrival number
+    enqueue({
+      data: null,
+      error: {
+        code: '23502',
+        message: 'null value in column "due_date" of relation "supplier_invoices" violates not-null constraint',
+        details: 'Failing row contains (...)',
+      },
+    }) // invoice insert fails
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      // A stale op staged before the due-date default existed.
+      makePendingOp({ params: { ...(makePendingOp().params as Record<string, unknown>), due_date: 'stale' } }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(result.error).toMatch(/due_date/)
+    expect(result.error).toMatch(/23502/)
+    // The failing-row echo from pg never reaches the caller.
+    expect(result.error).not.toMatch(/Failing row/)
+  })
+
+  it('maps PG 23514 (check_violation) to SI_CREATE_INVALID_INPUT naming the constraint', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'supplier-1', name: 'SEB', supplier_type: 'swedish_business' },
+      error: null,
+    })
+    enqueue({ data: 42, error: null }) // arrival number
+    enqueue({
+      data: null,
+      error: {
+        code: '23514',
+        message: 'new row for relation "supplier_invoices" violates check constraint "supplier_invoices_vat_treatment_check"',
+      },
+    }) // invoice insert fails
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(result.error).toMatch(/supplier_invoices_vat_treatment_check/)
+  })
+
+  it('keeps the generic 500 for other insert failures', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'supplier-1', name: 'SEB', supplier_type: 'swedish_business' },
+      error: null,
+    })
+    enqueue({ data: 42, error: null }) // arrival number
+    enqueue({
+      data: null,
+      error: { code: '42P01', message: 'relation "supplier_invoices" does not exist' },
+    }) // invoice insert fails
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(500)
+    expect(result.code).toBeUndefined()
+    expect(result.error).toBe('Failed to create supplier invoice')
   })
 })
