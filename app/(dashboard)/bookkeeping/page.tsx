@@ -164,6 +164,17 @@ export default function BookkeepingPage() {
     setCopyPrefill(null)
     setShowNewEntry(true)
   }, [searchParams, copyFromId, router])
+
+  // Deep link from the command palette ("Ny verifikation" lands on
+  // /bookkeeping?new=1): open the empty dialog and clean the URL so a
+  // refresh does not re-trigger. copy_from and skv_tx win if present.
+  useEffect(() => {
+    if (copyFromId || searchParams.has('skv_tx') || !searchParams.has('new')) return
+    router.replace('/bookkeeping')
+    setSkvLink(null)
+    setCopyPrefill(null)
+    setShowNewEntry(true)
+  }, [searchParams, copyFromId, router])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const skvPrefill = useMemo<SkvLinkPrefill | null>(() => {

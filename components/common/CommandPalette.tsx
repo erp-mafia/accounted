@@ -2,113 +2,157 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import {
-  ReceiptText,
-  ArrowLeftRight,
-  Users,
-  Wallet,
-  BookOpen,
-  ListTree,
-  BarChart3,
-  Upload,
-  Package,
-  ClipboardCheck,
-  HandCoins,
-  Wand2,
-  Inbox,
-  TrendingUp,
-  Settings,
-  HelpCircle,
-  ArrowRight,
-  Scale,
-  type LucideIcon,
-  Truck,
-} from 'lucide-react'
+import { ArrowRight, Wand2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
-import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
+import { useSettingsNavItems } from '@/components/settings/useSettingsNavItems'
+import { getBranding } from '@/lib/branding/service'
+import { isEmployerCompany, type NavGateContext } from '@/components/dashboard/nav-gates'
+import {
+  buildPaletteEntries,
+  groupPaletteResults,
+  type PaletteEntry,
+  type PaletteSection,
+} from './command-palette-entries'
+import { COMMAND_PALETTE_OPEN_EVENT, isCommandPaletteShortcut } from './command-palette-events'
+import {
+  commandPaletteShortcutLabel,
+  settingsShortcutLabel,
+  useIsApplePlatform,
+} from './use-shortcut-modifier'
+import type { DashboardShell, EntityType } from '@/types'
 
-type Entry = {
-  id: string
-  label: string
-  hint?: string
-  icon: LucideIcon
-  href: string
-  keywords?: string
+/**
+ * The layout's nav flags, passed through LazyCommandPalette: the same values
+ * DashboardNav receives, so the palette shows and hides a destination for
+ * exactly the reason the sidebar does (nav-gates.ts).
+ */
+export interface CommandPaletteGateProps {
+  entityType: EntityType
+  paysSalaries: boolean
+  dimensionsEnabled: boolean
+  salesOrdersEnabled: boolean
+  hasWebshop: boolean
+  hasMileage: boolean
+  hasExpenseClaims: boolean
+  shell: DashboardShell
 }
 
-const ACTION_ENTRIES: Entry[] = [
-  { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: ReceiptText, href: '/invoices?new=1', keywords: 'fakturera ny invoice send create' },
-  { id: 'book-transaction', label: 'Boka transaktion', hint: 'Gå till transaktionsinkorgen', icon: ArrowLeftRight, href: '/transactions', keywords: 'transaktion bokför kategorisera categorize' },
-  { id: 'new-customer', label: 'Lägg till kund', icon: Users, href: '/customers', keywords: 'kund customer ny lägg till' },
-  { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: Wallet, href: '/supplier-invoices?new=1', keywords: 'leverantörsfaktura supplier invoice ny' },
-  { id: 'reports', label: 'Visa resultaträkning', hint: 'Rapporter', icon: BarChart3, href: '/reports', keywords: 'rapport resultat balans report' },
-]
-
-const PAGE_ENTRIES: Entry[] = [
-  { id: 'kunder', label: 'Kunder', icon: Users, href: '/customers' },
-  { id: 'leverantörer', label: 'Leverantörer', icon: Truck, href: '/suppliers' },
-  { id: 'kundfakturor', label: 'Kundfakturor', icon: ReceiptText, href: '/invoices', keywords: 'fakturor fakturering invoices kundfaktura' },
-  { id: 'leverantörsfakturor', label: 'Leverantörsfakturor', icon: Wallet, href: '/supplier-invoices' },
-  { id: 'bokföring', label: 'Bokföring', icon: BookOpen, href: '/bookkeeping', keywords: 'verifikat journal ledger' },
-  { id: 'kontoplan', label: 'Kontoplan', icon: ListTree, href: '/chart-of-accounts', keywords: 'kontoplan konton bas chart of accounts konto' },
-  { id: 'anläggningstillgångar', label: 'Anläggningstillgångar', icon: Package, href: '/assets', keywords: 'tillgångar assets' },
-  { id: 'rapporter', label: 'Rapporter', icon: BarChart3, href: '/reports' },
-  { id: 'rapport-resultatrapport', label: 'Visa rapport: Resultatrapport', icon: BarChart3, href: '/reports/resultatrapport', keywords: 'rapport resultat intäkter kostnader' },
-  { id: 'rapport-balansrapport', label: 'Visa rapport: Balansrapport', icon: BarChart3, href: '/reports/balansrapport', keywords: 'rapport balans tillgångar skulder saldo per konto' },
-  { id: 'rapport-saldobalans', label: 'Visa rapport: Saldobalans', icon: BarChart3, href: '/reports/trial-balance', keywords: 'rapport saldobalans trial balance saldo per konto' },
-  { id: 'rapport-moms', label: 'Visa rapport: Momsdeklaration', icon: BarChart3, href: '/reports/vat-declaration', keywords: 'rapport moms vat deklaration' },
-  // "verifikat" is the word a bookkeeper reaches for ("verifikat per konto"),
-  // and matches() requires every typed token, so leaving it out made the exact
-  // phrase return nothing even though this report is precisely the answer.
-  // Deliberately NOT carrying "stäm av"/"avstämning" here: the palette
-  // auto-selects the first hit and huvudbok is listed above Bankavstämning, so
-  // those words would hijack Enter from the reconciliation page. They live in
-  // ReportDescriptor.searchTerms instead, where the library shows a list.
-  { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpen, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto verifikat verifikationer verifikationer per konto kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions vouchers' },
-  { id: 'rapport-kundreskontra', label: 'Visa rapport: Kundreskontra', icon: Users, href: '/reports/kundreskontra', keywords: 'rapport kundreskontra ar kundfordringar' },
-  { id: 'avstamning', label: 'Avstämning', hint: 'Stäm av bank och skattekonto', icon: Scale, href: '/reconciliation', keywords: 'avstämning stäm av bank skattekonto matcha reconcile reconciliation 1630 1930' },
-  { id: 'rapport-bankavstamning', label: 'Bankavstämning', hint: 'Stäm av bank mot bokföring', icon: ArrowLeftRight, href: '/reconciliation', keywords: 'avstämning stäm av bank matcha banktransaktioner reconcile reconciliation 1930' },
-  { id: 'importera', label: 'Importera', icon: Upload, href: '/import' },
-  { id: 'granskning', label: 'Granskning', icon: ClipboardCheck, href: '/pending', keywords: 'pending review' },
-  { id: 'löner', label: 'Löner', icon: HandCoins, href: '/salary' },
-  { id: 'anställda', label: 'Anställda', icon: Users, href: '/salary/employees' },
-  { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: Inbox, href: '/e/general/invoice-inbox' },
-  { id: 'nyckeltal', label: 'Nyckeltal', icon: TrendingUp, href: '/kpi' },
-  { id: 'inställningar', label: 'Inställningar', icon: Settings, href: '/settings' },
-  { id: 'hjälp', label: 'Hjälp', icon: HelpCircle, href: '/help' },
-]
-
-function matches(entry: Entry, q: string): boolean {
-  const hay = `${entry.label} ${entry.hint ?? ''} ${entry.keywords ?? ''}`.toLowerCase()
-  return q.split(/\s+/).filter(Boolean).every(t => hay.includes(t))
+interface CommandPaletteProps extends CommandPaletteGateProps {
+  /**
+   * LazyCommandPalette mounts this component on the first ⌘K or trigger
+   * tap, so the palette must come up already open rather than waiting for
+   * a second keypress.
+   */
+  initialOpen?: boolean
 }
 
-export default function CommandPalette({ initialOpen = false }: { initialOpen?: boolean } = {}) {
+const SECTION_TITLE_KEY = {
+  actions: 'section_actions',
+  pages: 'section_pages',
+  reports: 'section_reports',
+  settings: 'section_settings',
+} as const satisfies Record<PaletteSection, string>
+
+export default function CommandPalette({
+  initialOpen = false,
+  entityType,
+  paysSalaries,
+  dimensionsEnabled,
+  salesOrdersEnabled,
+  hasWebshop,
+  hasMileage,
+  hasExpenseClaims,
+  shell,
+}: CommandPaletteProps) {
   const router = useRouter()
-  // initialOpen: LazyCommandPalette mounts this component on the first ⌘K,
-  // so the palette must come up already open rather than waiting for a
-  // second keypress.
+  const t = useTranslations('command_palette')
+  const tNav = useTranslations('nav')
+  const tReports = useTranslations('reports')
   const [open, setOpen] = useState(initialOpen)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const { capabilities } = useCompany()
+  const { company, capabilities, byraTeam } = useCompany()
   const { identity } = useAgentSheet()
+  const { items: settingsSections } = useSettingsNavItems()
+  const isApple = useIsApplePlatform()
 
-  // Drop entries that jump to a paywalled extension workspace the active
-  // company can't reach (e.g. the AI-only Dokumentinkorg). The page itself is
-  // gated server-side; this keeps ⌘K from offering a dead destination.
-  const allowedByCapability = useMemo(() => {
-    return (entry: Entry) => {
-      const m = entry.href.match(/^\/e\/([^/]+)\/([^/?#]+)/)
-      if (!m) return true
-      const required = requiredCapabilityForExtension(m[1], m[2])
-      return !required || capabilities.includes(required)
+  const entries = useMemo(() => {
+    const gates: NavGateContext = {
+      entityType,
+      isEmployer: isEmployerCompany(entityType, paysSalaries),
+      dimensionsEnabled,
+      salesOrdersEnabled,
+      hasWebshop,
+      hasMileage,
+      hasExpenseClaims,
+      capabilities,
+      hiddenNavHrefs: new Set(getBranding().hiddenNavHrefs),
+      assistantVerified: identity.isVerified,
     }
-  }, [capabilities])
+    return buildPaletteEntries({
+      gates,
+      hasCompany: !!company,
+      isByraMember: !!byraTeam,
+      shell,
+      settingsSections,
+      settingsShortcut: settingsShortcutLabel(isApple),
+      labels: {
+        nav: (key) => tNav(key),
+        reports: (key) => tReports(key),
+        palette: (key) => t(key),
+      },
+    })
+  }, [
+    entityType,
+    paysSalaries,
+    dimensionsEnabled,
+    salesOrdersEnabled,
+    hasWebshop,
+    hasMileage,
+    hasExpenseClaims,
+    capabilities,
+    identity.isVerified,
+    company,
+    byraTeam,
+    shell,
+    settingsSections,
+    isApple,
+    t,
+    tNav,
+    tReports,
+  ])
+
+  const groups = useMemo(() => groupPaletteResults(entries, query), [entries, query])
+
+  // The hand-off-to-assistant row uses the agent name the user chose in
+  // /onboarding/agent, and hides entirely until that onboarding is done:
+  // the same gate as the nav entry and the FAB. Alone when nothing else
+  // matched, last otherwise.
+  const trimmed = query.trim()
+  const assistantName = identity.displayName?.trim() || t('assistant_default')
+  const hasResults = groups.length > 0
+  const assistantEntry: PaletteEntry | null =
+    identity.isVerified && trimmed
+      ? {
+          id: 'assistant',
+          section: 'pages',
+          label: hasResults
+            ? t('ask_assistant_instead', { name: assistantName, query: trimmed })
+            : t('ask_assistant', { name: assistantName, query: trimmed }),
+          icon: Wand2,
+          href: `/chat/new?prompt=${encodeURIComponent(trimmed)}`,
+          keywords: '',
+        }
+      : null
+
+  const flat = groups.flatMap((g) => g.entries)
+  const rows: PaletteEntry[] = assistantEntry ? [...flat, assistantEntry] : flat
+  const selected = Math.min(activeIndex, Math.max(0, rows.length - 1))
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
@@ -118,16 +162,23 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
     }
   }
 
-  // Global ⌘K / Ctrl+K
+  // Global ⌘K / Ctrl+K toggles; a trigger tap (sidebar, mobile sheet) opens.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      if (isCommandPaletteShortcut(e)) {
         e.preventDefault()
-        setOpen(prev => !prev)
+        setOpen((prev) => !prev)
       }
     }
+    function onOpen() {
+      setOpen(true)
+    }
     document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
+    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, onOpen)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, onOpen)
+    }
   }, [])
 
   useEffect(() => {
@@ -136,142 +187,90 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
     return () => cancelAnimationFrame(raf)
   }, [open])
 
-  const q = query.trim().toLowerCase()
-
-  const filteredActions = useMemo(() => {
-    const visible = ACTION_ENTRIES.filter(allowedByCapability)
-    return q ? visible.filter(e => matches(e, q)) : visible
-  }, [q, allowedByCapability])
-  const filteredPages = useMemo(() => {
-    const visible = PAGE_ENTRIES.filter(allowedByCapability)
-    return q ? visible.filter(e => matches(e, q)) : visible.slice(0, 6)
-  }, [q, allowedByCapability])
-
-  // The hand-off-to-assistant entries use the agent name the user chose in
-  // /onboarding/agent, and hide entirely until that onboarding is done: the
-  // same gate as the nav entry and the FAB.
-  const assistantName = identity.displayName?.trim() || 'assistenten'
-  const assistantFallback: Entry | null = !identity.isVerified || !q
-    ? null
-    : filteredActions.length === 0 && filteredPages.length === 0
-      ? {
-          id: 'assistant-fallback',
-          label: `Fråga ${assistantName}: "${query.trim()}"`,
-          icon: Wand2,
-          href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
-        }
-      : {
-          id: 'assistant-followup',
-          label: `Fråga ${assistantName} istället: "${query.trim()}"`,
-          icon: Wand2,
-          href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
-        }
-
-  const flatEntries: Entry[] = [
-    ...(assistantFallback && filteredActions.length === 0 && filteredPages.length === 0 ? [assistantFallback] : []),
-    ...filteredActions,
-    ...filteredPages,
-    ...(assistantFallback && (filteredActions.length > 0 || filteredPages.length > 0) ? [assistantFallback] : []),
-  ]
-
-  function commit(entry: Entry) {
+  function commit(entry: PaletteEntry) {
     setOpen(false)
+    setQuery('')
+    setActiveIndex(0)
     router.push(entry.href)
   }
 
   function onInputKey(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setActiveIndex(i => Math.min(flatEntries.length - 1, i + 1))
+      setActiveIndex(Math.min(rows.length - 1, selected + 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setActiveIndex(i => Math.max(0, i - 1))
+      setActiveIndex(Math.max(0, selected - 1))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      const target = flatEntries[activeIndex]
+      const target = rows[selected]
       if (target) commit(target)
     }
+  }
+
+  const renderRow = (entry: PaletteEntry) => {
+    const idx = rows.indexOf(entry)
+    return (
+      <Row
+        key={entry.id}
+        entry={entry}
+        active={idx === selected}
+        onSelect={() => commit(entry)}
+        onHover={() => setActiveIndex(idx)}
+      />
+    )
   }
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={handleOpenChange}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
-          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
-        />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
-          aria-label="Snabbkommandon"
+          aria-label={t('title')}
           className="fixed left-[50%] top-[20%] z-50 w-[calc(100vw-2rem)] max-w-xl translate-x-[-50%] rounded-xl border border-border bg-card data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
         >
-          <DialogPrimitive.Title className="sr-only">Snabbkommandon</DialogPrimitive.Title>
-          <DialogPrimitive.Description className="sr-only">
-            Sök efter sidor och åtgärder, eller fråga Anna.
-          </DialogPrimitive.Description>
+          <DialogPrimitive.Title className="sr-only">{t('title')}</DialogPrimitive.Title>
+          <DialogPrimitive.Description className="sr-only">{t('description')}</DialogPrimitive.Description>
           <div className="px-4 py-3 border-b border-border">
             <input
               ref={inputRef}
               value={query}
-              onChange={e => { setQuery(e.target.value); setActiveIndex(0) }}
+              onChange={(e) => {
+                setQuery(e.target.value)
+                setActiveIndex(0)
+              }}
               onKeyDown={onInputKey}
-              placeholder="Sök eller skriv vad du vill göra…"
-              aria-label="Sök eller skriv vad du vill göra"
+              placeholder={t('placeholder')}
+              aria-label={t('input_aria')}
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
               className="w-full bg-transparent text-base placeholder:text-muted-foreground outline-none"
             />
           </div>
 
           <div className="max-h-[60vh] overflow-y-auto py-1.5" role="listbox">
-            {filteredActions.length > 0 && (
-              <Section title="Åtgärder">
-                {filteredActions.map((entry) => {
-                  const idx = flatEntries.indexOf(entry)
-                  return (
-                    <Row
-                      key={entry.id}
-                      entry={entry}
-                      active={idx === activeIndex}
-                      onSelect={() => commit(entry)}
-                      onHover={() => setActiveIndex(idx)}
-                    />
-                  )
-                })}
-              </Section>
+            {assistantEntry && !hasResults && (
+              <Section title={assistantName}>{renderRow(assistantEntry)}</Section>
             )}
-            {filteredPages.length > 0 && (
-              <Section title="Sidor">
-                {filteredPages.map((entry) => {
-                  const idx = flatEntries.indexOf(entry)
-                  return (
-                    <Row
-                      key={entry.id}
-                      entry={entry}
-                      active={idx === activeIndex}
-                      onSelect={() => commit(entry)}
-                      onHover={() => setActiveIndex(idx)}
-                    />
-                  )
-                })}
+            {groups.map((group) => (
+              <Section key={group.section} title={t(SECTION_TITLE_KEY[group.section])}>
+                {group.entries.map(renderRow)}
               </Section>
+            ))}
+            {assistantEntry && hasResults && (
+              <Section title={assistantName}>{renderRow(assistantEntry)}</Section>
             )}
-            {assistantFallback && (
-              <Section title={assistantName}>
-                <Row
-                  entry={assistantFallback}
-                  active={flatEntries.indexOf(assistantFallback) === activeIndex}
-                  onSelect={() => commit(assistantFallback)}
-                  onHover={() => setActiveIndex(flatEntries.indexOf(assistantFallback))}
-                />
-              </Section>
-            )}
-            {flatEntries.length === 0 && (
-              <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                Inget hittades. Tryck Enter eller börja om.
-              </div>
+            {rows.length === 0 && (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('empty')}</div>
             )}
           </div>
 
           <div className="px-4 py-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>↑↓ navigera · Enter välj · Esc stäng</span>
-            <span className="font-mono">⌘K</span>
+            <span>{t('footer_keys')}</span>
+            <kbd className="rounded-sm border border-border px-1 font-sans text-[10px] leading-4">
+              {commandPaletteShortcutLabel(isApple)}
+            </kbd>
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
@@ -282,7 +281,9 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mb-1.5 last:mb-0">
-      <p className="px-4 pt-2 pb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{title}</p>
+      <p className="px-4 pt-2 pb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        {title}
+      </p>
       <div>{children}</div>
     </div>
   )
@@ -294,7 +295,7 @@ function Row({
   onSelect,
   onHover,
 }: {
-  entry: Entry
+  entry: PaletteEntry
   active: boolean
   onSelect: () => void
   onHover: () => void
@@ -315,8 +316,8 @@ function Row({
     >
       <Icon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
       <span className="flex-1 truncate">{entry.label}</span>
-      {entry.hint && <span className="text-xs text-muted-foreground">{entry.hint}</span>}
-      {active && <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />}
+      {entry.hint && <span className="text-xs text-muted-foreground truncate">{entry.hint}</span>}
+      {active && <ArrowRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
     </button>
   )
 }

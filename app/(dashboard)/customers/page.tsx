@@ -121,6 +121,20 @@ function CustomersPageInner() {
     [searchParams, sortColumn, sortDir, router, pathname]
   )
 
+  // Deep link from the command palette ("Ny kund" lands on /customers?new=1):
+  // open the dialog and drop the flag so a refresh or back-navigation does
+  // not reopen it. Viewers cannot create, so for them the link is the list.
+  /* eslint-disable react-hooks/set-state-in-effect -- URL→state sync requires sync setState */
+  useEffect(() => {
+    if (!searchParams.has('new')) return
+    const params = new URLSearchParams(searchParams.toString())
+    params.delete('new')
+    const rest = params.toString()
+    router.replace(rest ? `${pathname}?${rest}` : pathname, { scroll: false })
+    if (canWrite) setIsDialogOpen(true)
+  }, [searchParams, router, pathname, canWrite])
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   useEffect(() => {
     if (!customersError) return
     toast({

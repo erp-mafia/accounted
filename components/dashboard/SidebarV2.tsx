@@ -18,6 +18,8 @@ interface SidebarV2Props {
   betaLabel: string
   mainNavLabel: string
   brand: ReactNode
+  /** The command-palette trigger (Sök ⌘K), rendered right under the brand row. */
+  search?: ReactNode
   /** Byrå members inside a company: the pinned route back to the cockpit. */
   backLink?: ReactNode
   userBlock: ReactNode
@@ -46,6 +48,7 @@ export function SidebarV2({
   betaLabel,
   mainNavLabel,
   brand,
+  search,
   backLink,
   userBlock,
   renderIcon,
@@ -135,6 +138,7 @@ export function SidebarV2({
     <aside className="hidden md:fixed md:inset-y-0 md:z-10 md:flex md:w-[var(--nav-w)] md:flex-col">
       <div className="flex min-h-0 flex-1 flex-col bg-transparent">
         <div className="flex flex-shrink-0 items-center justify-between pl-5 pr-3 pt-3 pb-2">{brand}</div>
+        {search && <div className="flex-shrink-0 px-3 pb-1">{search}</div>}
         <nav
           data-ph-unmask
           aria-label={mainNavLabel}

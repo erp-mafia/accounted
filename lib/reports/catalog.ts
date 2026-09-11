@@ -358,7 +358,8 @@ export function getReport(slug: string): ReportDescriptor | undefined {
   return REPORT_CATALOG.find((r) => r.slug === slug)
 }
 
-function isVisible(
+/** Whether a report shows for this company (entity form, employer status, dimensions). */
+export function isReportVisible(
   r: ReportDescriptor,
   entityType?: EntityType,
   hasEmployees?: boolean,
@@ -386,7 +387,7 @@ export function getLibrarySections(
     category,
     labelKey: CATEGORY_LABEL_KEY[category],
     items: REPORT_CATALOG.filter(
-      (r) => r.category === category && isVisible(r, entityType, hasEmployees, dimensionsEnabled),
+      (r) => r.category === category && isReportVisible(r, entityType, hasEmployees, dimensionsEnabled),
     ),
   })).filter((s) => s.items.length > 0)
 }
@@ -399,13 +400,14 @@ export function getLibrarySections(
  * so "stam av" finds "stäm av" and a Swedish keyboard is not required.
  */
 export function reportMatchesQuery(haystack: string, query: string): boolean {
-  const tokens = fold(query).split(/\s+/).filter(Boolean)
+  const tokens = foldSearchText(query).split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return true
-  const hay = fold(haystack)
+  const hay = foldSearchText(haystack)
   return tokens.every((token) => hay.includes(token))
 }
 
-function fold(value: string): string {
+/** Lowercase, diacritics stripped: the normalisation behind reportMatchesQuery. */
+export function foldSearchText(value: string): string {
   return value
     .toLowerCase()
     .normalize('NFD')
