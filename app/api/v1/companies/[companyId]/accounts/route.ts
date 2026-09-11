@@ -81,7 +81,7 @@ registerEndpoint({
             default_vat_code: null,
             default_vat_rate: null,
             default_vat_treatment: null,
-            sru_code: '7212',
+            sru_code: '7281',
             sort_order: 0,
           },
           {
@@ -97,7 +97,7 @@ registerEndpoint({
             default_vat_code: null,
             default_vat_rate: 0.25,
             default_vat_treatment: null,
-            sru_code: '7310',
+            sru_code: '7410',
             sort_order: 0,
           },
         ],
