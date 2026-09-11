@@ -763,6 +763,14 @@ const PINNED_DEPS = [
       'SMTP mailer for self-hosts (extensions/general/email/lib/smtp-service.ts). Zero-dependency MIT-0 ' +
       'package on the outbound-mail path; bumps are deliberate, reviewed PRs (audit surface), never silent.',
   },
+  {
+    name: 'mailparser',
+    version: '3.9.20',
+    reason:
+      'Inbound-mail parser (extensions/general/invoice-inbox). 3.9.20 is the last release that depends on ' +
+      'nodemailer 9.x; 3.9.21+ pull nodemailer 10 as a second nested copy, which this guard cannot see ' +
+      '(it checks the top-level nodemailer only). Bump both pins together, on purpose (#2490).',
+  },
 ]
 
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
