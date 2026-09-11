@@ -1,4 +1,5 @@
 import { after } from 'next/server'
+import { countCompletedSieImports, countInboxItems, countTransactions, readActiveBankConnections } from './hem-reads'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import ResumePane from '@/components/dashboard/ResumePane'
@@ -60,7 +61,10 @@ export async function HemNoticesSection({
     now,
     deferReap: (task) => after(task),
   })
-  return <HemNotices notices={notices} />
+  // The Skatteverket reconnect has its own places (the Konton row and the
+  // Skattekonto page); a line about it over every visit to Att göra was
+  // noise (founder feedback 2026-09-09).
+  return <HemNotices notices={notices.filter((n) => n.category !== 'skv_disconnected')} />
 }
 
 export async function HemChecklistSection({
@@ -95,9 +99,9 @@ export async function HemChecklistSection({
   ] = await Promise.all([
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
-    supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed'),
+    countTransactions(companyId),
+    readActiveBankConnections(companyId),
+    countCompletedSieImports(companyId),
     // Skatteverket connections are per (user, company): filtering on user_id
     // alone made a connection on ANY of the user's companies hide the connect
     // nudge on all of them.
@@ -105,7 +109,7 @@ export async function HemChecklistSection({
     // Any item ever received in the document inbox (email/WhatsApp/upload)
     // marks the receipts checklist step done: same "has ever done X" shape
     // as the other flags above.
-    supabase.from('invoice_inbox_items').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
+    countInboxItems(companyId),
     // Next upcoming momsdeklaration for the checklist's Skatteverket step.
     // Rows are system-generated per company settings; dismissed rows are
     // excluded everywhere deadlines are listed, so here too.

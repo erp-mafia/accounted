@@ -41,6 +41,14 @@ const BodySchema = z
     trial_expired_ack: z
       .record(z.string().uuid(), z.string().datetime())
       .optional(),
+    // Dashboard shell opt-in (Inställningar → Konto → Layout).
+    shell: z.enum(['v1', 'v2']).optional(),
+    // Transaktioner column visibility (shell v2). Replaced whole, never merged:
+    // the list IS the preference.
+    tx_columns: z
+      .object({ hidden: z.array(z.string().max(32)).max(16).optional() })
+      .strict()
+      .optional(),
   })
   .strict()
 

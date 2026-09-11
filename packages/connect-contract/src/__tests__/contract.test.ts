@@ -107,6 +107,19 @@ describe('peppol schemas', () => {
     ).toBe(true)
     expect(peppolInboundMessageSchema.safeParse({ provider: 'qvalia', providerDocumentId: 'doc-1', documentType: 'Order', payload: {} }).success).toBe(false)
   })
+
+  it('accepts an optional receivedAfter cursor on the inbound listing and strips keys it does not know', () => {
+    const schema = PEPPOL_OPERATIONS.inboundList.request
+    expect(schema.safeParse({ documentType: 'Invoice' }).success).toBe(true)
+    expect(schema.safeParse({ documentType: 'Invoice', receivedAfter: '2026-09-01T00:00:00.000Z' }).success).toBe(true)
+    expect(schema.safeParse({ documentType: 'Invoice', receivedAfter: '2026-09-01T00:00:00+02:00' }).success).toBe(true)
+    expect(schema.safeParse({ documentType: 'Invoice', receivedAfter: '2026-09-01' }).success).toBe(false)
+    expect(schema.safeParse({ documentType: 'Invoice', receivedAfter: 'yesterday' }).success).toBe(false)
+    // A service on an older contract ignores the cursor rather than refusing the call.
+    const parsed = schema.safeParse({ documentType: 'Invoice', someFutureField: 1 })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data).toEqual({ documentType: 'Invoice' })
+  })
 })
 
 describe('bank sync operation', () => {

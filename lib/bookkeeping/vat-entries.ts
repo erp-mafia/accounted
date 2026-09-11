@@ -63,6 +63,19 @@ export function isReverseChargeBasisAccount(account: string): boolean {
 }
 
 /**
+ * The offsetting credit of the basis pair: 45xx is debited for the statistic
+ * (ruta 20-22) and 4598 credited with the same amount, so the income
+ * statement nets to zero. Named here because a basis leg is never the
+ * business line of a booking.
+ */
+export const RC_BASIS_OFFSET_ACCOUNT = '4598'
+
+/** True for either leg of the reverse-charge basis pair (the 45xx statistic or its 4598 offset). */
+export function isReverseChargeBasisLeg(account: string): boolean {
+  return isReverseChargeBasisAccount(account) || account === RC_BASIS_OFFSET_ACCOUNT
+}
+
+/**
  * Fiktiv-moms VAT accounts: self-assessed output VAT for reverse charge
  * (2614/2624/2634) and import (2615/2625/2635), plus the offsetting calculated
  * input legs (2645 EU/non-EU, 2647 domestic RC). The foreign supplier charged
@@ -78,6 +91,24 @@ export const REVERSE_CHARGE_VAT_ACCOUNTS: ReadonlySet<string> = new Set([
 
 export function isReverseChargeVatAccount(account: string): boolean {
   return REVERSE_CHARGE_VAT_ACCOUNTS.has(account)
+}
+
+/**
+ * Every moms account a generated verifikat can carry: the output legs
+ * (2611-2613 domestic, plus the fiktiv-moms and import legs above), the
+ * deductible input leg 2641, and the clearing account 2650. Used to tell a
+ * proposal's moms lines apart from the business line it books against.
+ */
+export const GENERATED_VAT_ACCOUNTS: ReadonlySet<string> = new Set([
+  '2610', '2611', '2612', '2613', '2616', '2617', '2618',
+  '2620', '2621', '2622', '2623', '2630', '2631', '2632', '2633',
+  '2641', '2642', '2650',
+  ...REVERSE_CHARGE_VAT_ACCOUNTS,
+])
+
+/** True for a moms leg of a generated verifikat (ingående, utgående, fiktiv or clearing). */
+export function isGeneratedVatAccount(account: string): boolean {
+  return GENERATED_VAT_ACCOUNTS.has(account)
 }
 
 /**

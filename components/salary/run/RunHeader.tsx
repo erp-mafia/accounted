@@ -43,6 +43,7 @@ import { formatDate } from '@/lib/utils'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { periodLabelOf, type RunDetail } from './types'
+import { useShell } from '@/components/dashboard/ShellProvider'
 
 // Same chip vocabulary as the Löner list (chips mark exceptions): in-flight
 // states wear the quiet beige chip, paid is sage, corrected the outline
@@ -107,6 +108,7 @@ export function RunHeader({
   onCorrect,
   onUpdatePaymentDate,
 }: RunHeaderProps) {
+  const shell = useShell()
   const t = useTranslations('salary_run')
   const tSalary = useTranslations('salary')
   const [correctOpen, setCorrectOpen] = useState(false)
@@ -230,7 +232,8 @@ export function RunHeader({
   return (
     <>
       {/* Back link on its own quiet row, so the title below keeps a stable
-          position across runs. */}
+          position across runs. Shell v2: the sidebar says where we are. */}
+      {shell !== 'v2' && (
       <div>
         <Link
           href="/salary"
@@ -240,13 +243,15 @@ export function RunHeader({
           {t('back_to_salary')}
         </Link>
       </div>
+      )}
 
       {/* Header: serif title with one status element, a quiet meta line, and
-          the next step on the right. Everything else lives in the ⋯ menu. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
+          the next step on the right. Everything else lives in the ⋯ menu.
+          The page-header hooks turn it into the v2 top bar. */}
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="font-display text-2xl leading-8 tracking-tight">
+            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
               {t('title', { period: periodLabel })}
             </h1>
             {run.status === 'booked' ? (
@@ -260,7 +265,7 @@ export function RunHeader({
               <Badge variant="outline">{t('correction_badge')}</Badge>
             )}
           </div>
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+          <p className="page-header-meta mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
             {metaParts.map((part, i) => (
               <span key={i} className="inline-flex items-center gap-x-2">
                 {i > 0 && <span aria-hidden>·</span>}
@@ -270,7 +275,7 @@ export function RunHeader({
           </p>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
           {showPayslipSend && (
             // The span carries the tooltip: browsers suppress `title` on
             // disabled elements, and hover events don't fire on them.

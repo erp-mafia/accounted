@@ -1439,6 +1439,16 @@ export const UpdateSupplierInvoiceSchema = z.object({
   notes: z.string().optional(),
 })
 
+/**
+ * PATCH /api/supplier-invoices/[id]/items/[itemId]: move one line to another
+ * expense account. The registration verifikat is corrected inline (BFL 5 kap
+ * 5 §, track 2) in the same call, so the invoice and the ledger never
+ * disagree about where the cost sits.
+ */
+export const SupplierInvoiceItemAccountSchema = z.object({
+  account_number: accountNumberSchema,
+})
+
 // ============================================================
 // Supplier payment batch (betalfil) schemas
 // ============================================================
@@ -1733,6 +1743,10 @@ export const CategorizeTransactionSchema = z
     category: TransactionCategorySchema.optional(),
     template_id: z.string().optional(),
     vat_treatment: VatTreatmentSchema.optional(),
+    // The underlag's actual moms, in the transaction's currency. Replaces the
+    // rate-based VAT line of a category or template booking (see
+    // buildMappingResultFromCategory / applyVatAmountOverride).
+    vat_amount: z.number().positive().optional(),
     account_override: accountNumber.optional(),
     counterparty_template_id: z.string().uuid().optional(),
     // Dimensions bag {sie_dim_no: code} applied to the business lines of the
@@ -4261,7 +4275,7 @@ export const SalesOrderListQuerySchema = z.object({
 // ── Parties (Kontakter register) ───────────────────────────────────────────
 
 export const PartiesRegisterQuerySchema = z.object({
-  view: z.enum(['suggested', 'observed']).optional(),
+  view: z.enum(['suggested', 'observed', 'all']).optional(),
   q: z.string().max(120).optional(),
   period: z.enum(['12m', 'all']).optional(),
 })
@@ -4325,3 +4339,25 @@ export const PartyRegistryLookupQuerySchema = z.object({
 export const PartyUndoMergeSchema = z.object({
   decisionId: uuid,
 })
+
+// ── Parties (Motparter list + aliases) ────────────────────────────────────
+
+export const PartiesListQuerySchema = z.object({
+  q: z.string().max(120).optional(),
+  period: z.enum(['12m', 'all']).optional(),
+})
+
+/**
+ * POST /api/parties/aliases: what a person says about the bank strings the
+ * resolver named. rename: these strings mean <name>. not_same: the reading
+ * was wrong and nothing is known. Both supersede the live rows and stamp the
+ * outcome on them, so the resolver's decision stays in the log.
+ */
+export const PartyAliasActionSchema = z
+  .object({
+    aliasKeys: z.array(z.string().min(1).max(300)).min(1).max(50),
+    action: z.enum(['rename', 'not_same']),
+    name: z.string().trim().min(1).max(200).optional(),
+  })
+  .refine((v) => v.action !== 'rename' || !!v.name, { message: 'name is required for rename', path: ['name'] })
+
