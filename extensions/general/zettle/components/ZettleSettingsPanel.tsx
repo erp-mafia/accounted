@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
@@ -20,6 +22,10 @@ import {
   ZETTLE_SYNC_TIMEOUT_MS,
   type ZettleSyncPayload,
 } from '../lib/settings-actions'
+import {
+  ZETTLE_ORGANIZATION_NAME_MAX_LEN,
+  zettleStoreDisplayName,
+} from '../lib/organization-name'
 import type { ZettleStatusResponse } from '../types'
 
 type ConnectionInfo = NonNullable<ZettleStatusResponse['connection']>
@@ -49,6 +55,8 @@ export default function ZettleSettingsPanel() {
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [togglingTransactionSync, setTogglingTransactionSync] = useState(false)
+  const [storeNameDraft, setStoreNameDraft] = useState('')
+  const [savingStoreName, setSavingStoreName] = useState(false)
 
   const failureCopy = { timeout: t('action_timeout'), network: t('action_network') }
 
@@ -66,6 +74,13 @@ export default function ZettleSettingsPanel() {
     setLoadFailed(false)
     setConfigured(result.data.configured)
     setConnection(result.data.connection)
+    // Never seed the editable field with the org UUID: that is an opaque id,
+    // and saving it would lock the UUID in as the merchant-facing store name.
+    setStoreNameDraft(
+      result.data.connection
+        ? zettleStoreDisplayName(result.data.connection.organization_name)
+        : '',
+    )
   }, [locale])
 
   useEffect(() => {
@@ -191,6 +206,40 @@ export default function ZettleSettingsPanel() {
     }
   }
 
+  async function handleSaveStoreName() {
+    if (!connection || connection.status !== 'active' || savingStoreName) return
+    const next = storeNameDraft.trim().replace(/\s+/g, ' ')
+    const stored = (connection.organization_name ?? '').trim().replace(/\s+/g, ' ')
+    // Compare to the stored value (not the display fallback) so a null DB
+    // name can still be persisted as the default and backfill existing orders.
+    if (!next || next === stored) return
+    setSavingStoreName(true)
+    try {
+      const result = await zettleRequest<{ organization_name?: string; warning?: string }>({
+        url: '/api/extensions/ext/zettle/organization-name',
+        body: { organization_name: next },
+        locale,
+      })
+      if (!result.ok) {
+        toast({
+          title: t('store_name_save_failed'),
+          description: failureDescription(result, failureCopy),
+          variant: 'destructive',
+        })
+        return
+      }
+      const saved = result.data?.organization_name ?? next
+      setConnection({ ...connection, organization_name: saved })
+      setStoreNameDraft(saved)
+      toast({
+        title: t('store_name_saved_toast'),
+        description: result.data?.warning ? t('store_name_saved_orders_warning') : undefined,
+      })
+    } finally {
+      setSavingStoreName(false)
+    }
+  }
+
   async function handleDisconnect() {
     if (!connection || disconnecting) return
     setDisconnecting(true)
@@ -271,71 +320,111 @@ export default function ZettleSettingsPanel() {
         <p className="text-sm text-muted-foreground">{t('description')}</p>
 
         {connection && (
-          <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border p-4">
-            <div className="flex items-center gap-3">
-              <CreditCard className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">
-                    {connection.organization_name ||
-                      connection.organization_uuid ||
-                      t('unnamed_store')}
-                  </span>
-                  <Badge variant={STATUS_VARIANT[connection.status]}>
-                    {t(`status_${connection.status}`)}
-                  </Badge>
+          <div className="space-y-4 rounded-lg border border-border p-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <CreditCard className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">
+                      {zettleStoreDisplayName(connection.organization_name)}
+                    </span>
+                    <Badge variant={STATUS_VARIANT[connection.status]}>
+                      {t(`status_${connection.status}`)}
+                    </Badge>
+                  </div>
+                  {connection.organization_uuid && (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {connection.organization_uuid}
+                    </p>
+                  )}
+                  {isActive && connection.connected_at && (
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {t('connected_since', { date: formatDateLong(connection.connected_at) })}
+                    </p>
+                  )}
+                  {connection.error_message && (
+                    <p className="mt-1 text-sm text-destructive">{connection.error_message}</p>
+                  )}
                 </div>
-                {connection.organization_uuid && connection.organization_name && (
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {connection.organization_uuid}
-                  </p>
-                )}
-                {isActive && connection.connected_at && (
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {t('connected_since', { date: formatDateLong(connection.connected_at) })}
-                  </p>
-                )}
-                {connection.error_message && (
-                  <p className="mt-1 text-sm text-destructive">{connection.error_message}</p>
-                )}
               </div>
+              {isActive &&
+                (confirmDisconnect ? (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleDisconnect}
+                      disabled={disconnecting}
+                    >
+                      {t('disconnect_confirm')}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setConfirmDisconnect(false)}
+                      disabled={disconnecting}
+                    >
+                      {t('cancel')}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={handleSyncNow} disabled={syncing}>
+                      {syncing ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                      )}
+                      {syncing ? t('syncing') : t('sync_now')}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setConfirmDisconnect(true)}>
+                      <Unlink className="mr-2 h-4 w-4" />
+                      {t('disconnect')}
+                    </Button>
+                  </div>
+                ))}
             </div>
-            {isActive &&
-              (confirmDisconnect ? (
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={handleDisconnect}
-                    disabled={disconnecting}
-                  >
-                    {t('disconnect_confirm')}
-                  </Button>
+
+            {isActive && (
+              <div className="space-y-2 border-t border-border pt-4">
+                <Label htmlFor="zettle-store-name">{t('store_name_label')}</Label>
+                <p className="text-sm text-muted-foreground">{t('store_name_help')}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    id="zettle-store-name"
+                    value={storeNameDraft}
+                    onChange={(e) => setStoreNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        void handleSaveStoreName()
+                      }
+                    }}
+                    maxLength={ZETTLE_ORGANIZATION_NAME_MAX_LEN}
+                    disabled={savingStoreName}
+                    className="max-w-sm"
+                    aria-label={t('store_name_label')}
+                  />
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setConfirmDisconnect(false)}
-                    disabled={disconnecting}
+                    onClick={() => void handleSaveStoreName()}
+                    disabled={
+                      savingStoreName ||
+                      !storeNameDraft.trim() ||
+                      storeNameDraft.trim().replace(/\s+/g, ' ') ===
+                        (connection.organization_name ?? '').trim().replace(/\s+/g, ' ')
+                    }
                   >
-                    {t('cancel')}
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm" onClick={handleSyncNow} disabled={syncing}>
-                    {syncing ? (
+                    {savingStoreName ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <RefreshCw className="mr-2 h-4 w-4" />
-                    )}
-                    {syncing ? t('syncing') : t('sync_now')}
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => setConfirmDisconnect(true)}>
-                    <Unlink className="mr-2 h-4 w-4" />
-                    {t('disconnect')}
+                    ) : null}
+                    {savingStoreName ? t('store_name_saving') : t('store_name_save')}
                   </Button>
                 </div>
-              ))}
+              </div>
+            )}
           </div>
         )}
 

@@ -599,7 +599,14 @@
     "transaction_sync_never_synced": "Inte synkad ännu",
     "transaction_sync_enabled_toast": "Köpsynk aktiverad. Historiken hämtas vid nästa synkning.",
     "transaction_sync_disabled_toast": "Köpsynk avaktiverad.",
-    "transaction_sync_toggle_failed": "Kunde inte spara inställningen. Försök igen."
+    "transaction_sync_toggle_failed": "Kunde inte spara inställningen. Försök igen.",
+    "store_name_label": "Butiksnamn",
+    "store_name_help": "Visas som Butik på Ordersidan. Zettle ger inget namn via API, så du sätter det här.",
+    "store_name_save": "Spara namn",
+    "store_name_saving": "Sparar…",
+    "store_name_saved_toast": "Butiksnamnet sparat",
+    "store_name_saved_orders_warning": "Namnet sparades, men befintliga ordrar kunde inte uppdateras automatiskt.",
+    "store_name_save_failed": "Kunde inte spara butiksnamnet"
   },
   "settings_modal": {
     "title": "Inställningar",

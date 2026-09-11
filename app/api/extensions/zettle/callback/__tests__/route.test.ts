@@ -116,6 +116,9 @@ describe('GET /api/extensions/zettle/callback', () => {
         ['oauth_state', OAUTH_STATE],
       ]),
     )
+    expect(activateChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({ organization_name: 'Zettle' }),
+    )
     expect(activateChain.maybeSingle).toHaveBeenCalled()
   })
 

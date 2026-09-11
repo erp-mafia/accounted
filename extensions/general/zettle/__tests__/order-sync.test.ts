@@ -88,6 +88,7 @@ describe('zettle order-sync mapping', () => {
     expect(rows[0]).toMatchObject({
       platform: 'zettle',
       row_type: 'order',
+      store_label: 'Caféet',
       is_paid: true,
       total: 125,
       total_tax: 25,
@@ -97,6 +98,15 @@ describe('zettle order-sync mapping', () => {
     })
     expect(rows[0].line_items).toHaveLength(1)
     expect(rows[0].vat_breakdown).toEqual([{ rate: 25, net: 100, tax: 25 }])
+  })
+
+  it('defaults store_label when organization_name is still null', () => {
+    const rows = mapPurchaseToWebshopRows(
+      { id: 'conn-1', organization_name: null },
+      'org-1',
+      sale(),
+    )
+    expect(rows[0]?.store_label).toBe('Zettle')
   })
 
   it('maps a refund with parent external_id', () => {
