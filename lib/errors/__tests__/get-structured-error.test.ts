@@ -137,3 +137,38 @@ describe('retryable contract (always present, transient inference)', () => {
     expect(result.retryable).toBe(true)
   })
 })
+
+describe('getStructuredError: throw-site remediation', () => {
+  it('lets a thrown error carry its own remediation over the registry entry', () => {
+    // SI_CREATE_INVALID_INPUT has no registry remediation (it is shared with
+    // the REST create route, where an MCP tool hint would be wrong), so the
+    // inbox staging tool attaches the fix it knows at the throw site.
+    const err = Object.assign(new Error('Extracted invoice has no usable total'), {
+      code: 'SI_CREATE_INVALID_INPUT',
+      remediation: {
+        description: 'Set totals from the underlag, then retry.',
+        tool: 'gnubok_set_inbox_extracted_data',
+        args: { inbox_item_id: 'inbox-1' },
+      },
+    })
+    const result = getStructuredError(err)
+    expect(result.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(result.remediation).toEqual({
+      description: 'Set totals from the underlag, then retry.',
+      tool: 'gnubok_set_inbox_extracted_data',
+      args: { inbox_item_id: 'inbox-1' },
+    })
+    expect(result.retryable).toBe(false)
+  })
+
+  it('ignores a malformed throw-site remediation and keeps the registry one', () => {
+    const err = Object.assign(new Error('Period must be locked before closing'), {
+      remediation: { tool: 'gnubok_lock_period' }, // no description: not a hint
+    })
+    const result = getStructuredError(err)
+    expect(result.code).toBe('PERIOD_NOT_LOCKED')
+    expect(result.remediation?.tool).toBe('gnubok_lock_period')
+    expect(result.remediation?.description).toBeTruthy()
+  })
+})
+
