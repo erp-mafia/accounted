@@ -222,14 +222,15 @@ describe('seed_chart_of_accounts: SRU codes', () => {
     const byNum = new Map((await getAccounts(companyId)).map((r) => [r.account_number, r]))
 
     // Spot-check values pulled from lib/bookkeeping/bas-data/. These three
-    // map to Skatteverket SRU fields in INK2; getting them wrong would
+    // map to Skatteverket INK2R fields (the same table the INK2 engine files
+    // with, lib/reports/ink2/account-mappings.ts); getting them wrong would
     // silently break tax filing.
-    expect(byNum.get('2099')?.sru_code).toBe('7222')
-    expect(byNum.get('2611')?.sru_code).toBe('7231')
-    expect(byNum.get('2731')?.sru_code).toBe('7231')
-    expect(byNum.get('1930')?.sru_code).toBe('7212')
-    expect(byNum.get('3001')?.sru_code).toBe('7310')
-    expect(byNum.get('7010')?.sru_code).toBe('7322')
+    expect(byNum.get('2099')?.sru_code).toBe('7302')
+    expect(byNum.get('2611')?.sru_code).toBe('7369')
+    expect(byNum.get('2731')?.sru_code).toBe('7369')
+    expect(byNum.get('1930')?.sru_code).toBe('7281')
+    expect(byNum.get('3001')?.sru_code).toBe('7410')
+    expect(byNum.get('7010')?.sru_code).toBe('7514')
   })
 })
 

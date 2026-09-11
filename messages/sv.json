@@ -5826,7 +5826,7 @@
     "toast_pruned_with_skipped": "{deleted} konton togs bort, {skipped} hoppades över",
     "toast_prune_failed": "Kunde inte rensa kontoplanen",
     "bas_version_chip": "BAS 2026",
-    "footer_note": "Visar {shown} av {total} konton, grupperade per BAS-klass. SRU-koderna följer med till inkomstdeklarationen.",
+    "footer_note": "Visar {shown} av {total} konton, grupperade per BAS-klass. SRU-koden är fältet i Skatteverkets räkenskapsschema (INK2R) och följer med i SIE-exporten. Enskild firma deklarerar via NE-bilagan, som mappar kontona automatiskt.",
     "vat_treatment_label": "Momskod för momsdeklarationen",
     "vat_treatment_none": "Använd BAS-standard",
     "vat_treatment_help": "Styr vilken ruta kontots belopp hamnar i. En vald momskod går före BAS-standarden.",

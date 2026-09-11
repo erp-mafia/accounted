@@ -1153,6 +1153,15 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The invoice carries a refused ROT/RUT deduction booked as a customer receivable. Reverse that voucher before crediting the invoice, otherwise the credit note splits 1510 and 1513 wrongly.',
   },
+  INVOICE_CREDIT_PERIOD_LOCKED: {
+    httpStatus: 400,
+    message_sv: 'Bokföringen är låst för dagens datum. Kreditfakturan kan inte skapas.',
+    message_en: 'Bookkeeping is locked for today\'s date; the credit note cannot be created.',
+    remediation: {
+      description:
+        'The credit note is dated today (Europe/Stockholm) and that date falls in a closed or locked period, or on/before the company lock date (details.reason). Unlock the period in the dashboard or wait for the next open period; the API cannot backdate or forward-date a credit note.',
+    },
+  },
   INVOICE_CREDIT_NOT_SENT: {
     httpStatus: 400,
     message_sv: 'Endast skickade, betalda eller förfallna fakturor kan krediteras.',

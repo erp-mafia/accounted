@@ -5826,7 +5826,7 @@
     "toast_pruned_with_skipped": "{deleted} accounts deleted, {skipped} skipped",
     "toast_prune_failed": "Could not clean up the chart of accounts",
     "bas_version_chip": "BAS 2026",
-    "footer_note": "Showing {shown} of {total} accounts, grouped by BAS class. SRU codes carry through to the income tax return.",
+    "footer_note": "Showing {shown} of {total} accounts, grouped by BAS class. The SRU code is the field on Skatteverket's INK2R schema and is written to SIE exports. Sole traders file the NE appendix, which maps accounts automatically.",
     "vat_treatment_label": "VAT treatment for the VAT return",
     "vat_treatment_none": "Use BAS default",
     "vat_treatment_help": "Controls which VAT return box receives the account balance. A selected treatment overrides the BAS default.",

@@ -24,6 +24,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import {
@@ -211,7 +212,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('SI_CREDIT_ALREADY_CREDITED', ctx.log, { requestId: ctx.requestId })
     }
 
-    const today = new Date().toISOString().split('T')[0]
+    // Stockholm date, not UTC (see the customer-invoice credit route).
+    const today = getSwedishLocalDate()
 
     // Pre-flight period-lock on the credit-note invoice_date (today).
     const lockVerdict = await checkPeriodLock(ctx.supabase, ctx.companyId!, today)

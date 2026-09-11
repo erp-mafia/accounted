@@ -179,6 +179,7 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
     lines.push('4. Om steget är "depreciation": gnubok_propose_annual_depreciation. Förklara planenlig vs. överavskrivning, K2 schablonregler vs. K3 individual.')
     lines.push('5. Om steget är "dispositioner": gnubok_propose_dispositioner. Periodiseringsfond, koncernbidrag (om holding), årets skatt.')
     lines.push('6. Om steget är "arsredovisning": preview via gnubok_preview_arsredovisning, granska noter, förvaltningsberättelse, underskrifter, deadline.')
+    lines.push('   Noten Medelantal anställda räknas från personalregistret (Löner > Anställda). Om ägare/VD tar lön men saknas där blir noten "inga anställda": be användaren lägga upp sig som anställd med anställningsform företagare, eller ange antalet i fältet Medelantal anställda på sidan Årsredovisning (Bokslut > Årsredovisning), som skriver över det beräknade värdet. Det finns ingen supportfunktion för att ändra noter; hänvisa aldrig till supporten för det.')
     lines.push('7. Om EF: använd gnubok_preview_ef_declaration. Räntefördelning, expansionsfond, NE-bilaga.')
     lines.push('')
     lines.push('Var BFL-rigorös: bokslut är irreversibelt när det låses. Peka på risker innan du föreslår staging av en operation.')
