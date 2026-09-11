@@ -208,6 +208,33 @@ describe('POST /api/salary/runs — one-click creation', () => {
     expect(response.status).toBe(409)
   })
 
+  it('puts the existing run id in the 409 when the lib names the race winner', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+    const raceErr = Object.assign(
+      new Error('Salary run already exists for this period (id run-winner, status draft)'),
+      { name: 'SalaryRunExistsError', existingId: 'run-winner', existingStatus: 'draft' },
+    )
+    vi.mocked(createSalaryRunWithEmployees).mockRejectedValue(raceErr)
+
+    enqueueMany([
+      { data: null }, // settings
+      { data: null }, // conflict pre-check (race: passes)
+    ])
+
+    const response = await POST(
+      post({ period_year: 2026, period_month: 6, payment_date: '2026-06-25' }),
+      { params: Promise.resolve({}) } as never,
+    )
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { existingId?: string; existingStatus?: string } }
+    }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('CONFLICT')
+    expect(body.error.details.existingId).toBe('run-winner')
+    expect(body.error.details.existingStatus).toBe('draft')
+  })
+
   it('still returns 201 when the chained calculation fails', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     authed(supabase)

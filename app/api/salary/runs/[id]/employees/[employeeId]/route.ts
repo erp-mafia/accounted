@@ -114,6 +114,12 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
         if (result.code === 'SALARY_RUN_EMPLOYEE_NOT_FOUND') {
           return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
         }
+        if (result.code === 'SALARY_RUN_SALARY_FIELD_MISMATCH') {
+          return NextResponse.json(
+            { error: 'Månadslön kan bara sättas för månadsavlönade. Timavlönade får sin lön från arbetade timmar.' },
+            { status: 400 },
+          )
+        }
         return NextResponse.json({ error: getUserErrorMessage(result.details) }, { status: 400 })
       }
 

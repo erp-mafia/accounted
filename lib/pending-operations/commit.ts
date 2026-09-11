@@ -6246,9 +6246,15 @@ async function commitSetRunSalary(
 ): Promise<ExecutorResult> {
   const salaryRunId = params.salary_run_id as string
   const employeeId = params.employee_id as string
-  const monthlySalary = params.monthly_salary as number
-  if (!salaryRunId || !employeeId || typeof monthlySalary !== 'number') {
-    return { error: 'salary_run_id, employee_id and monthly_salary are required', status: 400 }
+  const monthlySalary = params.monthly_salary as number | undefined
+  const hoursWorked = params.hours_worked as number | undefined
+  const hasMonthly = typeof monthlySalary === 'number'
+  const hasHours = typeof hoursWorked === 'number'
+  if (!salaryRunId || !employeeId || hasMonthly === hasHours) {
+    return {
+      error: 'salary_run_id, employee_id and exactly one of monthly_salary / hours_worked are required',
+      status: 400,
+    }
   }
 
   try {
@@ -6257,7 +6263,7 @@ async function commitSetRunSalary(
       companyId,
       salaryRunId,
       employeeId,
-      monthlySalary,
+      ...(hasMonthly ? { monthlySalary } : { hoursWorked }),
     })
     if (!result.ok) {
       const entry = getErrorEntry(result.code)
@@ -6273,6 +6279,8 @@ async function commitSetRunSalary(
         employee_id: result.data.employee_id,
         previous_monthly_salary: result.data.previous_monthly_salary,
         monthly_salary: result.data.monthly_salary,
+        previous_hours_worked: result.data.previous_hours_worked,
+        hours_worked: result.data.hours_worked,
       },
     }
   } catch (err) {

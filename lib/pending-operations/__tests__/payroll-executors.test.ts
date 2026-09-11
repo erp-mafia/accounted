@@ -196,6 +196,49 @@ describe('commitPendingOperation: set_run_salary', () => {
   })
 })
 
+describe('commitPendingOperation: set_run_salary (hours_worked)', () => {
+  it('writes the per-run hours through the shared service', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3 } }) // draft gate
+    enqueue({ data: { id: 'sre-2', employee_id: 'emp-2', salary_type: 'hourly', employment_degree: 100, monthly_salary: 0, hours_worked: null } })
+    enqueue({ data: [] }) // no calendar days
+    enqueue({ data: { hourly_rate: 200 } }) // employees.hourly_rate
+    enqueue({ data: null }) // sre update
+    enqueue({ data: null }) // Timlön line update
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'set_run_salary',
+      params: { salary_run_id: 'run-1', employee_id: 'emp-2', hours_worked: 160 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      salary_run_id: 'run-1',
+      employee_id: 'emp-2',
+      previous_hours_worked: null,
+      hours_worked: 160,
+    })
+  })
+
+  it('rejects both fields at once with 400', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'set_run_salary',
+      params: { salary_run_id: 'run-1', employee_id: 'emp-2', monthly_salary: 1000, hours_worked: 10 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+  })
+})
+
 describe('commitPendingOperation: update_salary_run', () => {
   const RUN_ROW = {
     id: 'run-1',

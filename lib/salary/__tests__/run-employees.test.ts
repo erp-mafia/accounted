@@ -341,10 +341,9 @@ describe('setRunEmployeeSalary', () => {
     if (result.ok) expect(result.data.monthly_salary).toBe(0)
   })
 
-  it('skips the display-line refresh for hourly employees', async () => {
-    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
-    mock.enqueue({ data: { ...SRE_ROW, salary_type: 'hourly' } })
-    mock.enqueue({ data: null }) // sre update only
+  it('rejects monthly_salary on an hourly row without writing (the engine would ignore it)', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 6 } })
+    mock.enqueue({ data: { ...SRE_ROW, salary_type: 'hourly', hours_worked: null } })
 
     const result = await setRunEmployeeSalary(supabase, {
       companyId: COMPANY_ID,
@@ -352,9 +351,123 @@ describe('setRunEmployeeSalary', () => {
       employeeId: EMPLOYEE_ID,
       monthlySalary: 45000,
     })
-    expect(result.ok).toBe(true)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_SALARY_FIELD_MISMATCH')
     const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
-    expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees', 'salary_run_employees'])
+    expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees'])
+  })
+
+  it('rejects hours_worked on a monthly row', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 6 } })
+    mock.enqueue({ data: { ...SRE_ROW, hours_worked: null } })
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      hoursWorked: 160,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_SALARY_FIELD_MISMATCH')
+  })
+
+  it('rejects both fields, neither field and out-of-range hours without touching the DB', async () => {
+    const base = { companyId: COMPANY_ID, salaryRunId: RUN_ID, employeeId: EMPLOYEE_ID }
+    const both = await setRunEmployeeSalary(supabase, { ...base, monthlySalary: 1000, hoursWorked: 10 })
+    const neither = await setRunEmployeeSalary(supabase, { ...base })
+    const tooMany = await setRunEmployeeSalary(supabase, { ...base, hoursWorked: 745 })
+    const negative = await setRunEmployeeSalary(supabase, { ...base, hoursWorked: -1 })
+    for (const r of [both, neither, tooMany, negative]) {
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.code).toBe('VALIDATION_ERROR')
+    }
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('refuses hours_worked when the period already has calendar days (they win at calculation)', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 6 } })
+    mock.enqueue({ data: { ...SRE_ROW, salary_type: 'hourly', hours_worked: null } })
+    mock.enqueue({ data: [{ hours: 8 }, { hours: '7.5' }] }) // salary_worked_days in period
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      hoursWorked: 160,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('SALARY_RUN_HOURS_FROM_CALENDAR')
+      expect(result.details).toMatchObject({
+        calendar_hours: 15.5,
+        period_start: '2026-06-01',
+        period_end: '2026-06-30',
+      })
+    }
+    const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees', 'salary_worked_days'])
+  })
+
+  it('sets hours_worked on an hourly row and reprices the Timlön display line', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 6 } })
+    mock.enqueue({ data: { ...SRE_ROW, salary_type: 'hourly', monthly_salary: 0, hours_worked: null } })
+    mock.enqueue({ data: [] }) // no calendar days
+    mock.enqueue({ data: { hourly_rate: 210.5 } }) // employees.hourly_rate
+    mock.enqueue({ data: null }) // sre update
+    mock.enqueue({ data: null }) // hourly_salary line update
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      hoursWorked: 160.333,
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.previous_hours_worked).toBeNull()
+      expect(result.data.hours_worked).toBe(160.33)
+      expect(result.data.hourly_rate).toBe(210.5)
+      expect(result.data.monthly_salary).toBe(0)
+    }
+    const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(fromCalls).toEqual([
+      'salary_runs',
+      'salary_run_employees',
+      'salary_worked_days',
+      'employees',
+      'salary_run_employees',
+      'salary_line_items',
+    ])
+    expect(mock.findCall('salary_run_employees', 'update')?.[0]).toEqual({
+      hours_worked: 160.33,
+      calculation_breakdown: null,
+    })
+    expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({
+      amount: 33749.47,
+      quantity: 160.33,
+      unit_price: 210.5,
+    })
+  })
+
+  it('dry-run for hours resolves the change without writing', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 6 } })
+    mock.enqueue({ data: { ...SRE_ROW, salary_type: 'hourly', hours_worked: 120, monthly_salary: 0 } })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: { hourly_rate: 200 } })
+
+    const result = await setRunEmployeeSalary(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      employeeId: EMPLOYEE_ID,
+      hoursWorked: 150,
+      dryRun: true,
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.previous_hours_worked).toBe(120)
+      expect(result.data.hours_worked).toBe(150)
+    }
+    expect(mock.findCall('salary_run_employees', 'update')).toBeUndefined()
   })
 
   it('dry-run resolves old and new salary without writing', async () => {

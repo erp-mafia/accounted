@@ -42,7 +42,7 @@ If anything is missing, the user fixes it in the web UI before running payroll.
 
 ### Step 3: Set this month's salary (if it differs from the fixed pay)
 
-\`gnubok_set_run_salary({ salary_run_id, employee_id, monthly_salary })\`: sets THIS run's base salary for one employee (draft only; 0 = nollkörning). This is the per-run value the engine reads at calculation: the employee's fixed salary is untouched. Common for owners taking salary by need and capacity. Do NOT edit the \`monthly_salary\` payslip line instead: recalculation rebuilds base salary lines from the per-run value.
+\`gnubok_set_run_salary({ salary_run_id, employee_id, monthly_salary })\` (hourly-paid: \`hours_worked\` instead, only when the period has no calendar days): sets THIS run's base salary for one employee (draft only; 0 = nollkörning). This is the per-run value the engine reads at calculation: the employee's fixed salary is untouched. Common for owners taking salary by need and capacity. Do NOT edit the \`monthly_salary\` payslip line instead: recalculation rebuilds base salary lines from the per-run value.
 
 ### Step 3b: Add OB-tillägg, traktamente, förmåner (if any)
 
@@ -66,7 +66,7 @@ Errors at this stage usually mean missing tax-table data: fall back to \`getDefa
 
 ### Step 5: Review
 
-\`gnubok_get_salary_run({ salary_run_id })\`: full breakdown including \`calculation_breakdown\` showing step-by-step formulas. The user reviews per-employee in web UI.
+\`gnubok_get_salary_run({ salary_run_id })\` (or \`{ period_year, period_month }\`): full breakdown including \`calculation_breakdown\` showing step-by-step formulas. The user reviews per-employee in web UI.
 
 \`gnubok_get_salary_journal({ year })\`: annual rollup for sanity check.
 
@@ -99,7 +99,7 @@ Returns \`{ message, period, employee_count, download_url }\`. The XML conforms 
 
 ## Common errors
 
-- **Run already exists**: idempotency on (company, year, month). Find the existing run with \`gnubok_get_salary_run\`.
+- **Run already exists**: idempotency on (company, year, month). The error names the existing run's id and status; or call \`gnubok_get_salary_run({ period_year, period_month })\`.
 - **Tax table column wrong**: defaults to column 1 if not set, which is too high for most employees. Fix on employee record.
 - **AGI before booking**: works (status check is past-draft, not booked), but you should book first so the JE matches what AGI reports.
 

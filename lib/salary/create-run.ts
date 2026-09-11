@@ -7,6 +7,28 @@ export interface CreateSalaryRunResult {
 }
 
 /**
+ * Thrown when the period already has a non-corrected run. Carries the
+ * existing run's id and status so every caller (dashboard route, MCP
+ * executor) can point the user at it instead of at a bare conflict: the
+ * digest's "already exists but no way to find it" gap.
+ */
+export class SalaryRunExistsError extends Error {
+  readonly existingId: string | null
+  readonly existingStatus: string | null
+
+  constructor(existingId: string | null, existingStatus: string | null) {
+    super(
+      existingId
+        ? `Salary run already exists for this period (id ${existingId}, status ${existingStatus ?? 'unknown'})`
+        : 'Salary run already exists for this period',
+    )
+    this.name = 'SalaryRunExistsError'
+    this.existingId = existingId
+    this.existingStatus = existingStatus
+  }
+}
+
+/**
  * Create a draft salary run and seed a base line for every active employee.
  *
  * There is no single-statement RPC for this fan-out, so it is not atomic at the
@@ -44,11 +66,23 @@ export async function createSalaryRunWithEmployees(
     .select()
     .single()
   if (runError || !run) {
-    throw new Error(
-      runError?.code === '23505'
-        ? 'Salary run already exists for this period'
-        : (runError?.message ?? 'Failed to create salary run'),
-    )
+    if (runError?.code === '23505') {
+      // The partial unique index (status != 'corrected') guarantees at most
+      // one live run per period; surface it so the caller can continue with
+      // gnubok_get_salary_run / the run page instead of guessing.
+      const { data: existing } = await supabase
+        .from('salary_runs')
+        .select('id, status')
+        .eq('company_id', companyId)
+        .eq('period_year', params.periodYear)
+        .eq('period_month', params.periodMonth)
+        .neq('status', 'corrected')
+        .limit(1)
+        .maybeSingle()
+      const row = (existing ?? null) as { id: string; status: string } | null
+      throw new SalaryRunExistsError(row?.id ?? null, row?.status ?? null)
+    }
+    throw new Error(runError?.message ?? 'Failed to create salary run')
   }
 
   try {
