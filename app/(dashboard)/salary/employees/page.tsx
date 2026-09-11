@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
-import { Plus, UserCircle } from 'lucide-react'
+import { Plus, Upload, UserCircle } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency } from '@/lib/utils'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
@@ -68,10 +68,16 @@ export default function EmployeesPage() {
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         {canWrite && (
-          <Button onClick={openNewEmployee}>
-            <Plus className="mr-2 h-4 w-4" />
-            {t('new_employee')}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => router.push('/import?mode=csv_data&entity=employees')}>
+              <Upload className="mr-2 h-4 w-4" />
+              {t('import_employees')}
+            </Button>
+            <Button onClick={openNewEmployee}>
+              <Plus className="mr-2 h-4 w-4" />
+              {t('new_employee')}
+            </Button>
+          </div>
         )}
       </div>
 
