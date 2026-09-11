@@ -351,7 +351,8 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources: period resolutio
       2026,
       1
     )
-    expect(rpcPeriod(supabase)).toEqual(declarationPeriod)
+    expect(declarationPeriod.source).toBe('fiscal_period')
+    expect(rpcPeriod(supabase)).toEqual({ start: declarationPeriod.start, end: declarationPeriod.end })
   })
 
   it('yearly: an explicit fiscal_period_id selects that räkenskapsår', async () => {
