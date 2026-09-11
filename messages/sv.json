@@ -2108,8 +2108,6 @@
     "unlock_payments_gloss": "betallänkar på fakturorna, Stripe-saldot som bankflöde",
     "unlock_webshop": "Webshop",
     "unlock_webshop_gloss": "ordrar hämtas från WooCommerce och Shopify",
-    "unlock_users": "Fler användare",
-    "unlock_users_gloss": "bjud in kollegor, alla kan arbeta i företaget",
     "terms_now": "Ingen bindningstid, avsluta när du vill. Betalning via Stripe.",
     "unlock_help": "Abonnemanget är de externa kopplingarna: assistenten, banken, Skatteverket, e-post, Stripe och webshoparna. Utan det fortsätter bokföring, fakturering, rapporter och SIE-export som vanligt, och allt finns kvar: räkenskapsinformation bevaras i sju år enligt bokföringslagen oavsett abonnemang. Startar du igen senare fortsätter kopplingarna där de slutade.",
     "without_note": "Utan abonnemang pausas bara de externa kopplingarna. Allt annat finns kvar.",
