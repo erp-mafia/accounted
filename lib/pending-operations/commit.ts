@@ -4690,6 +4690,29 @@ async function commitApproveSupplierInvoice(
   return { data: { supplier_invoice_id: id, status: nextStatus, approved_at: approvedAt } }
 }
 
+/**
+ * Swedish detail for a Postgres not_null_violation (23502) or check_violation
+ * (23514) on the supplier_invoices INSERT, naming the column or constraint
+ * from the pg message. Null for every other code so the caller keeps its
+ * generic handling; the pg `details` (which echoes the failing row) is never
+ * forwarded.
+ */
+function describeSupplierInvoiceInputViolation(
+  pgErr: { code?: string; message?: string } | null,
+): string | null {
+  if (!pgErr?.code) return null
+  const message = pgErr.message ?? ''
+  if (pgErr.code === '23502') {
+    const column = message.match(/column "([^"]+)"/)?.[1] ?? 'okänd kolumn'
+    return `Fältet ${column} saknas och får inte vara tomt (23502).`
+  }
+  if (pgErr.code === '23514') {
+    const constraint = message.match(/constraint "([^"]+)"/)?.[1] ?? 'okänt villkor'
+    return `Ett värde bryter mot villkoret ${constraint} (23514).`
+  }
+  return null
+}
+
 async function commitCreateSupplierInvoiceFromInbox(
   supabase: SupabaseClient,
   userId: string,
@@ -4709,9 +4732,21 @@ async function commitCreateSupplierInvoiceFromInbox(
   // Dimensions PR7: resolved at staging time; coerce is the drift/tamper gate.
   const defaultDimensions = coerceDimensionsBag(params.default_dimensions)
 
-  if (!inboxItemId || !supplierId || !supplierInvoiceNumber || !invoiceDate || rawItems.length === 0) {
+  // due_date is NOT NULL on supplier_invoices: a null here used to reach the
+  // INSERT and surface as a bare 500 (feedback 395405). Staging defaults it
+  // now; this guard catches a stale or tampered op before an ankomstnummer
+  // is burnt.
+  if (
+    !inboxItemId ||
+    !supplierId ||
+    !supplierInvoiceNumber ||
+    !invoiceDate ||
+    !dueDate ||
+    rawItems.length === 0
+  ) {
     return {
-      error: 'inbox_item_id, supplier_id, supplier_invoice_number, invoice_date, and items are required',
+      error: 'inbox_item_id, supplier_id, supplier_invoice_number, invoice_date, due_date, and items are required',
+      errorCode: 'SI_CREATE_INVALID_INPUT',
       status: 400,
     }
   }
@@ -4896,6 +4931,27 @@ async function commitCreateSupplierInvoiceFromInbox(
       return {
         error: `Leverantörsfaktura ${supplierInvoiceNumber} finns redan registrerad.`,
         status: 409,
+      }
+    }
+    // 23502 / 23514 are input problems, not infrastructure: the staged params
+    // carried a null or an out-of-range value that the column refused. Name
+    // the column or constraint so the caller can fix the extraction and
+    // re-stage, instead of reading "Failed to create supplier invoice" and
+    // retrying the identical op (feedback 395405: two retries on a null
+    // due_date, both logged only server-side).
+    const invalidInput = describeSupplierInvoiceInputViolation(pgErr)
+    if (invalidInput) {
+      log.warn('Supplier invoice insert from inbox refused by a column constraint', {
+        companyId,
+        inboxItemId,
+        supplierId,
+        code: pgErr?.code,
+        error: pgErr?.message ?? 'unknown',
+      })
+      return {
+        error: `${getErrorEntry('SI_CREATE_INVALID_INPUT')?.message_sv ?? 'Ogiltig kombination av fakturafält.'} ${invalidInput}`,
+        errorCode: 'SI_CREATE_INVALID_INPUT',
+        status: 400,
       }
     }
     log.error('Failed to insert supplier invoice from inbox', {
