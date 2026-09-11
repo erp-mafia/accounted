@@ -14,10 +14,31 @@
  * pagination hints, not security tokens.
  */
 
+import { z } from 'zod'
 import { UUID_RE as UUID } from '@/lib/invariants/uuid'
 
 export const DEFAULT_LIMIT = 50
 export const MAX_LIMIT = 100
+
+/**
+ * The pagination query parameters as the endpoint registry documents them
+ * (spread into a list route's `request.query`). parsePaginationParams stays
+ * the parser: it is deliberately lenient, so this schema describes the
+ * contract rather than validating requests.
+ */
+export const PaginationQueryShape = {
+  cursor: z
+    .string()
+    .optional()
+    .describe('Opaque cursor from the previous page\'s meta.next_cursor. Omit for the first page.'),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_LIMIT)
+    .optional()
+    .describe(`Page size, 1-${MAX_LIMIT} (default ${DEFAULT_LIMIT}). Larger values are clamped to ${MAX_LIMIT}.`),
+}
 
 export interface PaginationParams {
   limit: number
