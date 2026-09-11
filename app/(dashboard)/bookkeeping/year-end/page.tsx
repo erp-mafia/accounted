@@ -259,8 +259,8 @@ export default function YearEndPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="font-display text-2xl leading-8 tracking-tight">Årsbokslut</h1>
+      <div className="page-header flex items-center justify-between gap-3 flex-wrap">
+        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">Årsbokslut</h1>
         <div className="flex items-center gap-2">
           {showWizard && periods && periods.length > 0 && step !== 'result' && (
             <ContextPicker

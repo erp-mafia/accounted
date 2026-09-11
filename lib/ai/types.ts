@@ -17,9 +17,11 @@ export type AiProviderKind = 'bedrock' | 'anthropic' | 'openai-compatible'
  * Model tiers. `assistant` is the conversational/default tier, `heavy` the
  * deep-reasoning tier (supplier-invoice review, VAT review, bokslut), and
  * `extraction` the document-reading tier (a vision model on OpenAI-compatible
- * endpoints; Claude reads PDFs natively).
+ * endpoints; Claude reads PDFs natively). `cheap` is the high-volume,
+ * low-stakes tier (naming a bank string, yes/no checks): the smallest Claude,
+ * read once per distinct string and cached, so cost stays near zero.
  */
-export type AiTier = 'assistant' | 'heavy' | 'extraction'
+export type AiTier = 'assistant' | 'heavy' | 'extraction' | 'cheap'
 
 export interface AiCapabilities {
   /** PDF bytes can be sent as a native document part, no rasterization. */

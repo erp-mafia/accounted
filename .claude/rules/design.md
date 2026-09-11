@@ -39,15 +39,15 @@ WCAG AA (4.5:1 text, 3:1 UI). Keyboard-navigable + visible focus rings. Respect 
 
 Decided during the 2026-07 concept work (dev_docs/ui_migration_plan.md); they apply system-wide and override anything below that conflicts.
 
-1. **Frame layout.** The page is a rounded panel (12px) on a warm-toned frame (`--frame`). The panel keeps `--background`; the sidebar is borderless on the frame.
-2. **Page title is exactly 24px/32px** Hedvig Letters Serif (`text-2xl leading-8` via PageHeader).
+1. **Frame layout.** The page is a rounded panel (12px) on a warm-toned frame (`--frame`). The panel keeps `--background`; the sidebar is borderless on the frame. **Addendum 2026-09-07 (founder decision):** shell v2 drops the centered `max-w-5xl` column. The panel is full-bleed with 24px side padding and content starts directly under a 48px top bar. v2 is the default since the cutover (UI v2 PR 9a); Standard (v1) stays selectable per user (`user_preferences.ui_state.shell`, `data-shell` on `#main-content`) until v1 is removed, so every page must still look right in both. See dev_docs/ui_v2_build_plan.md.
+2. **Page title is exactly 24px/32px** Hedvig Letters Serif (`text-2xl leading-8` via PageHeader). **Addendum 2026-09-07:** in shell v2 the same PageHeader renders as the top bar: 13px/500 Geist title, `?` help beside it, primary action on the right, description hidden. The restyle is `[data-shell="v2"]` CSS in globals.css; pages keep using PageHeader and never draw a second title.
 3. **Buttons are pills.** Radius 99px, default padding 7px 16px, 13px text. Set once in `components/ui/button.tsx`, app-wide, never per page.
 4. **Table rows are one line.** Secondary info (descriptions, OCR, roles) belongs in the detail view or a click-popup, never as sub-rows in lists.
 5. **Chips mark exceptions.** Normal states render as muted text; Badge only when the row deviates. Same chip on every row means the chip is wrong.
 6. **Attention is one ochre sentence**, not a banner: the `.attn` pattern (12.5px, `--warning` tone, single line, optionally with an embedded action link). Max one per page. Addendum 2026-08-19: a page may show at most one global notice line sourced from `lib/notices` (highest priority wins, additional active notices collapse behind a quiet "+N till" inline expander) plus at most one page-domain attn line.
 7. **Help text lives behind a "?"** right after the H1: a small (17px) circular button opening a popover anchored at the button. No instructional copy in the page flow.
 8. **One context picker per page, far right in the toolbar**: fiscal year or account/source as a chip-dropdown with a check on the active choice. A chip that looks like a picker must be a picker.
-9. **The primary action lives in the page header**, right side. Multiple create paths collapse into a split button whose caret menu remembers the last-used mode (persisted in `user_preferences`, not localStorage).
+9. **The primary action lives in the page header**, right side (in shell v2 that header is the top bar, so the action sits top-right of the panel). Multiple create paths collapse into a split button whose caret menu remembers the last-used mode (persisted in `user_preferences`, not localStorage).
 10. **Confirm up front, don't comment afterwards.** Actions that post or send open a small confirm dialog describing the outcome ("Bokförs som verifikat A-217 ...") instead of writing outcome text into the page afterwards.
 11. **Content lands with stagger.** `.stagger-enter` is the standard entry for list/table content, on server render and on client-fetch completion alike.
 12. **Status colors are data, not chrome**: sage/ochre/terracotta only in numbers, exception chips and `.attn`.

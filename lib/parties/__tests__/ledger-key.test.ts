@@ -55,3 +55,17 @@ describe('displayNameFromVoucherText on assistant-written descriptions', () => {
     expect(displayNameFromVoucherText('1260424603197 Pris betalning')).toBe('Pris betalning')
   })
 })
+
+describe('displayNameFromVoucherText drops trailing months and initials', () => {
+  it('keeps the company, drops when and who', async () => {
+    const { displayNameFromVoucherText } = await import('../ledger-key')
+    expect(displayNameFromVoucherText('KjellCo Oktober')).toBe('KjellCo')
+    expect(displayNameFromVoucherText('Kontorsplatser j')).toBe('Kontorsplatser')
+    expect(displayNameFromVoucherText('Resend Jul Överföring via internet')).toBe('Resend')
+    expect(displayNameFromVoucherText('Supabase JW Maj')).toBe('Supabase')
+    expect(displayNameFromVoucherText('Visma Spcs AB')).toBe('Visma Spcs AB')
+    expect(displayNameFromVoucherText('Oktoberfest AB')).toBe('Oktoberfest AB')
+    expect(displayNameFromVoucherText('Juli')).toBe('Juli')
+  })
+})
+

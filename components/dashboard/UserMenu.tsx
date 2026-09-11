@@ -102,7 +102,7 @@ export default function UserMenu({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
-  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 })
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 232 })
 
   const sandbox = isSandbox || companyCtxSandbox
 
@@ -115,7 +115,10 @@ export default function UserMenu({
     // with the nav column.
     const top = Math.max(margin, triggerRect.top - menuRect.height - 6)
     const left = Math.max(margin, triggerRect.left)
-    setMenuPos({ top, left })
+    // As wide as the trigger when it spans a nav column, so the menu stays
+    // inside the sidebar instead of spilling over the page beside it.
+    const width = triggerRect.width >= 180 ? Math.round(triggerRect.width) : 232
+    setMenuPos({ top, left, width })
   }, [])
 
   useEffect(() => {
@@ -243,8 +246,8 @@ export default function UserMenu({
           <div
             ref={menuRef}
             role="menu"
-            className="fixed z-[60] w-[232px] rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-bottom-1 duration-150"
-            style={{ top: menuPos.top, left: menuPos.left }}
+            className="fixed z-[60] rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-bottom-1 duration-150"
+            style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
           >
             {/* Identity */}
             {(userName || userEmail) && (

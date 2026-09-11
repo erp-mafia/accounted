@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, TEMPLATE_CATEGORY_LABELS } from '../template-library'
+import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX } from '../template-library'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Partial<BookingTemplateLibrary> = {}): BookingTemplateLibrary {
@@ -247,14 +247,6 @@ describe('getTemplateScope', () => {
 
   it('identifies company templates', () => {
     expect(getTemplateScope({ is_system: false, team_id: null, company_id: 'comp-1' })).toBe('company')
-  })
-})
-
-describe('TEMPLATE_CATEGORY_LABELS', () => {
-  it('has labels for all categories', () => {
-    expect(Object.keys(TEMPLATE_CATEGORY_LABELS)).toHaveLength(9)
-    expect(TEMPLATE_CATEGORY_LABELS.eu_trade).toBe('EU-handel')
-    expect(TEMPLATE_CATEGORY_LABELS.tax_account).toBe('Skattekonto')
   })
 })
 

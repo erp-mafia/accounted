@@ -190,7 +190,15 @@ export interface UserUiState {
   // (companyId -> ISO timestamp of the ack). Lives on the user so each
   // member of a company sees the notice once.
   trial_expired_ack?: Record<string, string>
+  // Dashboard shell. 'v2' is the full-bleed frame with the page title in a
+  // top bar (founder decision 2026-09-07, dev_docs/ui_v2_build_plan.md).
+  // Absent or 'v1' keeps the centered max-w-5xl panel until v2 is default.
+  shell?: DashboardShell
+  // Transaktioner column visibility in shell v2 (lib/transactions/columns-v2).
+  tx_columns?: { hidden?: string[] }
 }
+
+export type DashboardShell = 'v1' | 'v2'
 
 export type AgentPanelMode = 'docked' | 'floating'
 
@@ -2153,6 +2161,11 @@ export interface CategorizationTemplate {
   last_seen_date: string | null
   source: CategorizationTemplateSource
   is_active: boolean
+  // Rules ladder (migration 20260907120000): mode is kept in step with
+  // is_active by a trigger; corrections counts changed proposals.
+  mode: 'proposed' | 'propose' | 'auto' | 'paused'
+  corrections: number
+  paused_at: string | null
   created_at: string
   updated_at: string
 }
@@ -3973,6 +3986,9 @@ export interface InvoiceExtractionResult {
     address: string | null
     bankgiro: string | null
     plusgiro: string | null
+    /** Payment details for a foreign supplier; read since 2026-09 so a betalfil can carry it. */
+    iban?: string | null
+    bic?: string | null
   }
   invoice: {
     invoiceNumber: string | null

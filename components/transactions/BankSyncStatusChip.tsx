@@ -3,17 +3,12 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { onBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { isSelfHosted } from '@/lib/env/public-flags'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/info-tooltip'
 import {
   getChipState,
   type ConnectionRow,
@@ -146,26 +141,8 @@ export default function BankSyncStatusChip() {
     )
   }
 
-  // healthy
-  return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex cursor-help items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground">
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>
-              {t('bank_sync_auto_nightly')}
-              {state.mostRecent && (
-                <>
-                  {t('bank_sync_last_separator')}
-                  <span className="tabular-nums">{formatAge(state.mostRecent)}</span>
-                </>
-              )}
-            </span>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-[320px]">
-          <div className="text-sm leading-relaxed">{t('bank_sync_latency_hint')}</div>
-        </TooltipContent>
-      </Tooltip>
-  )
+  // Healthy: nothing to say. A nightly sync that ran is the expected state,
+  // and a permanent pill reporting it is chrome. Every state that needs the
+  // person (paused, attention, expiring consent, stale) speaks above.
+  return null
 }

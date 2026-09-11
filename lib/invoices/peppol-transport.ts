@@ -151,6 +151,12 @@ export interface PeppolInboundListOptions {
   limit?: number
   /** Include documents already handed over once (re-sync); default only unread. */
   includeRead?: boolean
+  /**
+   * ISO timestamp of the newest document the caller has archived for this
+   * type. A provider that supports the cursor lists only what arrived after
+   * it; one that does not ignores it, so the caller still dedupes by id.
+   */
+  receivedAfter?: string
 }
 
 /**

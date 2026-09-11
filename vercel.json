@@ -131,8 +131,16 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/agent/categorize/cron",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/peppol/outbound/status/cron",
       "schedule": "5,20,35,50 * * * *"
+    },
+    {
+      "path": "/api/parties/resolver/cron",
+      "schedule": "45 5 * * *"
     }
   ]
 }

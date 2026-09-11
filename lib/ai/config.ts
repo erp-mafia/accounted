@@ -44,6 +44,9 @@ export interface ResolvedAiConfig {
 }
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5'
+// Bedrock knows Haiku 4.5 only by its versioned id; the Anthropic API only by the bare one.
+const DEFAULT_CHEAP_CLAUDE_MODEL = 'claude-haiku-4-5-20251001'
+const DEFAULT_CHEAP_BEDROCK_MODEL = 'claude-haiku-4-5-20251001-v1:0'
 const DEFAULT_EXTRACTION_MAX_TOKENS = 8192
 const DEFAULT_PDF_MAX_PAGES = 4
 
@@ -76,12 +79,14 @@ const LEGACY_TIER_VARS: Record<AiTier, string> = {
   assistant: 'BEDROCK_SONNET_MODEL_ID',
   heavy: 'BEDROCK_OPUS_MODEL_ID',
   extraction: 'BEDROCK_MODEL_ID',
+  cheap: 'BEDROCK_HAIKU_MODEL_ID',
 }
 
 const TIER_VARS: Record<AiTier, string> = {
   assistant: 'AI_ASSISTANT_MODEL',
   heavy: 'AI_HEAVY_MODEL',
   extraction: 'AI_EXTRACTION_MODEL',
+  cheap: 'AI_CHEAP_MODEL',
 }
 
 /**
@@ -93,7 +98,9 @@ const TIER_VARS: Record<AiTier, string> = {
 export function resolveTierModel(tier: AiTier, provider: AiProvider = resolveAiProvider()): string | null {
   const specific = env(TIER_VARS[tier]) ?? env(LEGACY_TIER_VARS[tier]) ?? env('AI_MODEL')
   if (specific) return specific
-  return provider === 'openai-compatible' ? null : DEFAULT_CLAUDE_MODEL
+  if (provider === 'openai-compatible') return null
+  if (tier === 'cheap') return provider === 'bedrock' ? DEFAULT_CHEAP_BEDROCK_MODEL : DEFAULT_CHEAP_CLAUDE_MODEL
+  return DEFAULT_CLAUDE_MODEL
 }
 
 export function readAiConfig(): ResolvedAiConfig {
@@ -102,6 +109,7 @@ export function readAiConfig(): ResolvedAiConfig {
     assistant: resolveTierModel('assistant', provider),
     heavy: resolveTierModel('heavy', provider),
     extraction: resolveTierModel('extraction', provider),
+    cheap: resolveTierModel('cheap', provider),
   }
   const credentials = hasAiCredentials()
   const isOpenAiCompatible = provider === 'openai-compatible'
@@ -166,6 +174,7 @@ export function getAiStatus(): AiStatus {
     assistant: cfg.models.assistant ? toProviderModelId(cfg.models.assistant, cfg.provider) : null,
     heavy: cfg.models.heavy ? toProviderModelId(cfg.models.heavy, cfg.provider) : null,
     extraction: cfg.models.extraction ? toProviderModelId(cfg.models.extraction, cfg.provider) : null,
+    cheap: cfg.models.cheap ? toProviderModelId(cfg.models.cheap, cfg.provider) : null,
   }
   return {
     provider: cfg.provider,

@@ -16,6 +16,10 @@ import {
   getResolvedDashboardAgentProfile,
 } from './request-context'
 import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-sections'
+import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { getTranslations } from 'next-intl/server'
+import type { DashboardShell } from '@/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -89,6 +93,7 @@ export default async function DashboardPage() {
     agentProfile,
     { count: skatteverketTokenCount },
     { count: oauthKeyCount, error: oauthKeyError },
+    { data: userPrefs },
   ] =
     await Promise.all([
       getDashboardSettings(),
@@ -110,6 +115,9 @@ export default async function DashboardPage() {
         .eq('user_id', user.id)
         .eq('name', OAUTH_MCP_KEY_NAME)
         .is('revoked_at', null),
+      // Shell v2 opt-in (ui_state.shell): picks the three-pane Att göra over
+      // the v1 Hem. Same row the layout reads for the sidebar.
+      supabase.from('user_preferences').select('ui_state').eq('user_id', user.id).maybeSingle(),
     ])
 
   // A FAILED settings read must not masquerade as "onboarding not done":
@@ -155,31 +163,42 @@ export default async function DashboardPage() {
   }
   const setupOpen = !settings.initial_setup_completed_at && !settings.initial_setup_dismissed_at
 
-  return (
+  // The streamed sections, shared by both shells: the notice line and the
+  // setup checklist fill in behind their own Suspense boundaries.
+  const notices = (
+    <Suspense fallback={null}>
+      <HemNoticesSection companyId={companyId} userId={user.id} now={now} />
+    </Suspense>
+  )
+  const checklist = (
+    <Suspense fallback={<ChecklistSkeleton />}>
+      <HemChecklistSection
+        companyId={companyId}
+        userId={user.id}
+        now={now}
+        initialSetup={initialSetup}
+        hasMcpKey={hasMcpKey}
+        vatRegistered={settings.vat_registered}
+        momsPeriod={settings.moms_period ?? null}
+      />
+    </Suspense>
+  )
+
+  // Hem: greeting, notice line, setup checklist, then the Att göra and
+  // Fortsätt panes side by side. In shell v2 the same content runs under the
+  // Att göra top bar, and MainContainer's full-bleed frame stretches it to
+  // the panel instead of the v1 max-w-5xl card. The three-pane queue of
+  // PR 3 was tried and dropped (founder direction 2026-09-10: "the to-do
+  // page should be the old homepage, but stretched").
+  const hem = (
     <DashboardContent
       companyId={companyId}
       agentBuilt={agentBuilt}
       userFirstName={userFirstName}
       initialSetup={initialSetup}
       hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
-      notices={
-        <Suspense fallback={null}>
-          <HemNoticesSection companyId={companyId} userId={user.id} now={now} />
-        </Suspense>
-      }
-      checklist={
-        <Suspense fallback={<ChecklistSkeleton />}>
-          <HemChecklistSection
-            companyId={companyId}
-            userId={user.id}
-            now={now}
-            initialSetup={initialSetup}
-            hasMcpKey={hasMcpKey}
-            vatRegistered={settings.vat_registered}
-            momsPeriod={settings.moms_period ?? null}
-          />
-        </Suspense>
-      }
+      notices={notices}
+      checklist={checklist}
       panes={
         <Suspense fallback={<PanesSkeleton />}>
           <HemPanesSection companyId={companyId} now={now} setupOpen={setupOpen} />
@@ -187,4 +206,20 @@ export default async function DashboardPage() {
       }
     />
   )
+
+  const shell: DashboardShell =
+    (userPrefs?.ui_state as { shell?: DashboardShell } | null)?.shell === 'v1' ? 'v1' : 'v2'
+  if (shell === 'v2') {
+    const tV2 = await getTranslations('att_gora_v2')
+    const header = <PageHeader title={tV2('title')} help={<HelpPopover>{tV2('help')}</HelpPopover>} />
+
+    return (
+      <>
+        {header}
+        {hem}
+      </>
+    )
+  }
+
+  return hem
 }
