@@ -79,8 +79,17 @@ export function resolveMedelantalAnstallda(
   periodStartIso: string,
   periodEndIso: string,
 ): number {
-  if (typeof override === 'number' && Number.isFinite(override) && override >= 0) {
+  if (hasMedelantalOverride(override)) {
     return Math.round(override)
   }
   return computeMedelantalAnstallda(employees, periodStartIso, periodEndIso)
+}
+
+/**
+ * Whether a manual medelantal figure is set (0 included: "no employees" as
+ * a deliberate statement). The one predicate the resolver and the note
+ * builder share, so "override wins" and "override is missing" agree.
+ */
+export function hasMedelantalOverride(override: number | null | undefined): override is number {
+  return typeof override === 'number' && Number.isFinite(override) && override >= 0
 }
