@@ -4221,9 +4221,15 @@ async function precheckDocumentLink(
  * (feedback 2026-08-24..26, three companies).
  *
  * Same shape as the create_voucher + inbox_item_id stamp: CAS on the null
- * link columns so a concurrent claim stays a no-op, and unique_violation
- * tolerated because the UNIQUE on created_journal_entry_id lets only one
- * inbox item point at a samlingsverifikat. Best-effort by design: the link is
+ * link columns so a concurrent claim of the same inbox row stays a no-op.
+ * Several inbox items may carry the same created_journal_entry_id (an invoice
+ * and its payment confirmation on one verifikat): migration 20260911120500
+ * dropped the UNIQUE that made every stamp after the first fail with 23505,
+ * which this helper used to swallow, leaving the item "unprocessed" forever
+ * (feedback seq 389343, 395894, 395931, 366701). Zero matched rows is the
+ * remaining quiet outcome (the document never came through the inbox, or the
+ * row was already claimed, typically by create_supplier_invoice_from_inbox)
+ * and is logged so the trail is visible. Best-effort by design: the link is
  * already committed and inbox bookkeeping must not roll it back.
  */
 async function stampInboxItemForLinkedDocument(
@@ -4232,18 +4238,26 @@ async function stampInboxItemForLinkedDocument(
   documentId: string,
   journalEntryId: string,
 ): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('invoice_inbox_items')
     .update({ created_journal_entry_id: journalEntryId })
     .eq('document_id', documentId)
     .eq('company_id', companyId)
     .is('created_journal_entry_id', null)
     .is('created_supplier_invoice_id', null)
-  if (error && error.code !== '23505') {
+    .select('id')
+  if (error) {
     log.warn('Failed to mark inbox item handled after document link (link still committed)', {
       documentId,
       journalEntryId,
       error: error.message,
+    })
+    return
+  }
+  if (!data || data.length === 0) {
+    log.warn('No inbox item stamped after document link: document has no inbox row or it was already claimed', {
+      documentId,
+      journalEntryId,
     })
   }
 }
@@ -5819,15 +5833,16 @@ async function commitCreateVoucher(
     const documentId = params.document_id as string | undefined
     let inboxLinked = false
     if (inboxItemId) {
-      // Race guard: the UNIQUE constraint on
-      // invoice_inbox_items.created_journal_entry_id (migration 20260515090000)
-      // stops two inbox items from being linked to the same JE, but it does
-      // NOT stop two concurrent commits of different staged ops on the same
-      // inbox item from overwriting each other (the second UPDATE on the same
-      // row trivially satisfies UNIQUE). We add a `.is('created_journal_entry_id', null)`
-      // predicate so only the first commit succeeds; the loser sees a
-      // zero-rows-updated result and surfaces a structured warning. We also
-      // require .eq('created_supplier_invoice_id', null) so a concurrent
+      // Race guard: two concurrent commits of different staged ops on the
+      // same inbox item must not overwrite each other, and no constraint
+      // catches that (a second UPDATE of the same row is invisible to any
+      // cross-row UNIQUE; the one on created_journal_entry_id from migration
+      // 20260515090000 was dropped in 20260911120500 because several inbox
+      // items legitimately back one verifikat). The
+      // `.is('created_journal_entry_id', null)` predicate is the guard: only
+      // the first commit succeeds; the loser sees a zero-rows-updated result
+      // and surfaces a structured warning. We also require
+      // .is('created_supplier_invoice_id', null) so a concurrent
       // create_supplier_invoice_from_inbox doesn't get clobbered either.
       // Only the link column is written: the status CHECK allows received|error
       // (migration 20260504180000), so writing 'confirmed' here would fail the

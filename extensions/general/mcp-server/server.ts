@@ -20239,8 +20239,9 @@ export const tools: McpTool[] = [
       // Optional inbox-direct booking. Validate at staging so the agent gets a
       // tight rejection signal: once staged, an already-booked inbox item
       // would only surface at commit time with a generic 409. The executor
-      // re-checks idempotently via UNIQUE constraint on
-      // invoice_inbox_items.created_journal_entry_id.
+      // re-checks with a compare-and-set on the item's null link columns
+      // (there is no UNIQUE on created_journal_entry_id: several inbox items
+      // may back one verifikat).
       const inboxItemId = (args.inbox_item_id as string | undefined) ?? null
       let inboxDocumentId: string | null = null
       if (inboxItemId) {
