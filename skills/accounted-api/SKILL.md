@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 146 endpoints.
+  pagination, scopes), and all 150 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,7 +142,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 146 operations. Paths are shown without
+API version `2026-05-12`, 150 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (5)
@@ -290,7 +290,7 @@ POST /companies/{companyId}/transactions/batch-categorize : Categorize up to 100
 POST /companies/{companyId}/transactions/ingest : Bulk-ingest transactions (up to 500 per call) [scope:transactions:write risk:medium idempotent dry-run]
 ```
 
-### Employees (13)
+### Employees (17)
 
 Full detail: [references/employees.md](references/employees.md)
 
@@ -307,6 +307,10 @@ GET /companies/{companyId}/employees/{id}/opening-balances : Get an employee's p
 PUT /companies/{companyId}/employees/{id}/opening-balances : Set an employee's payroll cutover opening balances [scope:payroll:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/employees/{id}/vacation-balance : Get an employee's current vacation balance [scope:payroll:read risk:low idempotent]
 PUT /companies/{companyId}/employees/opening-balances : Bulk-set payroll cutover opening balances (atomic) [scope:payroll:write risk:medium idempotent dry-run reversible]
+GET /companies/{companyId}/salary/premium-rules : List OB and overtime premium rules [scope:payroll:read risk:low idempotent]
+POST /companies/{companyId}/salary/premium-rules : Create an OB or overtime premium rule [scope:payroll:write risk:low idempotent dry-run reversible]
+PATCH /companies/{companyId}/salary/premium-rules/{id} : Update an OB or overtime premium rule [scope:payroll:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/salary/premium-rules/{id} : Delete an OB or overtime premium rule [scope:payroll:write risk:low dry-run]
 POST /companies/{companyId}/salary/vacation-year-close : Close a vacation year (semesterberedning + arsavslut) [scope:payroll:write risk:high idempotent dry-run]
 ```
 

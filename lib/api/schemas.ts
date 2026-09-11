@@ -3447,6 +3447,132 @@ export const UpdateEmployeeBenefitSchema = z.object({
   }
 })
 
+
+// ============================================================
+// Shift premium rules (OB-tillagg / overtid): shift_premium_rules
+// ============================================================
+
+/** The six premium families the engine derives (migration 20260526120900). */
+export const ShiftPremiumItemTypeSchema = z.enum([
+  'overtime_50',
+  'overtime_100',
+  'ob_weekday_evening',
+  'ob_weekend',
+  'ob_night',
+  'ob_holiday',
+])
+
+/** 'HH:MM' wall-clock time, 00:00 to 23:59. Seconds are dropped on input so
+ * the stored TIME and the UI agree on one shape. */
+const clockTime = z
+  .string()
+  .regex(/^\d{2}:\d{2}$/, 'Ange klockslag som HH:MM')
+  .refine((v) => {
+    const [h, m] = v.split(':').map(Number)
+    return h >= 0 && h <= 23 && m >= 0 && m <= 59
+  }, 'Ange klockslag mellan 00:00 och 23:59')
+
+const isoWeekdayArray = z
+  .array(z.number().int().min(1).max(7))
+  .min(1, 'Välj minst en veckodag')
+  .max(7)
+  .refine((days) => new Set(days).size === days.length, 'Samma veckodag angiven flera gånger')
+
+const premiumPercent = z
+  .number()
+  .min(0)
+  .max(500)
+  .refine((v) => Math.round(v * 100) === v * 100, 'Max två decimaler')
+
+const SHIFT_PREMIUM_SCOPE_MESSAGE =
+  'Välj antingen alla anställda eller minst en namngiven anställd'
+
+/** Both scope fields together: all=true means no named employees, all=false
+ * means at least one. Shared by create (always both present) and the merged
+ * state on update (route merges with the stored row before checking). */
+export function shiftPremiumScopeIsConsistent(
+  appliesToAll: boolean,
+  employeeIds: string[],
+): boolean {
+  return appliesToAll ? employeeIds.length === 0 : employeeIds.length > 0
+}
+
+export const CreateShiftPremiumRuleSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    day_of_week: isoWeekdayArray,
+    start_time: clockTime,
+    /** end <= start means the window wraps past midnight (22:00-06:00). */
+    end_time: clockTime,
+    premium_percent: premiumPercent,
+    item_type: ShiftPremiumItemTypeSchema,
+    priority: z.number().int().min(-1000).max(1000).default(0),
+    applies_to_all_employees: z.boolean().default(true),
+    applies_to_employee_ids: z.array(uuid).max(500).default([]),
+    is_active: z.boolean().default(true),
+  })
+  .superRefine((data, ctx) => {
+    if (!shiftPremiumScopeIsConsistent(data.applies_to_all_employees, data.applies_to_employee_ids)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: SHIFT_PREMIUM_SCOPE_MESSAGE,
+        path: ['applies_to_employee_ids'],
+      })
+    }
+    if (new Set(data.applies_to_employee_ids).size !== data.applies_to_employee_ids.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Samma anställd angiven flera gånger',
+        path: ['applies_to_employee_ids'],
+      })
+    }
+  })
+
+export const UpdateShiftPremiumRuleSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    day_of_week: isoWeekdayArray.optional(),
+    start_time: clockTime.optional(),
+    end_time: clockTime.optional(),
+    premium_percent: premiumPercent.optional(),
+    item_type: ShiftPremiumItemTypeSchema.optional(),
+    priority: z.number().int().min(-1000).max(1000).optional(),
+    applies_to_all_employees: z.boolean().optional(),
+    applies_to_employee_ids: z.array(uuid).max(500).optional(),
+    is_active: z.boolean().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (Object.keys(data).length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Inga fält att uppdatera' })
+    }
+    // Scope is only checkable here when both halves travel together; a
+    // single-field patch is checked against the stored row by the route.
+    if (
+      data.applies_to_all_employees !== undefined &&
+      data.applies_to_employee_ids !== undefined &&
+      !shiftPremiumScopeIsConsistent(data.applies_to_all_employees, data.applies_to_employee_ids)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: SHIFT_PREMIUM_SCOPE_MESSAGE,
+        path: ['applies_to_employee_ids'],
+      })
+    }
+    if (
+      data.applies_to_employee_ids &&
+      new Set(data.applies_to_employee_ids).size !== data.applies_to_employee_ids.length
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Samma anställd angiven flera gånger',
+        path: ['applies_to_employee_ids'],
+      })
+    }
+  })
+
+export type CreateShiftPremiumRuleInput = z.infer<typeof CreateShiftPremiumRuleSchema>
+export type UpdateShiftPremiumRuleInput = z.infer<typeof UpdateShiftPremiumRuleSchema>
+
 export const RecurringLineItemTypeSchema = z.enum([
   'gross_deduction_pension',
   'gross_deduction_other',

@@ -987,6 +987,327 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/salary/premium-rules`
+
+**List OB and overtime premium rules.**
+`scope:payroll:read · risk:low · idempotent`
+
+Returns the shift premium rules the salary engine applies to worked days (OB-tillägg for evenings, nights, weekends and public holidays; tiered overtime). Active rules only unless ?include_inactive=true. No pagination: a company has a handful of rules.
+
+**Use when:** You want to verify how OB or overtime will be derived before calculating a run, or to mirror a kollektivavtal into the company configuration.
+**Do not use for:** The derived premium amounts on a payslip (GET /salary-runs/{id}/employees/{employeeId} after :calculate). Worked hours themselves (the worked-days register on the dashboard).
+
+**Pitfalls:**
+- Rules only fire for worked days that carry start_time and end_time; hours-only rows are treated as 08:00-17:00 and never match night or weekend windows.
+- Overlapping rules never double-pay: each minute goes to the highest priority, ties to the higher percent.
+- ob_holiday rules fire only on actual Swedish public holidays, not on ordinary Sundays.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { premium_rule_id: string, name: string, applies_to_all_employees: boolean, applies_to_employee_ids: string[], day_of_week: number[], start_time: string, end_time: string, premium_percent: number, item_type: "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday", priority: number, is_active: boolean, created_at: string, updated_at: string }[],
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "premium_rule_id": "c3f2…",
+      "name": "OB natt",
+      "applies_to_all_employees": true,
+      "applies_to_employee_ids": [],
+      "day_of_week": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "start_time": "22:00",
+      "end_time": "06:00",
+      "premium_percent": 70,
+      "item_type": "ob_night",
+      "priority": 10,
+      "is_active": true,
+      "created_at": "2026-09-11T08:00:00Z",
+      "updated_at": "2026-09-11T08:00:00Z"
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/salary/premium-rules`
+
+**Create an OB or overtime premium rule.**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Adds a rule: weekdays (ISO 1-7), a wall-clock window (end <= start wraps midnight), a premium percent of the base hourly rate, one of six item types, a priority for overlaps, and a scope (all employees or a named list). Every named employee must belong to the company. Supports ?dry_run=true.
+
+**Use when:** Configuring OB and overtime from a kollektivavtal for the first time, or adding a window the agreement defines (e.g. weekday evening 18:00-22:00 at 50 %).
+**Do not use for:** One-off manual premium lines on a single payslip (add a line on the run instead). Mertid or kompensationsledighet (not modelled).
+
+**Pitfalls:**
+- applies_to_all_employees=true requires an empty applies_to_employee_ids; false requires at least one id. Mixed input returns 400 VALIDATION_ERROR.
+- An employee id from another company returns 404 SHIFT_PREMIUM_RULE_EMPLOYEE_NOT_FOUND with the offending ids in details.
+- Percent is of the base hourly rate (monthly salary / hourly divisor for monthly staff), not an absolute amount.
+- New rules apply to the next calculation of any open run; booked runs are never recomputed.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{
+  name: string,
+  day_of_week: number[],
+  start_time: string,
+  end_time: string,
+  premium_percent: number,
+  item_type: "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday",
+  priority?: number,
+  applies_to_all_employees?: boolean,
+  applies_to_employee_ids?: string[],
+  is_active?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "name": "OB natt",
+  "day_of_week": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "start_time": "22:00",
+  "end_time": "06:00",
+  "premium_percent": 70,
+  "item_type": "ob_night",
+  "priority": 10,
+  "applies_to_all_employees": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    premium_rule_id: string,
+    name: string,
+    applies_to_all_employees: boolean,
+    applies_to_employee_ids: string[],
+    day_of_week: number[],
+    start_time: string,
+    end_time: string,
+    premium_percent: number,
+    item_type: "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday",
+    priority: number,
+    is_active: boolean,
+    created_at: string,
+    updated_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "premium_rule_id": "c3f2…",
+    "name": "OB natt",
+    "applies_to_all_employees": true,
+    "applies_to_employee_ids": [],
+    "day_of_week": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "start_time": "22:00",
+    "end_time": "06:00",
+    "premium_percent": 70,
+    "item_type": "ob_night",
+    "priority": 10,
+    "is_active": true,
+    "created_at": "2026-09-11T08:00:00Z",
+    "updated_at": "2026-09-11T08:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/salary/premium-rules/{id}`
+
+**Update an OB or overtime premium rule.**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Patches any subset of the rule fields. The scope pair is validated on the merged state: flipping applies_to_all_employees to false without supplying applies_to_employee_ids returns 400 SHIFT_PREMIUM_RULE_SCOPE_INVALID. Set is_active=false to retire a rule without deleting it.
+
+**Use when:** A kollektivavtal changed a percent or a window, or a rule should stop applying from the next calculation.
+**Do not use for:** Retroactive corrections of booked runs (use the salary run correction flow).
+
+**Pitfalls:**
+- Named employee ids are re-verified against the company on every patch that sends them.
+- Changes apply to the next calculation of an open run only.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Request body:
+```ts
+{
+  name?: string,
+  day_of_week?: number[],
+  start_time?: string,
+  end_time?: string,
+  premium_percent?: number,
+  item_type?: "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday",
+  priority?: number,
+  applies_to_all_employees?: boolean,
+  applies_to_employee_ids?: string[],
+  is_active?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "premium_percent": 75
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    premium_rule_id: string,
+    name: string,
+    applies_to_all_employees: boolean,
+    applies_to_employee_ids: string[],
+    day_of_week: number[],
+    start_time: string,
+    end_time: string,
+    premium_percent: number,
+    item_type: "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday",
+    priority: number,
+    is_active: boolean,
+    created_at: string,
+    updated_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "premium_rule_id": "c3f2…",
+    "name": "OB natt",
+    "applies_to_all_employees": true,
+    "applies_to_employee_ids": [],
+    "day_of_week": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "start_time": "22:00",
+    "end_time": "06:00",
+    "premium_percent": 75,
+    "item_type": "ob_night",
+    "priority": 10,
+    "is_active": true,
+    "created_at": "2026-09-11T08:00:00Z",
+    "updated_at": "2026-09-11T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/salary/premium-rules/{id}`
+
+**Delete an OB or overtime premium rule.**
+`scope:payroll:write · risk:low · dry-run`
+
+Hard-deletes the rule. Premium lines already derived on an open run are regenerated (without this rule) on its next calculation; booked runs keep their verifikat unchanged.
+
+**Use when:** A rule was created by mistake. To stop a rule while keeping its history, PATCH is_active=false instead.
+**Do not use for:** Pausing a rule (PATCH is_active=false).
+
+**Pitfalls:**
+- Returns 404 SHIFT_PREMIUM_RULE_NOT_FOUND when the id is unknown to this company.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `204`.
+
+---
+
 ### `POST /api/v1/companies/{companyId}/salary/vacation-year-close`
 
 **Close a vacation year (semesterberedning + arsavslut).**

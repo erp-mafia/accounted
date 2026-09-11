@@ -256,6 +256,11 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Payroll gap-closure 3.4: vacation ledger + year close.
   'GET /api/v1/companies/:companyId/employees/:id/vacation-balance': 'payroll:read',
   'POST /api/v1/companies/:companyId/salary/vacation-year-close': 'payroll:write',
+  // OB / overtime premium rules (shift_premium_rules), configurable since 2026-09.
+  'GET /api/v1/companies/:companyId/salary/premium-rules': 'payroll:read',
+  'POST /api/v1/companies/:companyId/salary/premium-rules': 'payroll:write',
+  'PATCH /api/v1/companies/:companyId/salary/premium-rules/:id': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/salary/premium-rules/:id': 'payroll:write',
 
   // Dimensions (kostnadsställe/projekt): dimensions PR2. Reads ride
   // reports:read (registry data feeds report filters/pickers); value creation
