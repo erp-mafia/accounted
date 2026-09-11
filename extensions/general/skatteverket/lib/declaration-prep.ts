@@ -56,6 +56,34 @@ export async function resolveRedovisare(
 }
 
 /**
+ * The Skatteverket redovisningsperiod (YYYYMM) a VAT period files under.
+ *
+ * Helårsmoms is filed per räkenskapsår (SFL 26 kap 10-11 §§): the SKV period
+ * is the FY-end month, which for a broken fiscal year is not December. This is
+ * the ONE place that resolution happens, shared by validate/submit
+ * (buildMomsuppgift), the HTTP status service and the MCP status tool. The MCP
+ * tool used to inline formatRedovisningsperiod without the fiscal-year end and
+ * answered 202612 for a räkenskapsår 2025-04-01..2026-03-31 (feedback seq
+ * 330091) while submit had filed under 202603. Monthly and quarterly are
+ * calendar periods by law, so they never touch fiscal_periods.
+ */
+export async function resolveRedovisningsperiod(
+  supabase: SupabaseClient,
+  companyId: string,
+  input: { periodType: VatPeriodType; year: number; period: number; fiscalPeriodId?: string },
+): Promise<string> {
+  const { periodType, year, period, fiscalPeriodId } = input
+  let fiscalYearEnd: { year: number; month: number } | undefined
+  if (periodType === 'yearly') {
+    const { end } = await resolvePeriodDates(
+      supabase, companyId, periodType, year, period, fiscalPeriodId,
+    )
+    fiscalYearEnd = { year: Number(end.slice(0, 4)), month: Number(end.slice(5, 7)) }
+  }
+  return formatRedovisningsperiod(periodType, year, period, fiscalYearEnd)
+}
+
+/**
  * Compute the momsuppgift filed to SKV for a period, from the general ledger.
  * Body lifted verbatim from the former parseDeclarationRequest so route and
  * commit paths produce identical payloads.
@@ -69,18 +97,8 @@ export async function buildMomsuppgift(
 
   const redovisare = await resolveRedovisare(supabase, companyId)
 
-  // Helårsmoms is filed per räkenskapsår (SFL 26 kap 10-11 §§): the SKV
-  // redovisningsperiod is the FY-end month, which for a broken fiscal year is
-  // not December. Resolve the fiscal period's actual bounds so the period
-  // identifier and the figures below always describe the same räkenskapsår.
-  let fiscalYearEnd: { year: number; month: number } | undefined
-  if (periodType === 'yearly') {
-    const { end } = await resolvePeriodDates(
-      supabase, companyId, periodType, year, period, fiscalPeriodId,
-    )
-    fiscalYearEnd = { year: Number(end.slice(0, 4)), month: Number(end.slice(5, 7)) }
-  }
-  const redovisningsperiod = formatRedovisningsperiod(periodType, year, period, fiscalYearEnd)
+  // Same räkenskapsår for the period identifier and the figures below.
+  const redovisningsperiod = await resolveRedovisningsperiod(supabase, companyId, input)
 
   // Calculate VAT declaration from the general ledger
   const declaration = await calculateVatDeclaration(

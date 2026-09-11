@@ -1,6 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
-import { resolvePeriodDates } from '@/lib/reports/vat-declaration'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import type {
   SkvVatDeclarationStatusInput,
@@ -8,7 +6,7 @@ import type {
 } from '@/lib/skatteverket/declaration-status'
 import { skvRequestWithAuth, SkatteverketAuthError } from './api-client'
 import { resolveReadAuth } from './resolve-auth'
-import { resolveRedovisare } from './declaration-prep'
+import { resolveRedovisare, resolveRedovisningsperiod } from './declaration-prep'
 import { skvAuthCodeToStructured } from './error-map'
 import { writeSkatteverketAudit } from './audit'
 
@@ -66,19 +64,11 @@ export async function fetchVatDeclarationStatus(
   }
 
   try {
-    // Helårsmoms is filed per räkenskapsår (SFL 26 kap 10-11 §§): a broken
-    // fiscal year ends in its own month, not December. Same resolution as
-    // buildMomsuppgift so the period identifier matches what was filed.
-    let fiscalYearEnd: { year: number; month: number } | undefined
-    if (input.periodType === 'yearly') {
-      const { end } = await resolvePeriodDates(
-        supabase, companyId, input.periodType, input.year, input.period,
-      )
-      fiscalYearEnd = { year: Number(end.slice(0, 4)), month: Number(end.slice(5, 7)) }
-    }
-    const redovisningsperiod = formatRedovisningsperiod(
-      input.periodType, input.year, input.period, fiscalYearEnd,
-    )
+    // Same räkenskapsår-aware resolution as buildMomsuppgift, so the period
+    // identifier matches what was filed (helårsmoms: FY-end month).
+    const redovisningsperiod = await resolveRedovisningsperiod(supabase, companyId, {
+      periodType: input.periodType, year: input.year, period: input.period,
+    })
 
     const resolved = await resolveReadAuth(supabase, companyId, {
       requires: 'moms_ombud',

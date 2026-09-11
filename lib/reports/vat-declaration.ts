@@ -250,7 +250,15 @@ function round(value: number): number {
  * supplies the fiscal period we therefore use its actual bounds. If the period
  * can't be resolved we fall back to the calendar span so behaviour degrades
  * gracefully instead of erroring.
+ *
+ * `source` names the branch that answered. The yearly fallback is silent on
+ * purpose (a calendar-FY company with no fiscal_periods row still works), so a
+ * caller that puts the range on the wire must be able to tell a resolved
+ * räkenskapsår from a guessed Jan-Dec: for a broken fiscal year the guess puts
+ * both the figures and the Skatteverket redovisningsperiod on the wrong period.
  */
+export type VatPeriodSource = 'fiscal_period' | 'calendar' | 'calendar_fallback'
+
 export async function resolvePeriodDates(
   supabase: SupabaseClient,
   companyId: string,
@@ -258,7 +266,7 @@ export async function resolvePeriodDates(
   year: number,
   period: number,
   fiscalPeriodId?: string
-): Promise<{ start: string; end: string }> {
+): Promise<{ start: string; end: string; source: VatPeriodSource }> {
   if (periodType === 'yearly') {
     if (fiscalPeriodId) {
       const { data: fp } = await supabase
@@ -268,7 +276,7 @@ export async function resolvePeriodDates(
         .eq('company_id', companyId)
         .maybeSingle()
       if (fp?.period_start && fp?.period_end) {
-        return { start: fp.period_start, end: fp.period_end }
+        return { start: fp.period_start, end: fp.period_end, source: 'fiscal_period' }
       }
     } else {
       // No explicit fiscal period: resolve the räkenskapsår ending in `year`
@@ -287,11 +295,16 @@ export async function resolvePeriodDates(
         .limit(1)
         .maybeSingle()
       if (fp?.period_start && fp?.period_end) {
-        return { start: fp.period_start, end: fp.period_end }
+        return { start: fp.period_start, end: fp.period_end, source: 'fiscal_period' }
       }
     }
   }
-  return calculatePeriodDates(periodType, year, period)
+  return {
+    ...calculatePeriodDates(periodType, year, period),
+    // Monthly and quarterly ARE calendar periods by law; only the yearly
+    // branch landing here means a räkenskapsår was asked for and not found.
+    source: periodType === 'yearly' ? 'calendar_fallback' : 'calendar',
+  }
 }
 
 /**

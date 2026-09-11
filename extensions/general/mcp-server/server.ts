@@ -93,6 +93,7 @@ import {
   rcInputTotalsFromDeclaration,
   calculateVatDeclaration,
   resolvePeriodDates,
+  type VatPeriodSource,
 } from '@/lib/reports/vat-declaration'
 import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 // The momsdeklaration completeness checks live in core (lib/reports) and are
@@ -324,7 +325,7 @@ import { mirrorExtractionToDocument } from '@/extensions/general/invoice-inbox/l
 import { skvRequest, SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/agi-submission-status'
-import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatteverket/lib/declaration-prep'
+import { buildMomsuppgift, resolveRedovisare, resolveRedovisningsperiod } from '@/extensions/general/skatteverket/lib/declaration-prep'
 import { writeSkatteverketAudit } from '@/extensions/general/skatteverket/lib/audit'
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
 import { findCompanyTokenUser, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
@@ -2102,6 +2103,13 @@ interface VatReportWithRutor {
    * to the server: no tool puts this map on the wire.
    */
   accountTotals: VatCheckAccountTotals
+  /**
+   * Which branch of resolvePeriodDates produced `report.period`. Kept off the
+   * report itself: gnubok_get_vat_report declares its period object closed
+   * (additionalProperties: false), so the close check is the surface that
+   * discloses a yearly calendar fallback.
+   */
+  periodSource: VatPeriodSource
 }
 
 /**
@@ -2133,7 +2141,7 @@ async function computeVatReportWithRutor(
   if (periodType === 'monthly' && (period < 1 || period > 12)) throw new Error('period must be 1-12 for monthly')
   if (periodType === 'quarterly' && (period < 1 || period > 4)) throw new Error('period must be 1-4 for quarterly')
 
-  const { start: startDate, end: endDate } = await resolvePeriodDates(
+  const { start: startDate, end: endDate, source: periodSource } = await resolvePeriodDates(
     supabase,
     companyId,
     periodType as 'monthly' | 'quarterly' | 'yearly',
@@ -2298,6 +2306,7 @@ async function computeVatReportWithRutor(
     declarationRutor,
     dynamicVatAccounts,
     accountTotals,
+    periodSource,
   }
 }
 
@@ -2390,6 +2399,7 @@ interface VatCloseBlocker {
     | 'reverse_charge_input_missing'
     | 'declaration_incomplete'
     | 'deadline_unavailable'
+    | 'fiscal_year_not_found'
   severity: 'high' | 'medium' | 'low'
   count: number
   message: string
@@ -2488,7 +2498,13 @@ interface VatCloseSanityAnomaly {
 }
 
 interface VatCloseCheckResult {
-  period: VatReportResult['period']
+  /**
+   * `source` discloses whether the range is a resolved räkenskapsår or the
+   * calendar arithmetic (yearly: 'calendar_fallback' when no fiscal year ends
+   * in `year`). The outputSchema keeps `period` an open object, so this costs
+   * no tools/list budget.
+   */
+  period: VatReportResult['period'] & { source: VatPeriodSource }
   period_label: string
   rutor: VatReportResult['rutor']
   payment: {
@@ -2819,7 +2835,7 @@ export async function computeVatCloseCheck(
   //    step 4b: they need rutor 20-24 and 50, which the report view omits, plus
   //    the per-account totals so the RC input comparison reads 2645/2647
   //    instead of the ruta 48 aggregate.
-  const { report: vatReport, declarationRutor, dynamicVatAccounts, accountTotals } =
+  const { report: vatReport, declarationRutor, dynamicVatAccounts, accountTotals, periodSource } =
     await computeVatReportWithRutor(args, companyId, supabase)
   const { start, end, type: periodType, year, period } = vatReport.period
 
@@ -2839,6 +2855,11 @@ export async function computeVatCloseCheck(
   //    deadlines need the turnover threshold; annual deadlines additionally
   //    need the filing profile and a configured fiscal year matching the
   //    report range. Quarterly dates are independent of company settings.
+  const configuredStartMonth = typeof settings?.fiscal_year_start_month === 'number'
+    && settings.fiscal_year_start_month >= 1
+    && settings.fiscal_year_start_month <= 12
+    ? settings.fiscal_year_start_month
+    : null
   let deadline: { date: string; label: string } | null = null
   if (periodType === 'quarterly') {
     deadline = computeMomsDeadline('quarterly', Number(year), Number(period), {
@@ -2852,11 +2873,6 @@ export async function computeVatCloseCheck(
       vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m,
     })
   } else if (periodType === 'yearly' && settings && entityType) {
-    const configuredStartMonth = typeof settings.fiscal_year_start_month === 'number'
-      && settings.fiscal_year_start_month >= 1
-      && settings.fiscal_year_start_month <= 12
-      ? settings.fiscal_year_start_month
-      : null
     const reportEndMonth = Number(end.slice(5, 7))
     const reportStartMonth = reportEndMonth === 12 ? 1 : reportEndMonth + 1
     const calendarYearOnly = fiscalYearLockedToCalendar(entityType)
@@ -2891,12 +2907,17 @@ export async function computeVatCloseCheck(
 
   // 4) Blocker scans: run in parallel
   const [uncategorizedRes, unapprovedRes, recon, missingUnderlag] = await Promise.all([
+    // is_ignored = false: a transaction the user ignored on purpose (private,
+    // duplicate feed row) is not waiting to be booked, and the same predicate
+    // drives the Att göra worklist (lib/worklist/categories.ts). The column is
+    // NOT NULL DEFAULT false, so eq is exact.
     supabase
       .from('transactions')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
       .gte('date', start).lte('date', end)
-      .is('journal_entry_id', null),
+      .is('journal_entry_id', null)
+      .eq('is_ignored', false),
     supabase
       .from('supplier_invoices')
       .select('id', { count: 'exact', head: true })
@@ -2922,6 +2943,26 @@ export async function computeVatCloseCheck(
       count: 1,
       message: 'Momsens inlämningsdatum kunde inte fastställas säkert',
       hint: 'Kontrollera momsinställningar, deklarationssätt och räkenskapsperiod innan deklarationen lämnas in.',
+    })
+  }
+  // Helårsmoms follows the räkenskapsår (SFL 26 kap 10-11 §§). When no fiscal
+  // year ends in `year` the report silently fell back to Jan-Dec, which for a
+  // company whose fiscal year does not start in January means every figure
+  // above describes the wrong period (feedback seq 330091: FY Apr-Mar, yearly
+  // 2026 came back as 2026-01-01..2026-12-31). Say so instead of leaving the
+  // agent to infer it from an unavailable deadline.
+  if (
+    periodType === 'yearly'
+    && periodSource === 'calendar_fallback'
+    && configuredStartMonth !== null
+    && configuredStartMonth !== 1
+  ) {
+    blockers.push({
+      kind: 'fiscal_year_not_found',
+      severity: 'high',
+      count: 1,
+      message: `Inget räkenskapsår som slutar ${year} hittades: perioden föll tillbaka på kalenderåret ${start}..${end}, men helårsmoms redovisas per räkenskapsår (SFL 26 kap 10-11 §§)`,
+      hint: `Företagets räkenskapsår börjar månad ${configuredStartMonth}. Kontrollera räkenskapsåren med gnubok_list_fiscal_periods och ange year = det år räkenskapsåret slutar.`,
     })
   }
   const uncategorizedCount = uncategorizedRes.count ?? 0
@@ -3130,7 +3171,7 @@ export async function computeVatCloseCheck(
   }
 
   return {
-    period: vatReport.period,
+    period: { ...vatReport.period, source: periodSource },
     period_label: vatReport.period_label,
     rutor: vatReport.rutor,
     payment: {
@@ -5605,12 +5646,16 @@ export const tools: McpTool[] = [
         throw new Error('cash_account_id must be a cash account UUID (cash_accounts.id), not a ledger account number')
       }
 
-      // Get total count
+      // Get total count. is_ignored = false on both queries: a transaction
+      // ignored via gnubok_ignore_transaction has no journal entry by CHECK
+      // constraint, so journal_entry_id IS NULL alone kept listing it as work
+      // to do (feedback seq 330091). Same predicate as the Att göra worklist.
       let countQuery = supabase
         .from('transactions')
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId)
         .is('journal_entry_id', null)
+        .eq('is_ignored', false)
       if (cashAccountId) countQuery = countQuery.eq('cash_account_id', cashAccountId)
       const { count: totalCount, error: countError } = await countQuery
 
@@ -5623,6 +5668,7 @@ export const tools: McpTool[] = [
         )
         .eq('company_id', companyId)
         .is('journal_entry_id', null)
+        .eq('is_ignored', false)
       if (cashAccountId) listQuery = listQuery.eq('cash_account_id', cashAccountId)
       const { data, error } = await listQuery
         .order('date', { ascending: false })
@@ -8115,14 +8161,14 @@ export const tools: McpTool[] = [
     name: 'gnubok_vat_close_check',
     keywords: ['moms', 'momsavstämning', 'momskontroll'],
     title: 'VAT Close Check (Momsdeklaration)',
-    description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor, bookkeeping blockers (including unavailable deadlines), and declaration_checks from the same momsdeklaration completeness gate used by the web filing UI. ready_to_close covers both.",
+    description: "Answer 'can I close VAT?' in one call: SKV 4700 rutor, bookkeeping blockers (incl. unavailable deadlines) and declaration_checks from the momsdeklaration completeness gate the web filing UI uses. ready_to_close covers both.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         period_type: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'Period type' },
-        year: { type: 'number', description: 'Year (e.g. 2026)' },
-        period: { type: 'number', description: '1-12 for monthly, 1-4 for quarterly, 1 for yearly' },
+        year: { type: 'number', description: 'Year; for yearly, the year the räkenskapsår ends' },
+        period: { type: 'number', description: '1-12 monthly, 1-4 quarterly, 1 yearly' },
       },
       required: ['period_type', 'year', 'period'],
     },
@@ -15515,14 +15561,14 @@ export const tools: McpTool[] = [
     name: 'gnubok_vat_declaration_status',
     keywords: ['momsdeklaration', 'moms'],
     title: 'VAT Declaration Status (Momsdeklaration)',
-    description: 'Fetch the filing status of a momsdeklaration from Skatteverket: inlämnat (submitted) and/or beslutat (decided). Sections are null when nothing is on file yet.',
+    description: 'Filing status of a momsdeklaration at Skatteverket: inlämnat (submitted) and/or beslutat (decided). Sections are null when nothing is on file yet.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         period_type: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'Period type' },
-        year: { type: 'number', description: 'Year (e.g. 2026)' },
-        period: { type: 'number', description: '1-12 for monthly, 1-4 for quarterly, 1 for yearly' },
+        year: { type: 'number', description: 'Year; for yearly, the year the räkenskapsår ends' },
+        period: { type: 'number', description: '1-12 monthly, 1-4 quarterly, 1 yearly' },
         state: { type: 'string', enum: ['submitted', 'decided', 'both'], description: "Which view to fetch. Default 'both'." },
       },
       required: ['period_type', 'year', 'period'],
@@ -15538,7 +15584,11 @@ export const tools: McpTool[] = [
       const ctx = createExtensionContext(supabase, userId, companyId, 'skatteverket')
       try {
         const redovisare = await resolveRedovisare(supabase, companyId)
-        const redovisningsperiod = formatRedovisningsperiod(periodType, year, period)
+        // Shared with validate/submit and the HTTP status service: helårsmoms
+        // files under the räkenskapsår's end month, not December.
+        const redovisningsperiod = await resolveRedovisningsperiod(
+          supabase, companyId, { periodType, year, period },
+        )
         let submitted: unknown = null
         let decided: unknown = null
         if (state === 'submitted' || state === 'both') {
