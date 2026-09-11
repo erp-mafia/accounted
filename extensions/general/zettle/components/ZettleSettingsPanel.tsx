@@ -229,7 +229,10 @@ export default function ZettleSettingsPanel() {
         return
       }
       const saved = result.data?.organization_name ?? next
-      setConnection({ ...connection, organization_name: saved })
+      // Functional update: sync/toggle can refresh connection while rename awaits.
+      setConnection((current) =>
+        current ? { ...current, organization_name: saved } : current,
+      )
       setStoreNameDraft(saved)
       toast({
         title: t('store_name_saved_toast'),
