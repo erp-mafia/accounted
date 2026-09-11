@@ -2290,7 +2290,7 @@ function downloadEmployeeTemplate() {
 
 function EmployeesFlow() {
   const { toast } = useToast()
-  const t = useTranslations('import_employees')
+  const tEmp = useTranslations('import_employees')
 
   const [step, setStep] = useState<RegisterStep>('upload')
   const [isLoading, setIsLoading] = useState(false)
@@ -2313,10 +2313,10 @@ function EmployeesFlow() {
     const res = await fetch('/api/import/employees/parse', { method: 'POST', body: formData })
     const data = await res.json()
     if (!res.ok) {
-      throw new Error(data.error?.message_sv || getErrorMessage(data.error) || data.error || t('error_parse'))
+      throw new Error(data.error?.message_sv || getErrorMessage(data.error) || data.error || tEmp('error_parse'))
     }
     return data.data as EmployeeImportParseResult
-  }, [t])
+  }, [tEmp])
 
   const handleFileSelect = useCallback(async (selectedFile: File) => {
     setError(null)
@@ -2326,20 +2326,20 @@ function EmployeesFlow() {
       const result = await parseFile(selectedFile)
       setParseResult(result)
       if (result.rows.length === 0) {
-        setError(t('error_no_rows'))
+        setError(tEmp('error_no_rows'))
         return
       }
       toast({
-        title: t('toast_parsed_title'),
-        description: t('toast_parsed_description', { count: result.rows.length, duplicates: result.duplicate_count }),
+        title: tEmp('toast_parsed_title'),
+        description: tEmp('toast_parsed_description', { count: result.rows.length, duplicates: result.duplicate_count }),
       })
       setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : t('error_parse'))
+      setError(err instanceof Error ? getErrorMessage(err) : tEmp('error_parse'))
     } finally {
       setIsLoading(false)
     }
-  }, [parseFile, t, toast])
+  }, [parseFile, tEmp, toast])
 
   const handleColumnMappingConfirm = useCallback(async (
     mapping: Record<EmployeeColumnKey, number | null>,
@@ -2353,11 +2353,11 @@ function EmployeesFlow() {
       setParseResult(result)
       setStep('edit')
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : t('error_parse'))
+      setError(err instanceof Error ? getErrorMessage(err) : tEmp('error_parse'))
     } finally {
       setIsLoading(false)
     }
-  }, [file, parseFile, t])
+  }, [file, parseFile, tEmp])
 
   const handleExecute = useCallback(async (rows: AnnotatedEmployeeRow[]) => {
     setIsLoading(true)
@@ -2376,23 +2376,23 @@ function EmployeesFlow() {
       })
       const data = await res.json()
       if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || t('error_execute'))
+        setError(data.error?.message_sv || getErrorMessage(data.error) || tEmp('error_execute'))
         return
       }
       const r = data.data as RegisterResult
       setExecuteResult(r)
       setStep('result')
       toast({
-        title: r.success ? t('toast_done_title') : t('toast_done_partial_title'),
-        description: t('toast_done_description', { created: r.created, skipped: r.skipped, failed: r.failed }),
+        title: r.success ? tEmp('toast_done_title') : tEmp('toast_done_partial_title'),
+        description: tEmp('toast_done_description', { created: r.created, skipped: r.skipped, failed: r.failed }),
         variant: r.success ? 'default' : 'destructive',
       })
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : t('error_execute'))
+      setError(err instanceof Error ? getErrorMessage(err) : tEmp('error_execute'))
     } finally {
       setIsLoading(false)
     }
-  }, [t, toast])
+  }, [tEmp, toast])
 
   const handleNewImport = () => {
     setStep('upload')
@@ -2441,10 +2441,10 @@ function EmployeesFlow() {
             error={error}
           />
           <div className="flex flex-wrap items-center justify-between gap-4 px-1 text-sm text-muted-foreground">
-            <span>{t('template_hint')}</span>
+            <span>{tEmp('template_hint')}</span>
             <Button variant="outline" size="sm" onClick={downloadEmployeeTemplate}>
               <Download className="mr-2 h-4 w-4" />
-              {t('template_button')}
+              {tEmp('template_button')}
             </Button>
           </div>
         </>
