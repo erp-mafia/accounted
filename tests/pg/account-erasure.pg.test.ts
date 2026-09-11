@@ -561,6 +561,22 @@ describe('account erasure (pg)', () => {
         oauth_state: null,
         accounts_data: null,
       })
+
+      // Once only: the same revoke again would still bump updated_at on an
+      // immutable archive row, so it is refused, and the repair pass (which
+      // only updates rows that still hold something) stays a no-op here.
+      await client.query('SAVEPOINT repeat_revoke')
+      await expect(
+        client.query(
+          `UPDATE public.bank_connections
+              SET status = 'revoked', session_id = NULL, authorization_id = NULL, oauth_state = NULL,
+                  accounts_data = NULL
+            WHERE id = $1`,
+          [bankId],
+        ),
+      ).rejects.toThrow(/immutable/i)
+      await client.query('ROLLBACK TO SAVEPOINT repeat_revoke')
+      await client.query('SELECT public.erase_user_personal_data($1)', [userId])
     })
   })
 })

@@ -62,8 +62,8 @@
 
 -- Migration-reset source companies are retention containers (20260818084050):
 -- their rows stay unchanged. The one change let through is revoking a bank
--- consent, which alters no accounting-shaped data and is what erasure needs
--- (header, point 3). The IFs are nested because NEW.session_id only exists on
+-- consent, once (a repeat would still bump updated_at), which alters no
+-- accounting-shaped data and is what erasure needs (header, point 3). The IFs are nested because NEW.session_id only exists on
 -- bank_connections and AND gives no evaluation-order guarantee.
 CREATE OR REPLACE FUNCTION public.block_migration_reset_source_mutation()
  RETURNS trigger
@@ -94,6 +94,11 @@ BEGIN
          AND NEW.authorization_id IS NULL
          AND NEW.oauth_state IS NULL
          AND NEW.accounts_data IS NULL
+         AND (OLD.status IS DISTINCT FROM 'revoked'
+              OR OLD.session_id IS NOT NULL
+              OR OLD.authorization_id IS NOT NULL
+              OR OLD.oauth_state IS NOT NULL
+              OR OLD.accounts_data IS NOT NULL)
          AND (to_jsonb(NEW) - v_revoke_columns) = (to_jsonb(OLD) - v_revoke_columns)
       THEN
         RETURN NEW;
