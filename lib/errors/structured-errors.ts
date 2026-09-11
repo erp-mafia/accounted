@@ -2061,6 +2061,23 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Perioden är redan låst.',
     message_en: 'Period is already locked.',
+    retryable: false,
+    remediation: {
+      description:
+        'A lock only freezes the period. If the intent is bokslut, do not lock first: gnubok_run_year_end posts the closing entry into the period and then locks and closes it itself, so it needs an unlocked period (gnubok_unlock_period reopens a locked, not closed, one). If the period should simply stay frozen, nothing more is needed.',
+      tool: 'gnubok_unlock_period',
+    },
+  },
+  PERIOD_ALREADY_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Perioden är redan stängd: bokslutet är genomfört och perioden kan inte öppnas igen.',
+    message_en: 'Period is already closed: year-end has been run and the period is sealed.',
+    retryable: false,
+    remediation: {
+      description:
+        'Nothing more to do on this period. gnubok_run_year_end locks, closes and seeds the next period\'s opening balances in one step, so gnubok_close_period, gnubok_lock_period and gnubok_set_opening_balances are not follow-up calls. Confirm the state with gnubok_list_fiscal_periods and continue in the next period.',
+      tool: 'gnubok_list_fiscal_periods',
+    },
   },
   PERIOD_UNLOCK_NOT_LOCKED: {
     httpStatus: 409,
@@ -4128,15 +4145,28 @@ const BULK_BOOK: Record<string, StructuredErrorEntry> = {
   BULK_BOOK_DATE_MISMATCH: {
     httpStatus: 400,
     message_sv:
-      'Alla transaktioner i en samlingsbokföring måste ha samma datum (BFL 5 kap 6§).',
+      'Alla transaktioner i en samlingsbokföring måste ha samma datum: BFL 5 kap 6 § tredje stycket tillåter en gemensam verifikation bara för likartade affärshändelser samma dag. Dela upp bokföringen per dag.',
     message_en:
-      'All transactions in a bulk booking must share the same date (BFL 5 kap 6§).',
+      'All transactions in a bulk booking must share the same date: BFL 5 kap 6 § tredje stycket allows a gemensam verifikation only for likartade affärshändelser on the same day. Split the batch per day.',
+    retryable: false,
+    remediation: {
+      description:
+        'This is a legal limit, not a technical one: a monthly samlingsverifikat over several days is not an option under BFL 5 kap 6 §. Group the tx_ids by date and call gnubok_bulk_book_transactions once per date (and per direction).',
+      tool: 'gnubok_bulk_book_transactions',
+    },
   },
   BULK_BOOK_DIRECTION_MISMATCH: {
     httpStatus: 400,
     message_sv:
-      'Alla transaktioner måste vara samma riktning (alla intäkter eller alla utgifter).',
-    message_en: 'All transactions must be the same direction (all income or all expense).',
+      'Alla transaktioner i en samlingsbokföring måste ha samma riktning (alla intäkter eller alla utgifter): BFL 5 kap 6 § tredje stycket tillåter en gemensam verifikation bara för likartade affärshändelser. Dela upp bokföringen per riktning.',
+    message_en:
+      'All transactions in a bulk booking must share the same direction (all income or all expense): BFL 5 kap 6 § tredje stycket allows a gemensam verifikation only for likartade affärshändelser. Split the batch per direction.',
+    retryable: false,
+    remediation: {
+      description:
+        'This is a legal limit, not a technical one: an inflow and an outflow are not likartade affärshändelser under BFL 5 kap 6 §. Call gnubok_bulk_book_transactions once for the income rows and once for the expense rows (each batch still on one date).',
+      tool: 'gnubok_bulk_book_transactions',
+    },
   },
   BULK_BOOK_MIXED_CURRENCY: {
     httpStatus: 400,

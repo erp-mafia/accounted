@@ -329,6 +329,59 @@ describe('validateYearEndReadiness', () => {
     expect(codes).toContain('CONTINUITY_MISMATCH')
   })
 
+  // executeYearEndClosing posts the closing entry INTO the period before it
+  // locks it (steps 4 and 7): a period locked beforehand used to pass
+  // readiness and then hit the period-lock trigger at commit. The MCP skill
+  // prescribed exactly that order (feedback seq 392722).
+  it('blocks a locked (not closed) period with PERIOD_LOCKED and says to unlock it', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      is_closed: false,
+      closing_entry_id: null,
+      locked_at: '2026-01-15T10:00:00Z',
+    })
+    results = noGapResults(period)
+
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+
+    const supabase = makeClient()
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.ready).toBe(false)
+    const locked = result.blockers.find((b) => b.code === 'PERIOD_LOCKED')
+    expect(locked).toBeDefined()
+    expect(locked!.message).toMatch(/lås upp/)
+    expect(locked!.message).toMatch(/låser den sedan självt/)
+    expect(result.errors).toContain(locked!.message)
+  })
+
+  it('does not add PERIOD_LOCKED on a closed period (closed periods are locked too, but cannot be unlocked)', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      is_closed: true,
+      closing_entry_id: 'ce-1',
+      locked_at: '2026-01-15T10:00:00Z',
+    })
+    results = noGapResults(period)
+
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+
+    const supabase = makeClient()
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+    const codes = result.blockers.map((b) => b.code)
+    expect(codes).toContain('PERIOD_ALREADY_CLOSED')
+    expect(codes).not.toContain('PERIOD_LOCKED')
+  })
+
   it('returns errors when trial balance is unbalanced', async () => {
     const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
     results = noGapResults(period)
