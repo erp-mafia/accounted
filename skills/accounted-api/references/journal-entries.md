@@ -73,7 +73,7 @@ Example response `200`:
 **Create a draft journal entry (verifikation).**
 `scope:bookkeeping:write · risk:high · idempotent · dry-run · reversible`
 
-Creates a draft journal entry via the engine's createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run validates balance + account-chart membership + period date constraints without inserting any row.
+Creates a draft journal entry via the engine's createDraftEntry(). The draft has no voucher_number until /commit is called. Idempotent (mandatory Idempotency-Key). Dry-runnable: a dry-run checks the body, the balance, the period lock and the lines' accounts against the chart without inserting any row, so it fails with ACCOUNTS_NOT_IN_CHART for the same accounts the live call would reject.
 
 **Use when:** You're posting an arbitrary verifikation (manual journal entries, accrual reversals, period closing adjustments) outside the invoicing / supplier-invoice / transaction flows.
 **Do not use for:** Bookkeeping flows that have a dedicated endpoint (invoices, supplier-invoices, transactions). Editing an existing posted entry: use /correct instead.
@@ -82,7 +82,7 @@ Creates a draft journal entry via the engine's createDraftEntry(). The draft has
 - Idempotency-Key is mandatory.
 - Lines must sum to zero (Σ debit = Σ credit). Engine rejects with JOURNAL_ENTRY_NOT_BALANCED on imbalance.
 - entry_date must fall within fiscal_period_id's [period_start, period_end]; otherwise ENTRY_DATE_OUTSIDE_FISCAL_PERIOD.
-- All account_numbers must be active in the chart_of_accounts; otherwise ACCOUNTS_NOT_IN_CHART.
+- Every account_number must resolve in the company's chart of accounts: a standard BAS 2026 account that is not in the chart yet is added automatically, but a deactivated account, or a non-BAS number the chart does not contain, fails with ACCOUNTS_NOT_IN_CHART.
 - voucher_series defaults to "A" if omitted. Must be a single uppercase letter.
 - This creates a DRAFT only: call POST /{id}/commit to assign the voucher_number and post atomically.
 
