@@ -66,6 +66,27 @@ function readRemaining(raw: Record<string, unknown>): number | null {
   return null;
 }
 
+/**
+ * The open balance the DTO reports. Two independent signals arrive: the
+ * PaymentStatus enum and the remaining amount. With the enum present and
+ * saying NOT settled, a present-but-zero RemainingAmount (or its
+ * *InvoiceCurrency twin) is a payload artefact, not a settlement: company
+ * 5208b894 (2026-09-10) imported all 53 of its unpaid supplier invoices as
+ * paid because that zero was read as the balance. The open balance is then
+ * the positive remaining amount when one is stated, otherwise the total;
+ * never 0. Without the enum, or when it says settled, the amount keeps its
+ * meaning and an ABSENT amount falls back to total/0 as before.
+ */
+function openBalance(
+  ps: number | undefined,
+  paid: boolean,
+  remaining: number | null,
+  total: number,
+): number {
+  if (ps != null && !paid) return remaining != null && remaining > 0 ? remaining : total;
+  return remaining ?? (paid ? 0 : total);
+}
+
 function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
   const remaining = readRemaining(raw);
   const total = raw['TotalAmount'] as number ?? 0;
@@ -172,8 +193,9 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     paid,
     // When the payload omits RemainingAmount the honest open balance for an
     // unpaid invoice is its total, not 0: 0 would read as fully settled.
-    balance: amount(remaining ?? (paid ? 0 : total), currency),
+    balance: amount(openBalance(ps, paid, remaining, total), currency),
     lastPaymentDate: raw['PaymentDate'] as string | undefined,
+    source: ps != null ? 'enum' : 'balance',
   };
 
   return {
@@ -216,8 +238,9 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
     : remaining === 0 && total !== 0;
   // A partially paid invoice without a RemainingAmount cannot be represented
   // faithfully: report the full total as open (visible and correctable)
-  // rather than inventing a split.
-  const balance = remaining ?? (paid ? 0 : total);
+  // rather than inventing a split. A PRESENT zero beside an unpaid enum is
+  // handled in openBalance.
+  const balance = openBalance(ps, paid, remaining, total);
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => {
@@ -251,6 +274,7 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
     paid,
     balance: amount(balance, currency),
     lastPaymentDate: raw['PaymentDate'] as string | undefined,
+    source: ps != null ? 'enum' : 'balance',
   };
 
   return {

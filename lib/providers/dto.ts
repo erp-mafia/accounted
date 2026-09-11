@@ -143,6 +143,15 @@ export interface PaymentStatusDto {
   paid: boolean;
   balance: AmountType;
   lastPaymentDate?: string;
+  /**
+   * Where `paid` came from. 'enum': the provider's explicit payment-status
+   * enum (Visma PaymentStatus), which is authoritative: a zero balance beside
+   * paid = false is a payload artefact, not a settlement, and consumers must
+   * not let it override the flag. Absent or 'balance': `paid` was derived
+   * from the balance itself, so a non-positive balance keeps its
+   * drift-tolerant meaning (a residual öre resolves to paid).
+   */
+  source?: 'enum' | 'balance';
 }
 
 export interface SalesInvoiceLineDto {
