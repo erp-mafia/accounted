@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   insertAuthUser,
@@ -6,6 +5,7 @@ import {
   insertCompanyMember,
   insertFiscalPeriod,
   insertTransaction,
+  insertDraftJournalEntry,
 } from '@/tests/pg/fixtures'
 import { getClient, getPool, withUserContext } from '@/tests/pg/setup'
 
@@ -32,14 +32,7 @@ async function insertPostedEntry(params: {
   sourceType?: string
   lines?: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
-  const id = randomUUID()
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2026-01-01', 'Ingående balanser 2026', $6, 'draft')`,
-    [id, params.userId, params.companyId, params.fiscalPeriodId, params.voucherNumber, params.sourceType ?? 'manual'],
-  )
+  const id = await insertDraftJournalEntry({...params,entryDate:'2026-01-01',description:'Ingående balanser 2026'})
   const lines = params.lines ?? [
     { account: '1930', debit: 5000, credit: 0 },
     { account: '2099', debit: 0, credit: 5000 },

@@ -18,6 +18,7 @@
  * handleSkvError, the commit service through mapServiceError.
  */
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import type { VatPeriodType } from '@/types'
 import { skvRequest } from './api-client'
 import { writeSkatteverketAudit } from './audit'
@@ -62,8 +63,11 @@ export async function submitVatDeclarationChain(
   options: { validate?: boolean } = {}
 ): Promise<VatSubmitChainResult> {
   const { supabase, userId, companyId } = ctx
+  // Validate and release the read lease before any external write. The filed
+  // payload is this complete snapshot; a late response cannot turn a successful
+  // submission into an apparent failure merely because the read lease expired.
   const { redovisare, redovisningsperiod, momsuppgift } =
-    await buildMomsuppgift(supabase, ctx.companyId, params)
+    await withSIEPeriodRead(supabase,companyId,'vat_submission',() => buildMomsuppgift(supabase,companyId,params))
 
   // 0. Optional kontrollera pre-step: SKV validates the arithmetic without
   //    saving anything. ERROR-level findings abort the chain here, before

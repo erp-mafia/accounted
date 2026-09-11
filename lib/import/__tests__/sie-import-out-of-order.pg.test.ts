@@ -39,6 +39,9 @@ async function insertPostedEntry(params: {
   const client = await getClient()
   try {
     await client.query('BEGIN')
+    // This suite covers retained legacy opening-balance resync behavior.
+    // Seed historical imports without changing any accounting guard.
+    if(params.sourceType==='import') await client.query('ALTER TABLE journal_entries DISABLE TRIGGER guard_sie_entry_provenance')
     const voucher = await client.query<{ next_number: number }>(
       `SELECT COALESCE(MAX(voucher_number), 0) + 1 AS next_number
          FROM public.journal_entries
@@ -52,7 +55,7 @@ async function insertPostedEntry(params: {
       `INSERT INTO public.journal_entries
          (id, user_id, company_id, fiscal_period_id, voucher_number,
           voucher_series, entry_date, description, source_type, status, reverses_id)
-       VALUES ($1, $2, $3, $4, $5, 'A', $6, $7, $8, 'posted', $9)`,
+       VALUES ($1, $2, $3, $4, $5, 'A', $6, $7, $8, 'draft', $9)`,
       [
         id,
         params.userId,
@@ -97,6 +100,8 @@ async function insertPostedEntry(params: {
         ],
       )
     }
+    if(params.sourceType==='import') await client.query('ALTER TABLE journal_entries ENABLE TRIGGER guard_sie_entry_provenance')
+    await client.query("UPDATE journal_entries SET status='posted' WHERE id=$1",[id])
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {})

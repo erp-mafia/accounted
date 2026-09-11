@@ -63,16 +63,16 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
   // happens after selection, with a visible error instead of a dead drop.
   const trySelectFile = useCallback((file: File) => {
     const name = file.name.toLowerCase()
-    if (name.endsWith('.sie') || name.endsWith('.se')) {
+    if (name.endsWith('.sie') || name.endsWith('.se') || name.endsWith('.si')) {
       setFileTypeError(null)
       setSelectedFile(file)
       onFileSelect(file)
       return
     }
     if (name.endsWith('.zip')) {
-      setFileTypeError(`Filen "${file.name}" är en zip-fil. Packa upp den först och välj SIE-filen inuti (slutar på .sie eller .se).`)
+      setFileTypeError(`Filen "${file.name}" är en zip-fil. Packa upp den först och välj SIE-filen inuti (slutar på .sie, .se eller .si).`)
     } else {
-      setFileTypeError(`Filen "${file.name}" stöds inte. Välj en SIE-fil som slutar på .sie eller .se.`)
+      setFileTypeError(`Filen "${file.name}" stöds inte. Välj en SIE-fil som slutar på .sie, .se eller .si.`)
     }
   }, [onFileSelect])
 
@@ -173,7 +173,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                   <p className="font-medium hidden sm:block">Dra och släpp SIE-fil här</p>
                   <p className="font-medium sm:hidden">Tryck för att välja SIE-fil</p>
                   <p className="text-sm text-muted-foreground hidden sm:block">eller klicka för att välja fil</p>
-                  <p className="text-sm text-muted-foreground sm:hidden">.sie eller .se-filer</p>
+                  <p className="text-sm text-muted-foreground sm:hidden">.sie, .se eller .si-filer</p>
                 </div>
               </div>
             )}

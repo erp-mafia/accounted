@@ -96,4 +96,4 @@ export const GET = withRouteContext('report.salary_journal.xlsx', async (request
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

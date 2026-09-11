@@ -2384,8 +2384,8 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
   },
   SIE_IMPORT_UNEXPECTED: {
     httpStatus: 500,
-    message_sv: 'Importen avbröts oväntat. Ingen data har sparats.',
-    message_en: 'Unexpected error during SIE import; no data was committed.',
+    message_sv: 'Importens resultat kunde inte bekräftas. Kontrollera importhistoriken innan du försöker igen.',
+    message_en: 'The import outcome could not be confirmed. Check import history before retrying.',
   },
   SIE_REPLACE_FAILED: {
     httpStatus: 400,

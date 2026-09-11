@@ -1,47 +1,19 @@
-/**
- * POST /api/v1/companies/{companyId}/imports/sie
- *
- * SIE4 file import. Multipart upload: the file is the request body. The
- * route:
- *   1. Decodes the file (CP437 / Windows-1252 / UTF-8 auto-detected).
- *   2. Parses the SIE structure.
- *   3. Checks for duplicate file-hash imports (rejects if already imported).
- *   4. Runs the full import via `executeSIEImport()`: fiscal period
- *      creation, opening balance entry, voucher commits.
- *   5. Records the result on the `operations` table so the v1 caller
- *      receives a consistent `{ operation_id }` shape.
- *
- * Currently executes INLINE (the operation is stamped `succeeded` /
- * `failed` before the response returns). A future cron worker can take
- * over by flipping `initialStatus` from `'running'` to `'queued'`:
- * the API contract stays identical.
- *
- * SIE imports are expensive: a typical multi-year SIE file produces
- * thousands of journal entries. The dashboard route allows up to 5
- * minutes (`maxDuration = 300`); this route inherits the v1 default.
- * For very large imports, consider chunking client-side.
- */
-
+/** Submit durable SIE work and return its operation id before ledger writes. */
+import { readSIERequestFile } from '@/lib/import/sie-intake'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { z } from 'zod'
 import { accepted } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-import {
-  startOperation,
-  completeOperation,
-  failOperation,
-} from '@/lib/api/v1/operations'
+import { after } from 'next/server'
 import {
   parseSIEFile,
   detectEncoding,
   decodeBuffer,
-  calculateFileHash,
 } from '@/lib/import/sie-parser'
-import {
-  executeSIEImport,
-  checkDuplicateImport,
-} from '@/lib/import/sie-import'
+import { submitSIEJob } from '@/lib/import/sie-jobs'
+import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import { suggestMappings } from '@/lib/import/account-mapper'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
@@ -70,21 +42,20 @@ registerEndpoint({
   doNotUseFor:
     'Bank transaction CSV/XML imports (use POST /imports/bank). Single-voucher creation (use POST /journal-entries). Importing into a period that already has posted entries: SIE imports run on a fresh period.',
   pitfalls: [
-    'Body content-type must be multipart/form-data with a `file` field carrying the .se / .sie file (or a JSON body with `file_base64` for agents that can\'t do multipart).',
-    'File size cap: 50 MB. Larger files require chunking client-side or a future streaming import endpoint.',
-    'Duplicate-file detection is by SHA-256 hash: re-importing the same file returns 409 SIE_IMPORT_DUPLICATE without re-running the import.',
+    'Body content-type must be multipart/form-data with either a `file` field carrying the .se / .sie / .si file, or `storagePath` and `filename` fields from the signed-upload endpoint.',
+    'Files up to 50 MB use POST /imports/sie/upload, then upload bytes to Storage and submit storagePath + filename. Inline multipart is limited by the hosting gateway.',
+    'An identical retry returns the same execution. Deliberate replacement requires options.onExistingPeriod=replace and options.supersedesImportId naming the reviewed predecessor, and uses a new batch after storno.',
     'The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
-    'BFL 7 kap räkenskapsinformation: once a SIE import completes, the resulting verifikationer are immutable. Cancellation midway is not supported.',
+    'Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.',
     'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides). By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.',
   ],
   example: {
     response: {
       data: {
-        operation_id: 'op_a8f1…',
+        operation_id: '7ce97122-264e-49ca-a795-e01dc77425e7',
         type: 'import.sie',
         status: 'queued',
-        poll_url: '/api/v1/operations/op_a8f1…',
-        webhook_event: 'operation.completed',
+        poll_url: '/api/v1/operations/7ce97122-264e-49ca-a795-e01dc77425e7',
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -92,7 +63,7 @@ registerEndpoint({
   scope: 'bookkeeping:write',
   risk: 'high',
   idempotent: true,
-  reversible: false,
+  reversible: true,
   dryRunSupported: false,
   request: { contentType: 'multipart/form-data' },
   response: { success: dataEnvelope(SieImportAccepted) },
@@ -112,7 +83,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    const file = formData.get('file')
+    const file = await readSIERequestFile(formData,ctx.supabase,ctx.companyId!)
     if (!(file instanceof File)) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -158,6 +129,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         // use, so the IB entry never shifts the file's own numbering.
         openingBalanceSeries: z.string().min(1).max(2).optional(),
         updateAccountNames: z.boolean().optional().default(true),
+        onExistingPeriod:z.enum(['block','replace']).default('block'),
+        supersedesImportId:z.string().uuid().optional(),
       })
       // OWASP V4.5: reject unknown keys so a future schema-extension
       // (or a careless edit) doesn't silently pass mass-assigned fields
@@ -174,7 +147,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const buffer = await file.arrayBuffer()
     const encoding = detectEncoding(buffer)
     const content = decodeBuffer(buffer, encoding)
-    const fileHash = await calculateFileHash(content)
 
     // OWASP V5.2: cheap content-shape check before letting the SIE parser
     // chew on arbitrary bytes. A valid SIE4 file's first 4 KiB contains at
@@ -204,33 +176,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Duplicate-file check before starting the operation. Log the
-    // existing import id + timestamp server-side for operator forensics
-    // (CC7.2 audit trail), but do NOT echo them in the response body:
-    // symmetry with the bank IDOR fix. The agent learns "this file is
-    // already imported" via the error code; the server log carries the
-    // context for debugging.
-    const dup = await checkDuplicateImport(ctx.supabase, ctx.companyId!, content)
-    if (dup) {
-      ctx.log.info('SIE duplicate import rejected', {
-        fileHash,
-        existingImportId: dup.id,
-        existingImportedAt: dup.imported_at,
-      })
-      return v1ErrorResponseFromCode('SIE_IMPORT_DUPLICATE', ctx.log, {
-        requestId: ctx.requestId,
-        // Deliberately empty details. Server log has the forensic info.
-      })
-    }
-
     // Build account mappings server-side from the file's #KONTO records and
     // any stored per-company overrides: same as the dashboard execute route.
     // (This route used to pass [] as mappings, which executeSIEImport's
     // mapping-coverage guard rejects for any real file.)
-    const { data: storedMappings } = await ctx.supabase
-      .from('sie_account_mappings')
-      .select('*')
-      .eq('company_id', ctx.companyId)
+    const storedMappings = await fetchAllRows<SIEAccountMappingRecord>(({from,to}) => ctx.supabase
+      .from('sie_account_mappings').select('*').eq('company_id',ctx.companyId).order('source_account').range(from,to))
     const mappings = suggestMappings(
       parsed.accounts,
       BAS_REFERENCE,
@@ -255,67 +206,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Start the operation row: caller polls /operations/{id} for status.
-    const op = await startOperation(
-      ctx.supabase,
-      {
-        companyId: ctx.companyId!,
-        userId: ctx.userId,
-        operationType: 'import.sie',
-        params: {
-          filename: file.name,
-          file_size: file.size,
-          encoding,
-          file_hash: fileHash,
-          voucher_count: parsed.vouchers?.length ?? 0,
-        },
-      },
-      ctx.log,
-    )
-
-    // Run import INLINE. Future worker can take this over.
-    try {
-      const result = await executeSIEImport(
-        ctx.supabase,
-        ctx.companyId!,
-        ctx.userId,
-        parsed,
-        mappings,
-        {
-          filename: file.name,
-          fileContent: content,
-          createFiscalPeriod: options.createFiscalPeriod,
-          importOpeningBalances: options.importOpeningBalances,
-          importTransactions: options.importTransactions,
-          voucherSeries: options.voucherSeries,
-          openingBalanceSeries: options.openingBalanceSeries,
-          updateAccountNames: options.updateAccountNames,
-        },
-      )
-      await completeOperation(ctx.supabase, { id: op.id, result }, ctx.log)
-    } catch (err) {
-      ctx.log.error('SIE import failed', err as Error, {
-        operationId: op.id,
-        filename: file.name,
-        fileHash,
-      })
-      await failOperation(
-        ctx.supabase,
-        {
-          id: op.id,
-          error: {
-            code: 'SIE_IMPORT_FAILED',
-            message: err instanceof Error ? getUserErrorMessage(err) : 'Unknown failure during SIE import.',
-          },
-        },
-        ctx.log,
-      )
-      return v1ErrorResponseFromCode('SIE_IMPORT_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { operation_id: op.id, reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
-      })
-    }
-
-    return accepted(op.id, 'import.sie', { requestId: ctx.requestId })
+    const job = await submitSIEJob(ctx.supabase,ctx.companyId!,ctx.userId,content,mappings,{
+      filename:file.name,createFiscalPeriod:options.createFiscalPeriod,
+      importOpeningBalances:options.importOpeningBalances,importTransactions:options.importTransactions,
+      voucherSeries:options.voucherSeries,openingBalanceSeries:options.openingBalanceSeries,
+      updateAccountNames:options.updateAccountNames,onExistingPeriod:options.onExistingPeriod,
+      supersedesImportId:options.supersedesImportId,
+    },file)
+    after(async () => { await runSIEWorker({importId:job.id}) })
+    return accepted(job.id, 'import.sie', { requestId: ctx.requestId })
   },
 )

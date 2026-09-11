@@ -8095,6 +8095,35 @@
     "recheck": "Kontrollera igen"
   },
   "import": {
+    "sie_job": {
+      "title": "SIE-import",
+      "loading": "Hämtar importstatus",
+      "progress": "{done} av {total} delar klara. {count} verifikationer sparade.",
+      "durable": "Du kan stänga sidan. Importen fortsätter och finns i importhistoriken.",
+      "connection": "Kontakten med servern är bruten. Importen kan fortfarande pågå. Status hämtas igen automatiskt.",
+      "resume": "Fortsätt",
+      "newImport": "Ny import",
+      "repairStopped": "Dubbletträttelsen är stoppad",
+      "repairStoppedDetails": "{reversed} dubbletter rättades. {cancelled} återstår för en ny granskning. Periodspärren har släppts.",
+      "undo": "Ångra import",
+      "undoConfirm": "Sparade verifikationer rättas med storno. Underlag och historik bevaras. Perioden förblir spärrad tills ångringen är klar.",
+      "hold": "Import pågår eller är oavslutad. Rapporterna visar ett ofullständigt underlag tills importen är klar.",
+      "open": "Visa import",
+      "queued": "Ångringen har startats. Följ förloppet i importhistoriken.",
+      "replace": "Ersätt tidigare import efter granskning",
+      "states": {
+        "queued": "Väntar på tur",
+        "preparing": "Förbereder import",
+        "running": "Importerar verifikationer",
+        "reconciling": "Kontrollerar sparade verifikationer",
+        "paused": "Importen behöver granskas",
+        "finalizing": "Slutför import",
+        "completed": "Import klar",
+        "undoing": "Ångrar import med storno",
+        "undone": "Import ångrad",
+        "failed": "Importen kunde inte starta"
+      }
+    },
     "title": "Importera / exportera",
     "subtitle": "Importera banktransaktioner eller bokföringsdata till ditt företag",
     "theater_reading": "Läser {company}",

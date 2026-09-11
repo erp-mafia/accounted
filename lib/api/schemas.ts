@@ -1,4 +1,5 @@
 import { z } from 'zod'
+
 import { ENTITY_TYPES } from '@/lib/company/entity-type'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
@@ -41,6 +42,29 @@ import {
 } from '@/lib/customers/personal-number-shape'
 import type { AuditAction, Currency, InvoiceDocumentType } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
+
+export const SIEJobOptionsSchema = z.object({
+  createFiscalPeriod: z.boolean().default(true),
+  importOpeningBalances: z.boolean().default(true),
+  importTransactions: z.boolean().default(true),
+  voucherSeries: z.string().trim().min(1).max(16).optional(),
+  openingBalanceSeries: z.string().trim().min(1).max(16).optional(),
+  updateAccountNames: z.boolean().default(true),
+  markImportedNoDocRequired: z.boolean().default(false),
+  onExistingPeriod: z.enum(['block','replace']).default('block'),
+  supersedesImportId: z.string().uuid().optional(),
+})
+export const SIEJobMappingsSchema = z.array(z.object({
+  sourceAccount: z.string().min(1).max(40), sourceName: z.string().max(500),
+  targetAccount: z.string().regex(/^(?:[1-8]\d{3})?$/), targetName: z.string().max(500),
+  confidence: z.number().min(0).max(1), matchType: z.enum(['exact','name','class','manual','bas_range']),
+  isOverride: z.boolean().default(false),
+  defaultVatTreatment: z.enum(ACCOUNT_VAT_TREATMENTS).nullable().optional(),
+  defaultVatRate: z.number().min(0).max(100).nullable().optional(),
+  vatTreatmentSuggested: z.boolean().optional(), vatTreatmentReviewed: z.boolean().optional(),
+  requiresVatTreatmentReview: z.boolean().optional(),
+})).max(10_000)
+export const SIEJobActionSchema = z.object({action:z.enum(['resume','undo'])})
 
 // ============================================================
 // Shared primitives

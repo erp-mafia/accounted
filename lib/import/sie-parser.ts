@@ -763,7 +763,8 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           // #VER series number date "description" [regdate] [signature]
           // Some programs quote all fields, so strip quotes from number/date too
           const series = parseStringField(fields[1])
-          const number = parseInt(parseStringField(fields[2]), 10)
+          const sourceNumber = parseStringField(fields[2])
+          const number = sourceNumber === '' ? 0 : parseInt(sourceNumber, 10)
           const date = parseSIEDate(parseStringField(fields[3]))
           const description = parseStringField(fields[4])
 
@@ -771,6 +772,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
             currentVoucher = {
               series,
               number,
+              ...(sourceNumber === '' ? {numberOmitted:true} : {}),
               date,
               description: description || '',
               lines: [],

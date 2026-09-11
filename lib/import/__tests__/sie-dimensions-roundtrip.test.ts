@@ -34,7 +34,7 @@ function makeBuilder() {
 function makeClient() {
   return {
     from: vi.fn().mockImplementation(() => makeBuilder()),
-    rpc: vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null }),
+    rpc: vi.fn().mockImplementation(async (name:string) => name.endsWith('sie_period_read') ? {data:'lease-token',error:null} : results[resultIdx++] ?? { data: null, error: null }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any
 }

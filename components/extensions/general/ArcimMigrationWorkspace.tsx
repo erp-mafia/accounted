@@ -1,5 +1,6 @@
 'use client'
 
+import { uploadSIEFile, waitForSIEJob } from '@/lib/import/sie-job-client'
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -334,6 +335,7 @@ interface SIEFileStatus {
   // completed import in Accounted and a re-sync will replace it (cancelling the
   // imported journal entries; user-created entries are untouched).
   previousImport: {
+    id: string
     importedAt: string | null
     fiscalYearStart: string | null
     fiscalYearEnd: string | null
@@ -3163,15 +3165,12 @@ export default function ArcimMigrationWorkspace({
         setMigrationProgress(10)
         setSieImportResults([])
 
-        // Send every file to the engine. The Fortnox endpoint runs in
-        // replace-mode, so a year that already has a completed import
-        // gets its prior import marked 'replaced' (imported entries
-        // deleted, user-created entries untouched) before the new
-        // SIE is loaded. The per-file result reports replacedPriorImport.
+        // Complete fiscal years chronologically. Replacement is pinned to
+        // the execution reviewed in the preview, including on retries.
         const filesToImport = sieData.rawContent.map((content, i) => ({
           content,
           status: sieData.fileStatuses?.[i],
-        }))
+        })).sort((a,b) => (a.status?.fiscalYear ?? 0)-(b.status?.fiscalYear ?? 0))
 
         for (let i = 0; i < filesToImport.length; i++) {
           const progress = 10 + Math.round((i / filesToImport.length) * 40)
@@ -3185,17 +3184,20 @@ export default function ArcimMigrationWorkspace({
           const fiscalYear = filesToImport[i].status?.fiscalYear
           const yearLabel = fiscalYear ? `Räkenskapsår ${fiscalYear}: ` : ''
 
+          const filename = 'migration-sie-'+(fiscalYear ?? i)+'.se'
+          const storagePath = await uploadSIEFile(new File([filesToImport[i].content],filename,{type:'text/plain'}))
           const res = await fetch('/api/extensions/ext/arcim-migration/import-sie', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              rawContent: filesToImport[i].content,
+              storagePath,filename,
               mappings: sieData.mappings,
               options: {
                 createFiscalPeriod: true,
                 importOpeningBalances: true,
                 importTransactions: true,
                 voucherSeries: migrationOptions.voucherSeries,
+                supersedesImportId:filesToImport[i].status?.previousImport?.id,
               },
             }),
           })
@@ -3208,7 +3210,10 @@ export default function ArcimMigrationWorkspace({
               : err
           }
 
-          const result = await res.json() as ImportResult
+          const submitted = await res.json() as {importId:string}
+          const result = await waitForSIEJob(submitted.importId,job => {
+            setMigrationStep(yearLabel+'SIE: '+job.chunks_done+'/'+job.chunks_total)
+          })
           setSieImportResults(prev => [...prev, result])
           // The import creates accounts and a räkenskapsår: every cached
           // picker must see them.

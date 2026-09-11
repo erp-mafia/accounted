@@ -7,6 +7,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
 import { uiWidgets, findUiWidget } from '../widgets'
 
+const { mockPeriodReadRpc } = vi.hoisted(() => ({ mockPeriodReadRpc: vi.fn() }))
+
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
   createServiceClient: vi.fn(),
@@ -58,6 +60,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       )
       return {
         from: (table: string) => (table === 'company_members' ? membershipChain : makeChain()),
+        rpc: mockPeriodReadRpc,
       }
     }),
   }
@@ -81,6 +84,10 @@ async function parseResult(response: Response) {
 describe('VAT review widget', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockPeriodReadRpc.mockImplementation(async (name: string) => ({
+      data: name === 'acquire_sie_period_read' ? 'report-read-token' : null,
+      error: null,
+    }))
   })
 
   describe('widget registration', () => {
@@ -195,6 +202,24 @@ describe('VAT review widget', () => {
       ).json()
       expect(withoutUi.result.isError).toBeUndefined()
       expect(withoutUi.result._meta).toBeUndefined()
+    })
+
+    it('refuses an external VAT report while the database holds an unfinished import', async () => {
+      mockPeriodReadRpc.mockResolvedValueOnce({
+        data: null,
+        error: { code: '55000', message: 'Importen pågår eller är oavslutad.' },
+      })
+      const result = await parseResult(await handleMcpRequest(mcpRequest('tools/call', {
+        name: 'gnubok_get_vat_report',
+        arguments: { period_type: 'monthly', year: 2026, period: 3, render_ui: true },
+      })))
+      expect(result.isError).toBe(true)
+      expect(result._meta).toBeUndefined()
+      expect(mockPeriodReadRpc).toHaveBeenCalledWith('acquire_sie_period_read', {
+        p_company_id: '11111111-1111-4111-8111-111111111111', p_purpose: 'report_export',
+      })
+      expect(mockPeriodReadRpc).toHaveBeenCalledTimes(1)
+      expect(JSON.stringify(result)).toContain('CONFLICT')
     })
   })
 })

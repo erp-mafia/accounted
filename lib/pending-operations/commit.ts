@@ -122,8 +122,7 @@ import {
   resolveVoucherLinkedEntryIds,
 } from '@/lib/transactions/inbox-underlag'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-import { parseSIEFile } from '@/lib/import/sie-parser'
-import { executeSIEImport, undoSIEImport } from '@/lib/import/sie-import'
+import { submitSIEJob, requestSIEJobAction } from '@/lib/import/sie-jobs'
 import type { AccountMapping } from '@/lib/import/types'
 import { AccountsNotInChartError, isBookkeepingError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { extensionRegistry } from '@/lib/extensions/registry'
@@ -5593,46 +5592,13 @@ async function commitImportSie(
     return { error: 'file_content, filename, and mappings are required', status: 400 }
   }
 
-  let parsed
-  try {
-    parsed = parseSIEFile(fileContent)
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Failed to parse SIE file', status: 400 }
-  }
+  const job = await submitSIEJob(supabase,companyId,userId,fileContent,mappings,{
+    filename,createFiscalPeriod,importOpeningBalances,importTransactions,voucherSeries,openingBalanceSeries,updateAccountNames,
+  })
+  // The approval commits submission. The durable execution has its own status.
+  return {data:{import_id:job.id,operation_id:job.id,state:job.job_state,accepted:true,
+    status_tool:'gnubok_sie_import_status',fiscal_period_id:job.fiscal_period_id}}
 
-  try {
-    const result = await executeSIEImport(supabase, companyId, userId, parsed, mappings, {
-      filename,
-      fileContent,
-      createFiscalPeriod,
-      importOpeningBalances,
-      importTransactions,
-      voucherSeries,
-      openingBalanceSeries,
-      updateAccountNames,
-    })
-
-    if (!result.success) {
-      return { error: result.errors.join('; ') || 'SIE import failed', status: 400 }
-    }
-
-    return {
-      data: {
-        import_id: result.importId,
-        fiscal_period_id: result.fiscalPeriodId,
-        opening_balance_entry_id: result.openingBalanceEntryId,
-        journal_entries_created: result.journalEntriesCreated,
-        accounts_created: result.accountsCreated ?? 0,
-        // Informational facts that used to travel as warnings (#2462): the
-        // agent still needs them to explain a null opening_balance_entry_id.
-        accounts_renamed: result.accountsRenamed ?? 0,
-        opening_balance_skipped: result.details?.openingBalanceSkipped ?? null,
-        warnings: result.warnings,
-      },
-    }
-  } catch (err) {
-    return failUnlessBookkeepingError(err, 'SIE import failed', 500)
-  }
 }
 
 async function commitUndoSieImport(
@@ -5647,17 +5613,9 @@ async function commitUndoSieImport(
     return { error: 'import_id is required', status: 400 }
   }
 
-  const result = await undoSIEImport(supabase, companyId, importId, userId)
-  if (!result.success) {
-    return { error: result.error ?? 'SIE undo failed', status: 400 }
-  }
+  const job = await requestSIEJobAction(supabase,companyId,userId,importId,'undo')
+  return {data:{import_id:job.id,state:job.job_state,accepted:true,status_tool:'gnubok_sie_import_status'}}
 
-  return {
-    data: {
-      import_id: importId,
-      deleted_entries: result.deletedEntries,
-    },
-  }
 }
 
 // ── Phase 4: arbitrary-line bookkeeping primitives ───────────────

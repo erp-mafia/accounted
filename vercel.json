@@ -3,6 +3,14 @@
   "regions": ["arn1"],
   "crons": [
     {
+      "path": "/api/import/sie/invariants/cron",
+      "schedule": "15 4 * * 1"
+    },
+    {
+      "path": "/api/import/sie/worker/cron",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/deadlines/status/cron",
       "schedule": "0 6 * * *"
     },

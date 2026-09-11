@@ -20,7 +20,8 @@ import type {
   MigrationDocumentation,
   SIETransactionLine,
 } from './types'
-import type { CreateJournalEntryLineInput } from '@/types'
+import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
+import type { SIEPreparedEntry } from './sie-job-contract'
 import { roundOre } from '@/lib/money'
 import { mappingsToMap, getMappingStats } from './account-mapper'
 import { syncMappedAccounts } from './account-sync'
@@ -911,16 +912,13 @@ export function validateIBBalance(
  * The caller must validate the IB balance first via validateIBBalance().
  * If roundingAdjustment is non-zero, it is booked explicitly to 2099 with clear text.
  */
-async function createOpeningBalanceEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+export function buildSIEOpeningBalanceEntry(
   fiscalPeriodId: string,
   parsed: ParsedSIEFile,
   accountMap: Map<string, string>,
   roundingAdjustment: number,
   voucherSeries: string
-): Promise<string | null> {
+): CreateJournalEntryInput | null {
   // Effective set: explicit #IB 0, or IB derived from #UB -1 (issue #675).
   const { balances: currentYearBalances, derivedFromPriorYearUB } =
     getEffectiveOpeningBalances(parsed)
@@ -978,7 +976,7 @@ async function createOpeningBalanceEntry(
 
   const entryDate = parsed.stats.fiscalYearStart ?? formatDate(new Date())
 
-  const entry = await createJournalEntry(supabase, companyId, userId, {
+  return {
     fiscal_period_id: fiscalPeriodId,
     entry_date: entryDate,
     // When derived, say so on the voucher itself: permanent documentation
@@ -993,9 +991,16 @@ async function createOpeningBalanceEntry(
     // higher than in the source system (issue #1882).
     voucher_series: voucherSeries,
     lines,
-  })
+  }
+}
 
-  return entry.id
+async function createOpeningBalanceEntry(
+  supabase: SupabaseClient, companyId: string, userId: string,
+  fiscalPeriodId: string, parsed: ParsedSIEFile, accountMap: Map<string, string>,
+  roundingAdjustment: number, voucherSeries: string,
+): Promise<string | null> {
+  const input = buildSIEOpeningBalanceEntry(fiscalPeriodId, parsed, accountMap, roundingAdjustment, voucherSeries)
+  return input ? (await createJournalEntry(supabase, companyId, userId, input)).id : null
 }
 
 /**
@@ -1264,7 +1269,8 @@ export async function importVouchers(
   // history rows (journal_entry_rattelse_log.sie_import_id) so the log can
   // be traced back to the file that carried it. Null in callers that have
   // no import record (tests, legacy paths).
-  sieImportId: string | null = null
+  sieImportId: string | null = null,
+  preparation?: { startOrdinal: number; only: true; hasCurrentYearIb?: boolean; accountIds?: Map<string, string> },
 ): Promise<{
   created: number
   ids: string[]
@@ -1295,6 +1301,7 @@ export async function importVouchers(
   seriesUsed: string[]
   retriedBatches: number
   failedBatches: number
+  preparedEntries?: SIEPreparedEntry[]
 }> {
   const results = {
     created: 0,
@@ -1328,6 +1335,7 @@ export async function importVouchers(
   // Pre-filter and prepare all valid vouchers
   interface PreparedVoucher {
     sourceId: string
+    sourceOrdinal: number
     series: string
     date: string
     description: string
@@ -1403,10 +1411,10 @@ export async function importVouchers(
   // balances (the voucher serves as IB and gets tagged here); when IB was
   // derived from #UB -1 the gate is closed so the same amounts can never be
   // booked twice.
-  const hasCurrentYearIb = getEffectiveOpeningBalances(parsed).balances.length > 0
+  const hasCurrentYearIb = preparation?.hasCurrentYearIb ?? (getEffectiveOpeningBalances(parsed).balances.length > 0)
   const fyStart = parsed.stats.fiscalYearStart
 
-  for (const voucher of parsed.vouchers) {
+  for (const [voucherIndex, voucher] of parsed.vouchers.entries()) {
     const lines: PreparedVoucher['lines'] = []
     let hasUnmappedAccount = false
     const unmappedAccountSet = new Set<string>()
@@ -1537,7 +1545,7 @@ export async function importVouchers(
       : defaultSeries
 
     const rawSourceSeries = voucher.series && voucher.series.trim() ? voucher.series.trim() : null
-    const rawSourceNumber = Number.isFinite(voucher.number) ? voucher.number : null
+    const rawSourceNumber = !voucher.numberOmitted && Number.isFinite(voucher.number) ? voucher.number : null
 
     const voucherDateStr = formatDate(voucher.date)
     const isLikelyOpeningBalance =
@@ -1566,6 +1574,7 @@ export async function importVouchers(
 
     preparedVouchers.push({
       sourceId: voucherId,
+      sourceOrdinal: (preparation?.startOrdinal ?? 0) + voucherIndex,
       series: resolvedSeries,
       date: voucherDateStr,
       description: voucher.description || `Import: ${voucher.series}${voucher.number}`,
@@ -1594,11 +1603,15 @@ export async function importVouchers(
   }
 
   // Resolve all account IDs in one query
-  const { data: accounts } = await supabase
+  const { data: accounts, error: accountsError } = preparation?.accountIds
+    ? { data: [...preparation.accountIds].map(([account_number, id]) => ({ account_number, id })), error: null }
+    : await supabase
     .from('chart_of_accounts')
     .select('id, account_number')
     .eq('company_id', companyId)
     .in('account_number', [...allAccountNumbers])
+
+  if (accountsError) throw new Error(`Kunde inte läsa importens konton: ${accountsError.message}`)
 
   const accountIdMap = new Map<string, string>()
   for (const acc of accounts || []) {
@@ -1624,6 +1637,7 @@ export async function importVouchers(
   const voucherBySourceId = new Map(preparedVouchers.map((voucher) => [voucher.sourceId, voucher]))
   const rpcPayload = preparedVouchers.map((voucher) => ({
     sourceId: voucher.sourceId,
+    ...(sieImportId ? { sieImportId, sourceOrdinal: voucher.sourceOrdinal } : {}),
     series: voucher.series,
     date: voucher.date,
     description: voucher.description,
@@ -1656,6 +1670,11 @@ export async function importVouchers(
     }>
     skipped_duplicates?: Array<{ sourceId?: string; reason?: string }>
     validation_errors?: Array<{ sourceId?: string; message?: string }>
+  }
+
+  if (preparation?.only) {
+    if (!sieImportId) throw new Error('SIE preparation requires an execution identity')
+    return { ...results, preparedEntries: rpcPayload as SIEPreparedEntry[] }
   }
 
   const { data: rpcResult, error: rpcError } = await supabase.rpc('import_sie_journal_entries', {
@@ -1757,10 +1776,7 @@ export function computeVoucherNumberRanges(
  * Per BFL 1999:1078 and BFNAR 2013:2, corrections must be documented through
  * verifikationer with clear descriptions. This satisfies that requirement.
  */
-async function createMigrationAdjustmentEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+export function buildSIEMigrationAdjustmentEntry(
   fiscalPeriodId: string,
   parsed: ParsedSIEFile,
   accountMap: Map<string, string>,
@@ -1769,14 +1785,15 @@ async function createMigrationAdjustmentEntry(
     voucherId: string
     date: string
     reason: string
-  }[]
-): Promise<{ entryId: string | null; deltaAccounts: number; warnings: string[] }> {
+  }[],
+  skippedCount = skippedDetails.length,
+): { input: CreateJournalEntryInput | null; deltaAccounts: number; warnings: string[] } {
   const warnings: string[] = []
   const hasUB = parsed.closingBalances.some((b) => b.yearIndex === 0)
   const hasRES = parsed.resultBalances.some((b) => b.yearIndex === 0)
 
   if (!hasUB && !hasRES) {
-    return { entryId: null, deltaAccounts: 0, warnings }
+    return { input: null, deltaAccounts: 0, warnings }
   }
 
   // Fix 8: Separate BS/P&L reconciliation
@@ -1835,7 +1852,7 @@ async function createMigrationAdjustmentEntry(
     deltaAccountCount++
 
     // Fix 4: Per-line text referencing what the adjustment concerns
-    const lineDesc = `Justering konto ${account}: delta ${delta} SEK från ${skippedDetails.length} exkl. verifikationer`
+    const lineDesc = `Justering konto ${account}: delta ${delta} SEK från ${skippedCount} exkl. verifikationer`
 
     if (delta > 0) {
       lines.push({
@@ -1855,7 +1872,7 @@ async function createMigrationAdjustmentEntry(
   }
 
   if (lines.length === 0) {
-    return { entryId: null, deltaAccounts: 0, warnings }
+    return { input: null, deltaAccounts: 0, warnings }
   }
 
   // The entry must balance. It should by construction, but verify and handle rounding.
@@ -1893,16 +1910,27 @@ async function createMigrationAdjustmentEntry(
   const firstDate = skippedDates[0] || '?'
   const lastDate = skippedDates[skippedDates.length - 1] || '?'
 
-  const entry = await createJournalEntry(supabase, companyId, userId, {
+  const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: entryDate,
-    description: `Omföringsverifikation: justering för ${skippedDetails.length} exkluderade verifikationer (${firstId}-${lastId}, ${firstDate}-${lastDate}) vid SIE-import`,
+    description: `Omföringsverifikation: justering för ${skippedCount} exkluderade verifikationer (${firstId}-${lastId}, ${firstDate}-${lastDate}) vid SIE-import`,
     source_type: 'import',
     voucher_series: 'M',
     lines,
-  })
+  }
 
-  return { entryId: entry.id, deltaAccounts: deltaAccountCount, warnings }
+  return { input, deltaAccounts: deltaAccountCount, warnings }
+}
+
+async function createMigrationAdjustmentEntry(
+  supabase: SupabaseClient, companyId: string, userId: string,
+  fiscalPeriodId: string, parsed: ParsedSIEFile, accountMap: Map<string, string>,
+  importedMovements: Map<string, number>,
+  skippedDetails: { voucherId: string; date: string; reason: string }[],
+): Promise<{ entryId: string | null; deltaAccounts: number; warnings: string[] }> {
+  const built = buildSIEMigrationAdjustmentEntry(fiscalPeriodId, parsed, accountMap, importedMovements, skippedDetails)
+  return { entryId: built.input ? (await createJournalEntry(supabase, companyId, userId, built.input)).id : null,
+    deltaAccounts: built.deltaAccounts, warnings: built.warnings }
 }
 
 /**

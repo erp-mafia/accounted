@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
+import type { PoolClient } from 'pg'
+
+async function importFixtureBatch(client:PoolClient,params:{sourceType?:string;companyId:string;userId:string}):Promise<string|null> {
+  if(params.sourceType!=='import') return null
+  return (await client.query(`INSERT INTO sie_imports(company_id,user_id,filename,file_hash,sie_type,status)
+    VALUES($1,$2,'pg-import-fixture.se',md5(gen_random_uuid()::text),4,'completed') RETURNING id`,[params.companyId,params.userId])).rows[0].id
+}
 
 // Minimal fixture inserters for pg-real tests. All inserts go through the
 // pool (superuser `postgres`), which bypasses RLS: that is intentional for
@@ -178,20 +185,28 @@ export async function insertDraftJournalEntry(params: {
   sourceType?: string
   sourceId?: string | null
   createdAt?: string
-  // Inserting directly as 'posted' skips the set_committed_at() trigger (it
-  // fires on draft->posted UPDATE), so committed_at stays null unless set here.
+  // Explicit historic timestamps are retained by set_committed_at on posting.
   committedAt?: string | null
+  /** Explicit pre-backbone data for tests of retained legacy workflows. */
+  legacyImport?: boolean
 }): Promise<string> {
   if (params.status === 'posted') {
     return insertPostedJournalEntry(params)
   }
 
   const id = randomUUID()
-  await getPool().query(
+  const client=await getPool().connect()
+  try {
+  await client.query('BEGIN')
+  const batch=params.legacyImport ? null : await importFixtureBatch(client,params)
+  if(params.legacyImport) await client.query('ALTER TABLE journal_entries DISABLE TRIGGER guard_sie_entry_provenance')
+  await client.query(
     `INSERT INTO public.journal_entries
        (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, source_id, status, created_at, committed_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::timestamptz, now()), $13::timestamptz)`,
+        entry_date, description, source_type, source_id, status, created_at, committed_at,
+        import_batch_id,source_ordinal,source_content_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::timestamptz, now()), $13::timestamptz,
+       $14,CASE WHEN $14::uuid IS NOT NULL THEN 0 END,CASE WHEN $14::uuid IS NOT NULL THEN repeat('a',64) END)`,
     [
       id,
       params.userId,
@@ -206,9 +221,14 @@ export async function insertDraftJournalEntry(params: {
       params.status ?? 'draft',
       params.createdAt ?? null,
       params.committedAt ?? null,
+      batch,
     ],
   )
+  if(params.legacyImport) await client.query('ALTER TABLE journal_entries ENABLE TRIGGER guard_sie_entry_provenance')
+  await client.query('COMMIT')
   return id
+  } catch(error) {await client.query('ROLLBACK');throw error}
+  finally {client.release()}
 }
 
 export interface PostedJournalEntryLine {
@@ -221,10 +241,8 @@ export interface PostedJournalEntryLine {
   dimensions?: Record<string, string>
 }
 
-// Insert a posted entry and all of its lines in one transaction. This is the
-// only valid shape for pg fixtures that intentionally exercise a direct posted
-// INSERT: check_balance_on_posted_insert is deferred until the lines exist, but
-// still executes before COMMIT.
+// Insert a draft, add all lines, and post in one transaction. All accounting
+// guards stay enabled, including the posted-line immutability guard.
 export async function insertPostedJournalEntry(params: {
   userId: string
   companyId: string
@@ -237,6 +255,7 @@ export async function insertPostedJournalEntry(params: {
   sourceId?: string | null
   createdAt?: string
   committedAt?: string | null
+  legacyImport?: boolean
   lines?: PostedJournalEntryLine[]
 }): Promise<string> {
   const id = randomUUID()
@@ -248,12 +267,16 @@ export async function insertPostedJournalEntry(params: {
 
   try {
     await client.query('BEGIN')
+    const batch=params.legacyImport ? null : await importFixtureBatch(client,params)
+    if(params.legacyImport) await client.query('ALTER TABLE journal_entries DISABLE TRIGGER guard_sie_entry_provenance')
     await client.query(
       `INSERT INTO public.journal_entries
          (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-          entry_date, description, source_type, source_id, status, created_at, committed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'posted',
-               COALESCE($11::timestamptz, now()), $12::timestamptz)`,
+          entry_date, description, source_type, source_id, status, created_at, committed_at,
+          import_batch_id,source_ordinal,source_content_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'draft',
+               COALESCE($11::timestamptz, now()), $12::timestamptz,
+               $13,CASE WHEN $13::uuid IS NOT NULL THEN 0 END,CASE WHEN $13::uuid IS NOT NULL THEN repeat('a',64) END)`,
       [
         id,
         params.userId,
@@ -267,8 +290,10 @@ export async function insertPostedJournalEntry(params: {
         params.sourceId ?? null,
         params.createdAt ?? null,
         params.committedAt ?? null,
+        batch,
       ],
     )
+    if(params.legacyImport) await client.query('ALTER TABLE journal_entries ENABLE TRIGGER guard_sie_entry_provenance')
 
     for (const [index, line] of lines.entries()) {
       await client.query(
@@ -289,7 +314,7 @@ export async function insertPostedJournalEntry(params: {
       )
     }
 
-    await client.query('SET CONSTRAINTS check_balance_on_posted_insert IMMEDIATE')
+    await client.query("UPDATE journal_entries SET status='posted' WHERE id=$1",[id])
     await client.query('COMMIT')
     return id
   } catch (error) {

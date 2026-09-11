@@ -205,6 +205,7 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Imports: async via the Phase 4 PR-2 operations substrate. Multipart
   // uploads (the file is the request body).
   'POST /api/v1/companies/:companyId/imports/sie': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/imports/sie/upload': 'bookkeeping:write',
   'POST /api/v1/companies/:companyId/imports/bank': 'transactions:write',
 
   // Phase 5 PR-1: Payroll vertical (employees + salary-runs + lifecycle verbs).

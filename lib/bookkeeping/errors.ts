@@ -320,6 +320,9 @@ export class InvalidMappingResultError extends Error {
 // ============================================================================
 
 export type BookkeepingOperation =
+  | 'import_sie_chunk'
+  | 'undo_sie_import_chunk'
+  | 'undo_sie_duplicate_repair_chunk'
   | 'get_next_voucher_number'
   | 'resolve_account_ids'
   | 'create_draft_entry'

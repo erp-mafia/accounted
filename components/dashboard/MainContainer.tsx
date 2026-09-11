@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation'
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 import type { DashboardShell } from '@/types'
+import { SIEImportHoldBanner } from '@/components/import/SIEImportHoldBanner'
 
 /**
  * Picks the dashboard chrome container based on route. Extension workspaces
@@ -56,7 +57,7 @@ export function MainContainer({
   const isWide = /^\/salary\/runs\/[^/]+$/.test(pathname)
 
   if (isFullBleed) {
-    return <div key={companyId ?? ''} className="h-full">{children}</div>
+    return <div key={companyId ?? ''} className="h-full"><SIEImportHoldBanner companyId={companyId}/>{children}</div>
   }
 
   // Shell v2: the panel is the canvas. The 16px top padding is what the
@@ -65,6 +66,7 @@ export function MainContainer({
   if (shell === 'v2') {
     return (
       <div key={companyId ?? ''} className="px-4 pb-8 pt-4 md:px-6">
+        <SIEImportHoldBanner companyId={companyId}/>
         {children}
       </div>
     )
@@ -79,6 +81,7 @@ export function MainContainer({
           : 'max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10'
       }
     >
+      <SIEImportHoldBanner companyId={companyId}/>
       {children}
     </div>
   )

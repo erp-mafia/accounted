@@ -65,4 +65,4 @@ export const GET = withRouteContext('report.monthly_breakdown.xlsx', async (requ
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

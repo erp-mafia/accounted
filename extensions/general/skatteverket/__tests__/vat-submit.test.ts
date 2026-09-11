@@ -28,7 +28,7 @@ const PARAMS = { periodType: 'monthly' as const, year: 2026, period: 6 }
 
 function makeCtx() {
   return {
-    supabase: {},
+    supabase: {rpc:vi.fn().mockResolvedValue({data:'read-lease-token',error:null})},
     userId: 'user-1',
     companyId: 'company-1',
     settings: { set: vi.fn().mockResolvedValue(undefined) },

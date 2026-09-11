@@ -95,4 +95,4 @@ export const GET = withRouteContext('report.income_statement.pdf', async (reques
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

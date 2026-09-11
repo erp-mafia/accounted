@@ -220,7 +220,7 @@ export const GET = withRouteContext('report.kpi.xlsx', async (request, { supabas
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })
 
 function scaleToFraction(value: number | null): number | null {
   return value === null ? null : Math.round(value) / 100

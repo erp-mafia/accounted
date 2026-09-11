@@ -59,4 +59,4 @@ export const GET = withRouteContext('report.bokslutsbilagor', async (request, ct
     log.error('bokslutsbilagor generation failed', err as Error, { periodId })
     return errorResponseFromCode('REPORT_GENERATION_FAILED', log, { requestId })
   }
-})
+}, { requireCompleteLedger: true })

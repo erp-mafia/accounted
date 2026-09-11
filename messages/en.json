@@ -8095,6 +8095,35 @@
     "recheck": "Check again"
   },
   "import": {
+    "sie_job": {
+      "title": "SIE import",
+      "loading": "Loading import status",
+      "progress": "{done} of {total} parts complete. {count} vouchers saved.",
+      "durable": "You can close this page. The import continues and is available in import history.",
+      "connection": "The connection was lost. The import may still be running. Status will refresh automatically.",
+      "resume": "Resume",
+      "newImport": "New import",
+      "repairStopped": "Duplicate repair stopped",
+      "repairStoppedDetails": "{reversed} duplicates were reversed. {cancelled} remain for a new review. The period hold has been released.",
+      "undo": "Undo import",
+      "undoConfirm": "Saved vouchers are corrected with reversal entries. Documents and history are retained. The period stays on hold until undo completes.",
+      "hold": "An import is in progress or unfinished. Reports show incomplete data until it completes.",
+      "open": "View import",
+      "queued": "Undo has started. Follow its progress in import history.",
+      "replace": "Replace the previous import after review",
+      "states": {
+        "queued": "Queued",
+        "preparing": "Preparing import",
+        "running": "Importing vouchers",
+        "reconciling": "Checking saved vouchers",
+        "paused": "Import needs review",
+        "finalizing": "Finalizing import",
+        "completed": "Import complete",
+        "undoing": "Reversing imported vouchers",
+        "undone": "Import undone",
+        "failed": "Import could not start"
+      }
+    },
     "title": "Import / export",
     "subtitle": "Import bank transactions or bookkeeping data into your company",
     "theater_reading": "Reading {company}",

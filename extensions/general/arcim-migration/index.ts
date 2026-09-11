@@ -1,5 +1,8 @@
+import { readSIEIntakeFile } from '@/lib/import/sie-intake'
+import { submitSIEJob } from '@/lib/import/sie-jobs'
+import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
-import { NextResponse } from 'next/server'
+import { after, NextResponse } from 'next/server'
 import {
   createConsent,
   getConsent,
@@ -43,7 +46,7 @@ import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { mergeParsedSIEFiles } from '@/lib/import/sie-merge'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
-import { loadMappings, generateImportPreview, executeSIEImport, findOverlappingPeriodImports } from '@/lib/import/sie-import'
+import { loadMappings, generateImportPreview, findOverlappingPeriodImports } from '@/lib/import/sie-import'
 import { buildMappingTargets } from './lib/mapping-targets'
 import type { ProviderName } from '@/lib/providers/types'
 import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
@@ -1244,6 +1247,7 @@ export const arcimMigrationExtension: Extension = {
             fiscalYear: number
             rawContent: string
             previousImport: {
+              id: string
               importedAt: string | null
               fiscalYearStart: string | null
               fiscalYearEnd: string | null
@@ -1254,6 +1258,7 @@ export const arcimMigrationExtension: Extension = {
             const fyEnd = fileParsed.stats.fiscalYearEnd
 
             let priorImport: {
+              id: string
               imported_at: string | null
               fiscal_year_start: string | null
               fiscal_year_end: string | null
@@ -1278,6 +1283,7 @@ export const arcimMigrationExtension: Extension = {
               rawContent: file.rawContent,
               previousImport: priorImport
                 ? {
+                    id: priorImport.id,
                     importedAt: priorImport.imported_at,
                     fiscalYearStart: priorImport.fiscal_year_start,
                     fiscalYearEnd: priorImport.fiscal_year_end,
@@ -1339,7 +1345,9 @@ export const arcimMigrationExtension: Extension = {
 
         const companyId = ctx?.companyId ?? user.id
 
-        const { rawContent, mappings, options } = await request.json() as {
+        const { rawContent: inlineContent, storagePath, filename, mappings, options } = await request.json() as {
+          storagePath?:string
+          filename?:string
           rawContent: string
           mappings: import('@/lib/import/types').AccountMapping[]
           options: {
@@ -1348,9 +1356,12 @@ export const arcimMigrationExtension: Extension = {
             importTransactions: boolean
             voucherSeries?: string
             updateAccountNames?: boolean
+            supersedesImportId?: string
           }
         }
 
+        const originalFile = storagePath ? await readSIEIntakeFile(supabase,companyId,storagePath,filename ?? 'migration.se') : undefined
+        const rawContent = originalFile ? await originalFile.text() : inlineContent
         if (!rawContent || !mappings) {
           return NextResponse.json({ error: 'rawContent and mappings are required' }, { status: 400 })
         }
@@ -1385,47 +1396,15 @@ export const arcimMigrationExtension: Extension = {
             }, { status: 400 })
           }
 
-          // Account creation (and #KONTO renames) happen inside
-          // executeSIEImport via syncMappedAccounts: the auto-activate block
-          // that used to live here was a duplicate of that logic. Mapping
-          // persistence ALSO happens inside executeSIEImport, with the
-          // correct companyId + userId and non-fatal warning handling: the
-          // direct saveMappings call that used to sit here passed user.id in
-          // the companyId slot, which throws on RLS/FK now that the helper
-          // surfaces upsert failures, 500ing every provider-migration import
-          // before a single voucher was written. Do not re-add it.
-          const result = await executeSIEImport(supabase, companyId, user.id, parsed, mappings, {
-            filename: `migration-sie-${Date.now()}.se`,
-            fileContent: rawContent,
-            createFiscalPeriod: options.createFiscalPeriod,
-            importOpeningBalances: options.importOpeningBalances,
-            importTransactions: options.importTransactions,
-            voucherSeries: options.voucherSeries,
-            // Default ON: re-syncs keep account names current with the source
-            // system (idempotent: equal names are a no-op in the rename pass).
-            updateAccountNames: options.updateAccountNames ?? true,
-            // Provider re-sync semantics: a prior completed import for the
-            // same fiscal year is automatically replaced (its imported
-            // entries are cancelled) so the user can pull updated data
-            // without manual cleanup. Manual SIE upload keeps default
-            // 'block' behavior.
-            onExistingPeriod: 'replace',
-          })
-
-          // Surface the tripwire on the result the workspace UI already
-          // renders (its "Remaining warnings" card shows result.warnings).
-          if (artifactScan.flagged) {
-            result.warnings.push(formatSieArtifactWarning(artifactScan))
-          }
-
-          log.info('SIE import completed:', {
-            success: result.success,
-            journalEntriesCreated: result.journalEntriesCreated,
-            errors: result.errors.length,
-            errorDetails: result.errors.slice(0, 10),
-          })
-
-          return NextResponse.json(result)
+          const job = await submitSIEJob(supabase,companyId,user.id,rawContent,mappings,{
+            filename: 'migration-sie-'+parsed.stats.fiscalYearStart+'.se',
+            ...options,updateAccountNames:options.updateAccountNames ?? true,
+            onExistingPeriod:options.supersedesImportId ? 'replace' : 'block',
+          },originalFile)
+          after(async () => { await runSIEWorker({importId:job.id}) })
+          return NextResponse.json({importId:job.id,state:job.job_state,
+            warnings:artifactScan.flagged ? [formatSieArtifactWarning(artifactScan)] : [],
+            statusUrl:'/api/import/sie/'+job.id}, {status:202})
         } catch (error) {
           log.error('arcim sie import failed', error as Error)
           return providerFailureResponse(error, 'SIE_IMPORT_UNEXPECTED')

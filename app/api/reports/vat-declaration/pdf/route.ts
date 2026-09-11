@@ -79,5 +79,4 @@ export const GET = withRouteContext(
         'Content-Disposition': `attachment; filename="${filename}"`,
       },
     })
-  },
-)
+  }, { requireCompleteLedger: true })
