@@ -144,14 +144,15 @@ describe('propagateUnderlagForBookedTransaction', () => {
     ])
   })
 
-  it('tolerates the UNIQUE violation when a sibling item already claimed the verifikat', async () => {
-    // Samlingsverifikat: created_journal_entry_id is UNIQUE, so on N matched
-    // items only the first stamp lands. The rest must resolve quietly: the
-    // inbox list derives "booked" from the transaction's state for them.
-    const { supabase, enqueue } = createQueuedMockSupabase()
+  it('stamps every matched item on a samlingsverifikat', async () => {
+    // N kvitton settled by one bank line share one created_journal_entry_id.
+    // The UNIQUE that let only the first stamp land (and made this code
+    // swallow 23505 for the rest) was dropped in migration 20260911120500.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { document_id: null } }) // tx pin lookup: nothing pinned
-    enqueue({ data: [{ id: 'i1', document_id: null }] })
-    enqueue({ data: null, error: { code: '23505', message: 'duplicate key value' } })
+    enqueue({ data: [{ id: 'i1', document_id: null }, { id: 'i2', document_id: null }] })
+    enqueue({ data: null }) // stamp i1
+    enqueue({ data: null }) // stamp i2
 
     await expect(
       propagateUnderlagForBookedTransaction(
@@ -161,6 +162,10 @@ describe('propagateUnderlagForBookedTransaction', () => {
         JE1,
       ),
     ).resolves.toBeUndefined()
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([
+      [{ created_journal_entry_id: JE1 }],
+      [{ created_journal_entry_id: JE1 }],
+    ])
   })
 
   it('does NOT stamp when the document link fails, so a re-run can still repair it', async () => {
