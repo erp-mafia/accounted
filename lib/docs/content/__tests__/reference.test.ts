@@ -66,6 +66,13 @@ describe('endpoint tables', () => {
     const md = section('skatteverket', 'skatteverket.vat_declarations.get')
     expect(md).toContain('**Query parameters**')
     expect(md).toMatch(/\| `period_type` \| [^|\n]*"monthly"/)
+    expect(md).toMatch(/\| `period_type` \| [^\n]*\| yes \|/)
+    expect(md).toMatch(/\| `state` \| [^\n]*\| no \|/)
+  })
+
+  it('renders a nullable object as object | null, not object | object', () => {
+    const md = section('customers', 'customers.get')
+    expect(md).toContain('| `party` | object \\| null (optional) |')
   })
 
   it('advertises dry_run on a dry-run-capable endpoint', () => {

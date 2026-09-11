@@ -100,7 +100,7 @@ registerEndpoint({
         {
           id: 'a8f1…',
           name: 'Acme AB',
-          customer_type: 'business',
+          customer_type: 'swedish_business',
           email: 'finance@acme.example',
           org_number: '556677-8899',
           vat_number: 'SE556677889901',

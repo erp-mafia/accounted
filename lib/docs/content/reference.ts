@@ -105,7 +105,9 @@ function schemaType(schema: JsonSchema): string {
   const union = schema.anyOf ?? schema.oneOf
   if (union) return [...new Set(union.map(schemaType))].join(' | ')
   if (Array.isArray(schema.type)) {
-    return schema.type.map((t) => schemaType({ ...schema, type: t })).join(' | ')
+    // The null member of `type: [T, "null"]` must not inherit T's properties,
+    // or a nullable object renders as `object | object`.
+    return schema.type.map((t) => (t === 'null' ? 'null' : schemaType({ ...schema, type: t }))).join(' | ')
   }
   if (schema.type === 'array') {
     const item = schema.items ? schemaType(schema.items) : 'unknown'

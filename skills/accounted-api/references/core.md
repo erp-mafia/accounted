@@ -210,7 +210,7 @@ Request body:
   invoice_email_texts?: {
     sv?: { subject?: string, greeting?: string, body?: string, signoff?: string },
     en?: { subject?: string, greeting?: string, body?: string, signoff?: string }
-  }
+  } | null
 }
 ```
 
@@ -239,7 +239,7 @@ Response `200`:
     email: string | null,
     phone: string | null,
     website: string | null,
-    invoice_email_texts: { sv?: { subject?: string, greeting?: string, body?: string, signoff?: string }, en?: { subject?: string, greeting?: string, body?: string, signoff?: string } }
+    invoice_email_texts: { sv?: { subject?: string, greeting?: string, body?: string, signoff?: string }, en?: { subject?: string, greeting?: string, body?: string, signoff?: string } } | null
   },
   meta: {
     request_id: string,
@@ -354,7 +354,7 @@ Response `200`:
     status: "queued" | "running" | "succeeded" | "failed" | "cancelled",
     progress?: Record<string, unknown>,
     result?: unknown,
-    error: { code?: string, message?: string, details?: unknown },
+    error: { code?: string, message?: string, details?: unknown } | null,
     started_at: string | null,
     completed_at: string | null,
     poll_url: string,

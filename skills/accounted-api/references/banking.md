@@ -341,7 +341,7 @@ Response `200`:
 ```ts
 {
   data: {
-    accounts: { account_key: string, kind: "bank" | "skattekonto" | "manual", account_number: string, name: string, currency: string, logo_url: string | null, source: { type: "psd2" | "bank_file" | "skatteverket_api" | "skatteverket_file" | "manual", synced_at: string | null, stale: boolean }, status: { state: "reconciled" | "open" | "stale" | "not_configured", as_of: string, unexplained_difference: number | null, open_counts: { proposed: number, unmatched_external: number, unmatched_ledger: number } }, superseded_by: string | null, signed_off_through?: string | null }[]
+    accounts: { account_key: string, kind: "bank" | "skattekonto" | "manual", account_number: string, name: string, currency: string, logo_url: string | null, source: { type: "psd2" | "bank_file" | "skatteverket_api" | "skatteverket_file" | "manual", synced_at: string | null, stale: boolean }, status: { state: "reconciled" | "open" | "stale" | "not_configured", as_of: string, unexplained_difference: number | null, open_counts: { proposed: number, unmatched_external: number, unmatched_ledger: number } } | null, superseded_by: string | null, signed_off_through?: string | null }[]
   },
   meta: {
     request_id: string,
@@ -459,10 +459,10 @@ Response `200`:
     is_reconciled: boolean,
     bridge: { key: string, label_sv: string, label_en: string, amount: number, count: number | null, items_bucket: string | null }[],
     counts: { proposed: number, unmatched_external: number, unmatched_ledger: number, matched: number, ignored: number },
-    skattekonto: { saldo_skatteverket: number | null, fetched_at: string | null, history_start: string | null, opening_difference: number | null, upcoming_count: number, upcoming_total: number, ledger_balance_before_start: number | null },
+    skattekonto: { saldo_skatteverket: number | null, fetched_at: string | null, history_start: string | null, opening_difference: number | null, upcoming_count: number, upcoming_total: number, ledger_balance_before_start: number | null } | null,
     bank: Record<string, unknown> | null,
-    manual?: { period_id: string, period_start: string, period_end: string, opening_balance: number, movement: number, closing_balance: number, specification: { provider: "ar" | "ap" | "vacation", label_sv: string, label_en: string, amount: number, unconverted_fx_count: number } },
-    signoff?: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null }
+    manual?: { period_id: string, period_start: string, period_end: string, opening_balance: number, movement: number, closing_balance: number, specification: { provider: "ar" | "ap" | "vacation", label_sv: string, label_en: string, amount: number, unconverted_fx_count: number } | null } | null,
+    signoff?: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null } | null
   },
   meta: {
     request_id: string,
@@ -585,7 +585,7 @@ Response `200`:
 ```ts
 {
   data: {
-    items: { item_id: string, item_type: "skattekonto_transaction" | "transaction" | "journal_entry", side: "external" | "ledger", bucket: "proposed" | "unmatched_external" | "unmatched_ledger" | "matched" | "ignored" | "upcoming", date: string, description: string, amount: number, currency: string, voucher_number?: number | null, voucher_series?: string | null, entry_status?: "draft" | "posted" | "reversed", linked_journal_entry_id?: string | null, linked_entry?: { entry_date: string, voucher_series: string | null, voucher_number: number | null, description: string }, link_problem?: "entry_reversed" | "entry_draft" | "entry_missing" | null, proposal?: { journal_entry_id: string, voucher_number: number | null, voucher_series: string | null, entry_date: string, description: string, entry_status: "draft" | "posted" | "reversed", confidence: number, reasons: string[], vouchers?: { journal_entry_id: {...}, voucher_number: {...}, voucher_series: {...}, entry_date: {...}, description: {...}, amount: {...} }[] }, awaiting_external?: boolean, actions: ("match" | "unmatch" | "book" | "ignore" | "unignore" | "review")[] }[],
+    items: { item_id: string, item_type: "skattekonto_transaction" | "transaction" | "journal_entry", side: "external" | "ledger", bucket: "proposed" | "unmatched_external" | "unmatched_ledger" | "matched" | "ignored" | "upcoming", date: string, description: string, amount: number, currency: string, voucher_number?: number | null, voucher_series?: string | null, entry_status?: "draft" | "posted" | "reversed", linked_journal_entry_id?: string | null, linked_entry?: { entry_date: string, voucher_series: string | null, voucher_number: number | null, description: string } | null, link_problem?: "entry_reversed" | "entry_draft" | "entry_missing" | null, proposal?: { journal_entry_id: string, voucher_number: number | null, voucher_series: string | null, entry_date: string, description: string, entry_status: "draft" | "posted" | "reversed", confidence: number, reasons: string[], vouchers?: { journal_entry_id: string, voucher_number: number | null, voucher_series: string | null, entry_date: string, description: string, amount: number }[] } | null, awaiting_external?: boolean, actions: ("match" | "unmatch" | "book" | "ignore" | "unignore" | "review")[] }[],
     count: number,
     total_count: number,
     has_more: boolean,
@@ -762,7 +762,7 @@ Response `200`:
     dry_run: boolean,
     considered: number,
     applied: { external_id: string, journal_entry_id: string, via?: "line" | "entry_total", allocated_amount?: number }[],
-    skipped: { pair: { external_ids: string[], journal_entry_ids: string[], allocations?: { journal_entry_id: {...}, amount: {...} }[] }, code: string, message: string }[]
+    skipped: { pair: { external_ids: string[], journal_entry_ids: string[], allocations?: { journal_entry_id: string, amount: number }[] }, code: string, message: string }[]
   },
   meta: {
     request_id: string,
