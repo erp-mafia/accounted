@@ -145,7 +145,13 @@ import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
 import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import type { SkillTier } from './skills'
-import { RECOMMENDED_WORKFLOW_LOADOUTS, assertRecommendedLoadoutsValid } from './recommended-tools'
+import {
+  RECOMMENDED_WORKFLOW_LOADOUTS,
+  annotateLoadoutTools,
+  assertRecommendedLoadoutsValid,
+  type RecommendedToolClassification,
+} from './recommended-tools'
+import { SEARCH_ONLY_WRITE_NOTE, isDefaultCatalogTool, toolCallableVia } from './tool-reach'
 import {
   canonicalizeToolReferencesInText,
   projectToolReferences,
@@ -1758,9 +1764,10 @@ export function deriveToolMeta(t: { name: string; outputSchema?: Record<string, 
   }
 }
 
-export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'search' }): boolean {
-  return tool.catalogVisibility !== 'search'
-}
+// isDefaultCatalogTool lives in tool-reach.ts (shared with recommended-tools.ts
+// without an import cycle); re-exported here so the bench and tests keep
+// importing it from the server module.
+export { isDefaultCatalogTool } from './tool-reach'
 
 /**
  * Inline SIE content above this length is refused: a model reproducing tens
@@ -3528,13 +3535,13 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_search_tools',
     title: 'Search MCP Tools',
-    description: 'Search available tools by keyword and choose the returned schema detail level.',
+    description: 'Search tools by keyword; hits carry callable_via: tools_list, call_tool or none.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         query: { type: 'string', description: 'Keywords matched against tool names and descriptions. Empty returns all tools.' },
-        detail: { type: 'string', enum: ['name', 'summary', 'full'], description: 'Detail level. name: just names. summary: name + description + scope (default). full: complete schema including inputSchema and outputSchema.' },
+        detail: { type: 'string', enum: ['name', 'summary', 'full'], description: 'name: just names. summary (default): + description, scope, callable_via. full: + inputSchema, outputSchema, annotations.' },
         scope: { type: 'string', description: 'Optional filter: only tools requiring this API key scope (e.g. "invoices:write").' },
         limit: { type: 'number', description: 'Max results, 1-50 (default 20).' },
       },
@@ -3632,6 +3639,15 @@ export const tools: McpTool[] = [
         if (detail === 'name') {
           return { name: toPublicToolName(t.name, namespace), scope: requiredScope }
         }
+        // Reach, not existence: a hit the client cannot invoke (search-only
+        // WRITE on a tools/list-only host) was reported as a missing tool four
+        // times (feedback seq 372962 and siblings). Response field, so it costs
+        // nothing in tools/list.
+        const callableVia = toolCallableVia(t)
+        const reach = {
+          callable_via: callableVia,
+          ...(callableVia === 'none' ? { note: SEARCH_ONLY_WRITE_NOTE } : {}),
+        }
         if (detail === 'full') {
           const meta = projectMcpPayload(
             { ...(deriveToolMeta(t) ?? {}), ...(t._meta ?? {}) },
@@ -3642,6 +3658,7 @@ export const tools: McpTool[] = [
               name: toPublicToolName(t.name, namespace),
               description: t.description,
               scope: requiredScope,
+              ...reach,
               inputSchema: projectToolInputSchema(t),
               ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
               annotations: t.annotations,
@@ -3656,6 +3673,7 @@ export const tools: McpTool[] = [
             name: toPublicToolName(t.name, namespace),
             description: t.description,
             scope: requiredScope,
+            ...reach,
           },
           namespace
         )
@@ -5137,7 +5155,7 @@ export const tools: McpTool[] = [
           type: 'array',
           items: { type: 'object' },
           description:
-            'Per-workflow tool loadouts, ordered by call sequence: each entry names a workflow, describes it, and lists the exact registry tools it needs. Deferred-loading harnesses batch-load a whole cluster in one call (ToolSearch select:a,b,c). Static; validated against the registry at module load.',
+            'Per-workflow tool loadouts, ordered by call sequence: each entry names a workflow, describes it, and lists its tools as {name, callable, blocked_by?, note?}: callable=false names the missing scope or a search-only write. Batch-load the callable names in one call (ToolSearch select:a,b,c).',
         },
         feedback_channel: {
           type: 'object',
@@ -5159,7 +5177,27 @@ export const tools: McpTool[] = [
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
-    async execute(_args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase) {
+      // Callability per recommended tool (feedback seq 372962): the loadouts
+      // are static, but whether THIS key on THIS client can invoke a tool
+      // depends on the key's scopes and on the catalog tier. The dispatcher
+      // injects __keyScopes (the same private marker gnubok_search_tools
+      // uses); a missing marker fails closed to "no scopes granted", so a
+      // direct execute() never vouches for a scoped tool on faith.
+      const rawKeyScopes = (args as Record<string, unknown>).__keyScopes
+      const grantedScopes = new Set<string>(
+        Array.isArray(rawKeyScopes) ? (rawKeyScopes as string[]) : []
+      )
+      const classifyRecommendedTool = (toolName: string): RecommendedToolClassification => {
+        // Loadouts are validated against the registry at module init, so the
+        // lookup cannot miss; the fallback only keeps the type total.
+        const target = tools.find((candidate) => candidate.name === toolName)
+        return {
+          required_scope: TOOL_SCOPE_MAP[toolName] ?? null,
+          callable_via: target ? toolCallableVia(target) : 'none',
+        }
+      }
+
       // Dimension registry is best-effort and cheap: one indexed read, skipped
       // output when empty (most companies never register dimensions: lazy
       // seeding means zero rows until first use). Errors never block the
@@ -5470,11 +5508,14 @@ export const tools: McpTool[] = [
         // Static per-workflow loadouts (issue #1098): lets a deferred-loading
         // harness batch-load a whole workflow cluster in one call. Validated
         // against the tool registry at module init (assertRecommendedLoadoutsValid).
+        // Each tool is flagged callable for this key and a tools/list-only
+        // client; blocked entries stay in the list with the reason, so the
+        // agent knows what exists and why it is out of reach.
         recommended_tools: RECOMMENDED_WORKFLOW_LOADOUTS.map((w) => ({
           workflow: w.workflow,
           description: w.description,
           skill: w.skill,
-          tools: [...w.tools],
+          tools: annotateLoadoutTools(w.tools, classifyRecommendedTool, grantedScopes),
         })),
         // The feedback tool was previously discoverable only by scanning
         // tools/list; agents that never scan never report. Surface it here,
@@ -22849,8 +22890,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 ]
               : []),
             'Discovery:',
-            '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool that is not in tools/list, reach any READ tool through gnubok_call_tool({tool, arguments}); writes must be named directly.',
-            '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster.',
+            '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool that is not in tools/list, reach any READ tool through gnubok_call_tool({tool, arguments}); a WRITE outside tools/list is then out of reach (the bridge refuses writes), so check callable_via on each search hit before planning around it.',
+            '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster. Each loadout tool carries callable; when false, blocked_by and note say why (missing scope or search-only write).',
             `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId ?? 'none yet: this account has no company. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}); when selecting another company, repeat company_id on every company-data call, including approval.`,
             '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
@@ -23356,11 +23397,15 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
       const callStartedAt = Date.now()
       try {
-        // gnubok_search_tools needs the caller's scopes to filter results to
-        // what the API key can actually invoke. Inject privately via __keyScopes.
-        if (toolName === 'gnubok_search_tools') {
+        // gnubok_search_tools and gnubok_get_agent_briefing need the caller's
+        // scopes: search filters to what the API key can actually invoke, the
+        // briefing flags each recommended tool as callable or not. Inject
+        // privately via __keyScopes.
+        if (toolName === 'gnubok_search_tools' || toolName === 'gnubok_get_agent_briefing') {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
-          ;(toolArgs as Record<string, unknown>).__toolNamespace = toolNamespace
+        }
+        if (toolName === 'gnubok_search_tools') {
+          (toolArgs as Record<string, unknown>).__toolNamespace = toolNamespace
         }
         const rawResult = await tool.execute(toolArgs, tenantId, userId, supabase, actor)
         const canonicalResult = effectiveCompanyId
