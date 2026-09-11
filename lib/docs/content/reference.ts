@@ -89,9 +89,13 @@ function endpointAnchor(ep: EndpointDefinition): string {
   return `${ep.method.toLowerCase()}-${ep.operation.replace(/\./g, '-')}`
 }
 
-/** Markdown table cells: a pipe would end the cell, a newline the row. */
-function cell(text: string): string {
-  return text.replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ')
+/**
+ * Markdown table cells: a pipe would end the cell, a newline the row.
+ * Backslashes are escaped first, or a `\` already in the text (a regex in a
+ * description) would swallow the escape added in front of the next pipe.
+ */
+export function cell(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ')
 }
 
 /** A JSON Schema condensed to the type a reader needs: `"a" | "b"`, `string | null`, `object[]`. */

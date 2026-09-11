@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { listEndpoints } from '@/lib/api/v1/registry'
-import { buildResourcePages } from '../reference'
+import { buildResourcePages, cell } from '../reference'
 
 const pages = buildResourcePages()
 
@@ -85,5 +85,19 @@ describe('endpoint tables', () => {
     expect(md).toContain('**Response fields**')
     expect(md).toContain('| `accounts[].sru_code` | string \\| null |')
     expect(md).toContain('| `accounts[].account_type` | "asset" \\| "equity"')
+  })
+})
+
+describe('table cell escaping', () => {
+  it('escapes backslashes before pipes, so a backslash cannot swallow a pipe escape', () => {
+    expect(cell('string | null')).toBe('string \\| null')
+    // A description ending in a backslash right before a pipe: without the
+    // backslash escape the cell would read \\| and the pipe would end it.
+    expect(cell('a\\| b')).toBe('a\\\\\\| b')
+    expect(cell('^\\d{4}$')).toBe('^\\\\d{4}$')
+  })
+
+  it('folds newlines so a cell never breaks its row', () => {
+    expect(cell('one\n  two')).toBe('one two')
   })
 })
