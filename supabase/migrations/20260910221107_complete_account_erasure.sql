@@ -19,8 +19,8 @@
 --     kept syncing: 6 still active, last sync on the day of the audit.
 --   * skatteverket_tokens (6), agent_conversations (22, plus messages),
 --     agent_rate_counters (76), auth.flow_state (8), auth.one_time_tokens (2).
---   * auth.identities kept the Google profile (full_name, name, avatar_url,
---     picture) for 40 identities.
+--   * auth.identities: 33 rows; the 4 Google identities kept the Google
+--     profile (full_name, name, avatar_url, picture).
 --   * auth.sessions (13) and their refresh tokens were never ended: the
 --     route's auth.admin.signOut() takes a JWT, not a user id.
 --   * auth.users.email was kept indefinitely to block re-signup, while the
