@@ -20,10 +20,21 @@ import { UUID_RE } from '@/lib/invariants/uuid'
 
 /**
  * Whether the owner-only dormancy rule is enforced at all in this
- * environment. False on self-hosted instances (multi_user is a local
- * capability: an AGPL operator's own instance is never seat-gated) and under
- * the dev bypass; FORCE_PAYWALL flips it on in dev like every other gate.
- * Callers use this to pick the gated resolution RPC vs the plain one.
+ * environment. OFF everywhere by default (founder decision 2026-09-10, issue
+ * #2494): a trial that ends must change nothing for the people in the
+ * company, and the grace countdown read as "your account will be paused or
+ * deleted". Nobody is frozen out, no seat banner or reminder mail exists,
+ * and invites stay open.
+ *
+ * The state model (multi-user-state.ts), the SECURITY DEFINER RPCs and every
+ * dormancy check downstream of this switch are kept intact so the gate can
+ * be re-armed without a rebuild: MULTI_USER_SEAT_GATE=true on a hosted
+ * instance turns it back on. Self-hosted instances are never seat-gated
+ * (multi_user is a local capability: an AGPL operator's own instance is not
+ * gated on what it runs itself), whatever the env says. FORCE_PAYWALL and
+ * DISABLE_PAYWALL are deliberately NOT consulted here: they are the dev
+ * knobs for the paid-feature UX, and flipping FORCE_PAYWALL to preview an
+ * upsell must not silently freeze colleagues out of their books.
  *
  * Deliberately NOT delegated to has-capability's isBypassedFor: multi_user is
  * never a connector capability, so the logic reduces to these env reads, and
@@ -33,10 +44,7 @@ import { UUID_RE } from '@/lib/invariants/uuid'
  */
 export function isMultiUserEnforced(): boolean {
   if (isSelfHosted()) return false
-  if (process.env.FORCE_PAYWALL === 'true') return true
-  const bypassed =
-    process.env.NODE_ENV === 'development' || process.env.DISABLE_PAYWALL === 'true'
-  return !bypassed
+  return process.env.MULTI_USER_SEAT_GATE === 'true'
 }
 
 /**

@@ -110,7 +110,7 @@
     "expand_nav": "Expand menu",
     "members_roles": "Members and roles",
     "subscription": "Subscription",
-    "trial_expired_cta": "Trial ended · Upgrade",
+    "trial_expired_cta": "Upgrade",
     "subscription_lapsed_cta": "Subscription ended · Reactivate",
     "discord_community": "Discord community",
     "v2_todo": "To do",
@@ -131,10 +131,9 @@
     "v2_bank_accounts": "Bank accounts"
   },
   "trial_expired_dialog": {
-    "title": "Your trial has expired",
-    "title_dated": "Your trial expired {date}",
+    "title": "Would you like to keep using Accounted with every connection and benefit?",
     "title_lapsed": "Your subscription has ended",
-    "body_paused": "External connections are paused: the AI assistant, bank sync, Skatteverket and email sending.",
+    "body_included": "The AI assistant, bank sync, Skatteverket and email sending are part of the subscription.",
     "body_free": "Your bookkeeping, invoices and reports are still here and cost nothing.",
     "cta_primary": "View subscription",
     "cta_secondary": "Continue without"
@@ -2171,8 +2170,6 @@
     "unlock_payments_gloss": "payment links on invoices, Stripe balance as a bank feed",
     "unlock_webshop": "Webshop",
     "unlock_webshop_gloss": "orders pulled from WooCommerce and Shopify",
-    "unlock_users": "More users",
-    "unlock_users_gloss": "invite colleagues, everyone can work in the company",
     "terms_now": "No lock-in, cancel any time. Payment via Stripe.",
     "unlock_help": "The subscription is the external connections: the assistant, your bank, Skatteverket, email, Stripe and the webshops. Without it, bookkeeping, invoicing, reports and SIE export keep working as usual and everything stays: accounting records are kept for seven years under the Swedish Bookkeeping Act regardless of subscription. Start again later and the connections pick up where they left off.",
     "without_note": "Without a subscription only the external connections pause. Everything else stays.",
@@ -6262,21 +6259,9 @@
     "managed_via": "Managed via {domain}",
     "locked_note": "Paused: requires a paid plan"
   },
-  "multi_user": {
-    "banner_owner": "{emails} will be paused in {days, plural, =1 {1 day} other {# days}}. Upgrade to keep multiple users.",
-    "banner_affected": "Your access to {companyName} will be paused in {days, plural, =1 {1 day} other {# days}} unless the company upgrades.",
-    "banner_cta": "Upgrade"
-  },
   "system_notice": {
     "high_load": "The system is under high load right now. Some pages may respond slowly or fail temporarily. We are on it.",
     "dismiss": "Close"
-  },
-  "paused": {
-    "title": "Your account is paused",
-    "body_single": "Your account is paused in {companyName}. Only one person can work in the company without a paid plan.",
-    "body_multiple": "Your account is paused in the following companies: {companyNames}. Only one person can work in each company without a paid plan.",
-    "body_action": "Ask the owner to upgrade to continue.",
-    "sign_out": "Sign out"
   },
   "company_tab_guard": {
     "title": "The active company was switched in another tab",

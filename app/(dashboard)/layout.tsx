@@ -15,10 +15,7 @@ import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { SystemNoticeBanner } from '@/components/dashboard/SystemNoticeBanner'
 import { parseSystemNoticeUntil } from '@/components/dashboard/system-notice'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
-import MultiUserGraceBanner from '@/components/billing/MultiUserGraceBanner'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
-import { getMultiUserState } from '@/lib/entitlements/multi-user'
-import { createServiceClient } from '@/lib/supabase/server'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider, type ByraTeamRef } from '@/contexts/CompanyContext'
 import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
@@ -452,45 +449,6 @@ export default async function DashboardLayout({
       })),
   )
 
-  // The entitlements-derived multiUser state is computed from the grant rows
-  // the CALLER can see, and RLS hides team-scoped grants from users outside
-  // the team (byrå clients): re-verify any non-entitled answer through the
-  // SECURITY DEFINER state RPC before acting on it. One extra round trip only
-  // in the rare non-entitled case.
-  const activeMultiUser =
-    entitlements.multiUser.state === 'entitled'
-      ? entitlements.multiUser
-      : await getMultiUserState(supabase, companyId)
-
-  // Grace countdown banner data: only while the ACTIVE company is in its
-  // 20-day window AND actually has affected people (>= 1 non-owner member).
-  // Service client because other members' emails are not readable through
-  // the caller's RLS (same reason as GET /api/company/members).
-  let graceBanner: { graceEndsAt: string; affectedEmails: string[]; isAffectedUser: boolean } | null =
-    null
-  if (!isSandbox && activeMultiUser.state === 'grace' && activeMultiUser.graceEndsAt) {
-    const serviceClient = await createServiceClient()
-    const { data: memberRows } = await serviceClient
-      .from('company_members')
-      .select('user_id, role')
-      .eq('company_id', companyId)
-    const affected = (memberRows || []).filter((m) => m.role !== 'owner')
-    if (affected.length > 0) {
-      const { data: affectedProfiles } = await serviceClient
-        .from('profiles')
-        .select('id, email')
-        .in('id', affected.map((a) => a.user_id))
-      const emailById = new Map((affectedProfiles || []).map((p) => [p.id, p.email as string | null]))
-      graceBanner = {
-        graceEndsAt: activeMultiUser.graceEndsAt,
-        affectedEmails: affected
-          .map((a) => emailById.get(a.user_id))
-          .filter((e): e is string => !!e),
-        isAffectedUser: affected.some((a) => a.user_id === user.id),
-      }
-    }
-  }
-
   // Client-driven UI preferences (sidebar collapse + fold state). Read here
   // so the shell renders at the right width on first paint; the nav toggles
   // flip the data attribute client-side and persist via /api/user/ui-state.
@@ -547,7 +505,6 @@ export default async function DashboardLayout({
     trialEndsAt: entitlements.trialEndsAt,
     entitlementState: entitlements.entitlementState,
     trialExpiredAt: entitlements.trialExpiredAt,
-    multiUser: activeMultiUser,
     lockedCompanyIds: [...dormantCompanyIds],
   }
 
@@ -603,14 +560,6 @@ export default async function DashboardLayout({
           </a>
           {isSandbox && <SandboxBanner />}
           {systemNoticeBanner}
-          {graceBanner && (
-            <MultiUserGraceBanner
-              graceEndsAt={graceBanner.graceEndsAt}
-              affectedEmails={graceBanner.affectedEmails}
-              isAffectedUser={graceBanner.isAffectedUser}
-              companyName={displayName}
-            />
-          )}
           <DashboardNav
             companyName={settings?.company_name || 'Min verksamhet'}
             entityType={entityType}
@@ -645,7 +594,7 @@ export default async function DashboardLayout({
             </MainContainer>
             </ShellProvider>
           </main>
-          {/* One-time expired-trial notice. Sandbox/anonymous demo users have
+          {/* One-time post-trial invitation. Sandbox/anonymous demo users have
               no billing (their companies carry trial grants too), so the gate
               lives here where both flags are known. Acknowledgement persists
               per user AND company in user_preferences.ui_state, read here
@@ -653,7 +602,6 @@ export default async function DashboardLayout({
           {!isSandbox && !user.is_anonymous && (
             <TrialExpiredDialog
               state={entitlements.entitlementState}
-              trialExpiredAt={entitlements.trialExpiredAt}
               companyId={companyId}
               initialAcknowledged={!!uiState.trial_expired_ack?.[companyId]}
             />
