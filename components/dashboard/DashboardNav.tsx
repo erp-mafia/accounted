@@ -71,6 +71,8 @@ import { persistUiState } from '@/lib/ui-state/client'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { DashboardShell, EntityType, UserUiState } from '@/types'
 import { SidebarV2 } from './SidebarV2'
+import { isEmployerCompany, isNavHrefEnabled, passesNavGates, type NavGateContext } from './nav-gates'
+import { CommandPaletteTrigger } from '@/components/common/CommandPaletteTrigger'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags, type NavV2Item } from './nav-v2'
 
 void _ENABLED_EXTENSION_IDS
@@ -421,15 +423,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     ? tSwitcher('managed_via', { domain: new URL(cockpitHref).hostname })
     : null
   // Byrå-scope surfaces, not company surfaces: they must stay reachable even
-  // when the active company is unresolved.
-  const ALWAYS_ENABLED = new Set(['/settings', '/clients', '/byra', '/byra/automations', '/byra/kpi'])
-  const isItemEnabled = (href: string) => {
-    // The back-to-clients link may be absolute (cross-host cockpit); judge
-    // it by its path so it stays as reachable as the relative form.
-    const path = href.startsWith('https://') ? new URL(href).pathname : href
-    const base = path.split('?')[0]
-    return hasCompany || ALWAYS_ENABLED.has(base) || base.startsWith('/settings')
-  }
+  // when the active company is unresolved (nav-gates.ts, shared with ⌘K).
+  const isItemEnabled = (href: string) => isNavHrefEnabled(href, hasCompany)
   type ExpandableGroup = Exclude<GroupKey, 'top'>
 
   // Sidebar collapse (64px icon rail). The width is CSS-variable-driven:
@@ -604,48 +599,24 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     return <Icon className={className} />
   }
 
-  const isEmployer = entityType === 'aktiebolag' || paysSalaries
-
-  // One gate for both shells: a surface hides for the same reason in the
-  // v1 rail and the v2 section tree (nav-v2.ts).
-  const passesGates = (item: NavGateFlags) => {
-    if (item.hidden) return false
-    if (hiddenNavHrefs.has(item.href)) return false
-    // Payroll (employerOnly) is hidden until the company is an employer, an
-    // aktiebolag, or any entity that has flagged pays_salaries. #782
-    if (item.employerOnly && !isEmployer) return false
-    // Dimension surfaces are hidden until the company opts in via the
-    // bookkeeping settings toggle (company_settings.dimensions_enabled).
-    if (item.requiresDimensions && !dimensionsEnabled) return false
-    if (item.requiresSalesOrders && !salesOrdersEnabled) return false
-    // Webshop surfaces are hidden until a store is connected (or order rows
-    // already exist from a since-disconnected store).
-    if (item.requiresWebshop && !hasWebshop) return false
-    // Körjournal is hidden until the company opts in via the bookkeeping
-    // settings toggle (or trips already exist, e.g. created via MCP).
-    if (item.requiresMileage && !hasMileage) return false
-    // Utlägg is hidden until a claim exists (registered from Underlag).
-    if (item.requiresExpenses && !hasExpenseClaims) return false
-    // Paywalled surfaces (e.g. the AI-only Dokumentinkorg) are hidden unless
-    // the active company holds the capability. The page + API gates enforce
-    // the paywall; this keeps the sidebar from advertising a dead workspace.
-    if (item.requiredCapability && !capabilities.includes(item.requiredCapability)) return false
-    // Entity-gated statutory surfaces: INK2/ÅR for aktiebolag, NE for
-    // enskild firma; the page for the other form doesn't exist.
-    if (item.entityOnly && item.entityOnly !== entityType) return false
-    // Byrå cockpit: the Klienter entry lives in the lean cockpit sidebar
-    // (cockpitNavItems); in company mode the pinned back-to-clients link
-    // replaces it, and non-byrå users never see it (WL-14).
-    if (item.byraOnly) return false
-    // Hide the Assistent (/chat) tab until the agent is built: mirrors the
-    // floating AgentTrigger and avoids a nav entry that only bounces to the
-    // home checklist (chat/layout redirects unverified users to /).
-    if (item.href === '/chat' && !agentIdentity.isVerified) return false
-    // Granskning stays in the top nav at all times now: the badge
-    // surfaces the count when there are pending ops, but the link is
-    // always present so users can navigate there manually.
-    return true
+  // One gate for both shells and the command palette: a surface hides for
+  // the same reason in the v1 rail, the v2 section tree (nav-v2.ts) and ⌘K.
+  // The reasons live with the gate itself (nav-gates.ts). Granskning stays
+  // in the top nav at all times: the badge surfaces the count when there
+  // are pending ops, but the link is always present.
+  const gateContext: NavGateContext = {
+    entityType,
+    isEmployer: isEmployerCompany(entityType, paysSalaries),
+    dimensionsEnabled,
+    salesOrdersEnabled,
+    hasWebshop,
+    hasMileage,
+    hasExpenseClaims,
+    capabilities,
+    hiddenNavHrefs,
+    assistantVerified: agentIdentity.isVerified,
   }
+  const passesGates = (item: NavGateFlags) => passesNavGates(item, gateContext)
   const filteredItems = (cockpitMode ? cockpitNavItems : navItems).filter(passesGates)
 
   const topItems = filteredItems.filter((i) => i.group === 'top')
@@ -882,6 +853,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           betaLabel={tNav('badge_beta')}
           mainNavLabel={tNav('main_navigation')}
           brand={<BrandHomeLink showLabel />}
+          search={<CommandPaletteTrigger variant="sidebar" />}
           backLink={
             byraTeam && !cockpitMode ? (
               <div className="mb-2">
@@ -981,6 +953,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 )}
                 aria-label={tNav('main_navigation')}
               >
+                <CommandPaletteTrigger variant="rail" className="mb-1" />
                 {/* Rail counterpart of the back-to-clients link. */}
                 {byraTeam &&
                   !cockpitMode &&
@@ -1030,6 +1003,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               )}
               aria-label={tNav('main_navigation')}
             >
+              <div className="mb-2">
+                <CommandPaletteTrigger variant="sidebar" />
+              </div>
               {/* Byrå members inside a company: pinned route back to the
                   cockpit, above everything, separated by a hairline. */}
               {byraTeam && !cockpitMode && (
@@ -1283,6 +1259,12 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 CompanySwitcher above stays outside so it remains masked,
                 and count bubbles inside carry data-ph-mask. */}
             <div data-ph-unmask className="px-2">
+              {/* Search first: the palette is the fastest way anywhere, and
+                  touch has no ⌘K, so this row is its only way in on a phone. */}
+              <div className="mb-1.5">
+                <CommandPaletteTrigger variant="mobile" onOpen={closeMobileMenu} />
+                <div className="mx-3 mt-1.5 h-px bg-border/30" />
+              </div>
               {/* Byrå members inside a company: route back to the cockpit. */}
               {byraTeam && !cockpitMode && (
                 <div className="mb-1.5">
