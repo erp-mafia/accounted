@@ -8,10 +8,22 @@ The annual close. Irreversible. Legally significant. Always staged for human app
 
 - "Run year-end" / "Bokslut för [år]"
 - "Close FY[year]"
-- After all monthly closes are done and the last period is locked
+- After all monthly work is done: every business transaction in the year is booked
 - Before årsredovisning filing to Bolagsverket (AB) or NE-bilaga (enskild firma)
 
 **Do not run year-end during the year.** It zeros result accounts (3xxx-8xxx) into 2099 (årets resultat): only correct at the end of the räkenskapsår.
+
+## What \`gnubok_run_year_end\` actually does
+
+One staged operation, one approval, five effects (lib/core/bookkeeping/year-end-service.ts, executeYearEndClosing):
+
+1. Revalues open foreign-currency items at the closing rate (3960/7960)
+2. Posts the closing entry INTO the period (class 3-8 zeroed against 2099)
+3. Locks the period
+4. Closes the period (irreversible per BFL)
+5. Creates or reuses the next period and posts its opening balances (class 1-2), then moves 2099 to 2098 in the new year
+
+Consequence: **the period must be OPEN and UNLOCKED when you run it.** The closing entry is a journal entry dated on balansdagen; a period locked beforehand refuses it ("Cannot write to locked/closed fiscal period"), and \`gnubok_year_end_readiness\` / \`gnubok_run_year_end\` now refuse a pre-locked period up front (\`period_locked\` / PERIOD_LOCK_ALREADY_LOCKED). There is no separate lock, close or opening-balance step afterwards: those tools answer "already locked" / "already closed" once year-end has run.
 
 ## Workflow
 
@@ -38,27 +50,27 @@ It stages the exact customer-receivable and supplier-payable entries dated on th
 
 ### Step 3: Currency revaluation (if multi-currency)
 
-If the company has open foreign-currency receivables/payables (1510/2440 in EUR/USD/etc.), revalue to closing-date FX rate via \`gnubok_run_currency_revaluation({ fiscal_period_id, closing_date })\`. Posts to **3960** (kursvinster) and **7960** (kursförluster). One revaluation per period.
+Open foreign-currency receivables/payables (1510/2440 in EUR/USD/etc.) are revalued to the closing-date FX rate by \`gnubok_run_year_end\` itself (step 1 above). Run \`gnubok_run_currency_revaluation({ fiscal_period_id, closing_date })\` separately only if the user wants to review the FX result before the close. Posts to **3960** (kursvinster) and **7960** (kursförluster). One revaluation per period.
 
-### Step 4: Lock the period
+### Step 4: Readiness check
 
-\`gnubok_lock_period(fiscal_period_id)\`. Required before year-end. Refuses if business transactions are unbooked.
+\`gnubok_year_end_readiness({ fiscal_period_id })\`. Resolve every blocker before going on: \`unbooked_transactions\` (the common one), \`draft_entries\`, \`unexplained_voucher_gap\`, \`sequence_mismatch\`, \`trial_balance_unbalanced\`, \`kontantmetod_cutoff_required\`, \`period_locked\` (unlock it: year-end locks the period itself), and the period-state kinds. **Do NOT call \`gnubok_lock_period\` here.** A lock is not a pre-flight for bokslut; it only freezes a period you are not about to close.
 
-### Step 5: Run year-end
+### Step 5: Run year-end (the only write)
 
-\`gnubok_run_year_end(fiscal_period_id)\`: stages a high-risk operation. After approval:
+\`gnubok_run_year_end({ fiscal_period_id })\` on the open, unlocked period: stages a high-risk operation. Surface the irreversibility, then approve with \`confirmed=true\`. After approval:
 
 - Class 3-8 (revenue + expenses) zeroed into **2099** (årets resultat)
-- Period flagged \`is_year_end_complete\`
-- Next period created automatically
+- Period locked AND closed (sealed forever, not even storno)
+- Next period created (or reused) with opening balances posted and 2099 moved to 2098
 
-### Step 6: Set opening balances
+### Step 6: Verify
 
-\`gnubok_set_opening_balances({ closed_period_id, next_period_id })\`. Copies class 1-2 closing balances into the next period as opening balances. Stage → approve.
+- \`gnubok_list_fiscal_periods\`: the closed year shows \`is_closed\`, the next period exists
+- \`gnubok_get_balance_sheet\` on the next period: opening balances equal the closed year's closing balances (IB/UB continuity)
+- \`gnubok_get_income_statement\` on the closed year: the result that went to 2099
 
-### Step 7: Close (final, irreversible)
-
-\`gnubok_close_period(fiscal_period_id)\`. Once approved, the period is sealed forever. **No more entries possible, not even via storno.**
+Nothing else to call. \`gnubok_set_opening_balances\`, \`gnubok_close_period\` and \`gnubok_lock_period\` are for the manual or legacy flow only (a period closed in another system, or a partial run that needs finishing by hand); after \`gnubok_run_year_end\` they refuse with "already closed" / "already locked".
 
 ## Tax provisions to compute (AB)
 
@@ -78,35 +90,36 @@ These compute with \`gnubok_get_kpi_report\` for inputs but the actual tax JE is
 
 ## Critical rules
 
-- **Year-end is forever.** Once \`gnubok_close_period\` succeeds, there is no rollback. \`gnubok_unlock_period\` cannot unlock a closed period: only one that is locked but not closed.
-- **Run order matters.** lock → year-end → opening balances → close. Any other order fails.
+- **Year-end is forever.** Once \`gnubok_run_year_end\` is approved, the period is closed and there is no rollback. \`gnubok_unlock_period\` cannot unlock a closed period: only one that is locked but not closed.
+- **Run order matters.** bokslutstransaktioner → readiness → run_year_end on the OPEN period → verify. Locking first is the one ordering that fails.
 - **K2 vs K3:** affects många bokslutsposter: start-up costs, leasing, immateriella tillgångar. The skill assumes K2 unless told otherwise.
 - **Revisionsplikt:** AB with > 3 M SEK omsättning, > 1.5 M SEK BR-omslutning, > 3 employees (any 2 of 3, two consecutive years) need auditor: book the audit before close.
 
 ## Common errors
 
-- **"Period must be locked before closing"**: Step 3 missed.
-- **"Year-end closing entry must exist"**: Step 4 missed.
+- **"Cannot write to locked/closed fiscal period" at approval, or \`period_locked\` in readiness**: the period was locked before year-end. \`gnubok_unlock_period\`, then \`gnubok_run_year_end\` again. Never lock first.
+- **"Period is already closed" (PERIOD_ALREADY_CLOSED) from \`gnubok_close_period\` / \`gnubok_lock_period\`**: year-end already closed it. Not an error to fix: verify with \`gnubok_list_fiscal_periods\` and move on.
+- **"Period is already locked" (PERIOD_LOCK_ALREADY_LOCKED) from \`gnubok_run_year_end\`**: same cause as the first item; unlock and re-run.
 - **Forgetting periodiseringsfond reversal**: must reverse the oldest 6-year-old fond automatically. Skatteverket WILL catch this.
 - **Skipping currency revaluation on FX exposure**: distorts BR; auditors flag.
 
 ## Tools
 
-- \`gnubok_lock_period\`: pre-flight before year-end
+- \`gnubok_year_end_readiness\`: pre-flight (blockers + warnings)
 - \`gnubok_post_kontantmetod_cutoff\`: stage the mandatory cash-method cut-off and reversals
-- \`gnubok_run_year_end\`: zero result accounts
-- \`gnubok_set_opening_balances\`: seed next period
-- \`gnubok_run_currency_revaluation\`: FX revaluation
-- \`gnubok_close_period\`: final, irreversible
+- \`gnubok_run_year_end\`: closing entry + lock + close + next period IB, one approval
+- \`gnubok_run_currency_revaluation\`: FX revaluation on its own, for review before the close
+- \`gnubok_list_fiscal_periods\`: confirm the closed/open state afterwards
 - \`gnubok_get_balance_sheet\`: verify post-year-end balances
 - \`gnubok_get_income_statement\`: verify result before year-end JE
-- \`gnubok_get_trial_balance\`: sanity check before each step
+- \`gnubok_get_trial_balance\`: sanity check before the run
+- \`gnubok_lock_period\`, \`gnubok_close_period\`, \`gnubok_set_opening_balances\`: manual/legacy flow only, never after \`gnubok_run_year_end\`
 `
 
 export const yearEndCloseSkill: Skill = {
   slug: 'year-end-close',
   name: 'Year-End Close (Bokslut)',
-  summary: 'Annual close: bokslutstransaktioner, currency revaluation, lock → year-end → opening balances → close. Irreversible.',
+  summary: 'Annual close: bokslutstransaktioner, readiness check, then gnubok_run_year_end on the OPEN period (it locks, closes and seeds next-year IB itself). Irreversible.',
   tags: ['yearly', 'close', 'bokslut', 'compliance'],
   body,
   tier: 'workflow',

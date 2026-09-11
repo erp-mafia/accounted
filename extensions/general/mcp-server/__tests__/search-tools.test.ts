@@ -271,3 +271,31 @@ describe('gnubok_search_tools', () => {
     }
   })
 })
+
+describe('gnubok_search_tools: skattekonto booking tools are findable', () => {
+  // Both tools are catalogVisibility 'search' and had no keywords, so an agent
+  // searching for skattekonto interest found nothing and reported a missing
+  // tool (feedback seq 382367). Every query term must match, so the Swedish
+  // and English event words have to be on the tool, not guessed.
+  it.each([
+    'skattekonto ränta',
+    'book skattekonto interest',
+    'skattekonto intäktsränta',
+    'skattekonto kostnadsränta',
+    'skattekonto avgift',
+    'skattekonto 8314',
+  ])('finds gnubok_book_skattekonto_row for %j', async (query) => {
+    const result = await call({ query, detail: 'name', limit: 10 })
+    const names = result.tools.map((t) => t.name)
+    expect(names).toContain('gnubok_book_skattekonto_row')
+    expect(names).toContain('gnubok_book_skattekonto_rows')
+  })
+
+  it('names the event types and their counter accounts in the description', async () => {
+    const result = await call({ query: 'book_skattekonto_row', detail: 'summary', limit: 5 })
+    const tool = result.tools.find((t) => t.name === 'gnubok_book_skattekonto_row')
+    expect(tool?.description).toMatch(/intäktsränta 8314/)
+    expect(tool?.description).toMatch(/kostnadsränta 8423/)
+    expect(tool?.description).toMatch(/6992/)
+  })
+})
