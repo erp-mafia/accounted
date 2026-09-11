@@ -433,3 +433,43 @@ describe('mapTrialBalancesToK2: öre-rounding residual smoothing', () => {
     expect(res.warnings.some((w) => w.includes('3005'))).toBe(true)
   })
 })
+
+describe('mapTrialBalancesToK2: årets resultat on 8999 (feedback seq 345150)', () => {
+  it('does not report 8999 as missing from the ÅR: the result is derived from the RR sum', () => {
+    // A year imported already closed by another system: the result sits on
+    // 8999 in the pre-closing TB (the closing 2099 booking is in the full TB).
+    const closedElsewhere = {
+      full: CURRENT.full,
+      preClosing: [...CURRENT.preClosing, row('8999', 'Årets resultat', 0, 120_000)],
+    }
+    const res = mapTrialBalancesToK2(closedElsewhere, null)
+    expect(res.unmappedAccounts).toEqual([])
+    expect(res.warnings.some((w) => w.includes('8999') && w.includes('saknas'))).toBe(false)
+    const note = res.warnings.find((w) => w.startsWith('Konto 8999'))
+    expect(note).toBe(
+      'Konto 8999 (Årets resultat) ingår inte i K2-mappningen: årets resultat beräknas från resultaträkningens summa. Ingen åtgärd behövs.',
+    )
+    // RR totals are untouched: 8999 is outside every RR range.
+    expect(res.totals.aretsResultat.current).toBe(120_000)
+  })
+
+  it('emits the note once per account across both years and still flags a real unmapped account', () => {
+    const res = mapTrialBalancesToK2(
+      {
+        full: CURRENT.full,
+        preClosing: [
+          ...CURRENT.preClosing,
+          row('8999', 'Årets resultat', 0, 120_000),
+          row('9999', 'Internkonto', 5_000, 0),
+        ],
+      },
+      {
+        full: PREVIOUS.full,
+        preClosing: [...PREVIOUS.preClosing, row('8999', 'Årets resultat', 0, 40_000)],
+      },
+    )
+    expect(res.warnings.filter((w) => w.startsWith('Konto 8999'))).toHaveLength(1)
+    expect(res.unmappedAccounts.map((u) => u.account)).toEqual(['9999'])
+    expect(res.warnings.some((w) => w.includes('9999') && w.includes('täcks inte av K2-mappningen'))).toBe(true)
+  })
+})
