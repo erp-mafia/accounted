@@ -32,7 +32,9 @@ const Account = z.object({
   default_vat_rate: z.number().nullable(),
   default_vat_treatment: AccountVatTreatmentSchema.nullable(),
   sru_code: z.string().nullable(),
-  sort_order: z.number().int(),
+  // The column is nullable and the import paths write NULL for a
+  // non-numeric account number.
+  sort_order: z.number().int().nullable(),
 })
 
 const AccountsResponse = dataEnvelope(z.object({ accounts: z.array(Account) }))
