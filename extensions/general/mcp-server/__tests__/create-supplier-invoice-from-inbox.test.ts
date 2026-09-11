@@ -1054,3 +1054,175 @@ describe('gnubok_create_supplier_invoice_from_inbox: due date default and total 
   })
 })
 
+
+describe('gnubok_create_supplier_invoice_from_inbox: reverse charge registers the net as payable (feedback 366701)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // Anthropic invoice ZC8NEUGS-0001 as extracted: the seller charged Swedish
+  // VAT on a supply the buyer self-assesses. The registration entry credits
+  // 2440 with the line nets, so a staged gross put 1149 in the reskontra
+  // against 919.20 in the GL and the payment match could never settle.
+  const grossWithVat = {
+    supplier: { name: 'Anthropic, PBC' },
+    invoice: { invoiceNumber: 'ZC8NEUGS-0001', invoiceDate: '2026-08-01', dueDate: '2026-08-31', currency: 'SEK' },
+    totals: { subtotal: 919.2, vat: 229.8, total: 1149 },
+    lineItems: [
+      { description: 'Claude API usage', quantity: 1, unitPrice: 919.2, lineTotal: 919.2, vatRate: 25, accountSuggestion: '6540' },
+    ],
+  }
+
+  it('vat_treatment_override reverse_charge on a gross-with-VAT extraction stages total = net, vat 0, and says the seller charged VAT', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-rc-1',
+        status: 'received',
+        extracted_data: grossWithVat,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-rc-1',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-rc-1', vat_treatment_override: 'reverse_charge' },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const params = inserts[0].params as {
+      vat_treatment: string
+      subtotal: number
+      vat_amount: number
+      total: number
+      items: Array<{ vat_rate: number; vat_amount: number; line_total: number }>
+    }
+    expect(params.vat_treatment).toBe('reverse_charge')
+    // The payable the executor writes and the GL will carry on 2440: the net.
+    expect(params.subtotal).toBe(919.2)
+    expect(params.vat_amount).toBe(0)
+    expect(params.total).toBe(919.2)
+    expect(params.items[0].line_total).toBe(919.2)
+    expect(params.items[0].vat_rate).toBe(0)
+    expect(params.items[0].vat_amount).toBe(0)
+
+    // The approver sees the gross next to what is registered, and why.
+    expect(result.preview.total).toBe(919.2)
+    expect(result.preview.vat_amount).toBe(0)
+    expect(result.preview.payable_recomputed).toEqual({
+      reason: 'reverse_charge',
+      extracted_subtotal: 919.2,
+      extracted_vat: 229.8,
+      extracted_total: 1149,
+      payable_total: 919.2,
+    })
+    const warning = String(result.preview.warning)
+    expect(warning).toContain('229.8')
+    expect(warning).toContain('1149')
+    expect(warning).toContain('919.2')
+    expect(warning).toMatch(/not deductible/i)
+  })
+
+  it('dry_run shows the same recomputation before anything is staged', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-rc-2',
+        status: 'received',
+        extracted_data: grossWithVat,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-rc-2',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-rc-2', vat_treatment_override: 'reverse_charge', dry_run: true },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean; dry_run?: boolean; preview: Record<string, unknown> }
+
+    expect(result.dry_run).toBe(true)
+    expect(inserts).toHaveLength(0)
+    expect(result.preview.total).toBe(919.2)
+    expect((result.preview.payable_recomputed as { payable_total: number }).payable_total).toBe(919.2)
+    expect(typeof result.preview.warning).toBe('string')
+  })
+
+  it('an extraction already marked reverse_charge with no seller VAT stages unchanged and carries no warning', async () => {
+    const cleanReverseCharge = {
+      ...grossWithVat,
+      invoice: { ...grossWithVat.invoice, vatTreatment: 'reverse_charge' },
+      totals: { subtotal: 919.2, vat: 0, total: 919.2 },
+      lineItems: [
+        { description: 'Claude API usage', quantity: 1, unitPrice: 919.2, lineTotal: 919.2, vatRate: 0, accountSuggestion: '6540' },
+      ],
+    }
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-rc-3',
+        status: 'received',
+        extracted_data: cleanReverseCharge,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-rc-3',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-rc-3' },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const params = inserts[0].params as {
+      vat_treatment: string
+      subtotal: number
+      vat_amount: number
+      total: number
+      items: Array<{ vat_rate: number; vat_amount: number }>
+    }
+    expect(params.vat_treatment).toBe('reverse_charge')
+    expect(params.subtotal).toBe(919.2)
+    expect(params.vat_amount).toBe(0)
+    expect(params.total).toBe(919.2)
+    expect(params.items[0].vat_rate).toBe(0)
+    expect(params.items[0].vat_amount).toBe(0)
+    expect(result.preview.payable_recomputed).toBeUndefined()
+    expect(result.preview.warning).toBeUndefined()
+  })
+
+  it('a domestic invoice keeps the gross as payable and no reverse-charge warning', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-rc-4',
+        status: 'received',
+        extracted_data: grossWithVat,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-rc-4',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-rc-4' },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const params = inserts[0].params as { vat_treatment: string; vat_amount: number; total: number; items: Array<{ vat_rate: number }> }
+    expect(params.vat_treatment).toBe('standard_25')
+    expect(params.total).toBe(1149)
+    expect(params.vat_amount).toBe(229.8)
+    expect(params.items[0].vat_rate).toBe(0.25)
+    expect(result.preview.payable_recomputed).toBeUndefined()
+    expect(result.preview.warning).toBeUndefined()
+  })
+})
