@@ -15,6 +15,7 @@ import {
   loadPeriodFromQuery,
   loadRangeFromQuery,
   safeGenerate,
+  ReportPeriodQueryShape,
 } from '@/lib/api/v1/report-period'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 
@@ -28,6 +29,16 @@ const ALLOWED_PARAMS = ['period_id', 'to_date', 'as_of'] as const
 // require importing every BAS-section type, which adds maintenance with no
 // runtime benefit (the server is the source of truth, not the agent).
 const BalanceSheetResponse = z.unknown()
+
+// The accepted parameters, as ALLOWED_PARAMS gates them.
+const ReportQuery = z.object({
+  ...ReportPeriodQueryShape,
+  to_date: z
+    .string()
+    .optional()
+    .describe('YYYY-MM-DD inside the fiscal period: the position as of this date. Default: the period end.'),
+  as_of: z.string().optional().describe('Alias for to_date. Pass one or the other, not both.'),
+})
 
 registerEndpoint({
   operation: 'reports.balance-sheet',
@@ -60,6 +71,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ReportQuery },
   response: { success: dataEnvelope(BalanceSheetResponse) },
 })
 

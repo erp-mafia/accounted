@@ -47,6 +47,16 @@ function paramsReadBy(source: string): Set<string> {
   for (const [pattern, params] of HELPER_PARAMS) {
     if (pattern.test(source)) for (const p of params) names.add(p)
   }
+  // A route that gates its query with assertKnownQueryParams(ALLOWED_PARAMS)
+  // accepts exactly that list: anything else is a 400 before a helper reads
+  // it (the balance sheet refuses from_date although loadRangeFromQuery
+  // would read one).
+  const allowlist = source.match(/ALLOWED_PARAMS\s*=\s*\[([^\]]*)\]/)
+  if (allowlist && /\bassertKnownQueryParams\(/.test(source)) {
+    const allowed = new Set([...allowlist[1]!.matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]!))
+    for (const n of [...names]) if (!allowed.has(n)) names.delete(n)
+    for (const n of allowed) names.add(n)
+  }
   for (const p of WRAPPER_PARAMS) names.delete(p)
   return names
 }

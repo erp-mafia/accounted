@@ -11,8 +11,25 @@ import { NextResponse } from 'next/server'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ErrorResponse } from '@/lib/api/v1/errors'
-import { loadPeriodFromQuery, safeGenerate } from '@/lib/api/v1/report-period'
+import {
+  loadPeriodFromQuery,
+  safeGenerate,
+  ReportPeriodQueryShape,
+} from '@/lib/api/v1/report-period'
 import { generateSIEExport, encodeSIEToCP437 } from '@/lib/reports/sie-export'
+
+// Documents what the handler reads (period_id via loadPeriodFromQuery).
+const ExportQuery = z.object({
+  ...ReportPeriodQueryShape,
+  exclude_closing: z
+    .string()
+    .optional()
+    .describe('true leaves out the year-end closing verifikat (source_type year_end). Default: included.'),
+  encoding: z
+    .string()
+    .optional()
+    .describe('cp437 returns CP437 bytes for legacy desktop importers. Default: UTF-8.'),
+})
 
 registerEndpoint({
   operation: 'reports.sie-export',
@@ -39,6 +56,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ExportQuery },
   response: { success: z.unknown(), contentType: 'text/plain' },
 })
 

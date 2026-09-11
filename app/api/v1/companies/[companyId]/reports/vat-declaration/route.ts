@@ -18,6 +18,41 @@ import type { VatPeriodType } from '@/types'
 const VatPeriodTypeEnum = z.enum(['monthly', 'quarterly', 'yearly'])
 const AccountingMethodEnum = z.enum(['accrual', 'cash'])
 
+const DeclarationQuery = z
+  .object({
+    period_type: VatPeriodTypeEnum.describe('Declaration period length. Required.'),
+    year: z.coerce.number().int().min(2000).max(2100).describe('Calendar year of the period, 2000-2100. Required.'),
+    period: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(12)
+      .describe('Period number within the year: 1-12 for monthly, 1-4 for quarterly, 1 for yearly. Required.'),
+    accounting_method: AccountingMethodEnum.optional().describe(
+      'Accepted for backward compatibility; has no effect on the figures.',
+    ),
+  })
+  // Cross-field bounds: monthly accepts 1-12, quarterly 1-4, yearly only 1.
+  // Without this guard a caller could pass period_type=quarterly + period=7
+  // and silently get a nonsensical declaration that they might submit to
+  // Skatteverket.
+  .superRefine((data, ctx) => {
+    if (data.period_type === 'quarterly' && (data.period < 1 || data.period > 4)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['period'],
+        message: 'For quarterly period_type, period must be 1-4.',
+      })
+    }
+    if (data.period_type === 'yearly' && data.period !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['period'],
+        message: 'For yearly period_type, period must be 1.',
+      })
+    }
+  })
+
 registerEndpoint({
   operation: 'reports.vat-declaration',
   method: 'GET',
@@ -72,6 +107,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: DeclarationQuery },
   response: { success: dataEnvelope(z.unknown()) },
 })
 
@@ -79,34 +115,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'reports.vat-declaration',
   async (request, ctx) => {
     const url = new URL(request.url)
-    const FiltersSchema = z
-      .object({
-        period_type: VatPeriodTypeEnum,
-        year: z.coerce.number().int().min(2000).max(2100),
-        period: z.coerce.number().int().min(1).max(12),
-        accounting_method: AccountingMethodEnum.optional(),
-      })
-      // Cross-field bounds: monthly accepts 1-12, quarterly 1-4, yearly only 1.
-      // Without this guard a caller could pass period_type=quarterly + period=7
-      // and silently get a nonsensical declaration that they might submit to
-      // Skatteverket.
-      .superRefine((data, ctx) => {
-        if (data.period_type === 'quarterly' && (data.period < 1 || data.period > 4)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['period'],
-            message: 'For quarterly period_type, period must be 1-4.',
-          })
-        }
-        if (data.period_type === 'yearly' && data.period !== 1) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['period'],
-            message: 'For yearly period_type, period must be 1.',
-          })
-        }
-      })
-    const filters = FiltersSchema.safeParse({
+    const filters = DeclarationQuery.safeParse({
       period_type: url.searchParams.get('period_type'),
       year: url.searchParams.get('year'),
       period: url.searchParams.get('period'),

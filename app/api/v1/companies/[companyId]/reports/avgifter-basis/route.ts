@@ -13,6 +13,11 @@ import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { safeGenerate } from '@/lib/api/v1/report-period'
 import { generateAvgifterBasis } from '@/lib/reports/avgifter-basis'
 
+// Documents what the handler reads: it validates the year itself.
+const YearQuery = z.object({
+  year: z.number().int().min(2020).max(2100).describe('Year, 2020-2100. Required.'),
+})
+
 registerEndpoint({
   operation: 'reports.avgifter-basis',
   method: 'GET',
@@ -39,6 +44,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: YearQuery },
   response: { success: dataEnvelope(z.unknown()) },
 })
 
