@@ -72,7 +72,12 @@ describe('createOpenAICompatibleService', () => {
   it('builds the provider from AI_BASE_URL / AI_API_KEY', () => {
     createOpenAICompatibleService(readAiConfig())
     expect(createdWith).toHaveBeenCalledWith(
-      expect.objectContaining({ baseURL: 'https://api.berget.ai/v1', apiKey: 'sk-berget-example', supportsStructuredOutputs: false })
+      expect.objectContaining({
+        baseURL: 'https://api.berget.ai/v1',
+        apiKey: 'sk-berget-example',
+        supportsStructuredOutputs: false,
+        fetch: expect.any(Function),
+      })
     )
   })
 
