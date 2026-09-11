@@ -758,7 +758,7 @@ const PINNED_DEPS = [
   },
   {
     name: 'nodemailer',
-    version: '9.0.5',
+    version: '9.1.1',
     reason:
       'SMTP mailer for self-hosts (extensions/general/email/lib/smtp-service.ts). Zero-dependency MIT-0 ' +
       'package on the outbound-mail path; bumps are deliberate, reviewed PRs (audit surface), never silent.',
