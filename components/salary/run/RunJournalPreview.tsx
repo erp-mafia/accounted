@@ -17,6 +17,11 @@ export interface EntryPreviewLine {
 export interface EntryPreview {
   description: string
   lines: EntryPreviewLine[]
+  // The preview route's balance assertion (absent on booked runs, whose
+  // vouchers the DB trigger already proved balanced). False means the
+  // projection and the booking rules have diverged: surfaced, never hidden.
+  balanced?: boolean
+  difference?: number
 }
 
 export interface PreviewData {
@@ -71,6 +76,11 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating }: Run
           {entries.map((entry, idx) => (
             <div key={idx}>
               <h4 className="text-sm font-medium">{entry.description}</h4>
+              {entry.balanced === false && (
+                <p className="text-sm text-destructive" role="alert">
+                  {t('journal_preview_unbalanced', { amount: formatCurrency(entry.difference ?? 0) })}
+                </p>
+              )}
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-[13px]">
                   <thead>

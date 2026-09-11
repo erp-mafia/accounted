@@ -9,7 +9,12 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 vi.mock('@/lib/events', () => ({
   eventBus: { emit: vi.fn().mockResolvedValue(undefined) },
 }))
-vi.mock('@/lib/salary/salary-entries', () => ({ createSalaryRunEntries: vi.fn() }))
+// The rows -> engine-input mapper stays real (it is the contract under test
+// via the createSalaryRunEntries call args); only the posting is mocked.
+vi.mock('@/lib/salary/salary-entries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/salary-entries')>()),
+  createSalaryRunEntries: vi.fn(),
+}))
 vi.mock('@/lib/salary/vacation-ledger', () => ({
   syncVacationLedgerForEmployees: vi.fn(),
 }))

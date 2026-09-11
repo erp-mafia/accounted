@@ -7598,6 +7598,7 @@
     "journal_preview_title": "Preview — vouchers",
     "journal_booked_title": "Booked vouchers",
     "journal_preview_nollkorning": "Zero run — no vouchers are posted for this run. Verify that other payroll runs for the period cover the employer declaration to Skatteverket.",
+    "journal_preview_unbalanced": "The previewed voucher does not balance (difference {amount}). Do not book until this is resolved: check the pay lines and account mapping.",
     "journal_th_account": "Account",
     "journal_th_description": "Description",
     "journal_th_debit": "Debit",

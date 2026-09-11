@@ -23,7 +23,12 @@ vi.mock('@/lib/auth/require-write', () => ({
 vi.mock('@/lib/events', () => ({
   eventBus: { emit: vi.fn().mockResolvedValue(undefined) },
 }))
-vi.mock('@/lib/salary/salary-entries', () => ({ createSalaryRunEntries: vi.fn() }))
+// The rows -> engine-input mapper stays real (the call args are the contract
+// under test); only the posting is mocked.
+vi.mock('@/lib/salary/salary-entries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/salary-entries')>()),
+  createSalaryRunEntries: vi.fn(),
+}))
 // The booking core refreshes the payslip YTD snapshot first; it is a
 // display-only side effect with its own tests (lib/salary/__tests__/ytd.test.ts),
 // so stub it out rather than queue its reads into every booking fixture.

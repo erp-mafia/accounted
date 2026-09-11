@@ -11,6 +11,7 @@ import { creditNatural, debitNatural } from '@/lib/bookkeeping/line-side'
 import { SALARY_ACCOUNTS, getLineItemAccount, isTaxFreeReimbursementType } from './account-mapping'
 import {
   computeDeclaredAvgifterWithOverrides,
+  isFSkattStatus,
   resolveDeclaredAvgifterParams,
 } from './declared-avgifter'
 import { calculateLoneVaxlingPensionProvision } from './lonevaxling'
@@ -23,7 +24,7 @@ import type {
 
 const log = createLogger('salary-entries')
 
-interface SalaryRunEmployee {
+export interface SalaryRunEmployee {
   employee_id: string
   employment_type: string
   gross_salary: number
@@ -65,7 +66,7 @@ interface SalaryRunEmployee {
   pension_slp?: number
 }
 
-interface SalaryRunData {
+export interface SalaryRunData {
   id: string
   period_year: number
   period_month: number
@@ -78,6 +79,117 @@ interface SalaryRunData {
   total_vacation_accrual: number
   calculation_params?: Record<string, unknown> | null
   employees: SalaryRunEmployee[]
+}
+
+/** The salary_runs columns the run input reads. */
+export interface SalaryRunRow {
+  id: string
+  period_year: number
+  period_month: number
+  payment_date: string
+  voucher_series: string
+  total_gross: number
+  total_tax: number
+  total_net: number
+  total_avgifter: number
+  total_vacation_accrual: number
+  calculation_params?: Record<string, unknown> | null
+}
+
+/**
+ * A salary_run_employees row joined with the employee columns and line
+ * items the booking reads. Structural: the book runner's wider roster row
+ * and the preview route's narrower select both satisfy it.
+ */
+export interface SalaryRosterRow {
+  employee_id: string
+  gross_salary: number
+  tax_withheld: number
+  tax_withheld_override?: number | null
+  net_salary: number
+  avgifter_amount: number
+  avgifter_amount_override?: number | null
+  avgifter_basis?: number | null
+  avgifter_rate: number
+  avgifter_category?: string | null
+  vacation_accrual: number
+  vacation_accrual_avgifter: number
+  employee?: {
+    employment_type?: string | null
+    default_dimensions?: Record<string, string> | null
+    f_skatt_status?: string | null
+  } | null
+  line_items?: Array<Record<string, unknown>> | null
+}
+
+/**
+ * Map the stored run + roster rows to the engine input. ONE mapping for the
+ * booking (book-run.ts) and the journal preview route: the preview used to
+ * carry its own copy of these rules and drifted (no tax_withheld override,
+ * no employee dimensions), which is the class of bug behind feedback seq
+ * 384229 where the previewed salary voucher did not balance.
+ *
+ * Per-employee overrides (advanced mode) flow into the ledger: the tax
+ * override replaces tax_withheld and the net moves by the same amount.
+ * F-skatt payees form no underlag for arbetsgivaravgifter: the AGI
+ * hard-ignores avgifter overrides on such rows (isFSkattRow), so the booking
+ * must too, or the ledger would carry social charges the declaration
+ * provably excludes. The avgifter basis is deliberately the UN-overridden
+ * one (a basis override never reaches the filed IU fields, so Skatteverket
+ * computes from these values regardless), zeroed for F-skatt rows; an
+ * amount override is flagged instead so the 2731 split mirrors the AGI's
+ * override path. The employee's dimensions bag is read live from the
+ * employee row, so preview and booking show the same split.
+ */
+export function salaryRunDataFromRows(run: SalaryRunRow, roster: SalaryRosterRow[]): SalaryRunData {
+  return {
+    id: run.id,
+    period_year: run.period_year,
+    period_month: run.period_month,
+    payment_date: run.payment_date,
+    voucher_series: run.voucher_series,
+    total_gross: run.total_gross,
+    total_tax: run.total_tax,
+    total_net: run.total_net,
+    total_avgifter: run.total_avgifter,
+    total_vacation_accrual: run.total_vacation_accrual,
+    // The exact payroll-rate snapshot approved with this run: reading current
+    // config here could change SLP between calculation and booking.
+    calculation_params: run.calculation_params ?? null,
+    employees: roster.map((sre) => {
+      const fSkatt = isFSkattStatus(sre.employee?.f_skatt_status)
+      const taxWithheld = sre.tax_withheld_override ?? sre.tax_withheld
+      return {
+        employee_id: sre.employee_id,
+        employment_type: sre.employee?.employment_type || 'employee',
+        gross_salary: sre.gross_salary,
+        tax_withheld: taxWithheld,
+        net_salary: sre.net_salary + (sre.tax_withheld - taxWithheld),
+        avgifter_amount: fSkatt
+          ? sre.avgifter_amount
+          : sre.avgifter_amount_override ?? sre.avgifter_amount,
+        avgifter_rate: sre.avgifter_rate,
+        avgifter_basis: fSkatt ? 0 : (sre.avgifter_basis as number),
+        avgifter_category: sre.avgifter_category ?? null,
+        avgifter_amount_overridden: !fSkatt && sre.avgifter_amount_override != null,
+        vacation_accrual: sre.vacation_accrual,
+        vacation_accrual_avgifter: sre.vacation_accrual_avgifter,
+        default_dimensions: sre.employee?.default_dimensions ?? undefined,
+        line_items: (sre.line_items || []).map((li) => ({
+          item_type: li.item_type as string,
+          amount: li.amount as number,
+          account_number: li.account_number as string | null,
+          is_net_deduction: li.is_net_deduction as boolean,
+          is_gross_deduction: li.is_gross_deduction as boolean,
+        })),
+      }
+    }),
+  }
+}
+
+/** Voucher description shared by the booking and the preview: "Lön YYYY-MM". */
+export function salaryRunDescription(run: Pick<SalaryRunRow, 'period_year' | 'period_month'>): string {
+  return `Lön ${run.period_year}-${String(run.period_month).padStart(2, '0')}`
 }
 
 function resolveLoneVaxlingPension(run: SalaryRunData): SalaryRunData {
@@ -144,45 +256,90 @@ export async function createSalaryRunEntries(
     throw new Error(`Ingen öppen räkenskapsperiod för datum ${entryDate}`)
   }
 
-  const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
-  const desc = `Lön ${periodLabel}`
+  const desc = salaryRunDescription(run)
 
   await ensureSalaryAccountsExist(supabase, companyId, userId, postingRun)
 
+  // The four line sets come from the same builder the preview route renders,
+  // so what the user approved on screen is what posts.
+  const built = buildSalaryRunEntryLines(postingRun, desc)
+
+  const post = (description: string, lines: CreateJournalEntryLineInput[]): Promise<JournalEntry> => {
+    const input: CreateJournalEntryInput = {
+      fiscal_period_id: fiscalPeriodId,
+      entry_date: run.payment_date,
+      description,
+      source_type: 'salary_payment',
+      source_id: run.id,
+      voucher_series: run.voucher_series,
+      lines,
+    }
+    log.info(`Creating salary run entry "${description}": ${lines.length} lines`)
+    return createJournalEntry(supabase, companyId, userId, input)
+  }
+
   // ─── Entry 1: Salary (brutto, skatt, netto) ───
-  const salaryEntry = await createSalaryEntry(
-    supabase, companyId, userId, postingRun, fiscalPeriodId, desc
-  )
+  const salaryEntry = await post(desc, built.salaryLines)
 
   // ─── Entry 2: Arbetsgivaravgifter ───
-  const avgifterEntry = await createAvgifterEntry(
-    supabase, companyId, userId, postingRun, fiscalPeriodId, desc
-  )
+  const avgifterEntry = await post(`${desc}: Arbetsgivaravgifter`, built.avgifterLines)
 
   // ─── Entry 3: Vacation accrual (if any) ───
-  let vacationEntry: JournalEntry | null = null
-  const totalVacation = postingRun.employees.reduce((sum, e) => sum + e.vacation_accrual, 0)
-  const totalVacationAvgifter = postingRun.employees.reduce((sum, e) => sum + e.vacation_accrual_avgifter, 0)
-  if (totalVacation > 0 || totalVacationAvgifter > 0) {
-    vacationEntry = await createVacationEntry(
-      supabase, companyId, userId, postingRun, fiscalPeriodId, desc, totalVacation, totalVacationAvgifter
-    )
-  }
+  const vacationEntry =
+    built.vacationLines.length > 0
+      ? await post(`${desc}: Semesteravsättning`, built.vacationLines)
+      : null
 
   // ─── Entry 4: Pension provisions + SLP (if löneväxling) ───
   // Per deductions-lonevaxling.md: pension = löneväxling × 1.058, SLP = pension × 24.26%
   // Debit 7410 Pensionsförsäkringspremier / Credit 2740 Skuld pensionsförsäkringar
   // Debit 7533 Särskild löneskatt / Credit 2514 Beräknad särskild löneskatt
-  let pensionEntry: JournalEntry | null = null
-  const totalPension = postingRun.employees.reduce((sum, e) => sum + (e.pension_contribution || 0), 0)
-  const totalSlp = postingRun.employees.reduce((sum, e) => sum + (e.pension_slp || 0), 0)
-  if (totalPension > 0) {
-    pensionEntry = await createPensionEntry(
-      supabase, companyId, userId, postingRun, fiscalPeriodId, desc, totalPension, totalSlp
-    )
-  }
+  const pensionEntry =
+    built.pensionLines.length > 0
+      ? await post(`${desc}: Pensionsavsättning`, built.pensionLines)
+      : null
 
   return { salaryEntry, avgifterEntry, vacationEntry, pensionEntry }
+}
+
+export interface SalaryRunEntryLines {
+  /** Entry 1: löner, kostnadsersättning, nettolöneavdrag, personalskatt, nettolön. */
+  salaryLines: CreateJournalEntryLineInput[]
+  /** Entry 2: arbetsgivaravgifter (7510 / 2731 / 3740). Always present, zero-shaped for a nollkörning. */
+  avgifterLines: CreateJournalEntryLineInput[]
+  /** Entry 3: semesteravsättning; empty when nothing accrues. */
+  vacationLines: CreateJournalEntryLineInput[]
+  /** Entry 4: löneväxling pension + SLP; empty without löneväxling. */
+  pensionLines: CreateJournalEntryLineInput[]
+}
+
+/**
+ * Pure "run -> journal lines" for all four salary vouchers. The booking
+ * (createSalaryRunEntries) posts exactly these; the journal preview route
+ * renders exactly these. One builder, so a rule that lives here (benefit
+ * line types carry no cash flow, the base-salary remainder, the whole-krona
+ * 2731 split, dimension buckets) cannot be present in one and missing in
+ * the other: feedback seq 384229 was a preview that debited 7385 for a
+ * bilförmån with no counter line because it had its own copy of the loop.
+ */
+export function buildSalaryRunEntryLines(run: SalaryRunData, desc: string): SalaryRunEntryLines {
+  const postingRun = resolveLoneVaxlingPension(run)
+  const totalVacation = postingRun.employees.reduce((sum, e) => sum + e.vacation_accrual, 0)
+  const totalVacationAvgifter = postingRun.employees.reduce(
+    (sum, e) => sum + e.vacation_accrual_avgifter,
+    0,
+  )
+  const totalPension = postingRun.employees.reduce((sum, e) => sum + (e.pension_contribution || 0), 0)
+  const totalSlp = postingRun.employees.reduce((sum, e) => sum + (e.pension_slp || 0), 0)
+  return {
+    salaryLines: buildSalaryLines(postingRun, desc),
+    avgifterLines: buildAvgifterLines(postingRun, desc),
+    vacationLines:
+      totalVacation > 0 || totalVacationAvgifter > 0
+        ? buildVacationLines(postingRun, desc, totalVacation, totalVacationAvgifter)
+        : [],
+    pensionLines: totalPension > 0 ? buildPensionLines(postingRun, desc, totalSlp) : [],
+  }
 }
 
 /**
@@ -194,14 +351,7 @@ export async function createSalaryRunEntries(
  * Credit: 2710 Personalskatt (total tax withheld)
  * Credit: 1930 Företagskonto (total net salary)
  */
-async function createSalaryEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  run: SalaryRunData,
-  fiscalPeriodId: string,
-  desc: string
-): Promise<JournalEntry> {
+function buildSalaryLines(run: SalaryRunData, desc: string): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
 
   // Aggregate salary expenses by (account, dimensions), dimensions PR8. The
@@ -351,18 +501,7 @@ async function createSalaryEntry(
     })
   }
 
-  const input: CreateJournalEntryInput = {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: run.payment_date,
-    description: desc,
-    source_type: 'salary_payment',
-    source_id: run.id,
-    voucher_series: run.voucher_series,
-    lines,
-  }
-
-  log.info(`Creating salary entry for ${desc}: ${lines.length} lines`)
-  return createJournalEntry(supabase, companyId, userId, input)
+  return lines
 }
 
 /**
@@ -482,14 +621,7 @@ export function splitAvgifterLiability(
  * (borttag, overrides set during review) still require a storno + rebook:
  * this alignment covers the booking as calculated.
  */
-async function createAvgifterEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  run: SalaryRunData,
-  fiscalPeriodId: string,
-  desc: string
-): Promise<JournalEntry> {
+function buildAvgifterLines(run: SalaryRunData, desc: string): CreateJournalEntryLineInput[] {
   const dimBuckets = bucketByEmployeeDimensions(run.employees, (e) => e.avgifter_amount)
   // Legacy shape parity: a run whose avgifter sum to zero still emits the
   // single untagged debit line, exactly as before the dimension split.
@@ -528,18 +660,7 @@ async function createAvgifterEntry(
       : []),
   ]
 
-  const input: CreateJournalEntryInput = {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: run.payment_date,
-    description: `${desc}: Arbetsgivaravgifter`,
-    source_type: 'salary_payment',
-    source_id: run.id,
-    voucher_series: run.voucher_series,
-    lines,
-  }
-
-  log.info(`Creating avgifter entry for ${desc}: ${roundedAvgifter} SEK`)
-  return createJournalEntry(supabase, companyId, userId, input)
+  return lines
 }
 
 /**
@@ -550,16 +671,12 @@ async function createAvgifterEntry(
  * Debit:  7519 Sociala avgifter semester
  * Credit: 2940 Upplupna sociala avgifter
  */
-async function createVacationEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+function buildVacationLines(
   run: SalaryRunData,
-  fiscalPeriodId: string,
   desc: string,
   totalVacation: number,
   totalVacationAvgifter: number
-): Promise<JournalEntry> {
+): CreateJournalEntryLineInput[] {
   const roundedVacation = Math.round(totalVacation * 100) / 100
   const roundedAvgifter = Math.round(totalVacationAvgifter * 100) / 100
 
@@ -604,18 +721,7 @@ async function createVacationEntry(
     )
   }
 
-  const input: CreateJournalEntryInput = {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: run.payment_date,
-    description: `${desc}: Semesteravsättning`,
-    source_type: 'salary_payment',
-    source_id: run.id,
-    voucher_series: run.voucher_series,
-    lines,
-  }
-
-  log.info(`Creating vacation entry for ${desc}: ${roundedVacation} SEK + ${roundedAvgifter} SEK avgifter`)
-  return createJournalEntry(supabase, companyId, userId, input)
+  return lines
 }
 
 /**
@@ -628,16 +734,11 @@ async function createVacationEntry(
  *
  * Per deductions-lonevaxling.md: pension = löneväxling × 1.058
  */
-async function createPensionEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+function buildPensionLines(
   run: SalaryRunData,
-  fiscalPeriodId: string,
   desc: string,
-  totalPension: number,
   totalSlp: number
-): Promise<JournalEntry> {
+): CreateJournalEntryLineInput[] {
   const roundedSlp = Math.round(totalSlp * 100) / 100
 
   // Dimensions PR8: pension + SLP cost per bag, liabilities aggregated.
@@ -678,18 +779,7 @@ async function createPensionEntry(
     )
   }
 
-  const input: CreateJournalEntryInput = {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: run.payment_date,
-    description: `${desc}: Pensionsavsättning`,
-    source_type: 'salary_payment',
-    source_id: run.id,
-    voucher_series: run.voucher_series,
-    lines,
-  }
-
-  log.info(`Creating pension entry for ${desc}: ${pensionCredit} SEK pension + ${roundedSlp} SEK SLP`)
-  return createJournalEntry(supabase, companyId, userId, input)
+  return lines
 }
 
 // ============================================================
