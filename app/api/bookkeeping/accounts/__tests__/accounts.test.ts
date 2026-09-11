@@ -311,6 +311,62 @@ describe('POST /api/bookkeeping/accounts', () => {
     expect(insertArg.default_vat_rate).toBe(0.25)
   })
 
+  it('creates a 21xx account as untaxed_reserves (#2514)', async () => {
+    // The Kontoplan dialog derives untaxed_reserves for every 21xx number;
+    // the schema used to refuse it, so no 21xx account could be added.
+    const { supabase, calls } = createCapturingSupabase([{ data: { account_number: '2129' } }])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts', {
+      method: 'POST',
+      body: {
+        account_number: '2129',
+        account_name: 'Periodiseringsfond 2029',
+        account_type: 'untaxed_reserves',
+        normal_balance: 'credit',
+      },
+    })
+    expect((await createPOST(req, routeParams)).status).toBe(200)
+    const insertArg = calls.find((c) => c.method === 'insert')?.args[0] as {
+      account_type?: string
+      account_class?: number
+    }
+    expect(insertArg).toMatchObject({ account_type: 'untaxed_reserves', account_class: 2 })
+  })
+
+  it('refuses an account_type that contradicts the account class, without inserting', async () => {
+    const { supabase, calls } = createCapturingSupabase([])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts', {
+      method: 'POST',
+      body: {
+        account_number: '2999',
+        account_name: 'Fel typ',
+        account_type: 'expense',
+        normal_balance: 'debit',
+      },
+    })
+    const { status, body } = await parseJsonResponse<{ error: string }>(await createPOST(req, routeParams))
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/Kontotypen/)
+    expect(calls.some((c) => c.method === 'insert')).toBe(false)
+  })
+
+  it('refuses untaxed_reserves outside class 2', async () => {
+    const { supabase, calls } = createCapturingSupabase([])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts', {
+      method: 'POST',
+      body: {
+        account_number: '5999',
+        account_name: 'Fel typ',
+        account_type: 'untaxed_reserves',
+        normal_balance: 'credit',
+      },
+    })
+    expect((await createPOST(req, routeParams)).status).toBe(400)
+    expect(calls.some((c) => c.method === 'insert')).toBe(false)
+  })
+
   it('rejects a treatment that cannot apply to the account class', async () => {
     const { supabase } = createCapturingSupabase([])
     auth(supabase)
