@@ -47,18 +47,20 @@ const EB_CODE_RE = /^[A-Za-z0-9_.-]{1,64}$/
 
 /**
  * Scrub free-text error messages before they reach event_log. The patterns
- * are deliberately broad: a JSON object, an HTML fragment, a URL, an e-mail
- * address or a run of four or more digits (account numbers, personnummer,
- * request ids) is never needed to diagnose a sync failure.
+ * are deliberately broad: a JSON object, a URL, an e-mail address or a run
+ * of four or more digits (account numbers, personnummer, request ids) is
+ * never needed to diagnose a sync failure. Angle brackets are dropped as
+ * single characters (no tag parsing: this is a log field, not HTML output,
+ * and a tag-shaped regex is what CodeQL rightly refuses as a sanitizer).
  */
 export function redactDiagnostic(text: string): string {
   return text
     .replace(/\{[\s\S]*\}/g, '{…}')
     .replace(/\[[\s\S]*\]/g, '[…]')
-    .replace(/<[^>]*>/g, '')
-    .replace(/https?:\/\/\S+/gi, '<url>')
-    .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '<email>')
-    .replace(/\d{4,}/g, '<digits>')
+    .replace(/[<>]/g, ' ')
+    .replace(/https?:\/\/\S+/gi, '(url)')
+    .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '(email)')
+    .replace(/\d{4,}/g, '(digits)')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, DIAGNOSTIC_MAX)

@@ -65,11 +65,12 @@ describe('classifyBankSyncFailure', () => {
     // The `error` field is only taken as a code when it looks like one.
     expect(classifyBankSyncFailure(new SessionExpiredError(401, '{"error":"Unauthorized for account SE1234567890123456"}')))
       .not.toHaveProperty('ebCode')
-    // Free-text errors are scrubbed of JSON, tags, URLs, e-mails and digit runs.
+    // Free-text errors are scrubbed of JSON, angle brackets, URLs, e-mails and digit runs.
     const unknown = classifyBankSyncFailure(
-      new Error('request to https://api.bank.example/accounts/12345678 failed: {"iban":"SE00 1234"} contact ops@bank.example <b>now</b> ref 987654321'),
+      new Error('request to https://api.bank.example/accounts/12345678 failed: {"iban":"SE00 1234"} contact ops@bank.example ref 987654321'),
     )
-    expect(unknown.diagnostic).toBe('Error: request to <url> failed: {…} contact <email> now ref <digits>')
+    expect(unknown.diagnostic).toBe('Error: request to (url) failed: {…} contact (email) ref (digits)')
+    expect(classifyBankSyncFailure(new Error('<script>alert(1)</script> down')).diagnostic).not.toMatch(/[<>]/)
   })
 
   it('never returns the user-facing strings', () => {
