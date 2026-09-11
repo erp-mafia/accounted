@@ -58,8 +58,11 @@ FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a55
 WORKDIR /app
 
 # Patch OS packages (libssl3/libcrypto3, …) with fixes published after the
-# pinned base digest, so CI's Trivy scan doesn't flag fixable Alpine CVEs. No
-# su-exec or curl needed: the entrypoint runs unprivileged as nextjs and the
+# pinned base digest, so CI's Trivy scan doesn't flag fixable Alpine CVEs.
+# docker-publish.yml excludes this stage from the layer cache
+# (no-cache-filters: runner); otherwise this RUN replays from cache and the
+# upgrade silently stops happening.
+# No su-exec or curl needed: the entrypoint runs unprivileged as nextjs and the
 # healthcheck uses BusyBox wget. The runtime runs `node server.js` and never
 # invokes npm, so we delete the base image's bundled npm CLI: its vendored deps
 # (picomatch, tar, brace-expansion, ip-address) are the packages Trivy flags on
