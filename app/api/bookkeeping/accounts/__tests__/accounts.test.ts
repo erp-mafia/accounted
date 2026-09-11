@@ -157,6 +157,11 @@ describe('GET /api/bookkeeping/accounts', () => {
       'company_id',
       'company-1',
     ])
+    // Same order as the RPC: account_number, never sort_order (0 on every
+    // seeded account, and not unique, so pages could shift).
+    expect(calls.filter((c) => c.method === 'order').map((c) => c.args)).toEqual([
+      ['account_number'],
+    ])
   })
 
   it('returns the legacy 500 { error: string } on a non-fallback RPC error', async () => {
