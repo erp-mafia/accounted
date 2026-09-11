@@ -106,6 +106,29 @@ describe('SIE database execution protocol', () => {
       if(step.rows[0].result.done) break
     }
   }
+  it('rejects forged holds on direct period inserts while allowing ordinary creation and trusted admission', async () => {
+    await finishOne()
+    let nextPeriod = ''
+    for (const [index, role] of ['authenticated', 'service_role'].entries()) {
+      await client.query('RESET ROLE')
+      await client.query("SELECT set_config('request.jwt.claims',$1,true),set_config('request.jwt.claim.sub',$2,true),set_config('request.jwt.claim.role',$3,true)",
+        [JSON.stringify({sub:actor,role}),actor,role])
+      await client.query(role === 'authenticated' ? 'SET LOCAL ROLE authenticated' : 'SET LOCAL ROLE service_role')
+      nextPeriod = randomUUID()
+      const year = 2027 + index
+      const args = [nextPeriod,company,actor,String(year),`${year}-01-01`,`${year}-12-31`,job]
+      await client.query('SAVEPOINT forged_hold')
+      await expect(client.query('INSERT INTO fiscal_periods(id,company_id,user_id,name,period_start,period_end,import_hold) VALUES($1,$2,$3,$4,$5,$6,$7)',args))
+        .rejects.toMatchObject({code:'42501',message:'SIE import hold requires an authorized RPC'})
+      await client.query('ROLLBACK TO SAVEPOINT forged_hold')
+      await client.query('INSERT INTO fiscal_periods(id,company_id,user_id,name,period_start,period_end) VALUES($1,$2,$3,$4,$5,$6)',args.slice(0,6))
+      await rejects(()=>client.query('UPDATE fiscal_periods SET import_hold=$1 WHERE id=$2',[job,nextPeriod]),/authorized RPC/)
+    }
+    const nextManifest={...manifest,input:{...manifest.input,fiscalYear:{start:'2028-01-01',end:'2028-12-31'}}}
+    const admitted=(await client.query('SELECT j.* FROM start_sie_import_job($1,$2,$3,$4,$5,$6) j',
+      [company,actor,nextPeriod,'2028.se','c'.repeat(64),JSON.stringify(nextManifest)])).rows[0]
+    expect((await client.query('SELECT import_hold FROM fiscal_periods WHERE id=$1',[nextPeriod])).rows[0].import_hold).toBe(admitted.id)
+  })
   it('finishes with a durable manual IB review, preserves next-year entries, and renews review after undo',async()=>{
     const {next,entry}=await nextOpening()
     const original=(await client.query('SELECT to_jsonb(j) header,(SELECT jsonb_agg(to_jsonb(l) ORDER BY id) FROM journal_entry_lines l WHERE journal_entry_id=j.id) lines FROM journal_entries j WHERE id=$1',[entry])).rows[0]

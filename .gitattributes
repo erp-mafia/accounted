@@ -44,3 +44,4 @@ supabase/migrations/20260911145748_sie_repair_hold_and_stop.sql -text whitespace
 supabase/migrations/20260911150200_sie_repair_action_boundaries.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
 supabase/migrations/20260911165003_sie_manual_balance_review_and_retained_reset.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
 supabase/migrations/20260911165308_sie_review_conflict_response.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911171453_sie_period_hold_insert_guard.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol

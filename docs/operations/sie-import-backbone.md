@@ -201,7 +201,7 @@ stage-versus-bank-match race. Retired period-delete tests were replaced with
 rejection and retained-history tests; core writer regression cases exercise the
 new private writer.
 
-The final follow-up passed 53 real-Postgres tests covering the job protocol and
+The publication follow-up passed 54 real-Postgres tests covering the job protocol and
 both reset flows, and 49 archive tests. The manual-review HTTP acceptance
 confirmed unchanged adjacent-year header/lines through completion and undo,
 review renewal after undo, and stale-token rejection in 45 ms on the repeated
@@ -209,6 +209,14 @@ run. Browser verification also passed review acknowledgment, retained-history
 reset refusal, navigation to the existing archive flow and both dialogs at
 390 px without horizontal overflow. No automatic cross-year bookkeeping write
 is made.
+
+Publication review also found and closed a direct-insert hold bypass. The final
+guard rejects client-supplied holds when creating fiscal periods, while ordinary
+period creation and trusted import admission continue to work. The regression
+reproduced the bypass before the new migration and passed after it on staging.
+Generated API documentation was refreshed and its synchronization check passed.
+Registry validation has a pre-existing Windows CRLF failure, reproduced in the
+clean base checkout; the affected registry files are unchanged by this branch.
 
 The full unit run encountered Windows path/line-ending failures and
 shell-check loader failures. All seven remaining failing files were reproduced
