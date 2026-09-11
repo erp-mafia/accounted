@@ -41,7 +41,7 @@ const ListQuery = z.object({
     .string()
     .regex(/^[0-9]$/)
     .optional()
-    .describe('Account class, the first digit of account_number (0-9). BAS uses 1-8; 9 appears only on internal accounts carried over from an imported chart.'),
+    .describe('Account class, the first digit of account_number (0-9). BAS uses 1-8; 0 and 9 appear only on internal accounts, typically carried over from an imported chart.'),
   active: z
     .enum(['true', 'false'])
     .optional()
@@ -61,7 +61,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/accounts',
   summary: 'List chart-of-accounts entries (BAS chart).',
   description:
-    'Returns the company\'s own chart of accounts (kontoplan), ordered by account_number, which is the BAS sequence (a longer sub-account number such as 19301 sorts directly after 1930). This is not the full BAS 2026 catalogue: a new company starts with a small set of accounts seeded for its company form, and standard BAS accounts join the chart when the user activates them, when an import brings them in, or automatically the first time a verifikat posts to one. Filter with ?class=<0-9>, the first digit of account_number: 1 assets; 2 equity, untaxed reserves and liabilities; 3 operating revenue; 4 goods, materials and subcontracted services; 5 external expenses for premises, leasing, energy, consumables, repairs, vehicles, freight, travel, and advertising and PR; 6 other external expenses such as selling costs, office supplies, telecom, insurance, administration, accounting, IT and consulting services, and hired staff; 7 personnel costs, plus write-downs and depreciation (77xx-78xx); 8 financial items, year-end appropriations (88xx), and tax and the year\'s result (89xx). Class 9 appears only on internal accounts carried over from an imported chart. Only active accounts are returned by default; pass ?active=false to include deactivated ones.',
+    'Returns the company\'s own chart of accounts (kontoplan), ordered by account_number, which is the BAS sequence (a longer sub-account number such as 19301 sorts directly after 1930). This is not the full BAS 2026 catalogue: a new company starts with a small set of accounts seeded for its company form, and standard BAS accounts join the chart when the user activates them, when an import brings them in, or automatically the first time a verifikat posts to one. Filter with ?class=<0-9>, the first digit of account_number: 1 assets; 2 equity, untaxed reserves and liabilities; 3 operating revenue; 4 goods, materials and subcontracted services; 5 external expenses for premises, leasing, energy, consumables, repairs, vehicles, freight, travel, and advertising and PR; 6 other external expenses such as selling costs, office supplies, telecom, insurance, administration, accounting, IT and consulting services, and hired staff; 7 personnel costs, plus write-downs and depreciation (77xx-78xx); 8 financial items, year-end appropriations (88xx), and tax and the year\'s result (89xx). Classes 0 and 9 are outside BAS\'s 1-8 (free for company use) and appear only on internal accounts, typically carried over from an imported chart. Only active accounts are returned by default; pass ?active=false to include deactivated ones.',
   useWhen:
     'You need account numbers and names to render verifikation tables, build a custom report, check that an account is active before booking to it, or look up an account\'s type, normal balance, SRU code or VAT defaults.',
   doNotUseFor:

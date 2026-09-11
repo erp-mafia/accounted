@@ -556,7 +556,7 @@ Returns the period's SIE4 export as text/plain UTF-8. Includes #FNAMN / #ORGNR h
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
-| `exclude_closing` | query | `string` | no | true leaves out the year-end closing verifikat (source_type year_end). Default: included. |
+| `exclude_closing` | query | `string` | no | true leaves the year-end closing verifikat (source_type year_end) out of the #VER records, for importing into a system that books its own closing. Default: included. Archive the default, complete export. |
 | `encoding` | query | `string` | no | cp437 returns CP437 bytes for legacy desktop importers. Default: UTF-8. |
 
 Response `200` (`text/plain`).

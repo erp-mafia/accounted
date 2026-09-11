@@ -24,7 +24,9 @@ const ExportQuery = z.object({
   exclude_closing: z
     .string()
     .optional()
-    .describe('true leaves out the year-end closing verifikat (source_type year_end). Default: included.'),
+    .describe(
+      'true leaves the year-end closing verifikat (source_type year_end) out of the #VER records, for importing into a system that books its own closing. Default: included. Archive the default, complete export.',
+    ),
   encoding: z
     .string()
     .optional()
