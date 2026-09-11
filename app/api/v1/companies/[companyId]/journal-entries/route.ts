@@ -20,6 +20,7 @@ import {
   decodeDefaultCursor,
   encodeDefaultCursor,
   parsePaginationParams,
+  PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -75,6 +76,29 @@ const JournalEntryDetail = JournalEntrySummary.extend({
   lines: z.array(JournalEntryLine),
 })
 
+const ListFilters = z.object({
+  fiscal_period_id: z
+    .string()
+    .uuid()
+    .optional()
+    .describe('Only entries in this fiscal period (id from GET /fiscal-periods).'),
+  status: JournalEntryStatus.optional().describe(
+    'draft, posted or cancelled. Default: every status except cancelled.',
+  ),
+  date_from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe('YYYY-MM-DD. Entries whose entry_date (verifikationsdatum) is on or after this date.'),
+  date_to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe('YYYY-MM-DD. Entries whose entry_date is on or before this date.'),
+})
+
+const ListQuery = ListFilters.extend(PaginationQueryShape)
+
 registerEndpoint({
   operation: 'journal-entries.list',
   method: 'GET',
@@ -115,6 +139,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: JournalEntriesListResponse },
 })
 
@@ -125,13 +150,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
-    const FiltersSchema = z.object({
-      fiscal_period_id: z.string().uuid().optional(),
-      status: JournalEntryStatus.optional(),
-      date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-      date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    })
-    const fr = FiltersSchema.safeParse({
+    const fr = ListFilters.safeParse({
       fiscal_period_id: url.searchParams.get('fiscal_period_id') ?? undefined,
       status: url.searchParams.get('status') ?? undefined,
       date_from: url.searchParams.get('date_from') ?? undefined,

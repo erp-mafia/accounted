@@ -36,6 +36,18 @@ const Account = z.object({
   sort_order: z.number().int().nullable(),
 })
 
+const ListQuery = z.object({
+  class: z
+    .string()
+    .regex(/^[0-9]$/)
+    .optional()
+    .describe('Account class, the first digit of account_number (0-9). BAS uses 1-8; 9 appears only on internal accounts carried over from an imported chart.'),
+  active: z
+    .enum(['true', 'false'])
+    .optional()
+    .describe('false also returns deactivated accounts. Default: active accounts only.'),
+})
+
 const AccountsResponse = dataEnvelope(z.object({ accounts: z.array(Account) }))
 
 const ACCOUNT_COLUMNS =
@@ -109,6 +121,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: AccountsResponse },
 })
 
@@ -116,14 +129,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'accounts.list',
   async (request, ctx) => {
     const url = new URL(request.url)
-    const Filters = z.object({
-      class: z
-        .string()
-        .regex(/^[0-9]$/)
-        .optional(),
-      active: z.enum(['true', 'false']).optional(),
-    })
-    const parsed = Filters.safeParse({
+    const parsed = ListQuery.safeParse({
       class: url.searchParams.get('class') ?? undefined,
       active: url.searchParams.get('active') ?? undefined,
     })

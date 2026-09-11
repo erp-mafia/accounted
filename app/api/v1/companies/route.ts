@@ -15,6 +15,7 @@ import {
   encodeDefaultCursor,
   parsePaginationParams,
   decodeDefaultCursor,
+  PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -72,6 +73,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: z.object({ ...PaginationQueryShape }) },
   response: { success: CompaniesListResponse },
 })
 
