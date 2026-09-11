@@ -35,6 +35,27 @@ describe('getStructuredError', () => {
     expect(result.remediation?.tool).toBe('gnubok_lock_period')
   })
 
+  // close_period / lock_period / run_year_end (MCP) and period-service throw
+  // these as plain strings. They used to fall through to UNKNOWN_ERROR with
+  // "Något gick fel" (feedback seq 392722: close_period after run_year_end).
+  it('infers PERIOD_ALREADY_CLOSED from the plain "Period is already closed" throw', () => {
+    const result = getStructuredError(new Error('Period is already closed'))
+    expect(result.code).toBe('PERIOD_ALREADY_CLOSED')
+    expect(result.retryable).toBe(false)
+    expect(result.message_sv).toMatch(/redan stängd/)
+    expect(result.remediation?.description).toMatch(/gnubok_run_year_end/)
+    expect(result.remediation?.tool).toBe('gnubok_list_fiscal_periods')
+  })
+
+  it('infers PERIOD_LOCK_ALREADY_LOCKED from the plain "Period is already locked" throw', () => {
+    const result = getStructuredError(new Error('Period is already locked'))
+    expect(result.code).toBe('PERIOD_LOCK_ALREADY_LOCKED')
+    expect(result.retryable).toBe(false)
+    expect(result.message_sv).toBe('Perioden är redan låst.')
+    expect(result.remediation?.description).toMatch(/do not lock first/)
+    expect(result.remediation?.tool).toBe('gnubok_unlock_period')
+  })
+
   it('maps an over-long reason to VALIDATION_ERROR with a specific Swedish message', () => {
     const result = getStructuredError(new Error('reason must be 500 characters or fewer'))
     expect(result.code).toBe('VALIDATION_ERROR')

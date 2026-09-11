@@ -155,6 +155,11 @@ function inferCode(message: string): string | null {
   if (/already has a journal entry/i.test(message)) return 'TRANSACTION_ALREADY_CATEGORIZED'
   if (/already been sent/i.test(message) || /already sent/i.test(message)) return 'INVOICE_ALREADY_SENT'
   if (/locked\/closed fiscal period/i.test(message)) return 'PERIOD_LOCKED'
+  // close_period / lock_period / run_year_end and period-service throw these
+  // as plain strings; without a code they surfaced as UNKNOWN_ERROR with
+  // "Något gick fel" (feedback seq 392722, close_period after run_year_end).
+  if (/Period is already closed|already closed/i.test(message)) return 'PERIOD_ALREADY_CLOSED'
+  if (/Period is already locked|already locked/i.test(message)) return 'PERIOD_LOCK_ALREADY_LOCKED'
   if (/Bokföringen är låst/i.test(message)) return 'PERIOD_LOCKED'
   if (/Transaction not found/i.test(message)) return 'NOT_FOUND'
   if (/Invoice not found/i.test(message)) return 'NOT_FOUND'

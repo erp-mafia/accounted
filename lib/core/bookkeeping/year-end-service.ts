@@ -101,6 +101,21 @@ export async function validateYearEndReadiness(
     blockers.push({ code: 'PERIOD_ALREADY_CLOSED', message: 'Perioden är redan stängd' })
   }
 
+  // Check: period not locked. executeYearEndClosing posts the closing entry
+  // INTO this period (step 4) and locks it itself (step 7), so a lock taken
+  // beforehand only surfaces at commit as the period-lock trigger's "Cannot
+  // write to locked/closed fiscal period", after readiness said ready. The
+  // MCP year-end skill used to prescribe lock -> run_year_end (feedback seq
+  // 392722); name the fix here instead. A closed period is locked too, but
+  // "unlock it" would be wrong advice there: PERIOD_ALREADY_CLOSED covers it.
+  if (!period.is_closed && period.locked_at) {
+    blockers.push({
+      code: 'PERIOD_LOCKED',
+      message:
+        'Perioden är låst: lås upp den först. Bokslutet bokför bokslutsverifikationen i perioden och låser den sedan självt',
+    })
+  }
+
   // Check: closing entry doesn't already exist
   if (period.closing_entry_id) {
     blockers.push({

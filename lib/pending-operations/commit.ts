@@ -6175,7 +6175,27 @@ async function commitGenerateAgi(
       requestId: randomUUID(),
     })
     if (!result.ok) {
-      return { error: `AGI-generering misslyckades: ${result.code}`, status: 500 }
+      // generateAgiDeclaration already names what is missing (details.message
+      // from assertRequiredCompanyData); the bare code dropped it and the
+      // agent could not tell what to fill in (feedback seq 414922).
+      const details =
+        typeof result.details === 'object' && result.details !== null
+          ? (result.details as { message?: unknown; missing_fields?: unknown })
+          : {}
+      const detailMessage = typeof details.message === 'string' ? details.message : null
+      const missingFields = Array.isArray(details.missing_fields)
+        ? details.missing_fields.filter((f): f is string => typeof f === 'string')
+        : []
+      const hint =
+        result.code === 'AGI_INCOMPLETE_DATA'
+          ? ' Telefon och e-post sätts med gnubok_update_company_settings (sökbart via gnubok_search_tools) eller under Inställningar i webbappen; organisationsnummer ändras under Inställningar i webbappen.'
+          : ''
+      return {
+        error: `AGI-generering misslyckades: ${result.code}${detailMessage ? `: ${detailMessage}` : ''}${hint}`,
+        errorCode: result.code,
+        status: result.status ?? 500,
+        ...(missingFields.length > 0 ? { data: { missing_fields: missingFields } } : {}),
+      }
     }
     const period = `${result.periodYear}-${String(result.periodMonth).padStart(2, '0')}`
     return {
