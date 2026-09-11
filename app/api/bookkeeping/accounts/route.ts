@@ -54,12 +54,16 @@ export const GET = withRouteContext('bookkeeping.accounts.list', async (request,
       throw new Error(rpc.error.message)
     }
 
+    // Same order as the RPC: account_number is the BAS sequence and unique per
+    // company, which fetchAllRows needs for stable pages. sort_order is 0 on
+    // every seeded account, so ordering by it put the seeded block first and
+    // let rows shift between pages.
     const data = await fetchAllRows(({ from, to }) => {
       let query = supabase
         .from('chart_of_accounts')
         .select('*')
         .eq('company_id', companyId)
-        .order('sort_order')
+        .order('account_number')
 
       if (activeOnly) {
         query = query.eq('is_active', true)
