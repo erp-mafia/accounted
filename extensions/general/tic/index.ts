@@ -206,12 +206,17 @@ async function consumeBankIdSession(
  * refactor.
  *
  * SPAR (personnummer, address, name, birth date) is requested so TIC will
- * complete the enrichment, but is intentionally NOT persisted: personnummer
- * is already hashed + encrypted in `bankid_identities`, names live there too,
- * and no UI currently consumes the address. Storing the SPAR blob alongside
- * company roles would expose national-ID-level PII. If/when address pre-fill
- * is built, encrypt the relevant fields the same way `encryptPersonalNumber`
- * does for pnr.
+ * complete the enrichment, but is NOT persisted: personnummer is already
+ * hashed + encrypted in `bankid_identities`, names live there too, and no UI
+ * consumes the address. If/when address pre-fill is built, encrypt the
+ * relevant fields the same way `encryptPersonalNumber` does for pnr.
+ *
+ * CompanyRoles is not free of national-ID data either: for an enskild
+ * näringsidkare, `companyRegistrationNumber` starts with the owner's 12-digit
+ * personnummer, because a sole trader's organisationsnummer is the
+ * personnummer. The row is the signed-in user's own personal data, readable
+ * only by them (RLS), and `erase_user_personal_data` deletes it when the
+ * account is deleted.
  *
  * Non-blocking: any failure is logged and swallowed: BankID auth must still
  * succeed even if enrichment is down.
