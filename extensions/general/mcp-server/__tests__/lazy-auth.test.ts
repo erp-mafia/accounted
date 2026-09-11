@@ -91,6 +91,17 @@ describe('MCP lazy authentication', () => {
     expect(mocks.validateApiKey).not.toHaveBeenCalled()
   })
 
+  it('the discovery instructions say a WRITE outside tools/list is out of reach and point at callable_via', async () => {
+    // Feedback seq 372962: "writes must be named directly" read as if any
+    // client could; on tools/list-only hosts a search-only write is a dead end.
+    const response = await handleMcpRequest(rpc('initialize', { protocolVersion: '2025-06-18' }))
+    const body = await response.json()
+    expect(body.result.instructions).not.toContain('writes must be named directly')
+    expect(body.result.instructions).toContain('a WRITE outside tools/list is then out of reach')
+    expect(body.result.instructions).toContain('callable_via')
+    expect(body.result.instructions).toContain('blocked_by')
+  })
+
   it('lists the full default catalog without a token so protected tools can be called', async () => {
     const response = await handleMcpRequest(rpc('tools/list'))
     expect(response.status).toBe(200)

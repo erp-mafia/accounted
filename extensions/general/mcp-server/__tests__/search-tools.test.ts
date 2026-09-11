@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { tools } from '../server'
+import { isDefaultCatalogTool } from '../tool-reach'
 import { ALL_SCOPES } from '@/lib/auth/api-keys'
 
 const searchTool = tools.find((t) => t.name === 'gnubok_search_tools')!
@@ -14,7 +15,15 @@ async function call(args: Record<string, unknown>, keyScopes: string[] = ALL_SCO
     {} as never,
     { type: 'api_key' }
   )) as {
-    tools: Array<{ name: string; description?: string; scope: string | null; inputSchema?: unknown; outputSchema?: unknown }>
+    tools: Array<{
+      name: string
+      description?: string
+      scope: string | null
+      callable_via?: 'tools_list' | 'call_tool' | 'none'
+      note?: string
+      inputSchema?: unknown
+      outputSchema?: unknown
+    }>
     count: number
     total_matched: number
     detail: 'name' | 'summary' | 'full'
@@ -297,5 +306,73 @@ describe('gnubok_search_tools: skattekonto booking tools are findable', () => {
     expect(tool?.description).toMatch(/intäktsränta 8314/)
     expect(tool?.description).toMatch(/kostnadsränta 8423/)
     expect(tool?.description).toMatch(/6992/)
+  })
+})
+
+// A hit is not a promise the client can invoke it: search-only WRITES are
+// absent from tools/list and refused by gnubok_call_tool, so on claude.ai,
+// Cursor and Claude Code they were dead ends reported as missing tools four
+// times (feedback seq 335021 / 381082 / 414922 / 371965). callable_via says
+// how each hit is reached; note explains the dead end.
+describe('gnubok_search_tools: callable_via per hit', () => {
+  const find = (result: Awaited<ReturnType<typeof call>>, name: string) =>
+    result.tools.find((t) => t.name === name)!
+
+  it('summary: default-catalog tool = tools_list, search-only READ = call_tool, search-only WRITE = none + note', async () => {
+    const result = await call({ query: 'invoice', limit: 50 })
+
+    const listed = find(result, 'gnubok_list_invoices')
+    expect(isDefaultCatalogTool(tools.find((t) => t.name === listed.name)!)).toBe(true)
+    expect(listed.callable_via).toBe('tools_list')
+    expect(listed).not.toHaveProperty('note')
+
+    const bridged = find(result, 'gnubok_get_invoice')
+    expect(isDefaultCatalogTool(tools.find((t) => t.name === bridged.name)!)).toBe(false)
+    expect(bridged.callable_via).toBe('call_tool')
+    expect(bridged).not.toHaveProperty('note')
+
+    const deadEnd = find(result, 'gnubok_update_invoice')
+    expect(isDefaultCatalogTool(tools.find((t) => t.name === deadEnd.name)!)).toBe(false)
+    expect(deadEnd.callable_via).toBe('none')
+    expect(deadEnd.note).toContain('not in tools/list')
+    expect(deadEnd.note).toContain('gnubok_call_tool')
+  })
+
+  it('full: carries the same callable_via + note next to the schema', async () => {
+    const result = await call({ query: 'update_invoice', detail: 'full', limit: 5 })
+    const deadEnd = find(result, 'gnubok_update_invoice')
+    expect(deadEnd).toHaveProperty('inputSchema')
+    expect(deadEnd.callable_via).toBe('none')
+    expect(deadEnd.note).toContain('gnubok_call_tool')
+
+    const status = await call({ query: 'reconciliation status', detail: 'full', limit: 5 })
+    expect(find(status, 'gnubok_get_reconciliation_status').callable_via).toBe('tools_list')
+  })
+
+  it('name: stays names + scope only', async () => {
+    const result = await call({ query: 'invoice', detail: 'name', limit: 50 })
+    for (const t of result.tools) {
+      expect(t).not.toHaveProperty('callable_via')
+      expect(t).not.toHaveProperty('note')
+    }
+  })
+
+  it('classification mirrors the registry for every hit: none = search-only AND not read-only, and only none carries a note', async () => {
+    const result = await call({ query: '', limit: 50 })
+    expect(result.tools.length).toBe(50)
+    for (const hit of result.tools) {
+      const registryTool = tools.find((t) => t.name === hit.name)!
+      const expected = isDefaultCatalogTool(registryTool)
+        ? 'tools_list'
+        : registryTool.annotations.readOnlyHint === true
+          ? 'call_tool'
+          : 'none'
+      expect(hit.callable_via, hit.name).toBe(expected)
+      expect('note' in hit, hit.name).toBe(expected === 'none')
+    }
+  })
+
+  it('the description advertises callable_via', () => {
+    expect(searchTool.description).toContain('callable_via')
   })
 })

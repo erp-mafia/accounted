@@ -4,8 +4,15 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { tools } from '../server'
-import { RECOMMENDED_WORKFLOW_LOADOUTS, assertRecommendedLoadoutsValid } from '../recommended-tools'
+import {
+  RECOMMENDED_WORKFLOW_LOADOUTS,
+  annotateLoadoutTools,
+  assertRecommendedLoadoutsValid,
+  type RecommendedToolEntry,
+} from '../recommended-tools'
 import { workflowSkills } from '../skills'
+import { isDefaultCatalogTool } from '../tool-reach'
+import { ALL_SCOPES, DEFAULT_OAUTH_SCOPES, TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -611,7 +618,12 @@ describe('recommended_tools workflow loadouts (issue #1098)', () => {
       supabase as never,
       { type: 'api_key' }
     )) as {
-      recommended_tools: Array<{ workflow: string; description: string; skill: string; tools: string[] }>
+      recommended_tools: Array<{
+        workflow: string
+        description: string
+        skill: string
+        tools: RecommendedToolEntry[]
+      }>
     }
     expect(Array.isArray(result.recommended_tools)).toBe(true)
     expect(result.recommended_tools.length).toBe(RECOMMENDED_WORKFLOW_LOADOUTS.length)
@@ -620,7 +632,7 @@ describe('recommended_tools workflow loadouts (issue #1098)', () => {
       expect(typeof entry.description).toBe('string')
       expect(typeof entry.skill).toBe('string')
       expect(Array.isArray(entry.tools)).toBe(true)
-      expect(entry.tools.every((n) => typeof n === 'string')).toBe(true)
+      expect(entry.tools.every((t) => typeof t.name === 'string' && typeof t.callable === 'boolean')).toBe(true)
     }
     // The static list is returned verbatim, in registry order.
     expect(result.recommended_tools.map((w) => w.workflow)).toEqual(
@@ -639,5 +651,146 @@ describe('recommended_tools workflow loadouts (issue #1098)', () => {
     const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
     expect(tool.description).toContain('recommended_tools')
     expect(tool.description).toContain('ToolSearch')
+  })
+})
+
+// Feedback seq 372962 (and the 08-26 recurrence): a key without
+// reconciliation:* scopes was handed the reconcile_month loadout and every
+// call failed on scope; the search-only writes in it were reported as missing
+// tools four times (335021 / 381082 / 414922 / 371965). The loadout stays
+// static and complete; each tool now says whether THIS key on a
+// tools/list-only client can call it, and why not. Deliberately NOT asserted:
+// that every loadout tool is in the default catalog. Four are search-only by
+// design (tools/list has single-digit token headroom); the flag replaces
+// promotion.
+describe('recommended_tools callability (feedback seq 372962)', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+
+  /** Mirrors the dispatcher: inject __keyScopes the way handleMcpRequest does. */
+  async function briefing(keyScopes?: readonly string[]) {
+    const supabase = mockSupabase({ profile: null })
+    const args = keyScopes ? { __keyScopes: [...keyScopes] } : {}
+    const result = (await tool().execute(args, 'company-1', 'user-1', supabase as never, {
+      type: 'api_key',
+    })) as { recommended_tools: Array<{ workflow: string; tools: RecommendedToolEntry[] }> }
+    return result.recommended_tools
+  }
+  const loadout = (all: Array<{ workflow: string; tools: RecommendedToolEntry[] }>, workflow: string) =>
+    all.find((w) => w.workflow === workflow)!.tools
+  const entry = (list: RecommendedToolEntry[], name: string) => list.find((t) => t.name === name)!
+
+  it('a key without reconciliation scopes gets the reconcile_month tools flagged blocked_by scope, naming the scope', async () => {
+    // DEFAULT_OAUTH_SCOPES is the read-only grant an OAuth connector gets when
+    // it asks for nothing explicit: no reconciliation:* member.
+    expect(DEFAULT_OAUTH_SCOPES.some((s) => s.startsWith('reconciliation:'))).toBe(false)
+    const reconcile = loadout(await briefing(DEFAULT_OAUTH_SCOPES), 'reconcile_month')
+
+    for (const [name, scope] of [
+      ['gnubok_list_reconciliation_items', 'reconciliation:read'],
+      ['gnubok_reconcile_match', 'reconciliation:write'],
+      ['gnubok_reconcile_unmatch', 'reconciliation:write'],
+      ['gnubok_reconcile_signoff', 'reconciliation:signoff'],
+    ] as const) {
+      const e = entry(reconcile, name)
+      expect(e, name).toMatchObject({ callable: false, blocked_by: 'scope' })
+      expect(e.note, name).toContain(`requires ${scope}`)
+    }
+    // reports:read IS in the default grant, so the status read stays callable.
+    expect(entry(reconcile, 'gnubok_get_reconciliation_status')).toEqual({
+      name: 'gnubok_get_reconciliation_status',
+      callable: true,
+    })
+  })
+
+  it('with every scope granted, search-only WRITES are flagged blocked_by catalog and default tools are callable', async () => {
+    const reconcile = loadout(await briefing(ALL_SCOPES), 'reconcile_month')
+
+    for (const name of [
+      'gnubok_reconcile_unmatch',
+      'gnubok_reconcile_residual',
+      'gnubok_reconcile_signoff',
+      'gnubok_link_transaction_to_journal_entry',
+    ]) {
+      const registryTool = tools.find((t) => t.name === name)!
+      expect(isDefaultCatalogTool(registryTool), name).toBe(false)
+      expect(registryTool.annotations.readOnlyHint, name).not.toBe(true)
+      const e = entry(reconcile, name)
+      expect(e, name).toMatchObject({ callable: false, blocked_by: 'catalog' })
+      expect(e.note, name).toContain('not in tools/list')
+      expect(e.note, name).toContain('gnubok_call_tool')
+    }
+    for (const name of [
+      'gnubok_get_reconciliation_status',
+      'gnubok_reconcile_match',
+      'gnubok_categorize_transaction',
+      'gnubok_ignore_transaction',
+      'gnubok_approve_pending_operation',
+    ]) {
+      expect(entry(reconcile, name), name).toEqual({ name, callable: true })
+    }
+  })
+
+  it('keeps every loadout complete (nothing dropped) and lists callable tools first', async () => {
+    for (const keyScopes of [ALL_SCOPES, DEFAULT_OAUTH_SCOPES, [] as string[]]) {
+      const all = await briefing(keyScopes)
+      for (const w of RECOMMENDED_WORKFLOW_LOADOUTS) {
+        const returned = loadout(all, w.workflow)
+        expect([...returned.map((t) => t.name)].sort()).toEqual([...w.tools].sort())
+        const firstBlocked = returned.findIndex((t) => !t.callable)
+        if (firstBlocked >= 0) {
+          expect(returned.slice(firstBlocked).every((t) => !t.callable)).toBe(true)
+        }
+        for (const t of returned) {
+          if (t.callable) expect(t.blocked_by).toBeUndefined()
+          else expect(['scope', 'catalog']).toContain(t.blocked_by)
+        }
+      }
+    }
+  })
+
+  it('every default-catalog tool with a granted scope is callable: the flag is never pessimistic by accident', async () => {
+    const all = await briefing(ALL_SCOPES)
+    for (const w of RECOMMENDED_WORKFLOW_LOADOUTS) {
+      for (const t of loadout(all, w.workflow)) {
+        const registryTool = tools.find((r) => r.name === t.name)!
+        if (isDefaultCatalogTool(registryTool)) expect(t.callable, t.name).toBe(true)
+      }
+    }
+  })
+
+  it('fail-closed: without the injected __keyScopes marker every scoped tool is reported blocked_by scope', async () => {
+    // Same contract as gnubok_search_tools: a direct execute() outside the
+    // dispatcher must not vouch for a scoped tool on faith.
+    const all = await briefing(undefined)
+    for (const w of RECOMMENDED_WORKFLOW_LOADOUTS) {
+      for (const t of loadout(all, w.workflow)) {
+        const required = TOOL_SCOPE_MAP[t.name]
+        if (required) expect(t, t.name).toMatchObject({ callable: false, blocked_by: 'scope' })
+      }
+    }
+  })
+
+  it('annotateLoadoutTools: a missing scope wins over the catalog reason, a search-only READ stays callable with a bridge note', () => {
+    const classify = (name: string) =>
+      ({
+        write_no_scope: { required_scope: 'x:write', callable_via: 'none' as const },
+        write_scoped: { required_scope: 'x:write', callable_via: 'none' as const },
+        read_search_only: { required_scope: null, callable_via: 'call_tool' as const },
+        plain: { required_scope: null, callable_via: 'tools_list' as const },
+      })[name]!
+    const result = annotateLoadoutTools(
+      ['write_no_scope', 'plain', 'write_scoped', 'read_search_only'],
+      classify,
+      new Set(['y:read']),
+    )
+    expect(result.map((t) => t.name)).toEqual(['plain', 'read_search_only', 'write_no_scope', 'write_scoped'])
+    expect(result[0]).toEqual({ name: 'plain', callable: true })
+    expect(result[1]).toMatchObject({ name: 'read_search_only', callable: true })
+    expect(result[1].note).toContain('gnubok_call_tool')
+    expect(result[2]).toMatchObject({ callable: false, blocked_by: 'scope', note: 'requires x:write: not granted to this API key' })
+    expect(result[3]).toMatchObject({ callable: false, blocked_by: 'scope' })
+    // Grant the scope: the catalog reason surfaces.
+    const granted = annotateLoadoutTools(['write_scoped'], classify, new Set(['x:write']))
+    expect(granted[0]).toMatchObject({ callable: false, blocked_by: 'catalog' })
   })
 })
