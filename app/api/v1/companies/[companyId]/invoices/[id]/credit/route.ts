@@ -15,13 +15,17 @@
  *   4. Flips the original invoice to status='credited'.
  *   5. Posts the reverse journal entry via createCreditNoteJournalEntry
  *      (accrual only: cash basis defers recognition to refund time).
- *   6. Emits invoice.credited.
+ *   6. Emits credit_note.created.
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable. The credit-note row
  * gets created via INSERT: under dry-run NO row is created.
  *
  * Optional body: { reason?: string }: populates the credit note's `notes`
  * field. Defaults to "Krediterar faktura <original>".
+ *
+ * The credit note is dated today in Europe/Stockholm (there is no date
+ * parameter) and that date must fall in an open period: a locked or closed
+ * period returns 400 INVOICE_CREDIT_PERIOD_LOCKED before anything is written.
  */
 
 import { z } from 'zod'
@@ -30,6 +34,8 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { eventBus } from '@/lib/events'
 import type { AccountingMethod, CreditNote, EntityType, Invoice } from '@/types'
@@ -68,7 +74,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/credit',
   summary: 'Issue a credit note (kreditfaktura) against an invoice.',
   description:
-    'Creates a credit note referencing the original invoice. The credit note carries reversed-sign amounts (matching the original line for line) and gets invoice_number=KR-<original>. The original invoice transitions to status=credited. Under faktureringsmetoden, posts a reversing journal entry (Credit AR 1510 / Debit revenue + Debit output VAT). Under kontantmetoden the credit note still creates the row but defers the reversal entry until refund. Idempotent and dry-runnable. Emits invoice.credited.',
+    'Creates a credit note referencing the original invoice. The credit note carries reversed-sign amounts (matching the original line for line) and gets invoice_number=KR-<original>. The original invoice transitions to status=credited. Under faktureringsmetoden, posts a reversing journal entry (Credit AR 1510 / Debit revenue + Debit output VAT). Under kontantmetoden the credit note still creates the row but defers the reversal entry until refund. The credit note is dated today (Europe/Stockholm); a locked or closed period returns 400 INVOICE_CREDIT_PERIOD_LOCKED. Idempotent and dry-runnable. Emits credit_note.created.',
   useWhen:
     'You need to legally cancel an issued invoice (ML 17 kap 22-23§). The original invoice cannot be edited once issued: credit it and reissue corrected.',
   doNotUseFor:
@@ -214,7 +220,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    const today = new Date().toISOString().split('T')[0]
+    // Stockholm date, not UTC: between midnight and 01:00/02:00 local time
+    // toISOString() still says yesterday, which can drop the credit note into
+    // the previous month or a closed period.
+    const today = getSwedishLocalDate()
+
+    // Pre-flight period-lock on the credit-note invoice_date. Without this the
+    // row is created and the original flipped to credited, but the trigger
+    // rejects the verifikat and the caller gets a 201 with a
+    // JOURNAL_ENTRY_NOT_POSTED warning: an unbooked credit note.
+    const lockVerdict = await checkPeriodLock(ctx.supabase, ctx.companyId!, today)
+    if (lockVerdict.locked) {
+      return v1ErrorResponseFromCode('INVOICE_CREDIT_PERIOD_LOCKED', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          reason: lockVerdict.reason,
+          fiscal_period_id: lockVerdict.fiscal_period_id,
+          invoice_date: today,
+        },
+      })
+    }
     const creditNoteNumber = `KR-${original.invoice_number ?? original.id.slice(0, 8)}`
     const negate = (n: number | null | undefined): number =>
       n == null ? 0 : -Math.abs(n)
