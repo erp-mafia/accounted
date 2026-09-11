@@ -45,6 +45,7 @@ import {
 import { isEagerAuthRequested } from './auth-mode'
 import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
+import { addDaysIso } from '@/lib/dates/iso'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import type { DayValueEmployee } from '@/lib/salary/semesterberedning'
 import {
@@ -13759,7 +13760,7 @@ export const tools: McpTool[] = [
       // staged operation would fail opaquely at commit time instead.
       const { data: resolvedSupplier } = await supabase
         .from('suppliers')
-        .select('id, default_expense_account')
+        .select('id, default_expense_account, default_payment_terms')
         .eq('id', supplierId)
         .eq('company_id', companyId)
         .single()
@@ -13771,6 +13772,14 @@ export const tools: McpTool[] = [
         )
       }
       const supplierDefaultExpenseAccount = resolvedSupplier.default_expense_account ?? null
+      // Drives the due-date default below when the document carries no
+      // förfallodatum. 30 is the column default on suppliers and the Swedish
+      // norm; anything that is not a non-negative integer falls back to it.
+      const rawPaymentTerms: unknown = resolvedSupplier.default_payment_terms
+      const supplierPaymentTermsDays =
+        typeof rawPaymentTerms === 'number' && Number.isInteger(rawPaymentTerms) && rawPaymentTerms >= 0
+          ? rawPaymentTerms
+          : 30
 
       // The scan read the supplier's giro or IBAN with everything else: a
       // supplier that lacks them takes them now, so the staged invoice can
@@ -13788,12 +13797,75 @@ export const tools: McpTool[] = [
         }
       }
       const invoiceDate = (args.invoice_date_override as string | undefined) ?? (invoiceExt?.invoiceDate as string) ?? null
-      const dueDate = (args.due_date_override as string | undefined) ?? (invoiceExt?.dueDate as string | undefined) ?? null
       const supplierInvoiceNumber = (invoiceExt?.invoiceNumber as string) || ''
       if (!invoiceDate) throw new Error('Extracted invoice has no invoice date')
       if (!supplierInvoiceNumber) throw new Error('Extracted invoice has no invoice number')
 
-      const total = Number(totalsExt?.total) || 0
+      // supplier_invoices.due_date is NOT NULL. A bank fee or a kvitto has no
+      // förfallodatum printed on it, and the old code staged null straight
+      // through: the executor's INSERT died with 23502 and the agent saw a
+      // bare "Failed to create supplier invoice", then retried the identical
+      // call (feedback 395405). Default it here, deterministically, from the
+      // supplier's payment terms, and label the source so the approver and
+      // the agent both see that the date was not read off the underlag.
+      const extractedDueDate = (invoiceExt?.dueDate as string | undefined) || null
+      let dueDate: string
+      let dueDateSource: 'override' | 'extracted' | 'defaulted'
+      if (typeof args.due_date_override === 'string') {
+        dueDate = args.due_date_override
+        dueDateSource = 'override'
+      } else if (extractedDueDate) {
+        dueDate = extractedDueDate
+        dueDateSource = 'extracted'
+      } else {
+        // The extractor promises ISO dates but the schema does not enforce
+        // it; refuse to do date arithmetic on anything else rather than
+        // stage a NaN-derived date.
+        if (!ISO_DATE_RE.test(invoiceDate)) {
+          throw Object.assign(
+            new Error(
+              `Extracted invoice has no due date and its invoice date "${invoiceDate}" is not an ISO date (YYYY-MM-DD), so no default can be derived. `
+              + 'Re-stage with invoice_date_override and/or due_date_override, or fix extracted_data via gnubok_set_inbox_extracted_data.',
+            ),
+            { code: 'SI_CREATE_INVALID_INPUT' },
+          )
+        }
+        dueDate = addDaysIso(invoiceDate, supplierPaymentTermsDays)
+        dueDateSource = 'defaulted'
+      }
+
+      // The first prod attempt on the same item staged total 0 from a null
+      // OCR total without complaint: a zero-value leverantörsskuld is never
+      // what the underlag says. Refuse before anything is staged and point
+      // at the tool that fixes the extraction. The line sum is a hint only:
+      // the agent confirms it against the underlag and sets it explicitly
+      // rather than this tool guessing the header amount.
+      const rawTotal = Number(totalsExt?.total)
+      if (!Number.isFinite(rawTotal) || rawTotal === 0) {
+        const lineNetSum = lineItemsExt.reduce(
+          (sum, li) => sum + (Number(li.line_total ?? li.lineTotal ?? li.amount) || 0),
+          0,
+        )
+        throw Object.assign(
+          new Error(
+            `Extracted invoice has no usable total (totals.total = ${JSON.stringify(totalsExt?.total ?? null)}). `
+            + (lineItemsExt.length > 0
+              ? `${lineItemsExt.length} extracted line item(s) sum to ${roundOre(lineNetSum)} excl. VAT; `
+              : 'No line items were extracted; ')
+            + 'verify the amount on the underlag, set totals via gnubok_set_inbox_extracted_data, then retry.',
+          ),
+          {
+            code: 'SI_CREATE_INVALID_INPUT',
+            remediation: {
+              description:
+                'Set totals.total (with subtotal and vat) from the underlag on the inbox item, then retry gnubok_create_supplier_invoice_from_inbox.',
+              tool: 'gnubok_set_inbox_extracted_data',
+              args: { inbox_item_id: inboxItemId },
+            },
+          },
+        )
+      }
+      const total = rawTotal
       const subtotal = Number(totalsExt?.subtotal) || 0
 
       // VAT treatment: explicit override wins, else heuristic from extracted data
@@ -13955,6 +14027,7 @@ export const tools: McpTool[] = [
         supplier_invoice_number: supplierInvoiceNumber,
         invoice_date: invoiceDate,
         due_date: dueDate,
+        due_date_source: dueDateSource,
         currency,
         exchange_rate: exchangeRate,
         exchange_rate_source: exchangeRateSource,
