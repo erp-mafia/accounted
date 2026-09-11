@@ -34,13 +34,9 @@ describe('BAS_REFERENCE data integrity', () => {
     }
   })
 
-  it('every account has a non-null sru_code, except the two that are not INK2R posts', () => {
-    // 8810 is the periodiseringsfond group account (its children 8811/8819
-    // split by direction into 7525/7420) and 8990 is the technical result
-    // account; neither is a post on the räkenskapsschema.
-    const NOT_INK2R_POSTS = ['8810', '8990']
+  it('every account has a non-null sru_code', () => {
     const withoutSru = BAS_REFERENCE.filter((a) => a.sru_code === null).map((a) => a.account_number)
-    expect(withoutSru).toEqual(NOT_INK2R_POSTS)
+    expect(withoutSru).toEqual([])
   })
 
   it('every account has a non-empty description', () => {

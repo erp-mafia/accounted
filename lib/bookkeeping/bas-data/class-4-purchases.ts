@@ -757,7 +757,7 @@ export const CLASS_4_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Förändring av lager av råvaror',
-    sru_code: '7411',
+    sru_code: '7511',
     k2_excluded: false,
   },
   {
@@ -768,7 +768,7 @@ export const CLASS_4_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Förändring av lager av tillsatsmaterial och förnödenheter',
-    sru_code: '7411',
+    sru_code: '7511',
     k2_excluded: false,
   },
   {
@@ -834,7 +834,7 @@ export const CLASS_4_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Förändring av lager av handelsvaror',
-    sru_code: '7411',
+    sru_code: '7512',
     k2_excluded: false,
   },
   {
@@ -889,7 +889,7 @@ export const CLASS_4_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Förändring av lager av värdepapper (Handelsvaror)',
-    sru_code: '7411',
+    sru_code: '7512',
     k2_excluded: false,
   },
   {
@@ -900,7 +900,7 @@ export const CLASS_4_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Sålda värdepappers anskaffningsvärde (Handelsvaror)',
-    sru_code: '7411',
+    sru_code: '7512',
     k2_excluded: false,
   },
   {
@@ -911,7 +911,7 @@ export const CLASS_4_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Nedskrivning av värdepapper (Handelsvaror)',
-    sru_code: '7411',
+    sru_code: '7512',
     k2_excluded: false,
   },
   {
@@ -922,7 +922,7 @@ export const CLASS_4_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Återföring av nedskrivning av värdepapper (Handelsvaror)',
-    sru_code: '7411',
+    sru_code: '7512',
     k2_excluded: false,
   },
 ]
