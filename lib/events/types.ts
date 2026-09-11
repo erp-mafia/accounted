@@ -148,7 +148,8 @@ export type CoreEvent =
       trigger: 'agent' | 'cron' | 'manual'
       errorClass: 'session_expired' | 'bank_unavailable' | 'connector' | 'unknown'
       status: string
-      message: string
+      /** Redacted summary (class name + scrubbed phrase); never a raw provider body. */
+      diagnostic: string
       httpStatus?: number
       ebCode?: string
       userId: string

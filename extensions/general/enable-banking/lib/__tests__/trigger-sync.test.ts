@@ -314,9 +314,9 @@ describe('triggerConnectionSync: bank_connection.sync_failed (feedback seq 34010
       trigger: 'agent',
       errorClass: 'unknown',
       status: 'active',
-      message: 'boom: ECONNRESET',
+      diagnostic: 'Error: boom: ECONNRESET',
     })
-    expect(events[0].payload.message).not.toBe(SYNC_FAILED_MESSAGE)
+    expect(events[0].payload.diagnostic).not.toBe(SYNC_FAILED_MESSAGE)
   })
 
   it('emits session_expired with the HTTP status, the envelope code and the post-handling status', async () => {
@@ -333,8 +333,8 @@ describe('triggerConnectionSync: bank_connection.sync_failed (feedback seq 34010
       httpStatus: 401,
       ebCode: 'SESSION_EXPIRED',
     })
-    expect(events[0].payload.message).not.toBe(REAUTH_REQUIRED_MESSAGE)
-    expect(events[0].payload.message).toContain('Bank session expired (401)')
+    expect(events[0].payload.diagnostic).not.toBe(REAUTH_REQUIRED_MESSAGE)
+    expect(events[0].payload.diagnostic).toBe('SessionExpiredError: bank session expired (HTTP 401)')
   })
 
   it('emits connector with the connector code, and a failing bus never changes the sync outcome', async () => {

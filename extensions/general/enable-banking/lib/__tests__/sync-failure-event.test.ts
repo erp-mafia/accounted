@@ -24,7 +24,7 @@ describe('classifyBankSyncFailure', () => {
   it('maps the three transport errors and everything else to the four classes', () => {
     expect(classifyBankSyncFailure(new SessionExpiredError(403, '{"code":403,"error":"SESSION_CLOSED"}'))).toEqual({
       errorClass: 'session_expired',
-      message: 'Bank session expired (403): {"code":403,"error":"SESSION_CLOSED"}',
+      diagnostic: 'SessionExpiredError: bank session expired (HTTP 403)',
       httpStatus: 403,
       ebCode: '403',
     })
@@ -35,21 +35,41 @@ describe('classifyBankSyncFailure', () => {
     ).toMatchObject({ errorClass: 'bank_unavailable', httpStatus: 500, ebCode: 'ASPSP_ERROR' })
     expect(classifyBankSyncFailure(new ConnectorSyncError(null, 'CONNECTOR_TIMEOUT', ''))).toEqual({
       errorClass: 'connector',
-      message: 'Connector bank sync failed (no response CONNECTOR_TIMEOUT)',
+      diagnostic: 'ConnectorSyncError: CONNECTOR_TIMEOUT',
       ebCode: 'CONNECTOR_TIMEOUT',
     })
     expect(classifyBankSyncFailure(new TypeError('fetch failed'))).toEqual({
       errorClass: 'unknown',
-      message: 'fetch failed',
+      diagnostic: 'TypeError: fetch failed',
     })
-    expect(classifyBankSyncFailure('plain string')).toEqual({ errorClass: 'unknown', message: 'plain string' })
+    expect(classifyBankSyncFailure('plain string')).toEqual({ errorClass: 'unknown', diagnostic: 'Error: plain string' })
   })
 
   it('reads no code out of a non-JSON body and caps a long message', () => {
     const html = new SessionExpiredError(401, '<html>gateway</html>')
     expect(classifyBankSyncFailure(html)).not.toHaveProperty('ebCode')
     const long = new Error('x'.repeat(2_000))
-    expect(classifyBankSyncFailure(long).message).toHaveLength(501)
+    expect(classifyBankSyncFailure(long).diagnostic).toHaveLength(160)
+  })
+
+  it('never persists provider bodies or identifiers: the diagnostic is a template or a scrubbed phrase', () => {
+    // A session-expiry body quoting response data must not reach event_log
+    // (Superagent P2 on the first cut of this event).
+    const leaky = new SessionExpiredError(
+      403,
+      '{"code":403,"error":"SESSION_CLOSED","detail":"account SE1234567890123456 owner anna@example.com"}',
+    )
+    const classified = classifyBankSyncFailure(leaky)
+    expect(classified.diagnostic).toBe('SessionExpiredError: bank session expired (HTTP 403)')
+    expect(JSON.stringify(classified)).not.toMatch(/SE1234|anna@|SESSION_CLOSED/)
+    // The `error` field is only taken as a code when it looks like one.
+    expect(classifyBankSyncFailure(new SessionExpiredError(401, '{"error":"Unauthorized for account SE1234567890123456"}')))
+      .not.toHaveProperty('ebCode')
+    // Free-text errors are scrubbed of JSON, tags, URLs, e-mails and digit runs.
+    const unknown = classifyBankSyncFailure(
+      new Error('request to https://api.bank.example/accounts/12345678 failed: {"iban":"SE00 1234"} contact ops@bank.example <b>now</b> ref 987654321'),
+    )
+    expect(unknown.diagnostic).toBe('Error: request to <url> failed: {…} contact <email> now ref <digits>')
   })
 
   it('never returns the user-facing strings', () => {
@@ -59,9 +79,9 @@ describe('classifyBankSyncFailure', () => {
       new ConnectorSyncError(502, 'CONNECTOR_UPSTREAM_ERROR', 'body'),
       new Error('boom'),
     ]) {
-      const { message } = classifyBankSyncFailure(error)
-      expect(message).not.toBe(REAUTH_REQUIRED_MESSAGE)
-      expect(message).not.toBe(SYNC_FAILED_MESSAGE)
+      const { diagnostic } = classifyBankSyncFailure(error)
+      expect(diagnostic).not.toBe(REAUTH_REQUIRED_MESSAGE)
+      expect(diagnostic).not.toBe(SYNC_FAILED_MESSAGE)
     }
   })
 })
@@ -94,7 +114,7 @@ describe('emitBankSyncFailed', () => {
         trigger: 'cron',
         status: 'error',
         errorClass: 'unknown',
-        message: 'boom',
+        diagnostic: 'Error: boom',
         userId: 'user-1',
         companyId: 'co-1',
       },
