@@ -598,7 +598,14 @@
     "transaction_sync_never_synced": "Not synced yet",
     "transaction_sync_enabled_toast": "Purchase sync enabled. History is fetched on the next sync.",
     "transaction_sync_disabled_toast": "Purchase sync disabled.",
-    "transaction_sync_toggle_failed": "Could not save the setting. Try again."
+    "transaction_sync_toggle_failed": "Could not save the setting. Try again.",
+    "store_name_label": "Store name",
+    "store_name_help": "Shown as Store on the Orders page. Zettle does not provide a name via the API, so you set it here.",
+    "store_name_save": "Save name",
+    "store_name_saving": "Saving…",
+    "store_name_saved_toast": "Store name saved",
+    "store_name_saved_orders_warning": "The name was saved, but existing orders could not be updated automatically.",
+    "store_name_save_failed": "Could not save the store name"
   },
   "settings_modal": {
     "title": "Settings",

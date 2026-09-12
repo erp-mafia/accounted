@@ -185,4 +185,64 @@ describe('zettle extension routes', () => {
     expect(res.status).toBe(200)
     expect(syncZettlePurchases).toHaveBeenCalled()
   })
+
+  it('POST /organization-name updates the connection and backfills order store_label', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    enqueue({ data: [{ id: 'c1' }] }) // update zettle_connections
+    enqueue({ data: null }) // update webshop_orders
+    const res = await findRoute('POST', '/organization-name').handler(
+      makeRequest('POST', { organization_name: '  Café Norr  ' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toEqual({ success: true, organization_name: 'Café Norr' })
+    expect(findCall('zettle_connections', 'update')?.[0]).toEqual({
+      organization_name: 'Café Norr',
+    })
+    expect(findCall('webshop_orders', 'update')?.[0]).toEqual({
+      store_label: 'Café Norr',
+    })
+    expect(findCall('webshop_orders', 'in')).toEqual(['connection_id', ['c1']])
+  })
+
+  it('POST /organization-name rejects an empty name', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    const res = await findRoute('POST', '/organization-name').handler(
+      makeRequest('POST', { organization_name: '   ' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /organization-name returns 404 when no active connection exists', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    enqueue({ data: [] })
+    const res = await findRoute('POST', '/organization-name').handler(
+      makeRequest('POST', { organization_name: 'Café Norr' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(404)
+  })
+
+  it('POST /organization-name keeps the rename when order backfill fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    enqueue({ data: [{ id: 'c1' }] })
+    enqueue({ data: null, error: { message: 'backfill failed' } })
+    const res = await findRoute('POST', '/organization-name').handler(
+      makeRequest('POST', { organization_name: 'Café Norr' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toEqual({
+      success: true,
+      organization_name: 'Café Norr',
+      warning: 'Namnet sparades, men befintliga ordrar kunde inte uppdateras.',
+    })
+  })
 })
