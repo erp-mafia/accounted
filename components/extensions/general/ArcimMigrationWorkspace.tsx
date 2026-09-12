@@ -243,6 +243,7 @@ import {
   applyVatTreatmentReviewAll,
   enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
+  needsVatTreatmentReview,
 } from '@/lib/import/account-vat-treatment'
 import type { TheaterModel } from '@/lib/import/theater-model'
 import type { AccountMapping, ImportResult, ParsedSIEFile } from '@/lib/import/types'
@@ -3065,9 +3066,7 @@ export default function ArcimMigrationWorkspace({
         setMigrationOptions(prev => ({ ...prev, importSIEData: false }))
       }
 
-      const needsVatReview = enrichedMappings.some(mapping =>
-        mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
-      )
+      const needsVatReview = enrichedMappings.some(needsVatTreatmentReview)
       // Auto-skip only when there is neither account mapping nor VAT review work.
       if ((data.mappingStats.unmapped === 0 && !needsVatReview) || data.allImported) {
         setStep('options')

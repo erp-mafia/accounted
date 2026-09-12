@@ -132,7 +132,7 @@ export function enrichChangedAccountMappingWithVat(
  */
 export function applyVatTreatmentReviewAll(mappings: AccountMapping[]): AccountMapping[] {
   return mappings.map((mapping) =>
-    mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
+    needsVatTreatmentReview(mapping)
       ? {
           ...mapping,
           vatTreatmentSuggested: false,

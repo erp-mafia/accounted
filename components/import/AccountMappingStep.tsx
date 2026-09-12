@@ -85,7 +85,7 @@ export default function AccountMappingStep({
   // Default to showing unmapped accounts first (most actionable)
   const [filter, setFilter] = useState<FilterType>(() => {
     const hasUnmapped = mappings.some((m) => !m.targetAccount)
-    const hasVatReview = mappings.some((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed)
+    const hasVatReview = mappings.some(needsVatTreatmentReview)
     return hasUnmapped ? 'unmapped' : hasVatReview ? 'vat_review' : 'all'
   })
   const [currentPage, setCurrentPage] = useState(1)
@@ -168,6 +168,24 @@ export default function AccountMappingStep({
     setEditedThisStep((prev) =>
       prev.has(sourceAccount) ? prev : new Set(prev).add(sourceAccount),
     )
+    onVatTreatmentChange(sourceAccount, treatment, rate)
+  }
+
+  // The per-row confirm means "done with this row", so it releases the row
+  // from the sticky set as well as marking it reviewed. Without the release
+  // the button is inert on a row the user has edited: the row is held in the
+  // list by editedThisStep and clicking the check changes nothing on screen.
+  const handleVatConfirm = (
+    sourceAccount: string,
+    treatment: AccountVatTreatment | null,
+    rate: number | null,
+  ) => {
+    setEditedThisStep((prev) => {
+      if (!prev.has(sourceAccount)) return prev
+      const next = new Set(prev)
+      next.delete(sourceAccount)
+      return next
+    })
     onVatTreatmentChange(sourceAccount, treatment, rate)
   }
 
@@ -477,7 +495,11 @@ export default function AccountMappingStep({
                         'group-hover:bg-muted/50 group-focus-within:bg-muted/50',
                       )}
                     >
-                      {mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed && (
+                      {/* Keyed to the row's visibility, not to "still unreviewed": a row
+                          held in the list mid-edit must keep its confirm control, or it
+                          reads as unfinished with no way to finish it. Clicking it
+                          re-confirms the values now showing and drops the row. */}
+                      {isInVatReviewList(mapping, editedThisStep) && (
                         /* Icon-only: the column header carries the label and
                            the tooltip repeats it on hover; the accessible name
                            also says which row. */
@@ -489,7 +511,7 @@ export default function AccountMappingStep({
                               size="icon"
                               className="h-11 w-11 sm:h-8 sm:w-8"
                               aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount}`}
-                              onClick={() => onVatTreatmentChange(
+                              onClick={() => handleVatConfirm(
                                 mapping.sourceAccount,
                                 mapping.defaultVatTreatment ?? null,
                                 mapping.defaultVatRate ?? null,
