@@ -299,7 +299,7 @@ export default function AccountMappingStep({
                   <TableHead className="w-8 !px-0" aria-hidden="true"></TableHead>
                   <TableHead className="w-56">Målkonto</TableHead>
                   <TableHead className="w-72">{t('vat_treatment_column')}</TableHead>
-                  <TableHead className="w-24">Konfidens</TableHead>
+                  <TableHead className="w-24">{t('match_column')}</TableHead>
                   <TableHead className="sticky right-0 z-20 w-28 min-w-28 border-l border-border bg-background text-right">
                     <span className="inline-flex items-center gap-1">
                       {t('vat_treatment_confirm')}
@@ -440,13 +440,11 @@ export default function AccountMappingStep({
                       )}
                     </TableCell>
                     <TableCell>
-                      {mapping.targetAccount && (
-                        <ConfidenceBadge
-                          confidence={mapping.confidence}
-                          matchType={mapping.matchType}
-                          isOverride={mapping.isOverride}
-                        />
-                      )}
+                      <AccountMatchBadge
+                        sourceAccount={mapping.sourceAccount}
+                        targetAccount={mapping.targetAccount}
+                        isOverride={mapping.isOverride}
+                      />
                     </TableCell>
                     <TableCell
                       className={cn(
@@ -612,26 +610,40 @@ function TruncatedSourceName({ sourceName }: { sourceName: string }) {
   )
 }
 
-function ConfidenceBadge({
-  confidence,
+/**
+ * What the mapper did with this account, said only when it is worth saying.
+ *
+ * Replaces a confidence score that was never a score. `suggestMappings` emits
+ * exactly three values (1.0 exact BAS match, 0.7 valid BAS-range self-map, 0 no
+ * match), so thresholding them re-derived by inequality a three-valued enum that
+ * `matchType` already carried as a string. The 0.7 band rendered as "Trolig" on
+ * an identity mapping (4057 to 4057, created at import), inventing a doubt that
+ * does not exist: 11 of the 12 accounts in the #2527 fixture read that way, and
+ * most real charts keep sub-accounts outside BAS 2026. The "Osäker" branch was
+ * unreachable, because the only zero-confidence case carries an empty target and
+ * the badge was guarded on the target being present.
+ *
+ * Nearly every mapping is an identity. The only non-identity cases are the
+ * single group-header redirect (2640 to 2641) and a target the user picked, so
+ * the column now stays empty unless one of those applies.
+ */
+function AccountMatchBadge({
+  sourceAccount,
+  targetAccount,
   isOverride,
 }: {
-  confidence: number
-  matchType: string  // Keep for potential future use
+  sourceAccount: string
+  targetAccount: string
   isOverride: boolean
 }) {
+  const t = useTranslations('chart_of_accounts')
+  if (!targetAccount) return null
   if (isOverride) {
-    return <Badge variant="default">Manuell</Badge>
+    return <Badge variant="default">{t('match_manual')}</Badge>
   }
-
-  if (confidence >= 0.9) {
-    return <Badge variant="success">Exakt</Badge>
+  if (targetAccount !== sourceAccount) {
+    return <Badge variant="secondary">{t('match_redirected')}</Badge>
   }
-
-  if (confidence >= 0.7) {
-    return <Badge variant="secondary">Trolig</Badge>
-  }
-
-  return <Badge variant="outline">Osäker</Badge>
+  return null
 }
 
