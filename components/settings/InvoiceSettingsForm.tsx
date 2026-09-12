@@ -16,9 +16,11 @@ import type { CompanySettings } from '@/types'
 
 interface InvoiceSettingsFormProps {
   settings: CompanySettings
+  /** Rendered between Fakturainställningar and Påminnelser (self-saving controls). */
+  afterInvoiceSettings?: React.ReactNode
 }
 
-export function InvoiceSettingsForm({ settings }: InvoiceSettingsFormProps) {
+export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceSettingsFormProps) {
   const t = useTranslations('settings_invoice_form')
   const [sendReminders, setSendReminders] = useState(settings.send_invoice_reminders ?? true)
   return (
@@ -104,6 +106,8 @@ export function InvoiceSettingsForm({ settings }: InvoiceSettingsFormProps) {
           />
         </SettingsRow>
       </SettingsGroup>
+
+      {afterInvoiceSettings}
 
       <SettingsGroup label={t('reminder_days_heading')} help={t('reminder_days_help')}>
         {!REMINDERS_SENDING_ENABLED && (

@@ -44,6 +44,7 @@
     "kpi": "KPIs",
     "invoice_inbox": "Documents",
     "invoices": "Customer invoices",
+    "quotes": "Quotes",
     "sales_orders": "Sales orders",
     "webshop_orders": "Webshop orders",
     "customers": "Customers",
@@ -2290,6 +2291,19 @@
     "request_receiving_label": "We also want to receive e-invoices via Peppol (limited number of slots, enabled by us)",
     "access_enabled_receiving": "Enabled for sending and receiving e-invoices.",
     "access_enabled_send_only": "Enabled for sending e-invoices. Receiving is not included; write to support if you want to receive."
+  },
+  "settings_invoice_types": {
+    "heading": "Invoice types",
+    "heading_help": "Choose which document types appear in the New invoice menu and in the invoice list. Switched-off types disappear from the interface, but existing documents stay under All and keep working as usual.",
+    "quotes_enabled_label": "Quote",
+    "quotes_enabled_help": "Shows Quotes as its own page in the menu under Invoicing. Existing quotes are kept and the page stays reachable by link even when switched off.",
+    "proforma_enabled_label": "Proforma invoice",
+    "proforma_enabled_help": "Shows Create proforma in the New invoice menu and the Proforma view in the invoice list.",
+    "recurring_invoices_enabled_label": "Recurring",
+    "recurring_invoices_enabled_help": "Shows Recurring invoice in the New invoice menu. Existing schedules keep creating invoices.",
+    "self_billing_enabled_label": "Self-billing",
+    "self_billing_enabled_help": "Shows Create self-billed invoice in the New invoice menu.",
+    "save_failed_title": "Could not save the setting"
   },
   "settings_pdf_print": {
     "heading": "Print & PDF",
@@ -6955,6 +6969,10 @@
     "rot_rut_download_network": "The file could not be downloaded. Check your connection and try again.",
     "rot_rut_skatteverket_link": "Open ROT and RUT at Skatteverket",
     "title": "Customer invoices",
+    "title_quotes": "Quotes",
+    "th_valid_until": "Valid until",
+    "no_quotes_title": "No quotes here",
+    "no_quotes_description": "Create a quote, or switch view to see more.",
     "recurring": "Recurring",
     "new_invoice": "New invoice",
     "new_self_billed": "Self-billing",

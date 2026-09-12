@@ -44,6 +44,7 @@
     "kpi": "Nyckeltal",
     "invoice_inbox": "Underlag",
     "invoices": "Kundfakturor",
+    "quotes": "Offerter",
     "sales_orders": "Kundorder",
     "webshop_orders": "Webshop-order",
     "customers": "Kunder",
@@ -2290,6 +2291,19 @@
     "request_receiving_label": "Vi vill också ta emot e-fakturor via Peppol (begränsat antal platser, aktiveras av oss)",
     "access_enabled_receiving": "Aktiverat för att skicka och ta emot e-fakturor.",
     "access_enabled_send_only": "Aktiverat för att skicka e-fakturor. Mottagning ingår inte; skriv till support om ni vill ta emot."
+  },
+  "settings_invoice_types": {
+    "heading": "Fakturatyper",
+    "heading_help": "Välj vilka typer av dokument som visas i menyn Ny faktura och i fakturalistan. Avstängda typer försvinner från gränssnittet men befintliga dokument finns kvar under Alla och fungerar som vanligt.",
+    "quotes_enabled_label": "Offert",
+    "quotes_enabled_help": "Visar Offerter som egen sida i menyn under Fakturering. Befintliga offerter finns kvar och sidan nås via länk även när den är avstängd.",
+    "proforma_enabled_label": "Proformafaktura",
+    "proforma_enabled_help": "Visar Skapa proforma i menyn Ny faktura och vyn Proforma i fakturalistan.",
+    "recurring_invoices_enabled_label": "Återkommande",
+    "recurring_invoices_enabled_help": "Visar Återkommande faktura i menyn Ny faktura. Befintliga scheman fortsätter att skapa fakturor.",
+    "self_billing_enabled_label": "Självfaktura",
+    "self_billing_enabled_help": "Visar Skapa självfaktura i menyn Ny faktura.",
+    "save_failed_title": "Kunde inte spara inställningen"
   },
   "settings_pdf_print": {
     "heading": "Utskrift & PDF",
@@ -6955,6 +6969,10 @@
     "rot_rut_download_network": "Filen kunde inte hämtas. Kontrollera anslutningen och försök igen.",
     "rot_rut_skatteverket_link": "Öppna ROT och RUT hos Skatteverket",
     "title": "Kundfakturor",
+    "title_quotes": "Offerter",
+    "th_valid_until": "Giltig till",
+    "no_quotes_title": "Inga offerter här",
+    "no_quotes_description": "Skapa en offert, eller byt vy för att se fler.",
     "recurring": "Återkommande",
     "new_invoice": "Ny faktura",
     "new_self_billed": "Självfaktura",

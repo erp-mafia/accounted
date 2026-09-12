@@ -586,6 +586,15 @@ export interface CompanySettings {
   // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
   // for correctness (the /sales-orders pages and APIs work regardless).
   sales_orders_enabled: boolean
+
+  // Invoice document type toggles (migration 20260912190000): hide the
+  // optional invoice kinds from the UI for companies that never use them.
+  // Default true. UI-visibility only, never load-bearing for correctness:
+  // existing documents stay listed and the API/MCP work regardless.
+  quotes_enabled: boolean
+  proforma_enabled: boolean
+  recurring_invoices_enabled: boolean
+  self_billing_enabled: boolean
   // Per-company counter behind generate_sales_order_number (OR-<n>).
   next_sales_order_number?: number
 

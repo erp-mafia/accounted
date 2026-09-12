@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   INVOICE_LIST_TABS,
+  QUOTE_LIST_TABS,
   isUnsentNumberedInvoice,
   matchesInvoiceListTab,
+  matchesQuoteListTab,
   parseInvoiceListTab,
+  parseQuoteListTab,
   type InvoiceListTab,
+  type QuoteListTab,
 } from '../invoice-list-tabs'
 
 type Row = Parameters<typeof matchesInvoiceListTab>[0]
@@ -64,7 +68,7 @@ describe('matchesInvoiceListTab', () => {
     expect(
       tabsFor(row({ status: 'draft', invoice_number: 'F-13', credited_invoice_id: 'orig' })),
     ).toEqual(['all', 'credit'])
-    expect(tabsFor(row({ status: 'draft', document_type: 'quote' }))).toEqual(['all', 'quote'])
+    expect(tabsFor(row({ status: 'draft', document_type: 'quote' }))).toEqual([])
     expect(tabsFor(row({ status: 'draft', document_type: 'proforma' }))).toEqual([
       'all',
       'proforma',
@@ -114,5 +118,43 @@ describe('parseInvoiceListTab', () => {
   it('rejects unknown values', () => {
     expect(parseInvoiceListTab('bogus')).toBeNull()
     expect(parseInvoiceListTab(null)).toBeNull()
+  })
+})
+
+describe('quotes', () => {
+  function quoteTabsFor(invoice: Row & { quote_status?: string | null; valid_until?: string | null }): QuoteListTab[] {
+    return QUOTE_LIST_TABS.filter((tab) => matchesQuoteListTab(invoice, tab, '2026-09-12'))
+  }
+
+  it('never appear in any invoice list view: a quote is not an invoice', () => {
+    for (const status of ['draft', 'sent', 'paid', 'cancelled'] as const) {
+      expect(tabsFor(row({ status, document_type: 'quote', invoice_number: 'OF-001' }))).toEqual([])
+    }
+  })
+
+  it('bucket by decision, with expired derived from valid_until', () => {
+    const open = { ...row({ status: 'sent', document_type: 'quote' }), quote_status: 'open', valid_until: '2026-12-31' }
+    expect(quoteTabsFor(open)).toEqual(['all', 'open'])
+    expect(quoteTabsFor({ ...open, valid_until: '2026-01-01' })).toEqual(['all', 'expired'])
+    expect(quoteTabsFor({ ...open, quote_status: 'accepted', valid_until: '2026-01-01' })).toEqual([
+      'all',
+      'accepted',
+    ])
+    expect(quoteTabsFor({ ...open, quote_status: 'declined' })).toEqual(['all', 'declined'])
+  })
+
+  it('keep cancelled quotes in their own view only', () => {
+    const cancelled = { ...row({ status: 'cancelled', document_type: 'quote' }), quote_status: 'open' }
+    expect(quoteTabsFor(cancelled)).toEqual(['cancelled'])
+  })
+
+  it('ignore non-quote rows in the quote views', () => {
+    expect(quoteTabsFor(row({ status: 'sent' }))).toEqual([])
+  })
+
+  it('parse the quote view ids and nothing else', () => {
+    expect(parseQuoteListTab('open')).toBe('open')
+    expect(parseQuoteListTab('unpaid')).toBeNull()
+    expect(parseQuoteListTab(null)).toBeNull()
   })
 })

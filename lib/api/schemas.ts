@@ -2559,6 +2559,12 @@ export const UpdateSettingsSchema = z.object({
   // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
   // for correctness (the pages and APIs work regardless).
   sales_orders_enabled: z.boolean().optional(),
+  // Invoice document type toggles (offert, proforma, återkommande,
+  // självfaktura): UI-visibility only, never load-bearing for correctness.
+  quotes_enabled: z.boolean().optional(),
+  proforma_enabled: z.boolean().optional(),
+  recurring_invoices_enabled: z.boolean().optional(),
+  self_billing_enabled: z.boolean().optional(),
   // Data analysis consent (#1346): gates cross-company analysis of this
   // company's bookkeeping outcomes. Flipped by a human in the settings UI
   // only; deliberately absent from the v1 REST / MCP settings pick lists.

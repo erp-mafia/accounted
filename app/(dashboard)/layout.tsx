@@ -420,6 +420,8 @@ export default async function DashboardLayout({
   const dimensionsEnabled = settings?.dimensions_enabled ?? false
   // Kundorder visibility: same UI-only gate as dimensionsEnabled.
   const salesOrdersEnabled = settings?.sales_orders_enabled ?? false
+  // Offerter row: UI-only gate, default on (a fresh settings row has it true).
+  const quotesEnabled = settings?.quotes_enabled ?? true
   // Körjournal visibility: the settings toggle is the normal way in, existing
   // trips force the row on so already-created data stays reachable.
   const hasMileage = (settings?.mileage_enabled ?? false) || hasMileageTrips
@@ -566,6 +568,7 @@ export default async function DashboardLayout({
             paysSalaries={paysSalaries}
             dimensionsEnabled={dimensionsEnabled}
             salesOrdersEnabled={salesOrdersEnabled}
+            quotesEnabled={quotesEnabled}
             hasWebshop={hasWebshop}
             hasMileage={hasMileage}
             hasExpenseClaims={hasExpenseClaims}
