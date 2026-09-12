@@ -32,6 +32,7 @@ import {
 } from 'lucide-react'
 import type { AccountMapping } from '@/lib/import/types'
 import { isValidBASRange } from '@/lib/import/account-mapper'
+import { isInVatReviewList, needsVatTreatmentReview } from '@/lib/import/account-vat-treatment'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
@@ -77,10 +78,14 @@ export default function AccountMappingStep({
 }: AccountMappingStepProps) {
   const t = useTranslations('chart_of_accounts')
   const [searchTerm, setSearchTerm] = useState('')
+  // Source accounts whose momskod or sats was changed while this filter has
+  // been open. They stay in the review list so the second of the two selects
+  // is still reachable; see isInVatReviewList.
+  const [editedThisStep, setEditedThisStep] = useState<ReadonlySet<string>>(() => new Set())
   // Default to showing unmapped accounts first (most actionable)
   const [filter, setFilter] = useState<FilterType>(() => {
     const hasUnmapped = mappings.some((m) => !m.targetAccount)
-    const hasVatReview = mappings.some((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed)
+    const hasVatReview = mappings.some(needsVatTreatmentReview)
     return hasUnmapped ? 'unmapped' : hasVatReview ? 'vat_review' : 'all'
   })
   const [currentPage, setCurrentPage] = useState(1)
@@ -114,7 +119,7 @@ export default function AccountMappingStep({
         result = result.filter((m) => m.targetAccount && m.confidence < 0.7)
         break
       case 'vat_review':
-        result = result.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed)
+        result = result.filter((m) => isInVatReviewList(m, editedThisStep))
         break
       case 'manual':
         result = result.filter((m) => m.isOverride)
@@ -134,7 +139,7 @@ export default function AccountMappingStep({
     }
 
     return result
-  }, [mappings, filter, searchTerm, knownTargets])
+  }, [mappings, filter, searchTerm, knownTargets, editedThisStep])
 
   // Pagination
   const totalPages = Math.ceil(filteredMappings.length / PAGE_SIZE)
@@ -147,6 +152,41 @@ export default function AccountMappingStep({
   const handleFilterChange = (newFilter: FilterType) => {
     setFilter(newFilter)
     setCurrentPage(1)
+    // Re-entering the review filter should offer what is still outstanding,
+    // not the rows finished during the previous visit.
+    setEditedThisStep(new Set())
+  }
+
+  // Used by the momskod and sats selects only: a row being edited must stay
+  // in the list until the user is done with it. The per-row confirm button
+  // calls onVatTreatmentChange directly, so it still clears the row.
+  const handleVatSelectChange = (
+    sourceAccount: string,
+    treatment: AccountVatTreatment | null,
+    rate: number | null,
+  ) => {
+    setEditedThisStep((prev) =>
+      prev.has(sourceAccount) ? prev : new Set(prev).add(sourceAccount),
+    )
+    onVatTreatmentChange(sourceAccount, treatment, rate)
+  }
+
+  // The per-row confirm means "done with this row", so it releases the row
+  // from the sticky set as well as marking it reviewed. Without the release
+  // the button is inert on a row the user has edited: the row is held in the
+  // list by editedThisStep and clicking the check changes nothing on screen.
+  const handleVatConfirm = (
+    sourceAccount: string,
+    treatment: AccountVatTreatment | null,
+    rate: number | null,
+  ) => {
+    setEditedThisStep((prev) => {
+      if (!prev.has(sourceAccount)) return prev
+      const next = new Set(prev)
+      next.delete(sourceAccount)
+      return next
+    })
+    onVatTreatmentChange(sourceAccount, treatment, rate)
   }
 
   const handleSearchChange = (term: string) => {
@@ -160,7 +200,7 @@ export default function AccountMappingStep({
     const newAccounts = mappings.filter((m) => m.targetAccount && !knownTargets.has(m.targetAccount)).length
     const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.7).length
     const manual = mappings.filter((m) => m.isOverride).length
-    const vatReview = mappings.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed).length
+    const vatReview = mappings.filter(needsVatTreatmentReview).length
     return { unmapped, newAccounts, lowConfidence, manual, vatReview }
   }, [mappings, knownTargets])
 
@@ -391,7 +431,7 @@ export default function AccountMappingStep({
                                   ? defaultRateForVatTreatment(treatment, accountClass)
                                   : mapping.defaultVatRate
                                 : mapping.defaultVatRate ?? null
-                              onVatTreatmentChange(mapping.sourceAccount, treatment, rate)
+                              handleVatSelectChange(mapping.sourceAccount, treatment, rate)
                             }}
                           >
                             <SelectTrigger
@@ -417,7 +457,7 @@ export default function AccountMappingStep({
                             value={mapping.defaultVatRate === null || mapping.defaultVatRate === undefined
                               ? 'none'
                               : String(mapping.defaultVatRate)}
-                            onValueChange={(value) => onVatTreatmentChange(
+                            onValueChange={(value) => handleVatSelectChange(
                               mapping.sourceAccount,
                               mapping.defaultVatTreatment ?? null,
                               value === 'none' ? null : Number(value),
@@ -455,7 +495,11 @@ export default function AccountMappingStep({
                         'group-hover:bg-muted/50 group-focus-within:bg-muted/50',
                       )}
                     >
-                      {mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed && (
+                      {/* Keyed to the row's visibility, not to "still unreviewed": a row
+                          held in the list mid-edit must keep its confirm control, or it
+                          reads as unfinished with no way to finish it. Clicking it
+                          re-confirms the values now showing and drops the row. */}
+                      {isInVatReviewList(mapping, editedThisStep) && (
                         /* Icon-only: the column header carries the label and
                            the tooltip repeats it on hover; the accessible name
                            also says which row. */
@@ -467,7 +511,7 @@ export default function AccountMappingStep({
                               size="icon"
                               className="h-11 w-11 sm:h-8 sm:w-8"
                               aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount}`}
-                              onClick={() => onVatTreatmentChange(
+                              onClick={() => handleVatConfirm(
                                 mapping.sourceAccount,
                                 mapping.defaultVatTreatment ?? null,
                                 mapping.defaultVatRate ?? null,

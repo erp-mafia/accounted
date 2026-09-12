@@ -56,6 +56,41 @@ export function enrichAccountMappingsWithVat(
   })
 }
 
+/**
+ * A mapping still awaiting the user's VAT decision. This is the "how many are
+ * left" predicate: it drives the chip counter on the mapping step and nothing
+ * else should recompute it inline, which is how the counter and the list came
+ * to disagree in the first place.
+ */
+export function needsVatTreatmentReview(mapping: AccountMapping): boolean {
+  return Boolean(mapping.requiresVatTreatmentReview) && !mapping.vatTreatmentReviewed
+}
+
+/**
+ * Whether a row belongs in the "momskoder att granska" list.
+ *
+ * Deliberately wider than {@link needsVatTreatmentReview}: a row the user has
+ * touched through one of the two selects during this step stays in the list
+ * even once it counts as reviewed. Each row carries a momskod AND a separate
+ * sats, and changing either marks the row reviewed, so a list keyed on the
+ * narrow predicate drops the row after the first of the two is set. Picking a
+ * treatment also assigns a default rate (0.25 for reverse charge on class 4 to
+ * 6), so the row that vanishes is frequently the one still carrying the wrong
+ * rate: "Inköp varor 12% EG" becomes 25% and disappears before it can be
+ * corrected.
+ *
+ * `editedThisStep` holds only per-select edits. The per-row confirm button and
+ * "Bekräfta alla föreslagna" deliberately do not feed it: those say "done with
+ * this row", and the row leaving the list is the point.
+ */
+export function isInVatReviewList(
+  mapping: AccountMapping,
+  editedThisStep: ReadonlySet<string>,
+): boolean {
+  if (needsVatTreatmentReview(mapping)) return true
+  return Boolean(mapping.requiresVatTreatmentReview) && editedThisStep.has(mapping.sourceAccount)
+}
+
 export function applyVatTreatmentReview(
   mappings: AccountMapping[],
   sourceAccount: string,
@@ -97,7 +132,7 @@ export function enrichChangedAccountMappingWithVat(
  */
 export function applyVatTreatmentReviewAll(mappings: AccountMapping[]): AccountMapping[] {
   return mappings.map((mapping) =>
-    mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
+    needsVatTreatmentReview(mapping)
       ? {
           ...mapping,
           vatTreatmentSuggested: false,
