@@ -40,6 +40,7 @@ import {
   parseInvoiceListTab,
   type InvoiceListTab,
 } from '@/lib/invoices/invoice-list-tabs'
+import { isInvoiceTypeEnabled, visibleInvoiceListTabs } from '@/lib/invoices/invoice-type-toggles'
 import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
@@ -276,6 +277,12 @@ export default function InvoicesPage() {
   // (lib/reference-data), derived instead of copied into state.
   const { settings: companySettings } = useCompanySettings()
   const oreRounding: boolean = companySettings?.ore_rounding ?? true
+  // Invoice kinds hidden in Inställningar > Försäljning drop out of the
+  // Ny faktura menu and the status views; existing rows stay under Alla.
+  const quotesEnabled = isInvoiceTypeEnabled(companySettings, 'quotes_enabled')
+  const proformaEnabled = isInvoiceTypeEnabled(companySettings, 'proforma_enabled')
+  const recurringEnabled = isInvoiceTypeEnabled(companySettings, 'recurring_invoices_enabled')
+  const selfBillingEnabled = isInvoiceTypeEnabled(companySettings, 'self_billing_enabled')
   const rotRutEnabled: boolean = companySettings?.rot_rut_enabled ?? false
   // Booking mode drives which rows are bulk-bookable (kontantmetoden: none).
   const accountingMethod: string = companySettings?.accounting_method ?? 'accrual'
@@ -735,40 +742,56 @@ export default function InvoicesPage() {
       disabledTitle: t('viewer_disabled_tooltip'),
       onSelect: () => openNewInvoice(),
     },
-    {
-      key: 'offert',
-      label: t('create_quote'),
-      icon: FileText,
-      description: t('create_quote_desc'),
-      disabled: !canWrite,
-      disabledTitle: t('viewer_disabled_tooltip'),
-      onSelect: () => openNewQuote(),
-    },
-    {
-      key: 'proforma',
-      label: t('create_proforma'),
-      icon: FileClock,
-      description: t('create_proforma_desc'),
-      disabled: !canWrite,
-      disabledTitle: t('viewer_disabled_tooltip'),
-      onSelect: () => openNewProforma(),
-    },
-    {
-      key: 'aterkommande',
-      label: t('create_recurring'),
-      icon: Repeat,
-      description: t('create_recurring_desc'),
-      onSelect: () => router.push('/invoices/recurring'),
-    },
-    {
-      key: 'sjalvfaktura',
-      label: t('create_self'),
-      icon: FileInput,
-      description: t('create_self_desc'),
-      disabled: !canWrite,
-      disabledTitle: t('viewer_disabled_tooltip'),
-      onSelect: () => openNewSelfBilled(),
-    },
+    ...(quotesEnabled
+      ? [
+          {
+            key: 'offert',
+            label: t('create_quote'),
+            icon: FileText,
+            description: t('create_quote_desc'),
+            disabled: !canWrite,
+            disabledTitle: t('viewer_disabled_tooltip'),
+            onSelect: () => openNewQuote(),
+          } satisfies SplitButtonOption,
+        ]
+      : []),
+    ...(proformaEnabled
+      ? [
+          {
+            key: 'proforma',
+            label: t('create_proforma'),
+            icon: FileClock,
+            description: t('create_proforma_desc'),
+            disabled: !canWrite,
+            disabledTitle: t('viewer_disabled_tooltip'),
+            onSelect: () => openNewProforma(),
+          } satisfies SplitButtonOption,
+        ]
+      : []),
+    ...(recurringEnabled
+      ? [
+          {
+            key: 'aterkommande',
+            label: t('create_recurring'),
+            icon: Repeat,
+            description: t('create_recurring_desc'),
+            onSelect: () => router.push('/invoices/recurring'),
+          } satisfies SplitButtonOption,
+        ]
+      : []),
+    ...(selfBillingEnabled
+      ? [
+          {
+            key: 'sjalvfaktura',
+            label: t('create_self'),
+            icon: FileInput,
+            description: t('create_self_desc'),
+            disabled: !canWrite,
+            disabledTitle: t('viewer_disabled_tooltip'),
+            onSelect: () => openNewSelfBilled(),
+          } satisfies SplitButtonOption,
+        ]
+      : []),
   ]
 
   // One derivable status chip per row (concept scene 15). Doc-type markers
@@ -870,7 +893,7 @@ export default function InvoicesPage() {
               ? `${t(TAB_LABEL_KEYS[activeTab])} · ${tabCounts[activeTab]}`
               : t(TAB_LABEL_KEYS[activeTab])
           }
-          items={ALL_TABS.map((tab) => ({
+          items={visibleInvoiceListTabs(ALL_TABS, companySettings, activeTab).map((tab) => ({
             id: tab,
             label: t(TAB_LABEL_KEYS[tab]),
             annotation: tabCounts[tab] > 0 ? String(tabCounts[tab]) : undefined,

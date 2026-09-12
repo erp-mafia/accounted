@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
+import { InvoiceTypesSettings } from '@/components/settings/InvoiceTypesSettings'
 import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePaymentLinkSettings'
 import { PeppolReceiveSettings } from '@/components/settings/PeppolReceiveSettings'
 import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
@@ -64,6 +65,9 @@ export function InvoicingSettingsContent() {
       <SettingsFormWrapper onSave={handleSave}>
         <InvoiceSettingsForm settings={settings} />
       </SettingsFormWrapper>
+
+      {/* Invoice kinds on/off: saves individually via toggle switches */}
+      <InvoiceTypesSettings />
 
       {/* Payment link opt-in: saves individually via toggle switch */}
       <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />

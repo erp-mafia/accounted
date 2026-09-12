@@ -65,6 +65,7 @@ import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDi
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { useAccounts, useArticles, useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
+import { isInvoiceTypeEnabled } from '@/lib/invoices/invoice-type-toggles'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -3145,8 +3146,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="invoice">{t('doctype_invoice')}</SelectItem>
-                              <SelectItem value="proforma">{t('doctype_proforma')}</SelectItem>
-                              <SelectItem value="quote">{t('doctype_quote')}</SelectItem>
+                              {/* Kinds switched off in Inställningar > Försäljning
+                                  are hidden unless this document already is one. */}
+                              {(field.value === 'proforma' ||
+                                isInvoiceTypeEnabled(companySettings, 'proforma_enabled')) && (
+                                <SelectItem value="proforma">{t('doctype_proforma')}</SelectItem>
+                              )}
+                              {(field.value === 'quote' ||
+                                isInvoiceTypeEnabled(companySettings, 'quotes_enabled')) && (
+                                <SelectItem value="quote">{t('doctype_quote')}</SelectItem>
+                              )}
                               <SelectItem value="delivery_note">{t('doctype_delivery_note')}</SelectItem>
                             </SelectContent>
                           </Select>

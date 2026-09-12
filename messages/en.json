@@ -2291,6 +2291,20 @@
     "access_enabled_receiving": "Enabled for sending and receiving e-invoices.",
     "access_enabled_send_only": "Enabled for sending e-invoices. Receiving is not included; write to support if you want to receive."
   },
+  "settings_invoice_types": {
+    "heading": "Invoice types",
+    "heading_help": "Choose which document types appear in the New invoice menu and in the invoice list. Switched-off types disappear from the interface, but existing documents stay under All and keep working as usual.",
+    "toggle_label": "Show",
+    "quotes_enabled_label": "Quote",
+    "quotes_enabled_help": "Shows Create quote in the New invoice menu and the Quotes view in the invoice list.",
+    "proforma_enabled_label": "Proforma invoice",
+    "proforma_enabled_help": "Shows Create proforma in the New invoice menu and the Proforma view in the invoice list.",
+    "recurring_invoices_enabled_label": "Recurring",
+    "recurring_invoices_enabled_help": "Shows Recurring invoice in the New invoice menu. Existing schedules keep creating invoices.",
+    "self_billing_enabled_label": "Self-billing",
+    "self_billing_enabled_help": "Shows Create self-billed invoice in the New invoice menu.",
+    "save_failed_title": "Could not save the setting"
+  },
   "settings_pdf_print": {
     "heading": "Print & PDF",
     "toast_save_failed": "Could not save",
