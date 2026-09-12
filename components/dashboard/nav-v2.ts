@@ -25,6 +25,9 @@ export interface NavGateFlags {
   employerOnly?: boolean
   requiresDimensions?: boolean
   requiresSalesOrders?: boolean
+  // Offerter: company_settings.quotes_enabled (UI-visibility gate only; the
+  // /quotes page and the APIs work regardless, existing quotes are kept).
+  requiresQuotes?: boolean
   requiresWebshop?: boolean
   requiresMileage?: boolean
   requiresExpenses?: boolean
@@ -92,6 +95,9 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     labelKey: 'v2_invoicing',
     icon: ReceiptText,
     sub: [
+      // A quote is not an invoice (founder direction 2026-09-12): its own row
+      // above Kundfakturor, shown while quotes are switched on in settings.
+      { href: '/quotes', labelKey: 'quotes', requiresQuotes: true },
       // Återkommande opens from Ny faktura; it is a way to make invoices, not a place.
       { href: '/invoices', labelKey: 'invoices' },
       { href: '/sales-orders', labelKey: 'sales_orders', requiresSalesOrders: true },

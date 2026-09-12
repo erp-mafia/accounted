@@ -7,8 +7,9 @@ import type { InvoiceListTab } from './invoice-list-tabs'
  * option. Följesedel is not on it either: it has no entry point of its own.
  *
  * The toggles gate visibility only, never correctness: a hidden kind keeps
- * working through the API/MCP, its existing documents stay listed under
- * Alla and its pages stay reachable by URL.
+ * working through the API/MCP, its existing documents stay in the database
+ * and its pages stay reachable by URL (quotes on /quotes, whose nav row is
+ * what quotes_enabled hides).
  */
 export const INVOICE_TYPE_TOGGLES = [
   'quotes_enabled',
@@ -26,9 +27,9 @@ export function isInvoiceTypeEnabled(settings: InvoiceTypeFlags, toggle: Invoice
   return settings?.[toggle] ?? true
 }
 
-/** Which list view (if any) each toggle hides when off. */
+/** Which invoice list view (if any) each toggle hides when off. Quotes have
+ *  their own page (/quotes), gated in the nav instead. */
 const TAB_BY_TOGGLE: Partial<Record<InvoiceTypeToggle, InvoiceListTab>> = {
-  quotes_enabled: 'quote',
   proforma_enabled: 'proforma',
 }
 

@@ -1,10 +1,12 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
-import { SettingsGroup, SettingsRow } from '@/components/settings/SettingsRows'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import {
@@ -12,7 +14,6 @@ import {
   isInvoiceTypeEnabled,
   type InvoiceTypeToggle,
 } from '@/lib/invoices/invoice-type-toggles'
-import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 /**
@@ -30,6 +31,7 @@ export function InvoiceTypesSettings() {
   const { settings, updateSettings } = useSettings()
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
+  const router = useRouter()
   const [saving, setSaving] = useState<InvoiceTypeToggle | null>(null)
 
   async function handleChange(toggle: InvoiceTypeToggle, next: boolean) {
@@ -50,8 +52,10 @@ export function InvoiceTypesSettings() {
         return
       }
       // The invoice list and editor read the same SWR row, so the patch
-      // reaches them without a reload; no server-rendered nav depends on it.
+      // reaches them without a reload. The Offerter nav row is gated by the
+      // server-rendered dashboard layout, so it needs a refresh to follow.
       updateSettings({ [toggle]: next })
+      if (toggle === 'quotes_enabled') router.refresh()
     } catch (err) {
       // A rejected fetch never reaches the !res.ok arm, and the switch is
       // controlled by the settings context, so it stays put: without this
@@ -68,26 +72,31 @@ export function InvoiceTypesSettings() {
 
   return (
     <SettingsGroup label={t('heading')} help={t('heading_help')}>
-      {INVOICE_TYPE_TOGGLES.map((toggle) => {
-        const id = `invoice-type-${toggle}`
-        const locked = saving === toggle || !canWrite
-        return (
-          <SettingsRow key={toggle} label={t(`${toggle}_label`)} help={t(`${toggle}_help`)}>
-            <Switch
-              id={id}
-              checked={isInvoiceTypeEnabled(settings, toggle)}
-              onCheckedChange={(next) => void handleChange(toggle, next)}
-              disabled={locked}
-            />
-            <label
-              htmlFor={id}
-              className={cn('text-sm', locked ? 'text-muted-foreground' : 'cursor-pointer')}
+      {/* Compact switch rows two abreast, same grid as the PDF show/hide switches. */}
+      <div className="grid gap-x-8 md:grid-cols-2">
+        {INVOICE_TYPE_TOGGLES.map((toggle) => {
+          const id = `invoice-type-${toggle}`
+          return (
+            <div
+              key={toggle}
+              className="flex items-center justify-between gap-3 border-b border-border px-1 py-3"
             >
-              {t('toggle_label')}
-            </label>
-          </SettingsRow>
-        )
-      })}
+              <span className="flex min-w-0 items-center gap-2">
+                <label htmlFor={id} className="truncate text-sm">
+                  {t(`${toggle}_label`)}
+                </label>
+                <HelpPopover className="shrink-0">{t(`${toggle}_help`)}</HelpPopover>
+              </span>
+              <Switch
+                id={id}
+                checked={isInvoiceTypeEnabled(settings, toggle)}
+                onCheckedChange={(next) => void handleChange(toggle, next)}
+                disabled={saving === toggle || !canWrite}
+              />
+            </div>
+          )
+        })}
+      </div>
     </SettingsGroup>
   )
 }

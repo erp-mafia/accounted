@@ -21,7 +21,7 @@ const DETAIL_SEGMENTS = [
   'articles/[id]',
   'salary/runs/[id]',
 ]
-const LIST_SEGMENTS = ['customers', 'invoices', 'suppliers', 'articles', 'supplier-invoices']
+const LIST_SEGMENTS = ['customers', 'invoices', 'quotes', 'suppliers', 'articles', 'supplier-invoices']
 
 describe('detail and list segments have a route-level loading state', () => {
   for (const segment of [...DETAIL_SEGMENTS, ...LIST_SEGMENTS]) {

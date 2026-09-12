@@ -63,11 +63,13 @@ export function InvoicingSettingsContent() {
       <InvoicePaymentAccountsSettings settings={settings} onUpdate={updateSettings} />
 
       <SettingsFormWrapper onSave={handleSave}>
-        <InvoiceSettingsForm settings={settings} />
+        <InvoiceSettingsForm
+          settings={settings}
+          // Invoice kinds on/off, right after Fakturainställningar: each
+          // switch saves itself, independent of the form's Spara.
+          afterInvoiceSettings={<InvoiceTypesSettings />}
+        />
       </SettingsFormWrapper>
-
-      {/* Invoice kinds on/off: saves individually via toggle switches */}
-      <InvoiceTypesSettings />
 
       {/* Payment link opt-in: saves individually via toggle switch */}
       <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />

@@ -26,27 +26,22 @@ describe('visibleInvoiceListTabs', () => {
     expect(visibleInvoiceListTabs(INVOICE_LIST_TABS, {}, 'all')).toEqual([...INVOICE_LIST_TABS])
   })
 
-  it('drops the quote and proforma views for switched-off kinds', () => {
-    const tabs = visibleInvoiceListTabs(
-      INVOICE_LIST_TABS,
-      { quotes_enabled: false, proforma_enabled: false },
-      'all',
-    )
-    expect(tabs).not.toContain('quote')
+  it('drops the proforma view when proformas are switched off', () => {
+    const tabs = visibleInvoiceListTabs(INVOICE_LIST_TABS, { proforma_enabled: false }, 'all')
     expect(tabs).not.toContain('proforma')
     expect(tabs).toContain('delivery_note')
     expect(tabs).toContain('all')
   })
 
-  it('keeps the active view even when its kind is switched off (bookmarked ?status=quote)', () => {
-    const tabs = visibleInvoiceListTabs(INVOICE_LIST_TABS, { quotes_enabled: false }, 'quote')
-    expect(tabs).toContain('quote')
+  it('keeps the active view even when its kind is switched off (bookmarked ?status=proforma)', () => {
+    const tabs = visibleInvoiceListTabs(INVOICE_LIST_TABS, { proforma_enabled: false }, 'proforma')
+    expect(tabs).toContain('proforma')
   })
 
-  it('has no list view to hide for recurring and self-billing', () => {
+  it('has no invoice list view to hide for quotes, recurring and self-billing', () => {
     const tabs = visibleInvoiceListTabs(
       INVOICE_LIST_TABS,
-      { recurring_invoices_enabled: false, self_billing_enabled: false },
+      { quotes_enabled: false, recurring_invoices_enabled: false, self_billing_enabled: false },
       'all',
     )
     expect(tabs).toEqual([...INVOICE_LIST_TABS])

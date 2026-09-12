@@ -35,12 +35,19 @@ import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { matchesInvoiceSearch } from '@/lib/invoices/invoice-search'
 import {
   INVOICE_LIST_TABS,
+  QUOTE_LIST_TABS,
+  isQuoteRow,
   isUnsentNumberedInvoice,
   matchesInvoiceListTab,
+  matchesQuoteListTab,
   parseInvoiceListTab,
+  parseQuoteListTab,
+  type AnyListTab,
   type InvoiceListTab,
+  type QuoteListTab,
 } from '@/lib/invoices/invoice-list-tabs'
 import { isInvoiceTypeEnabled, visibleInvoiceListTabs } from '@/lib/invoices/invoice-type-toggles'
+import { useInvoiceListVariant } from '@/lib/invoices/list-variant'
 import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
@@ -125,9 +132,9 @@ const CREATE_MODES = ['faktura', 'aterkommande', 'sjalvfaktura'] as const
 // The status views and their one predicate live in lib/invoices/invoice-list-tabs:
 // the visible rows, the per-view counts in the ContextPicker and the status
 // sections all go through it, so the annotation always matches what the view
-// will show.
-const ALL_TABS = INVOICE_LIST_TABS
-type ListTab = InvoiceListTab
+// will show. The quotes variant (/quotes) swaps in the quote views; the
+// status sections stay invoice-only (that grouping is hidden for quotes).
+type ListTab = AnyListTab
 const matchesListTab = matchesInvoiceListTab
 
 // Row grouping: sections in the table body. 'none' (the flat list) is the
@@ -179,10 +186,14 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   draft: 'tab_draft',
   paid: 'tab_paid',
   proforma: 'tab_proforma',
-  quote: 'tab_quote',
   delivery_note: 'tab_delivery_note',
   credit: 'tab_credit',
   cancelled: 'tab_cancelled',
+  // Quote views (/quotes): the decision states share the row chip labels.
+  open: 'quote_status_open',
+  accepted: 'quote_status_accepted',
+  declined: 'quote_status_declined',
+  expired: 'quote_status_expired',
 }
 
 /** A list row: the invoice plus the begäran embed the ROT/RUT column reads. */
@@ -268,6 +279,17 @@ function SortableHeader({
 }
 
 export default function InvoicesPage() {
+  // 'invoices' (default) or 'quotes': /quotes renders this same component
+  // inside InvoiceListVariantProvider. A quote is not an invoice, so the two
+  // never share rows: each variant scopes the fetched list to its own kind.
+  const variant = useInvoiceListVariant()
+  const isQuotesList = variant === 'quotes'
+  const listPath = isQuotesList ? '/quotes' : '/invoices'
+  const listTabs: readonly ListTab[] = isQuotesList ? QUOTE_LIST_TABS : INVOICE_LIST_TABS
+  const matchesTab = (invoice: Invoice, tab: ListTab): boolean =>
+    isQuotesList
+      ? matchesQuoteListTab(invoice, tab as QuoteListTab)
+      : matchesInvoiceListTab(invoice, tab as InvoiceListTab)
   const { company } = useCompany()
   const { canWrite } = useCanWrite()
   const router = useRouter()
@@ -279,7 +301,7 @@ export default function InvoicesPage() {
   const oreRounding: boolean = companySettings?.ore_rounding ?? true
   // Invoice kinds hidden in Inställningar > Försäljning drop out of the
   // Ny faktura menu and the status views; existing rows stay under Alla.
-  const quotesEnabled = isInvoiceTypeEnabled(companySettings, 'quotes_enabled')
+  // Quotes are not among them: they have their own page and nav row.
   const proformaEnabled = isInvoiceTypeEnabled(companySettings, 'proforma_enabled')
   const recurringEnabled = isInvoiceTypeEnabled(companySettings, 'recurring_invoices_enabled')
   const selfBillingEnabled = isInvoiceTypeEnabled(companySettings, 'self_billing_enabled')
@@ -299,7 +321,7 @@ export default function InvoicesPage() {
   const [activeTab, setActiveTab] = useState<ListTab>(() => {
     // Deep links from the worklist and older bookmarks: ?status= / ?tab=.
     const param = searchParams.get('status') ?? searchParams.get('tab')
-    return parseInvoiceListTab(param) ?? 'all'
+    return (isQuotesList ? parseQuoteListTab(param) : parseInvoiceListTab(param)) ?? 'all'
   })
   // Shell v2: grouping sits behind a gear at the right (same as Inköp).
   const shell = useShell()
@@ -346,7 +368,7 @@ export default function InvoicesPage() {
     const params = new URLSearchParams(searchParams.toString())
     mutate(params)
     const qs = params.toString()
-    return qs ? `/invoices?${qs}` : '/invoices'
+    return qs ? `${listPath}?${qs}` : listPath
   }
   const closeNewInvoice = () =>
     router.replace(
@@ -396,7 +418,8 @@ export default function InvoicesPage() {
   // the year after payment, so last year's invoices are exactly the relevant
   // ones. ?rot-rut=1 keeps working regardless, so nothing is unreachable.
   const showRotRutAction =
-    rotRutEnabled || invoices.some((invoice) => (invoice.deduction_total ?? 0) > 0)
+    !isQuotesList &&
+    (rotRutEnabled || invoices.some((invoice) => (invoice.deduction_total ?? 0) > 0))
   // The begäran column and its filter share that gate: a company without
   // ROT/RUT never sees an empty column or a picker with nothing to pick.
   const showRotRut = showRotRutAction
@@ -474,6 +497,8 @@ export default function InvoicesPage() {
   const searchScopedInvoices = useMemo(
     () =>
       invoices.filter((invoice) => {
+        // Each list shows its own kind only: quotes on /quotes, the rest here.
+        if (isQuoteRow(invoice) !== isQuotesList) return false
         const matchesSearch = matchesInvoiceSearch(invoice, normalizedSearch)
 
         const matchesFy =
@@ -483,7 +508,7 @@ export default function InvoicesPage() {
 
         return matchesSearch && matchesFy
       }),
-    [fyPeriod, invoices, normalizedSearch],
+    [fyPeriod, invoices, isQuotesList, normalizedSearch],
   )
   // The ROT/RUT filter sits between search/FY and the status view, so the
   // status counts honour it while its own counts are taken one level up.
@@ -495,8 +520,9 @@ export default function InvoicesPage() {
     [rotRutFilter, searchScopedInvoices],
   )
   const filteredInvoices = useMemo(
-    () => scopedInvoices.filter((invoice) => matchesListTab(invoice, activeTab)),
-    [activeTab, scopedInvoices],
+    () => scopedInvoices.filter((invoice) => matchesTab(invoice, activeTab)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- matchesTab only varies with isQuotesList
+    [activeTab, isQuotesList, scopedInvoices],
   )
   const sortedInvoices = useMemo(
     () => (sort ? sortInvoiceList(filteredInvoices, sort, oreRounding) : filteredInvoices),
@@ -564,20 +590,21 @@ export default function InvoicesPage() {
   // Detail-pager context: the FULL grouped list (not the visible slice), so
   // prev/next on the detail page can walk past the paging boundary.
   const rememberListContext = () => {
-    writeListContext(listContextKey('invoices', company?.id), {
+    writeListContext(listContextKey(variant, company?.id), {
       ids: flatRows.map((entry) => entry.row.id),
     })
   }
 
   const tabCounts = useMemo(() => {
-    const counts = Object.fromEntries(ALL_TABS.map((tab) => [tab, 0])) as Record<ListTab, number>
+    const counts = Object.fromEntries(listTabs.map((tab) => [tab, 0])) as Record<ListTab, number>
     for (const invoice of scopedInvoices) {
-      for (const tab of ALL_TABS) {
-        if (matchesListTab(invoice, tab)) counts[tab] += 1
+      for (const tab of listTabs) {
+        if (matchesTab(invoice, tab)) counts[tab] += 1
       }
     }
     return counts
-  }, [scopedInvoices])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- listTabs/matchesTab only vary with isQuotesList
+  }, [isQuotesList, scopedInvoices])
 
   const rotRutCounts = useMemo(() => {
     const counts = Object.fromEntries(ROT_RUT_LIST_FILTERS.map((f) => [f, 0])) as Record<
@@ -593,6 +620,10 @@ export default function InvoicesPage() {
   }, [searchScopedInvoices])
 
   const resetPaging = () => setVisibleCount(INITIAL_VISIBLE_ROWS)
+  // Status sections bucket by invoice payment state, which a quote has none of.
+  const groupModes: readonly GroupMode[] = isQuotesList
+    ? GROUP_MODES.filter((mode) => mode !== 'status')
+    : GROUP_MODES
 
   const updateSort = (column: InvoiceListSortColumn) => {
     setSort((current) => ({
@@ -614,7 +645,7 @@ export default function InvoicesPage() {
     if (tab === 'all') params.delete('status')
     else params.set('status', tab)
     const qs = params.toString()
-    router.replace(qs ? `/invoices?${qs}` : '/invoices', { scroll: false })
+    router.replace(qs ? `${listPath}?${qs}` : listPath, { scroll: false })
   }
 
   const updateGroup = (mode: GroupMode) => {
@@ -626,7 +657,7 @@ export default function InvoicesPage() {
     if (mode === 'none') params.delete('group')
     else params.set('group', mode)
     const qs = params.toString()
-    router.replace(qs ? `/invoices?${qs}` : '/invoices', { scroll: false })
+    router.replace(qs ? `${listPath}?${qs}` : listPath, { scroll: false })
   }
 
   const updateRotRut = (filter: RotRutListFilter) => {
@@ -636,7 +667,7 @@ export default function InvoicesPage() {
     if (filter === 'all') params.delete('rotrut')
     else params.set('rotrut', filter)
     const qs = params.toString()
-    router.replace(qs ? `/invoices?${qs}` : '/invoices', { scroll: false })
+    router.replace(qs ? `${listPath}?${qs}` : listPath, { scroll: false })
   }
 
   // Bulk Bokför eligibility. Kontantmetoden books at payment, so no row is
@@ -646,7 +677,7 @@ export default function InvoicesPage() {
   // verifikat (worklist-canonical predicate: journal_entry_id IS NULL).
   const bulkMode: 'issue' | 'deferred' | null =
     accountingMethod !== 'accrual' ? null : deferInvoiceBooking ? 'deferred' : 'issue'
-  const showSelection = canWrite && bulkMode !== null
+  const showSelection = canWrite && bulkMode !== null && !isQuotesList
 
   const isBulkSelectable = (invoice: Invoice): boolean => {
     if (!bulkMode) return false
@@ -742,19 +773,6 @@ export default function InvoicesPage() {
       disabledTitle: t('viewer_disabled_tooltip'),
       onSelect: () => openNewInvoice(),
     },
-    ...(quotesEnabled
-      ? [
-          {
-            key: 'offert',
-            label: t('create_quote'),
-            icon: FileText,
-            description: t('create_quote_desc'),
-            disabled: !canWrite,
-            disabledTitle: t('viewer_disabled_tooltip'),
-            onSelect: () => openNewQuote(),
-          } satisfies SplitButtonOption,
-        ]
-      : []),
     ...(proformaEnabled
       ? [
           {
@@ -856,7 +874,9 @@ export default function InvoicesPage() {
     <div className="space-y-8">
       {/* Page header (concept scene 15): title + invoice actions */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
+          {t(isQuotesList ? 'title_quotes' : 'title')}
+        </h1>
         <div className="flex flex-wrap items-center gap-2">
           {showRotRutAction && (
             // The ROT/RUT overview (begäran, beslut, utbetalning, nekat
@@ -871,12 +891,25 @@ export default function InvoicesPage() {
               {t('rot_rut_payout_action')}
             </Button>
           )}
-          <SplitButton
-            key={uiStateLoaded ? 'loaded' : 'initial'}
-            persistKey="invoices"
-            initialModeKey={resolveInitialMode(uiState, 'invoices', CREATE_MODES, 'faktura')}
-            options={createOptions}
-          />
+          {isQuotesList ? (
+            // One way to make a quote, so a plain button: no modes to remember.
+            <Button
+              type="button"
+              onClick={openNewQuote}
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              <FileText className="mr-2 h-4 w-4" />
+              {t('create_quote')}
+            </Button>
+          ) : (
+            <SplitButton
+              key={uiStateLoaded ? 'loaded' : 'initial'}
+              persistKey="invoices"
+              initialModeKey={resolveInitialMode(uiState, 'invoices', CREATE_MODES, 'faktura')}
+              options={createOptions}
+            />
+          )}
         </div>
       </div>
 
@@ -893,7 +926,10 @@ export default function InvoicesPage() {
               ? `${t(TAB_LABEL_KEYS[activeTab])} · ${tabCounts[activeTab]}`
               : t(TAB_LABEL_KEYS[activeTab])
           }
-          items={visibleInvoiceListTabs(ALL_TABS, companySettings, activeTab).map((tab) => ({
+          items={(isQuotesList
+            ? listTabs
+            : visibleInvoiceListTabs(INVOICE_LIST_TABS, companySettings, activeTab as InvoiceListTab)
+          ).map((tab) => ({
             id: tab,
             label: t(TAB_LABEL_KEYS[tab]),
             annotation: tabCounts[tab] > 0 ? String(tabCounts[tab]) : undefined,
@@ -905,7 +941,7 @@ export default function InvoicesPage() {
             onChange={(id) => updateGroup(id as GroupMode)}
             ariaLabel={t('group_picker_aria')}
             triggerLabel={`${t('group_by')} · ${t(GROUP_LABEL_KEYS[groupMode])}`}
-            items={GROUP_MODES.map((mode) => ({
+            items={groupModes.map((mode) => ({
               id: mode,
               label: t(GROUP_LABEL_KEYS[mode]),
             }))}
@@ -963,7 +999,7 @@ export default function InvoicesPage() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuRadioGroup value={groupMode} onValueChange={(v) => updateGroup(v as GroupMode)}>
-                  {GROUP_MODES.map((mode) => (
+                  {groupModes.map((mode) => (
                     <DropdownMenuRadioItem key={mode} value={mode}>
                       {t(GROUP_LABEL_KEYS[mode])}
                     </DropdownMenuRadioItem>
@@ -1040,7 +1076,7 @@ export default function InvoicesPage() {
             title={t('no_search_results_title')}
             description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
-        ) : invoices.length === 0 ? (
+        ) : invoices.length === 0 && !isQuotesList ? (
           <div className="animate-fade-in">
             <StartCard
               card="venice"
@@ -1053,10 +1089,20 @@ export default function InvoicesPage() {
           </div>
         ) : (
           <DataListEmpty
-            icon={<ReceiptText className="h-6 w-6" />}
-            title={t(activeTab === 'unsent' ? 'no_unsent_title' : 'no_category_title')}
+            icon={isQuotesList ? <FileText className="h-6 w-6" /> : <ReceiptText className="h-6 w-6" />}
+            title={t(
+              isQuotesList
+                ? 'no_quotes_title'
+                : activeTab === 'unsent'
+                  ? 'no_unsent_title'
+                  : 'no_category_title',
+            )}
             description={t(
-              activeTab === 'unsent' ? 'no_unsent_description' : 'no_category_description',
+              isQuotesList
+                ? 'no_quotes_description'
+                : activeTab === 'unsent'
+                  ? 'no_unsent_description'
+                  : 'no_category_description',
             )}
           />
         )
@@ -1084,8 +1130,8 @@ export default function InvoicesPage() {
                   className="w-full"
                 />
                 <SortableHeader
-                  label={t('th_due')}
-                  sortLabel={t('sort_by', { column: t('th_due') })}
+                  label={t(isQuotesList ? 'th_valid_until' : 'th_due')}
+                  sortLabel={t('sort_by', { column: t(isQuotesList ? 'th_valid_until' : 'th_due') })}
                   column="due"
                   sort={sort}
                   onSort={updateSort}
@@ -1130,16 +1176,14 @@ export default function InvoicesPage() {
                   : invoice.invoice_number
                 // Doc-type marker only where the view doesn't already imply it.
                 const typeMarker =
-                  activeTab === 'all'
+                  activeTab === 'all' && !isQuotesList
                     ? docType === 'proforma'
                       ? t('badge_proforma')
-                      : docType === 'quote'
-                        ? t('badge_quote')
-                        : docType === 'delivery_note'
-                          ? t('badge_delivery_note')
-                          : invoice.is_self_billed
-                            ? t('badge_self_billed')
-                            : null
+                      : docType === 'delivery_note'
+                        ? t('badge_delivery_note')
+                        : invoice.is_self_billed
+                          ? t('badge_self_billed')
+                          : null
                     : null
                 return (
                   <Fragment key={invoice.id}>

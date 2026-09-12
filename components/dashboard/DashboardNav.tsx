@@ -11,6 +11,7 @@ import {
   Home,
   Receipt,
   ReceiptText,
+  FileText,
   Users,
   ArrowLeftRight,
   BookOpen,
@@ -96,6 +97,10 @@ interface DashboardNavProps {
   // Drives visibility of the Kundorder row: same mechanism as
   // dimensionsEnabled, fetched by the dashboard layout.
   salesOrdersEnabled?: boolean
+  // Whether offerter (company_settings.quotes_enabled) is switched on. Same
+  // mechanism as salesOrdersEnabled, but default true: quotes are on unless
+  // the company switched them off.
+  quotesEnabled?: boolean
   // Whether the company has a webshop hooked up (active WooCommerce/Shopify
   // connection, or existing webshop_orders rows). Drives visibility of the
   // Order row: same mechanism as paysSalaries, fetched by the layout.
@@ -131,6 +136,7 @@ type NavLabelKey =
   | 'kpi'
   | 'invoice_inbox'
   | 'invoices'
+  | 'quotes'
   | 'sales_orders'
   | 'webshop_orders'
   | 'customers'
@@ -204,6 +210,9 @@ interface NavItem {
   // company_settings.sales_orders_enabled (UI-visibility gate only; the
   // pages and APIs work regardless).
   requiresSalesOrders?: boolean
+  // Offerter: visible while company_settings.quotes_enabled is on (UI
+  // visibility only; /quotes and the APIs work regardless).
+  requiresQuotes?: boolean
   // Webshop surfaces: visible only when the company has an active
   // WooCommerce/Shopify connection or already-imported order rows.
   // UI-visibility gate only; the page and APIs work regardless.
@@ -251,6 +260,8 @@ const navItems: NavItem[] = [
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
   // Kundorder: opt-in via the bookkeeping settings toggle (UI gate only).
   { href: '/sales-orders', labelKey: 'sales_orders', icon: ClipboardList, group: 'arbeta', requiresSalesOrders: true },
+  // Offerter: a quote is not an invoice, so its own row above Kundfakturor.
+  { href: '/quotes', labelKey: 'quotes', icon: FileText, group: 'arbeta', requiresQuotes: true },
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   // Webshop orders: visible only for companies that actually have a webshop
   // hooked up (active WooCommerce/Shopify connection or existing order rows).
@@ -361,7 +372,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState, shell = 'v1' }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState, shell = 'v1' }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -618,6 +629,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // bookkeeping settings toggle (company_settings.dimensions_enabled).
     if (item.requiresDimensions && !dimensionsEnabled) return false
     if (item.requiresSalesOrders && !salesOrdersEnabled) return false
+    if (item.requiresQuotes && !quotesEnabled) return false
     // Webshop surfaces are hidden until a store is connected (or order rows
     // already exist from a since-disconnected store).
     if (item.requiresWebshop && !hasWebshop) return false

@@ -1465,7 +1465,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       router.push(
         invoice.credited_invoice_id
           ? `/invoices/${invoice.credited_invoice_id}`
-          : '/invoices',
+          : (invoice.document_type || 'invoice') === 'quote'
+            ? '/quotes'
+            : '/invoices',
       )
     } catch (error) {
       toast({
@@ -1772,7 +1774,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {t('back')}
         </button>
         <DetailPager
-          contextKey={listContextKey('invoices', company?.id)}
+          contextKey={listContextKey(isQuote ? 'quotes' : 'invoices', company?.id)}
           basePath="/invoices"
           currentId={id}
         />
@@ -1805,7 +1807,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
           {shell === 'v2' && (
             <DetailPager
-              contextKey={listContextKey('invoices', company?.id)}
+              contextKey={listContextKey(isQuote ? 'quotes' : 'invoices', company?.id)}
               basePath="/invoices"
               currentId={id}
               className="shrink-0"
