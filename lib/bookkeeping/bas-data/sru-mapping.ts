@@ -26,12 +26,12 @@ import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from '@/lib/reports/ink2/account-mappings'
 
 /**
- * 8999 (årets resultat) is not range-mapped by the engine because the form
- * splits it into vinst (7450) / förlust (7550) by sign at filing time. The
- * static BAS SRU table lists 8999 under 7450.
+ * 899x (resultat, årets resultat) is not range-mapped by the engine because
+ * the form splits it into vinst (7450) / förlust (7550) by sign at filing
+ * time. The official table lists 899x under 7450/7550; the chart shows 7450.
  */
-const ARETS_RESULTAT_ACCOUNT = '8999'
 const ARETS_RESULTAT_SRU = '7450'
+const isAretsResultatAccount = (num: string): boolean => num >= '8990' && num <= '8999'
 
 /**
  * Compute the INK2R SRU code for a BAS account number. Returns null for
@@ -40,7 +40,7 @@ const ARETS_RESULTAT_SRU = '7450'
 export function computeSRUCode(accountNumber: string): string | null {
   const num = String(accountNumber).trim()
   if (!ACCOUNT_NUMBER_RE.test(num)) return null
-  if (num === ARETS_RESULTAT_ACCOUNT) return ARETS_RESULTAT_SRU
+  if (isAretsResultatAccount(num)) return ARETS_RESULTAT_SRU
   for (const mapping of INK2R_ACCOUNT_MAPPINGS) {
     if (isAccountInMapping(num, mapping)) return mapping.sruCode
   }

@@ -32,13 +32,30 @@ describe('computeSRUCode', () => {
     ['7010', '7514'],
     ['8310', '7417'],
     ['8999', '7450'],
+    // Official BAS kopplingstabell (bas.se INK2_P1_intervall-241119), not the
+    // decade-shifted table the engine carried until 2026-09-11.
+    ['2410', '7361'], // andra kortfristiga låneskulder till kreditinstitut
+    ['2480', '7360'], // checkräkningskredit
+    ['2420', '7362'],
+    ['2460', '7367'],
+    ['1580', '7251'], // kontokortsfordringar are kundfordringar
+    ['1520', '7251'],
+    ['2130', '7321'], // periodiseringsfond nr 2
+    ['1380', '7235'],
+    ['1280', '7217'],
+    ['8200', '7416'],
+    ['8270', '7521'],
+    ['4960', '7512'],
+    ['8810', '7420'],
+    ['8990', '7450'],
   ])('maps %s to INK2R %s', (account, expected) => {
     expect(computeSRUCode(account)).toBe(expected)
   })
 
   it('returns null for numbers no INK2R post covers', () => {
-    expect(computeSRUCode('8810')).toBeNull()
-    expect(computeSRUCode('8990')).toBeNull()
+    expect(computeSRUCode('1395')).toBeNull()
+    expect(computeSRUCode('2105')).toBeNull()
+    expect(computeSRUCode('8500')).toBeNull()
     expect(computeSRUCode('')).toBeNull()
     expect(computeSRUCode('19300')).toBeNull()
   })

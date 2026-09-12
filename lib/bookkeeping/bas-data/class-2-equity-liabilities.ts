@@ -740,7 +740,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'untaxed_reserves',
     normal_balance: 'credit',
     description: 'Periodiseringsfond avsatt taxeringsår 2020: nr 2',
-    sru_code: '7323',
+    sru_code: '7321',
     k2_excluded: false,
   },
   {
@@ -751,7 +751,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'untaxed_reserves',
     normal_balance: 'credit',
     description: 'Periodiseringsfond avsatt taxeringsår 2021: nr 2',
-    sru_code: '7323',
+    sru_code: '7321',
     k2_excluded: false,
   },
   {
@@ -762,7 +762,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'untaxed_reserves',
     normal_balance: 'credit',
     description: 'Periodiseringsfond avsatt taxeringsår 2022: nr 2',
-    sru_code: '7323',
+    sru_code: '7321',
     k2_excluded: false,
   },
   {
@@ -773,7 +773,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'untaxed_reserves',
     normal_balance: 'credit',
     description: 'Periodiseringsfond avsatt taxeringsår 2023: nr 2',
-    sru_code: '7323',
+    sru_code: '7321',
     k2_excluded: false,
   },
   {
@@ -784,7 +784,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'untaxed_reserves',
     normal_balance: 'credit',
     description: 'Periodiseringsfond avsatt taxeringsår 2024: nr 2',
-    sru_code: '7323',
+    sru_code: '7321',
     k2_excluded: false,
   },
   {
@@ -795,7 +795,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'untaxed_reserves',
     normal_balance: 'credit',
     description: 'Periodiseringsfond avsatt taxeringsår 2025: nr 2',
-    sru_code: '7323',
+    sru_code: '7321',
     k2_excluded: false,
   },
   {
@@ -806,7 +806,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'untaxed_reserves',
     normal_balance: 'credit',
     description: 'Periodiseringsfond avsatt taxeringsår 2026: nr 2',
-    sru_code: '7323',
+    sru_code: '7321',
     k2_excluded: false,
   },
   {
@@ -817,7 +817,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'untaxed_reserves',
     normal_balance: 'credit',
     description: 'Periodiseringsfond avsatt taxeringsår 2027: nr 2',
-    sru_code: '7323',
+    sru_code: '7321',
     k2_excluded: false,
   },
   {
@@ -828,7 +828,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'untaxed_reserves',
     normal_balance: 'credit',
     description: 'Periodiseringsfond avsatt taxeringsår 2019: nr 2',
-    sru_code: '7323',
+    sru_code: '7321',
     k2_excluded: false,
   },
   {
@@ -971,7 +971,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Avsättningar för garantier',
-    sru_code: '7332',
+    sru_code: '7333',
     k2_excluded: false,
   },
   {
@@ -982,7 +982,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Övriga avsättningar för pensioner och liknande förpliktelser',
-    sru_code: '7333',
+    sru_code: '7332',
     k2_excluded: false,
   },
   {
@@ -1257,7 +1257,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Långfristiga skulder till övriga företag som det finns ett ägarintresse i',
-    sru_code: '7353',
+    sru_code: '7354',
     k2_excluded: false,
   },
   {
@@ -1367,7 +1367,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Banklån och checkkrediter med återbetalningstid under 12 månader.',
-    sru_code: '7360',
+    sru_code: '7361',
     k2_excluded: false,
   },
   {
@@ -1378,7 +1378,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kortfristiga lån från kreditinstitut',
-    sru_code: '7360',
+    sru_code: '7361',
     k2_excluded: false,
   },
   {
@@ -1389,7 +1389,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Byggnadskreditiv, kortfristig del',
-    sru_code: '7360',
+    sru_code: '7361',
     k2_excluded: false,
   },
   {
@@ -1400,7 +1400,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kortfristig del av långfristiga skulder till kreditinstitut',
-    sru_code: '7360',
+    sru_code: '7361',
     k2_excluded: false,
   },
   {
@@ -1411,7 +1411,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Övriga kortfristiga skulder till kreditinstitut',
-    sru_code: '7360',
+    sru_code: '7361',
     k2_excluded: false,
   },
   {
@@ -1422,7 +1422,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Förskott från kunder',
-    sru_code: '7361',
+    sru_code: '7362',
     k2_excluded: false,
   },
   {
@@ -1433,7 +1433,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Ej inlösta presentkort',
-    sru_code: '7361',
+    sru_code: '7362',
     k2_excluded: false,
   },
   {
@@ -1444,7 +1444,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Övriga förskott från kunder',
-    sru_code: '7361',
+    sru_code: '7362',
     k2_excluded: false,
   },
   {
@@ -1455,7 +1455,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Pågående arbeten',
-    sru_code: '7361',
+    sru_code: '7363',
     k2_excluded: false,
   },
   {
@@ -1466,7 +1466,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Pågående arbeten, fakturering',
-    sru_code: '7361',
+    sru_code: '7363',
     k2_excluded: false,
   },
   {
@@ -1477,7 +1477,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Pågående arbeten, nedlagda kostnader',
-    sru_code: '7361',
+    sru_code: '7363',
     k2_excluded: false,
   },
   {
@@ -1488,7 +1488,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Beräknad förändring av pågående arbeten',
-    sru_code: '7361',
+    sru_code: '7363',
     k2_excluded: false,
   },
   {
@@ -1554,7 +1554,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Fakturerad men ej upparbetad intäkt',
-    sru_code: '7363',
+    sru_code: '7364',
     k2_excluded: false,
   },
   {
@@ -1565,7 +1565,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Leverantörsskulder till koncernföretag',
-    sru_code: '7364',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -1576,7 +1576,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Leverantörsskulder till moderföretag',
-    sru_code: '7364',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -1587,7 +1587,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Leverantörsskulder till dotterföretag',
-    sru_code: '7364',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -1598,7 +1598,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Leverantörsskulder till andra koncernföretag',
-    sru_code: '7364',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -1653,7 +1653,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kontokredit, kortfristig',
-    sru_code: '7369',
+    sru_code: '7360',
     k2_excluded: false,
   },
   {
@@ -1664,7 +1664,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Övriga kortfristiga skulder till kreditinstitut, kunder och leverantörer',
-    sru_code: '7366',
+    sru_code: '7369',
     k2_excluded: false,
   },
   {
@@ -1686,7 +1686,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Växelskulder',
-    sru_code: '7369',
+    sru_code: '7366',
     k2_excluded: false,
   },
   {
@@ -2500,7 +2500,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kortfristiga skulder till koncernföretag',
-    sru_code: '7369',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -2511,7 +2511,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kortfristiga skulder till moderföretag',
-    sru_code: '7369',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -2522,7 +2522,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kortfristiga skulder till dotterföretag',
-    sru_code: '7369',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -2533,7 +2533,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kortfristiga skulder till andra koncernföretag',
-    sru_code: '7369',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -2544,7 +2544,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kortfristiga skulder till intresseföretag, gemensamt styrda företag och övriga företag som det finns ett ägarintresse i',
-    sru_code: '7369',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -2555,7 +2555,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kortfristiga skulder till intresseföretag',
-    sru_code: '7369',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -2566,7 +2566,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kortfristiga skulder till gemensamt styrda företag',
-    sru_code: '7369',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {
@@ -2577,7 +2577,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'liability',
     normal_balance: 'credit',
     description: 'Kortfristiga skulder till övriga företag som det finns ett ägarintresse i',
-    sru_code: '7369',
+    sru_code: '7367',
     k2_excluded: false,
   },
   {

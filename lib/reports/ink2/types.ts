@@ -59,7 +59,8 @@ export interface INK2RRutor {
 
   // Income statement (Resultaträkning)
   '7410': number  // 3.1  Nettoomsättning
-  '7411': number  // 3.2  Förändring av lager
+  '7411': number  // 3.2  Förändring av lager (net positive)
+  '7510': number  // 3.2  Förändring av lager (net negative, absolute)
   '7412': number  // 3.3  Aktiverat arbete för egen räkning
   '7413': number  // 3.4  Övriga rörelseintäkter
   '7511': number  // 3.5  Råvaror och förnödenheter
@@ -69,10 +70,14 @@ export interface INK2RRutor {
   '7515': number  // 3.9  Av- och nedskrivningar materiella/immateriella
   '7516': number  // 3.10 Nedskrivningar omsättningstillgångar
   '7517': number  // 3.11 Övriga rörelsekostnader
-  '7414': number  // 3.12 Resultat från andelar i koncernföretag
-  '7415': number  // 3.13 Resultat från andelar i intresseföretag
-  '7423': number  // 3.14 Resultat från övriga företag med ägarintresse
-  '7416': number  // 3.15 Resultat från övriga finansiella anläggningstillgångar
+  '7414': number  // 3.12 Resultat från andelar i koncernföretag (net positive)
+  '7518': number  // 3.12 Resultat från andelar i koncernföretag (net negative, absolute)
+  '7415': number  // 3.13 Resultat från andelar i intresseföretag (net positive)
+  '7519': number  // 3.13 Resultat från andelar i intresseföretag (net negative, absolute)
+  '7423': number  // 3.14 Resultat från övriga företag med ägarintresse (net positive)
+  '7530': number  // 3.14 Resultat från övriga företag med ägarintresse (net negative, absolute)
+  '7416': number  // 3.15 Resultat från övriga finansiella anläggningstillgångar (net positive)
+  '7520': number  // 3.15 Resultat från övriga finansiella anläggningstillgångar (net negative, absolute)
   '7417': number  // 3.16 Övriga ränteintäkter och liknande
   '7521': number  // 3.17 Nedskrivningar finansiella anläggningstillgångar
   '7522': number  // 3.18 Räntekostnader och liknande
@@ -80,8 +85,10 @@ export interface INK2RRutor {
   '7419': number  // 3.20 Mottagna koncernbidrag
   '7420': number  // 3.21 Återföring av periodiseringsfond
   '7525': number  // 3.22 Avsättning till periodiseringsfond
-  '7421': number  // 3.23 Förändring av överavskrivningar
-  '7422': number  // 3.24 Övriga bokslutsdispositioner
+  '7421': number  // 3.23 Förändring av överavskrivningar (net positive)
+  '7526': number  // 3.23 Förändring av överavskrivningar (net negative, absolute)
+  '7422': number  // 3.24 Övriga bokslutsdispositioner (net positive)
+  '7527': number  // 3.24 Övriga bokslutsdispositioner (net negative, absolute)
   '7528': number  // 3.25 Skatt på årets resultat
   '7450': number  // 3.26 Årets resultat, vinst (positive)
   '7550': number  // 3.27 Årets resultat, förlust (positive = loss)
@@ -201,13 +208,29 @@ export const INK2R_EQUITY_LIABILITY_CODES: INK2RSRUCode[] = [
 ]
 
 export const INK2R_INCOME_CODES: INK2RSRUCode[] = [
-  '7410', '7411', '7412', '7413',
+  '7410', '7411', '7510', '7412', '7413',
   '7511', '7512', '7513', '7514', '7515', '7516', '7517',
-  '7414', '7415', '7423', '7416', '7417',
+  '7414', '7518', '7415', '7519', '7423', '7530', '7416', '7520', '7417',
   '7521', '7522',
-  '7524', '7419', '7420', '7525', '7421', '7422',
+  '7524', '7419', '7420', '7525', '7421', '7526', '7422', '7527',
   '7528',
   '7450', '7550',
+]
+
+/**
+ * INK2R rows with a plus box and a minus box. The engine orients each post so
+ * positive means income; when the net comes out negative the absolute value
+ * is filed in the minus-box field instead (BAS kopplingstabell "Om netto -").
+ */
+export const INK2R_SIGN_TWINS: ReadonlyArray<readonly [positive: INK2RSRUCode, negative: INK2RSRUCode]> = [
+  ['7411', '7510'],
+  ['7414', '7518'],
+  ['7415', '7519'],
+  ['7423', '7530'],
+  ['7416', '7520'],
+  ['7420', '7525'],
+  ['7421', '7526'],
+  ['7422', '7527'],
 ]
 
 export const INK2R_RUTA_LABELS: Record<INK2RSRUCode, string> = {
@@ -266,6 +289,7 @@ export const INK2R_RUTA_LABELS: Record<INK2RSRUCode, string> = {
   // Income statement
   '7410': 'Nettoomsättning',
   '7411': 'Förändring av lager',
+  '7510': 'Förändring av lager (minskning)',
   '7412': 'Aktiverat arbete för egen räkning',
   '7413': 'Övriga rörelseintäkter',
   '7511': 'Råvaror och förnödenheter',
@@ -276,9 +300,13 @@ export const INK2R_RUTA_LABELS: Record<INK2RSRUCode, string> = {
   '7516': 'Nedskrivningar omsättningstillgångar',
   '7517': 'Övriga rörelsekostnader',
   '7414': 'Resultat andelar koncernföretag',
+  '7518': 'Resultat från andelar i koncernföretag (negativt)',
   '7415': 'Resultat andelar intresseföretag',
+  '7519': 'Resultat från andelar i intresseföretag (negativt)',
   '7423': 'Resultat övriga ägarintresse',
+  '7530': 'Resultat från övriga företag med ägarintresse (negativt)',
   '7416': 'Övriga finansiella anläggningstillgångar',
+  '7520': 'Resultat från övriga finansiella anläggningstillgångar (negativt)',
   '7417': 'Ränteintäkter',
   '7521': 'Nedskrivningar finansiella anläggningstillgångar',
   '7522': 'Räntekostnader',
@@ -287,7 +315,9 @@ export const INK2R_RUTA_LABELS: Record<INK2RSRUCode, string> = {
   '7420': 'Återföring av periodiseringsfond',
   '7525': 'Avsättning till periodiseringsfond',
   '7421': 'Förändring av överavskrivningar',
+  '7526': 'Förändring av överavskrivningar (negativt)',
   '7422': 'Övriga bokslutsdispositioner',
+  '7527': 'Övriga bokslutsdispositioner (negativt)',
   '7528': 'Skatt på årets resultat',
   '7450': 'Årets resultat (vinst)',
   '7550': 'Årets resultat (förlust)',

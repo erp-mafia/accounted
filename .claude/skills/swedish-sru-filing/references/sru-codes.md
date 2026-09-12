@@ -179,106 +179,98 @@ Fields 7104/7114 correspond directly to INK2S fields 8020/8021. (Verified agains
 <a id="bas-balance"></a>
 ## 6. BAS-to-SRU Mapping: Balance Sheet
 
-Source: BAS-kontogruppen + Skatteverket joint mapping at bas.se/kontoplaner/sru/. Stable since 2017.
+Source: the official BAS kopplingstabell, bas.se `INK2_P1_intervall-241119.xlsx` (published 2024-11-19, newest as of 2026-09-11; INK2R form edition SKV2002-33). The same file is checked in as `lib/reports/ink2/official-ink2r-coupling.json` and pinned by `lib/reports/ink2/__tests__/official-coupling.test.ts`; the engine ranges live in `lib/reports/ink2/account-mappings.ts`. Account specs use the file spelling: `112x` = 1120-1129, `17xx` = 1700-1799.
 
-### Assets
-
-| BAS accounts | → SRU | INK2R row | Description |
+| BAS accounts | SRU | INK2R row | Description |
 |---|---|---|---|
-| 1010-1079, 1090-1099 | 7201 | 2.1 | Immateriella anläggningstillgångar |
-| 1080-1089 | 7202 | 2.2 | Förskott immateriella |
+| 1000-1087, 1089-1099 | 7201 | 2.1 | Koncessioner, patent, licenser, varumärken, hyresrätter, goodwill och liknande rättigheter |
+| 1088 | 7202 | 2.2 | Förskott avseende immateriella anläggningstillgångar |
 | 1100-1119, 1130-1179, 1190-1199 | 7214 | 2.3 | Byggnader och mark |
-| 1200-1299 (most) | 7215 | 2.4 | Maskiner och inventarier |
-| 1120-1129 | 7216 | 2.5 | Förbättringsutgifter annans fastighet |
-| 1180-1189 | 7217 | 2.6 | Pågående nyanläggningar |
-| 1311-1316 | 7230 | 2.7 | Andelar koncernföretag |
-| 1330-1338 | 7231 | 2.8 | Andelar intresseföretag |
-| 1350-1359, 1380-1389 | 7233 | 2.9 | Ägarintressen övriga |
-| 1320-1329, 1340-1349 | 7232 | 2.10 | Fordringar koncern/intresse |
-| 1360-1369 | 7234 | 2.11 | Lån till delägare |
-| 1370-1379, 1390-1399 | 7235 | 2.12 | Övriga långfristiga fordringar |
-| 1410-1419 | 7241 | 2.13 | Råvaror |
-| 1440-1449 | 7242 | 2.14 | Varor under tillverkning |
-| 1450-1469 | 7243 | 2.15 | Färdiga varor |
-| 1470-1489 | 7244 | 2.16 | Övriga lagertillgångar |
-| 1490-1499 | 7245 | 2.17 | Pågående arbeten |
-| 1400-1409 | 7246 | 2.18 | Förskott till leverantörer |
-| 1500-1519 | 7251 | 2.19 | Kundfordringar |
-| 1560-1579 | 7252 | 2.20 | Fordringar koncern/intresse (kortfristiga) |
-| 1520-1559, 1580-1599, 1600-1699 | 7261 | 2.21 | Övriga fordringar |
-| 1620 (specific) | 7262 | 2.22 | Upparbetad ej fakturerad |
-| 1700-1799 | 7263 | 2.23 | Förutbetalda kostnader |
-| 1860-1869 | 7270 | 2.24 | Kortfristiga andelar koncern |
+| 1200-1279, 1290-1299 | 7215 | 2.4 | Maskiner, inventarier och övriga materiella anläggningstillgångar |
+| 112x | 7216 | 2.5 | Förbättringsutgifter på annans fastighet |
+| 118x, 128x | 7217 | 2.6 | Pågående nyanläggningar och förskott avseende materiella anläggningstillgångar |
+| 131x | 7230 | 2.7 | Andelar i koncernföretag |
+| 1330-1335, 1338-1339 | 7231 | 2.8 | Andelar i intresseföretag och gemensamt styrda företag |
+| 135x, 1336, 1337 | 7233 | 2.9 | Ägarintresse i övriga företag och andra långfristiga värdepappersinnehav |
+| 132x, 1340-1345, 1348-1349 | 7232 | 2.10 | Fordringar hos koncern-, intresse- och gemensamt styrda företag |
+| 136x | 7234 | 2.11 | Lån till delägare eller närstående |
+| 137x, 138x, 1346, 1347 | 7235 | 2.12 | Fordringar hos övriga företag som det finns ett ett ägarintresse i och Andra långfristiga fordringar |
+| 141x, 142x | 7241 | 2.13 | Råvaror och förnödenheter |
+| 144x | 7242 | 2.14 | Varor under tillverkning |
+| 145x, 146x | 7243 | 2.15 | Färdiga varor och handelsvaror |
+| 149x | 7244 | 2.16 | Övriga lagertillgångar |
+| 147x | 7245 | 2.17 | Pågående arbeten för annans räkning |
+| 148x | 7246 | 2.18 | Förskott till leverantörer |
+| 151x-155x, 158x | 7251 | 2.19 | Kundfordringar |
+| 156x, 1570-1572, 1574-1579, 166x, 1671-1672, 1674-1679 | 7252 | 2.20 | Fordringar hos koncern-, intresse- och gemensamt styrda företag |
+| 161x, 163x-165x, 168x-169x, 1573, 1673 | 7261 | 2.21 | Fordringar hos övriga företag som det finns ett ägarintresse i och Övriga fordringar |
+| 162x | 7262 | 2.22 | Upparbetad men ej fakturerad intäkt |
+| 17xx | 7263 | 2.23 | Förutbetalda kostnader och upplupna intäkter |
+| 186x | 7270 | 2.24 | Andelar i koncernföretag |
 | 1800-1859, 1870-1899 | 7271 | 2.25 | Övriga kortfristiga placeringar |
-| 1900-1999 | 7281 | 2.26 | Kassa och bank |
+| 19xx | 7281 | 2.26 | Kassa, bank och redovisningsmedel |
+| 208x | 7301 | 2.27 | Bundet eget kapital |
+| 209x | 7302 | 2.28 | Fritt eget kapital |
+| 211x-213x | 7321 | 2.29 | Periodiseringsfonder |
+| 215x | 7322 | 2.30 | Ackumulerade överavskrivningar |
+| 216x-219x | 7323 | 2.31 | Övriga obeskattade reserver |
+| 221x | 7331 | 2.32 | Avsättningar för pensioner och liknande förpliktelser enligt lagen (1967:531) om tryggande av pensionsutfästelserr m.m. |
+| 223x | 7332 | 2.33 | Övriga avsättningar för pensioner och liknande förpliktelser |
+| 2220-2229, 2240-2299 | 7333 | 2.34 | Övriga avsättningar |
+| 231x-232x | 7350 | 2.35 | Obligationslån |
+| 233x | 7351 | 2.36 | Checkräkningskredit |
+| 234x-235x | 7352 | 2.37 | Övriga skulder till kreditinstitut |
+| 2360- 2372, 2374-2379 | 7353 | 2.38 | Skulder till koncern-, intresse- och gemensamt styrda företag |
+| 238x-239x, 2373 | 7354 | 2.39 | Skulder till övriga företag som det finns ett ägarintresse i och övriga skulder |
+| 248x | 7360 | 2.40 | Checkräkningskredit |
+| 241x | 7361 | 2.41 | Övriga skulder till kreditinstitut |
+| 242x | 7362 | 2.42 | Förskott från kunder |
+| 243x | 7363 | 2.43 | Pågående arbeten för annans räkning |
+| 245x | 7364 | 2.44 | Fakturerad men ej upparbetad intäkt |
+| 244x | 7365 | 2.45 | Leverantörsskulder |
+| 2492 | 7366 | 2.46 | Växelskulder |
+| 2460-2472, 2474-2479, 2874-2879 | 7367 | 2.47 | Skulder till koncern-, intresse- och gemensamt styrda företag |
+| 2490-2491, 2493-2499, 2600-2859, 2880-2899 | 7369 | 2.48 | Skulder till övriga företag som det finns ett ägarintresse i och Övriga skulder |
+| 25xx | 7368 | 2.49 | Skatteskulder |
+| 29xx | 7370 | 2.50 | Upplupna kostnader och förutbetalda intäkter |
 
-### Equity & Liabilities
-
-| BAS accounts | → SRU | INK2R row | Description |
-|---|---|---|---|
-| 2010-2089 | 7301 | 2.27 | Bundet eget kapital |
-| 2090-2099 | 7302 | 2.28 | Fritt eget kapital |
-| 2110-2129 | 7321 | 2.29 | Periodiseringsfonder |
-| 2150-2159 | 7322 | 2.30 | Ackumulerade överavskrivningar |
-| 2130-2149, 2160-2199 | 7323 | 2.31 | Övriga obeskattade reserver |
-| 2210-2219 | 7331 | 2.32 | Pensionsavsättningar tryggandelagen |
-| 2220-2229 | 7332 | 2.33 | Övriga pensionsavsättningar |
-| 2230-2299 | 7333 | 2.34 | Övriga avsättningar |
-| 2320-2329 | 7350 | 2.35 | Obligationslån |
-| 2330-2339 | 7351 | 2.36 | Checkräkningskredit (långfristig) |
-| 2340-2359 | 7352 | 2.37 | Övriga skulder kreditinstitut (långfristiga) |
-| 2360-2379 | 7353 | 2.38 | Skulder koncern/intresse (långfristiga) |
-| 2380-2399 | 7354 | 2.39 | Övriga skulder (långfristiga) |
-| 2410-2419 | 7360 | 2.40 | Checkräkningskredit (kortfristig) |
-| 2420-2439 | 7361 | 2.41 | Övriga skulder kreditinstitut (kortfristiga) |
-| 2400-2409 | 7362 | 2.42 | Förskott från kunder |
-| 2450-2459 | 7363 | 2.43 | Pågående arbeten (skuld) |
-| 2460-2469 | 7364 | 2.44 | Fakturerad ej upparbetad |
-| 2440-2449 | 7365 | 2.45 | Leverantörsskulder |
-| 2490 | 7366 | 2.46 | Växelskulder |
-| 2470-2479 | 7367 | 2.47 | Skulder koncern/intresse (kortfristiga) |
-| 2480-2489, 2491-2499, 2600-2799, 2800-2899 | 7369 | 2.48 | Övriga skulder (kortfristiga) |
-| 2500-2599 | 7368 | 2.49 | Skatteskulder |
-| 2900-2999 | 7370 | 2.50 | Upplupna kostnader |
-
----
+Accounts the official file does not list but the engine maps on purpose: 2010-2079 (EF/HB equity) to 7301, 1670 to 7252, 2473 and 2860-2873 to 7367, 48xx to 7511.
 
 <a id="bas-income"></a>
 ## 7. BAS-to-SRU Mapping: Income Statement
 
-**CRITICAL: BAS 5000-6999 ALL map to SRU 7513.** This is the single most common mapping error.
+**5000-6999 ALL map to 7513.** 40xx-47xx is listed under both 7511 (råvaror) and 7512 (handelsvaror); the engine files 46xx as handelsvaror and the rest as råvaror. Rows marked "om netto -" have a plus box and a minus box on the form: the engine orients the post so positive means income and files a negative net as a positive amount in the minus-box field (`INK2R_SIGN_TWINS`).
 
-| BAS accounts | → SRU | INK2R row | Description |
+| BAS accounts | SRU | INK2R row | Description |
 |---|---|---|---|
-| 3000-3799 | 7410 | 3.1 | Nettoomsättning |
-| 3800-3899 | 7412 | 3.3 | Aktiverat arbete |
-| 3900-3999 | 7413 | 3.4 | Övriga rörelseintäkter |
-| 4900-4999 | 7411 | 3.2 | Förändring av lager |
-| 4000-4499 | 7511 | 3.5 | Råvaror och förnödenheter |
-| 4600-4699 | 7512 | 3.6 | Handelsvaror |
-| **5000-6999** | **7513** | 3.7 | **Övriga externa kostnader (ALL accounts in range)** |
-| 7000-7699 | 7514 | 3.8 | Personalkostnader |
-| 7740-7749, 7790-7799 | 7516 | 3.10 | Nedskrivningar omsättningstillgångar |
-| 7700-7739, 7750-7789, 7800-7899 | 7515 | 3.9 | Av- och nedskrivningar av anläggningstillgångar (incl. återföringar) |
-| 7900-7999 | 7517 | 3.11 | Övriga rörelsekostnader |
-| 8000-8099 | 7414 | 3.12 | Resultat koncernföretag |
-| 8100-8199 | 7415 | 3.13 | Resultat intresseföretag |
-| 8200-8269 | 7423 | 3.14 | Resultat övriga ägarintresse |
-| 8270-8299 | 7416 | 3.15 | Övriga finansiella anläggningstillgångar |
-| 8300-8399 | 7417 | 3.16 | Ränteintäkter |
-| 8400-8499 | 7522 | 3.18 | Räntekostnader |
-| 8500-8599 (nedskrivn.) | 7521 | 3.17 | Nedskrivningar finansiella |
-| 8810 | 7524 | 3.19 | Lämnade koncernbidrag |
-| 8820 | 7419 | 3.20 | Mottagna koncernbidrag |
-| 8830 | 7420 | 3.21 | Återföring periodiseringsfond |
-| 8840 | 7525 | 3.22 | Avsättning periodiseringsfond |
-| 8850 | 7421 | 3.23 | Förändring överavskrivningar |
-| 8860-8899 | 7422 | 3.24 | Övriga bokslutsdispositioner |
-| 8900-8989 | 7528 | 3.25 | Skatt |
-| 8999 (positive balance) | 7450 | 3.26 | Vinst |
-| 8999 (negative balance) | 7550 | 3.27 | Förlust |
+| 30xx-37xx | 7410 | 3.1 | Nettoomsättning |
+| 4900-4909, 4930-4959, 4970-4979, 4990-4999 (Om netto +) | 7411 / 7510 (om netto -) | 3.2 | Förändring av lager av produkter i arbete, färdiga varor och pågående arbete för annans räkning |
+| 38xx | 7412 | 3.3 | Aktiverat arbete för egen räkning |
+| 39xx | 7413 | 3.4 | Övriga rörelseintäkter |
+| 40xx-47xx, 4910-4920 | 7511 | 3.5 | Råvaror och förnödenheter |
+| 40xx-47xx, 496x, 498x | 7512 | 3.6 | Handelsvaror |
+| 50xx-69xx | 7513 | 3.7 | Övriga externa kostnader |
+| 70xx-76xx | 7514 | 3.8 | Personalkostnader |
+| 7700-7739, 7750-7789, 7800-7899 | 7515 | 3.9 | Av- och nedskrivningar av materiella och immateriella anläggningstillgångar |
+| 774x, 779x | 7516 | 3.10 | Nedskrivningar av omsättningstillgångar utöver normala nedskrivningar |
+| 79xx | 7517 | 3.11 | Övriga rörelsekostnader |
+| 8000-8069, 8090-8099 (Om netto +) | 7414 / 7518 (om netto -) | 3.12 | Resultat från andelar i koncernföretag |
+| 8100-8112, 8114-8117, 8119-8122, 8124-8132, 8134-8169, 8190-8199 (Om netto +) | 7415 / 7519 (om netto -) | 3.13 | Resultat från andelar i intresseföretag och gemensamt styrda företag |
+| 8113, 8118, 8123, 8133 (Om netto +) | 7423 / 7530 (om netto -) | 3.14 | Resultat från övriga företag som det finns ett ägarintresse i |
+| 8200-8269, 8290-8299 (Om netto +) | 7416 / 7520 (om netto -) | 3.15 | Resultat från övriga anläggningstillgångar |
+| 8300-8369, 8390-8399 | 7417 | 3.16 | Övriga ränteintäkter och liknande resultatposter |
+| 807x, 808x, 817x, 818x, 827x, 828x, 837x, 838x | 7521 | 3.17 | Nedskrivningar av finansiella anläggningstillgångar och kortfristiga placeringar |
+| 84xx | 7522 | 3.18 | Räntekostnader och liknande resultatposter |
+| 883x | 7524 | 3.19 | Lämnade koncernbidrag |
+| 882x | 7419 | 3.20 | Mottagna koncernbidrag |
+| 8810 (Om netto +), 8819 | 7420 | 3.21 | Återföring av periodiseringsfond |
+| 8810 (Om netto -), 8811 | 7525 | 3.22 | Avsättning till periodiseringsfond |
+| 885x (Om netto +) | 7421 / 7526 (om netto -) | 3.23 | Förändring av överavskrivningar |
+| 886x-889x (Om netto +) | 7422 / 7527 (om netto -) | 3.24 | Övriga bokslutsdispositioner |
+| 8900-8989 | 7528 | 3.25 | Skatt på årets resultat |
+| 899x | 7450 | 3.26 | Årets resultat, vinst (flyttas till p. 4.1)  (+) |
 
----
+8810 (group account for periodiseringsfond) goes to 7420 when the net is a credit and 7525 when it is a debit; 8811 is always 7525 and 8819 always 7420. 899x is 7450 (vinst) or 7550 (förlust) by sign and is computed from the other rows, never read from the ledger.
 
 <a id="signs"></a>
 ## 8. Sign conventions for INK2R
