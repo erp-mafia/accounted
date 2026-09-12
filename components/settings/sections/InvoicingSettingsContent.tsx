@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
 import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePaymentLinkSettings'
+import { AutoApproveSupplierInvoiceSettings } from '@/components/settings/AutoApproveSupplierInvoiceSettings'
 import { PeppolReceiveSettings } from '@/components/settings/PeppolReceiveSettings'
 import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
 import { InvoiceEmailTextsSettings } from '@/components/settings/InvoiceEmailTextsSettings'
@@ -67,6 +68,9 @@ export function InvoicingSettingsContent() {
 
       {/* Payment link opt-in: saves individually via toggle switch */}
       <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />
+
+      {/* Auto-approve leverantörsfakturor after register (payment attest) */}
+      <AutoApproveSupplierInvoiceSettings settings={settings} onUpdate={updateSettings} />
 
       {/* Peppol receiving: one switch that publishes the company's Peppol id */}
       <PeppolReceiveSettings />

@@ -2253,6 +2253,13 @@
     "enable_help": "Shows the payment link field in the invoice editor. With Stripe connected, a payment link is created automatically when the invoice is sent.",
     "toast_save_failed": "Could not save"
   },
+  "settings_auto_approve_supplier_invoices": {
+    "heading": "Supplier invoices",
+    "enable_label": "Approve automatically on registration",
+    "enable_help": "Sets payment approval (attest) as soon as the supplier invoice is registered, skipping the separate Approve step.",
+    "enable_help_ef": "Sole traders always approve supplier invoices on registration. This setting cannot be turned off.",
+    "toast_save_failed": "Could not save"
+  },
   "settings_peppol": {
     "heading": "E-invoicing via Peppol",
     "enable_label": "Receive e-invoices via Peppol",

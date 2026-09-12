@@ -12,6 +12,7 @@ describe('deriveSupplierInvoiceDefaults', () => {
       oreRounding: true,
       dimensionsEnabled: false,
       vatRegistered: true,
+      autoApproveSupplierInvoices: false,
     })
     expect(deriveSupplierInvoiceDefaults(undefined, 'aktiebolag').entityType).toBe('aktiebolag')
   })
@@ -25,6 +26,7 @@ describe('deriveSupplierInvoiceDefaults', () => {
           ore_rounding: false,
           dimensions_enabled: true,
           vat_registered: false,
+          auto_approve_supplier_invoices: true,
         }),
       ),
     ).toEqual({
@@ -33,6 +35,7 @@ describe('deriveSupplierInvoiceDefaults', () => {
       oreRounding: false,
       dimensionsEnabled: true,
       vatRegistered: false,
+      autoApproveSupplierInvoices: true,
     })
   })
 

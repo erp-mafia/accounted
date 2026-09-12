@@ -324,6 +324,7 @@ const SETTINGS_FIELDS: Record<string, string> = {
   bookkeeping_locked_through: 'Bokföringen låst till och med',
   auto_lock_period_days: 'Automatisk låsning (dagar)',
   defer_invoice_booking: 'Bokför kundfakturor vid betalning',
+  auto_approve_supplier_invoices: 'Autogodkänn leverantörsfakturor',
   ore_rounding: 'Öresavrundning',
   rot_rut_enabled: 'ROT/RUT',
   oss_enabled: 'OSS',
