@@ -1,14 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import {
-  getAllTransactionsWithRaw,
-  convertTransaction,
-  getAccountBalance,
-  SessionExpiredError,
-  ConnectorSyncError,
-} from './api-client'
+import { getAccountBalance } from './api-client'
+import { selectBankFeedAdapter } from './bank-feed'
 import { historyWindowDays } from './history-window'
-import { bankSyncResponseSchema, connectorErrorSchema } from '@accounted/connect-contract'
-import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
+import type { BookedBankTransaction } from '@/lib/bank-feed/port'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
 import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
@@ -66,121 +60,21 @@ export interface SyncResult {
   historyNarrowed: boolean
 }
 
-/** The subset of a converted bank transaction that the ingest mapping below reads. */
-interface BookedTransactionFields {
-  amount: number
-  currency: string
-  description: string
-  counterparty_name?: string
-  counterparty_account?: string
-  reference?: string
-  merchant_category_code?: string
-  bank_transaction_code?: string
-  proprietary_bank_transaction_code?: string
-}
-
-const CONNECTOR_SYNC_TIMEOUT_MS = 120_000
-
 /**
- * Booked transactions through the hosted connector. The session id is the
- * installation's own (it stays here); the service proves ownership from its
- * ledger, does the provider work, and answers with the contract's response
- * shape. A 410 means the consent is over and maps onto the same
- * SessionExpiredError the direct path throws, so callers flip the connection
- * to expired identically.
+ * The PSD2 session id rests on the connection row (never on the account
+ * payload) and stays on this installation: an adapter that needs it receives
+ * it per call and proves ownership on its own side.
  */
-async function fetchBookedViaConnector(
-  connector: { baseUrl: string; key: string },
-  args: {
-    supabase: SupabaseClient
-    companyId: string
-    connectionId: string
-    account: StoredAccount
-    fromDate: string
-    toDate: string
-    strategy?: TransactionsFetchStrategy
-  },
-): Promise<ReturnType<typeof bankSyncResponseSchema.parse>> {
-  // The PSD2 session id rests on the connection row (never on the account
-  // payload), and it stays on this installation: the service only receives
-  // it per call and proves ownership from its own ledger.
-  const { data: row, error } = await args.supabase
+async function loadSessionId(supabase: SupabaseClient, connectionId: string): Promise<string> {
+  const { data: row, error } = await supabase
     .from('bank_connections')
     .select('session_id')
-    .eq('id', args.connectionId)
+    .eq('id', connectionId)
     .maybeSingle()
-  if (error) throw new Error(`Connector bank sync could not read the connection: ${error.message}`)
+  if (error) throw new Error(`Bank sync could not read the connection: ${error.message}`)
   const sessionId = (row as { session_id: string | null } | null)?.session_id
-  if (!sessionId) throw new Error('Connector bank sync requires a connection with a session id')
-  // The body is read INSIDE the timeout window: a service that sends headers
-  // and then stalls the body must not hold the sync open past the budget.
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), CONNECTOR_SYNC_TIMEOUT_MS)
-  let response: Response
-  let text: string
-  try {
-    try {
-      response = await fetch(`${connector.baseUrl}/sync`, {
-        method: 'POST',
-        signal: controller.signal,
-        redirect: 'error',
-        headers: {
-          Authorization: `Bearer ${connector.key}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          [CONNECTOR_COMPANY_HEADER]: args.companyId,
-        },
-        body: JSON.stringify({
-          session_id: sessionId,
-          account_uid: args.account.uid,
-          account_currency: args.account.currency,
-          date_from: args.fromDate,
-          date_to: args.toDate,
-          ...(args.strategy ? { strategy: args.strategy } : {}),
-        }),
-      })
-      text = await response.text()
-    } catch (err) {
-      // Transport failure or the abort above: the connector hop failed, the
-      // PSD2 session is untouched. Never a status flip (ConnectorSyncError).
-      const aborted = err instanceof Error && err.name === 'AbortError'
-      throw new ConnectorSyncError(
-        null,
-        aborted ? 'CONNECTOR_TIMEOUT' : 'CONNECTOR_TRANSPORT',
-        err instanceof Error ? err.message : String(err),
-      )
-    }
-  } finally {
-    clearTimeout(timeout)
-  }
-  let json: unknown = null
-  try {
-    json = text ? JSON.parse(text) : null
-  } catch {
-    json = null
-  }
-  if (!response.ok) {
-    const envelope = connectorErrorSchema.safeParse(json)
-    const code = envelope.success ? envelope.data.code : `HTTP_${response.status}`
-    if (response.status === 410 || code === 'CONNECTOR_BANK_SESSION_EXPIRED') {
-      throw new SessionExpiredError(response.status, text)
-    }
-    throw new ConnectorSyncError(response.status, code, text.slice(0, 500))
-  }
-  const parsed = bankSyncResponseSchema.safeParse(json)
-  if (!parsed.success) {
-    // The field paths are the only thing that lets the service side be fixed:
-    // a bare "unexpected shape" left the 2026-09-04 canary failure undiagnosable.
-    const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
-    console.warn('[enable-banking] Connector sync response failed the wire contract', {
-      connectionId: args.connectionId,
-      accountUid: args.account.uid,
-      status: response.status,
-      issues,
-    })
-    throw new ConnectorSyncError(response.status, 'CONNECTOR_BAD_SHAPE', text.slice(0, 500), issues)
-  }
-  return parsed.data
+  if (!sessionId) throw new Error('Bank sync requires a connection with a session id')
+  return sessionId
 }
 
 /**
@@ -214,94 +108,49 @@ export async function syncAccountTransactions(
     strategy: syncOptions?.strategy,
   })
 
-  // Two ways to obtain booked transactions. Direct: this installation's own
-  // Enable Banking credentials, exactly as before. Connector: the hosted
-  // service does the paging, the booked-only filter and the normalization
-  // (POST /api/connect/bank/sync) and returns rows plus the raw pages. Both
-  // paths converge on bookedEntries + rawPages, and everything below
-  // (external ids, ingest, archive, balance) is shared, so a company moved to
-  // the connector produces byte-identical stored keys.
-  const connector = bankConnectorMode(companyId)
-  let rawPages: string[]
-  let bookedEntries: Array<{ tx: BookedTransactionFields; bookingDate: string }>
-  let totalFetched: number
-  let effectiveFromDate: string | undefined
-  let historyNarrowed = false
-  if (connector) {
-    const remote = await fetchBookedViaConnector(connector, {
-      supabase,
-      companyId,
+  // The bank feed adapter (this installation's own Enable Banking
+  // credentials, or Accounted Connect) is chosen by the ledger's registry per
+  // company. Everything below the adapter call (external ids, ingest,
+  // archive, balance) is provider neutral, so a company moved between
+  // adapters produces byte-identical stored keys.
+  const adapter = selectBankFeedAdapter(companyId)
+  const sessionId = adapter.needsSessionId ? await loadSessionId(supabase, connectionId) : null
+  const feed = await adapter.syncBooked({
+    companyId,
+    connectionId,
+    sessionId,
+    accountUid: account.uid,
+    accountCurrency: account.currency,
+    acceptedHistoryDays: account.accepted_history_days,
+    fromDate,
+    toDate,
+    strategy: syncOptions?.strategy,
+  })
+  const rawPages = feed.rawPages
+  const bookedEntries: Array<{ tx: BookedBankTransaction; bookingDate: string }> = feed.transactions.map((tx) => ({
+    tx,
+    bookingDate: tx.booking_date,
+  }))
+  const totalFetched = feed.transactions.length + feed.skippedPending
+  const effectiveFromDate = feed.effectiveFromDate
+  const historyNarrowed = feed.narrowed
+  // Remember the widest window this bank has ANSWERED for the account, so a
+  // later rejection of a window no wider than it is read as the bank being
+  // unavailable rather than as a too-wide window (#2202). Never shrinks:
+  // an incremental 7-day sync must not forget that 90 days once worked.
+  // Stamped on the account object; the caller's accounts_data write-back
+  // persists it, exactly like dedup_scope and the balance fields.
+  const acceptedDays = historyWindowDays(effectiveFromDate, toDate)
+  if (acceptedDays !== undefined && acceptedDays > (account.accepted_history_days ?? -1)) {
+    account.accepted_history_days = acceptedDays
+  }
+  if (historyNarrowed) {
+    console.warn('[enable-banking] Bank refused the requested history window; synced a narrower one', {
       connectionId,
-      account,
-      fromDate,
+      accountUid: account.uid,
+      requestedFromDate: fromDate,
+      effectiveFromDate,
       toDate,
-      strategy: syncOptions?.strategy,
-    })
-    rawPages = remote.raw_pages
-    totalFetched = remote.transactions.length + remote.skipped_pending
-    bookedEntries = remote.transactions.map((tx) => ({
-      tx: {
-        amount: tx.amount,
-        currency: tx.currency,
-        description: tx.description,
-        counterparty_name: tx.counterparty_name ?? undefined,
-        counterparty_account: tx.counterparty_account ?? undefined,
-        reference: tx.reference ?? undefined,
-        merchant_category_code: tx.merchant_category_code ?? undefined,
-        bank_transaction_code: tx.bank_transaction_code ?? undefined,
-        proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code ?? undefined,
-      },
-      bookingDate: tx.booking_date,
-    }))
-  } else {
-    const fetched = await getAllTransactionsWithRaw(
-      account.uid,
-      fromDate,
-      toDate,
-      syncOptions?.strategy,
-      { acceptedHistoryDays: account.accepted_history_days },
-    )
-    rawPages = fetched.rawPages
-    totalFetched = fetched.transactions.length
-    effectiveFromDate = fetched.effectiveDateFrom
-    historyNarrowed = fetched.narrowed === true
-    // Remember the widest window this bank has ANSWERED for the account, so a
-    // later rejection of a window no wider than it is read as the bank being
-    // unavailable rather than as a too-wide window (#2202). Never shrinks:
-    // an incremental 7-day sync must not forget that 90 days once worked.
-    // Stamped on the account object; the caller's accounts_data write-back
-    // persists it, exactly like dedup_scope and the balance fields.
-    const acceptedDays = historyWindowDays(fetched.effectiveDateFrom, toDate)
-    if (acceptedDays !== undefined && acceptedDays > (account.accepted_history_days ?? -1)) {
-      account.accepted_history_days = acceptedDays
-    }
-    if (historyNarrowed) {
-      console.warn('[enable-banking] Bank refused the requested history window; synced a narrower one', {
-        connectionId,
-        accountUid: account.uid,
-        requestedFromDate: fromDate,
-        effectiveFromDate,
-        toDate,
-      })
-    }
-    const bankTransactions = fetched.transactions.map(tx => convertTransaction(tx, account.currency))
-    // Only ingest BOOKED transactions: those the ASPSP returned with a real
-    // booking_date. Pending entries are intentionally skipped: a pending row is
-    // unstable across syncs (a later "synka nu" returns the same transaction
-    // either still pending or finally booked, often with a *different* effective
-    // date). Because BOTH the dedup external_id and the content-dedup key are
-    // date-derived, that drift mints a brand-new id and re-imports a transaction
-    // that already exists. Gating the import set on a stable booking_date
-    // removes the drift at the source, and leaves booked rows' ids byte-identical.
-    //
-    // booking_date is read from the RAW transaction, index-aligned with
-    // bankTransactions: convertTransaction's booking_date already falls back to
-    // value_date/today, so it cannot tell booked from pending.
-    bookedEntries = bankTransactions.flatMap((tx, i) => {
-      const bookingDate = fetched.transactions[i]?.booking_date
-      return typeof bookingDate === 'string' && bookingDate.trim() !== ''
-        ? [{ tx, bookingDate: bookingDate.trim() }]
-        : []
     })
   }
 
@@ -317,7 +166,7 @@ export async function syncAccountTransactions(
   console.log('[enable-banking] Fetched transactions', {
     connectionId,
     accountUid: account.uid,
-    via: connector ? 'connector' : 'direct',
+    via: adapter.provider,
     transactionCount: totalFetched,
     rawPageCount: rawPages.length,
     requestedFromDate: fromDate,
@@ -378,7 +227,7 @@ export async function syncAccountTransactions(
       // the accounting-correct ledger date; keep it identical to the value the
       // external_id was derived from.
       date: bookingDate,
-      // tx.description is already non-empty (convertTransaction guarantees a
+      // tx.description is already non-empty (the adapter guarantees a
       // label); the trailing fallbacks are defensive. Ingest re-normalizes.
       description: tx.description || tx.counterparty_name || FALLBACK_DESCRIPTION,
       amount: tx.amount,

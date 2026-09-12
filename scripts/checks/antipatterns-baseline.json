@@ -43,7 +43,7 @@
       "app/api/connect/bank/[...path]/route.ts",
       "extensions/general/bolagsverket/lib/client.ts",
       "extensions/general/enable-banking/index.ts",
-      "extensions/general/enable-banking/lib/api-client.ts",
+      "extensions/general/enable-banking/lib/transport.ts",
       "extensions/general/mail/lib/gmail-client.ts",
       "extensions/general/skatteverket/index.ts",
       "extensions/general/skatteverket/lib/connector-mode.ts",
