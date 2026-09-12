@@ -19,6 +19,12 @@ lib/bokslut/ixbrl/taxonomy/generated/*.json text eol=lf linguist-generated=true
 lib/extensions/_generated/** text eol=lf linguist-generated=true
 *.snap text eol=lf linguist-generated=true
 
+# CP437 SIE4 fixture. The bytes ARE the test: it is #FORMAT PC8, deliberately
+# not valid UTF-8, so the import test exercises detectEncoding/decodeBuffer and
+# the account-label matching together. Git must not convert its line endings
+# or try to diff it as text.
+lib/import/__tests__/fixtures/*.se binary
+
 # DECISIONS.md is an append-only log that every concurrent PR writes to, so
 # two PRs touching it always conflict at EOF. That is worse than it sounds:
 # GitHub runs ZERO Actions on a conflicting PR, so `gh pr checks` returns a
@@ -26,9 +32,3 @@ lib/extensions/_generated/** text eol=lf linguist-generated=true
 # merge keeps both sides' lines (the file has no ordering contract beyond
 # the date prefix), which is exactly the right semantics for an append log.
 DECISIONS.md merge=union
-
-# CP437 SIE4 fixture. The bytes ARE the test: it is #FORMAT PC8, deliberately
-# not valid UTF-8, so the import test exercises detectEncoding/decodeBuffer and
-# the account-label matching together. Git must not convert its line endings
-# or try to diff it as text.
-lib/import/__tests__/fixtures/*.se binary
