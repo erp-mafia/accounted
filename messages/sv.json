@@ -5853,7 +5853,7 @@
     "match_bas": "BAS-konto",
     "match_from_file": "Från filen",
     "match_manual": "Manuell",
-    "match_redirected": "Omdirigerad",
+    "match_redirected": "Flyttad",
     "vat_treatment_confirm": "Bekräfta",
     "vat_treatment_confirm_help": "Godkänn momskoden för raden så räknas den som granskad. Ändra momskod eller momssats först om förslaget inte stämmer.",
     "new_account_filter": "{count} nya konton skapas",

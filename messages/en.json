@@ -5853,7 +5853,7 @@
     "match_bas": "BAS account",
     "match_from_file": "From the file",
     "match_manual": "Manual",
-    "match_redirected": "Redirected",
+    "match_redirected": "Moved",
     "vat_treatment_confirm": "Confirm",
     "vat_treatment_confirm_help": "Accept the VAT code for this row to mark it as reviewed. Change the VAT code or rate first if the suggestion is wrong.",
     "new_account_filter": "{count} new accounts to create",

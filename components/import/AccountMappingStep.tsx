@@ -30,8 +30,8 @@ import {
   XCircle,
   Filter,
 } from 'lucide-react'
-import type { AccountMapping, AccountMatchType } from '@/lib/import/types'
-import { isValidBASRange } from '@/lib/import/account-mapper'
+import type { AccountMapping } from '@/lib/import/types'
+import { isValidBASRange, resolveAccountMatch, type AccountMatchKind } from '@/lib/import/account-mapper'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
@@ -427,12 +427,7 @@ export default function AccountMappingStep({
                       )}
                     </TableCell>
                     <TableCell>
-                      <AccountMatchBadge
-                        sourceAccount={mapping.sourceAccount}
-                        targetAccount={mapping.targetAccount}
-                        matchType={mapping.matchType}
-                        isOverride={mapping.isOverride}
-                      />
+                      <AccountMatchBadge mapping={mapping} />
                     </TableCell>
                     <TableCell
                       className={cn(
@@ -599,52 +594,24 @@ function TruncatedSourceName({ sourceName }: { sourceName: string }) {
 }
 
 /**
- * What the mapper did with this account, said only when it is worth saying.
- *
- * Replaces a confidence score that was never a score. `suggestMappings` emits
- * exactly three values (1.0 exact BAS match, 0.7 valid BAS-range self-map, 0 no
- * match), so thresholding them re-derived by inequality a three-valued enum that
- * `matchType` already carried as a string. The 0.7 band rendered as "Trolig" on
- * an identity mapping (4057 to 4057, created at import), inventing a doubt that
- * does not exist: 11 of the 12 accounts in the #2527 fixture read that way, and
- * most real charts keep sub-accounts outside BAS 2026. The "Osäker" branch was
- * unreachable, because the only zero-confidence case carries an empty target and
- * the badge was guarded on the target being present.
- *
- * Nearly every mapping is an identity. The only non-identity cases are the
- * single group-header redirect (2640 to 2641) and a target the user picked, so
- * the column now stays empty unless one of those applies.
+ * Presentation for the decision made by resolveAccountMatch. "Från filen" is
+ * the majority of rows in a migration and must not read as a warning, so it
+ * takes the quietest variant; the states that mean someone intervened carry
+ * the most weight.
  */
-function AccountMatchBadge({
-  sourceAccount,
-  targetAccount,
-  matchType,
-  isOverride,
-}: {
-  sourceAccount: string
-  targetAccount: string
-  matchType: AccountMatchType
-  isOverride: boolean
-}) {
+const MATCH_BADGE: Record<AccountMatchKind, { key: string; variant: 'default' | 'secondary' | 'outline' }> = {
+  manual: { key: 'match_manual', variant: 'default' },
+  redirected: { key: 'match_redirected', variant: 'default' },
+  from_file: { key: 'match_from_file', variant: 'outline' },
+  bas: { key: 'match_bas', variant: 'secondary' },
+}
+
+function AccountMatchBadge({ mapping }: { mapping: AccountMapping }) {
   const t = useTranslations('chart_of_accounts')
-  if (!targetAccount) return null
-  if (isOverride) {
-    return <Badge variant="default">{t('match_manual')}</Badge>
-  }
-  if (targetAccount !== sourceAccount) {
-    return <Badge variant="default">{t('match_redirected')}</Badge>
-  }
-  // The two identity cases. Deliberately NOT labelled "eget konto" or similar:
-  // bas_range means the number is in the valid range but absent from our BAS
-  // 2026 reference, which covers both a source system's invention (a Fortnox
-  // 4599) AND a perfectly standard sub-account the reference does not carry
-  // (1241 Personbilar is not among its 1286 entries). Claiming it is the
-  // company's own account would assert something the mapper cannot know, which
-  // is the same mistake "Trolig" made. "Från filen" says only what is true:
-  // the number is kept and the name and type come from the uploaded file.
-  if (matchType === 'bas_range') {
-    return <Badge variant="outline">{t('match_from_file')}</Badge>
-  }
-  return <Badge variant="secondary">{t('match_bas')}</Badge>
+  const kind = resolveAccountMatch(mapping)
+  if (!kind) return null
+  const { key, variant } = MATCH_BADGE[kind]
+  // Every label is measured to fit this column on one line: check before adding one.
+  return <Badge variant={variant} className="whitespace-nowrap">{t(key)}</Badge>
 }
 
