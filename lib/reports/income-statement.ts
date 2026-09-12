@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
+import { roundOre } from '@/lib/money'
 import type { IncomeStatementReport, IncomeStatementSection, TrialBalanceRow } from '@/types'
 
 /**
@@ -10,6 +11,12 @@ import type { IncomeStatementReport, IncomeStatementSection, TrialBalanceRow } f
  * - Rörelsekostnader (4-7xxx): Operating expenses
  * - Finansiella poster (8xxx): Financial items
  * - Årets resultat: Net result
+ *
+ * Three amount columns, the same ones Resultatrapport prints: `ytd_opening`
+ * ("Ingående saldo", fiscal-year activity before the window), `amount`
+ * ("Period", the window's own activity) and `ytd_closing` ("Ackumulerat").
+ * `amount` keeps its original meaning so every existing consumer reads the
+ * same number; the two others are additive.
  */
 export async function generateIncomeStatement(
   supabase: SupabaseClient,
@@ -26,14 +33,33 @@ export async function generateIncomeStatement(
   // zeroed by the closing verifikat (8999 → 2099). Including them collapses
   // the resultaträkning to zero. The income statement must reflect the
   // pre-closing activity for the year.
-  const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
-    // Operational convention, unchanged. Moving this to 'exclude-final' is
-    // Stage 2 of #1051 and deliberately deferred: see DECISIONS.md:632.
-    closingEntry: 'exclude-all-year-end',
-    fromDate: options?.fromDate,
-    toDate: options?.toDate,
-    dimensions: options?.dimensions,
-  })
+  //
+  // The period bounds ride along in the same round trip: the report header
+  // needs them for the räkenskapsår line and for the column tooltips.
+  const [periodResponse, { rows }] = await Promise.all([
+    supabase
+      .from('fiscal_periods')
+      .select('period_start, period_end')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .single(),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+      // Operational convention, unchanged. Moving this to 'exclude-final' is
+      // Stage 2 of #1051 and deliberately deferred: see DECISIONS.md:632.
+      closingEntry: 'exclude-all-year-end',
+      fromDate: options?.fromDate,
+      toDate: options?.toDate,
+      dimensions: options?.dimensions,
+    }),
+  ])
+
+  // Non-fatal, as in generateBalanceSheet: a period row that cannot be read
+  // costs the header dates, not the report.
+  const period = periodResponse.data as { period_start: string; period_end: string } | null
+  const fiscalYear = {
+    start: period?.period_start ?? '',
+    end: period?.period_end ?? '',
+  }
 
   // With a fromDate after period start, the trial balance rolls all earlier
   // activity (P&L accounts included) into the opening columns, so the closing
@@ -43,6 +69,11 @@ export async function generateIncomeStatement(
   // equal the movements for P&L accounts and behavior is unchanged.
   return buildIncomeStatementFromRows(rows, {
     periodMovements: Boolean(options?.fromDate),
+    period: {
+      start: options?.fromDate ?? fiscalYear.start,
+      end: options?.toDate ?? fiscalYear.end,
+    },
+    fiscalYear,
   })
 }
 
@@ -64,9 +95,18 @@ export function buildIncomeStatementFromRows(
      * the opening columns and the closing columns become year-to-date.
      */
     periodMovements?: boolean
+    /**
+     * Reported window and fiscal-year bounds for the header. Optional: the
+     * KPI aggregate path holds rows without ever loading the fiscal period,
+     * and an empty string pair is what this builder has always returned.
+     */
+    period?: { start: string; end: string }
+    fiscalYear?: { start: string; end: string }
   }
 ): IncomeStatementReport {
   const periodMovements = buildOptions?.periodMovements ?? false
+  const period = buildOptions?.period ?? { start: '', end: '' }
+  const fiscalYear = buildOptions?.fiscalYear ?? { start: '', end: '' }
   // Filter to income/expense accounts (class 3-8)
   const incomeExpenseRows = rows.filter(
     (r) => r.account_class >= 3 && r.account_class <= 8
@@ -164,20 +204,46 @@ export function buildIncomeStatementFromRows(
     periodMovements,
   )
 
-  const totalRevenue = revenueSections.reduce((sum, s) => sum + s.subtotal, 0)
-  const totalExpenses = expenseSections.reduce((sum, s) => sum + s.subtotal, 0)
-  const totalFinancial = financialSections.reduce((sum, s) => sum + s.subtotal, 0)
+  const totalRevenue = sumSections(revenueSections, (s) => s.subtotal)
+  const totalExpenses = sumSections(expenseSections, (s) => s.subtotal)
+  const totalFinancial = sumSections(financialSections, (s) => s.subtotal)
+  const totalRevenueYtdOpening = sumSections(revenueSections, (s) => s.subtotal_ytd_opening)
+  const totalExpensesYtdOpening = sumSections(expenseSections, (s) => s.subtotal_ytd_opening)
+  const totalFinancialYtdOpening = sumSections(financialSections, (s) => s.subtotal_ytd_opening)
+  const totalRevenueYtdClosing = sumSections(revenueSections, (s) => s.subtotal_ytd_closing)
+  const totalExpensesYtdClosing = sumSections(expenseSections, (s) => s.subtotal_ytd_closing)
+  const totalFinancialYtdClosing = sumSections(financialSections, (s) => s.subtotal_ytd_closing)
 
   return {
     revenue_sections: revenueSections.filter((s) => s.rows.length > 0),
-    total_revenue: Math.round(totalRevenue * 100) / 100,
+    total_revenue: totalRevenue,
+    total_revenue_ytd_opening: totalRevenueYtdOpening,
+    total_revenue_ytd_closing: totalRevenueYtdClosing,
     expense_sections: expenseSections.filter((s) => s.rows.length > 0),
-    total_expenses: Math.round(totalExpenses * 100) / 100,
+    total_expenses: totalExpenses,
+    total_expenses_ytd_opening: totalExpensesYtdOpening,
+    total_expenses_ytd_closing: totalExpensesYtdClosing,
     financial_sections: financialSections.filter((s) => s.rows.length > 0),
-    total_financial: Math.round(totalFinancial * 100) / 100,
-    net_result: Math.round((totalRevenue - totalExpenses + totalFinancial) * 100) / 100,
-    period: { start: '', end: '' }, // Will be filled by caller
+    total_financial: totalFinancial,
+    total_financial_ytd_opening: totalFinancialYtdOpening,
+    total_financial_ytd_closing: totalFinancialYtdClosing,
+    net_result: roundOre(totalRevenue - totalExpenses + totalFinancial),
+    net_result_ytd_opening: roundOre(
+      totalRevenueYtdOpening - totalExpensesYtdOpening + totalFinancialYtdOpening
+    ),
+    net_result_ytd_closing: roundOre(
+      totalRevenueYtdClosing - totalExpensesYtdClosing + totalFinancialYtdClosing
+    ),
+    period,
+    fiscal_year: fiscalYear,
   }
+}
+
+function sumSections(
+  sections: IncomeStatementSection[],
+  pick: (section: IncomeStatementSection) => number
+): number {
+  return roundOre(sections.reduce((sum, s) => sum + pick(s), 0))
 }
 
 /**
@@ -197,31 +263,48 @@ function buildSections(
   fallbackTitle: string,
   periodMovements = false
 ): IncomeStatementSection[] {
+  // Expenses (debit) use debit - credit; revenue (credit) and financial
+  // (mixed) use credit - debit.
+  const signed = (debit: number, credit: number) =>
+    normalBalance === 'debit' ? debit - credit : credit - debit
+
   const makeSection = (title: string, groupRows: TrialBalanceRow[]): IncomeStatementSection => {
     const sectionRows = groupRows.map((r) => {
-      // Expenses (debit) use debit - credit; revenue (credit) and financial
-      // (mixed) use credit - debit. Ranged reports sum the window's movements
-      // (period columns); full-period reports keep the closing columns.
+      // Ranged reports sum the window's movements (period columns);
+      // full-period reports keep the closing columns.
       const debit = periodMovements ? r.period_debit : r.closing_debit
       const credit = periodMovements ? r.period_credit : r.closing_credit
-      const amount =
-        normalBalance === 'debit'
-          ? debit - credit
-          : credit - debit
 
+      // `opening_*`, not `year_opening_*`: for a P&L account the fiscal-year
+      // opening balance is empty by construction (the OB entry carries classes
+      // 1-2 only), so everything the trial balance rolled into `opening_*`
+      // between period_start and fromDate is exactly this year's pre-window
+      // activity. `closingEntry: 'exclude-all-year-end'` keeps a resultatavslut
+      // out of both columns. In the full-period case nothing is rolled forward,
+      // so ytd_opening reads 0 and ytd_closing equals the period amount.
       return {
         account_number: r.account_number,
         account_name: r.account_name,
-        amount: Math.round(amount * 100) / 100,
+        amount: roundOre(signed(debit, credit)),
+        ytd_opening: roundOre(signed(r.opening_debit, r.opening_credit)),
+        ytd_closing: roundOre(signed(r.closing_debit, r.closing_credit)),
       }
     })
 
-    const subtotal = sectionRows.reduce((sum, r) => sum + r.amount, 0)
-
     return {
       title,
-      rows: sectionRows.filter((r) => Math.abs(r.amount) > 0.005),
-      subtotal: Math.round(subtotal * 100) / 100,
+      // An account with activity earlier in the year but none in the window
+      // still belongs on the report: its Ackumulerat column is non-zero.
+      rows: sectionRows.filter(
+        (r) => Math.abs(r.amount) > 0.005 || Math.abs(r.ytd_closing) > 0.005
+      ),
+      subtotal: roundOre(sectionRows.reduce((sum, r) => sum + r.amount, 0)),
+      subtotal_ytd_opening: roundOre(
+        sectionRows.reduce((sum, r) => sum + r.ytd_opening, 0)
+      ),
+      subtotal_ytd_closing: roundOre(
+        sectionRows.reduce((sum, r) => sum + r.ytd_closing, 0)
+      ),
     }
   }
 

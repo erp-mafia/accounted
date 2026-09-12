@@ -126,6 +126,10 @@ describe('buildTrialBalanceRows', () => {
       account_class: 1,
       opening_debit: 5000,
       opening_credit: 0,
+      // The KPI aggregates never narrow the window, so the fiscal-year
+      // opening is the opening.
+      year_opening_debit: 5000,
+      year_opening_credit: 0,
       period_debit: 12500,
       period_credit: 3000,
       closing_debit: 17500,

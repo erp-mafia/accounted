@@ -28,6 +28,8 @@ function row(accountNumber: string, accountName: string, balance: number): Trial
     account_class: Number(accountNumber[0]),
     opening_debit: 0,
     opening_credit: 0,
+    year_opening_debit: 0,
+    year_opening_credit: 0,
     period_debit: debit,
     period_credit: credit,
     closing_debit: debit,

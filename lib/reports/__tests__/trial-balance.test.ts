@@ -11,7 +11,7 @@ let mockResults: Record<string, MockResult[]>
 
 function makeBuilder(tableName: string) {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'lt', 'lte', 'gte', 'neq', 'or', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'in', 'lt', 'lte', 'gte', 'neq', 'or', 'order', 'range', 'contains']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   const consume = (): MockResult => {
@@ -756,6 +756,186 @@ describe('generateTrialBalance', () => {
     expect(orCalls).toContainEqual([
       'correction_of_id.is.null,correction_of_id.not.in.(reversed-year-end-1)',
     ])
+  })
+
+  // ── Fiscal-year opening snapshot ─────────────────────────────────
+  // year_opening_* is the balance at period_start, taken BEFORE the
+  // roll-forward fold. The Balansrapport prints it as "Ing balans" next to
+  // the window's "Ing saldo".
+
+  it('reports year_opening equal to opening when no range is requested', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: { period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: 'ob-entry-1' },
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        // OB entry lines (from getOpeningBalances).
+        {
+          data: [
+            { account_number: '1930', debit_amount: 8000, credit_amount: 0 },
+            { account_number: '2099', debit_amount: 0, credit_amount: 8000 },
+          ],
+          error: null,
+        },
+        // Period lines.
+        {
+          data: [
+            { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [
+        {
+          data: [
+            { account_number: '1930', account_name: 'Bank', account_class: 1 },
+            { account_number: '2099', account_name: 'Årets resultat', account_class: 2 },
+            { account_number: '3001', account_name: 'Revenue', account_class: 3 },
+          ],
+          error: null,
+        },
+      ],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
+
+    for (const row of result.rows) {
+      expect(row.year_opening_debit).toBe(row.opening_debit)
+      expect(row.year_opening_credit).toBe(row.opening_credit)
+    }
+
+    const acc1930 = result.rows.find((r) => r.account_number === '1930')!
+    expect(acc1930.year_opening_debit).toBe(8000)
+    expect(acc1930.year_opening_credit).toBe(0)
+  })
+
+  it('keeps year_opening at the OB figure while opening absorbs the roll-forward', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: { period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: 'ob-entry-1' },
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        // 1st consumption: the OB entry, i.e. the fiscal-year opening balance.
+        {
+          data: [
+            { account_number: '1930', debit_amount: 8000, credit_amount: 0 },
+            { account_number: '2099', debit_amount: 0, credit_amount: 8000 },
+          ],
+          error: null,
+        },
+        // 2nd: roll-forward for [2025-01-01, 2025-04-01).
+        {
+          data: [
+            { account_number: '1930', debit_amount: 2000, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 2000 },
+          ],
+          error: null,
+        },
+        // 3rd: period activity for [2025-04-01, 2025-06-30].
+        {
+          data: [
+            { account_number: '1930', debit_amount: 500, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 500 },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [
+        {
+          data: [
+            { account_number: '1930', account_name: 'Bank', account_class: 1 },
+            { account_number: '2099', account_name: 'Årets resultat', account_class: 2 },
+            { account_number: '3001', account_name: 'Revenue', account_class: 3 },
+          ],
+          error: null,
+        },
+      ],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
+      fromDate: '2025-04-01',
+      toDate: '2025-06-30',
+    })
+
+    // 1930: year opening 8000, window opening 8000 + 2000 rolled forward.
+    const acc1930 = result.rows.find((r) => r.account_number === '1930')!
+    expect(acc1930.year_opening_debit).toBe(8000)
+    expect(acc1930.opening_debit).toBe(10000)
+    expect(acc1930.period_debit).toBe(500)
+    expect(acc1930.closing_debit).toBe(10500)
+
+    // 3001 is a P&L account: no fiscal-year opening at all, so the whole
+    // window opening is this year's pre-window activity.
+    const acc3001 = result.rows.find((r) => r.account_number === '3001')!
+    expect(acc3001.year_opening_credit).toBe(0)
+    expect(acc3001.year_opening_debit).toBe(0)
+    expect(acc3001.opening_credit).toBe(2000)
+    expect(acc3001.closing_credit).toBe(2500)
+
+    // 2099 has no activity in either slice: the snapshot still carries its OB.
+    const acc2099 = result.rows.find((r) => r.account_number === '2099')!
+    expect(acc2099.year_opening_credit).toBe(8000)
+    expect(acc2099.opening_credit).toBe(8000)
+  })
+
+  it('leaves year_opening at zero for a dimension-filtered view', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: { period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: 'ob-entry-1' },
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        // 1st: the OB entry. Company-wide, so a dimension-filtered view must
+        // drop it entirely rather than report a balance no filter produced.
+        {
+          data: [
+            { account_number: '1930', debit_amount: 8000, credit_amount: 0 },
+            { account_number: '2099', debit_amount: 0, credit_amount: 8000 },
+          ],
+          error: null,
+        },
+        // 2nd: roll-forward slice, already dimension-scoped.
+        {
+          data: [{ account_number: '3001', debit_amount: 0, credit_amount: 400 }],
+          error: null,
+        },
+        // 3rd: period slice.
+        {
+          data: [{ account_number: '3001', debit_amount: 0, credit_amount: 100 }],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [
+        { data: [{ account_number: '3001', account_name: 'Revenue', account_class: 3 }], error: null },
+      ],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      closingEntry: 'exclude-all-year-end',
+      fromDate: '2025-04-01',
+      toDate: '2025-06-30',
+      dimensions: { '6': 'P001' },
+    })
+
+    // The company-wide OB entry contributed nothing, so 1930 and 2099 never
+    // appear and 3001 carries no fiscal-year opening.
+    expect(result.rows.map((r) => r.account_number)).toEqual(['3001'])
+    const acc3001 = result.rows.find((r) => r.account_number === '3001')!
+    expect(acc3001.year_opening_debit).toBe(0)
+    expect(acc3001.year_opening_credit).toBe(0)
+    // The dimension-scoped roll-forward still lands in the window opening.
+    expect(acc3001.opening_credit).toBe(400)
+    expect(acc3001.closing_credit).toBe(500)
   })
 
   it('returns empty period activity when the range matches no lines', async () => {

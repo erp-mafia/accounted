@@ -12,15 +12,19 @@ vi.mock('../imbalance-diagnosis', () => ({
 import { generateBalanceSheet } from '../balance-sheet'
 import { generateTrialBalance } from '../trial-balance'
 import { findUntransferredResults, buildImbalanceDiagnosis } from '../imbalance-diagnosis'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createFixedRowSupabase, createQueuedMockSupabase } from '@/tests/helpers'
 import type { TrialBalanceRow } from '@/types'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
 const mockFindUntransferred = vi.mocked(findUntransferredResults)
 const mockBuildDiagnosis = vi.mocked(buildImbalanceDiagnosis)
 
+// generateBalanceSheet reads the fiscal period bounds for its header even
+// when the trial balance is mocked.
+const FISCAL_PERIOD = { period_start: '2025-01-01', period_end: '2025-12-31' }
+const FISCAL_PERIOD_BOUNDS = { start: '2025-01-01', end: '2025-12-31' }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const supabase = {} as any
+const supabase = createFixedRowSupabase(FISCAL_PERIOD) as any
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -33,6 +37,8 @@ function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
     account_class: 1,
     opening_debit: 0,
     opening_credit: 0,
+    year_opening_debit: 0,
+    year_opening_credit: 0,
     period_debit: 0,
     period_credit: 0,
     closing_debit: 0,
@@ -285,7 +291,7 @@ describe('generateBalanceSheet', () => {
   it('attaches imbalance_diagnosis when the report does not balance', async () => {
     const q = createQueuedMockSupabase()
     // Period fetch inside the diagnosis path
-    q.enqueue({ data: { period_start: '2025-03-01' } })
+    q.enqueue({ data: { period_start: '2025-03-01', period_end: '2026-02-28' } })
 
     mockTrialBalance.mockResolvedValue({
       rows: [
@@ -340,7 +346,7 @@ describe('generateBalanceSheet', () => {
 
   it('still returns the report when the diagnosis lookup fails', async () => {
     const q = createQueuedMockSupabase()
-    q.enqueue({ data: { period_start: '2025-03-01' } })
+    q.enqueue({ data: { period_start: '2025-03-01', period_end: '2026-02-28' } })
 
     mockTrialBalance.mockResolvedValue({
       rows: [makeRow({ account_number: '1930', account_class: 1, closing_debit: 500 })],
@@ -375,5 +381,163 @@ describe('generateBalanceSheet', () => {
     const section = report.asset_sections.find(s => s.title === 'Kassa och bank')!
     expect(section.subtotal).toBe(100)
     expect(report.total_assets).toBe(100)
+  })
+})
+
+describe('generateBalanceSheet opening and period columns', () => {
+  it('carries year_ib, ib and period_change next to the closing amount', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({
+          account_number: '1930',
+          account_name: 'Företagskonto',
+          account_class: 1,
+          year_opening_debit: 10_000,
+          opening_debit: 12_000,
+          period_debit: 3_000,
+          closing_debit: 15_000,
+        }),
+      ],
+      totalDebit: 15_000,
+      totalCredit: 0,
+      isBalanced: false,
+    })
+
+    const report = await generateBalanceSheet(supabase, 'company-1', 'period-1', {
+      fromDate: '2025-04-01',
+      toDate: '2025-06-30',
+    })
+
+    const section = report.asset_sections.find((s) => s.title === 'Kassa och bank')!
+    expect(section.rows[0]).toMatchObject({
+      year_ib: 10_000,
+      ib: 12_000,
+      period_change: 3_000,
+      amount: 15_000,
+    })
+    expect(section.subtotal_year_ib).toBe(10_000)
+    expect(section.subtotal_ib).toBe(12_000)
+    expect(section.subtotal_period_change).toBe(3_000)
+    expect(report.total_assets_year_ib).toBe(10_000)
+    expect(report.total_assets_ib).toBe(12_000)
+    expect(report.total_assets_period_change).toBe(3_000)
+    // period echoes the requested window; fiscal_year the period's own bounds.
+    expect(report.period).toEqual({ start: '2025-04-01', end: '2025-06-30' })
+    expect(report.fiscal_year).toEqual(FISCAL_PERIOD_BOUNDS)
+  })
+
+  it('flips the sign of every column on the credit side', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({
+          account_number: '2440',
+          account_name: 'Leverantörsskulder',
+          account_class: 2,
+          year_opening_credit: 5_000,
+          opening_credit: 4_000,
+          period_credit: 1_000,
+          closing_credit: 5_000,
+        }),
+      ],
+      totalDebit: 0,
+      totalCredit: 5_000,
+      isBalanced: false,
+    })
+
+    const report = await generateBalanceSheet(supabase, 'company-1', 'period-1')
+
+    const section = report.equity_liability_sections.find(
+      (s) => s.title === 'Kortfristiga skulder',
+    )!
+    expect(section.rows[0]).toMatchObject({
+      year_ib: 5_000,
+      ib: 4_000,
+      period_change: 1_000,
+      amount: 5_000,
+    })
+    // No window requested: period falls back to the fiscal period's own bounds.
+    expect(report.period).toEqual(FISCAL_PERIOD_BOUNDS)
+    expect(report.fiscal_year).toEqual(FISCAL_PERIOD_BOUNDS)
+  })
+
+  it('keeps a row settled to zero inside the window because it still has an opening figure', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({
+          account_number: '1930',
+          account_name: 'Företagskonto',
+          account_class: 1,
+          year_opening_debit: 8_000,
+          opening_debit: 8_000,
+          period_credit: 8_000,
+          closing_debit: 8_000,
+          closing_credit: 8_000,
+        }),
+      ],
+      totalDebit: 8_000,
+      totalCredit: 8_000,
+      isBalanced: true,
+    })
+
+    const report = await generateBalanceSheet(supabase, 'company-1', 'period-1')
+
+    const section = report.asset_sections.find((s) => s.title === 'Kassa och bank')!
+    expect(section.rows).toHaveLength(1)
+    expect(section.rows[0]).toMatchObject({
+      year_ib: 8_000,
+      ib: 8_000,
+      period_change: -8_000,
+      amount: 0,
+    })
+  })
+
+  it('computes Beräknat resultat per column so equity sums in every one', async () => {
+    // A P&L residual that already stood at 2 000 when the window opened and
+    // grew by 1 000 inside it. 2099 does not carry it, so the synthetic row
+    // is what makes the equity side add up in all four columns.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({
+          account_number: '1930',
+          account_class: 1,
+          year_opening_debit: 0,
+          opening_debit: 2_000,
+          period_debit: 1_000,
+          closing_debit: 3_000,
+        }),
+        makeRow({
+          account_number: '3001',
+          account_class: 3,
+          year_opening_credit: 0,
+          opening_credit: 2_000,
+          period_credit: 1_000,
+          closing_credit: 3_000,
+        }),
+      ],
+      totalDebit: 3_000,
+      totalCredit: 3_000,
+      isBalanced: true,
+    })
+
+    const report = await generateBalanceSheet(supabase, 'company-1', 'period-1', {
+      fromDate: '2025-04-01',
+    })
+
+    const resultSection = report.equity_liability_sections.find(
+      (s) => s.title === 'Årets resultat',
+    )!
+    expect(resultSection.rows[0]).toMatchObject({
+      year_ib: 0,
+      ib: 2_000,
+      period_change: 1_000,
+      amount: 3_000,
+    })
+    // Assets equal equity and liabilities in every column.
+    expect(report.total_equity_liabilities_year_ib).toBe(report.total_assets_year_ib)
+    expect(report.total_equity_liabilities_ib).toBe(report.total_assets_ib)
+    expect(report.total_equity_liabilities_period_change).toBe(
+      report.total_assets_period_change,
+    )
+    expect(report.total_equity_liabilities).toBe(report.total_assets)
   })
 })

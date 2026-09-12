@@ -17,6 +17,8 @@ describe('trialBalanceToCsv', () => {
         account_class: 1,
         opening_debit: 1000,
         opening_credit: 0,
+        year_opening_debit: 1000,
+        year_opening_credit: 0,
         period_debit: 500.5,
         period_credit: 200,
         closing_debit: 1300.5,
@@ -60,23 +62,52 @@ describe('incomeStatementToCsv', () => {
       revenue_sections: [
         {
           title: 'Nettoomsättning',
-          rows: [{ account_number: '3001', account_name: 'Försäljning 25%', amount: 100 }],
+          rows: [
+            {
+              account_number: '3001',
+              account_name: 'Försäljning 25%',
+              amount: 100,
+              ytd_opening: 0,
+              ytd_closing: 100,
+            },
+          ],
           subtotal: 100,
+          subtotal_ytd_opening: 0,
+          subtotal_ytd_closing: 100,
         },
       ],
       total_revenue: 100,
+      total_revenue_ytd_opening: 0,
+      total_revenue_ytd_closing: 100,
       expense_sections: [
         {
           title: 'Övriga externa kostnader',
-          rows: [{ account_number: '6110', account_name: 'Kontorsmateriel', amount: 40 }],
+          rows: [
+            {
+              account_number: '6110',
+              account_name: 'Kontorsmateriel',
+              amount: 40,
+              ytd_opening: 0,
+              ytd_closing: 40,
+            },
+          ],
           subtotal: 40,
+          subtotal_ytd_opening: 0,
+          subtotal_ytd_closing: 40,
         },
       ],
       total_expenses: 40,
+      total_expenses_ytd_opening: 0,
+      total_expenses_ytd_closing: 40,
       financial_sections: [],
       total_financial: 0,
+      total_financial_ytd_opening: 0,
+      total_financial_ytd_closing: 0,
       net_result: 60,
+      net_result_ytd_opening: 0,
+      net_result_ytd_closing: 60,
       period: { start: '2024-01-01', end: '2024-12-31' },
+      fiscal_year: { start: '2024-01-01', end: '2024-12-31' },
     }
     const csv = incomeStatementToCsv(report)
     expect(csv).toContain('Nettoomsättning;3001;Försäljning 25%;100,00')
@@ -93,20 +124,51 @@ describe('balanceSheetToCsv', () => {
       asset_sections: [
         {
           title: 'Kassa och bank',
-          rows: [{ account_number: '1930', account_name: 'Företagskonto', amount: 5000 }],
+          rows: [
+            {
+              account_number: '1930',
+              account_name: 'Företagskonto',
+              amount: 5000,
+              year_ib: 0,
+              ib: 0,
+              period_change: 5000,
+            },
+          ],
           subtotal: 5000,
+          subtotal_year_ib: 0,
+          subtotal_ib: 0,
+          subtotal_period_change: 5000,
         },
       ],
       total_assets: 5000,
+      total_assets_year_ib: 0,
+      total_assets_ib: 0,
+      total_assets_period_change: 5000,
       equity_liability_sections: [
         {
           title: 'Eget kapital',
-          rows: [{ account_number: '2010', account_name: 'Eget kapital', amount: 5000 }],
+          rows: [
+            {
+              account_number: '2010',
+              account_name: 'Eget kapital',
+              amount: 5000,
+              year_ib: 0,
+              ib: 0,
+              period_change: 5000,
+            },
+          ],
           subtotal: 5000,
+          subtotal_year_ib: 0,
+          subtotal_ib: 0,
+          subtotal_period_change: 5000,
         },
       ],
       total_equity_liabilities: 5000,
+      total_equity_liabilities_year_ib: 0,
+      total_equity_liabilities_ib: 0,
+      total_equity_liabilities_period_change: 5000,
       period: { start: '2024-01-01', end: '2024-12-31' },
+      fiscal_year: { start: '2024-01-01', end: '2024-12-31' },
     }
     const csv = balanceSheetToCsv(report)
     expect(csv).toContain('Kassa och bank;1930;Företagskonto;5000,00')

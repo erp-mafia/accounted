@@ -11,12 +11,17 @@ import {
 } from '@/lib/reports/xlsx-export'
 import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '@/lib/reports/latest-vouchers-format'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { roundOre } from '@/lib/money'
 
 interface FlatRow {
   group: string
   account_number: string
   account_name: string
+  /** "Ingående saldo": fiscal-year activity before the window. */
+  ytd_opening: number
   current_period: number
+  /** "Ackumulerat": fiscal-year activity through the window end. */
+  ytd_closing: number
   prior_period: number
 }
 
@@ -69,7 +74,9 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
           group: g.class_label,
           account_number: r.account_number,
           account_name: r.account_name,
+          ytd_opening: r.ytd_opening,
           current_period: r.current_period,
+          ytd_closing: r.ytd_closing,
           prior_period: r.prior_period,
         })
       }
@@ -77,7 +84,9 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
         group: g.class_label,
         account_number: '',
         account_name: `Summa ${g.class_label}`,
+        ytd_opening: g.subtotal_ytd_opening,
         current_period: g.subtotal_current,
+        ytd_closing: g.subtotal_ytd_closing,
         prior_period: g.subtotal_prior,
       })
     }
@@ -85,7 +94,9 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
       group: 'Resultat',
       account_number: '',
       account_name: 'Beräknat resultat',
+      ytd_opening: roundOre(report.net_result_ytd - report.net_result_current),
       current_period: report.net_result_current,
+      ytd_closing: report.net_result_ytd,
       prior_period: report.net_result_prior,
     })
 
@@ -98,7 +109,9 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
         group: `${LATEST_VOUCHERS_LABEL}: ${vouchersLabel}`,
         account_number: '',
         account_name: '',
+        ytd_opening: null as unknown as number,
         current_period: null as unknown as number,
+        ytd_closing: null as unknown as number,
         prior_period: null as unknown as number,
       })
     }
@@ -111,7 +124,9 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
         group: disclosure,
         account_number: '',
         account_name: '',
+        ytd_opening: null as unknown as number,
         current_period: null as unknown as number,
+        ytd_closing: null as unknown as number,
         prior_period: null as unknown as number,
       })
     }
@@ -123,7 +138,9 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
           textColumn('Grupp'),
           textColumn('Konto'),
           textColumn('Kontonamn'),
+          currencyColumn('Ingående saldo'),
           currencyColumn('Aktuell period'),
+          currencyColumn('Ackumulerat'),
           currencyColumn('Föregående period'),
         ],
         rows,
@@ -131,7 +148,9 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
           r.group,
           r.account_number,
           r.account_name,
+          r.ytd_opening,
           r.current_period,
+          r.ytd_closing,
           r.prior_period,
         ],
       },

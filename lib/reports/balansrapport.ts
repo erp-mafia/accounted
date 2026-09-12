@@ -18,7 +18,11 @@ const CLASS_LABELS: Record<number, string> = {
 /**
  * Balansrapport: operational balance report.
  *
- * Lists every account in classes 1-2 with IB, period change, and UB.
+ * Lists every account in classes 1-2 with four amount columns, matching how
+ * Fortnox prints its Balansrapport: `year_ib` ("Ing balans", the balance at
+ * fiscal-year start), `ib` ("Ing saldo", the balance at the start of the
+ * reported window), `period_change`, and `ub`. The two opening columns are
+ * equal whenever the window starts at period_start.
  * Unlike Balansräkning (formal, ÅRL Bilaga 1), this keeps account numbers
  * and is meant for ongoing reconciliation, not for årsbokslut/årsredovisning.
  *
@@ -63,20 +67,32 @@ export async function generateBalansrapport(
       .sort((a, b) => a.account_number.localeCompare(b.account_number))
 
     const rows: BalansrapportRow[] = []
+    let subtotalYearIb = 0
     let subtotalIb = 0
     let subtotalUb = 0
     for (const r of groupRows) {
+      const yearIb = signedAmount(r.year_opening_debit, r.year_opening_credit)
       const ib = signedAmount(r.opening_debit, r.opening_credit)
       const ub = signedAmount(r.closing_debit, r.closing_credit)
       const change = round2(ub - ib)
-      if (Math.abs(ib) < 0.005 && Math.abs(ub) < 0.005) continue
+      // An account settled to zero before the window still has a year IB, and
+      // Fortnox prints that row. Only drop a row that is empty in every column.
+      if (
+        Math.abs(yearIb) < 0.005 &&
+        Math.abs(ib) < 0.005 &&
+        Math.abs(ub) < 0.005
+      ) {
+        continue
+      }
       rows.push({
         account_number: r.account_number,
         account_name: r.account_name,
+        year_ib: round2(yearIb),
         ib: round2(ib),
         ub: round2(ub),
         period_change: change,
       })
+      subtotalYearIb += yearIb
       subtotalIb += ib
       subtotalUb += ub
     }
@@ -87,6 +103,7 @@ export async function generateBalansrapport(
       class: klass,
       class_label: CLASS_LABELS[klass],
       rows,
+      subtotal_year_ib: round2(subtotalYearIb),
       subtotal_ib: round2(subtotalIb),
       subtotal_ub: round2(subtotalUb),
     })
@@ -139,6 +156,7 @@ export async function generateBalansrapport(
     beraknat_resultat: beraknatResultat,
     is_balanced: trialBalance.isBalanced,
     period: { start: effectiveFromDate, end: effectiveToDate },
+    fiscal_year: { start: period.period_start, end: period.period_end },
     ...(imbalanceDiagnosis ? { imbalance_diagnosis: imbalanceDiagnosis } : {}),
     ...(latestVouchers.length > 0 ? { latest_vouchers: latestVouchers } : {}),
   }

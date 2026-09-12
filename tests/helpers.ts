@@ -651,6 +651,30 @@ export function createMockRouteParams<T extends Record<string, string>>(
 }
 
 /**
+ * Supabase stub where every query, however chained, resolves to the same row.
+ *
+ * For a generator that makes one small read of its own while its heavy
+ * dependency is mocked out: the statement generators load the fiscal period
+ * bounds for their header, and a test that mocks `generateTrialBalance` still
+ * has to answer that one read.
+ */
+export function createFixedRowSupabase(data: unknown) {
+  const result = { data, error: null, count: null }
+  const handler: ProxyHandler<object> = {
+    get(_target, prop) {
+      if (prop === 'then') {
+        return (resolve: (v: unknown) => void) => resolve(result)
+      }
+      return () => new Proxy({}, handler)
+    },
+  }
+  return {
+    from: () => new Proxy({}, handler),
+    rpc: () => new Proxy({}, handler),
+  }
+}
+
+/**
  * Queue-based Supabase mock for routes with multiple sequential DB calls.
  *
  * Each call to `.from()` or `.rpc()` consumes the next result in the queue.

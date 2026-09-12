@@ -12,6 +12,7 @@ import type {
   IncomeStatementReport,
   IncomeStatementSection,
   BalanceSheetReport,
+  BalanceSheetSection,
 } from '@/types'
 import type { GeneralLedgerReport } from './general-ledger'
 
@@ -70,8 +71,14 @@ export function trialBalanceToCsv(report: TrialBalanceLike): string {
   return csv(rows)
 }
 
+/**
+ * Both statements flatten to the same four columns. The archive CSV format is
+ * frozen on purpose (it is what an auditor's tooling reads), so the opening
+ * and period columns the reports gained stay out of it: only `amount` is
+ * written, exactly as before.
+ */
 function sectionRows(
-  sections: IncomeStatementSection[],
+  sections: (IncomeStatementSection | BalanceSheetSection)[],
   out: (string | number | null)[][]
 ): void {
   for (const section of sections) {

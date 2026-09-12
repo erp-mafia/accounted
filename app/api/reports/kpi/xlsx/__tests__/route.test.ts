@@ -163,12 +163,21 @@ beforeEach(() => {
   mockIncomeStatement.mockResolvedValue({
     revenue_sections: [],
     total_revenue: 0,
+    total_revenue_ytd_opening: 0,
+    total_revenue_ytd_closing: 0,
     expense_sections: [],
     total_expenses: 0,
+    total_expenses_ytd_opening: 0,
+    total_expenses_ytd_closing: 0,
     financial_sections: [],
     total_financial: 0,
+    total_financial_ytd_opening: 0,
+    total_financial_ytd_closing: 0,
     net_result: 0,
+    net_result_ytd_opening: 0,
+    net_result_ytd_closing: 0,
     period: { start: '2026-01-01', end: '2026-03-31' },
+    fiscal_year: { start: '2026-01-01', end: '2026-12-31' },
   })
   mockTrialBalance.mockResolvedValue({ rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true })
   mockMonthlyBreakdown.mockResolvedValue({ months: [] })

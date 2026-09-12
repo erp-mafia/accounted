@@ -63,7 +63,7 @@ export const GET = withRouteContext('report.income_statement.pdf', async (reques
     })
     report.period = { start: effectiveStart, end: effectiveEnd }
 
-    const { groups, summary } = buildIncomeStatementPdfModel(report)
+    const { columns, groups, summary } = buildIncomeStatementPdfModel(report)
 
     const pdfBuffer = await renderToBuffer(
       FinancialStatementPDF({
@@ -71,9 +71,11 @@ export const GET = withRouteContext('report.income_statement.pdf', async (reques
         title: dimensionFilterDisclosure(dimFilter.dimensions)
           ? `Resultaträkning: ${dimensionFilterDisclosure(dimFilter.dimensions)}`
           : 'Resultaträkning',
+        columns,
         groups,
         summary,
         period: report.period,
+        fiscalYear: report.fiscal_year,
         company: companyRow as CompanySettings,
         generatedAt: new Date().toISOString(),
       })
