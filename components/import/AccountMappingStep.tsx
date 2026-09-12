@@ -62,7 +62,7 @@ interface AccountMappingStepProps {
   onBack: () => void
 }
 
-type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'low_confidence' | 'manual'
+type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'manual'
 
 const PAGE_SIZE = 50
 
@@ -110,9 +110,6 @@ export default function AccountMappingStep({
       case 'new_account':
         result = result.filter((m) => m.targetAccount && !knownTargets.has(m.targetAccount))
         break
-      case 'low_confidence':
-        result = result.filter((m) => m.targetAccount && m.confidence < 0.7)
-        break
       case 'vat_review':
         result = result.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed)
         break
@@ -158,10 +155,9 @@ export default function AccountMappingStep({
   const stats = useMemo(() => {
     const unmapped = mappings.filter((m) => !m.targetAccount).length
     const newAccounts = mappings.filter((m) => m.targetAccount && !knownTargets.has(m.targetAccount)).length
-    const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.7).length
     const manual = mappings.filter((m) => m.isOverride).length
     const vatReview = mappings.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed).length
-    return { unmapped, newAccounts, lowConfidence, manual, vatReview }
+    return { unmapped, newAccounts, manual, vatReview }
   }, [mappings, knownTargets])
 
   // After the mapper's self-map rule, an unmapped row is always a number
@@ -194,7 +190,7 @@ export default function AccountMappingStep({
           <CardTitle>Kontomappning</CardTitle>
           <CardDescription>
             Varje konto i SIE-filen kopplas till ett konto i din kontoplan.
-            De flesta matchas automatiskt: granska de osäkra nedan.{' '}
+            De flesta matchas automatiskt: granska de markerade nedan.{' '}
             {t('mapping_new_accounts_note')}
           </CardDescription>
         </CardHeader>
@@ -224,14 +220,6 @@ export default function AccountMappingStep({
             >
               <CheckCircle className="h-3 w-3 mr-1" />
               {t('new_account_filter', { count: stats.newAccounts })}
-            </Badge>
-            <Badge
-              variant={filter === 'low_confidence' ? 'default' : stats.lowConfidence > 0 ? 'secondary' : 'outline'}
-              className="cursor-pointer"
-              onClick={() => handleFilterChange('low_confidence')}
-            >
-              <AlertCircle className="h-3 w-3 mr-1" />
-              {stats.lowConfidence} osäkra
             </Badge>
             <Badge
               variant={filter === 'manual' ? 'default' : 'outline'}
@@ -277,7 +265,6 @@ export default function AccountMappingStep({
                 <SelectItem value="unmapped">Ej mappade</SelectItem>
                 <SelectItem value="new_account">{t('new_account_filter', { count: stats.newAccounts })}</SelectItem>
                 <SelectItem value="vat_review">{t('vat_review_filter', { count: stats.vatReview })}</SelectItem>
-                <SelectItem value="low_confidence">Osäkra</SelectItem>
                 <SelectItem value="manual">Manuellt satta</SelectItem>
               </SelectContent>
             </Select>
