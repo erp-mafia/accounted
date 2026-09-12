@@ -32,6 +32,7 @@ import {
 } from 'lucide-react'
 import type { AccountMapping } from '@/lib/import/types'
 import { isValidBASRange } from '@/lib/import/account-mapper'
+import { isInVatReviewList, needsVatTreatmentReview } from '@/lib/import/account-vat-treatment'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
@@ -77,6 +78,10 @@ export default function AccountMappingStep({
 }: AccountMappingStepProps) {
   const t = useTranslations('chart_of_accounts')
   const [searchTerm, setSearchTerm] = useState('')
+  // Source accounts whose momskod or sats was changed while this filter has
+  // been open. They stay in the review list so the second of the two selects
+  // is still reachable; see isInVatReviewList.
+  const [editedThisStep, setEditedThisStep] = useState<ReadonlySet<string>>(() => new Set())
   // Default to showing unmapped accounts first (most actionable)
   const [filter, setFilter] = useState<FilterType>(() => {
     const hasUnmapped = mappings.some((m) => !m.targetAccount)
@@ -114,7 +119,7 @@ export default function AccountMappingStep({
         result = result.filter((m) => m.targetAccount && m.confidence < 0.7)
         break
       case 'vat_review':
-        result = result.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed)
+        result = result.filter((m) => isInVatReviewList(m, editedThisStep))
         break
       case 'manual':
         result = result.filter((m) => m.isOverride)
@@ -134,7 +139,7 @@ export default function AccountMappingStep({
     }
 
     return result
-  }, [mappings, filter, searchTerm, knownTargets])
+  }, [mappings, filter, searchTerm, knownTargets, editedThisStep])
 
   // Pagination
   const totalPages = Math.ceil(filteredMappings.length / PAGE_SIZE)
@@ -147,6 +152,23 @@ export default function AccountMappingStep({
   const handleFilterChange = (newFilter: FilterType) => {
     setFilter(newFilter)
     setCurrentPage(1)
+    // Re-entering the review filter should offer what is still outstanding,
+    // not the rows finished during the previous visit.
+    setEditedThisStep(new Set())
+  }
+
+  // Used by the momskod and sats selects only: a row being edited must stay
+  // in the list until the user is done with it. The per-row confirm button
+  // calls onVatTreatmentChange directly, so it still clears the row.
+  const handleVatSelectChange = (
+    sourceAccount: string,
+    treatment: AccountVatTreatment | null,
+    rate: number | null,
+  ) => {
+    setEditedThisStep((prev) =>
+      prev.has(sourceAccount) ? prev : new Set(prev).add(sourceAccount),
+    )
+    onVatTreatmentChange(sourceAccount, treatment, rate)
   }
 
   const handleSearchChange = (term: string) => {
@@ -160,7 +182,7 @@ export default function AccountMappingStep({
     const newAccounts = mappings.filter((m) => m.targetAccount && !knownTargets.has(m.targetAccount)).length
     const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.7).length
     const manual = mappings.filter((m) => m.isOverride).length
-    const vatReview = mappings.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed).length
+    const vatReview = mappings.filter(needsVatTreatmentReview).length
     return { unmapped, newAccounts, lowConfidence, manual, vatReview }
   }, [mappings, knownTargets])
 
@@ -391,7 +413,7 @@ export default function AccountMappingStep({
                                   ? defaultRateForVatTreatment(treatment, accountClass)
                                   : mapping.defaultVatRate
                                 : mapping.defaultVatRate ?? null
-                              onVatTreatmentChange(mapping.sourceAccount, treatment, rate)
+                              handleVatSelectChange(mapping.sourceAccount, treatment, rate)
                             }}
                           >
                             <SelectTrigger
@@ -417,7 +439,7 @@ export default function AccountMappingStep({
                             value={mapping.defaultVatRate === null || mapping.defaultVatRate === undefined
                               ? 'none'
                               : String(mapping.defaultVatRate)}
-                            onValueChange={(value) => onVatTreatmentChange(
+                            onValueChange={(value) => handleVatSelectChange(
                               mapping.sourceAccount,
                               mapping.defaultVatTreatment ?? null,
                               value === 'none' ? null : Number(value),

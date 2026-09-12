@@ -4,6 +4,8 @@ import {
   enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
   applyVatTreatmentReviewAll,
+  isInVatReviewList,
+  needsVatTreatmentReview,
 } from '../account-vat-treatment'
 import type { AccountMapping } from '../types'
 
@@ -204,5 +206,61 @@ describe('applyVatTreatmentReviewAll', () => {
     expect(result.filter((m: { requiresVatTreatmentReview?: boolean; vatTreatmentReviewed?: boolean }) =>
       m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
     )).toHaveLength(0)
+  })
+})
+
+describe('vat review list visibility', () => {
+  const NONE: ReadonlySet<string> = new Set()
+
+  // Mirrors the real row: a class 4 purchase account whose label says 12%, so
+  // picking the treatment assigns the wrong default rate and the sats select
+  // still has to be reached.
+  function row() {
+    return enrichAccountMappingsWithVat([mapping('4057', 'Inköp varor 12% EU')], [])
+  }
+
+  it('counts a row as outstanding until it is reviewed', () => {
+    const [before] = row()
+    expect(needsVatTreatmentReview(before)).toBe(true)
+    const [after] = applyVatTreatmentReview(row(), '4057', 'reverse_charge_eu_goods', 0.25)
+    expect(needsVatTreatmentReview(after)).toBe(false)
+  })
+
+  it('keeps a row in the list between setting its momskod and its sats', () => {
+    // The bug: picking the treatment marks the row reviewed, and a list keyed
+    // on needsVatTreatmentReview drops it before the 25% default can be
+    // corrected to the 12% the label states.
+    const [afterTreatment] = applyVatTreatmentReview(
+      row(), '4057', 'reverse_charge_eu_goods', 0.25,
+    )
+    expect(isInVatReviewList(afterTreatment, NONE)).toBe(false)
+    expect(isInVatReviewList(afterTreatment, new Set(['4057']))).toBe(true)
+
+    // And the rate is still correctable while it is visible.
+    const [afterRate] = applyVatTreatmentReview(
+      [afterTreatment], '4057', 'reverse_charge_eu_goods', 0.12,
+    )
+    expect(afterRate.defaultVatRate).toBe(0.12)
+    expect(isInVatReviewList(afterRate, new Set(['4057']))).toBe(true)
+  })
+
+  it('shows an outstanding row whether or not it has been edited', () => {
+    const [outstanding] = row()
+    expect(isInVatReviewList(outstanding, NONE)).toBe(true)
+    expect(isInVatReviewList(outstanding, new Set(['4057']))).toBe(true)
+  })
+
+  it('never pulls in a row that was not up for review', () => {
+    // Class 5 with no label suggestion: requiresVatTreatmentReview is false, so
+    // a stale entry in the edited set must not put it in the list.
+    const [untouched] = enrichAccountMappingsWithVat([mapping('5410', 'Förbrukningsinventarier')], [])
+    expect(untouched.requiresVatTreatmentReview).toBe(false)
+    expect(isInVatReviewList(untouched, new Set(['5410']))).toBe(false)
+  })
+
+  it('lets the bulk confirm clear the list, since it feeds no edited set', () => {
+    const confirmed = applyVatTreatmentReviewAll(row())
+    expect(confirmed.every((m) => !needsVatTreatmentReview(m))).toBe(true)
+    expect(confirmed.every((m) => !isInVatReviewList(m, NONE))).toBe(true)
   })
 })
