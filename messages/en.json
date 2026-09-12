@@ -5850,6 +5850,8 @@
     "vat_review_filter": "{count} VAT treatments to review",
     "vat_treatment_column": "VAT treatment",
     "match_column": "Match",
+    "match_bas": "BAS account",
+    "match_from_file": "From the file",
     "match_manual": "Manual",
     "match_redirected": "Redirected",
     "vat_treatment_confirm": "Confirm",

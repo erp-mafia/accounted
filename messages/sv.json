@@ -5850,6 +5850,8 @@
     "vat_review_filter": "{count} momskoder att granska",
     "vat_treatment_column": "Momskod",
     "match_column": "Matchning",
+    "match_bas": "BAS-konto",
+    "match_from_file": "Från filen",
     "match_manual": "Manuell",
     "match_redirected": "Omdirigerad",
     "vat_treatment_confirm": "Bekräfta",

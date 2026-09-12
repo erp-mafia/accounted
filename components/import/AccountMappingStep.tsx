@@ -30,7 +30,7 @@ import {
   XCircle,
   Filter,
 } from 'lucide-react'
-import type { AccountMapping } from '@/lib/import/types'
+import type { AccountMapping, AccountMatchType } from '@/lib/import/types'
 import { isValidBASRange } from '@/lib/import/account-mapper'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
@@ -430,6 +430,7 @@ export default function AccountMappingStep({
                       <AccountMatchBadge
                         sourceAccount={mapping.sourceAccount}
                         targetAccount={mapping.targetAccount}
+                        matchType={mapping.matchType}
                         isOverride={mapping.isOverride}
                       />
                     </TableCell>
@@ -617,10 +618,12 @@ function TruncatedSourceName({ sourceName }: { sourceName: string }) {
 function AccountMatchBadge({
   sourceAccount,
   targetAccount,
+  matchType,
   isOverride,
 }: {
   sourceAccount: string
   targetAccount: string
+  matchType: AccountMatchType
   isOverride: boolean
 }) {
   const t = useTranslations('chart_of_accounts')
@@ -629,8 +632,19 @@ function AccountMatchBadge({
     return <Badge variant="default">{t('match_manual')}</Badge>
   }
   if (targetAccount !== sourceAccount) {
-    return <Badge variant="secondary">{t('match_redirected')}</Badge>
+    return <Badge variant="default">{t('match_redirected')}</Badge>
   }
-  return null
+  // The two identity cases. Deliberately NOT labelled "eget konto" or similar:
+  // bas_range means the number is in the valid range but absent from our BAS
+  // 2026 reference, which covers both a source system's invention (a Fortnox
+  // 4599) AND a perfectly standard sub-account the reference does not carry
+  // (1241 Personbilar is not among its 1286 entries). Claiming it is the
+  // company's own account would assert something the mapper cannot know, which
+  // is the same mistake "Trolig" made. "Från filen" says only what is true:
+  // the number is kept and the name and type come from the uploaded file.
+  if (matchType === 'bas_range') {
+    return <Badge variant="outline">{t('match_from_file')}</Badge>
+  }
+  return <Badge variant="secondary">{t('match_bas')}</Badge>
 }
 
