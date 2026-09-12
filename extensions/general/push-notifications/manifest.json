@@ -3,7 +3,7 @@
   "sector": "general",
   "exportName": "pushNotificationsExtension",
   "entryPoint": "@/extensions/general/push-notifications",
-  "workspace": "@/components/extensions/general/PushNotificationsWorkspace",
+  "workspace": null,
   "requiredEnvVars": ["VAPID_PRIVATE_KEY", "NEXT_PUBLIC_VAPID_PUBLIC_KEY"],
   "optionalEnvVars": ["VAPID_SUBJECT"],
   "npmDependencies": ["web-push"],

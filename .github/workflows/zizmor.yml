@@ -37,6 +37,10 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      # upload-sarif reads the current workflow run before posting the
+      # Security-tab report. Without actions: read the step fails with
+      # "Resource not accessible by integration" on a read-default token.
+      actions: read
       # SARIF upload to the repo's "Security" tab.
       security-events: write
 

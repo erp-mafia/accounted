@@ -10,6 +10,7 @@ import {
   type UserContent,
 } from 'ai'
 import { capabilitiesFor, type ResolvedAiConfig } from '../config'
+import { wrapGeminiThoughtSignatureFetch } from '../gemini-thought-signatures'
 import { extractJsonObject } from '../json'
 import { rasterizePdf } from '../rasterize-pdf'
 import type {
@@ -83,6 +84,9 @@ function toSdkTools(defs: AiToolDef[] | undefined): ToolSet | undefined {
  *   - JSON: the default is JSON-in-prose plus the caller's extraction + Zod,
  *     which works everywhere; AI_STRICT_JSON=true opts into response_format
  *     json_schema for providers that enforce it.
+ *   - Gemini 3 thought signatures: Google's OpenAI-compat tool loop 400s
+ *     unless extra_content.google.thought_signature is echoed. Wrapped fetch
+ *     restores that field; other OpenAI-compat endpoints are untouched.
  */
 
 export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService {
@@ -93,6 +97,10 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
     // reject or ignore an empty Bearer, and omitting it means no auth header.
     ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}),
     supportsStructuredOutputs: cfg.strictJson,
+    // Gemini 3 400s a tool-loop turn when thought_signature is dropped. The
+    // SDK stores it under this custom provider name and only echoes
+    // providerOptions.google; wrap fetch so the wire format is restored.
+    fetch: wrapGeminiThoughtSignatureFetch(),
   })
   const capabilities = capabilitiesFor(cfg)
   const modelFor = (tier: AiTier): string => {
