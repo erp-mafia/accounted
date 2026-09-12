@@ -5,7 +5,7 @@ import { utcDateStamp } from '@/lib/utils'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   estimateArchiveSize,
-  generateBaseDataArchive,
+  generateFullArchive,
 } from '@/lib/reports/full-archive-export'
 import { createServiceClient } from '@/lib/supabase/server'
 
@@ -153,7 +153,8 @@ export const GET = withRouteContext<Params>(
         ))
       }
 
-      const zipBuffer = await generateBaseDataArchive(archiveClient, reset.source_company_id, {
+      const zipBuffer = await generateFullArchive(archiveClient, reset.source_company_id, {
+        scope: 'all',
         include_documents: includeDocuments,
       })
       const filename = `migration_reset_archive_${utcDateStamp(new Date())}.zip`

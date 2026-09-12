@@ -264,3 +264,8 @@ describe('KPI JSON and xlsx agree', () => {
     expect(body.data.topSuppliersUnconvertedFxCount).toBe(1)
   })
 })
+
+// The shared route-wrapper tests cover the database read lease.
+vi.mock('@/lib/import/sie-period-read', () => ({
+  withSIEPeriodRead: (_client: unknown, _company: string, _purpose: string, read: () => Promise<unknown>) => read(),
+}))

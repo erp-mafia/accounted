@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SIEChunkResult, SIEJob } from '@/lib/import/sie-job-contract'
+
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import {
@@ -48,6 +50,27 @@ import type {
   JournalEntrySourceType,
   VatTreatment,
 } from '@/types'
+
+/** The only application entry point for a durable SIE voucher commit. */
+export async function commitSIEImportChunk(supabase: SupabaseClient, job: SIEJob, chunk: number, phase: 'vouchers' | 'finalize'): Promise<SIEChunkResult> {
+  const { data, error } = await supabase.rpc('import_sie_chunk', {
+    p_company_id: job.company_id, p_import_id: job.id, p_worker_id: job.worker_id,
+    p_attempt: job.job_attempt, p_phase: phase, p_chunk_no: chunk,
+  })
+  if (error) throw new BookkeepingDatabaseError('import_sie_chunk', error.message)
+  if (!data) throw new BookkeepingDatabaseError('import_sie_chunk', 'Missing completion receipt')
+  return data as SIEChunkResult
+}
+
+/** Reversals and their receipt commit together under the execution lease. */
+export async function reverseSIEImportChunk(supabase: SupabaseClient, job: SIEJob): Promise<{ reversed: number; done: boolean }> {
+  const rpc = job.job_kind === 'duplicate_repair' ? 'undo_sie_duplicate_repair_chunk' : 'undo_sie_import_chunk'
+  const { data, error } = await supabase.rpc(rpc, {
+    p_company_id: job.company_id, p_import_id: job.id, p_worker_id: job.worker_id, p_attempt: job.job_attempt,
+  })
+  if (error) throw new BookkeepingDatabaseError(rpc, error.message)
+  return data as { reversed: number; done: boolean }
+}
 
 const log = createLogger('bookkeeping.engine')
 

@@ -82,4 +82,4 @@ export const GET = withRouteContext('report.trial_balance.xlsx', async (request,
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

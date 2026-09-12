@@ -147,6 +147,7 @@ import '@/app/api/v1/companies/[companyId]/reports/avgifter-basis/route'
 import '@/app/api/v1/companies/[companyId]/reports/vacation-liability/route'
 import '@/app/api/v1/companies/[companyId]/reports/sie-export/route'
 import '@/app/api/v1/companies/[companyId]/imports/sie/route'
+import '@/app/api/v1/companies/[companyId]/imports/sie/upload/route'
 import '@/app/api/v1/companies/[companyId]/imports/bank/route'
 
 // Phase 6 PR-1: webhooks substrate.

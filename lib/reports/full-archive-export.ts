@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createHash } from 'node:crypto'
+import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import JSZip from 'jszip'
 import { generateSIEExport } from './sie-export'
 import { generateTrialBalance } from './trial-balance'
@@ -124,15 +126,23 @@ export async function generateFullArchive(
   companyId: string,
   options: FullArchiveOptions
 ): Promise<ArrayBuffer> {
+  return withSIEPeriodRead(supabase, companyId, 'report_export', () =>
+    buildFullArchive(supabase, companyId, options))
+}
+
+async function buildFullArchive(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: FullArchiveOptions
+): Promise<ArrayBuffer> {
   const company = await fetchCompany(supabase, companyId)
   const periods =
     options.scope === 'all'
       ? await fetchAllPeriods(supabase, companyId)
       : [await fetchSinglePeriod(supabase, companyId, options.period_id)]
 
-  if (periods.length === 0) {
-    throw new Error('No fiscal periods found')
-  }
+  // A retained source can have documents and company history before its first
+  // fiscal year. An all-company archive must keep that material accessible too.
 
   const zip = new JSZip()
 
@@ -175,7 +185,7 @@ export async function generateFullArchive(
 
   if (options.include_documents !== false) {
     await writeDocuments(zip, supabase, companyId, periods, options.scope)
-    await writeReconciliationAttachments(zip, supabase, companyId, periods)
+    if (periods.length) await writeReconciliationAttachments(zip, supabase, companyId, periods)
   }
 
   if (options.scope === 'all') {
@@ -221,6 +231,15 @@ export async function generateBaseDataArchive(
   supabase: SupabaseClient,
   companyId: string,
   options: { include_documents?: boolean } = {}
+): Promise<ArrayBuffer> {
+  return withSIEPeriodRead(supabase, companyId, 'report_export', () =>
+    buildBaseDataArchive(supabase, companyId, options))
+}
+
+async function buildBaseDataArchive(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: { include_documents?: boolean }
 ): Promise<ArrayBuffer> {
   const company = await fetchCompany(supabase, companyId)
   const periods = await fetchAllPeriods(supabase, companyId)
@@ -762,6 +781,7 @@ interface SieImportRow {
   fiscal_period_id: string | null
   imported_at: string | null
   created_at: string | null
+  manifest?: { originalSource?: { format?: string; path?: string; sha256?: string } } | null
 }
 
 interface SieSourceManifestEntry {
@@ -802,7 +822,7 @@ async function writeSieSourceFiles(
       supabase
         .from('sie_imports')
         .select(
-          'id, filename, file_hash, file_storage_path, org_number, company_name, sie_type, fiscal_year_start, fiscal_year_end, accounts_count, transactions_count, status, fiscal_period_id, imported_at, created_at'
+          'id, filename, file_hash, file_storage_path, org_number, company_name, sie_type, fiscal_year_start, fiscal_year_end, accounts_count, transactions_count, status, fiscal_period_id, imported_at, created_at, job_state, manifest, supersedes_import_id, migration_documentation'
         )
         .eq('company_id', companyId)
         .order('created_at', { ascending: true })
@@ -817,12 +837,15 @@ async function writeSieSourceFiles(
       const originalFolder = sieFolder.folder('original')!
 
       for (const imp of imports) {
+        const original = imp.manifest?.originalSource
+        const storagePath = original?.format === 'original_bytes' ? original.path : imp.file_storage_path
+        const sourceHash = original?.format === 'original_bytes' ? original.sha256 : imp.file_hash
         if (!imp.file_storage_path) {
           manifest.push({
             import_id: imp.id,
             filename: imp.filename,
             storage_path: null,
-            sha256_hash: imp.file_hash,
+            sha256_hash: sourceHash ?? null,
             sie_type: imp.sie_type,
             fiscal_year_start: imp.fiscal_year_start,
             fiscal_year_end: imp.fiscal_year_end,
@@ -837,16 +860,21 @@ async function writeSieSourceFiles(
         const zipFileName = `${imp.id}_${sanitizeFileName(imp.filename || `${imp.id}.se`)}`
 
         try {
+          if (original?.format === 'original_bytes' &&
+            (!sourceHash || !/^[a-f0-9]{64}$/.test(sourceHash) ||
+              storagePath !== `${companyId}/sie-originals/${sourceHash}.se`)) {
+            throw new Error('Invalid original SIE source reference')
+          }
           const { data: fileData, error } = await supabase.storage
             .from('sie-files')
-            .download(imp.file_storage_path)
+            .download(storagePath!)
 
           if (error || !fileData) {
             manifest.push({
               import_id: imp.id,
               filename: imp.filename,
-              storage_path: imp.file_storage_path,
-              sha256_hash: imp.file_hash,
+              storage_path: storagePath ?? null,
+              sha256_hash: sourceHash ?? null,
               sie_type: imp.sie_type,
               fiscal_year_start: imp.fiscal_year_start,
               fiscal_year_end: imp.fiscal_year_end,
@@ -859,12 +887,15 @@ async function writeSieSourceFiles(
           }
 
           const buffer = await fileData.arrayBuffer()
+          if (original?.format === 'original_bytes' && createHash('sha256').update(Buffer.from(buffer)).digest('hex') !== sourceHash) {
+            throw new Error('Original SIE source checksum mismatch')
+          }
           originalFolder.file(zipFileName, buffer)
           manifest.push({
             import_id: imp.id,
             filename: imp.filename,
-            storage_path: imp.file_storage_path,
-            sha256_hash: imp.file_hash,
+            storage_path: storagePath ?? null,
+            sha256_hash: sourceHash ?? null,
             sie_type: imp.sie_type,
             fiscal_year_start: imp.fiscal_year_start,
             fiscal_year_end: imp.fiscal_year_end,
@@ -876,8 +907,8 @@ async function writeSieSourceFiles(
           manifest.push({
             import_id: imp.id,
             filename: imp.filename,
-            storage_path: imp.file_storage_path,
-            sha256_hash: imp.file_hash,
+            storage_path: storagePath ?? null,
+            sha256_hash: sourceHash ?? null,
             sie_type: imp.sie_type,
             fiscal_year_start: imp.fiscal_year_start,
             fiscal_year_end: imp.fiscal_year_end,
@@ -964,6 +995,8 @@ export interface MasterDataTableSpec {
  * classified, so the backup can never silently fall behind the schema again.
  */
 export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
+  { name: 'sie_import_chunks', file: 'sie_import_chunks.json', orderBy: 'created_at' },
+  { name: 'sie_duplicate_repair_items', file: 'sie_duplicate_repair_items.json', orderBy: 'created_at' },
   // Counterparties and articles
   { name: 'customers', file: 'customers.json', orderBy: 'created_at' },
   { name: 'suppliers', file: 'suppliers.json', orderBy: 'created_at' },
@@ -1177,6 +1210,7 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  * a portable räkenskapsinformation backup.
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
+  sie_period_read_leases: 'short-lived coordination leases; no accounting content',
   // Operator-side Peppol access grant and sending cap: platform configuration, not the company's räkenskapsinformation.
   peppol_access: 'platform access grant (status, sending cap); no bookkeeping content',
   agent_conversations: 'AI assistant state, not räkenskapsinformation',

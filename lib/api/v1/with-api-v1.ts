@@ -52,6 +52,7 @@ import {
   validateApiKey,
 } from '@/lib/auth/api-keys'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import { withSIEExternalReport } from '@/lib/import/sie-period-read'
 
 // Per CLAUDE.md: any route that emits events via eventBus must call
 // ensureInitialized() at module level to wire extension event handlers
@@ -593,7 +594,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // token. The OAuth/MCP surfaces set their own actor and are unaffected.
       const response = await runWithActor(
         { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key' },
-        () => handler(workingRequest, ctx, params),
+        () => withSIEExternalReport(supabase,companyId,operation,()=>handler(workingRequest,ctx,params)),
       )
 
       // Signal test mode on every test-key response so integrators can see the

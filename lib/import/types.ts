@@ -133,6 +133,7 @@ export interface SIEVoucherCorrections {
 export interface SIEVoucher {
   series: string                   // Voucher series (A, B, etc.)
   number: number                   // Voucher number
+  numberOmitted?: boolean          // SIE4I: receiver assigns; never a source key
   date: Date
   description: string
   registrationDate?: Date
@@ -342,6 +343,8 @@ export interface ImportResult {
   openingBalanceEntryId: string | null
   journalEntriesCreated: number
   journalEntryIds: string[]
+  /** Full entries remain addressable by import_batch_id when the preview is capped. */
+  journalEntryIdsTruncated?: boolean
 
   // Accounts the import itself inserted into chart_of_accounts (the mapped
   // target accounts that did not exist yet). Accounts created from the
@@ -387,6 +390,15 @@ export interface ImportResult {
   // If the next period's IB needed resync but we couldn't do it (locked,
   // closed, or no existing IB), the human-readable reason.
   nextPeriodIBResyncSkipped?: { reason: string; nextPeriodName: string } | null
+  // Durable imports leave adjacent-year balances unchanged and request review.
+  nextPeriodOpeningBalanceReview?: {
+    nextPeriodId: string
+    nextPeriodName: string
+    openingBalanceEntryId: string
+    importId: string
+    reviewToken: string
+    reason: 'import' | 'undo'
+  } | null
 
   // Populated when the file carried dimension data (#DIM/#OBJEKT/object
   // lists): what landed in the registry and whether the import flipped

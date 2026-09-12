@@ -68,4 +68,4 @@ export const GET = withRouteContext('report.kassaflodesanalys.pdf', async (reque
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

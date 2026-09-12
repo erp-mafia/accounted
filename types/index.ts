@@ -127,6 +127,8 @@ export type FiscalYearResetBlockerCode =
   | 'agi_declared'
   | 'rot_rut_state'
   | 'cross_year_reference'
+  | 'retained_import_history'
+  | 'unfinished_import'
 
 export interface FiscalYearResetBlocker {
   code: FiscalYearResetBlockerCode
@@ -1914,6 +1916,10 @@ export interface FiscalPeriod {
   opening_balances_set: boolean
   closing_entry_id: string | null
   opening_balance_entry_id: string | null
+  opening_balance_review_import_id?: string | null
+  opening_balance_review_token?: string | null
+  opening_balance_review_entry_id?: string | null
+  opening_balance_review_reason?: 'import' | 'undo' | null
   previous_period_id: string | null
   tax_depreciation_method?: 'rakenskapsenlig' | 'restvarde' | null
   tax_depreciation_rule?: 'huvudregel_30' | 'kompletteringsregel_20' | null

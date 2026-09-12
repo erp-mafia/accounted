@@ -97,4 +97,4 @@ export const GET = withRouteContext('report.vat_declaration.xlsx', async (reques
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

@@ -117,4 +117,43 @@ describe('withRouteContext', () => {
       /^auth;dur=\d+, company;dur=\d+, handler;dur=\d+$/,
     )
   })
+
+  it('refuses an export before building it while an import is unfinished', async () => {
+    const { supabase } = createMockSupabase()
+    supabase.rpc.mockResolvedValue({ data: null, error: { code: '55000', message: 'SIE_IMPORT_HOLD' } })
+    supabaseRef.supabase = supabase
+    const handler = vi.fn(async () => NextResponse.json({ ok: true }))
+    const route = withRouteContext('report.test.pdf', handler, { requireCompleteLedger: true })
+    const res = await route(new Request('http://localhost/api/test'), EMPTY_PARAMS)
+    expect(res.status).toBe(409)
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('holds an export through generation and validates its lease before returning it', async () => {
+    const { supabase } = createMockSupabase()
+    supabase.rpc.mockResolvedValueOnce({ data: 'lease-1', error: null })
+      .mockResolvedValueOnce({ data: null, error: null })
+    supabaseRef.supabase = supabase
+    const handler = vi.fn(async () => {
+      expect(supabase.rpc).toHaveBeenCalledTimes(1)
+      return new NextResponse('file', { headers: { 'Content-Disposition': 'attachment' } })
+    })
+    const route = withRouteContext('report.test.pdf', handler, { requireCompleteLedger: true })
+    const res = await route(new Request('http://localhost/api/test'), EMPTY_PARAMS)
+    expect(await res.text()).toBe('file')
+    expect(supabase.rpc).toHaveBeenLastCalledWith('finish_sie_period_read', {
+      p_company_id: 'company-1', p_token: 'lease-1', p_require_valid: true,
+    })
+  })
+
+  it('keeps on-screen JSON available when the same route also downloads a filing', async () => {
+    const { supabase } = createMockSupabase()
+    supabaseRef.supabase = supabase
+    const route = withRouteContext('report.test', async () => NextResponse.json({ data: [] }), {
+      requireCompleteLedger: request => new URL(request.url).searchParams.get('format') === 'sru',
+    })
+    const res = await route(new Request('http://localhost/api/test?format=json'), EMPTY_PARAMS)
+    expect(res.status).toBe(200)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
 })

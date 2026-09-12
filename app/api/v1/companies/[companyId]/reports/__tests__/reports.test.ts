@@ -11,6 +11,8 @@
  */
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+// The shared wrapper's lease boundary has separate real and unit coverage.
+vi.mock('@/lib/import/sie-period-read',()=>({withSIEExternalReport:(_s:unknown,_c:unknown,_op:unknown,read:()=>Promise<unknown>)=>read()}))
 
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') {

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { getPool } from '@/tests/pg/setup'
+import { sieWriterFixture } from '@/tests/pg/sie-writer-fixture'
 import { insertBalancedLines, insertDraftJournalEntry, seedCompany } from '@/tests/pg/fixtures'
 
 // A completed sie_imports row the correction history can point at.
 async function insertSieImport(companyId: string, userId: string): Promise<string> {
-  const { rows } = await getPool().query<{ id: string }>(
+  const { rows } = await sieWriterFixture().query<{ id: string }>(
     `INSERT INTO public.sie_imports (company_id, user_id, filename, file_hash, sie_type, status)
      VALUES ($1, $2, 'fixture.se', md5(gen_random_uuid()::text), 4, 'completed')
      RETURNING id`,
@@ -13,7 +13,7 @@ async function insertSieImport(companyId: string, userId: string): Promise<strin
   return rows[0]!.id
 }
 
-describe('import_sie_journal_entries RPC', () => {
+describe('write_sie_job_entries RPC', () => {
   it('rolls back the journal entry header when a line insert fails', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
 
@@ -48,13 +48,13 @@ describe('import_sie_journal_entries RPC', () => {
     ]
 
     await expect(
-      getPool().query(
-        `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+      sieWriterFixture().query(
+        `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
         [companyId, userId, fiscalPeriodId, JSON.stringify(payload)],
       ),
     ).rejects.toThrow(/null value in column "account_number"|violates not-null constraint/i)
 
-    const headers = await getPool().query<{ count: string }>(
+    const headers = await sieWriterFixture().query<{ count: string }>(
       `SELECT count(*)::text AS count
          FROM public.journal_entries
         WHERE company_id = $1
@@ -64,7 +64,7 @@ describe('import_sie_journal_entries RPC', () => {
     )
     expect(headers.rows[0]!.count).toBe('0')
 
-    const sequence = await getPool().query<{ last_number: number }>(
+    const sequence = await sieWriterFixture().query<{ last_number: number }>(
       `SELECT last_number
          FROM public.voucher_sequences
         WHERE company_id = $1
@@ -110,13 +110,13 @@ describe('import_sie_journal_entries RPC', () => {
       },
     ]
 
-    const res = await getPool().query<{ import_sie_journal_entries: { inserted_entries: unknown[] } }>(
-      `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+    const res = await sieWriterFixture().query<{ write_sie_job_entries: { inserted_entries: unknown[] } }>(
+      `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
       [companyId, userId, fiscalPeriodId, JSON.stringify(payload)],
     )
-    expect(res.rows[0]!.import_sie_journal_entries.inserted_entries).toHaveLength(1)
+    expect(res.rows[0]!.write_sie_job_entries.inserted_entries).toHaveLength(1)
 
-    const posted = await getPool().query<{ count: string }>(
+    const posted = await sieWriterFixture().query<{ count: string }>(
       `SELECT count(*)::text AS count
          FROM public.journal_entries
         WHERE company_id = $1 AND status = 'posted' AND description = 'Dimensioned import'`,
@@ -124,7 +124,7 @@ describe('import_sie_journal_entries RPC', () => {
     )
     expect(posted.rows[0]!.count).toBe('1')
 
-    const dimLine = await getPool().query<{
+    const dimLine = await sieWriterFixture().query<{
       dimensions: Record<string, string>
       cost_center: string | null
       project: string | null
@@ -159,13 +159,13 @@ describe('import_sie_journal_entries RPC', () => {
     ]
 
     await expect(
-      getPool().query(
-        `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+      sieWriterFixture().query(
+        `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
         [companyId, userId, fiscalPeriodId, JSON.stringify(payload)],
       ),
     ).rejects.toThrow(/unbalanced/i)
 
-    const headers = await getPool().query<{ count: string }>(
+    const headers = await sieWriterFixture().query<{ count: string }>(
       `SELECT count(*)::text AS count FROM public.journal_entries
         WHERE company_id = $1 AND description = 'Unbalanced import'`,
       [companyId],
@@ -193,8 +193,8 @@ describe('import_sie_journal_entries RPC', () => {
 
     // company A's id + user, but company B's fiscal period.
     await expect(
-      getPool().query(
-        `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+      sieWriterFixture().query(
+        `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
         [a.companyId, a.userId, b.fiscalPeriodId, JSON.stringify(payload)],
       ),
     ).rejects.toThrow(/does not belong to company/i)
@@ -245,17 +245,17 @@ describe('import_sie_journal_entries RPC', () => {
       },
     ]
 
-    const res = await getPool().query<{ import_sie_journal_entries: { inserted_entries: Array<{ id: string; sourceId: string }> } }>(
-      `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+    const res = await sieWriterFixture().query<{ write_sie_job_entries: { inserted_entries: Array<{ id: string; sourceId: string }> } }>(
+      `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
       [companyId, userId, fiscalPeriodId, JSON.stringify(payload)],
     )
-    const inserted = res.rows[0]!.import_sie_journal_entries.inserted_entries
+    const inserted = res.rows[0]!.write_sie_job_entries.inserted_entries
     expect(inserted).toHaveLength(2)
     const correctedId = inserted.find((e) => e.sourceId === 'A7')!.id
 
     // Ledger: exactly the #TRANS rows, posted and balanced. History never
     // becomes a line.
-    const lines = await getPool().query<{ account_number: string; debit_amount: string; credit_amount: string }>(
+    const lines = await sieWriterFixture().query<{ account_number: string; debit_amount: string; credit_amount: string }>(
       `SELECT account_number, debit_amount::text, credit_amount::text
          FROM public.journal_entry_lines
         WHERE journal_entry_id = $1
@@ -265,7 +265,7 @@ describe('import_sie_journal_entries RPC', () => {
     expect(lines.rows.map((r) => r.account_number)).toEqual(['6540', '1930'])
 
     // One log row for the corrected voucher, none for the plain one.
-    const logs = await getPool().query<{
+    const logs = await sieWriterFixture().query<{
       journal_entry_id: string
       rattelse_type: string
       source: string
@@ -309,7 +309,7 @@ describe('import_sie_journal_entries RPC', () => {
 
     // The log stays WORM for imported rows too.
     await expect(
-      getPool().query(`DELETE FROM public.journal_entry_rattelse_log WHERE company_id = $1`, [companyId]),
+      sieWriterFixture().query(`DELETE FROM public.journal_entry_rattelse_log WHERE company_id = $1`, [companyId]),
     ).rejects.toThrow(/oföränderlig/)
   })
 
@@ -341,19 +341,19 @@ describe('import_sie_journal_entries RPC', () => {
     ]
 
     await expect(
-      getPool().query(
-        `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+      sieWriterFixture().query(
+        `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
         [companyId, userId, fiscalPeriodId, JSON.stringify(payload)],
       ),
     ).rejects.toThrow(/does not belong to company/)
 
     // Fail closed: the whole import rolled back, nothing posted, no log row.
-    const posted = await getPool().query<{ count: string }>(
+    const posted = await sieWriterFixture().query<{ count: string }>(
       `SELECT count(*)::text AS count FROM public.journal_entries WHERE company_id = $1`,
       [companyId],
     )
     expect(posted.rows[0]!.count).toBe('0')
-    const logs = await getPool().query<{ count: string }>(
+    const logs = await sieWriterFixture().query<{ count: string }>(
       `SELECT count(*)::text AS count FROM public.journal_entry_rattelse_log WHERE company_id = $1`,
       [companyId],
     )
@@ -380,15 +380,15 @@ describe('import_sie_journal_entries RPC', () => {
       { sourceId: 'C2', series: 'C', date: '2026-02-02', description: 'c2', sourceType: 'import', lines: makeLines(50) },
     ]
 
-    const res = await getPool().query<{
-      import_sie_journal_entries: {
+    const res = await sieWriterFixture().query<{
+      write_sie_job_entries: {
         inserted_entries: Array<{ id: string; sourceId: string; series: string; voucherNumber: number; sourceType: string }>
       }
     }>(
-      `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+      `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
       [companyId, userId, fiscalPeriodId, JSON.stringify(payload)],
     )
-    const inserted = res.rows[0]!.import_sie_journal_entries.inserted_entries
+    const inserted = res.rows[0]!.write_sie_job_entries.inserted_entries
 
     // Payload order is preserved and each series counts up from 1.
     expect(inserted.map((e) => [e.sourceId, e.series, e.voucherNumber])).toEqual([
@@ -402,7 +402,7 @@ describe('import_sie_journal_entries RPC', () => {
 
     // The rows say the same as the return value, and every line landed on
     // the header that carries its source voucher.
-    const rows = await getPool().query<{ voucher_series: string; voucher_number: number; description: string; status: string; committed_at: string | null; total: string }>(
+    const rows = await sieWriterFixture().query<{ voucher_series: string; voucher_number: number; description: string; status: string; committed_at: string | null; total: string }>(
       `SELECT je.voucher_series, je.voucher_number, je.description, je.status, je.committed_at::text,
               sum(l.debit_amount)::text AS total
          FROM public.journal_entries je
@@ -421,7 +421,7 @@ describe('import_sie_journal_entries RPC', () => {
     ])
     expect(rows.rows.every((r) => r.status === 'posted' && r.committed_at !== null)).toBe(true)
 
-    const sequences = await getPool().query<{ voucher_series: string; last_number: number }>(
+    const sequences = await sieWriterFixture().query<{ voucher_series: string; last_number: number }>(
       `SELECT voucher_series, last_number FROM public.voucher_sequences
         WHERE company_id = $1 AND fiscal_period_id = $2 ORDER BY voucher_series`,
       [companyId, fiscalPeriodId],
@@ -438,15 +438,15 @@ describe('import_sie_journal_entries RPC', () => {
     // Engine commit first: A1.
     const draftBefore = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId, voucherSeries: 'A' })
     await insertBalancedLines(draftBefore)
-    const first = await getPool().query<{ voucher_number: number }>(
+    const first = await sieWriterFixture().query<{ voucher_number: number }>(
       `SELECT voucher_number FROM public.commit_journal_entry($1::uuid, $2::uuid)`,
       [companyId, draftBefore],
     )
     expect(first.rows[0]!.voucher_number).toBe(1)
 
     // Import two: A2, A3.
-    const res = await getPool().query<{ import_sie_journal_entries: { inserted_entries: Array<{ voucherNumber: number }> } }>(
-      `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+    const res = await sieWriterFixture().query<{ write_sie_job_entries: { inserted_entries: Array<{ voucherNumber: number }> } }>(
+      `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
       [
         companyId,
         userId,
@@ -457,18 +457,18 @@ describe('import_sie_journal_entries RPC', () => {
         ]),
       ],
     )
-    expect(res.rows[0]!.import_sie_journal_entries.inserted_entries.map((e) => e.voucherNumber)).toEqual([2, 3])
+    expect(res.rows[0]!.write_sie_job_entries.inserted_entries.map((e) => e.voucherNumber)).toEqual([2, 3])
 
     // Engine commit after: A4.
     const draftAfter = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId, voucherSeries: 'A' })
     await insertBalancedLines(draftAfter)
-    const last = await getPool().query<{ voucher_number: number }>(
+    const last = await sieWriterFixture().query<{ voucher_number: number }>(
       `SELECT voucher_number FROM public.commit_journal_entry($1::uuid, $2::uuid)`,
       [companyId, draftAfter],
     )
     expect(last.rows[0]!.voucher_number).toBe(4)
 
-    const numbers = await getPool().query<{ voucher_number: number }>(
+    const numbers = await sieWriterFixture().query<{ voucher_number: number }>(
       `SELECT voucher_number FROM public.journal_entries
         WHERE company_id = $1 AND voucher_series = 'A' AND status = 'posted'
         ORDER BY voucher_number`,
@@ -497,13 +497,13 @@ describe('import_sie_journal_entries RPC', () => {
       },
     ]
 
-    const res = await getPool().query<{ import_sie_journal_entries: { inserted_entries: Array<{ id: string }> } }>(
-      `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+    const res = await sieWriterFixture().query<{ write_sie_job_entries: { inserted_entries: Array<{ id: string }> } }>(
+      `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
       [companyId, userId, fiscalPeriodId, JSON.stringify(payload)],
     )
-    const entryId = res.rows[0]!.import_sie_journal_entries.inserted_entries[0]!.id
+    const entryId = res.rows[0]!.write_sie_job_entries.inserted_entries[0]!.id
 
-    const lines = await getPool().query<{ account_number: string; debit_amount: string; credit_amount: string; line_description: string | null; sort_order: number }>(
+    const lines = await sieWriterFixture().query<{ account_number: string; debit_amount: string; credit_amount: string; line_description: string | null; sort_order: number }>(
       `SELECT account_number, debit_amount::text, credit_amount::text, line_description, sort_order
          FROM public.journal_entry_lines WHERE journal_entry_id = $1 ORDER BY sort_order`,
       [entryId],
@@ -524,30 +524,30 @@ describe('import_sie_journal_entries RPC', () => {
     ]
 
     await expect(
-      getPool().query(
-        `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+      sieWriterFixture().query(
+        `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
         [companyId, userId, fiscalPeriodId, JSON.stringify(payload)],
       ),
     ).rejects.toThrow(/SIE journal entry A2 has no lines/)
 
-    const headers = await getPool().query<{ count: string }>(
+    const headers = await sieWriterFixture().query<{ count: string }>(
       `SELECT count(*)::text AS count FROM public.journal_entries WHERE company_id = $1`,
       [companyId],
     )
     expect(headers.rows[0]!.count).toBe('0')
-    const sequence = await getPool().query(
+    const sequence = await sieWriterFixture().query(
       `SELECT 1 FROM public.voucher_sequences WHERE company_id = $1 AND fiscal_period_id = $2`,
       [companyId, fiscalPeriodId],
     )
     expect(sequence.rowCount).toBe(0)
   })
 
-  it('refuses a closed fiscal period even though headers insert directly as posted', async () => {
+  it('refuses a closed fiscal period before a draft can be posted', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany({ isClosed: true })
 
     await expect(
-      getPool().query(
-        `SELECT public.import_sie_journal_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
+      sieWriterFixture().query(
+        `SELECT public.write_sie_job_entries($1::uuid, $2::uuid, $3::uuid, $4::jsonb)`,
         [
           companyId,
           userId,
@@ -559,12 +559,12 @@ describe('import_sie_journal_entries RPC', () => {
       ),
     ).rejects.toThrow(/locked\/closed fiscal period/i)
 
-    const headers = await getPool().query<{ count: string }>(
+    const headers = await sieWriterFixture().query<{ count: string }>(
       `SELECT count(*)::text AS count FROM public.journal_entries WHERE company_id = $1`,
       [companyId],
     )
     expect(headers.rows[0]!.count).toBe('0')
-    const sequence = await getPool().query(
+    const sequence = await sieWriterFixture().query(
       `SELECT 1 FROM public.voucher_sequences WHERE company_id = $1 AND fiscal_period_id = $2`,
       [companyId, fiscalPeriodId],
     )
@@ -574,7 +574,7 @@ describe('import_sie_journal_entries RPC', () => {
   it('rejects an imported history row that claims an actor (provenance check)', async () => {
     const { companyId } = await seedCompany()
     await expect(
-      getPool().query(
+      sieWriterFixture().query(
         `INSERT INTO public.journal_entry_rattelse_log
            (company_id, journal_entry_id, rattelse_type, struck_lines, added_lines, actor, source)
          VALUES ($1, gen_random_uuid(), 'lines', '[]', '[]', gen_random_uuid(), 'sie_import')`,

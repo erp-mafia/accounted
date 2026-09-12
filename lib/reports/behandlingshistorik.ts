@@ -119,6 +119,7 @@ interface EntryRow {
   commit_method: string | null
   reverses_id: string | null
   correction_of_id: string | null
+  import_batch_id?: string | null
 }
 
 interface RattelseRow {
@@ -213,6 +214,7 @@ export const AUDITED_TABLES = [
   'categorization_templates',
   'booking_template_library',
   'sie_imports',
+  'sie_import_chunks',
   'bank_file_imports',
   // Verifikationsserie per bankkonto (audited since migration 20260902124513):
   // the per-account override outranks the per-source-type map above, so it is
@@ -244,7 +246,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)'
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   manual: 'Manuell',
@@ -1220,6 +1222,22 @@ export function auditRowToEvent(
         event: 'SIE-importlogg raderad',
         object: str(row.old_state?.filename),
       })
+    case 'sie_import_chunks': {
+      if (row.action !== 'COMMIT') return null
+      const state = row.new_state
+      const entries = Array.isArray(state?.entries) ? state.entries as Array<Record<string, unknown>> : []
+      return auditEvent(row, {
+        category: 'import',
+        code: 'sie_import.chunk_committed',
+        event: 'SIE-importdel bokförd',
+        object: str(state?.import_id),
+        details: [
+          `Del: ${fmtValue(state?.phase)} ${fmtValue(state?.chunk_no)}`,
+          `Kontrollsumma: ${fmtValue(state?.payload_hash)}`,
+          ...entries.map(entry => `${voucherLabel(entry.series, entry.voucherNumber)}: ${fmtValue(entry.id)}`),
+        ],
+      })
+    }
     case 'bank_file_imports':
       if (row.action !== 'DELETE') return null
       return auditEvent(row, {
@@ -1637,7 +1655,7 @@ async function fetchPeriodEntries(supabase: SupabaseClient, companyId: string, p
     supabase
       .from('journal_entries')
       .select(
-        'id, voucher_series, voucher_number, entry_date, description, source_type, status, committed_at, user_id, committed_actor_type, committed_actor_label, commit_method, reverses_id, correction_of_id',
+        'id, voucher_series, voucher_number, entry_date, description, source_type, status, committed_at, user_id, committed_actor_type, committed_actor_label, commit_method, reverses_id, correction_of_id, import_batch_id',
       )
       .eq('company_id', companyId)
       .eq('fiscal_period_id', periodId)
@@ -1651,6 +1669,7 @@ async function fetchAuditRows(
   companyId: string,
   window: { fromTs: string; toTs: string },
   recordIds: string[],
+  importIds: string[] = [],
 ): Promise<AuditLogEntry[]> {
   const byId = new Map<string, AuditLogEntry>()
 
@@ -1664,7 +1683,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -1683,6 +1702,14 @@ async function fetchAuditRows(
         .order('id', { ascending: true })
         .range(from, to),
     )
+    for (const row of rows) byId.set(row.id, row)
+  }
+  // An older fiscal year can be imported today. Its immutable chunk receipts
+  // belong to that year's history even outside the registration-time window.
+  for (const ids of chunk(importIds, ID_CHUNK)) {
+    const rows = await fetchAllRows<AuditLogEntry>(({ from, to }) => supabase.from('audit_log')
+      .select('*').eq('company_id', companyId).eq('table_name', 'sie_import_chunks')
+      .in('new_state->>import_id', ids).order('id').range(from, to))
     for (const row of rows) byId.set(row.id, row)
   }
   return [...byId.values()]
@@ -1823,7 +1850,8 @@ export async function generateBehandlingshistorik(
   const unionIds = mode === 'fiscal_year' ? entryIds : []
 
   const [auditRows, rattelseRows, resets, sieImports, bankImports, releases, globalAuditRows] = await Promise.all([
-    fetchAuditRows(supabase, companyId, window, unionIds),
+    fetchAuditRows(supabase, companyId, window, unionIds, mode === 'fiscal_year'
+      ? [...new Set(entries.map(entry => entry.import_batch_id).filter((id): id is string => !!id))] : []),
     fetchRattelseRows(supabase, companyId, window, unionIds),
     fetchMigrationResets(supabase, companyId),
     fetchSieImports(supabase, companyId),

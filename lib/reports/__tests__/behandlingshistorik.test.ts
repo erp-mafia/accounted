@@ -93,7 +93,7 @@ describe('AUDIT_ROW_FILTER', () => {
 
   it('is the exact literal used in the audit_log query (schema guard needs a literal there)', () => {
     const source = readFileSync(path.join(__dirname, '..', 'behandlingshistorik.ts'), 'utf-8')
-    expect(source).toContain(`.or(\n        '${AUDIT_ROW_FILTER}',\n      )`)
+    expect(source.replace(/\r\n/g, '\n')).toContain(`.or(\n        '${AUDIT_ROW_FILTER}',\n      )`)
   })
 })
 
@@ -175,6 +175,16 @@ describe('commitEventFromEntry', () => {
 // ============================================================
 
 describe('auditRowToEvent: journal_entries', () => {
+  it('renders the exact voucher identities and hash of a compact SIE receipt', () => {
+    const event = auditRowToEvent(auditRow({ table_name: 'sie_import_chunks', action: 'COMMIT', new_state: {
+      import_id: 'batch-1', phase: 'vouchers', chunk_no: 2, payload_hash: 'hash-1',
+      entries: [{ id: 'entry-7', series: 'A', voucherNumber: 7 }],
+    } }))!
+    expect(event.code).toBe('sie_import.chunk_committed')
+    expect(event.object).toBe('batch-1')
+    expect(event.details.join(' ')).toContain('entry-7')
+    expect(event.details.join(' ')).toContain('hash-1')
+  })
   it('ignores COMMIT rows (the bokföringspost comes from journal_entries)', () => {
     expect(auditRowToEvent(auditRow({ action: 'COMMIT', new_state: { status: 'posted' } }))).toBeNull()
   })

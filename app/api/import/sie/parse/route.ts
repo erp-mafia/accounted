@@ -21,6 +21,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { readSIERequestFile } from '@/lib/import/sie-intake'
+import { resolveSIEFiscalYear } from '@/lib/import/sie-jobs'
 
 /**
  * POST /api/import/sie/parse
@@ -32,14 +34,14 @@ export const POST = withRouteContext(
     const { supabase, companyId, log, requestId } = ctx
 
     const formData = await request.formData()
-    const file = formData.get('file') as File | null
+    const file = await readSIERequestFile(formData,supabase,companyId)
 
     if (!file) {
       return errorResponseFromCode('SIE_PARSE_NO_FILE', log, { requestId })
     }
 
     const filename = file.name.toLowerCase()
-    if (!filename.endsWith('.sie') && !filename.endsWith('.se')) {
+    if (!/\.(sie|se|si)$/.test(filename)) {
       return errorResponseFromCode('SIE_PARSE_INVALID_TYPE', log, {
         requestId,
         details: { filename: file.name },
@@ -66,17 +68,8 @@ export const POST = withRouteContext(
       const content = decodeBuffer(arrayBuffer, encoding)
 
       const duplicate = await checkDuplicateImport(supabase, companyId!, content)
-      if (duplicate) {
-        return errorResponseFromCode('SIE_DUPLICATE_FILE', opLog, {
-          requestId,
-          details: {
-            importId: duplicate.id,
-            importedAt: duplicate.imported_at,
-          },
-        })
-      }
-
       const parsed = parseSIEFile(content)
+      await resolveSIEFiscalYear(supabase,companyId,parsed)
 
       // Mojibake tripwire (warn, never block): CP437 bytes decoded as
       // windows-1252 somewhere upstream leave C1 specials mid-word in account
@@ -101,25 +94,9 @@ export const POST = withRouteContext(
         })
       }
 
-      if (parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd) {
-        const periodDuplicate = await checkDuplicatePeriodImport(
-          supabase,
-          companyId!,
-          parsed.stats.fiscalYearStart,
-          parsed.stats.fiscalYearEnd,
-        )
-        if (periodDuplicate) {
-          return errorResponseFromCode('SIE_DUPLICATE_PERIOD', opLog, {
-            requestId,
-            details: {
-              importId: periodDuplicate.id,
-              fiscalYearStart: periodDuplicate.fiscal_year_start,
-              fiscalYearEnd: periodDuplicate.fiscal_year_end,
-              importedAt: periodDuplicate.imported_at,
-            },
-          })
-        }
-      }
+      const periodDuplicate = parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd
+        ? await checkDuplicatePeriodImport(supabase,companyId!,parsed.stats.fiscalYearStart,parsed.stats.fiscalYearEnd)
+        : null
 
       const validation = validateSIEFile(parsed)
 
@@ -182,6 +159,7 @@ export const POST = withRouteContext(
 
       return NextResponse.json({
         success: true,
+        existingImport: duplicate ?? periodDuplicate,
         encoding,
         fileHash,
         parsed: {

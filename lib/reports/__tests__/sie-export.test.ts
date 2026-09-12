@@ -31,7 +31,11 @@ function makeClient() {
     // `rpc` drains the same queue so tests can intersperse RPC + table fetches.
     // SIE export calls `compute_prior_opening_balances` via getOpeningBalances
     // whenever `opening_balance_entry_id` is null (the multi-year-import path).
-    rpc: vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null }),
+    rpc: vi.fn().mockImplementation(async (name:string) => {
+      if (name === 'acquire_sie_period_read') return {data:'read-lease',error:null}
+      if (name === 'finish_sie_period_read') return {data:null,error:null}
+      return results[resultIdx++] ?? { data: null, error: null }
+    }),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any
 }

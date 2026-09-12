@@ -1250,9 +1250,10 @@ describe('importVouchers: per-voucher series preservation', () => {
     expect(importCalls).toHaveLength(1)
     const entries = importCalls[0].args.p_entries as Array<Record<string, unknown>>
 
-    // The plain voucher carries no history keys at all.
+    // Every voucher has batch provenance, even when it carries no history.
     expect(entries[0]).not.toHaveProperty('corrections')
-    expect(entries[0]).not.toHaveProperty('sieImportId')
+    expect(entries[0]).toHaveProperty('sieImportId', 'import-42')
+    expect(entries[0]).toHaveProperty('sourceOrdinal', 0)
 
     // The corrected voucher: lines are the #TRANS rows only ...
     expect(entries[1].lines).toHaveLength(2)

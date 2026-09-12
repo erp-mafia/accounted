@@ -1,3 +1,4 @@
+import { getSIEJob } from '@/lib/import/sie-jobs'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import {
   ENTITY_TYPES,
@@ -223,6 +224,7 @@ import {
 } from '@/lib/suppliers/match-supplier'
 import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
+import { withSIEExternalReport } from '@/lib/import/sie-period-read'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 // Account-keyed reconciliation (one engine, three doors): the same service
 // the dashboard routes and the v1 API call.
@@ -19756,7 +19758,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_import_sie',
     keywords: ['sie', 'sie-fil', 'importera bokföring', 'byta system'],
     title: 'Import SIE File',
-    description: 'Stage SIE-file import (types 1-4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. Always staged. Run gnubok_sie_preflight first; large files arrive byte-exact via gnubok_create_sie_upload (card/URL), NEVER retyped inline.',
+    description: 'Stage a durable SIE import (types 1-4). Approval submits a job; poll gnubok_sie_import_status until completed. Run gnubok_sie_preflight first. Upload large files through gnubok_create_sie_upload; never retype them.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -19896,15 +19898,31 @@ export const tools: McpTool[] = [
   },
 
   {
+    name:'gnubok_sie_import_status',title:'SIE Import Status',keywords:['sie','importstatus'],catalogVisibility:'search',
+    description:'Read durable SIE import progress, failure details and the final result. Poll after gnubok_import_sie or gnubok_undo_sie_import commits; accepted submission is not completed bookkeeping.',
+    inputSchema:{type:'object',additionalProperties:false,properties:{import_id:{type:'string',format:'uuid'}},required:['import_id']},
+    outputSchema:{type:'object',additionalProperties:false,properties:{
+      import_id:{type:'string'},state:{type:'string'},chunks_done:{type:'integer'},chunks_total:{type:'integer'},
+      vouchers_written:{type:'integer'},error_message:{type:['string','null']},result:{type:['object','null'],additionalProperties:true},
+    },required:['import_id','state','chunks_done','chunks_total','vouchers_written','error_message','result']},
+    annotations:ANNOTATIONS_READ_ONLY,
+    async execute(args,companyId,_userId,supabase) {
+      const job = await getSIEJob(supabase,companyId,args.import_id as string)
+      if (!job) throw new Error('SIE import not found')
+      return {import_id:job.id,state:job.job_state,chunks_done:job.chunks_done,chunks_total:job.chunks_total,
+        vouchers_written:job.transactions_count,error_message:job.error_message,result:job.job_result}
+    },
+  },
+  {
     name: 'gnubok_undo_sie_import',
     keywords: ['sie', 'ångra import'],
     title: 'Undo SIE Import',
-    description: 'Stage undo of a completed SIE import: hard-deletes its entries, detaches docs, resets voucher_sequences, marks the import \'undone\' for re-import. Use after a botched import. Period must be open. HIGH risk.',
+    description: 'Stage batch undo of a completed or unfinished durable SIE import. Approval queues storno, retaining documents and history. Poll gnubok_sie_import_status until undone. Period must be open. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        import_id: { type: 'string', description: 'UUID of the sie_imports row to undo. Must be status=\'completed\'.' },
+        import_id: { type: 'string', description: 'UUID of the sie_imports row to undo. Must be a durable execution.' },
         reason: { type: 'string', maxLength: 500, description: 'Optional human-readable reason: shown in pending_operations review.' },
       },
       required: ['import_id'],
@@ -19932,12 +19950,13 @@ export const tools: McpTool[] = [
         transactions_count: number | null
         opening_balance_entry_id: string | null
         status: string
+        job_state: string | null
         fiscal_period_id: string | null
         imported_at: string | null
       }
       const { data, error: lookupErr } = await supabase
         .from('sie_imports')
-        .select('id, filename, fiscal_year_start, fiscal_year_end, transactions_count, opening_balance_entry_id, status, fiscal_period_id, imported_at')
+        .select('id, filename, fiscal_year_start, fiscal_year_end, transactions_count, opening_balance_entry_id, status, job_state, fiscal_period_id, imported_at')
         .eq('id', importId)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -19949,7 +19968,7 @@ export const tools: McpTool[] = [
       if (!importRow) {
         throw new Error(`SIE-import hittades inte: ${importId}`)
       }
-      if (importRow.status !== 'completed') {
+      if (!importRow.job_state || ['undone','failed'].includes(importRow.job_state)) {
         throw new Error(`Bara slutförda importer kan ångras (nuvarande status: ${importRow.status}).`)
       }
 
@@ -19984,12 +20003,12 @@ export const tools: McpTool[] = [
             imported_at: importRow.imported_at,
           },
           reason: reason ?? null,
-          will: 'hard-delete the import\'s journal entries (transactions + opening balance), detach user-attached documents, reset voucher_sequences, and mark the sie_imports row as \'undone\' so the file can be re-imported',
+          will: 'Reverse exactly this batch with storno, retain documents and history, and release the period hold only when every undo checkpoint completes.',
         },
         actor,
         {
-          description: 'After commit, re-stage the SIE import with corrected mappings via gnubok_import_sie.',
-          tool: 'gnubok_import_sie',
+          description: 'Poll until undone before submitting a new execution with corrected mappings.',
+          tool: 'gnubok_sie_import_status',
         },
       )
     },
@@ -23273,7 +23292,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         const taskStartedAt = Date.now()
         emitAfterResponse(async () => {
           try {
-            const rawResult = await tool.execute(toolArgs, tenantId, userId, supabase, actor)
+            const rawResult = await withSIEExternalReport(supabase,tenantId,toolName,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor))
             const canonicalResult = effectiveCompanyId
               ? addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
               : rawResult
@@ -23353,7 +23372,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
           ;(toolArgs as Record<string, unknown>).__toolNamespace = toolNamespace
         }
-        const rawResult = await tool.execute(toolArgs, tenantId, userId, supabase, actor)
+        const rawResult = await withSIEExternalReport(supabase,tenantId,toolName,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor))
         const canonicalResult = effectiveCompanyId
           ? addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
           : rawResult

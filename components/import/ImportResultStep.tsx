@@ -182,6 +182,13 @@ export default function ImportResultStep({
       {/* A year missing between the imported ones: say so here, where the next file is one click away. */}
       {result.success && <FiscalYearGapNotice />}
 
+      {result.success && result.nextPeriodOpeningBalanceReview && (
+        <p className="text-sm text-warning" role="status">
+          {t('next_year_review', { name: result.nextPeriodOpeningBalanceReview.nextPeriodName })}{' '}
+          <Link href="/settings/bookkeeping" className="underline underline-offset-2">{t('next_year_review_action')}</Link>
+        </p>
+      )}
+
       {/* IB resync notice (prior-year backfill) */}
       {result.success && result.nextPeriodIBResync && (
         <Card className="border-success/50">

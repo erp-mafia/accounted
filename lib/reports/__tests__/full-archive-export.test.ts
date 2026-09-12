@@ -9,6 +9,9 @@ import {
 } from '../full-archive-export'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
+import { generateTrialBalance } from '../trial-balance'
+import { generateSIEExport } from '../sie-export'
+import { generateJournalRegister } from '../journal-register'
 import type { AuditLogEntry } from '@/types'
 
 vi.mock('../sie-export', () => ({
@@ -84,6 +87,15 @@ vi.mock('@/lib/core/audit/audit-service', () => ({
 
 const mockGetAuditLog = vi.mocked(getAuditLog)
 
+function installArchiveReadLease(supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) {
+  const queuedRpc = supabase.rpc.getMockImplementation()!
+  supabase.rpc.mockImplementation((name: string, ...args: unknown[]) => {
+    if (name === 'acquire_sie_period_read') return Promise.resolve({ data: 'archive-lease', error: null })
+    if (name === 'finish_sie_period_read') return Promise.resolve({ data: null, error: null })
+    return queuedRpc(name, ...args)
+  })
+}
+
 const COMPANY_ROW = {
   company_name: 'Test AB',
   org_number: '5566778899',
@@ -135,8 +147,37 @@ describe('generateFullArchive', () => {
     mockGetAuditLog.mockResolvedValue({ data: [], count: 0 })
     const mock = createQueuedMockSupabase()
     supabase = mock.supabase
+    installArchiveReadLease(supabase)
     enqueueMany = mock.enqueueMany
     findCall = mock.findCall
+  })
+
+  it('refuses an archive before reading anything while an import hold exists', async () => {
+    supabase.rpc.mockResolvedValueOnce({ data: null, error: { code: '55000', message: 'SIE_IMPORT_HOLD' } })
+    await expect(generateFullArchive(supabase as any, 'company-1', { scope: 'all' })).rejects.toMatchObject({ code: 'CONFLICT' })
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(generateTrialBalance).not.toHaveBeenCalled()
+  })
+
+  it('keeps the outer lease through every financial report and discards an expired archive', async () => {
+    enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
+    const readTrialBalance = vi.mocked(generateTrialBalance).getMockImplementation()!
+    vi.mocked(generateTrialBalance).mockImplementationOnce(async (...args) => {
+      expect(supabase.rpc).toHaveBeenCalledWith('acquire_sie_period_read', { p_company_id: 'company-1', p_purpose: 'report_export' })
+      expect(supabase.rpc.mock.calls.some(([name]) => name === 'finish_sie_period_read')).toBe(false)
+      return readTrialBalance(...args)
+    })
+    const rpc = supabase.rpc.getMockImplementation()!
+    supabase.rpc.mockImplementation((name: string, args: Record<string, unknown>) =>
+      name === 'finish_sie_period_read' && args.p_require_valid
+        ? Promise.resolve({ data: null, error: { message: 'SIE_READ_LEASE_EXPIRED' } }) : rpc(name, args))
+    await expect(generateFullArchive(supabase as any, 'company-1', {
+      scope: 'period', period_id: PERIOD_2024.id, include_documents: false,
+    })).rejects.toThrow('SIE_READ_LEASE_EXPIRED')
+    expect(generateTrialBalance).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).toHaveBeenLastCalledWith('finish_sie_period_read', {
+      p_company_id: 'company-1', p_token: 'archive-lease', p_require_valid: false,
+    })
   })
 
   describe('scope: period', () => {
@@ -399,6 +440,26 @@ describe('generateFullArchive', () => {
   })
 
   describe('scope: all', () => {
+    it('keeps current retained vouchers and their linked PDF without depending on an original import file', async () => {
+      const entry={id:'retained-entry',voucher_number:17,voucher_series:'A',status:'posted',description:'Retained voucher'}
+      vi.mocked(generateSIEExport).mockResolvedValueOnce('#FLAGGA 0\n#VER A 17 20240601 "Retained voucher"\n{\n#TRANS 1930 {} 100\n#TRANS 2091 {} -100\n}')
+      vi.mocked(generateJournalRegister).mockResolvedValueOnce({entries:[entry],total_entries:1,total_debit:100,total_credit:100,
+        period:{start:'2024-01-01',end:'2024-12-31'}} as any)
+      enqueueMany([
+        {data:COMPANY_ROW},{data:[PERIOD_2024]},
+        {data:[{id:'retained-doc',file_name:'retained.pdf',storage_path:'p/retained.pdf',journal_entry_id:entry.id,
+          journal_entries:{voucher_number:17,voucher_series:'A',entry_date:'2024-06-01'}}]},
+        {data:[{id:entry.id,fiscal_period_id:PERIOD_2024.id}]},
+        {data:[]}, // no original SIE source file
+      ])
+      const zip=await JSZip.loadAsync(await generateFullArchive(supabase as any,'company-1',{scope:'all'}))
+      expect(await zip.file('sie/2024-01-01_2024-12-31.se')!.async('text')).toContain('#VER A 17')
+      const register=JSON.parse(await zip.file('rapporter/2024-01-01_2024-12-31/grundbok.json')!.async('text'))
+      expect(register.entries).toContainEqual(entry)
+      expect(zip.file('dokument/2024/A17_retained.pdf')).not.toBeNull()
+      const documents=JSON.parse(await zip.file('dokument/manifest.json')!.async('text'))
+      expect(documents[0]).toMatchObject({journal_entry_id:entry.id,status:'downloaded'})
+    })
     it('generates per-period SIE files and report subfolders', async () => {
       enqueueMany([
         { data: COMPANY_ROW },
@@ -585,23 +646,25 @@ describe('generateFullArchive', () => {
       expect(zip.file('dokument/2024/A5_kvitto_doc-coll.pdf')).not.toBeNull()
     })
 
-    it('throws when no fiscal periods exist', async () => {
+    it('keeps an archived company readable even before its first fiscal period', async () => {
       enqueueMany([
         { data: COMPANY_ROW },
         { data: [] },
       ])
 
-      await expect(
-        generateFullArchive(supabase as any, 'company-1', { scope: 'all' })
-      ).rejects.toThrow('No fiscal periods found')
+      const zip=await JSZip.loadAsync(await generateFullArchive(supabase as any, 'company-1', { scope: 'all' }))
+      expect(zip.file('revision/behandlingshistorik.json')).not.toBeNull()
+      expect(zip.file('dokument/manifest.json')).not.toBeNull()
     })
 
-    it('includes imported SIE source files and master-data dumps in all-mode', async () => {
+    it.each([false, true])('includes imported SIE sources and master data (original-byte manifest: %s)', async (durable) => {
+      const rawHash = '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'
       const importRow = {
         id: 'import-1',
         filename: 'original.se',
         file_hash: 'abc123',
         file_storage_path: 'company-1/import-1.se',
+        ...(durable ? {manifest:{originalSource:{format:'original_bytes',path:`company-1/sie-originals/${rawHash}.se`,sha256:rawHash}}} : {}),
         org_number: '5560000000',
         company_name: 'Test AB',
         sie_type: 4,
@@ -653,6 +716,8 @@ describe('generateFullArchive', () => {
       const manifest = JSON.parse(await manifestFile!.async('text'))
       expect(manifest[0].import_id).toBe('import-1')
       expect(manifest[0].status).toBe('downloaded')
+      expect(manifest[0].storage_path).toBe(durable ? `company-1/sie-originals/${rawHash}.se` : importRow.file_storage_path)
+      expect(manifest[0].sha256_hash).toBe(durable ? rawHash : importRow.file_hash)
 
       const imports = JSON.parse(await zip.file('sie/imports.json')!.async('text'))
       expect(imports[0].filename).toBe('original.se')
@@ -947,6 +1012,7 @@ describe('generateBaseDataArchive', () => {
     mockGetAuditLog.mockResolvedValue({ data: [], count: 0 })
     const mock = createQueuedMockSupabase()
     supabase = mock.supabase
+    installArchiveReadLease(supabase)
     enqueueMany = mock.enqueueMany
   })
 
