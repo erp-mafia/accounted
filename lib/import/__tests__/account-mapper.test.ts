@@ -10,6 +10,7 @@ import {
   applyMappingOverride,
   mappingsToMap,
   isSystemAccount,
+  resolveAccountMatch,
 } from '../account-mapper'
 
 // --- Helpers ---
@@ -527,5 +528,44 @@ describe('isSystemAccount', () => {
     const mappings = suggestMappings(bookkeepingAccounts, basAccounts)
     expect(mappings).toHaveLength(2)
     expect(mappings.every((m) => m.targetAccount)).toBe(true)
+  })
+})
+
+describe('resolveAccountMatch', () => {
+  const base = {
+    sourceAccount: '4056', sourceName: 'Inköp varor 25% EG',
+    targetAccount: '4056', targetName: 'Inköp varor 25% EG',
+    confidence: 0.7, matchType: 'bas_range' as const, isOverride: false,
+  }
+
+  it('names a recognised account rather than leaving the cell blank', () => {
+    expect(resolveAccountMatch({ ...base, matchType: 'exact', confidence: 1 })).toBe('bas')
+  })
+
+  it('does not claim a number outside the BAS reference is the company own', () => {
+    // 1241 Personbilar is a standard BAS account our reference does not carry;
+    // 4599 is a source system's invention. Indistinguishable to the mapper.
+    const personbilar = { ...base, sourceAccount: '1241', targetAccount: '1241', sourceName: 'Personbilar' }
+    const invented = { ...base, sourceAccount: '4599', targetAccount: '4599', sourceName: 'Eget inköpskonto' }
+    expect(resolveAccountMatch(personbilar)).toBe('from_file')
+    expect(resolveAccountMatch(invented)).toBe('from_file')
+  })
+
+  it('flags a mapping that lands on a different number', () => {
+    // 2640 to 2641 is the only non-identity mapping the mapper makes on its own.
+    expect(resolveAccountMatch({
+      ...base, sourceAccount: '2640', targetAccount: '2641', matchType: 'exact', confidence: 1,
+    })).toBe('redirected')
+  })
+
+  it('reports a user choice as manual, even when it maps to itself', () => {
+    expect(resolveAccountMatch({ ...base, isOverride: true })).toBe('manual')
+    expect(resolveAccountMatch({
+      ...base, sourceAccount: '3058', targetAccount: '3058', matchType: 'exact', isOverride: true,
+    })).toBe('manual')
+  })
+
+  it('says nothing at all about an unmapped row', () => {
+    expect(resolveAccountMatch({ ...base, targetAccount: '', confidence: 0, matchType: 'manual' })).toBeNull()
   })
 })

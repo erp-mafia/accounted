@@ -31,7 +31,7 @@ import {
   Filter,
 } from 'lucide-react'
 import type { AccountMapping } from '@/lib/import/types'
-import { isValidBASRange } from '@/lib/import/account-mapper'
+import { isValidBASRange, resolveAccountMatch, type AccountMatchKind } from '@/lib/import/account-mapper'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
@@ -62,7 +62,7 @@ interface AccountMappingStepProps {
   onBack: () => void
 }
 
-type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'low_confidence' | 'manual'
+type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'manual'
 
 const PAGE_SIZE = 50
 
@@ -110,9 +110,6 @@ export default function AccountMappingStep({
       case 'new_account':
         result = result.filter((m) => m.targetAccount && !knownTargets.has(m.targetAccount))
         break
-      case 'low_confidence':
-        result = result.filter((m) => m.targetAccount && m.confidence < 0.7)
-        break
       case 'vat_review':
         result = result.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed)
         break
@@ -158,10 +155,9 @@ export default function AccountMappingStep({
   const stats = useMemo(() => {
     const unmapped = mappings.filter((m) => !m.targetAccount).length
     const newAccounts = mappings.filter((m) => m.targetAccount && !knownTargets.has(m.targetAccount)).length
-    const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.7).length
     const manual = mappings.filter((m) => m.isOverride).length
     const vatReview = mappings.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed).length
-    return { unmapped, newAccounts, lowConfidence, manual, vatReview }
+    return { unmapped, newAccounts, manual, vatReview }
   }, [mappings, knownTargets])
 
   // After the mapper's self-map rule, an unmapped row is always a number
@@ -194,7 +190,7 @@ export default function AccountMappingStep({
           <CardTitle>Kontomappning</CardTitle>
           <CardDescription>
             Varje konto i SIE-filen kopplas till ett konto i din kontoplan.
-            De flesta matchas automatiskt: granska de osäkra nedan.{' '}
+            De flesta matchas automatiskt: granska de markerade nedan.{' '}
             {t('mapping_new_accounts_note')}
           </CardDescription>
         </CardHeader>
@@ -224,14 +220,6 @@ export default function AccountMappingStep({
             >
               <CheckCircle className="h-3 w-3 mr-1" />
               {t('new_account_filter', { count: stats.newAccounts })}
-            </Badge>
-            <Badge
-              variant={filter === 'low_confidence' ? 'default' : stats.lowConfidence > 0 ? 'secondary' : 'outline'}
-              className="cursor-pointer"
-              onClick={() => handleFilterChange('low_confidence')}
-            >
-              <AlertCircle className="h-3 w-3 mr-1" />
-              {stats.lowConfidence} osäkra
             </Badge>
             <Badge
               variant={filter === 'manual' ? 'default' : 'outline'}
@@ -277,7 +265,6 @@ export default function AccountMappingStep({
                 <SelectItem value="unmapped">Ej mappade</SelectItem>
                 <SelectItem value="new_account">{t('new_account_filter', { count: stats.newAccounts })}</SelectItem>
                 <SelectItem value="vat_review">{t('vat_review_filter', { count: stats.vatReview })}</SelectItem>
-                <SelectItem value="low_confidence">Osäkra</SelectItem>
                 <SelectItem value="manual">Manuellt satta</SelectItem>
               </SelectContent>
             </Select>
@@ -299,7 +286,7 @@ export default function AccountMappingStep({
                   <TableHead className="w-8 !px-0" aria-hidden="true"></TableHead>
                   <TableHead className="w-56">Målkonto</TableHead>
                   <TableHead className="w-72">{t('vat_treatment_column')}</TableHead>
-                  <TableHead className="w-24">Konfidens</TableHead>
+                  <TableHead className="w-24">{t('match_column')}</TableHead>
                   <TableHead className="sticky right-0 z-20 w-28 min-w-28 border-l border-border bg-background text-right">
                     <span className="inline-flex items-center gap-1">
                       {t('vat_treatment_confirm')}
@@ -440,13 +427,7 @@ export default function AccountMappingStep({
                       )}
                     </TableCell>
                     <TableCell>
-                      {mapping.targetAccount && (
-                        <ConfidenceBadge
-                          confidence={mapping.confidence}
-                          matchType={mapping.matchType}
-                          isOverride={mapping.isOverride}
-                        />
-                      )}
+                      <AccountMatchBadge mapping={mapping} />
                     </TableCell>
                     <TableCell
                       className={cn(
@@ -612,26 +593,25 @@ function TruncatedSourceName({ sourceName }: { sourceName: string }) {
   )
 }
 
-function ConfidenceBadge({
-  confidence,
-  isOverride,
-}: {
-  confidence: number
-  matchType: string  // Keep for potential future use
-  isOverride: boolean
-}) {
-  if (isOverride) {
-    return <Badge variant="default">Manuell</Badge>
-  }
+/**
+ * Presentation for the decision made by resolveAccountMatch. "Från filen" is
+ * the majority of rows in a migration and must not read as a warning, so it
+ * takes the quietest variant; the states that mean someone intervened carry
+ * the most weight.
+ */
+const MATCH_BADGE: Record<AccountMatchKind, { key: string; variant: 'default' | 'secondary' | 'outline' }> = {
+  manual: { key: 'match_manual', variant: 'default' },
+  redirected: { key: 'match_redirected', variant: 'default' },
+  from_file: { key: 'match_from_file', variant: 'outline' },
+  bas: { key: 'match_bas', variant: 'secondary' },
+}
 
-  if (confidence >= 0.9) {
-    return <Badge variant="success">Exakt</Badge>
-  }
-
-  if (confidence >= 0.7) {
-    return <Badge variant="secondary">Trolig</Badge>
-  }
-
-  return <Badge variant="outline">Osäker</Badge>
+function AccountMatchBadge({ mapping }: { mapping: AccountMapping }) {
+  const t = useTranslations('chart_of_accounts')
+  const kind = resolveAccountMatch(mapping)
+  if (!kind) return null
+  const { key, variant } = MATCH_BADGE[kind]
+  // Every label is measured to fit this column on one line: check before adding one.
+  return <Badge variant={variant} className="whitespace-nowrap">{t(key)}</Badge>
 }
 
