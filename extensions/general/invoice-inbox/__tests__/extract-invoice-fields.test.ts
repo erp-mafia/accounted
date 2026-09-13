@@ -54,6 +54,8 @@ const VALID_RESULT = {
     address: '548 Market Street, San Francisco, CA 94104',
     bankgiro: null,
     plusgiro: null,
+    iban: null,
+    bic: null,
   },
   invoice: {
     invoiceNumber: '06655767-0007',
@@ -653,6 +655,8 @@ describe('extractInvoiceFields', () => {
           address: 'Provgatan 1, 111 11 Teststad',
           bankgiro: null,
           plusgiro: null,
+          iban: null,
+          bic: null,
         },
       })
     )
@@ -669,6 +673,8 @@ describe('extractInvoiceFields', () => {
       address: null,
       bankgiro: null,
       plusgiro: null,
+      iban: null,
+      bic: null,
     })
     // Only the supplier block is affected.
     expect(data.totals.total).toBe(6.25)
@@ -737,6 +743,8 @@ describe('stripOwnCompanyAsSupplier', () => {
     address: null,
     bankgiro: null,
     plusgiro: null,
+    iban: null,
+    bic: null,
   }
   const own = { orgNumber: '556677-8899', name: 'Testbrand AB' }
 
@@ -787,6 +795,8 @@ describe('stripOwnCompanyAsSupplier', () => {
       address: null,
       bankgiro: null,
       plusgiro: null,
+      iban: null,
+      bic: null,
     }
     expect(stripOwnCompanyAsSupplier(withSupplier(supplier), own).supplier).toEqual(supplier)
   })
@@ -799,6 +809,8 @@ describe('stripOwnCompanyAsSupplier', () => {
       address: null,
       bankgiro: null,
       plusgiro: null,
+      iban: null,
+      bic: null,
     }
     expect(stripOwnCompanyAsSupplier(withSupplier(supplier), own).supplier).toEqual(supplier)
   })

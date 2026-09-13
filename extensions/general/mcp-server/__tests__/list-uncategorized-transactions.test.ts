@@ -96,4 +96,25 @@ describe('gnubok_list_uncategorized_transactions', () => {
       tool.execute({ limit: 20, cash_account_id: '1930' }, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/cash_account_id must be a cash account UUID/)
   })
+
+  it('excludes ignored transactions from both the count and the page', async () => {
+    // A transaction ignored via gnubok_ignore_transaction has journal_entry_id
+    // NULL by CHECK constraint, so "no journal entry yet" alone kept listing
+    // it as work to do (feedback seq 330091). Same predicate as the worklist:
+    // journal_entry_id IS NULL AND is_ignored = false, on both queries.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null, count: 0 })
+    enqueue({ data: [], error: null })
+
+    await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)
+
+    expect(findCalls('transactions', 'is')).toEqual([
+      ['journal_entry_id', null],
+      ['journal_entry_id', null],
+    ])
+    expect(findCalls('transactions', 'eq').filter((args) => args[0] === 'is_ignored')).toEqual([
+      ['is_ignored', false],
+      ['is_ignored', false],
+    ])
+  })
 })

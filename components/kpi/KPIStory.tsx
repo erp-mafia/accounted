@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { KPIReport, KPIPreferences } from '@/types'
 import {
@@ -30,12 +31,15 @@ function Pane({
   annotation,
   tooltip,
   className,
+  flat = false,
   children,
 }: {
   title: string
   annotation?: React.ReactNode
   tooltip?: React.ReactNode
   className?: string
+  /** Shell v2: no card around the figure. */
+  flat?: boolean
   children: React.ReactNode
 }) {
   const label = (
@@ -44,7 +48,7 @@ function Pane({
     </p>
   )
   return (
-    <div className={cn('rounded-lg border border-border p-4', className)}>
+    <div className={cn(flat ? '' : 'rounded-lg border border-border p-4', className)}>
       <div className="flex items-center justify-between gap-3">
         {tooltip ? (
           <InfoTooltip content={tooltip} side="top" iconClassName="h-3 w-3">
@@ -66,7 +70,7 @@ function Pane({
  *  (terracotta when negative). Every non-zero bar carries a compact value
  *  label when they fit side by side, otherwise only the latest does; the
  *  exact amounts always follow in a two-column list under the axis. */
-function ResultBarsPane({ report }: { report: KPIReport }) {
+function ResultBarsPane({ report, flat = false }: { report: KPIReport; flat?: boolean }) {
   const t = useTranslations('kpi')
   const months = report.months
   if (months.length === 0) return null
@@ -79,7 +83,9 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
     return months.length - 1
   })()
 
-  const W = 320
+  // Flat (v2) draws twice as wide at the same height: the bars spread over
+  // the page instead of sitting in a card's half.
+  const W = flat ? 640 : 320
   const H = 120
   const hasNegative = months.some((m) => m.net < 0)
   // Fixed headroom above (and below, when negatives exist) keeps the endpoint
@@ -105,7 +111,7 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
     m.income === 0 && m.expenses === 0 && m.net === 0
 
   return (
-    <Pane title={t('bars_title')} annotation={t('bars_unit')} className="sm:row-span-2">
+    <Pane title={t('bars_title')} annotation={t('bars_unit')} flat={flat} className={flat ? undefined : 'sm:row-span-2'}>
       <svg
         viewBox={`0 0 ${W} ${H + 8}`}
         className="mt-3 h-auto w-full"
@@ -309,12 +315,13 @@ export function KPIPanes({
     .filter(Boolean) as MetricPane[]
 
   const total = (p: MetricPane) => (p.aging ? p.aging.ok + p.aging.overdue : 0)
+  // Shell v2: no card grid. The figures stand in one flat row and the
+  // result bars take their own width underneath, so nothing has to share
+  // a row height with something of another size.
+  const flat = useShell() === 'v2'
 
-  return (
-    <div className="grid items-stretch gap-4 sm:grid-cols-2">
-      <ResultBarsPane report={report} />
-      {panes.map((pane) => (
-        <Pane key={pane.id} title={pane.title} tooltip={pane.tooltip}>
+  const body = (pane: MetricPane) => (
+    <>
           <p
             className={cn(
               'mt-2 font-display text-2xl tabular-nums tracking-tight',
@@ -347,6 +354,30 @@ export function KPIPanes({
               {pane.note}
             </p>
           )}
+    </>
+  )
+
+  if (flat) {
+    return (
+      <div className="space-y-8">
+        <div className="flex flex-wrap gap-x-12 gap-y-5 border-b border-border pb-6">
+          {panes.map((pane) => (
+            <Pane key={pane.id} title={pane.title} tooltip={pane.tooltip} flat className="min-w-[180px]">
+              {body(pane)}
+            </Pane>
+          ))}
+        </div>
+        <ResultBarsPane report={report} flat />
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid items-stretch gap-4 sm:grid-cols-2">
+      <ResultBarsPane report={report} />
+      {panes.map((pane) => (
+        <Pane key={pane.id} title={pane.title} tooltip={pane.tooltip}>
+          {body(pane)}
         </Pane>
       ))}
     </div>

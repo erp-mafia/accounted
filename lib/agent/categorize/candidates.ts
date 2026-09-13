@@ -1,113 +1,44 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import {
-  getSuggestedCategories,
-  buildMerchantHistory,
-  merchantHistoryFor,
-} from '@/lib/transactions/category-suggestions'
-import {
-  findCounterpartyTemplate,
-  formatCounterpartyName,
-} from '@/lib/bookkeeping/counterparty-templates'
-import { getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
-import type { MappingRule, Transaction, VatTreatment } from '@/types'
+import { proposeForTransactions } from '@/lib/transactions/propose'
+import { businessAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import type { Transaction, VatTreatment } from '@/types'
 import type { AccountCandidate } from './select-account'
 
 /**
- * Tier 1 of the auto-booking cascade: deterministic candidate generation.
+ * Tier 1 of the auto-booking cascade: the deterministic candidate slate.
  *
- * Assembles the ranked slate of candidate accounts for one transaction from
- * the company's own memory: a learned counterparty template (the strongest
- * signal) plus mapping rules, keyword patterns and per-merchant history. This
- * is the same engine the `gnubok_suggest_categories` MCP tool uses; it runs
- * with NO model call. The slate is what the Tier-2 selector reasons over.
+ * The same proposals the transactions page and the MCP suggestion tool
+ * show (lib/transactions/propose.ts), reduced to the accounts the Tier-2
+ * selector reasons over: a learned counterpart, a rule that matched, the
+ * catalog's patterns. The assistant's own earlier read is left out, so the
+ * model never argues from itself. No model call here.
  *
  * Company-scoped throughout. Returns at most `limit` candidates, de-duplicated
  * by account (highest confidence wins), highest confidence first.
  */
-
-const MAX_HISTORY_ROWS = 200
-
 export async function gatherCandidates(
   supabase: SupabaseClient,
   companyId: string,
   transaction: Transaction,
   limit = 8,
 ): Promise<AccountCandidate[]> {
-  // The company's own rules plus the global (null-company) defaults. Two static
-  // queries rather than one dynamic `.or('company_id.eq.<id>,...')`, which the
-  // no-phantom-columns scanner can't resolve (and it would trip the ceiling).
-  const [companyRulesRes, globalRulesRes, historyRes, cpMatch] = await Promise.all([
-    supabase
-      .from('mapping_rules')
-      .select('*')
-      .eq('company_id', companyId)
-      .eq('is_active', true)
-      .order('priority', { ascending: false }),
-    supabase
-      .from('mapping_rules')
-      .select('*')
-      .is('company_id', null)
-      .eq('is_active', true)
-      .order('priority', { ascending: false }),
-    // Counterparty-keyed history: only the same merchant's past bookings, so
-    // global frequency padding can't drown the signal in noise.
-    supabase
-      .from('transactions')
-      .select('category, merchant_name, description, original_description')
-      .eq('company_id', companyId)
-      .not('is_business', 'is', null)
-      .neq('category', 'uncategorized')
-      .neq('category', 'private')
-      .order('date', { ascending: false })
-      .limit(MAX_HISTORY_ROWS),
-    findCounterpartyTemplate(supabase, companyId, transaction),
-  ])
-
-  const mappingRules = [
-    ...((companyRulesRes.data ?? []) as MappingRule[]),
-    ...((globalRulesRes.data ?? []) as MappingRule[]),
-  ]
-  const merchantHistory = buildMerchantHistory(historyRes.data ?? [])
-
-  const raw: AccountCandidate[] = []
-
-  // 1. Learned counterparty template — the strongest signal (carries its own VAT).
-  if (cpMatch?.template.debit_account) {
-    const t = cpMatch.template
-    raw.push({
-      account: t.debit_account,
-      label: formatCounterpartyName(t.counterparty_name),
-      vatTreatment: (t.vat_treatment as VatTreatment | null) ?? null,
-      source: 'counterparty_template',
-      confidence: cpMatch.confidence,
-      matchReason: `${t.occurrence_count ?? 0} tidigare bokföringar`,
-    })
-  }
-
-  // 2. Rules / pattern / history suggestions. They don't carry VAT, so derive
-  //    the category's default treatment (the selector can still flag reverse charge).
-  const suggestions = getSuggestedCategories(
-    transaction,
-    mappingRules,
-    merchantHistoryFor(
-      merchantHistory,
-      transaction.merchant_name,
-      transaction.original_description ?? transaction.description,
-    ),
-  )
-  for (const s of suggestions) {
-    if (!s.account) continue
-    raw.push({
-      account: s.account,
-      label: s.label,
-      vatTreatment: getDefaultVatTreatmentForCategory(s.category),
-      source: s.source,
-      confidence: s.confidence,
-      matchReason: s.match_reason,
-    })
-  }
-
+  const { proposals } = await proposeForTransactions(supabase, companyId, [transaction], { withReads: false })
+  const raw = (proposals[transaction.id] ?? [])
+    .filter((p) => p.source !== 'assistant' && p.source !== 'recent')
+    .map(candidateFromProposal)
   return dedupeByAccount(raw).slice(0, limit)
+}
+
+export function candidateFromProposal(p: BookingProposal): AccountCandidate {
+  const businessLine = p.line_pattern?.find((l) => l.type === 'business')
+  return {
+    account: businessLine?.account ?? businessAccount(p),
+    label: p.name_sv,
+    vatTreatment: (p.booking.kind === 'account' ? p.booking.vat_treatment : p.vat_treatment) as VatTreatment | null,
+    source: p.source === 'counterparty' ? 'counterparty_template' : p.source === 'rule' ? 'mapping_rule' : 'pattern',
+    confidence: p.confidence,
+    matchReason: p.description_sv || undefined,
+  }
 }
 
 /** Keep one candidate per account (the highest-confidence one), highest confidence first. */

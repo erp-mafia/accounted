@@ -310,8 +310,11 @@ export const VoucherSequenceNextQuerySchema = z.object({
   date: isoDate.optional(),
 })
 
+// Mirrors chart_of_accounts_account_type_check. untaxed_reserves is the 21xx
+// group (obeskattade reserver); without it every 21xx account the Kontoplan
+// dialog derived was refused (#2514).
 export const AccountTypeSchema = z.enum([
-  'asset', 'equity', 'liability', 'revenue', 'expense',
+  'asset', 'equity', 'liability', 'untaxed_reserves', 'revenue', 'expense',
 ])
 
 export const NormalBalanceSchema = z.enum(['debit', 'credit'])
@@ -1439,6 +1442,16 @@ export const UpdateSupplierInvoiceSchema = z.object({
   notes: z.string().optional(),
 })
 
+/**
+ * PATCH /api/supplier-invoices/[id]/items/[itemId]: move one line to another
+ * expense account. The registration verifikat is corrected inline (BFL 5 kap
+ * 5 §, track 2) in the same call, so the invoice and the ledger never
+ * disagree about where the cost sits.
+ */
+export const SupplierInvoiceItemAccountSchema = z.object({
+  account_number: accountNumberSchema,
+})
+
 // ============================================================
 // Supplier payment batch (betalfil) schemas
 // ============================================================
@@ -1733,6 +1746,10 @@ export const CategorizeTransactionSchema = z
     category: TransactionCategorySchema.optional(),
     template_id: z.string().optional(),
     vat_treatment: VatTreatmentSchema.optional(),
+    // The underlag's actual moms, in the transaction's currency. Replaces the
+    // rate-based VAT line of a category or template booking (see
+    // buildMappingResultFromCategory / applyVatAmountOverride).
+    vat_amount: z.number().positive().optional(),
     account_override: accountNumber.optional(),
     counterparty_template_id: z.string().uuid().optional(),
     // Dimensions bag {sie_dim_no: code} applied to the business lines of the
@@ -2194,13 +2211,6 @@ export const LinkTransactionJournalEntrySchema = z.object({
   invoice_id: uuid.optional(),
 })
 
-export const CreateTransactionFromDocumentSchema = z.object({
-  inbox_item_id: uuid,
-  amount: z.number().refine((n) => n !== 0, 'Amount must be non-zero'),
-  transaction_date: isoDate,
-  description: z.string().min(1).max(500),
-})
-
 /**
  * POST /api/transactions/[id]/match-rot-rut-payout: settle one or several
  * ROT/RUT begäran with the bank row that carried Skatteverkets utbetalning.
@@ -2542,6 +2552,12 @@ export const UpdateSettingsSchema = z.object({
   // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
   // for correctness (the pages and APIs work regardless).
   sales_orders_enabled: z.boolean().optional(),
+  // Invoice document type toggles (offert, proforma, återkommande,
+  // självfaktura): UI-visibility only, never load-bearing for correctness.
+  quotes_enabled: z.boolean().optional(),
+  proforma_enabled: z.boolean().optional(),
+  recurring_invoices_enabled: z.boolean().optional(),
+  self_billing_enabled: z.boolean().optional(),
   // Data analysis consent (#1346): gates cross-company analysis of this
   // company's bookkeeping outcomes. Flipped by a human in the settings UI
   // only; deliberately absent from the v1 REST / MCP settings pick lists.
@@ -2602,36 +2618,6 @@ export const CreateFiscalPeriodSchema = z.object({
     path: ['period_end'],
   }
 )
-
-// ============================================================
-// Mapping rule schemas
-// ============================================================
-
-export const CreateMappingRuleSchema = z.object({
-  rule_name: z.string().min(1, 'Rule name is required'),
-  rule_type: MappingRuleTypeSchema,
-  priority: z.number().int().min(0).optional(),
-  mcc_codes: z.array(z.string()).optional(),
-  merchant_pattern: z.string().optional(),
-  description_pattern: z.string().optional(),
-  amount_min: z.number().optional(),
-  amount_max: z.number().optional(),
-  debit_account: accountNumber,
-  credit_account: accountNumber,
-  vat_treatment: z.string().optional(),
-  risk_level: RiskLevelSchema.optional(),
-  default_private: z.boolean().optional(),
-  requires_review: z.boolean().optional(),
-  confidence_score: z.number().min(0).max(1).optional(),
-})
-
-export const EvaluateMappingRulesSchema = z.union([
-  z.object({ transaction_id: uuid }),
-  z.object({
-    description: z.string().optional(),
-    amount: z.number(),
-  }).passthrough(),
-])
 
 // ============================================================
 // Deadline schemas
@@ -2731,10 +2717,6 @@ export const BankLinkSchema = z
     message: 'Ange journal_entry_id eller allocations, inte båda.',
     path: ['journal_entry_id'],
   })
-
-export const BankUnlinkSchema = z.object({
-  transaction_id: uuid,
-})
 
 /**
  * Re-tag a mis-typed bank-account opening balance (a manual/import voucher that
@@ -4261,7 +4243,7 @@ export const SalesOrderListQuerySchema = z.object({
 // ── Parties (Kontakter register) ───────────────────────────────────────────
 
 export const PartiesRegisterQuerySchema = z.object({
-  view: z.enum(['suggested', 'observed']).optional(),
+  view: z.enum(['suggested', 'observed', 'all']).optional(),
   q: z.string().max(120).optional(),
   period: z.enum(['12m', 'all']).optional(),
 })
@@ -4325,3 +4307,25 @@ export const PartyRegistryLookupQuerySchema = z.object({
 export const PartyUndoMergeSchema = z.object({
   decisionId: uuid,
 })
+
+// ── Parties (Motparter list + aliases) ────────────────────────────────────
+
+export const PartiesListQuerySchema = z.object({
+  q: z.string().max(120).optional(),
+  period: z.enum(['12m', 'all']).optional(),
+})
+
+/**
+ * POST /api/parties/aliases: what a person says about the bank strings the
+ * resolver named. rename: these strings mean <name>. not_same: the reading
+ * was wrong and nothing is known. Both supersede the live rows and stamp the
+ * outcome on them, so the resolver's decision stays in the log.
+ */
+export const PartyAliasActionSchema = z
+  .object({
+    aliasKeys: z.array(z.string().min(1).max(300)).min(1).max(50),
+    action: z.enum(['rename', 'not_same']),
+    name: z.string().trim().min(1).max(200).optional(),
+  })
+  .refine((v) => v.action !== 'rename' || !!v.name, { message: 'name is required for rename', path: ['name'] })
+

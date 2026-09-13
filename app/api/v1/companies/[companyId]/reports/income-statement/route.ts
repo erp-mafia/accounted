@@ -15,12 +15,17 @@ import {
   loadPeriodFromQuery,
   loadRangeFromQuery,
   safeGenerate,
+  ReportPeriodQueryShape,
+  ReportDateRangeQueryShape,
 } from '@/lib/api/v1/report-period'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 
 const ALLOWED_PARAMS = ['period_id', 'from_date', 'to_date'] as const
 
 const IncomeStatementResponse = z.unknown()
+
+// The accepted parameters, as ALLOWED_PARAMS gates them.
+const ReportQuery = z.object({ ...ReportPeriodQueryShape, ...ReportDateRangeQueryShape })
 
 registerEndpoint({
   operation: 'reports.income-statement',
@@ -49,6 +54,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ReportQuery },
   response: { success: dataEnvelope(IncomeStatementResponse) },
 })
 

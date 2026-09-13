@@ -1,13 +1,11 @@
+import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 
 export default function InvoicesLoading() {
   return (
     <div className="space-y-8">
       {/* Title (24px) + primary action (single "Ny faktura" split button, pill) */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <Skeleton className="h-8 w-36" />
-        <Skeleton className="h-9 w-32 rounded-full" />
-      </div>
+      <PageHeader title={<Skeleton className="h-4 w-36" />} action={<Skeleton className="h-9 w-32 rounded-full" />} />
 
       {/* Toolbar: status picker chip + search + fiscal-year picker */}
       <div className="flex flex-wrap items-center gap-2">

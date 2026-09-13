@@ -1,13 +1,11 @@
+import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 
 export default function BookkeepingLoading() {
   return (
     <div className="space-y-8">
       {/* Title (24px) + single "Nytt verifikat" split button (pill) */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <Skeleton className="h-8 w-40" />
-        <Skeleton className="h-9 w-36 rounded-full" />
-      </div>
+      <PageHeader title={<Skeleton className="h-4 w-40" />} action={<Skeleton className="h-9 w-36 rounded-full" />} />
 
       {/* Borderless table (JournalEntryList): header row + single-line rows */}
       <div>

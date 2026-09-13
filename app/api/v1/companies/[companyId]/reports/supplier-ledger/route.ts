@@ -13,6 +13,14 @@ import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { safeGenerate } from '@/lib/api/v1/report-period'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 
+// Documents what the handler reads: it validates the date itself.
+const LedgerQuery = z.object({
+  as_of_date: z
+    .string()
+    .optional()
+    .describe('YYYY-MM-DD, a real calendar date between 2000 and next year. Default: today (UTC).'),
+})
+
 registerEndpoint({
   operation: 'reports.supplier-ledger',
   method: 'GET',
@@ -39,6 +47,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: LedgerQuery },
   response: { success: dataEnvelope(z.unknown()) },
 })
 

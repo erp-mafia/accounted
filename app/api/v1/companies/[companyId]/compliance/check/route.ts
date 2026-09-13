@@ -256,6 +256,17 @@ async function runVoucherGapsCheck(
 // Endpoint definition
 // --------------------------------------------------------------------
 
+// Documents the parameters the handler and the check runners read. The
+// handler parses them itself (type via CheckTypeSchema, fiscal_period_id per
+// check type); this schema describes that contract for the registry.
+const CheckQuery = z.object({
+  type: CheckTypeSchema.describe('Which check to run.'),
+  fiscal_period_id: z
+    .string()
+    .uuid()
+    .describe('Fiscal period to check (id from GET /fiscal-periods). Both current check types require it.'),
+})
+
 registerEndpoint({
   operation: 'compliance.check',
   method: 'GET',
@@ -293,6 +304,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: CheckQuery },
   response: { success: dataEnvelope(ComplianceCheckResponse) },
 })
 

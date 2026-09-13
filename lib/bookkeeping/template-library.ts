@@ -1,4 +1,4 @@
-import type { BookingTemplateCategory, BookingTemplateLibrary, BookingTemplateLibraryLine, VatTreatment } from '@/types'
+import type { BookingTemplateLibrary, BookingTemplateLibraryLine, VatTreatment } from '@/types'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import { isReverseChargeVatAccount } from '@/lib/bookkeeping/vat-entries'
@@ -10,21 +10,6 @@ import { roundOre } from '@/lib/money'
  */
 export const LIBRARY_TEMPLATE_PREFIX = 'library:'
 export function isLibraryTemplateId(id: string): boolean { return id.startsWith(LIBRARY_TEMPLATE_PREFIX) }
-
-/**
- * Category labels in Swedish for UI display.
- */
-export const TEMPLATE_CATEGORY_LABELS: Record<BookingTemplateCategory, string> = {
-  eu_trade: 'EU-handel',
-  tax_account: 'Skattekonto',
-  private_transfer: 'Egna transaktioner',
-  salary: 'Lön',
-  representation: 'Representation',
-  year_end: 'Bokslut',
-  vat: 'Moms',
-  financial: 'Bank & finans',
-  other: 'Övrigt',
-}
 
 /**
  * Convert a template's line pattern + total amount into form lines

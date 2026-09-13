@@ -30,6 +30,11 @@ vi.mock('@/lib/salary/book-run', () => ({
   bookPaidSalaryRun: vi.fn(),
 }))
 
+const mockGenerateAgi = vi.fn()
+vi.mock('@/lib/salary/agi/generate-declaration', () => ({
+  generateAgiDeclaration: (...a: unknown[]) => mockGenerateAgi(...a),
+}))
+
 import { commitPendingOperation } from '../commit'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
@@ -993,5 +998,57 @@ describe('commitPendingOperation: update_employee', () => {
 
     expect(result.status).not.toBe('committed')
     expect(result.error).toBe(JAMKNING_ROW_INCOMPLETE)
+  })
+})
+
+describe('commitPendingOperation: generate_agi', () => {
+  // The executor used to return only "AGI-generering misslyckades: <code>",
+  // dropping the missing-field list generateAgiDeclaration had already
+  // computed (feedback seq 414922): the agent could not tell what to fill in.
+  it('surfaces the missing fields and where to fill them in when AGI data is incomplete', async () => {
+    mockGenerateAgi.mockResolvedValueOnce({
+      ok: false,
+      code: 'AGI_INCOMPLETE_DATA',
+      details: {
+        missing_fields: ['organisationsnummer', 'telefon', 'e-post'],
+        message:
+          'AGI kan inte genereras, följande uppgifter saknas: organisationsnummer, telefon, e-post. Fyll i dem under Inställningar → Företag och Inställningar → Lön.',
+      },
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'generate_agi',
+      risk_level: 'high',
+      params: { salary_run_id: 'run-1' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toContain('AGI_INCOMPLETE_DATA')
+    expect(result.error).toContain('organisationsnummer, telefon, e-post')
+    expect(result.error).toContain('gnubok_update_company_settings')
+    expect(result.http_status).toBe(500)
+  })
+
+  it('keeps a bare code readable when the failure carries no details', async () => {
+    mockGenerateAgi.mockResolvedValueOnce({ ok: false, code: 'SALARY_RUN_NOT_FOUND' })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'generate_agi',
+      risk_level: 'high',
+      params: { salary_run_id: 'run-missing' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toBe('AGI-generering misslyckades: SALARY_RUN_NOT_FOUND')
   })
 })

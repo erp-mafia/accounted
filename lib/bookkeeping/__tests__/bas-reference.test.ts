@@ -35,7 +35,7 @@ describe('BAS_REFERENCE data integrity', () => {
   })
 
   it('every account has a non-null sru_code', () => {
-    const withoutSru = BAS_REFERENCE.filter((a) => a.sru_code === null)
+    const withoutSru = BAS_REFERENCE.filter((a) => a.sru_code === null).map((a) => a.account_number)
     expect(withoutSru).toEqual([])
   })
 

@@ -74,6 +74,8 @@ interface NewSupplierForm {
   address_line1: string
   bankgiro: string
   plusgiro: string
+  iban: string
+  bic: string
   default_expense_account: string
 }
 
@@ -98,6 +100,8 @@ const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
   address_line1: '',
   bankgiro: '',
   plusgiro: '',
+  iban: '',
+  bic: '',
   default_expense_account: '',
 }
 
@@ -1090,6 +1094,8 @@ export default function NewSupplierInvoiceForm({
       address_line1: extractedData?.supplier?.address || '',
       bankgiro: extractedData?.supplier?.bankgiro || '',
       plusgiro: extractedData?.supplier?.plusgiro || '',
+      iban: extractedData?.supplier?.iban || '',
+      bic: extractedData?.supplier?.bic || '',
       default_expense_account: '',
     })
     setShowNewSupplier(true)
@@ -1116,6 +1122,8 @@ export default function NewSupplierInvoiceForm({
     if (newSupplier.address_line1) payload.address_line1 = newSupplier.address_line1
     if (newSupplier.bankgiro) payload.bankgiro = newSupplier.bankgiro
     if (newSupplier.plusgiro) payload.plusgiro = newSupplier.plusgiro
+    if (newSupplier.iban) payload.iban = newSupplier.iban
+    if (newSupplier.bic) payload.bic = newSupplier.bic
     if (newSupplier.default_expense_account) payload.default_expense_account = newSupplier.default_expense_account
 
     const res = await fetch('/api/suppliers', {

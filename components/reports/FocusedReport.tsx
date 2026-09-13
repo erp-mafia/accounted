@@ -8,56 +8,47 @@ import { useTranslations } from 'next-intl'
 import { ChevronLeft } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from '@/components/ui/skeleton'
+import { ReportBodyLoading, ReportPageLoading } from '@/components/reports/ReportLoading'
+import { REPORT_TOOLBAR_SLOT_ID } from '@/components/reports/ReportExportMenu'
 import { useCompany } from '@/contexts/CompanyContext'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import type { FiscalPeriod } from '@/types'
 
-function ReportViewLoading() {
-  return (
-    <Card>
-      <CardContent className="space-y-4 p-6">
-        <Skeleton className="h-5 w-32" />
-        <Skeleton className="h-64" />
-      </CardContent>
-    </Card>
-  )
-}
-
-const TrialBalanceView = dynamic(() => import('./lazy-views/TrialBalanceView'), { loading: ReportViewLoading })
-const IncomeStatementView = dynamic(() => import('./lazy-views/IncomeStatementView'), { loading: ReportViewLoading })
-const BalanceSheetView = dynamic(() => import('./lazy-views/BalanceSheetView'), { loading: ReportViewLoading })
-const ResultatrapportView = dynamic(() => import('./lazy-views/ResultatrapportView'), { loading: ReportViewLoading })
-const BalansrapportView = dynamic(() => import('./lazy-views/BalansrapportView'), { loading: ReportViewLoading })
-const VatDeclarationView = dynamic(() => import('./lazy-views/VatDeclarationView'), { loading: ReportViewLoading })
-const SupplierLedgerView = dynamic(() => import('./lazy-views/SupplierLedgerView'), { loading: ReportViewLoading })
-const GeneralLedgerView = dynamic(() => import('./lazy-views/GeneralLedgerView'), { loading: ReportViewLoading })
-const JournalRegisterView = dynamic(() => import('./lazy-views/JournalRegisterView'), { loading: ReportViewLoading })
-const ARLedgerView = dynamic(() => import('./lazy-views/ARLedgerView'), { loading: ReportViewLoading })
-const DimensionPnlView = dynamic(() => import('./lazy-views/DimensionPnlView'), { loading: ReportViewLoading })
+const TrialBalanceView = dynamic(() => import('./lazy-views/TrialBalanceView'), { loading: ReportBodyLoading })
+const IncomeStatementView = dynamic(() => import('./lazy-views/IncomeStatementView'), { loading: ReportBodyLoading })
+const BalanceSheetView = dynamic(() => import('./lazy-views/BalanceSheetView'), { loading: ReportBodyLoading })
+const ResultatrapportView = dynamic(() => import('./lazy-views/ResultatrapportView'), { loading: ReportBodyLoading })
+const BalansrapportView = dynamic(() => import('./lazy-views/BalansrapportView'), { loading: ReportBodyLoading })
+// Standalone: the view owns its title bar, so the import stage shows one too.
+const VatDeclarationView = dynamic(() => import('./lazy-views/VatDeclarationView'), { loading: ReportPageLoading })
+const SupplierLedgerView = dynamic(() => import('./lazy-views/SupplierLedgerView'), { loading: ReportBodyLoading })
+const GeneralLedgerView = dynamic(() => import('./lazy-views/GeneralLedgerView'), { loading: ReportBodyLoading })
+const JournalRegisterView = dynamic(() => import('./lazy-views/JournalRegisterView'), { loading: ReportBodyLoading })
+const ARLedgerView = dynamic(() => import('./lazy-views/ARLedgerView'), { loading: ReportBodyLoading })
+const DimensionPnlView = dynamic(() => import('./lazy-views/DimensionPnlView'), { loading: ReportBodyLoading })
 const NEDeclarationView = dynamic(() =>
   import('./NEDeclarationView').then((module) => ({ default: module.NEDeclarationView })),
-  { loading: ReportViewLoading },
+  { loading: ReportBodyLoading },
 )
 const PeriodiskSammanstallningView = dynamic(() =>
   import('./PeriodiskSammanstallningView').then((module) => ({ default: module.PeriodiskSammanstallningView })),
-  { loading: ReportViewLoading },
+  { loading: ReportBodyLoading },
 )
 const INK2DeclarationView = dynamic(() =>
   import('./INK2DeclarationView').then((module) => ({ default: module.INK2DeclarationView })),
-  { loading: ReportViewLoading },
+  { loading: ReportBodyLoading },
 )
 const BehandlingshistorikView = dynamic(() =>
   import('./BehandlingshistorikView').then((module) => ({ default: module.BehandlingshistorikView })),
-  { loading: ReportViewLoading },
+  { loading: ReportBodyLoading },
 )
 const BokslutsbilagorView = dynamic(() =>
   import('./BokslutsbilagorView').then((module) => ({ default: module.BokslutsbilagorView })),
-  { loading: ReportViewLoading },
+  { loading: ReportBodyLoading },
 )
 
 /**
@@ -88,6 +79,11 @@ function FocusedReportInner({
   const [isReady, setIsReady] = useState(false)
 
   const report = getReport(slug)
+  // Shell v2: the nav names Rapporter, so no back link over the title, and
+  // the period presets and the dimension picker share one row.
+  const v2 = useShell() === 'v2'
+  const showRange = DATE_RANGE_SLUGS.has(slug) && !!selectedPeriodBounds
+  const showDim = DIMENSION_FILTER_SLUGS.has(slug) && !!selectedPeriod
   // Calendar (VAT family) and param-less reports don't need a fiscal period.
   const isPeriodless = report?.params === 'calendar' || report?.params === 'none'
   // Nav-promoted pages (Momsdeklaration) drop the library chrome: no back
@@ -107,7 +103,7 @@ function FocusedReportInner({
 
   return (
     <div className="space-y-8">
-      {!isStandalone && (
+      {!isStandalone && !v2 && (
         <Link
           href="/reports"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -148,26 +144,27 @@ function FocusedReportInner({
         />
       )}
 
-      {DATE_RANGE_SLUGS.has(slug) && selectedPeriodBounds && (
-        <ReportDateRange
-          periodStart={selectedPeriodBounds.start}
-          periodEnd={selectedPeriodBounds.end}
-          value={dateRange}
-          onChange={setDateRange}
-        />
-      )}
-
-      {DIMENSION_FILTER_SLUGS.has(slug) && selectedPeriod && (
-        <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />
+      {/* v1: only when a filter renders, an empty row would still take the
+          stack's gap. v2: one toolbar row per report, the pickers on the
+          left and the report's Exportera on the right (ReportExportMenu
+          portals into the slot), so no report spends a row on one button. */}
+      {(showRange || showDim || (v2 && !isStandalone)) && (
+        <div className={v2 ? 'flex flex-wrap items-center gap-x-6 gap-y-3' : 'contents'}>
+          {showRange && selectedPeriodBounds && (
+            <ReportDateRange
+              periodStart={selectedPeriodBounds.start}
+              periodEnd={selectedPeriodBounds.end}
+              value={dateRange}
+              onChange={setDateRange}
+            />
+          )}
+          {showDim && <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />}
+          {v2 && !isStandalone && <div id={REPORT_TOOLBAR_SLOT_ID} className="ml-auto flex items-center gap-2" />}
+        </div>
       )}
 
       {!isReady && !isPeriodless ? (
-        <Card>
-          <CardContent className="p-6 space-y-4">
-            <Skeleton className="h-5 w-32" />
-            <Skeleton className="h-64" />
-          </CardContent>
-        </Card>
+        <ReportBodyLoading />
       ) : isPeriodless || selectedPeriod ? (
         <FocusedView
           slug={slug}

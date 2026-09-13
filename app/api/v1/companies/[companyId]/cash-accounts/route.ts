@@ -30,6 +30,13 @@ const CashAccountsResponse = dataEnvelope(
   z.object({ cash_accounts: z.array(CashAccount) }),
 )
 
+const ListQuery = z.object({
+  enabled_only: z
+    .enum(['true', 'false'])
+    .optional()
+    .describe('true returns only enabled accounts. Default: all accounts.'),
+})
+
 registerEndpoint({
   operation: 'cash-accounts.list',
   method: 'GET',
@@ -73,6 +80,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: CashAccountsResponse },
 })
 
@@ -80,8 +88,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'cash-accounts.list',
   async (request, ctx) => {
     const url = new URL(request.url)
-    const Filters = z.object({ enabled_only: z.enum(['true', 'false']).optional() })
-    const parsed = Filters.safeParse({
+    const parsed = ListQuery.safeParse({
       enabled_only: url.searchParams.get('enabled_only') ?? undefined,
     })
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)

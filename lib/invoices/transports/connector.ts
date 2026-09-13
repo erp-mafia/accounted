@@ -61,14 +61,22 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
+/** Adapter-side codes for failures the hosted envelope cannot carry. */
+export const CONNECTOR_UNREACHABLE_CODE = 'CONNECTOR_UNREACHABLE'
+export const CONNECTOR_PROTOCOL_ERROR_CODE = 'CONNECTOR_PROTOCOL_ERROR'
+
+/**
+ * The hosted envelope code travels as `code` (or `HTTP_<status>` when the
+ * body is not an envelope), the hosted detail as `detail`, untouched: the
+ * caller stores and translates the code and keeps the prose for logs.
+ */
 function failureFromResponse(status: number, body: unknown): PeppolTransportError {
   const parsed = connectorErrorSchema.safeParse(body)
   const envelope = parsed.success ? parsed.data : null
   const code = envelope?.code ?? `HTTP_${status}`
   const message = envelope?.error || `Connector answered ${status}`
   const retryable = typeof envelope?.retryable === 'boolean' ? envelope.retryable : status === 429 || status >= 500
-  const detail = [code, envelope?.detail ?? null].filter(Boolean).join(': ')
-  return new PeppolTransportError(`Connector: ${message}`, { retryable, detail: detail || null })
+  return new PeppolTransportError(`Connector: ${message}`, { retryable, code, detail: envelope?.detail ?? null })
 }
 
 /** Validate a hosted answer against the contract; a shape mismatch is a protocol error, never retried. */
@@ -77,6 +85,7 @@ function parseResponse<T>(schema: z.ZodType<T>, json: unknown, operation: string
   if (parsed.success) return parsed.data
   throw new PeppolTransportError(`Connector: unexpected response shape from ${operation}`, {
     retryable: false,
+    code: CONNECTOR_PROTOCOL_ERROR_CODE,
     detail: parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
   })
 }
@@ -141,7 +150,11 @@ export function createConnectorPeppolTransport(
       return parseResponse(schema, json, operation)
     } catch (error) {
       if (error instanceof PeppolTransportError) throw error
-      throw new PeppolTransportError('Connector: could not reach the hosted service', { retryable: true, cause: error })
+      throw new PeppolTransportError('Connector: could not reach the hosted service', {
+        retryable: true,
+        code: CONNECTOR_UNREACHABLE_CODE,
+        cause: error,
+      })
     } finally {
       clearTimeout(timeout)
     }
@@ -193,6 +206,7 @@ export function createConnectorPeppolTransport(
     if (!input.tenantReference) {
       throw new PeppolTransportError('Connector: a tenant reference is required to register a recipient', {
         retryable: false,
+        code: 'CONNECTOR_COMPANY_MISSING',
       })
     }
     const result = await call('register', PEPPOL_OPERATIONS.register.response, 'PUT', PEPPOL_OPERATIONS.register.path, input, {

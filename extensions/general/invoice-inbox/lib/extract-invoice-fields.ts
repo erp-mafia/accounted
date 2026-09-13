@@ -125,6 +125,9 @@ export const ExtractionSchema = z.object({
     address: z.string().nullable(),
     bankgiro: z.string().nullable(),
     plusgiro: z.string().nullable(),
+    // Older extractions predate these: optional, so a stored document still parses.
+    iban: z.string().nullable().optional(),
+    bic: z.string().nullable().optional(),
   }),
   invoice: z.object({
     invoiceNumber: z.string().nullable(),
@@ -285,6 +288,8 @@ export function stripOwnCompanyAsSupplier(
       address: null,
       bankgiro: null,
       plusgiro: null,
+      iban: null,
+      bic: null,
     },
   }
 }
@@ -354,7 +359,9 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
     "vatNumber": string | null,    // ISO format, e.g. "SE556012579001" or "DE123456789"
     "address": string | null,      // multi-line allowed
     "bankgiro": string | null,     // Swedish bankgiro, with hyphen, e.g. "991-2346"
-    "plusgiro": string | null      // Swedish plusgiro, with hyphen, e.g. "12345-6"
+    "plusgiro": string | null,     // Swedish plusgiro, with hyphen, e.g. "12345-6"
+    "iban": string | null,         // IBAN as printed (foreign suppliers), e.g. "DE89 3704 0044 0532 0130 00"
+    "bic": string | null           // BIC/SWIFT next to the IBAN, e.g. "COBADEFFXXX"
   },
   "invoice": {
     "invoiceNumber": string | null,    // include any suffix, e.g. "06655767-0007"
@@ -428,6 +435,8 @@ export function emptyResult(): InvoiceExtractionResult {
       address: null,
       bankgiro: null,
       plusgiro: null,
+      iban: null,
+      bic: null,
     },
     invoice: {
       invoiceNumber: null,

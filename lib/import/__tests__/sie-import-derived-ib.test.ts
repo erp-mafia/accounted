@@ -310,6 +310,10 @@ describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
       // The chronological activity check excludes the already-imported 2026
       // entries when deciding whether the 2025 #IB is legitimate.
       { count: 0 },
+      // Orphan-IB guard for 2025: no surviving IB voucher.
+      {},
+      // The resync reads the series of the 2026 IB it replaces (seq 345150).
+      { data: { voucher_series: 'M' } },
     ]
 
     vi.mocked(createJournalEntry).mockResolvedValueOnce({
@@ -379,9 +383,12 @@ describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
       entry_date: '2026-01-01',
       }),
     )
-    expect(vi.mocked(replaceOpeningBalanceEntry).mock.calls[0]?.[4]).not.toHaveProperty(
-      'voucher_series',
-    )
+    // The replacement follows the replaced entry's series: the RPC stornos
+    // the old IB in its own series, so anything else splits the pair
+    // (M storno, A replacement) out of date order (feedback seq 345150).
+    expect(vi.mocked(replaceOpeningBalanceEntry).mock.calls[0]?.[4]).toMatchObject({
+      voucher_series: 'M',
+    })
   })
 
   it('warns without changing a locked successor opening balance', async () => {

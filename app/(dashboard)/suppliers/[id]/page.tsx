@@ -23,6 +23,7 @@ import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
 import { formatOrgNumber } from '@/lib/utils'
+import { useShell } from '@/components/dashboard/ShellProvider'
 
 // Supplier invoices carry their own currency; "kr" is only correct for SEK.
 function amountWithCurrency(amount: number, currency?: string | null): string {
@@ -45,6 +46,7 @@ export default function SupplierDetailPage() {
   const params = useParams()
   const router = useRouter()
   const { toast } = useToast()
+  const shell = useShell()
   const t = useTranslations('supplier_detail')
   const tParties = useTranslations('parties')
   const [supplier, setSupplier] = useState<Supplier & { stats?: SupplierStats } | null>(null)
@@ -199,9 +201,10 @@ export default function SupplierDetailPage() {
     : [{ currency: supplier.default_currency || 'SEK', total_outstanding: 0, total_paid: 0 }]
 
   return (
-    <div className="max-w-3xl space-y-8 stagger-enter">
+    <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type/org kicker, quiet actions right */}
       <div>
+        {shell !== 'v2' && (
         <Link
           href="/suppliers"
           className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"
@@ -210,16 +213,17 @@ export default function SupplierDetailPage() {
           <ArrowLeft className="h-4 w-4" />
           {t('back')}
         </Link>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <h1 className="font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
+        )}
+        <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="page-header-lead min-w-0">
+            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>
+            <p className="page-header-meta mt-1 text-sm text-muted-foreground">
               {supplierTypeLabels[supplier.supplier_type]}
               {supplier.org_number ? ` · ${t('kicker_org', { number: formatOrgNumber(supplier.org_number) })}` : ''}
             </p>
           </div>
 
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="page-header-action flex shrink-0 items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
@@ -282,6 +286,8 @@ export default function SupplierDetailPage() {
         </div>
       </div>
 
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start lg:gap-x-12">
+      <div className="space-y-8">
       {partyId && party.dossier ? (
         <PartyFactsSection
           partyId={partyId}
@@ -359,6 +365,8 @@ export default function SupplierDetailPage() {
         </DefRow>
       </DetailSection>
 
+      </div>
+      <div className="space-y-8">
       <DetailSection
         kicker={t('invoices_section_title')}
         aside={
@@ -437,6 +445,8 @@ export default function SupplierDetailPage() {
             </>
           )}
       </DetailSection>
+      </div>
+      </div>
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 

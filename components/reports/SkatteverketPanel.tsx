@@ -681,11 +681,18 @@ function SkatteverketPanelInner({
   }
 
   if (loading) {
+    // The same silhouette as the report above it: a heading and rows, not a
+    // block, so the page does not change shape twice while it loads.
     return (
-      <section>
-        <div className="space-y-4">
-          <Skeleton className="h-5 w-48" />
-          <Skeleton className="h-24" />
+      <section aria-busy>
+        <div className="space-y-3">
+          <Skeleton className="h-3 w-48" />
+          {[0, 1].map((i) => (
+            <div key={i} className="flex items-center justify-between border-b border-border/60 py-2">
+              <Skeleton className="h-3.5 w-56" />
+              <Skeleton className="h-3.5 w-20" />
+            </div>
+          ))}
         </div>
       </section>
     )

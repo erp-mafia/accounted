@@ -25,13 +25,17 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
-import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
 import {
   assertLinkedExpenseClaimsOpen,
   rosterHasLinkedExpenseClaims,
   settleExpenseClaimsForBookedRun,
 } from '@/lib/salary/expense-claim-lines'
-import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
+import {
+  createSalaryRunEntries,
+  salaryRunDataFromRows,
+  type SalaryRosterRow,
+  type SalaryRunRow,
+} from '@/lib/salary/salary-entries'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
@@ -57,10 +61,7 @@ interface BookRunArgs {
 const ROSTER_SELECT =
   '*, employee:employees(first_name, last_name, employment_type, default_dimensions, f_skatt_status, clearing_number, bank_account_number, email)'
 
-type RosterRow = Record<string, unknown> & {
-  employee_id: string
-  net_salary: number
-  tax_withheld: number
+type RosterRow = SalaryRosterRow & Record<string, unknown> & {
   tax_withheld_override: number | null
   employee: {
     first_name: string
@@ -166,71 +167,14 @@ async function bookLoadedRun(
     return { ok: true, data: { run: bookedRun, entryIds: [], nollkorning: true } }
   }
 
+  // Rows -> engine input through the same mapper the journal preview route
+  // uses (overrides, F-skatt avgifter rules, dimensions all live there), so
+  // the voucher the user approved on screen is the voucher that posts.
   const { salaryEntry, avgifterEntry, vacationEntry, pensionEntry } = await createSalaryRunEntries(
     supabase,
     companyId,
     userId,
-    {
-      id: run.id as string,
-      period_year: run.period_year as number,
-      period_month: run.period_month as number,
-      payment_date: run.payment_date as string,
-      voucher_series: run.voucher_series as string,
-      total_gross: run.total_gross as number,
-      total_tax: run.total_tax as number,
-      total_net: run.total_net as number,
-      total_avgifter: run.total_avgifter as number,
-      total_vacation_accrual: run.total_vacation_accrual as number,
-      // Use the exact payroll-rate snapshot approved with this run. Reading
-      // current config here could change SLP between calculation and booking.
-      calculation_params: run.calculation_params as Record<string, unknown> | null,
-      employees: roster.map((sre) => ({
-        employee_id: sre.employee_id,
-        employment_type: sre.employee?.employment_type || 'employee',
-        gross_salary: sre.gross_salary as number,
-        // Apply per-employee overrides (advanced mode) so manual
-        // adjustments for FoU-avdrag / jämkning flow into the ledger.
-        tax_withheld: (sre.tax_withheld_override as number | null) ?? (sre.tax_withheld as number),
-        net_salary:
-          (sre.net_salary as number) +
-          ((sre.tax_withheld as number) -
-            ((sre.tax_withheld_override as number | null) ?? (sre.tax_withheld as number))),
-        // F-skatt payees form no underlag for arbetsgivaravgifter: the AGI
-        // hard-ignores avgifter overrides on such rows (isFSkattRow), so the
-        // booking must too, or the ledger would carry social charges the
-        // declaration provably excludes.
-        avgifter_amount:
-          isFSkattStatus(sre.employee?.f_skatt_status)
-            ? (sre.avgifter_amount as number)
-            : (sre.avgifter_amount_override as number | null) ?? (sre.avgifter_amount as number),
-        avgifter_rate: sre.avgifter_rate as number,
-        // Declared-avgifter inputs: the 2731 liability books the whole-krona
-        // amount Skatteverket computes from the underlag (declared-avgifter.ts).
-        // Deliberately the UN-overridden basis: a basis override never
-        // reaches the filed IU fields, so Skatteverket computes from these
-        // values regardless. Zeroed for F-skatt rows (the AGI's isFSkattRow
-        // invariant: their pay forms no underlag). An amount override is
-        // flagged instead: the split then mirrors the AGI's override path.
-        avgifter_basis:
-          isFSkattStatus(sre.employee?.f_skatt_status) ? 0 : (sre.avgifter_basis as number),
-        avgifter_category: (sre.avgifter_category as string | null) ?? null,
-        avgifter_amount_overridden:
-          !isFSkattStatus(sre.employee?.f_skatt_status) &&
-          (sre.avgifter_amount_override as number | null) != null,
-        vacation_accrual: sre.vacation_accrual as number,
-        vacation_accrual_avgifter: sre.vacation_accrual_avgifter as number,
-        // Dimensions PR8: read-at-book from the employee row, the run
-        // review shows the same live bag, so preview matches booking.
-        default_dimensions: sre.employee?.default_dimensions ?? undefined,
-        line_items: (sre.line_items || []).map((li: Record<string, unknown>) => ({
-          item_type: li.item_type as string,
-          amount: li.amount as number,
-          account_number: li.account_number as string | null,
-          is_net_deduction: li.is_net_deduction as boolean,
-          is_gross_deduction: li.is_gross_deduction as boolean,
-        })),
-      })),
-    },
+    salaryRunDataFromRows(run as unknown as SalaryRunRow, roster),
   )
 
   const entryIds: string[] = [salaryEntry.id, avgifterEntry.id]

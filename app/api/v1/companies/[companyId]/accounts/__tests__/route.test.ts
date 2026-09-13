@@ -27,7 +27,11 @@ const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
 type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
+type ChainCall = { table: string; method: string; args: unknown[] }
+function makeFlexibleSupabase(
+  byTable: Record<string, MockResult | MockResult[]>,
+  calls: ChainCall[] = [],
+) {
   const queues = new Map<string, MockResult[]>()
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
@@ -42,7 +46,10 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          calls.push({ table, method: String(prop), args })
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
@@ -106,7 +113,7 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
     expect(body.data.accounts[0].account_number).toBe('1930')
   })
 
-  it('returns all rows when the chart exceeds the 1000-row PostgREST page', async () => {
+  it('returns all rows in account_number order when the chart exceeds the 1000-row PostgREST page', async () => {
     const makeAccount = (n: number, sortOrder: number | null = n) => ({
       account_number: String(n),
       account_name: `Konto ${n}`,
@@ -121,25 +128,30 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
       sru_code: null,
       sort_order: sortOrder,
     })
-    // Page 1: exactly 1000 rows (forces a second range request). Account 1000
-    // gets sort_order 99999 and account 9998 (page 2) a null sort_order, so the
-    // response order proves the sort_order re-sort with nulls last.
-    const page1 = [
-      makeAccount(1000, 99999),
-      ...Array.from({ length: 999 }, (_, i) => makeAccount(1001 + i)),
-    ]
+    // Page 1: exactly 1000 rows (forces a second range request). The pages
+    // arrive in account_number order, as Postgres returns them. Accounts 1500
+    // and 2100 carry sort_order 0, like every account seeded at company
+    // creation, and 9998 a null one: none of them may move, because sort_order
+    // is not the BAS sequence and re-sorting by it put the seeded block first.
+    const page1 = Array.from({ length: 1000 }, (_, i) =>
+      makeAccount(1000 + i, 1000 + i === 1500 ? 0 : 1000 + i),
+    )
     const page2 = [
-      ...Array.from({ length: 289 }, (_, i) => makeAccount(2000 + i)),
+      ...Array.from({ length: 289 }, (_, i) => makeAccount(2000 + i, 2000 + i === 2100 ? 0 : 2000 + i)),
       makeAccount(9998, null),
     ]
+    const calls: ChainCall[] = []
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        chart_of_accounts: [
-          { data: page1, error: null },
-          { data: page2, error: null },
-        ],
-      }),
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          chart_of_accounts: [
+            { data: page1, error: null },
+            { data: page2, error: null },
+          ],
+        },
+        calls,
+      ),
     )
     const res = await listAccounts(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/accounts`),
@@ -147,11 +159,36 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
     )
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.accounts).toHaveLength(1290)
-    expect(body.data.accounts[0].account_number).toBe('1001')
-    // sort_order 99999 lands second-to-last; null sort_order lands last.
-    expect(body.data.accounts[1288].account_number).toBe('1000')
-    expect(body.data.accounts[1289].account_number).toBe('9998')
+    const numbers = body.data.accounts.map((a: { account_number: string }) => a.account_number)
+    expect(numbers).toHaveLength(1290)
+    expect(numbers).toEqual([...page1, ...page2].map((a) => a.account_number))
+    expect(numbers[500]).toBe('1500')
+    expect(numbers[1100]).toBe('2100')
+    expect(numbers[1289]).toBe('9998')
+    const orderCalls = calls.filter((c) => c.table === 'chart_of_accounts' && c.method === 'order')
+    expect(orderCalls.length).toBeGreaterThan(0)
+    for (const call of orderCalls) {
+      expect(call.args[0]).toBe('account_number')
+    }
+  })
+
+  it('accepts class 9 and filters on account_class', async () => {
+    const calls: ChainCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          chart_of_accounts: { data: [], error: null },
+        },
+        calls,
+      ),
+    )
+    const res = await listAccounts(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/accounts?class=9`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(200)
+    expect(calls).toContainEqual({ table: 'chart_of_accounts', method: 'eq', args: ['account_class', 9] })
   })
 
   it('rejects invalid class filter', async () => {
@@ -161,7 +198,7 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
       }),
     )
     const res = await listAccounts(
-      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/accounts?class=9`),
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/accounts?class=10`),
       { params: Promise.resolve({ companyId: COMPANY_ID }) },
     )
     expect(res.status).toBe(400)

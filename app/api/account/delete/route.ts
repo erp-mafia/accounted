@@ -18,11 +18,13 @@ const DeleteAccountSchema = z.object({
 /**
  * POST /api/account/delete
  *
- * Anonymizes the calling user's account. The auth.users row is retained
+ * Deletes the calling user's account. The auth.users row is retained
  * (banned for ~100 years) as a tombstone so FKs into BFL-retained
  * bookkeeping data (companies.created_by, audit_log.user_id, etc.) stay
- * valid. Memberships are removed, profile PII is stripped, and a global
- * signout forces all sessions to end.
+ * valid. Everything personal is erased by the anonymize_user_account RPC
+ * through public.erase_user_personal_data: memberships, credentials and
+ * sessions, BankID data, settings, conversations and the email address;
+ * bank and mail consents the user gave are revoked.
  *
  * Precondition: the user must own zero non-archived companies. The RPC
  * enforces this at the DB level and raises SQLSTATE P0001 with a message
@@ -90,39 +92,27 @@ export async function POST(request: Request) {
     )
   }
 
-  // Ban the tombstone row ~100 years so login is impossible. The DB function
-  // can't set the ban (GoTrue-managed), so we do it here.
+  // Ban the tombstone row ~100 years. The RPC has already removed every way
+  // to sign in (email, identities, sessions, refresh tokens, MFA factors), so
+  // the ban is defense in depth. The DB function can't set it: bans are
+  // GoTrue-managed.
   //
-  // Note: auth.users.email is intentionally NOT scrubbed. The original
-  // address is retained as a legitimate-interest tombstone so that:
-  //   (1) re-signup with the same email is blocked by Supabase's unique
-  //       constraint: deletion must feel permanent, not trivially
-  //       reversible by re-registering
-  //   (2) support can verify identity when a former user asks to recover
-  //       BFL-retained räkenskapsinformation
-  // This must be documented in the privacy policy under legitimate
-  // interest (GDPR Art. 6(1)(f)). The email is never read by the app
-  // after this point: login is impossible (row is banned) and the
-  // profile is anonymized, so no UI ever surfaces it.
-  //
-  // user_metadata / app_metadata PII is scrubbed by the RPC itself, NOT
-  // here: GoTrue's admin update MERGES metadata maps, so the previous
-  // updateUserById(..., { user_metadata: {}, app_metadata: {} }) call was
-  // a silent no-op that left the full name on the tombstone (found on
-  // prod 2026-07-24, repaired by migration 20260724150000).
+  // Nothing else on the auth row is written here. GoTrue's admin update
+  // MERGES metadata maps, so an updateUserById(..., { user_metadata: {} })
+  // wipe is a silent no-op (found on prod 2026-07-24), and
+  // auth.admin.signOut() takes the user's JWT, not a user id, so the former
+  // signOut(user.id, 'global') call could not end sessions. Both jobs live in
+  // the RPC.
   const service = createServiceClient()
   try {
-    await service.auth.admin.updateUserById(user.id, {
+    const { error: banError } = await service.auth.admin.updateUserById(user.id, {
       ban_duration: '876000h',
     })
+    if (banError) {
+      log.error('Failed to ban anonymized user', { userId: user.id, error: banError.message })
+    }
   } catch (err) {
     log.error('Failed to ban anonymized user', { userId: user.id, err })
-  }
-
-  try {
-    await service.auth.admin.signOut(user.id, 'global')
-  } catch (err) {
-    log.error('Failed to global sign out anonymized user', { userId: user.id, err })
   }
 
   const deletedAt = new Date().toISOString()

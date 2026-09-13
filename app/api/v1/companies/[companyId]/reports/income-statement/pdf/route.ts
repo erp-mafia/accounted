@@ -17,6 +17,8 @@ import {
   loadPeriodFromQuery,
   loadRangeFromQuery,
   safeGenerate,
+  ReportPeriodQueryShape,
+  ReportDateRangeQueryShape,
 } from '@/lib/api/v1/report-period'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
@@ -25,6 +27,9 @@ import { buildIncomeStatementPdfModel } from '@/lib/reports/financial-statement-
 import type { CompanySettings } from '@/types'
 
 const ALLOWED_PARAMS = ['period_id', 'from_date', 'to_date'] as const
+
+// The accepted parameters, as ALLOWED_PARAMS gates them.
+const ReportQuery = z.object({ ...ReportPeriodQueryShape, ...ReportDateRangeQueryShape })
 
 registerEndpoint({
   operation: 'reports.income-statement.pdf',
@@ -52,6 +57,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ReportQuery },
   response: {
     success: z.unknown(), // Marker: binary response, see contentType.
     contentType: 'application/pdf',

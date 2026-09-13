@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { ensureInitialized } from '@/lib/init'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { issueAndBookInvoice, type IssueAndBookResult } from '@/lib/invoices/issue-and-book-invoice'
@@ -13,6 +14,7 @@ import {
   PEPPOL_BIS_BILLING_PROFILE_ID,
 } from '@/lib/invoices/peppol-bis-billing'
 import {
+  isFiscalPeriodMissingError,
   persistVerifiedPeppolEvent,
   sha256Hex,
   stagePeppolDelivery,
@@ -25,9 +27,11 @@ import {
   getPeppolTransportAvailability,
   isPeppolTransportError,
   type PeppolDeliveryStatus,
+  type PeppolRecipientLookup,
   type PeppolTransport,
   type PeppolVerifiedEvent,
 } from '@/lib/invoices/peppol-transport'
+import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClient } from '@/lib/supabase/server'
 import type { Invoice } from '@/types'
 
@@ -39,6 +43,43 @@ const paramsSchema = z.object({ id: z.uuid() })
 
 /** Invoice states that may still be handed to the network. */
 const SENDABLE_STATUSES = new Set<Invoice['status']>(['draft', 'sent', 'overdue'])
+
+/**
+ * How a failed submission is classified. A verdict on the document arrives
+ * only as the access point's own answer: the direct adapter throws a
+ * non-retryable error without a code, and the connector wraps the access
+ * point's refusal as a non-retryable CONNECTOR_UPSTREAM_ERROR. Every other
+ * coded answer is about the sender, the key, the route or the service:
+ * transient ones (unreachable, rate limited, ledger, upstream unconfigured,
+ * HTTP 429/5xx) are a plain failure; permanent ones (sender not registered,
+ * not allowed, quota, scope, key, HTTP 4xx, protocol) are a precondition.
+ * Neither is terminal: the delivery stays resendable.
+ */
+type SubmitVerdict = 'rejected' | 'precondition' | 'failed'
+
+function classifySubmitFailure(err: unknown): { verdict: SubmitVerdict; code: string | null } {
+  if (!isPeppolTransportError(err)) return { verdict: 'failed', code: null }
+  if (err.retryable) return { verdict: 'failed', code: err.code }
+  const documentVerdict = err.code === null || err.code === 'CONNECTOR_UPSTREAM_ERROR'
+  return { verdict: documentVerdict ? 'rejected' : 'precondition', code: err.code }
+}
+
+const PRECONDITION_PREFIX_SV = 'Fakturan kunde inte skickas via Peppol ännu: '
+const PRECONDITION_PREFIX_EN = 'The invoice could not be sent via Peppol yet: '
+
+/**
+ * The hosted text behind the precondition prefix when the registry knows the
+ * code; an empty override otherwise, so the registry's generic pointer to the
+ * settings stands.
+ */
+function preconditionMessages(code: string): { messageSv?: string; messageEn?: string } {
+  const entry = getErrorEntry(code)
+  if (!entry) return {}
+  return {
+    messageSv: PRECONDITION_PREFIX_SV + entry.message_sv,
+    messageEn: PRECONDITION_PREFIX_EN + entry.message_en,
+  }
+}
 
 /** Provider-source lifecycle events written by this route (service role). */
 function routeEvent(args: {
@@ -91,6 +132,13 @@ function summaryPayload(delivery: PeppolDeliverySummary) {
 
 const TERMINAL_FAILURE_STATUSES = new Set(['failed', 'no_route', 'business_rejected'])
 
+interface RefusalContext {
+  details?: unknown
+  status?: number
+  messageSv?: string
+  messageEn?: string
+}
+
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.peppol.send',
   async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
@@ -103,15 +151,33 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
     const invoiceId = parsedParams.data.id
 
+    // Every refusal before a delivery row exists leaves one structured line
+    // with the registry code: no amounts, no names. Prod had zero deliveries
+    // and no way to tell which gate stopped them (#2484).
+    const logRefusal = (code: string, extra: Record<string, unknown> = {}) =>
+      log.info('peppol send refused', { invoiceId, code, ...extra })
+    const refuse = (code: string, ctx: RefusalContext = {}) => {
+      logRefusal(code)
+      return privateNoStore(errorResponseFromCode(code, log, { requestId, ...ctx }))
+    }
+
     const availability = getPeppolTransportAvailability()
     const transport: PeppolTransport | null = availability.available
       ? getPeppolTransport(availability.provider)
       : null
     if (!availability.available || !transport) {
-      return privateNoStore(errorResponseFromCode('PEPPOL_TRANSPORT_UNAVAILABLE', log, {
-        requestId,
+      return refuse('PEPPOL_TRANSPORT_UNAVAILABLE', {
         details: { reason: availability.available ? 'provider_adapter_unavailable' : availability.reason },
-      }))
+      })
+    }
+
+    // The demo company never speaks to the access point: a transmission is
+    // billed per document.
+    if (await isSandboxCompany(supabase, companyId)) {
+      return refuse('PEPPOL_SANDBOX_NOT_ALLOWED', {
+        messageSv: 'Peppol-sändning är inte tillgänglig i demobolaget. Skapa ett riktigt konto för att skicka e-fakturor.',
+        messageEn: 'Peppol sending is not available in the demo company. Create a real account to send e-invoices.',
+      })
     }
 
     // Access is granted per company by the operators and capped in sends:
@@ -119,18 +185,20 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const service = createServiceClient()
     const permission = await checkPeppolSendPermission({ service, companyId })
     if (!permission.ok) {
-      return privateNoStore(errorResponseFromCode(permission.code, log, {
-        requestId,
+      return refuse(permission.code, {
         details: {
           access_status: permission.summary.status,
           max_sends: permission.summary.max_sends,
           sent_count: permission.summary.sent_count,
         },
-      }))
+      })
     }
 
     const records = await loadPeppolRecords({ supabase, companyId, invoiceId, log, requestId })
-    if (!records.ok) return records.response
+    if (!records.ok) {
+      logRefusal(records.code)
+      return records.response
+    }
     const { invoice, company } = records
 
     const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
@@ -140,10 +208,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       || invoice.is_self_billed
       || !SENDABLE_STATUSES.has(invoice.status)
     ) {
-      return privateNoStore(errorResponseFromCode('PEPPOL_SEND_INVALID_STATUS', log, {
-        requestId,
+      return refuse('PEPPOL_SEND_INVALID_STATUS', {
         details: { status: invoice.status, document_type: invoice.document_type ?? 'invoice' },
-      }))
+      })
     }
 
     const wasDraft = invoice.status === 'draft'
@@ -153,18 +220,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (wasDraft) {
       const payeeSnapshot = await snapshotInvoicePayee(supabase, companyId, invoice)
       if (!payeeSnapshot.ok) {
-        return privateNoStore(errorResponseFromCode(payeeSnapshot.code, log, {
-          requestId,
-          details: payeeSnapshot.details,
-        }))
+        return refuse(payeeSnapshot.code, { details: payeeSnapshot.details })
       }
       invoice.payment_details = payeeSnapshot.payee
     }
     if (wasDraft && !hasRequiredInvoicePaymentAccount(company, invoice)) {
-      return privateNoStore(errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
-        requestId,
-        details: { currency: invoice.currency },
-      }))
+      return refuse('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', { details: { currency: invoice.currency } })
     }
 
     if (wasDraft && !invoice.invoice_number) {
@@ -172,12 +233,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         invoice.invoice_number = await ensureInvoiceNumber(supabase, companyId, invoice)
       } catch (err) {
         log.error('failed to assign invoice number before Peppol send', err as Error)
-        return privateNoStore(errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId }))
+        return refuse('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
       }
     }
 
     const generated = generatePeppolDocumentOrResponse({ invoice, company, log, requestId })
-    if (!generated.ok) return generated.response
+    if (!generated.ok) {
+      // The BIS issue codes say which preflight rule stopped the send.
+      logRefusal(generated.code, generated.issues ? { issues: generated.issues.slice(0, 10) } : {})
+      return generated.response
+    }
     const document = generated.document
 
     const provider = transport.provider
@@ -188,12 +253,20 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       || provider
 
     try {
-      let delivery: PeppolDeliverySummary = await stagePeppolDelivery({
-        supabase,
-        companyId,
-        invoiceId,
-        document,
-      })
+      let delivery: PeppolDeliverySummary
+      try {
+        delivery = await stagePeppolDelivery({
+          supabase,
+          companyId,
+          invoiceId,
+          document,
+        })
+      } catch (err) {
+        if (isFiscalPeriodMissingError(err)) {
+          return refuse('PEPPOL_FISCAL_PERIOD_MISSING', { details: { invoice_date: invoice.invoice_date } })
+        }
+        throw err
+      }
 
       if (delivery.provider_submission_id) {
         // Exact XML already handed to the network: idempotent replay, never a
@@ -214,7 +287,25 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         }))
       }
 
-      const lookup = await transport.lookupRecipient(document.recipient)
+      // A lookup that cannot be performed is not a lookup that answered "not
+      // registered" and never a verdict on the document: the delivery stays
+      // staged, nothing terminal is recorded, and the answer is always 502
+      // retryable. Anything but a transport error keeps the generic handling.
+      let lookup: PeppolRecipientLookup
+      try {
+        lookup = await transport.lookupRecipient(document.recipient)
+      } catch (err) {
+        if (!isPeppolTransportError(err)) throw err
+        log.error('Peppol recipient lookup failed', err, {
+          invoiceId,
+          retryable: err.retryable,
+          transportCode: err.code,
+        })
+        return privateNoStore(errorResponseFromCode('PEPPOL_LOOKUP_FAILED', log, {
+          requestId,
+          details: { reason: err.detail, code: err.code },
+        }))
+      }
       if (!lookup.reachable) {
         return privateNoStore(errorResponseFromCode('PEPPOL_RECIPIENT_NOT_REACHABLE', log, {
           requestId,
@@ -290,7 +381,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         providerSubmissionId = receipt.providerSubmissionId
         acceptedAt = receipt.acceptedAt
       } catch (err) {
-        const retryable = isPeppolTransportError(err) ? err.retryable : true
+        const { verdict, code: transportCode } = classifySubmitFailure(err)
+        // Only the access point's own verdict (provider `rejected`/`duplicate`)
+        // is terminal; a precondition or a transient failure leaves the
+        // delivery resendable.
+        const retryable = verdict !== 'rejected'
         // The provider's own explanation (validation rule, duplicate notice) is
         // what the user can act on; the adapter's error message stays in the
         // event log and never reaches the response.
@@ -301,6 +396,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         log.error('Peppol submission failed', err as Error, {
           invoiceId,
           retryable,
+          verdict,
+          transportCode,
         })
         await persistVerifiedPeppolEvent({
           supabase: service,
@@ -317,10 +414,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             occurredAt: new Date().toISOString(),
           }),
         })
+        if (verdict === 'precondition' && transportCode !== null) {
+          return privateNoStore(errorResponseFromCode('PEPPOL_SEND_PRECONDITION_FAILED', log, {
+            requestId,
+            ...preconditionMessages(transportCode),
+            details: { reason: providerReason, code: transportCode },
+          }))
+        }
         return privateNoStore(errorResponseFromCode(
-          retryable ? 'PEPPOL_SUBMISSION_FAILED' : 'PEPPOL_SUBMISSION_REJECTED',
+          verdict === 'failed' ? 'PEPPOL_SUBMISSION_FAILED' : 'PEPPOL_SUBMISSION_REJECTED',
           log,
-          { requestId, details: { reason: providerReason } },
+          { requestId, details: { reason: providerReason, code: transportCode } },
         ))
       }
 

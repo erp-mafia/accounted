@@ -111,8 +111,8 @@ function SalesOrdersPageInner() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <Button asChild={canWrite} disabled={!canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
           {canWrite ? (
             <Link href="/sales-orders/new">

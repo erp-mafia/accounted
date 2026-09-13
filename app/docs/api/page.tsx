@@ -24,7 +24,7 @@ export default function DocsApiLandingPage() {
       <section className="mt-16">
         <h2 className="font-display text-2xl tracking-tight mb-4 pb-2 border-b border-border">Cookbooks</h2>
         <p className="text-[15px] leading-7 text-foreground/80 mb-6">
-          End-to-end recipes for the most common integrations. Copy-paste ready, tested against the sandbox.
+          End-to-end recipes for the most common integrations. Copy-paste ready, tested against an empty company with a live key.
         </p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {cookbooks.map((c) => (

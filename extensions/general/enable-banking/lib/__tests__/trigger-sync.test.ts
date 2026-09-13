@@ -16,7 +16,7 @@ vi.mock('@/lib/events/bus', () => ({
   eventBus: { emit: (...args: unknown[]) => mocks.emit(...args) },
 }))
 
-import { SessionExpiredError, REAUTH_REQUIRED_MESSAGE, ConnectorSyncError } from '../api-client'
+import { SessionExpiredError, REAUTH_REQUIRED_MESSAGE, SYNC_FAILED_MESSAGE, ConnectorSyncError } from '../api-client'
 import { SYNC_COOLDOWN_MS, triggerConnectionSync } from '../trigger-sync'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -277,5 +277,83 @@ describe('triggerConnectionSync', () => {
       skipAutoCategorization: true,
       rawInsertOnly: true,
     })
+  })
+})
+
+describe('triggerConnectionSync: bank_connection.sync_failed (feedback seq 340107)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    state = {
+      connection: connection(),
+      membershipRole: 'owner',
+      sieOverlap: false,
+      updates: [],
+      leaseUntil: EPOCH,
+    }
+    mocks.updateBalancesFromSync.mockResolvedValue(undefined)
+    mocks.emit.mockResolvedValue(undefined)
+  })
+
+  const failedEvents = () =>
+    mocks.emit.mock.calls
+      .map((c) => c[0] as { type: string; payload: Record<string, unknown> })
+      .filter((e) => e.type === 'bank_connection.sync_failed')
+
+  it('emits one event on the unknown branch with the internal message, never the Swedish string', async () => {
+    mocks.syncAccountTransactions.mockRejectedValue(new Error('boom: ECONNRESET'))
+    const result = await run()
+    expect(result).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status: 'active' })
+    const events = failedEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0].payload).toEqual({
+      connectionId: CONNECTION_ID,
+      companyId: COMPANY_ID,
+      userId: 'user-1',
+      bankName: 'Swedbank',
+      provider: 'enable_banking',
+      trigger: 'agent',
+      errorClass: 'unknown',
+      status: 'active',
+      diagnostic: 'Error: boom: ECONNRESET',
+    })
+    expect(events[0].payload.diagnostic).not.toBe(SYNC_FAILED_MESSAGE)
+  })
+
+  it('emits session_expired with the HTTP status, the envelope code and the post-handling status', async () => {
+    mocks.syncAccountTransactions.mockRejectedValue(
+      new SessionExpiredError(401, '{"code":"SESSION_EXPIRED","message":"Session has expired"}'),
+    )
+    const result = await run()
+    expect(result).toMatchObject({ ok: false, code: 'BANK_SESSION_EXPIRED', status: 'expired' })
+    const events = failedEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0].payload).toMatchObject({
+      errorClass: 'session_expired',
+      status: 'expired',
+      httpStatus: 401,
+      ebCode: 'SESSION_EXPIRED',
+    })
+    expect(events[0].payload.diagnostic).not.toBe(REAUTH_REQUIRED_MESSAGE)
+    expect(events[0].payload.diagnostic).toBe('SessionExpiredError: bank session expired (HTTP 401)')
+  })
+
+  it('emits connector with the connector code, and a failing bus never changes the sync outcome', async () => {
+    mocks.syncAccountTransactions.mockRejectedValue(
+      new ConnectorSyncError(502, 'CONNECTOR_UPSTREAM_ERROR', 'body never in the event'),
+    )
+    mocks.emit.mockRejectedValue(new Error('bus down'))
+    const result = await run()
+    expect(result).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status: 'active' })
+    const events = failedEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0].payload).toMatchObject({
+      errorClass: 'connector',
+      status: 'active',
+      httpStatus: 502,
+      ebCode: 'CONNECTOR_UPSTREAM_ERROR',
+    })
+    expect(JSON.stringify(events[0].payload)).not.toContain('body never in the event')
+    // The row is left alone, as before: no status flip on a connector hop failure.
+    expect(state.updates.some((u) => 'status' in u)).toBe(false)
   })
 })

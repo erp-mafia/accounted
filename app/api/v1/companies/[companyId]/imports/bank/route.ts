@@ -51,6 +51,32 @@ const BankImportAccepted = z.object({
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB: matches dashboard
 
+// The canonical BankFileFormatId values a `format` override may name. The
+// handler validates the parameter against it before anything reaches the
+// format module.
+const BankFormatEnum = z.enum([
+  'nordea',
+  'nordea_business',
+  'seb',
+  'swedbank',
+  'handelsbanken',
+  'lansforsakringar',
+  'ica_banken',
+  'skandia',
+  'lunar',
+  'northmill',
+  'wise',
+  'wise_statement',
+  'generic_csv',
+  'camt053',
+])
+
+const ImportQuery = z.object({
+  format: BankFormatEnum.optional().describe(
+    'Force this bank file format instead of auto-detection. Omit to auto-detect.',
+  ),
+})
+
 registerEndpoint({
   operation: 'imports.bank',
   method: 'POST',
@@ -87,7 +113,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
-  request: { contentType: 'multipart/form-data' },
+  request: { contentType: 'multipart/form-data', query: ImportQuery },
   response: { success: dataEnvelope(BankImportAccepted) },
 })
 
@@ -129,22 +155,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // front so an attacker-supplied value never reaches the format module
     // (V2.2 / PI1.1 hardening).
     const formatParam = url.searchParams.get('format')
-    const BankFormatEnum = z.enum([
-      'nordea',
-      'nordea_business',
-      'seb',
-      'swedbank',
-      'handelsbanken',
-      'lansforsakringar',
-      'ica_banken',
-      'skandia',
-      'lunar',
-      'northmill',
-      'wise',
-      'wise_statement',
-      'generic_csv',
-      'camt053',
-    ])
     let formatOverride: BankFileFormatId | null = null
     if (formatParam) {
       const parsed = BankFormatEnum.safeParse(formatParam)

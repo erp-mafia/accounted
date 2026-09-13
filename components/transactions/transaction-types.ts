@@ -60,7 +60,9 @@ export type CategorizeHandler = (
   templateId?: string,
   inboxItemId?: string,
   // Dimensions bag {sie_dim_no: code} for the business lines of the booking.
-  dimensions?: Record<string, string>
+  dimensions?: Record<string, string>,
+  /** The underlag's moms in the transaction's currency; replaces the rate-based VAT line. */
+  vatAmount?: number
 ) => Promise<string | null>
 
 // Category option type. `label` retains the Swedish text for back-compat and

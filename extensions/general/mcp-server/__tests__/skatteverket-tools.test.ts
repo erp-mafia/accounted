@@ -19,10 +19,16 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', async (importOrigina
 
 const mockBuildMomsuppgift = vi.fn()
 const mockResolveRedovisare = vi.fn()
-vi.mock('@/extensions/general/skatteverket/lib/declaration-prep', () => ({
-  buildMomsuppgift: (...a: unknown[]) => mockBuildMomsuppgift(...a),
-  resolveRedovisare: (...a: unknown[]) => mockResolveRedovisare(...a),
-}))
+// resolveRedovisningsperiod stays REAL: the status tests below exercise the
+// fiscal_periods lookup behind it against the queued supabase double.
+vi.mock('@/extensions/general/skatteverket/lib/declaration-prep', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>
+  return {
+    ...actual,
+    buildMomsuppgift: (...a: unknown[]) => mockBuildMomsuppgift(...a),
+    resolveRedovisare: (...a: unknown[]) => mockResolveRedovisare(...a),
+  }
+})
 
 const mockKvittenser = vi.fn()
 vi.mock('@/extensions/general/skatteverket/lib/agi-client', () => ({
@@ -317,6 +323,77 @@ describe('gnubok_agi_status: run-scoped filing state', () => {
     expect(result.filing_state).toBe('none')
     expect(result.kvittensnummer).toBeNull()
     expect(result.local_state).toBeNull()
+  })
+})
+
+describe('gnubok_vat_declaration_status: redovisningsperiod follows the räkenskapsår', () => {
+  // Helårsmoms is filed per räkenskapsår (SFL 26 kap 10-11 §§). The MCP
+  // handler used to inline formatRedovisningsperiod without the fiscal-year
+  // end and polled 202612 for a company whose räkenskapsår 2025-04-01..
+  // 2026-03-31 had been filed under 202603 (feedback seq 330091). Same
+  // resolution as the HTTP status service and the submit path now.
+  const notOnFile = { ok: false, status: 404, json: async () => ({}), text: async () => '' }
+
+  it('yearly for a broken FY (Apr-Mar) polls the FY-end month, not December', async () => {
+    mockResolveRedovisare.mockResolvedValue('165560000000')
+    mockSkvRequest.mockResolvedValue(notOnFile)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    // fiscal_periods: the räkenskapsår ending in 2026.
+    enqueue({ data: { period_start: '2025-04-01', period_end: '2026-03-31' } })
+
+    const result = await vatStatus.execute(
+      { period_type: 'yearly', year: 2026, period: 1 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    ) as { redovisningsperiod: string; submitted: unknown; decided: unknown }
+
+    expect(result.redovisningsperiod).toBe('202603')
+    expect(result).toMatchObject({ submitted: null, decided: null })
+    // The lookup is "the fiscal year ending in `year`", not a calendar guess.
+    expect(findCalls('fiscal_periods', 'gte')).toEqual([['period_end', '2026-01-01']])
+    expect(findCalls('fiscal_periods', 'lte')).toEqual([['period_end', '2026-12-31']])
+    expect(mockSkvRequest.mock.calls.map((c) => c[4])).toEqual([
+      '/inlamnat/165560000000/202603',
+      '/beslutat/165560000000/202603',
+    ])
+  })
+
+  it('yearly for a calendar FY still maps to YYYY12', async () => {
+    mockResolveRedovisare.mockResolvedValue('165560000000')
+    mockSkvRequest.mockResolvedValue(notOnFile)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { period_start: '2026-01-01', period_end: '2026-12-31' } })
+
+    const result = await vatStatus.execute(
+      { period_type: 'yearly', year: 2026, period: 1, state: 'submitted' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    ) as { redovisningsperiod: string }
+
+    expect(result.redovisningsperiod).toBe('202612')
+    expect(mockSkvRequest.mock.calls.map((c) => c[4])).toEqual(['/inlamnat/165560000000/202612'])
+  })
+
+  it('yearly with no fiscal year ending in `year` keeps the calendar fallback', async () => {
+    mockResolveRedovisare.mockResolvedValue('165560000000')
+    mockSkvRequest.mockResolvedValue(notOnFile)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // fiscal_periods: nothing ends in 2026
+
+    const result = await vatStatus.execute(
+      { period_type: 'yearly', year: 2026, period: 1, state: 'decided' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    ) as { redovisningsperiod: string }
+
+    expect(result.redovisningsperiod).toBe('202612')
+  })
+
+  it('monthly and quarterly are calendar periods: no fiscal_periods lookup', async () => {
+    mockResolveRedovisare.mockResolvedValue('165560000000')
+    mockSkvRequest.mockResolvedValue(notOnFile)
+    const { supabase, findCalls } = createQueuedMockSupabase()
+
+    const result = await vatStatus.execute(
+      { period_type: 'quarterly', year: 2026, period: 1, state: 'submitted' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    ) as { redovisningsperiod: string }
+
+    expect(result.redovisningsperiod).toBe('202603')
+    expect(findCalls('fiscal_periods', 'select')).toEqual([])
   })
 })
 

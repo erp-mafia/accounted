@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { ensureInitialized } from '@/lib/init'
-import { syncInboundPeppolDocuments } from '@/lib/invoices/peppol-inbound'
+import {
+  reprocessInboundPeppolDocuments,
+  syncInboundPeppolDocuments,
+} from '@/lib/invoices/peppol-inbound'
 import { deliverPeppolDocumentToInbox } from '@/lib/invoices/peppol-inbox-delivery'
 import {
   getPeppolTransport,
@@ -22,6 +25,14 @@ export const maxDuration = 300
  * company's identifier, so this is one poll for all of them; a document
  * nobody is registered for is kept as `unrouted`, never dropped.
  *
+ * After the listing, a bounded reprocessing pass revisits what the archive
+ * still holds pending (missing XML, unrouted, failed) regardless of whether
+ * the provider still lists it. One page per run, and only for what needs a
+ * person: documents that became terminal in this run (never retried again,
+ * and a received e-invoice under seven-year retention) and real processing
+ * failures. Transport hiccups, XML misses under budget and held documents
+ * are logged at warn and retried after the backoff.
+ *
  * Truthful no-op when no access point is switched on in this environment.
  */
 export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) => {
@@ -35,14 +46,44 @@ export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) 
   }
 
   const service = createServiceClientNoCookies()
-  const summary = await syncInboundPeppolDocuments({
-    service,
-    transport,
-    deliver: (delivery) => deliverPeppolDocumentToInbox(service, delivery),
-    log: ctx.log,
-  })
+  const deliver = (delivery: Parameters<typeof deliverPeppolDocumentToInbox>[1]) =>
+    deliverPeppolDocumentToInbox(service, delivery)
+  const summary = await syncInboundPeppolDocuments({ service, transport, deliver, log: ctx.log })
   ctx.log.info('peppol inbound sync complete', { ...summary, errors: summary.errors.length })
-  return NextResponse.json({ data: summary })
+
+  const reprocess = await reprocessInboundPeppolDocuments({ service, transport, deliver, log: ctx.log })
+  ctx.log.info('peppol inbound reprocess complete', {
+    ...reprocess,
+    terminalDocuments: reprocess.terminalDocuments.length,
+    errors: reprocess.errors.length,
+  })
+  if (reprocess.errors.length > 0) {
+    ctx.log.warn('peppol inbound reprocess left failures to retry', {
+      ids: reprocess.errors.map((e) => e.id),
+      errors: reprocess.errors,
+    })
+  }
+  // One page per run for everything that needs a person, from both passes:
+  // listing-sync failures (a listing that failed, a document that stopped
+  // the type), reprocess failures, and documents that became terminal.
+  const terminalDocuments = [...summary.terminalDocuments, ...reprocess.terminalDocuments]
+  const failures = [
+    ...summary.errors.map((e) => `sync ${e.providerDocumentId}: ${e.reason}`),
+    ...reprocess.errors.map((e) => `reprocess ${e.id} (${e.providerDocumentId}): ${e.reason}`),
+  ]
+  if (failures.length > 0 || terminalDocuments.length > 0) {
+    ctx.log.error('peppol inbound needs an operator', {
+      alert: true,
+      errorCount: failures.length,
+      syncErrorProviderDocumentIds: summary.errors.map((e) => e.providerDocumentId),
+      reprocessErrorIds: reprocess.errors.map((e) => e.id),
+      errorReasons: failures,
+      terminalCount: terminalDocuments.length,
+      terminalProviderDocumentIds: terminalDocuments.map((d) => d.providerDocumentId),
+      terminalReasons: terminalDocuments.map((d) => `${d.providerDocumentId}: ${d.reason}`),
+    })
+  }
+  return NextResponse.json({ data: { ...summary, reprocess } })
 })
 
 export const POST = GET

@@ -190,7 +190,15 @@ export interface UserUiState {
   // (companyId -> ISO timestamp of the ack). Lives on the user so each
   // member of a company sees the notice once.
   trial_expired_ack?: Record<string, string>
+  // Dashboard shell. 'v2' is the full-bleed frame with the page title in a
+  // top bar (founder decision 2026-09-07, dev_docs/ui_v2_build_plan.md).
+  // Absent or 'v1' keeps the centered max-w-5xl panel until v2 is default.
+  shell?: DashboardShell
+  // Transaktioner column visibility in shell v2 (lib/transactions/columns-v2).
+  tx_columns?: { hidden?: string[] }
 }
+
+export type DashboardShell = 'v1' | 'v2'
 
 export type AgentPanelMode = 'docked' | 'floating'
 
@@ -578,6 +586,15 @@ export interface CompanySettings {
   // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
   // for correctness (the /sales-orders pages and APIs work regardless).
   sales_orders_enabled: boolean
+
+  // Invoice document type toggles (migration 20260912190000): hide the
+  // optional invoice kinds from the UI for companies that never use them.
+  // Default true. UI-visibility only, never load-bearing for correctness:
+  // existing documents stay listed and the API/MCP work regardless.
+  quotes_enabled: boolean
+  proforma_enabled: boolean
+  recurring_invoices_enabled: boolean
+  self_billing_enabled: boolean
   // Per-company counter behind generate_sales_order_number (OR-<n>).
   next_sales_order_number?: number
 
@@ -2153,6 +2170,11 @@ export interface CategorizationTemplate {
   last_seen_date: string | null
   source: CategorizationTemplateSource
   is_active: boolean
+  // Rules ladder (migration 20260907120000): mode is kept in step with
+  // is_active by a trigger; corrections counts changed proposals.
+  mode: 'proposed' | 'propose' | 'auto' | 'paused'
+  corrections: number
+  paused_at: string | null
   created_at: string
   updated_at: string
 }
@@ -3540,6 +3562,7 @@ export type YearEndBlockerCode =
   | 'PERIOD_NOT_FOUND'
   | 'PERIOD_NOT_ENDED'
   | 'PERIOD_ALREADY_CLOSED'
+  | 'PERIOD_LOCKED'
   | 'CLOSING_ENTRY_EXISTS'
   | 'DRAFT_ENTRIES'
   | 'UNEXPLAINED_VOUCHER_GAP'
@@ -4039,6 +4062,9 @@ export interface InvoiceExtractionResult {
     address: string | null
     bankgiro: string | null
     plusgiro: string | null
+    /** Payment details for a foreign supplier; read since 2026-09 so a betalfil can carry it. */
+    iban?: string | null
+    bic?: string | null
   }
   invoice: {
     invoiceNumber: string | null

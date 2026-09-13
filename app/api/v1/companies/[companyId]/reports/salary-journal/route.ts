@@ -13,6 +13,13 @@ import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { safeGenerate } from '@/lib/api/v1/report-period'
 import { generateSalaryJournal } from '@/lib/reports/salary-journal'
 
+// Documents what the handler reads: it validates the values itself.
+const JournalQuery = z.object({
+  year: z.number().int().min(2020).max(2100).describe('Payroll year, 2020-2100. Required.'),
+  month_from: z.number().int().min(1).max(12).optional().describe('First month to include, 1-12 (inclusive).'),
+  month_to: z.number().int().min(1).max(12).optional().describe('Last month to include, 1-12 (inclusive).'),
+})
+
 registerEndpoint({
   operation: 'reports.salary-journal',
   method: 'GET',
@@ -41,6 +48,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: JournalQuery },
   response: { success: dataEnvelope(z.unknown()) },
 })
 

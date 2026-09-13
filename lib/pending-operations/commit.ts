@@ -4221,9 +4221,15 @@ async function precheckDocumentLink(
  * (feedback 2026-08-24..26, three companies).
  *
  * Same shape as the create_voucher + inbox_item_id stamp: CAS on the null
- * link columns so a concurrent claim stays a no-op, and unique_violation
- * tolerated because the UNIQUE on created_journal_entry_id lets only one
- * inbox item point at a samlingsverifikat. Best-effort by design: the link is
+ * link columns so a concurrent claim of the same inbox row stays a no-op.
+ * Several inbox items may carry the same created_journal_entry_id (an invoice
+ * and its payment confirmation on one verifikat): migration 20260911120500
+ * dropped the UNIQUE that made every stamp after the first fail with 23505,
+ * which this helper used to swallow, leaving the item "unprocessed" forever
+ * (feedback seq 389343, 395894, 395931, 366701). Zero matched rows is the
+ * remaining quiet outcome (the document never came through the inbox, or the
+ * row was already claimed, typically by create_supplier_invoice_from_inbox)
+ * and is logged so the trail is visible. Best-effort by design: the link is
  * already committed and inbox bookkeeping must not roll it back.
  */
 async function stampInboxItemForLinkedDocument(
@@ -4232,18 +4238,26 @@ async function stampInboxItemForLinkedDocument(
   documentId: string,
   journalEntryId: string,
 ): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('invoice_inbox_items')
     .update({ created_journal_entry_id: journalEntryId })
     .eq('document_id', documentId)
     .eq('company_id', companyId)
     .is('created_journal_entry_id', null)
     .is('created_supplier_invoice_id', null)
-  if (error && error.code !== '23505') {
+    .select('id')
+  if (error) {
     log.warn('Failed to mark inbox item handled after document link (link still committed)', {
       documentId,
       journalEntryId,
       error: error.message,
+    })
+    return
+  }
+  if (!data || data.length === 0) {
+    log.warn('No inbox item stamped after document link: document has no inbox row or it was already claimed', {
+      documentId,
+      journalEntryId,
     })
   }
 }
@@ -4690,6 +4704,29 @@ async function commitApproveSupplierInvoice(
   return { data: { supplier_invoice_id: id, status: nextStatus, approved_at: approvedAt } }
 }
 
+/**
+ * Swedish detail for a Postgres not_null_violation (23502) or check_violation
+ * (23514) on the supplier_invoices INSERT, naming the column or constraint
+ * from the pg message. Null for every other code so the caller keeps its
+ * generic handling; the pg `details` (which echoes the failing row) is never
+ * forwarded.
+ */
+function describeSupplierInvoiceInputViolation(
+  pgErr: { code?: string; message?: string } | null,
+): string | null {
+  if (!pgErr?.code) return null
+  const message = pgErr.message ?? ''
+  if (pgErr.code === '23502') {
+    const column = message.match(/column "([^"]+)"/)?.[1] ?? 'okänd kolumn'
+    return `Fältet ${column} saknas och får inte vara tomt (23502).`
+  }
+  if (pgErr.code === '23514') {
+    const constraint = message.match(/constraint "([^"]+)"/)?.[1] ?? 'okänt villkor'
+    return `Ett värde bryter mot villkoret ${constraint} (23514).`
+  }
+  return null
+}
+
 async function commitCreateSupplierInvoiceFromInbox(
   supabase: SupabaseClient,
   userId: string,
@@ -4709,9 +4746,21 @@ async function commitCreateSupplierInvoiceFromInbox(
   // Dimensions PR7: resolved at staging time; coerce is the drift/tamper gate.
   const defaultDimensions = coerceDimensionsBag(params.default_dimensions)
 
-  if (!inboxItemId || !supplierId || !supplierInvoiceNumber || !invoiceDate || rawItems.length === 0) {
+  // due_date is NOT NULL on supplier_invoices: a null here used to reach the
+  // INSERT and surface as a bare 500 (feedback 395405). Staging defaults it
+  // now; this guard catches a stale or tampered op before an ankomstnummer
+  // is burnt.
+  if (
+    !inboxItemId ||
+    !supplierId ||
+    !supplierInvoiceNumber ||
+    !invoiceDate ||
+    !dueDate ||
+    rawItems.length === 0
+  ) {
     return {
-      error: 'inbox_item_id, supplier_id, supplier_invoice_number, invoice_date, and items are required',
+      error: 'inbox_item_id, supplier_id, supplier_invoice_number, invoice_date, due_date, and items are required',
+      errorCode: 'SI_CREATE_INVALID_INPUT',
       status: 400,
     }
   }
@@ -4828,9 +4877,18 @@ async function commitCreateSupplierInvoiceFromInbox(
   }
 
   const reverseCharge = vatTreatment === 'reverse_charge'
-  const subtotalRounded = Math.round(subtotal * 100) / 100
-  const vatAmountRounded = Math.round(vatAmount * 100) / 100
-  const totalRounded = Math.round(total * 100) / 100
+  // Omvänd skattskyldighet: the registration entry credits 2440 with the sum
+  // of the line nets (the fiktiv 2614/2645 pair nets to zero), so that sum is
+  // the only payable the reskontra can carry. Staging registers the net since
+  // feedback seq 366701, but an op staged before that fix, or a tampered one,
+  // still carries the document's gross (919.20 + 229.80 = 1149.00 on the
+  // reported invoice) and would leave remaining_amount 1149 against 919.20 in
+  // the GL: never trust a staged header under reverse charge. VAT the seller
+  // charged on a reverse-charge invoice is not deductible and is not booked.
+  const itemNetSum = rawItems.reduce((sum, item) => sum + (finite(item.line_total) ?? 0), 0)
+  const subtotalRounded = reverseCharge ? roundOre(itemNetSum) : Math.round(subtotal * 100) / 100
+  const vatAmountRounded = reverseCharge ? 0 : Math.round(vatAmount * 100) / 100
+  const totalRounded = reverseCharge ? subtotalRounded : Math.round(total * 100) / 100
   // Fed the already-rounded figures so a SEK invoice (rate 1) gets
   // total_sek === total to the öre instead of the two roundings disagreeing on
   // an exact-half value. The old `exchangeRate ? … : null` guard left all three
@@ -4896,6 +4954,27 @@ async function commitCreateSupplierInvoiceFromInbox(
       return {
         error: `Leverantörsfaktura ${supplierInvoiceNumber} finns redan registrerad.`,
         status: 409,
+      }
+    }
+    // 23502 / 23514 are input problems, not infrastructure: the staged params
+    // carried a null or an out-of-range value that the column refused. Name
+    // the column or constraint so the caller can fix the extraction and
+    // re-stage, instead of reading "Failed to create supplier invoice" and
+    // retrying the identical op (feedback 395405: two retries on a null
+    // due_date, both logged only server-side).
+    const invalidInput = describeSupplierInvoiceInputViolation(pgErr)
+    if (invalidInput) {
+      log.warn('Supplier invoice insert from inbox refused by a column constraint', {
+        companyId,
+        inboxItemId,
+        supplierId,
+        code: pgErr?.code,
+        error: pgErr?.message ?? 'unknown',
+      })
+      return {
+        error: `${getErrorEntry('SI_CREATE_INVALID_INPUT')?.message_sv ?? 'Ogiltig kombination av fakturafält.'} ${invalidInput}`,
+        errorCode: 'SI_CREATE_INVALID_INPUT',
+        status: 400,
       }
     }
     log.error('Failed to insert supplier invoice from inbox', {
@@ -5763,15 +5842,16 @@ async function commitCreateVoucher(
     const documentId = params.document_id as string | undefined
     let inboxLinked = false
     if (inboxItemId) {
-      // Race guard: the UNIQUE constraint on
-      // invoice_inbox_items.created_journal_entry_id (migration 20260515090000)
-      // stops two inbox items from being linked to the same JE, but it does
-      // NOT stop two concurrent commits of different staged ops on the same
-      // inbox item from overwriting each other (the second UPDATE on the same
-      // row trivially satisfies UNIQUE). We add a `.is('created_journal_entry_id', null)`
-      // predicate so only the first commit succeeds; the loser sees a
-      // zero-rows-updated result and surfaces a structured warning. We also
-      // require .eq('created_supplier_invoice_id', null) so a concurrent
+      // Race guard: two concurrent commits of different staged ops on the
+      // same inbox item must not overwrite each other, and no constraint
+      // catches that (a second UPDATE of the same row is invisible to any
+      // cross-row UNIQUE; the one on created_journal_entry_id from migration
+      // 20260515090000 was dropped in 20260911120500 because several inbox
+      // items legitimately back one verifikat). The
+      // `.is('created_journal_entry_id', null)` predicate is the guard: only
+      // the first commit succeeds; the loser sees a zero-rows-updated result
+      // and surfaces a structured warning. We also require
+      // .is('created_supplier_invoice_id', null) so a concurrent
       // create_supplier_invoice_from_inbox doesn't get clobbered either.
       // Only the link column is written: the status CHECK allows received|error
       // (migration 20260504180000), so writing 'confirmed' here would fail the
@@ -6175,7 +6255,27 @@ async function commitGenerateAgi(
       requestId: randomUUID(),
     })
     if (!result.ok) {
-      return { error: `AGI-generering misslyckades: ${result.code}`, status: 500 }
+      // generateAgiDeclaration already names what is missing (details.message
+      // from assertRequiredCompanyData); the bare code dropped it and the
+      // agent could not tell what to fill in (feedback seq 414922).
+      const details =
+        typeof result.details === 'object' && result.details !== null
+          ? (result.details as { message?: unknown; missing_fields?: unknown })
+          : {}
+      const detailMessage = typeof details.message === 'string' ? details.message : null
+      const missingFields = Array.isArray(details.missing_fields)
+        ? details.missing_fields.filter((f): f is string => typeof f === 'string')
+        : []
+      const hint =
+        result.code === 'AGI_INCOMPLETE_DATA'
+          ? ' Telefon och e-post sätts med gnubok_update_company_settings (sökbart via gnubok_search_tools) eller under Inställningar i webbappen; organisationsnummer ändras under Inställningar i webbappen.'
+          : ''
+      return {
+        error: `AGI-generering misslyckades: ${result.code}${detailMessage ? `: ${detailMessage}` : ''}${hint}`,
+        errorCode: result.code,
+        status: result.status ?? 500,
+        ...(missingFields.length > 0 ? { data: { missing_fields: missingFields } } : {}),
+      }
     }
     const period = `${result.periodYear}-${String(result.periodMonth).padStart(2, '0')}`
     return {

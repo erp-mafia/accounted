@@ -27,15 +27,22 @@ Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newes
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `status` | query | `"registered" \| "approved" \| "paid" \| "partially_paid" \| "overdue" \| "disputed" \| "credited" \| "reversed"` | no | Only supplier invoices in this status. |
+| `supplier_id` | query | `string` | no | Only invoices from this supplier (id). |
+| `currency` | query | `string` | no | 3-letter ISO 4217 code, uppercase (e.g. SEK, EUR). |
+| `date_from` | query | `string` | no | YYYY-MM-DD. Invoices with invoice_date on or after this date. |
+| `date_to` | query | `string` | no | YYYY-MM-DD. Invoices with invoice_date on or before this date. |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, paid_at: string, created_at: string }[],
+  data: { id: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, paid_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -101,6 +108,7 @@ Creates a supplier invoice in `registered` status and posts the registration jou
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -119,12 +127,12 @@ Request body:
   notes?: string,
   ore_rounding?: boolean,
   paid_with_private_funds?: boolean,
-  employee_id?: string,
+  employee_id?: string | null,
   claimant_name?: string,
-  inbox_item_id?: string,
+  inbox_item_id?: string | null,
   payment_date?: string,
   default_dimensions?: Record<string, string>,
-  items: { description: string, amount?: number, account_number: string, vat_rate?: 0 | 0.06 | 0.12 | 0.25, vat_amount?: number, reverse_charge_rate?: number, apply_slp?: boolean, vat_code?: string, quantity?: number, unit?: string, unit_price?: number, accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
+  items: { description: string, amount?: number, account_number: string, vat_rate?: 0 | 0.06 | 0.12 | 0.25, vat_amount?: number, reverse_charge_rate?: number, apply_slp?: boolean, vat_code?: string, quantity?: number, unit?: string, unit_price?: number, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[]
 }
 ```
 
@@ -166,13 +174,13 @@ Response `200`:
     total: number,
     remaining_amount: number,
     is_credit_note: boolean,
-    registration_journal_entry_id: string,
+    registration_journal_entry_id: string | null,
     created_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -219,6 +227,7 @@ Returns the full supplier-invoice record. Pass ?expand=supplier,items,payments t
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `expand` | query | `string` | no | Comma-separated related records to embed: supplier, items, payments. An unknown key returns 400 VALIDATION_ERROR. |
 
 Response `200`:
 ```ts
@@ -231,10 +240,10 @@ Response `200`:
     invoice_date: string,
     due_date: string,
     received_date: string,
-    delivery_date: string,
+    delivery_date: string | null,
     status: string,
     currency: string,
-    exchange_rate: number,
+    exchange_rate: number | null,
     subtotal: number,
     vat_amount: number,
     total: number,
@@ -243,17 +252,17 @@ Response `200`:
     paid_amount: number,
     remaining_amount: number,
     is_credit_note: boolean,
-    credited_invoice_id: string,
-    registration_journal_entry_id: string,
-    payment_journal_entry_id: string,
-    notes: string,
+    credited_invoice_id: string | null,
+    registration_journal_entry_id: string | null,
+    payment_journal_entry_id: string | null,
+    notes: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -305,6 +314,7 @@ Patches a supplier invoice with the supplied fields. Only allowed on `registered
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -336,10 +346,10 @@ Response `200`:
     invoice_date: string,
     due_date: string,
     received_date: string,
-    delivery_date: string,
+    delivery_date: string | null,
     status: string,
     currency: string,
-    exchange_rate: number,
+    exchange_rate: number | null,
     subtotal: number,
     vat_amount: number,
     total: number,
@@ -348,17 +358,17 @@ Response `200`:
     paid_amount: number,
     remaining_amount: number,
     is_credit_note: boolean,
-    credited_invoice_id: string,
-    registration_journal_entry_id: string,
-    payment_journal_entry_id: string,
-    notes: string,
+    credited_invoice_id: string | null,
+    registration_journal_entry_id: string | null,
+    payment_journal_entry_id: string | null,
+    notes: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -401,6 +411,7 @@ Attests a supplier invoice that has not been approved yet (status `registered` o
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -414,7 +425,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -460,6 +471,7 @@ Creates a kreditfaktura that reverses the original supplier invoice. Under accru
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -469,12 +481,12 @@ Response `200`:
     original_id: string,
     arrival_number: number,
     supplier_invoice_number: string,
-    registration_journal_entry_id: string
+    registration_journal_entry_id: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -523,6 +535,7 @@ Books the payment journal entry (Debit 2440 / Credit 1930 under accrual; or Debi
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -553,13 +566,13 @@ Response `200`:
     total: number,
     paid_amount: number,
     remaining_amount: number,
-    paid_at: string,
-    payment_journal_entry_id: string
+    paid_at: string | null,
+    payment_journal_entry_id: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -606,15 +619,20 @@ Returns active suppliers in created-first order. Pass ?include_archived=true to 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `supplier_type` | query | `"swedish_business" \| "eu_business" \| "non_eu_business"` | no | Only suppliers of this type. |
+| `search` | query | `string` | no | Case-insensitive match on the name (anywhere) or the org number (prefix), 1-200 characters. |
+| `include_archived` | query | `"true" \| "false"` | no | true also returns archived suppliers. Default: false. |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email: string, org_number: string, vat_number: string, default_payment_terms: number, default_currency: string, party_id?: string, archived_at: string, created_at: string }[],
+  data: { id: string, name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, default_currency: string, party_id?: string | null, archived_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -668,6 +686,7 @@ Creates a new supplier for the company. Requires Idempotency-Key (UUID). Support
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -692,7 +711,7 @@ Request body:
   account_number?: string,
   default_expense_account?: string,
   default_payment_terms?: number,
-  default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK",
+  default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | null,
   notes?: string
 }
 ```
@@ -715,35 +734,35 @@ Response `200`:
 ```ts
 {
   data: {
-    id: string,
+    id: string | null,
     name: string,
     supplier_type: "swedish_business" | "eu_business" | "non_eu_business",
-    email: string,
-    phone: string,
-    address_line1: string,
-    address_line2: string,
-    postal_code: string,
-    city: string,
+    email: string | null,
+    phone: string | null,
+    address_line1: string | null,
+    address_line2: string | null,
+    postal_code: string | null,
+    city: string | null,
     country: string,
-    org_number: string,
-    vat_number: string,
-    bankgiro: string,
-    plusgiro: string,
-    bank_account: string,
-    iban: string,
-    bic: string,
-    default_expense_account: string,
+    org_number: string | null,
+    vat_number: string | null,
+    bankgiro: string | null,
+    plusgiro: string | null,
+    bank_account: string | null,
+    iban: string | null,
+    bic: string | null,
+    default_expense_account: string | null,
     default_payment_terms: number,
     default_currency: string,
-    notes: string,
-    archived_at: string,
-    created_at: string,
-    updated_at: string
+    notes: string | null,
+    archived_at: string | null,
+    created_at: string | null,
+    updated_at: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -795,6 +814,7 @@ Returns the full supplier record. Pass ?expand=supplier_invoices to embed any op
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `expand` | query | `string` | no | Comma-separated related records to embed: supplier_invoices, party. An unknown key returns 400 VALIDATION_ERROR. |
 
 Response `200`:
 ```ts
@@ -803,34 +823,34 @@ Response `200`:
     id: string,
     name: string,
     supplier_type: string,
-    email: string,
-    phone: string,
-    address_line1: string,
-    address_line2: string,
-    postal_code: string,
-    city: string,
+    email: string | null,
+    phone: string | null,
+    address_line1: string | null,
+    address_line2: string | null,
+    postal_code: string | null,
+    city: string | null,
     country: string,
-    org_number: string,
-    vat_number: string,
-    bankgiro: string,
-    plusgiro: string,
-    bank_account: string,
-    iban: string,
-    bic: string,
-    default_expense_account: string,
+    org_number: string | null,
+    vat_number: string | null,
+    bankgiro: string | null,
+    plusgiro: string | null,
+    bank_account: string | null,
+    iban: string | null,
+    bic: string | null,
+    default_expense_account: string | null,
     default_payment_terms: number,
     default_currency: string,
-    notes: string,
-    party_id: string,
-    party?: { id: string, display_name: string, legal_name: string, org_number: string, vat_number: string, country: string, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string, customer_id: string }, registry: { legal_name: string, legal_form: string, status: { label: string, active: boolean }, warning: string, registrations: { f_tax: boolean, vat: boolean, employer: boolean }, industry: { code: string, label: string }, seat: string, registered_at: string, active_since: string, active_until: string, employees_band: string, turnover: { band: string, year: string }, workplaces: number, contact: { email: string, phone: string, address: { co: string, street: string, postal_code: string, city: string } }, vat_number: string, fetched_at: string }, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string, last_seen: string, dominant_account: string }, identities: { scheme: string, value: string, status: string, seen_count: number }[] },
-    archived_at: string,
+    notes: string | null,
+    party_id: string | null,
+    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null,
+    archived_at: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -883,13 +903,14 @@ Patches the supplier with the supplied fields. All fields optional. Idempotent (
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
 {
   name?: string,
   supplier_type?: "swedish_business" | "eu_business" | "non_eu_business",
-  email?: string,
+  email?: string | null,
   phone?: string,
   address_line1?: string,
   address_line2?: string,
@@ -905,9 +926,9 @@ Request body:
   bic?: string,
   clearing_number?: string,
   account_number?: string,
-  default_expense_account?: string,
+  default_expense_account?: string | null,
   default_payment_terms?: number,
-  default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK",
+  default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | null,
   notes?: string
 }
 ```
@@ -927,34 +948,34 @@ Response `200`:
     id: string,
     name: string,
     supplier_type: string,
-    email: string,
-    phone: string,
-    address_line1: string,
-    address_line2: string,
-    postal_code: string,
-    city: string,
+    email: string | null,
+    phone: string | null,
+    address_line1: string | null,
+    address_line2: string | null,
+    postal_code: string | null,
+    city: string | null,
     country: string,
-    org_number: string,
-    vat_number: string,
-    bankgiro: string,
-    plusgiro: string,
-    bank_account: string,
-    iban: string,
-    bic: string,
-    default_expense_account: string,
+    org_number: string | null,
+    vat_number: string | null,
+    bankgiro: string | null,
+    plusgiro: string | null,
+    bank_account: string | null,
+    iban: string | null,
+    bic: string | null,
+    default_expense_account: string | null,
     default_payment_terms: number,
     default_currency: string,
-    notes: string,
-    party_id: string,
-    party?: { id: string, display_name: string, legal_name: string, org_number: string, vat_number: string, country: string, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string, customer_id: string }, registry: { legal_name: string, legal_form: string, status: { label: string, active: boolean }, warning: string, registrations: { f_tax: boolean, vat: boolean, employer: boolean }, industry: { code: string, label: string }, seat: string, registered_at: string, active_since: string, active_until: string, employees_band: string, turnover: { band: string, year: string }, workplaces: number, contact: { email: string, phone: string, address: { co: string, street: string, postal_code: string, city: string } }, vat_number: string, fetched_at: string }, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string, last_seen: string, dominant_account: string }, identities: { scheme: string, value: string, status: string, seen_count: number }[] },
-    archived_at: string,
+    notes: string | null,
+    party_id: string | null,
+    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null,
+    archived_at: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -999,6 +1020,7 @@ Sets archived_at on the supplier; the record is preserved (supplier invoices and
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `204`.
 
@@ -1023,11 +1045,12 @@ Bulk-create endpoint mirroring /customers/bulk-create. Each supplier is validate
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
 {
-  suppliers: { name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK", notes?: string }[],
+  suppliers: { name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | null, notes?: string }[],
   all_or_nothing?: boolean
 }
 ```
@@ -1060,7 +1083,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>

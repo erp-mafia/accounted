@@ -850,3 +850,85 @@ input[type="number"] {
 .prefill-settle {
   animation: prefill-settle 0.9s ease-out both;
 }
+
+/* Dashboard shell v2 (founder decision 2026-09-07, dev_docs/ui_v2_build_plan.md).
+   Opt-in per user via ui_state.shell, rendered as data-shell on #main-content.
+   The PageHeader keeps its markup and becomes the panel's 48px top bar:
+   sticky, full width, 13px/500 body-face title, help and primary action on
+   the same line, description hidden (it lives behind the "?" popover).
+   The negative margins undo MainContainer's v2 padding (pt-4, px-4/md:px-6),
+   so keep the two in step. v1 pages are untouched: nothing here matches
+   without the attribute. */
+[data-shell="v2"] .page-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 3rem;
+  margin: -1rem -1rem 1rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid hsl(var(--border) / 0.7);
+  background: hsl(var(--background));
+}
+@media (min-width: 768px) {
+  [data-shell="v2"] .page-header {
+    margin-left: -1.5rem;
+    margin-right: -1.5rem;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+[data-shell="v2"] .page-header-lead {
+  min-width: 0;
+}
+[data-shell="v2"] .page-header-title {
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+/* A field label above a picker (PERIOD, DIMENSION) makes a toolbar two rows
+   tall; in v2 the pickers' own values say what they are, in the top bar and
+   in a page's filter row alike. */
+[data-shell="v2"] .field-label {
+  display: none;
+}
+/* Pages that centre a narrow column in v1 (Momsdeklaration) run full
+   width in v2, like every other v2 page. Styling-free hook. */
+[data-shell="v2"] .report-narrow {
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+}
+[data-shell="v2"] .page-header-desc {
+  display: none;
+}
+/* A detail page's facts line (counterparty, dates, org number) stays in the
+   bar, inline after the title, instead of vanishing like a description. */
+[data-shell="v2"] .page-header-lead:has(.page-header-meta) {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+[data-shell="v2"] .page-header-meta {
+  margin: 0;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-shell="v2"] .page-header-meta > * {
+  display: inline;
+}
+[data-shell="v2"] .page-header-action {
+  width: auto;
+}
+[data-shell="v2"] .page-header-action > * {
+  width: auto;
+}

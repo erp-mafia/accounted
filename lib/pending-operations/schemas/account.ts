@@ -75,6 +75,13 @@ export function accountClassTypeConflict(
   accountNumber: string,
   accountType: string,
 ): string | null {
+  // Obeskattade reserver are the 21xx group only: every BAS 2026 account of
+  // that type is 21xx (periodiseringsfonder 211x-213x, överavskrivningar
+  // 215x, ...), and so is every such row in prod. Elsewhere in class 2 the
+  // type would move a plain liability or equity row into that section.
+  if (accountType === 'untaxed_reserves' && !accountNumber.startsWith('21')) {
+    return `Account ${accountNumber} is outside the 21xx group, the only one that can hold account_type 'untaxed_reserves'.`
+  }
   const allowed = BAS_CLASS_ACCOUNT_TYPES[accountNumber[0]]
   if (!allowed || allowed.includes(accountType)) return null
   return `Account ${accountNumber} is in BAS class ${accountNumber[0]}, which cannot hold account_type '${accountType}' (allowed: ${allowed.join(', ')}).`

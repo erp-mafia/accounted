@@ -20,6 +20,7 @@ import {
   decodeDefaultCursor,
   encodeDefaultCursor,
   parsePaginationParams,
+  PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -56,6 +57,22 @@ const SuppliersListResponse = listEnvelope(SupplierSummary)
 // must update this list before the field becomes visible on the public API.
 const SUPPLIER_SUMMARY_COLUMNS =
   'id, name, supplier_type, email, org_number, vat_number, default_payment_terms, default_currency, party_id, archived_at, created_at'
+
+const ListFilters = z.object({
+  supplier_type: SupplierType.optional().describe('Only suppliers of this type.'),
+  search: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Case-insensitive match on the name (anywhere) or the org number (prefix), 1-200 characters.'),
+  include_archived: z
+    .enum(['true', 'false'])
+    .optional()
+    .describe('true also returns archived suppliers. Default: false.'),
+})
+
+const ListQuery = ListFilters.extend(PaginationQueryShape)
 
 registerEndpoint({
   operation: 'suppliers.list',
@@ -97,6 +114,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: SuppliersListResponse },
 })
 
@@ -107,12 +125,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
-    const FiltersSchema = z.object({
-      supplier_type: SupplierType.optional(),
-      search: z.string().min(1).max(200).optional(),
-      include_archived: z.enum(['true', 'false']).optional(),
-    })
-    const filtersResult = FiltersSchema.safeParse({
+    const filtersResult = ListFilters.safeParse({
       supplier_type: url.searchParams.get('supplier_type') ?? undefined,
       search: url.searchParams.get('search') ?? undefined,
       include_archived: url.searchParams.get('include_archived') ?? undefined,

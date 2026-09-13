@@ -249,3 +249,35 @@ describe('gnubok_call_tool bridge', () => {
     expect(json.error?.message).toContain('gnubok_not_a_real_tool')
   })
 })
+
+// The briefing's callable flags (feedback seq 372962) are only as honest as
+// the scopes it sees: the dispatcher must hand it the key's scopes through the
+// same private marker gnubok_search_tools gets. Otherwise fail-closed reports
+// every scoped tool as blocked_by scope, for every key.
+describe('dispatcher injects __keyScopes into gnubok_get_agent_briefing', () => {
+  beforeEach(() => {
+    vi.mocked(validateApiKey).mockResolvedValueOnce({
+      userId: 'user-1',
+      companyId: '11111111-1111-4111-8111-111111111111',
+      scopes: ['agent:read', 'reports:read'],
+      apiKeyId: 'key-1',
+      apiKeyName: 'Live Key',
+      mode: 'live',
+    } as never)
+  })
+
+  it('passes the validated key scopes as __keyScopes on a direct call', async () => {
+    const briefing = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const spy = vi.spyOn(briefing, 'execute').mockResolvedValue({ stubbed: true })
+    try {
+      const response = await handleMcpRequest(mcpToolCall('gnubok_get_agent_briefing'))
+      const { isError } = await parsedToolResult(response)
+      expect(isError).toBe(false)
+      expect(spy).toHaveBeenCalledTimes(1)
+      const args = spy.mock.calls[0][0] as Record<string, unknown>
+      expect(args.__keyScopes).toEqual(['agent:read', 'reports:read'])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})

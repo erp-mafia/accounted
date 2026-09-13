@@ -25,7 +25,8 @@ const DOT_CLASS: Record<NonNullable<ReconciliationAccount['status']>['state'] | 
 }
 
 function monogram(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean)
+  // Letters and digits only: "Företagskonto (SEK)" is FS, not "F(".
+  const words = name.replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/).filter(Boolean)
   if (words.length === 0) return '?'
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
   return (words[0][0] + words[1][0]).toUpperCase()

@@ -15,6 +15,7 @@ import {
   decodeDefaultCursor,
   encodeDefaultCursor,
   parsePaginationParams,
+  PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -62,6 +63,22 @@ const CustomersListResponse = listEnvelope(CustomerSummary)
 const CUSTOMER_SUMMARY_COLUMNS =
   'id, name, customer_type, email, org_number, vat_number, default_payment_terms, party_id, archived_at, created_at'
 
+const ListFilters = z.object({
+  customer_type: CustomerType.optional().describe('Only customers of this type.'),
+  search: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Case-insensitive match on the name (anywhere) or the org number (prefix), 1-200 characters.'),
+  include_archived: z
+    .enum(['true', 'false'])
+    .optional()
+    .describe('true also returns archived customers. Default: false.'),
+})
+
+const ListQuery = ListFilters.extend(PaginationQueryShape)
+
 registerEndpoint({
   operation: 'customers.list',
   method: 'GET',
@@ -83,7 +100,7 @@ registerEndpoint({
         {
           id: 'a8f1…',
           name: 'Acme AB',
-          customer_type: 'business',
+          customer_type: 'swedish_business',
           email: 'finance@acme.example',
           org_number: '556677-8899',
           vat_number: 'SE556677889901',
@@ -100,6 +117,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: CustomersListResponse },
 })
 
@@ -110,12 +128,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
-    const FiltersSchema = z.object({
-      customer_type: CustomerType.optional(),
-      search: z.string().min(1).max(200).optional(),
-      include_archived: z.enum(['true', 'false']).optional(),
-    })
-    const filtersResult = FiltersSchema.safeParse({
+    const filtersResult = ListFilters.safeParse({
       customer_type: url.searchParams.get('customer_type') ?? undefined,
       search: url.searchParams.get('search') ?? undefined,
       include_archived: url.searchParams.get('include_archived') ?? undefined,

@@ -20,7 +20,7 @@ import { z } from 'zod'
  * breaking change is a new operation or family name, never a changed one.
  */
 
-export const CONTRACT_VERSION = '2026-09-08'
+export const CONTRACT_VERSION = '2026-09-10'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -110,6 +110,8 @@ export const CONNECTOR_ERROR_CODES = [
   'CONNECTOR_UPSTREAM_UNCONFIGURED',
   'CONNECTOR_PEPPOL_PARTICIPANT_TAKEN',
   'CONNECTOR_PEPPOL_PARTICIPANT_NOT_ALLOWED',
+  'CONNECTOR_PEPPOL_PARTICIPANT_PUBLISHED_ELSEWHERE',
+  'CONNECTOR_PEPPOL_REGISTRATION_IN_PROGRESS',
   'CONNECTOR_PEPPOL_SENDER_NOT_REGISTERED',
   'PEPPOL_RECEIVING_UNSUPPORTED',
   'PEPPOL_REGISTRATION_CAP_REACHED',
@@ -369,6 +371,14 @@ export const peppolInboundListRequestSchema = z.object({
   documentType: peppolDocumentTypeSchema,
   limit: z.number().int().min(1).max(100).optional(),
   includeRead: z.boolean().optional(),
+  /**
+   * Listing cursor: the newest `receivedAt` the caller has already archived
+   * for this document type. A service that supports it lists only documents
+   * received after that instant; one that does not ignores the field (object
+   * schemas strip unknown keys), so the caller must still dedupe by
+   * providerDocumentId.
+   */
+  receivedAfter: z.iso.datetime({ offset: true }).optional(),
 })
 export type PeppolInboundListRequest = z.infer<typeof peppolInboundListRequestSchema>
 

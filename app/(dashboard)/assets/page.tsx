@@ -74,8 +74,8 @@ export default function AssetsPage() {
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 29): title + Ny tillgång */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <Button onClick={() => setDialogOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
           {t('new_asset')}

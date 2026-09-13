@@ -6,6 +6,7 @@ import { validateBody, validateQuery } from '@/lib/api/validate'
 import { CreateAccountSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { accountClassTypeConflict } from '@/lib/pending-operations/schemas/account'
 import {
   defaultRateForVatTreatment,
   isVatTreatmentAllowedForAccountClass,
@@ -53,12 +54,16 @@ export const GET = withRouteContext('bookkeeping.accounts.list', async (request,
       throw new Error(rpc.error.message)
     }
 
+    // Same order as the RPC: account_number is the BAS sequence and unique per
+    // company, which fetchAllRows needs for stable pages. sort_order is 0 on
+    // every seeded account, so ordering by it put the seeded block first and
+    // let rows shift between pages.
     const data = await fetchAllRows(({ from, to }) => {
       let query = supabase
         .from('chart_of_accounts')
         .select('*')
         .eq('company_id', companyId)
-        .order('sort_order')
+        .order('account_number')
 
       if (activeOnly) {
         query = query.eq('is_active', true)
@@ -92,6 +97,15 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
     const body = validation.data
     const accountClass = parseInt(body.account_number[0])
+    // Same class/type rule the MCP create path enforces: account_class is
+    // derived from the first digit below, so a contradicting type (2999 +
+    // expense) would put the account on the wrong side of every report.
+    if (accountClassTypeConflict(body.account_number, body.account_type)) {
+      return NextResponse.json(
+        { error: 'Kontotypen passar inte kontoklassen för det här kontonumret.' },
+        { status: 400 },
+      )
+    }
     if (
       body.default_vat_treatment &&
       !isVatTreatmentAllowedForAccountClass(body.default_vat_treatment, accountClass)

@@ -394,6 +394,46 @@ describe('PATCH /accounts (enable-banking)', () => {
     expect(written.find(a => a.uid === 'acc-2')?.name).toBe('Privat')
   })
 
+  it('clears the mirror-card note when the user turns that account on, keeps it when left off', async () => {
+    // Issue #2565: the callback stores Svea's BOKIO_Debit_Business off and
+    // flagged. Enabling it is the user's call; once made, the note is stale.
+    const stub: SupabaseStub = {
+      authUser: { id: 'user-1' },
+      connectionRow: {
+        id: 'conn-1',
+        status: 'active',
+        accounts_data: [
+          { uid: 'acc-main', currency: 'SEK', enabled: true, name: 'Testbrand AB', iban: 'SE1234' },
+          { uid: 'acc-card', currency: 'SEK', enabled: false, name: 'BOKIO_Debit_Business', mirror_card_account: true },
+        ],
+      },
+    }
+    const supabase = buildSupabase(stub)
+    const ctx = makeContext(supabase)
+
+    const keptOff = await accountsRoute.handler(
+      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-main'] }),
+      ctx
+    )
+    expect(keptOff.status).toBe(200)
+    const keptOffWritten = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+    expect(keptOffWritten.find(a => a.uid === 'acc-card')).toMatchObject({
+      enabled: false,
+      mirror_card_account: true,
+    })
+
+    stub.capturedUpdates = []
+    const turnedOn = await accountsRoute.handler(
+      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-main', 'acc-card'] }),
+      ctx
+    )
+    expect(turnedOn.status).toBe(200)
+    const turnedOnWritten = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+    const card = turnedOnWritten.find(a => a.uid === 'acc-card')
+    expect(card?.enabled).toBe(true)
+    expect(card?.mirror_card_account).toBeUndefined()
+  })
+
   it('allows re-selection on an already-active connection', async () => {
     const stub: SupabaseStub = {
       authUser: { id: 'user-1' },

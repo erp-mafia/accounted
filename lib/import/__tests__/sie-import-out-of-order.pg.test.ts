@@ -137,6 +137,7 @@ function makePgSupabase(_userId: string): SupabaseClient {
       const filters: {
         companyId?: string
         status?: string
+        id?: string
         excludedSourceTypes: string[]
         throughDate?: string
       } = { excludedSourceTypes: [] }
@@ -146,8 +147,22 @@ function makePgSupabase(_userId: string): SupabaseClient {
         eq: (column: string, value: unknown) => {
           if (column === 'company_id') filters.companyId = String(value)
           else if (column === 'status') filters.status = String(value)
+          else if (column === 'id') filters.id = String(value)
           else throw new Error(`Unhandled eq filter in journal entry pg adapter: ${column}`)
           return chain
+        },
+        // resyncNextPeriodOpeningBalance reads the replaced IB entry's series
+        // (`select('voucher_series').eq('id', ...).eq('company_id', ...).maybeSingle()`)
+        // so the replacement books in the same series as the storno.
+        maybeSingle: async () => {
+          if (!filters.id) throw new Error('journal entry pg adapter: maybeSingle needs an id filter')
+          const result = await getPool().query<{ voucher_series: string | null }>(
+            `SELECT voucher_series
+               FROM public.journal_entries
+              WHERE id = $1 AND company_id = $2`,
+            [filters.id, filters.companyId],
+          )
+          return { data: result.rows[0] ?? null, error: null }
         },
         neq: (column: string, value: unknown) => {
           if (column === 'source_type') filters.excludedSourceTypes.push(String(value))

@@ -23,6 +23,8 @@ export const INVOICE_ONLY_FIELD_KEYS: ReadonlySet<string> = new Set([
   'invoice.paymentReference',
   'supplier.bankgiro',
   'supplier.plusgiro',
+  'supplier.iban',
+  'supplier.bic',
 ])
 
 /** Labels that read wrong on a receipt. */

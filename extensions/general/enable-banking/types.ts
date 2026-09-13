@@ -44,6 +44,13 @@ export interface StoredAccount {
   // silent; cleared by the selection save when the user re-enables the
   // account.
   deselected_elsewhere?: boolean
+  // Set by the OAuth callback when the account is a known card sub-account
+  // that only mirrors the main account (lib/mirror-card-account.ts: Svea's
+  // BOKIO_Debit_Business, no IBAN, no BBAN). Stored disabled so its
+  // opposite-sign "Okänd transaktion" twins never sync; the picker renders
+  // the reason next to the unchecked box. Cleared by the selection save when
+  // the user turns the account on, which is always allowed (issue #2565).
+  mirror_card_account?: boolean
   // Widest transactions history window (whole days before date_to) this
   // account's bank has ever ACCEPTED, stamped by lib/sync.ts after each
   // successful fetch. ASPSP_ERROR is Enable Banking's generic wrapper for any

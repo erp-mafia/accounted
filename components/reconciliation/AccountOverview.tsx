@@ -24,7 +24,10 @@ import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } 
 import { SignoffDialog, type SignoffPreviewResult, type SignoffSubmitInput } from './SignoffDialog'
 import { ReconciliationUnderlag } from './ReconciliationUnderlag'
 import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
+import { ReconciliationSummary } from './ReconciliationSummary'
+import { PairRow, PairsHead } from './ReconciliationPairs'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { useShell } from '@/components/dashboard/ShellProvider'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
@@ -77,9 +80,11 @@ interface AccountOverviewProps {
   window: ReconciliationWindow
   /** Called after any write so the rail can refresh its status dots. */
   onChanged: () => void
+  /** Shell v2: opens the manual match view; the v1 segmented control does this. */
+  onMatchManually?: () => void
 }
 
-export function AccountOverview({ account, rail, otherBankAccounts = [], window, onChanged }: AccountOverviewProps) {
+export function AccountOverview({ account, rail, otherBankAccounts = [], window, onChanged, onMatchManually }: AccountOverviewProps) {
   const t = useTranslations('reconciliation')
   const locale = useLocale()
   const { toast } = useToast()
@@ -91,10 +96,14 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
   const [bookRow, setBookRow] = useState<ReconciliationItem | null>(null)
   const [signoffOpen, setSignoffOpen] = useState(false)
   const [matcher, setMatcher] = useState<MatcherMatch[] | null>(null)
+  const [bridgeOpen, setBridgeOpen] = useState(false)
   const searchParams = useSearchParams()
   const autorunRequested = searchParams.get('autorun') === '1'
   const autorunDone = useRef(false)
 
+  // Shell v2: no rail (the account table is the landing) and one summary
+  // table instead of the tiles and the bridge list.
+  const v2 = useShell() === 'v2'
   const isSkv = account.kind === 'skattekonto'
   // Manual accounts have no rows to match or book: the body is the balance
   // bridge (IB, movement, UB against a specification or the signer's
@@ -408,12 +417,15 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when the status first loads
   }, [autorunRequested, isSkv, status])
 
+  // v2 rows are pairs (outside | sign | ledger); v1 keeps the five-column row.
+  const Row = v2 ? PairRow : ItemRow
+
   // ---- render -------------------------------------------------------------
 
   if (loadError) {
     return (
-      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-        {rail}
+      <div className={cn(!v2 && 'grid gap-8 lg:grid-cols-[220px_1fr]')}>
+        {!v2 && rail}
         <div className="min-w-0">
           <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>
             {t('load_failed')}
@@ -424,6 +436,41 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
   }
 
   if (!status || !items) {
+    if (v2) {
+      // The silhouette of the page that follows: the strip of figures, the
+      // action row and the paired rows, so nothing moves when the data lands.
+      return (
+        <div className="space-y-6" aria-busy>
+          <div className="grid grid-cols-2 gap-6 border-b border-border pb-4 md:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="space-y-2">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-6 w-28" />
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-4">
+            <Skeleton className="h-9 w-64 rounded-full" />
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-3 w-24" />
+          </div>
+          <div className="space-y-px">
+            <div className="flex items-center gap-6 border-b border-border py-2">
+              <Skeleton className="h-3 w-12" />
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="ml-auto h-3 w-16" />
+            </div>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="flex items-center gap-6 border-b border-border/60 py-3.5">
+                <Skeleton className="h-3.5 w-20" />
+                <Skeleton className="h-3.5 w-48" />
+                <Skeleton className="ml-auto h-3.5 w-20" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="grid gap-8 lg:grid-cols-[220px_1fr]" aria-busy>
         {rail}
@@ -567,6 +614,33 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     (byBucket.get('unmatched_external')?.length ?? 0) +
     (byBucket.get('unmatched_ledger')?.length ?? 0)
 
+  // Shell v2: the verdict in one sentence. The difference once, then what
+  // explains it as the bridge's own counted lines ("9 omatchade
+  // banktransaktioner"), then what is left unexplained only when it differs
+  // from the difference itself. The full bridge stays behind a disclosure.
+  const explained = status.bridge
+    .filter((l) => !['bank_transactions', 'external_balance', 'specification', 'ledger_balance', 'opening_balance', 'movement'].includes(l.key))
+    .filter((l) => l.count != null && l.count > 0)
+    .map((l) => {
+      const label = locale === 'en' ? l.label_en : l.label_sv
+      return `${l.count} ${label.charAt(0).toLowerCase()}${label.slice(1)}`
+    })
+  const diffAbs = Math.abs(status.difference ?? 0)
+  const verdict =
+    status.is_reconciled || diffAbs < 0.005
+      ? isSkv
+        ? t('v2_verdict_ok_skv')
+        : isManual
+          ? t('v2_verdict_ok_manual')
+          : t('v2_verdict_ok_bank')
+      : explained.length > 0
+        ? t('v2_verdict_diff', { amount: formatCurrency(diffAbs, currency), explanations: explained.join(', ') })
+        : t('v2_verdict_diff_plain', { amount: formatCurrency(diffAbs, currency) })
+  const verdictUnexplained =
+    unexplained != null && Math.abs(unexplained) >= 0.005 && Math.abs(Math.abs(unexplained) - diffAbs) >= 0.005
+      ? t('v2_verdict_unexplained', { amount: formatCurrency(unexplained, currency) })
+      : null
+
 
   // Default sign-off date: the window end, never past today nor past the
   // skattekonto snapshot. The button hides when that date is already signed.
@@ -577,10 +651,54 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-        {rail}
+      <div className={cn(!v2 && 'grid gap-8 lg:grid-cols-[220px_1fr]')}>
+        {!v2 && rail}
         <div className="min-w-0 space-y-6">
-      {/* Tiles: label + number, nothing else. */}
+      {v2 ? (
+        <div className="space-y-3">
+          {/* The two sides and what separates them, on one line (Kick's
+              reconciliation strip): the outside, the ledger, the difference,
+              the part of it nothing explains. */}
+          <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-b border-border pb-4 md:grid-cols-4">
+            {tiles.map((tile) => (
+              <div key={tile.key} className="min-w-0">
+                <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+                  <span className="truncate">{tile.label}</span>
+                  {tile.help && <InfoTooltip content={tile.help} iconClassName="h-3 w-3" />}
+                </div>
+                <div
+                  className={cn(
+                    'mt-1 text-[20px] font-semibold leading-tight tabular-nums',
+                    tile.tone === 'ok' && 'text-success',
+                    tile.tone === 'attn' && 'text-warning',
+                  )}
+                  data-ph-mask
+                >
+                  {tile.value}
+                </div>
+                {tile.sub && <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{tile.sub}</div>}
+              </div>
+            ))}
+          </div>
+          <p className={cn('text-[13.5px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
+            {verdict}
+            {verdictUnexplained && <span className="ml-1 text-warning">{verdictUnexplained}</span>}
+            <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3 text-[12.5px]')}>
+              {bridgeOpen ? t('v2_hide_bridge') : t('v2_show_bridge')}
+            </button>
+          </p>
+          {bridgeOpen && (
+            <div className="space-y-2">
+              <ReconciliationSummary status={status} kind={account.kind} specificationLabel={specificationLabel} />
+              {bankReportedLine && (
+                <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+                  {bankReportedLine}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border stagger-enter">
         {tiles.map((tile) => (
           <div key={tile.key} className="bg-background px-4 py-3.5">
@@ -602,14 +720,17 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
           </div>
         ))}
       </div>
+      )}
 
-      {bankReportedLine && (
+      {!v2 && bankReportedLine && (
         <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
           {bankReportedLine}
         </p>
       )}
 
-      {attn ? (
+      {v2 ? (
+        status.stale ? <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine> : null
+      ) : attn ? (
         <AttnLine>{attn}</AttnLine>
       ) : status.is_reconciled ? (
         <p className="text-[13px] text-muted-foreground">{t('reconciled_line')}</p>
@@ -632,8 +753,8 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         </p>
       )}
 
-      {/* Bridge: how the difference is explained. */}
-      {status.bridge.length > 0 && (
+      {/* Bridge: how the difference is explained (v2 has it in the summary table). */}
+      {!v2 && status.bridge.length > 0 && (
         <dl className="max-w-[520px] text-[13px]">
           {status.bridge.map((line) => (
             <div
@@ -668,15 +789,25 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
             {t('action_book_rows', { count: bookableIds.length })}
           </Button>
         )}
-        {!isSkv && !isManual && (
+        {!v2 && !isSkv && !isManual && (
           <Button size="sm" variant="outline" onClick={() => void runMatcher()} disabled={busy !== null} aria-busy={busy === 'matcher'}>
             {t('action_run_bank_matcher')}
           </Button>
         )}
         {signoffEnabled && (
-          <Button size="sm" variant={status.is_reconciled ? 'default' : 'outline'} onClick={() => setSignoffOpen(true)} disabled={busy !== null}>
+          <Button size="sm" variant={v2 || status.is_reconciled ? 'default' : 'outline'} onClick={() => setSignoffOpen(true)} disabled={busy !== null}>
             {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
           </Button>
+        )}
+        {v2 && !isSkv && !isManual && (
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => void runMatcher()} disabled={busy !== null} aria-busy={busy === 'matcher'}>
+            {t('action_run_bank_matcher')}
+          </button>
+        )}
+        {onMatchManually && (
+          <button type="button" className={QUIET_LINK_CLASS} onClick={onMatchManually} disabled={busy !== null}>
+            {t('mode_match')}
+          </button>
         )}
         {isSkv && (
           <span className="ml-auto">
@@ -694,13 +825,15 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         )}
       </div>
 
-      {/* Underlag for the balansdag in play: the signed date, else the date the next sign-off would cover. */}
-      <ReconciliationUnderlag
-        accountKey={account.account_key}
-        throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
-      />
+      {/* Underlag for the balansdag in play: the signed date, else the date the next sign-off would cover. v2 puts it under the list. */}
+      {!v2 && (
+        <ReconciliationUnderlag
+          accountKey={account.account_key}
+          throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
+        />
+      )}
 
-      {items.older_unmatched_count > 0 && (
+      {!v2 && items.older_unmatched_count > 0 && (
         <p className="text-[12.5px] text-muted-foreground">
           {t('older_unmatched', { count: items.older_unmatched_count })}
           {isSkv && (
@@ -735,9 +868,12 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
       ) : items.items.length === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
       ) : (
-        <div className="-mx-4 overflow-x-auto sm:mx-0">
+        <div className={cn('overflow-x-auto', !v2 && '-mx-4 sm:mx-0')}>
           <table className="w-full text-[13px]">
             <thead>
+              {v2 ? (
+                <PairsHead externalLabel={isSkv ? t('v2_side_external_skv') : t('v2_side_external_bank')} />
+              ) : (
               <tr>
                 <th className={cn(TH_CLASS, 'w-[110px]')}>{t('col_date')}</th>
                 <th className={TH_CLASS}>{t('col_event')}</th>
@@ -745,6 +881,7 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
                 <th className={cn(TH_CLASS, 'w-[34%]')}>{t('col_voucher')}</th>
                 <th className={cn(TH_CLASS, 'w-[170px]')} />
               </tr>
+              )}
             </thead>
             <tbody className="stagger-enter">
               {BUCKET_ORDER.map((bucket) => {
@@ -762,8 +899,11 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
                   <Fragment key={bucket}>
                     <tr className="bg-muted/30">
                       <td
-                        colSpan={5}
-                        className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
+                        colSpan={v2 ? 7 : 5}
+                        className={cn(
+                          'py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground',
+                          v2 ? 'px-0' : 'px-4',
+                        )}
                       >
                         <span className="flex items-center gap-3">
                           <span>
@@ -786,7 +926,7 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
                     </tr>
                     {!folded &&
                       rows.map((item) => (
-                        <ItemRow
+                        <Row
                           key={item.item_id}
                           item={item}
                           isSkv={isSkv}
@@ -817,6 +957,28 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
 
       {openWork === 0 && items.items.length > 0 && (
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
+      )}
+
+      {v2 && (
+        <div className="space-y-2 border-t border-border pt-4">
+          {items.older_unmatched_count > 0 && (
+            <p className="text-[12.5px] text-muted-foreground">
+              {t('older_unmatched', { count: items.older_unmatched_count })}
+              {isSkv && (
+                <>
+                  {' · '}
+                  <Link href="/skattekonto" className={QUIET_LINK_CLASS}>
+                    {t('older_show')}
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
+          <ReconciliationUnderlag
+            accountKey={account.account_key}
+            throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
+          />
+        </div>
       )}
 
       {isSkv && (

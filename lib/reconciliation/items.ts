@@ -93,6 +93,31 @@ function page<T>(all: T[], limit: number, offset: number): ListItemsResult & { i
   } as ListItemsResult & { items: T[] }
 }
 
+/**
+ * A linked row shows its verifikat, not an id: date, label and text come from
+ * journal_entries in one batched read after the items are built.
+ */
+async function attachLinkedEntries(supabase: SupabaseClient, companyId: string, items: ReconciliationItem[]): Promise<void> {
+  const ids = [...new Set(items.map((i) => i.linked_journal_entry_id).filter((x): x is string => !!x))]
+  if (ids.length === 0) return
+  const byId = new Map<string, NonNullable<ReconciliationItem['linked_entry']>>()
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await supabase
+      .from('journal_entries')
+      .select('id, entry_date, voucher_series, voucher_number, description')
+      .eq('company_id', companyId)
+      .in('id', ids.slice(i, i + 200))
+    for (const r of (data ?? []) as Array<{ id: string; entry_date: string; voucher_series: string | null; voucher_number: number | null; description: string | null }>) {
+      byId.set(r.id, { entry_date: r.entry_date, voucher_series: r.voucher_series, voucher_number: r.voucher_number, description: r.description ?? '' })
+    }
+  }
+  for (const it of items) {
+    if (!it.linked_journal_entry_id) continue
+    const meta = byId.get(it.linked_journal_entry_id)
+    if (meta) it.linked_entry = meta
+  }
+}
+
 export async function listAccountItems(
   supabase: SupabaseClient,
   companyId: string,
@@ -120,6 +145,7 @@ export async function listAccountItems(
     const all = options.bucket
       ? status.items[options.bucket]
       : BUCKET_ORDER.flatMap((b) => status.items[b])
+    await attachLinkedEntries(supabase, companyId, all)
     return { ...page(all, limit, offset), older_unmatched_count: status.older_unmatched_count }
   }
 
@@ -260,6 +286,7 @@ export async function listAccountItems(
     }
 
     const all = buckets.flatMap((b) => byBucket.get(b) ?? [])
+    await attachLinkedEntries(supabase, companyId, all)
     return page(all, limit, offset)
   }
 

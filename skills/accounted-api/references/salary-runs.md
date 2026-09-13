@@ -25,15 +25,19 @@ Returns salary runs in created-first order with their lifecycle status (draft|re
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_year` | query | `number` | no | Only runs for this payroll year (2020-2100). |
+| `status` | query | `"draft" \| "review" \| "approved" \| "paid" \| "booked" \| "corrected"` | no | Only runs in this status. |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, period_year: number, period_month: number, payment_date: string, status: "draft" | "review" | "approved" | "paid" | "booked" | "corrected", voucher_series: string, total_gross: number, total_tax: number, total_net: number, total_avgifter: number, total_employer_cost: number, agi_generated_at: string, agi_submitted_at: string, approved_at: string, paid_at: string, booked_at: string, created_at: string }[],
+  data: { id: string, period_year: number, period_month: number, payment_date: string, status: "draft" | "review" | "approved" | "paid" | "booked" | "corrected", voucher_series: string, total_gross: number, total_tax: number, total_net: number, total_avgifter: number, total_employer_cost: number, agi_generated_at: string | null, agi_submitted_at: string | null, approved_at: string | null, paid_at: string | null, booked_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -89,6 +93,7 @@ Creates a draft salary run for the given period (period_year, period_month). The
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -126,20 +131,20 @@ Response `200`:
     total_net: number,
     total_avgifter: number,
     total_employer_cost: number,
-    agi_generated_at: string,
-    agi_submitted_at: string,
-    approved_at: string,
-    paid_at: string,
-    booked_at: string,
+    agi_generated_at: string | null,
+    agi_submitted_at: string | null,
+    approved_at: string | null,
+    paid_at: string | null,
+    booked_at: string | null,
     created_at: string,
-    notes: string,
+    notes: string | null,
     calculation_params?: unknown,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -202,25 +207,25 @@ Response `200`:
     total_avgifter: number,
     total_vacation_accrual: number,
     total_employer_cost: number,
-    salary_entry_id: string,
-    avgifter_entry_id: string,
-    vacation_entry_id: string,
-    agi_generated_at: string,
-    agi_submitted_at: string,
+    salary_entry_id: string | null,
+    avgifter_entry_id: string | null,
+    vacation_entry_id: string | null,
+    agi_generated_at: string | null,
+    agi_submitted_at: string | null,
     calculation_params?: unknown,
-    approved_by: string,
-    approved_at: string,
-    paid_at: string,
-    booked_at: string,
-    booked_by: string,
-    notes: string,
+    approved_by: string | null,
+    approved_at: string | null,
+    paid_at: string | null,
+    booked_at: string | null,
+    booked_by: string | null,
+    notes: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -272,10 +277,11 @@ Updates payment_date, voucher_series, or notes on a draft salary run. ONLY allow
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
-{ payment_date?: string, voucher_series?: string, notes?: string }
+{ payment_date?: string, voucher_series?: string, notes?: string | null }
 ```
 
 Example request:
@@ -301,25 +307,25 @@ Response `200`:
     total_avgifter: number,
     total_vacation_accrual: number,
     total_employer_cost: number,
-    salary_entry_id: string,
-    avgifter_entry_id: string,
-    vacation_entry_id: string,
-    agi_generated_at: string,
-    agi_submitted_at: string,
+    salary_entry_id: string | null,
+    avgifter_entry_id: string | null,
+    vacation_entry_id: string | null,
+    agi_generated_at: string | null,
+    agi_submitted_at: string | null,
     calculation_params?: unknown,
-    approved_by: string,
-    approved_at: string,
-    paid_at: string,
-    booked_at: string,
-    booked_by: string,
-    notes: string,
+    approved_by: string | null,
+    approved_at: string | null,
+    paid_at: string | null,
+    booked_at: string | null,
+    booked_by: string | null,
+    notes: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -359,6 +365,7 @@ Hard-deletes a salary run. ONLY allowed when status === "draft": once the run ha
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `204`.
 
@@ -385,15 +392,22 @@ Advances a salary run from `review` to `approved` after validating every employe
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, status: "approved", approved_at: string, approved_by: string, warnings: string[] },
+  data: {
+    id: string,
+    status: "approved",
+    approved_at: string,
+    approved_by: string | null,
+    warnings: string[]
+  },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -443,6 +457,7 @@ Creates 2-4 journal entries (1: salary brutto/tax/net; 2: arbetsgivaravgifter; 3
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -451,17 +466,17 @@ Response `200`:
     id: string,
     status: "booked",
     booked_at: string,
-    booked_by: string,
+    booked_by: string | null,
     salary_entry_id: string,
     avgifter_entry_id: string,
-    vacation_entry_id: string,
-    pension_entry_id: string,
+    vacation_entry_id: string | null,
+    pension_entry_id: string | null,
     entry_ids: string[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -522,6 +537,7 @@ Runs the per-employee payroll calculation (tax withholding, employer contributio
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -541,7 +557,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -594,15 +610,17 @@ Returns one row per employee in the run with the calculated aggregates: gross sa
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
 
 Response `200`:
 ```ts
 {
-  data: { salary_run_employee_id: string, employee_id: string, first_name: string, last_name: string, personnummer_masked: string, salary_type: string, employment_degree: number, monthly_salary: number, hours_worked: number, gross_salary: number, taxable_income: number, tax_withheld: number, tax_withheld_override: number, net_salary: number, avgifter_basis: number, avgifter_amount: number, avgifter_amount_override: number, avgifter_category: string, vacation_accrual: number, sick_days: number, vab_days: number, parental_days: number, vacation_days_taken: number, created_at: string, updated_at: string }[],
+  data: { salary_run_employee_id: string, employee_id: string, first_name: string, last_name: string, personnummer_masked: string, salary_type: string, employment_degree: number, monthly_salary: number | null, hours_worked: number | null, gross_salary: number, taxable_income: number, tax_withheld: number, tax_withheld_override: number | null, net_salary: number, avgifter_basis: number, avgifter_amount: number, avgifter_amount_override: number | null, avgifter_category: string | null, vacation_accrual: number, sick_days: number, vab_days: number, parental_days: number, vacation_days_taken: number, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -657,6 +675,7 @@ Attaches an active employee to a draft run: snapshots their pay configuration (s
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -674,19 +693,19 @@ Response `200`:
 ```ts
 {
   data: {
-    salary_run_employee_id: string,
+    salary_run_employee_id: string | null,
     employee_id: string,
     salary_type: string,
     employment_degree: number,
     monthly_salary: number,
-    hours_worked: number,
-    tax_table_number: number,
-    tax_column: number
+    hours_worked: number | null,
+    tax_table_number: number | null,
+    tax_column: number | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -746,28 +765,28 @@ Response `200`:
     personnummer_masked: string,
     salary_type: string,
     employment_degree: number,
-    monthly_salary: number,
-    hours_worked: number,
+    monthly_salary: number | null,
+    hours_worked: number | null,
     gross_salary: number,
     gross_deductions: number,
     benefit_values: number,
     taxable_income: number,
     tax_withheld: number,
-    tax_withheld_override: number,
+    tax_withheld_override: number | null,
     net_deductions: number,
     net_salary: number,
     avgifter_rate: number,
     avgifter_basis: number,
     avgifter_amount: number,
-    avgifter_basis_override: number,
-    avgifter_amount_override: number,
-    avgifter_category: string,
-    override_reason: string,
+    avgifter_basis_override: number | null,
+    avgifter_amount_override: number | null,
+    avgifter_category: string | null,
+    override_reason: string | null,
     vacation_accrual: number,
     vacation_accrual_avgifter: number,
-    tax_table_number: number,
-    tax_column: number,
-    tax_table_year: number,
+    tax_table_number: number | null,
+    tax_column: number | null,
+    tax_table_year: number | null,
     sick_days: number,
     vab_days: number,
     parental_days: number,
@@ -776,14 +795,14 @@ Response `200`:
     ytd_tax: number,
     ytd_net: number,
     calculation_breakdown?: unknown,
-    line_items: { salary_line_item_id: string, item_type: string, description: string, quantity: number, unit_price: number, amount: number, is_taxable: boolean, is_avgift_basis: boolean, is_vacation_basis: boolean, is_gross_deduction: boolean, is_net_deduction: boolean, account_number: string, sort_order: number }[],
+    line_items: { salary_line_item_id: string, item_type: string, description: string, quantity: number | null, unit_price: number | null, amount: number, is_taxable: boolean, is_avgift_basis: boolean, is_vacation_basis: boolean, is_gross_deduction: boolean, is_net_deduction: boolean, account_number: string | null, sort_order: number }[],
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -842,6 +861,7 @@ Sets the per-run base salary (salary_run_employees.monthly_salary) that the calc
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `employeeId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -869,7 +889,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -917,6 +937,7 @@ Detaches the employee from the run and cascades away their payslip line items. D
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `employeeId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `204`.
 
@@ -942,6 +963,7 @@ Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, 
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `employeeId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -974,25 +996,25 @@ Response `200`:
 ```ts
 {
   data: {
-    salary_line_item_id: string,
+    salary_line_item_id: string | null,
     salary_run_employee_id: string,
     item_type: string,
     description: string,
-    quantity: number,
-    unit_price: number,
+    quantity: number | null,
+    unit_price: number | null,
     amount: number,
     is_taxable: boolean,
     is_avgift_basis: boolean,
     is_vacation_basis: boolean,
     is_gross_deduction: boolean,
     is_net_deduction: boolean,
-    account_number: string,
+    account_number: string | null,
     sort_order: number
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1057,7 +1079,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1118,6 +1140,7 @@ Updates fields on a salary_line_items row (amount, description, quantity, unit_p
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `lineId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -1152,21 +1175,21 @@ Response `200`:
     salary_run_employee_id: string,
     item_type: string,
     description: string,
-    quantity: number,
-    unit_price: number,
+    quantity: number | null,
+    unit_price: number | null,
     amount: number,
     is_taxable: boolean,
     is_avgift_basis: boolean,
     is_vacation_basis: boolean,
     is_gross_deduction: boolean,
     is_net_deduction: boolean,
-    account_number: string,
+    account_number: string | null,
     sort_order: number
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -1209,6 +1232,7 @@ Removes a salary_line_items row while the run is a draft. Engine-derived lines (
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `lineId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `204`.
 
@@ -1232,6 +1256,7 @@ Advances a salary run from `approved` to `paid` and stamps `paid_at`. This is th
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -1240,7 +1265,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>

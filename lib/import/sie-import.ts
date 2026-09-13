@@ -1138,6 +1138,27 @@ export async function resyncNextPeriodOpeningBalance(
     }
   }
 
+  // The replacement books in the SAME series as the entry it replaces. The
+  // RPC stornos the old entry in its own series (COALESCE(old.voucher_series,
+  // 'A')) while the engine resolved the replacement from company settings,
+  // so an IB booked in M got its storno as M and its replacement as A15,
+  // out of date order (feedback seq 345150). Fail closed on a read error:
+  // guessing a series here is what put the pair in two series.
+  const { data: oldEntry, error: oldEntryError } = await supabase
+    .from('journal_entries')
+    .select('voucher_series')
+    .eq('id', nextPeriod.opening_balance_entry_id)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (oldEntryError) {
+    throw new Error(
+      `Failed to read the opening balance entry to replace: ${oldEntryError.message}`,
+    )
+  }
+  // Null mirrors the RPC's storno fallback so the pair stays together.
+  const replacementSeries =
+    ((oldEntry as { voucher_series: string | null } | null)?.voucher_series ?? 'A')
+
   // Build the new IB lines from the just-imported year's #UB (yearIndex=0
   // closing balances). Each balance carries the source account number; map
   // through accountMap so chart renames in the target company are honored.
@@ -1203,6 +1224,7 @@ export async function resyncNextPeriodOpeningBalance(
       entry_date: nextPeriod.period_start as string,
       description: 'Ingående balanser (resynk efter prior-year SIE-import)',
       source_type: 'opening_balance',
+      voucher_series: replacementSeries,
       lines: newLines,
     },
   )

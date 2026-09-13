@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const { mockCookieSet } = vi.hoisted(() => ({ mockCookieSet: vi.fn() }))
 
@@ -88,6 +88,10 @@ beforeEach(() => {
   vi.clearAllMocks()
   multiUserSeam.enforced = false
   multiUserSeam.membershipActive.mockResolvedValue(true)
+})
+
+afterEach(() => {
+  vi.unstubAllEnvs()
 })
 
 describe('setActiveCompany', () => {
@@ -376,6 +380,9 @@ describe('multi-user seat gate', () => {
 
   it('gated query fallback resolves the first ACCESSIBLE membership (dormant skipped)', async () => {
     multiUserSeam.enforced = true
+    // The dormancy scan below runs the REAL getMultiUserState, which reads
+    // the env switch itself (off by default since #2494): arm it here.
+    vi.stubEnv('MULTI_USER_SEAT_GATE', 'true')
     const memberships = [
       // Frozen for the user: non-owner and no grant rows will match below.
       { company_id: 'frozen-co', role: 'member', created_at: '2026-01-01', companies: { team_id: null } },

@@ -11,13 +11,23 @@
  *   'e_invoice', extractionOwner 'none'): that is the räkenskapsinformation;
  * - an embedded PDF rendering, when the sender attached one, as the document
  *   the inbox shows (people read PDFs, not UBL).
+ *
+ * No inbox item without the archived XML: when the exact document is not in
+ * hand yet the delivery is held (the row stays routed, `last_error` says
+ * why) and the reprocessing pass files it once the XML has been fetched.
+ * There is no JSON-only rendition to fall back on; an item pointing at no
+ * document would be a supplier invoice without its underlag.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { roundOre } from '@/lib/money'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
-import type { PeppolInboundDelivery } from '@/lib/invoices/peppol-inbound'
+import {
+  PEPPOL_INBOUND_AWAITING_OWNER,
+  PEPPOL_INBOUND_AWAITING_XML,
+  type PeppolInboundDelivery,
+} from '@/lib/invoices/peppol-inbound'
 import type { PeppolInboundDocument, PeppolInboundLine } from '@/lib/invoices/peppol-inbound-ubl'
 import type {
   ExtractedInvoiceLineItem,
@@ -57,6 +67,9 @@ export function peppolDocumentToExtraction(document: PeppolInboundDocument): Inv
   const sign: 1 | -1 = document.documentType === 'CreditNote' ? -1 : 1
   const bankgiro = document.paymentMeans.map((m) => m.bankgiro).find((v): v is string => !!v) ?? null
   const plusgiro = document.paymentMeans.map((m) => m.plusgiro).find((v): v is string => !!v) ?? null
+  const iban = document.paymentMeans.map((m) => m.iban).find((v): v is string => !!v) ?? null
+  // The branch id next to an IBAN is the BIC; next to a giro it is SE:BANKGIRO or a BBAN marker.
+  const bic = document.paymentMeans.map((m) => (m.iban && m.branchId && /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(m.branchId.toUpperCase()) ? m.branchId.toUpperCase() : null)).find((v): v is string => !!v) ?? null
   const paymentReference = document.paymentMeans.map((m) => m.paymentId).find((v): v is string => !!v) ?? null
   const supplier = document.supplier
   const addressParts = [
@@ -88,6 +101,8 @@ export function peppolDocumentToExtraction(document: PeppolInboundDocument): Inv
       address: addressParts.length ? addressParts.join(', ') : null,
       bankgiro: formatGiro(bankgiro),
       plusgiro: formatGiro(plusgiro),
+      iban,
+      bic,
     },
     invoice: {
       invoiceNumber: document.documentId || null,
@@ -156,7 +171,7 @@ export async function resolvePeppolInboxOwner(args: {
 export async function deliverPeppolDocumentToInbox(
   service: SupabaseClient,
   delivery: PeppolInboundDelivery,
-): Promise<{ inboxItemId: string | null; xmlDocumentId: string | null }> {
+): Promise<{ inboxItemId: string | null; xmlDocumentId: string | null; holdReason?: string }> {
   const { row, companyId, document, xml } = delivery
 
   const { data: existingItem } = await service
@@ -174,8 +189,15 @@ export async function deliverPeppolDocumentToInbox(
     }
   }
 
+  // Nothing to archive yet: hold rather than file an item with no document.
+  if (!row.xml_document_id && !xml) {
+    return { inboxItemId: null, xmlDocumentId: null, holdReason: PEPPOL_INBOUND_AWAITING_XML }
+  }
+
+  // No member to own the item is a configuration state of the company, not
+  // a fault of the document: hold and try again later, do not page.
   const userId = await resolvePeppolInboxOwner({ service, companyId, provider: row.provider })
-  if (!userId) throw new Error('No owner member found for the receiving company')
+  if (!userId) return { inboxItemId: null, xmlDocumentId: null, holdReason: PEPPOL_INBOUND_AWAITING_OWNER }
 
   const baseName = `peppol-${document.documentType === 'CreditNote' ? 'kreditnota' : 'faktura'}-${document.documentId || row.provider_document_id}`
 

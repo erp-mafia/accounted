@@ -464,7 +464,6 @@ async function updateSessionInner(
     companyId: string | null
     locale: string | null
     degraded: boolean
-    allLocked: boolean
   } | null = null
   const resolveCompanyOnce = async () =>
     (resolvedCompany ??= await timed(timing, 'companyMs', () =>
@@ -508,7 +507,7 @@ async function updateSessionInner(
 
   // Company context resolution
   const cookieCompanyId = request.cookies.get('gnubok-company-id')?.value
-  const { companyId, locale: dbLocale, degraded, allLocked } = await resolveCompanyOnce()
+  const { companyId, locale: dbLocale, degraded } = await resolveCompanyOnce()
 
   // If the cookie pointed at a company we can no longer resolve (e.g.
   // archived), clear it so the browser stops sending it. Never on degraded
@@ -539,10 +538,7 @@ async function updateSessionInner(
     pathname.startsWith('/select-company') ||
     pathname.startsWith('/settings/account') ||
     pathname.startsWith('/api/account/') ||
-    pathname.startsWith('/api/company') ||
-    // Multi-user seat gate: the paused page IS the destination for a user
-    // whose every membership is frozen, so it must render in that state.
-    pathname.startsWith('/paused')
+    pathname.startsWith('/api/company')
 
   // No companies: redirect to the picker if we have BankID enrichment for
   // this user, otherwise the manual wizard. Either way, allow the escape-hatch
@@ -589,18 +585,6 @@ async function updateSessionInner(
         return supabaseResponse
       }
       return redirectWithAuthCookies(supabaseResponse, new URL('/byra', request.url))
-    }
-
-    // Multi-user seat gate: memberships exist but every one is frozen for
-    // this (non-owner) user. This is NOT the no-company state: sending them
-    // to onboarding would walk a locked-out colleague into creating a
-    // pointless company. The paused page explains and names the companies.
-    // API requests pass through so routes answer JSON, not an HTML redirect.
-    if (allLocked) {
-      if (pathname.startsWith('/api/')) {
-        return supabaseResponse
-      }
-      return NextResponse.redirect(new URL('/paused', request.url))
     }
 
     // Enrichment lives in the user-keyed `bankid_enrichment` table (migration
@@ -1095,12 +1079,12 @@ async function resolveCompanyForMiddleware(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest
-): Promise<{ companyId: string | null; locale: string | null; degraded: boolean; allLocked: boolean }> {
-  // Multi-user seat gate: the gated RPC skips memberships frozen for this
-  // user (non-owner, multi_user lapsed past its 20-day grace) and reports
-  // has_locked_membership when NOTHING resolved because of that, which is
-  // what routes the user to /paused instead of onboarding. Self-hosted and
-  // dev call the ungated function: the gate never bites there.
+): Promise<{ companyId: string | null; locale: string | null; degraded: boolean }> {
+  // Multi-user seat gate (off by default, see isMultiUserEnforced): when
+  // armed, the gated RPC skips memberships frozen for this user (non-owner,
+  // multi_user lapsed past its 20-day grace). A user whose every membership
+  // is frozen then resolves to no company and lands in onboarding like any
+  // other company-less user. Otherwise the ungated function runs.
   const enforced = isMultiUserEnforced()
   const { data, error } = enforced
     ? await supabase.rpc('resolve_active_company_gated', {
@@ -1120,7 +1104,7 @@ async function resolveCompanyForMiddleware(
     // companies". locale null is fine because the degraded flag already
     // suppresses the locale-cookie sync at the call site.
     console.error('[middleware] resolve_active_company rpc failed', error)
-    return { companyId: null, locale: null, degraded: true, allLocked: false }
+    return { companyId: null, locale: null, degraded: true }
   }
 
   const row = Array.isArray(data) ? data[0] : data
@@ -1128,7 +1112,7 @@ async function resolveCompanyForMiddleware(
     // Zero rows = NULL auth.uid(); impossible for the cookie-auth middleware
     // client, so treat as degraded rather than redirecting to onboarding.
     console.error('[middleware] resolve_active_company returned no row for authenticated user')
-    return { companyId: null, locale: null, degraded: true, allLocked: false }
+    return { companyId: null, locale: null, degraded: true }
   }
 
   if (row.company_id && row.used_fallback) {
@@ -1151,9 +1135,6 @@ async function resolveCompanyForMiddleware(
     companyId: row.company_id ?? null,
     locale: row.locale ?? null,
     degraded: false,
-    // Only the gated RPC carries the column; the ungated one leaves it
-    // undefined, which correctly reads as false.
-    allLocked: row.has_locked_membership === true,
   }
 }
 
@@ -1166,7 +1147,7 @@ async function resolveCompanyForMiddlewareViaQueries(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest
-): Promise<{ companyId: string | null; locale: string | null; degraded: boolean; allLocked: boolean }> {
+): Promise<{ companyId: string | null; locale: string | null; degraded: boolean }> {
   // 1. user_preferences (authoritative) + first membership, fetched in
   // parallel: the fallback query result doubles as validation when the
   // preferred company happens to be the first membership, which is the
@@ -1201,12 +1182,12 @@ async function resolveCompanyForMiddlewareViaQueries(
       '[middleware] company resolution query failed',
       prefsRes.error ?? firstRes.error
     )
-    return { companyId: null, locale, degraded: true, allLocked: false }
+    return { companyId: null, locale, degraded: true }
   }
 
   if (prefs?.active_company_id) {
     if (prefs.active_company_id === firstCompany?.company_id) {
-      return { companyId: firstCompany.company_id, locale, degraded: false, allLocked: false }
+      return { companyId: firstCompany.company_id, locale, degraded: false }
     }
 
     const { data: membership, error: membershipError } = await supabase
@@ -1221,14 +1202,14 @@ async function resolveCompanyForMiddlewareViaQueries(
     // first membership (wrong company for consultants): degrade instead.
     if (membershipError) {
       console.error('[middleware] company preference validation failed', membershipError)
-      return { companyId: null, locale, degraded: true, allLocked: false }
+      return { companyId: null, locale, degraded: true }
     }
 
-    if (membership) return { companyId: membership.company_id, locale, degraded: false, allLocked: false }
+    if (membership) return { companyId: membership.company_id, locale, degraded: false }
   }
 
   // 2. Fallback: first non-archived membership (already fetched above)
-  if (!firstCompany) return { companyId: null, locale, degraded: false, allLocked: false }
+  if (!firstCompany) return { companyId: null, locale, degraded: false }
 
   // Write the fallback back to user_preferences so future RLS lookups
   // see the same active company without needing this fallback scan.
@@ -1246,5 +1227,5 @@ async function resolveCompanyForMiddlewareViaQueries(
     console.error('[middleware] active company write-back failed', writeBackError)
   }
 
-  return { companyId: firstCompany.company_id, locale, degraded: false, allLocked: false }
+  return { companyId: firstCompany.company_id, locale, degraded: false }
 }

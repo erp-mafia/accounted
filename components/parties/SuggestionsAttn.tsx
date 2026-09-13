@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import type { RegisterCounts } from '@/lib/parties/register'
 
 /**
@@ -14,6 +15,9 @@ import type { RegisterCounts } from '@/lib/parties/register'
 export function SuggestionsAttn({ side }: { side: 'supplier' | 'customer' }) {
   const t = useTranslations('parties')
   const router = useRouter()
+  // Shell v2: Att göra and Motparter carry the queue; a line over every
+  // register page said it a third time.
+  const shell = useShell()
   const [counts, setCounts] = useState<RegisterCounts | null>(null)
 
   useEffect(() => {
@@ -32,7 +36,7 @@ export function SuggestionsAttn({ side }: { side: 'supplier' | 'customer' }) {
     }
   }, [])
 
-  if (!counts) return null
+  if (shell === 'v2' || !counts) return null
   const n = side === 'supplier' ? counts.suggestedSuppliers : counts.suggestedCustomers
   if (n > 0) {
     return (

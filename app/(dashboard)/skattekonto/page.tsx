@@ -937,6 +937,11 @@ function SkattekontoTable({
                   className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
                 >
                   {section.label}
+                  {section.key === 'booked' && section.rows.some((r) => !r.journal_entry_id) && (
+                    <span className="ml-2 font-normal normal-case tracking-normal">
+                      · {t('band_not_booked_count', { count: section.rows.filter((r) => !r.journal_entry_id).length })}
+                    </span>
+                  )}
                 </td>
               </tr>
               {section.rows.map((row) => (
@@ -1020,9 +1025,9 @@ function SkattekontoRow({
                 })}
               </Badge>
             ) : (
-              <Badge variant="outline" className="font-normal">
-                {t('chip_not_booked')}
-              </Badge>
+              /* Plain fact, not an exception: quiet text, and the band
+                 header carries the count once. */
+              <span className="text-[11.5px] text-muted-foreground">{t('chip_not_booked').toLowerCase()}</span>
             )
           )}
         </span>

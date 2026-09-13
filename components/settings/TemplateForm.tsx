@@ -10,10 +10,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Trash2, Plus } from 'lucide-react'
-import { TEMPLATE_CATEGORY_LABELS, convertLibraryToBookingTemplate, applyTemplate } from '@/lib/bookkeeping/template-library'
+import { convertLibraryToBookingTemplate, applyTemplate } from '@/lib/bookkeeping/template-library'
+import { deriveLibraryCategory } from '@/lib/bookkeeping/template-groups'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { formatCurrency } from '@/lib/utils'
-import type { BookingTemplateLibrary, BookingTemplateCategory, BookingTemplateLibraryLine } from '@/types'
+import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 export type TemplateFormMode = 'create' | 'edit' | 'duplicate'
 
@@ -51,7 +52,6 @@ export function TemplateForm({
       : '',
   )
   const [description, setDescription] = useState(initialTemplate?.description ?? '')
-  const [category, setCategory] = useState<BookingTemplateCategory>(initialTemplate?.category ?? 'other')
   const [entityType, setEntityType] = useState<'all' | EntityType>(
     initialTemplate?.entity_type ?? 'all',
   )
@@ -145,7 +145,7 @@ export function TemplateForm({
       created_by: null,
       name,
       description,
-      category,
+      category: deriveLibraryCategory(lines),
       entity_type: entityType,
       lines,
       is_system: false,
@@ -174,7 +174,7 @@ export function TemplateForm({
       const res = await fetch(url, {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description, category, entity_type: entityType, lines }),
+        body: JSON.stringify({ name, description, category: deriveLibraryCategory(lines), entity_type: entityType, lines }),
       })
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))
@@ -205,17 +205,6 @@ export function TemplateForm({
         <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t('description_placeholder')} rows={2} className="resize-none" />
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label>{t('category_label')}</Label>
-          <Select value={category} onValueChange={(v) => setCategory(v as BookingTemplateCategory)}>
-            <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {Object.entries(TEMPLATE_CATEGORY_LABELS).map(([k, v]) => (
-                <SelectItem key={k} value={k}>{v}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
         <div>
           <Label>{t('entity_type_label')}</Label>
           <Select value={entityType} onValueChange={(v) => setEntityType(v as typeof entityType)}>

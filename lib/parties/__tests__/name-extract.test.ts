@@ -45,7 +45,7 @@ describe('extractNameCandidates', () => {
       'Claude Maj H Överföring via internet · Anthropic Ireland, faktura 22,5 EUR inkl 4,5 EUR VAT-Sweden 25% via OSS. Säljardebiterad moms ej avdragsgill.',
     )
     expect(c[0]).toMatchObject({ name: 'Anthropic Ireland', country: 'IE', foreign: true, source: 'country' })
-    expect(c[1]).toMatchObject({ name: 'Claude Maj H', country: 'IE', foreign: true, source: 'head' })
+    expect(c[1]).toMatchObject({ name: 'Claude', country: 'IE', foreign: true, source: 'head' })
   })
 
   it('drops lead words and counters before the name', () => {

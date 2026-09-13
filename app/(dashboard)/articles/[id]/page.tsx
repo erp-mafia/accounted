@@ -6,6 +6,8 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { DetailColumns } from '@/components/ui/detail-columns'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -19,7 +21,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { ArrowLeft, Loader2, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { parseArticleHouseworkType, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
@@ -39,6 +41,7 @@ export default function ArticleDetailPage({
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('article_detail')
+  const shell = useShell()
   const errorLocale = useLocale() as ErrorLocale
   const [article, setArticle] = useState<Article | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -214,7 +217,7 @@ export default function ArticleDetailPage({
   })()
 
   return (
-    <div className="max-w-2xl space-y-8 stagger-enter">
+    <div className={cn(shell !== 'v2' && 'max-w-2xl', 'space-y-8 stagger-enter')}>
       {/* Header: serif name over a quiet type/status kicker, quiet actions right */}
       <div>
         <Link
@@ -287,57 +290,59 @@ export default function ArticleDetailPage({
         </div>
       </div>
 
-      <DetailSection kicker={t('section_pricing')}>
-        <DefRow label={t('label_price')}>
-          <span className="tabular-nums">
-            {formatCurrency(article.price_excl_vat, article.currency)}
-          </span>
-        </DefRow>
-        <DefRow label={t('label_vat')}>
-          <span className="tabular-nums">{article.vat_rate} %</span>
-        </DefRow>
-        <DefRow label={t('label_unit')}>{article.unit}</DefRow>
-        {article.cost_price != null && (
-          <DefRow label={t('label_cost_price')}>
+      <DetailColumns>
+        <DetailSection kicker={t('section_pricing')}>
+          <DefRow label={t('label_price')}>
             <span className="tabular-nums">
-              {formatCurrency(article.cost_price, article.currency)}
+              {formatCurrency(article.price_excl_vat, article.currency)}
             </span>
           </DefRow>
-        )}
-      </DetailSection>
-
-      <DetailSection kicker={t('section_accounting')}>
-        <DefRow label={t('label_revenue_account')}>
-          {article.revenue_account ? (
-            <span className="tabular-nums">{article.revenue_account}</span>
-          ) : (
-            <span className="text-muted-foreground">{t('revenue_account_auto')}</span>
-          )}
-        </DefRow>
-        {article.type === 'tjanst' && houseworkDisplay && (
-          <DefRow label={t('label_housework')}>{houseworkDisplay}</DefRow>
-        )}
-      </DetailSection>
-
-      {/* Optional facts (English name, EAN) are omitted row-wise; when none
-          exist the whole section goes, so the document never pads itself
-          with placeholders for facts nobody entered. */}
-      {(article.name_en || article.ean) && (
-        <DetailSection kicker={t('section_details')}>
-          {article.name_en && <DefRow label={t('label_name_en')}>{article.name_en}</DefRow>}
-          {article.ean && (
-            <DefRow label={t('label_ean')}>
-              <span className="tabular-nums">{article.ean}</span>
+          <DefRow label={t('label_vat')}>
+            <span className="tabular-nums">{article.vat_rate} %</span>
+          </DefRow>
+          <DefRow label={t('label_unit')}>{article.unit}</DefRow>
+          {article.cost_price != null && (
+            <DefRow label={t('label_cost_price')}>
+              <span className="tabular-nums">
+                {formatCurrency(article.cost_price, article.currency)}
+              </span>
             </DefRow>
           )}
         </DetailSection>
-      )}
 
-      {article.notes && (
-        <DetailSection kicker={t('section_notes')}>
-          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{article.notes}</p>
+        <DetailSection kicker={t('section_accounting')}>
+          <DefRow label={t('label_revenue_account')}>
+            {article.revenue_account ? (
+              <span className="tabular-nums">{article.revenue_account}</span>
+            ) : (
+              <span className="text-muted-foreground">{t('revenue_account_auto')}</span>
+            )}
+          </DefRow>
+          {article.type === 'tjanst' && houseworkDisplay && (
+            <DefRow label={t('label_housework')}>{houseworkDisplay}</DefRow>
+          )}
         </DetailSection>
-      )}
+
+        {/* Optional facts (English name, EAN) are omitted row-wise; when none
+            exist the whole section goes, so the document never pads itself
+            with placeholders for facts nobody entered. */}
+        {(article.name_en || article.ean) && (
+          <DetailSection kicker={t('section_details')}>
+            {article.name_en && <DefRow label={t('label_name_en')}>{article.name_en}</DefRow>}
+            {article.ean && (
+              <DefRow label={t('label_ean')}>
+                <span className="tabular-nums">{article.ean}</span>
+              </DefRow>
+            )}
+          </DetailSection>
+        )}
+
+        {article.notes && (
+          <DetailSection kicker={t('section_notes')}>
+            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{article.notes}</p>
+          </DetailSection>
+        )}
+      </DetailColumns>
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 

@@ -21,8 +21,9 @@ import {
   decodeDefaultCursor,
   encodeDefaultCursor,
   parsePaginationParams,
+  PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
-import { parseExpand } from '@/lib/api/v1/expand'
+import { parseExpand, expandQueryShape } from '@/lib/api/v1/expand'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
@@ -146,6 +147,46 @@ const CUSTOMER_LIST_CONTEXT_COLUMNS = 'id, name, customer_type, email, country, 
 const INVOICE_ITEM_COLUMNS =
   'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, created_at'
 
+// List filters. Currency is strict ISO-4217 (3 uppercase letters): accepting
+// arbitrary 3-8 char strings would pass through to the DB filter without
+// serving any documented purpose.
+const ListFilters = z.object({
+  status: InvoiceStatus.optional().describe('Only invoices in this status.'),
+  customer_id: z.string().uuid().optional().describe('Only invoices to this customer (id).'),
+  document_type: InvoiceDocumentType.optional().describe(
+    'Only this document type. Default: every type.',
+  ),
+  // Quotes only. "expired" is derived (open AND valid_until < today), so it
+  // is a predicate here rather than a stored value.
+  quote_status: z
+    .enum(['open', 'accepted', 'declined', 'expired'])
+    .optional()
+    .describe('Quotes only (implies document_type=quote). expired = open with valid_until before today.'),
+  currency: z
+    .string()
+    .regex(/^[A-Z]{3}$/, 'currency must be a 3-letter ISO-4217 code')
+    .optional()
+    .describe('3-letter ISO 4217 code, uppercase (e.g. SEK, EUR).'),
+  // invoice_date range. The sort key is created_at (see the ordering
+  // rationale in the handler), so these filters are how a caller narrows by
+  // the business date.
+  date_from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'date_from must be ISO YYYY-MM-DD')
+    .optional()
+    .describe('YYYY-MM-DD. Invoices with invoice_date on or after this date.'),
+  date_to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'date_to must be ISO YYYY-MM-DD')
+    .optional()
+    .describe('YYYY-MM-DD. Invoices with invoice_date on or before this date.'),
+})
+
+const ListQuery = ListFilters.extend({
+  ...PaginationQueryShape,
+  ...expandQueryShape(ALLOWED_EXPAND),
+})
+
 registerEndpoint({
   operation: 'invoices.list',
   method: 'GET',
@@ -200,6 +241,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: ListQuery },
   response: { success: InvoicesListResponse },
 })
 
@@ -224,24 +266,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const expand = expandResult.expand
 
-    // Validate query filters. Currency is strict ISO-4217 (3 uppercase
-    // letters): accepting arbitrary 3-8 char strings would pass through
-    // to the DB filter without serving any documented purpose.
-    const FiltersSchema = z.object({
-      status: InvoiceStatus.optional(),
-      customer_id: z.string().uuid().optional(),
-      document_type: InvoiceDocumentType.optional(),
-      // Quotes only. "expired" is derived (open AND valid_until < today),
-      // so it is a predicate here rather than a stored value.
-      quote_status: z.enum(['open', 'accepted', 'declined', 'expired']).optional(),
-      currency: z.string().regex(/^[A-Z]{3}$/, 'currency must be a 3-letter ISO-4217 code').optional(),
-      // invoice_date range. The sort key is created_at (see the ordering
-      // rationale below), so these filters are how a caller narrows by the
-      // business date.
-      date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date_from must be ISO YYYY-MM-DD').optional(),
-      date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date_to must be ISO YYYY-MM-DD').optional(),
-    })
-    const filtersResult = FiltersSchema.safeParse({
+    const filtersResult = ListFilters.safeParse({
       status: url.searchParams.get('status') ?? undefined,
       customer_id: url.searchParams.get('customer_id') ?? undefined,
       document_type: url.searchParams.get('document_type') ?? undefined,

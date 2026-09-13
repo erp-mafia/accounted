@@ -34,7 +34,7 @@ export const COOKBOOK: CookbookEntry[] = [
     slug: 'quickstart',
     title: 'Quickstart: send your first invoice',
     markdown: QUICKSTART_MD,
-    description: 'Five minutes from a fresh sandbox to an emailed invoice.',
+    description: 'Five minutes from an empty company to an emailed invoice.',
   },
   {
     slug: 'send-first-invoice',

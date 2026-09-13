@@ -40,9 +40,8 @@ export default function EmployeesPage() {
   const searchParams = useSearchParams()
 
   // The "Ny anställd" modal is driven by the URL (?new=1) so every entry
-  // point (the header button, the empty state, and the legacy
-  // /salary/employees/new redirect) opens the same dialog, and the browser
-  // back button closes it. Same pattern as /invoices.
+  // point (the header button and the empty state) opens the same dialog, and
+  // the browser back button closes it. Same pattern as /invoices.
   const showNewEmployee = searchParams.has('new')
   const closeNewEmployee = () => router.replace('/salary/employees', { scroll: false })
   const openNewEmployee = () => router.push('/salary/employees?new=1', { scroll: false })
@@ -65,8 +64,8 @@ export default function EmployeesPage() {
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 28) */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         {canWrite && (
           <Button onClick={openNewEmployee}>
             <Plus className="mr-2 h-4 w-4" />

@@ -14,8 +14,9 @@ import { formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
 import { AccountNub } from './AccountNub'
 import { registryFacts, registryLabel, registryValue } from './RegistryFacts'
 import { regionName } from './SuggestionQueue'
-import { formatPaymentIdentity, rhythmLabel, roleLabel } from './format'
+import { formatPaymentIdentity, reasonText, rhythmLabel, roleLabel } from './format'
 import type { MergeCandidate } from './MergeDialog'
+import { displayNameFromVoucherText } from '@/lib/parties/ledger-key'
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{children}</h2>
@@ -38,6 +39,20 @@ function Row({ label, value, note }: { label: string; value: React.ReactNode; no
  * "Vad Accounted vet" lists every fact with its source; promotion and
  * merge are one action each and always confirm up front.
  */
+const DECISION_KINDS = new Set(['confirm', 'merge', 'split', 'rename', 'role', 'dismiss', 'pin', 'ignore', 'label', 'undo'])
+
+/** The history line for a decision: every kind the table allows has words, and a role decision names the role. */
+function decisionLabel(t: ReturnType<typeof useTranslations>, d: { kind: string; after: unknown }): string {
+  if (d.kind === 'role') {
+    const roles = (d.after as { roles?: unknown } | null)?.roles
+    const list = Array.isArray(roles) ? (roles as string[]) : []
+    if (list.includes('supplier') && list.includes('customer')) return t('decision_role_both')
+    if (list.includes('customer')) return t('decision_role_customer')
+    if (list.includes('supplier')) return t('decision_role_supplier')
+  }
+  return DECISION_KINDS.has(d.kind) ? t(`decision_${d.kind}` as never) : d.kind
+}
+
 export function PartyDossier({
   partyId,
   period,
@@ -97,6 +112,14 @@ export function PartyDossier({
 
   const p = dossier?.party
   const stats = p?.stats ?? null
+  // The variants are voucher texts; show them as names, once each, and only
+  // the ones that differ from the display name.
+  const variantNote = (() => {
+    if (!p || !stats || stats.variants.length < 2) return undefined
+    const shown = p.displayName.trim().toLowerCase()
+    const names = [...new Set(stats.variants.map((v) => displayNameFromVoucherText(v)))].filter((n) => n.trim().toLowerCase() !== shown)
+    return names.length ? t('dossier_seen_as', { names: names.slice(0, 3).join(', ') }) : undefined
+  })()
   const suggested = p?.status === 'suggested'
   const kicker = p ? (suggested ? t('dossier_kicker_suggested') : roleLabel(t, p.roles)) : ''
   const subtitle = stats
@@ -122,10 +145,14 @@ export function PartyDossier({
   const registryVat = dossier?.facts.find((f) => f.field === 'vat_number' && f.source === 'registry_scb')?.value
   const countryRaw = dossier?.facts.find((f) => f.field === 'country')?.value
   const countryCode = typeof countryRaw === 'string' && /^[A-Za-z]{2}$/.test(countryRaw) ? countryRaw.toUpperCase() : null
-  // One primary action: the role the ledger suggests and the party does not
-  // have yet. The other role and everything else live behind the menu.
+  // One primary action: a role the ledger's money supports and the party
+  // does not have yet. A confirmed supplier with only expenses has no
+  // primary action at all; the fallback that used to headline "Lägg upp som
+  // kund" for a counterpart you pay offered the one role that made no sense.
+  // The unsupported missing role stays reachable behind the menu, because a
+  // counterpart can genuinely be both.
   const missingRoles: PartyRole[] = p ? (['supplier', 'customer'] as PartyRole[]).filter((r) => (r === 'supplier' ? !p.roles.supplierId : !p.roles.customerId)) : []
-  const primaryRole: PartyRole | null = p ? (missingRoles.find((r) => p.defaultRoles.includes(r)) ?? missingRoles[0] ?? null) : null
+  const primaryRole: PartyRole | null = p ? (missingRoles.find((r) => p.defaultRoles.includes(r)) ?? null) : null
   const secondaryRole: PartyRole | null = missingRoles.find((r) => r !== primaryRole) ?? null
   const scbFetchedAt = dossier?.facts.filter((f) => f.source === 'registry_scb').map((f) => f.fetchedAt ?? f.recordedAt).sort().at(-1) ?? null
 
@@ -146,6 +173,11 @@ export function PartyDossier({
             <div className="space-y-8">
               <div className="space-y-3">
                 {subtitle ? <p className="text-[13px] text-muted-foreground">{subtitle}</p> : null}
+                {suggested && p.reason ? (
+                  <p className="text-[13px] text-muted-foreground">
+                    {t('dossier_why', { reason: reasonText(t, p.reason, stats?.rhythm ?? null, p.orgNumber) })}
+                  </p>
+                ) : null}
                 <div className="flex items-center gap-2">
                   {primaryRole ? (
                     <Button type="button" size="sm" onClick={() => onPromote(p.id, [primaryRole])} disabled={!canWrite || busy}>
@@ -241,9 +273,11 @@ export function PartyDossier({
                     <Row
                       label={t('fact_name')}
                       value={p.displayName}
-                      note={stats && stats.variants.length > 1 ? stats.variants.slice(0, 3).join(', ') : undefined}
+                      note={variantNote}
                     />
-                    <Row label={t('fact_legal_name')} value={legalName ?? <span className="text-muted-foreground">{t('fact_missing')}</span>} note={legalName ? docsFor('legal_name') : undefined} />
+                    {legalName && legalName.trim().toLowerCase() === p.displayName.trim().toLowerCase() ? null : (
+                      <Row label={t('fact_legal_name')} value={legalName ?? <span className="text-muted-foreground">{t('fact_missing')}</span>} note={legalName ? docsFor('legal_name') : undefined} />
+                    )}
                     <Row
                       label={t('fact_org')}
                       value={p.orgNumber ? formatOrgNumber(p.orgNumber) : <span className="text-muted-foreground">{t('fact_missing')}</span>}
@@ -312,7 +346,7 @@ export function PartyDossier({
                         <tr key={d.id}>
                           <td className={`${VTD_CLASS} w-24 whitespace-nowrap text-muted-foreground tabular-nums`}>{formatDate(d.createdAt)}</td>
                           <td className={VTD_CLASS}>
-                            {['confirm', 'dismiss', 'merge', 'split', 'undo'].includes(d.kind) ? t(`decision_${d.kind}`) : d.kind}
+                            {decisionLabel(t, d)}
                             {d.note ? <span className="text-muted-foreground"> · {d.note}</span> : null}
                           </td>
                         </tr>

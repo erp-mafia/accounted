@@ -343,7 +343,7 @@ export function LedgerGraph({ deep, companyName }: { deep: DeepLedgerContext; co
       </div>
 
       {/* stage */}
-      <div className="relative mx-auto aspect-square w-full max-w-[680px]">
+      <div className="relative mx-auto aspect-square w-full max-w-[840px]">
         <svg
           viewBox={`0 0 ${W} ${H}`}
           className="block h-full w-full"

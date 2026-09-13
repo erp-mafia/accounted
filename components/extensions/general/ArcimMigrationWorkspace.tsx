@@ -469,6 +469,19 @@ function StepRail({ steps, currentIndex }: { steps: WizardStep[]; currentIndex: 
 
 // ── Provider selection step ──────────────────────────────────────
 
+interface SieImportSummary {
+  id: string
+  filename: string
+  status: string
+  accounts_count: number | null
+  transactions_count: number | null
+  company_name: string | null
+  fiscal_year_start: string | null
+  fiscal_year_end: string | null
+  imported_at: string | null
+  created_at: string
+}
+
 interface ConnectionStatus {
   consents: {
     id: string
@@ -477,18 +490,15 @@ interface ConnectionStatus {
     companyName?: string
     createdAt?: string
   }[]
-  sieImports: {
-    id: string
-    filename: string
-    status: string
-    accounts_count: number | null
-    transactions_count: number | null
-    company_name: string | null
-    fiscal_year_start: string | null
-    fiscal_year_end: string | null
-    imported_at: string | null
-    created_at: string
-  }[]
+  /** The 10 newest imports of any status: display only. */
+  sieImports: SieImportSummary[]
+  /**
+   * Whether ANY completed import exists, asked of the server: failed and
+   * replaced rows can push the completed one out of the 10-row history.
+   * Optional only for a server that predates the field.
+   */
+  hasCompletedSieImport?: boolean
+  latestCompletedSieImport?: SieImportSummary | null
   entityCounts: {
     customers: number
     suppliers: number
@@ -524,7 +534,8 @@ function ProviderStep({
   isLoadingStatus: boolean
 }) {
   const activeConsents = connectionStatus?.consents.filter(c => c.status === 1) ?? []
-  const hasSieImport = (connectionStatus?.sieImports.filter(i => i.status === 'completed').length ?? 0) > 0
+  const hasSieImport = connectionStatus?.hasCompletedSieImport
+    ?? ((connectionStatus?.sieImports.filter(i => i.status === 'completed').length ?? 0) > 0)
   const sieViaApi = (id: ArcimProvider) => ARCIM_PROVIDERS.find(p => p.id === id)?.sieViaApi === true
   const allSieViaApi = activeConsents.length > 0 && activeConsents.every(c => sieViaApi(c.provider))
   const showSieRequiredBanner = !isLoadingStatus && !hasSieImport && !allSieViaApi
@@ -556,7 +567,7 @@ function ProviderStep({
             {activeConsents.map((consent) => {
               const providerInfo = ARCIM_PROVIDERS.find(p => p.id === consent.provider)
               const completedImports = connectionStatus?.sieImports.filter(i => i.status === 'completed') ?? []
-              const lastImport = completedImports[0]
+              const lastImport = connectionStatus?.latestCompletedSieImport ?? completedImports[0]
 
               return (
                 <div key={consent.id} className="flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap sm:gap-4">
@@ -627,8 +638,10 @@ function ProviderStep({
             // SIE upload first. Gate the connection entry until a completed
             // SIE import exists so users don't authenticate into a flow that
             // can't import anything yet. The /migrate route enforces this
-            // server-side regardless; this is just the matching UX.
-            const needsSieFirst = !hasSieImport && !provider.sieViaApi
+            // server-side regardless; this is just the matching UX. Never
+            // gate on a status that has not arrived yet (same guard as the
+            // banner above).
+            const needsSieFirst = !isLoadingStatus && !hasSieImport && !provider.sieViaApi
             const isDisabled = comingSoon || alreadyConnected || needsSieFirst
             return (
               <button
@@ -1200,6 +1213,7 @@ function OptionsStep({
   sieData,
   hasSieData,
   provider,
+  isStarting,
   onChange,
   onStart,
   onBack,
@@ -1210,6 +1224,8 @@ function OptionsStep({
   /** The company already has a completed SIE import (any origin). */
   hasSieData: boolean
   provider: ArcimProvider | null
+  /** A run is in flight: the submit stays disabled until it settles. */
+  isStarting: boolean
   onChange: (options: MigrationOptions) => void
   onStart: () => void
   onBack: () => void
@@ -1375,7 +1391,7 @@ function OptionsStep({
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked}>
+        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked || isStarting}>
           Starta migrering
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
@@ -1388,7 +1404,7 @@ function OptionsStep({
           setShowConfirm(false)
           onStart()
         }}
-        isSubmitting={false}
+        isSubmitting={isStarting}
         title="Starta migrering"
         confirmLabel="Starta migrering"
       >
@@ -2420,6 +2436,13 @@ export default function ArcimMigrationWorkspace({
   const [step, setStep] = useState<WizardStep>('provider')
   const [isLoading, setIsLoading] = useState(false)
   const [isLoadingStatus, setIsLoadingStatus] = useState(true)
+  // One migration run at a time. A second submit while the first request is
+  // still inserting re-runs the same step against a register snapshot that
+  // predates the first run's rows: 987 duplicate customers in one company
+  // (2026-09-10). The ref closes the same-tick race; the state disables the
+  // submit and the confirm button.
+  const migrationInFlightRef = useRef(false)
+  const [isStartingMigration, setIsStartingMigration] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Per-item details behind `error`: e.g. the SIE validation errors from
   // /sie-data, which would otherwise be swallowed (the envelope's `error`
@@ -3136,6 +3159,9 @@ export default function ArcimMigrationWorkspace({
 
   const handleStartMigration = useCallback(async () => {
     if (!consentId) return
+    if (migrationInFlightRef.current) return
+    migrationInFlightRef.current = true
+    setIsStartingMigration(true)
 
     setStep('migrating')
     setMigrationStep('Startar migrering...')
@@ -3339,6 +3365,9 @@ export default function ArcimMigrationWorkspace({
     } catch (err) {
       setError(displayError(err))
       setStep('result')
+    } finally {
+      migrationInFlightRef.current = false
+      setIsStartingMigration(false)
     }
   }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, sieData, toast])
 
@@ -3438,6 +3467,7 @@ export default function ArcimMigrationWorkspace({
           sieData={sieData}
           hasSieData={(preview?.hasSieData ?? false) || sieImportResults.some(r => r.success)}
           provider={preview?.consent.provider ?? null}
+          isStarting={isStartingMigration}
           onChange={setMigrationOptions}
           onStart={handleStartMigration}
           onBack={() => preview?.sieAvailable ? setStep('mapping') : setStep('preview')}

@@ -1,4 +1,5 @@
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
+import { matchSeedText } from './resolver/directory'
 
 /**
  * Pre-classifier for counterparty keys: routes a key before entity
@@ -29,7 +30,7 @@ const STOP = new Set([
 // Generic words voucher text uses for a category without a counterpart.
 // Geographic tokens are deliberately absent: "taxi stockholm" reads as a party
 // to the founder, "taxiresor och parkering" does not.
-const GENERIC = [
+export const GENERIC_WORDS = [
   'inköp', 'inkp', 'kvitto', 'kvitton', 'fika', 'diesel', 'bensin', 'bränsle', 'försäkring', 'telefon', 'mobil', 'hyra',
   'lokalhyra', 'frakt', 'hosting', 'julklapp', 'frimärken', 'utlägg', 'hotell', 'resa', 'resor', 'resekostnader',
   'registreringsavgift', 'registeringsavgift', 'tillsynsavgift', 'årsavgift', 'medlemsavgift', 'serviceavgift', 'anmälningsavgift', 'expeditionsavgift',
@@ -53,7 +54,7 @@ const GENERIC = [
 let vocabCache: Set<string> | null = null
 function vocab(): Set<string> {
   if (vocabCache) return vocabCache
-  const v = new Set<string>(GENERIC)
+  const v = new Set<string>(GENERIC_WORDS)
   for (const a of BAS_REFERENCE) {
     if (a.account_class < 4) continue
     for (const t of a.account_name.toLowerCase().split(/[^a-zåäöé]+/)) if (t.length >= 3) v.add(t)
@@ -90,6 +91,10 @@ export function classifyKey(input: { key: string; acct?: string | null }): Party
   if (BANK.test(k)) return 'bank'
   if (AUTHORITY.test(k)) return 'authority'
   if (INTERMEDIARY.test(k)) return 'intermediary'
+  // A brand the directory knows is a party however generic the rest of the
+  // text is: "sj biljetter" is SJ, not a category, even though "sj" is too
+  // short to count as content below and "biljetter" is vocabulary.
+  if (matchSeedText(k)) return 'party'
   const content = k
     .split(/\s+/)
     .filter((t) => t.length >= 3 && !/^\d+$/.test(t) && !/^k\d+$/.test(t) && !STOP.has(t))

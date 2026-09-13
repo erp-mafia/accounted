@@ -1,15 +1,15 @@
 export const QUICKSTART_MD = `# Quickstart: send your first invoice
 
-> Five minutes from a fresh sandbox to an emailed invoice. Demonstrates the auth, dry-run, and idempotency patterns you'll use everywhere.
+> Five minutes from an empty company to an emailed invoice. Demonstrates the auth, dry-run, and idempotency patterns you'll use everywhere.
 
 ## What you'll need
 
-- A **live** API key (\`gnubok_sk_*\`, no \`test_\` infix) from the Accounted dashboard at **/settings/api**. Run the whole walkthrough with this one key: the create→send→pay sequence chains on real IDs (the customer's \`id\`, then the invoice's \`id\`) that only committed writes return. A **test** key (\`gnubok_sk_test_*\`) is useful to validate request *shapes* first — it's bound to a deterministic sandbox company and the wrapper forces every write into dry-run — but because a forced dry-run never persists (\`id: null\`, no emails), it can't complete the stateful flow, and its sandbox \`companyId\` differs from your live one. So: **use one key throughout.** If you validate with a test key first, re-run step 1 with your live key before step 3 so \`COMPANY_ID\` matches the company you're actually writing to.
+- A **live** API key (\`gnubok_sk_*\`, no \`test_\` infix) from the Accounted dashboard at **/settings/api**. Run the whole walkthrough with this one key: the create→send→pay sequence chains on real IDs (the customer's \`id\`, then the invoice's \`id\`) that only committed writes return. A **test** key (\`gnubok_sk_test_*\`) is useful to validate request *shapes* first: it points at the same company as a live key, but the wrapper forces every write into dry-run. Because a forced dry-run never persists (\`id: null\`, no emails), it can't complete the stateful flow. So: **use a live key for the walkthrough.** There is no separate sandbox company or host; to test without touching your bookkeeping, create a second, empty company in the dashboard and never connect a bank or Skatteverket to it.
 - \`curl\` or any HTTP client.
 
 ## 1. List the companies the key can access
 
-This call confirms your key works and returns the \`companyId\` you'll use throughout. Run it with the **same key you'll use for the committing steps** so the \`companyId\` matches — a live key resolves to the real companies it can access; a test key resolves to its sandbox company.
+This call confirms your key works and returns the \`companyId\` you'll use throughout. Both live and test keys resolve to the companies the key's user can access.
 
 \`\`\`bash
 curl https://app.gnubok.se/api/v1/companies \\

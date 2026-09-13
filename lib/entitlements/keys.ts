@@ -83,9 +83,10 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.woocommerce_sync,
   CAPABILITY.shopify_sync,
   CAPABILITY.zettle_sync,
-  // Founder decision (2026-09-01): multiple users per company is paid.
-  // Trial-seeded and Stripe-synced like the rest; enforcement is the
-  // owner-only dormancy rule in lib/entitlements/multi-user.ts.
+  // Trial-seeded and Stripe-synced like the rest. The owner-only dormancy
+  // rule in lib/entitlements/multi-user.ts is OFF by default since
+  // 2026-09-10 (issue #2494): the key is kept and granted so the gate can
+  // be re-armed by env, but nothing withholds extra users today.
   CAPABILITY.multi_user,
 ] as const
 

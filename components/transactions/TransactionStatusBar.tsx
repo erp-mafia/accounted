@@ -57,7 +57,10 @@ export default function TransactionStatusBar({
       label: t('action_import'),
       icon: Upload,
       description: t('create_import_desc'),
-      onSelect: () => router.push('/import'),
+      // Straight to the bank-file step: the option's own description says
+      // "CSV- eller SIE-fil från banken", so the chooser in between is a stop
+      // that asks what the user already answered.
+      onSelect: () => router.push('/import?mode=bank'),
     },
     {
       key: 'manuell',
@@ -71,8 +74,8 @@ export default function TransactionStatusBar({
   ]
 
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <h1 className="font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
+    <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
       <SplitButton
         key={`${loaded ? 'loaded' : 'initial'}-${showSync ? 'sync' : 'nosync'}`}
         persistKey="transactions"

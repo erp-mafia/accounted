@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { parseEntityType } from '@/lib/company/entity-type'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
@@ -7,11 +6,10 @@ import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getAiStatus } from '@/lib/ai'
-import { gatherCandidates } from '@/lib/agent/categorize/candidates'
-import { gatherUnderlag } from '@/lib/agent/categorize/underlag'
-import { selectAccount } from '@/lib/agent/categorize/select-account'
+import { loadReads, readIsFresh, readTransaction, storeRead } from '@/lib/agent/categorize/read'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import type { EntityType, Transaction } from '@/types'
+import { parseEntityType } from '@/lib/company/entity-type'
+import type { Transaction } from '@/types'
 
 /**
  * POST /api/agent/categorize: a provider-agnostic booking proposal for one
@@ -20,9 +18,10 @@ import type { EntityType, Transaction } from '@/types'
  *
  * It gathers the deterministic candidate accounts (counterparty templates,
  * rules, history) with NO model call, then has the model SELECT among them
- * (self-consistency sampled), and returns the proposed account + VAT +
- * confidence + reasoning + the candidate slate. It never posts anything: the
- * caller (the transaction row) renders the proposal as an approval card.
+ * (self-consistency sampled). The answer is one AssistantRead, the same row
+ * transaction_assistant_reads stores and the transactions list hands to the
+ * review, so there is one shape end to end. A fresh stored read answers at
+ * once. It never posts anything.
  *
  * Runs on any configured backend (Bedrock or a local model), so it is gated on
  * `configured`, not `assistantAvailable` — same as /api/agent/ask.
@@ -97,34 +96,29 @@ export const POST = withRouteContext(
     ])
 
     try {
-      // Gather the matched receipt/invoice text when the caller didn't supply it:
-      // this is what lifts the cold-start case — the model reads the actual
-      // supplier + line items, not just the bank line. Best-effort; '' if none.
-      const underlag =
-        parsed.data.underlag ??
-        (await gatherUnderlag(
-          supabase,
-          companyId,
-          (tx as Transaction).id,
-          (tx as { document_id?: string | null }).document_id,
-        ))
+      const transaction = tx as Transaction
+      const entityType = parseEntityType(company?.entity_type)
+      const vatRegistered = settings?.vat_registered ?? false
 
-      const candidates = await gatherCandidates(supabase, companyId, tx as Transaction)
-      const selection = await selectAccount({
-        transaction: {
-          merchantName: (tx as Transaction).merchant_name,
-          description: (tx as Transaction).description,
-          amount: (tx as Transaction).amount,
-          date: (tx as Transaction).date,
-          currency: (tx as Transaction).currency,
-        },
-        underlag,
-        candidates,
-        entityType: parseEntityType(company?.entity_type),
-        vatRegistered: settings?.vat_registered ?? false,
+      // The read made before anyone opened the row (the ten-minute cron, or
+      // an earlier open) answers at once while it is fresh; a caller who
+      // brings its own underlag or sample count wants a new one.
+      if (parsed.data.underlag == null && parsed.data.samples == null) {
+        const stored = await loadReads(supabase, companyId, [transaction.id]).catch(() => new Map())
+        const read = stored.get(transaction.id)
+        if (read && readIsFresh(read, transaction)) return NextResponse.json({ data: read })
+      }
+
+      const { read } = await readTransaction(supabase, companyId, transaction, {
+        entityType,
+        vatRegistered,
+        underlag: parsed.data.underlag,
         samples: parsed.data.samples,
       })
-      return NextResponse.json({ data: { ...selection, candidates } })
+      // Keep it for the list and the next open. Best effort: a failed
+      // store never costs the caller the answer.
+      await storeRead(supabase, companyId, read).catch(() => undefined)
+      return NextResponse.json({ data: read })
     } catch (err) {
       return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
     }

@@ -6,8 +6,8 @@ import { validateQuery } from '@/lib/api/validate'
 // GET /api/agent/skills
 //
 // Read-only transparency surface for the in-app bookkeeping assistant's domain
-// knowledge ("atoms"). Powers /settings/agent-skills: the companion to
-// /settings/agent-memory. Memory is what the assistant *learned* about this
+// knowledge ("atoms"). Powers /settings/assistant?view=skills: the companion to
+// /settings/assistant?view=memory. Memory is what the assistant *learned* about this
 // company (user-editable); skills are the Swedish-accounting expertise it
 // *ships* with: authored in .claude/skills/**/SKILL.md, seeded into
 // agent_atom_registry, read-only for users, curated via mcp_exposed.

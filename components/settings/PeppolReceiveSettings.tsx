@@ -13,6 +13,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { useLocale } from 'next-intl'
 
 interface PeppolRegistrationView {
@@ -20,7 +21,13 @@ interface PeppolRegistrationView {
   participant_identifier: string
   status: 'pending' | 'registered' | 'failed' | 'deregistered'
   registered_at: string | null
-  last_error: string | null
+  /** Stable code behind the last failure; the raw provider text never leaves the server. */
+  last_error_code: string | null
+  /** A pending row the server considers abandoned (older than five minutes). */
+  stale_pending: boolean
+  /** Server verdict: the stored code is retryable and the row is in a state a retry can change. */
+  can_retry: boolean
+  updated_at: string
 }
 
 interface PeppolAccessView {
@@ -32,11 +39,26 @@ interface PeppolAccessView {
   remaining_sends: number | null
 }
 
+interface PeppolParticipantView {
+  ok: boolean
+  code: string | null
+}
+
 interface PeppolSettingsPayload {
   transport: { available: boolean }
   receiving_supported: boolean
   access: PeppolAccessView
+  participant: PeppolParticipantView
   registration: PeppolRegistrationView | null
+}
+
+type UiLocale = 'sv' | 'en'
+
+/** Registry text for a stable code, in the UI locale; null when the registry does not know the code. */
+function registryText(code: string, locale: UiLocale): string | null {
+  const entry = getErrorEntry(code)
+  if (!entry) return null
+  return locale === 'en' ? entry.message_en : entry.message_sv
 }
 
 /**
@@ -74,12 +96,30 @@ export function PeppolReceiveSettings() {
     void load()
   }, [load])
 
-  const localeKey = locale.startsWith('sv') ? 'sv' : 'en'
+  const localeKey: UiLocale = locale.startsWith('sv') ? 'sv' : 'en'
   const access = state?.access ?? null
   const registration = state?.registration ?? null
   const isOn = registration?.status === 'registered' || registration?.status === 'pending'
   const transportAvailable = !!state?.transport.available
   const receivingAvailable = transportAvailable && !!state?.receiving_supported && !!access?.receive_enabled
+  // The company cannot publish a Peppol id at all (personnummer, no org
+  // number, no name): say so where the receiving offer would otherwise be.
+  const participantBlocked = state !== null && !state.participant.ok
+  const eligibilityText = participantBlocked
+    ? registryText(state.participant.code ?? 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED', localeKey)
+    : null
+  // Translated through the error registry; an unknown code falls back to the
+  // generic registration failure text rather than leaking anything raw.
+  const registrationErrorText = registration?.last_error_code && registration.status !== 'deregistered'
+    ? registryText(registration.last_error_code, localeKey) ?? registryText('PEPPOL_REGISTRATION_FAILED', localeKey)
+    : null
+  // A retry on a live row repeats the withdrawal (the toggle stays on); on a
+  // failed or stale row it repeats the registration.
+  const retryRepeatsWithdrawal = registration?.status === 'registered'
+  const canRetry = !!registration
+    && registration.can_retry
+    && registration.status !== 'deregistered'
+    && (retryRepeatsWithdrawal ? transportAvailable : receivingAvailable && !participantBlocked)
 
   const requestAccess = useCallback(async () => {
     setIsRequesting(true)
@@ -147,7 +187,9 @@ export function PeppolReceiveSettings() {
     : null
   const registrationStatusLabel = !registration || registration.status === 'deregistered'
     ? t('status_off')
-    : t(`status_${registration.status}`)
+    : registration.stale_pending
+      ? t('status_pending_stale')
+      : t(`status_${registration.status}`)
 
   return (
     <SettingsGroup label={t('heading')}>
@@ -170,16 +212,20 @@ export function PeppolReceiveSettings() {
               whole settings panel wider than its column. */}
           {state !== null && transportAvailable && (access?.status === 'none' || access?.status === 'disabled') && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 shrink-0 rounded-sm border-border"
-                  checked={wantsReceiving}
-                  onChange={(event) => setWantsReceiving(event.target.checked)}
-                  disabled={isRequesting || !canWrite}
-                />
-                <span>{t('request_receiving_label')}</span>
-              </label>
+              {participantBlocked ? (
+                <SettingsRowNote className="min-w-0">{eligibilityText}</SettingsRowNote>
+              ) : (
+                <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 shrink-0 rounded-sm border-border"
+                    checked={wantsReceiving}
+                    onChange={(event) => setWantsReceiving(event.target.checked)}
+                    disabled={isRequesting || !canWrite}
+                  />
+                  <span>{t('request_receiving_label')}</span>
+                </label>
+              )}
               <Button
                 type="button"
                 variant="outline"
@@ -200,14 +246,18 @@ export function PeppolReceiveSettings() {
       {(receivingAvailable || isOn) && (
         <>
           <SettingsRow label={t('enable_label')} help={t('enable_help')}>
-            <SettingsRowEnd>
-              <Switch
-                checked={isOn}
-                onCheckedChange={(value) => void toggleReceiving(value)}
-                disabled={isSaving || !canWrite || !receivingAvailable || state === null}
-                aria-label={t('enable_label')}
-              />
-            </SettingsRowEnd>
+            {participantBlocked && !isOn ? (
+              <SettingsRowNote className="min-w-0">{eligibilityText}</SettingsRowNote>
+            ) : (
+              <SettingsRowEnd>
+                <Switch
+                  checked={isOn}
+                  onCheckedChange={(value) => void toggleReceiving(value)}
+                  disabled={isSaving || !canWrite || !receivingAvailable || state === null}
+                  aria-label={t('enable_label')}
+                />
+              </SettingsRowEnd>
+            )}
           </SettingsRow>
           <SettingsRow label={t('status_label')} borderless>
             <div className="min-w-0 space-y-1 text-sm">
@@ -217,8 +267,21 @@ export function PeppolReceiveSettings() {
                   {t('peppol_id_label')} {registration.participant_scheme}:{registration.participant_identifier}
                 </SettingsRowNote>
               )}
-              {registration?.status === 'failed' && registration.last_error && (
-                <SettingsRowNote className="block">{registration.last_error}</SettingsRowNote>
+              {registrationErrorText && (
+                <SettingsRowNote className="block">{registrationErrorText}</SettingsRowNote>
+              )}
+              {canRetry && (
+                <div className="pt-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void toggleReceiving(!retryRepeatsWithdrawal)}
+                    disabled={isSaving || !canWrite}
+                  >
+                    {isSaving ? t('retry_sending') : t('retry_button')}
+                  </Button>
+                </div>
               )}
             </div>
           </SettingsRow>

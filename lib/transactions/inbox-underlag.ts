@@ -42,9 +42,6 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('transactions/inbox-underlag')
 
-/** Postgres unique_violation: a sibling item already claimed this verifikat. */
-const UNIQUE_VIOLATION = '23505'
-
 /**
  * Map each booked transaction id to the journal entry that anchors it:
  * transactions.journal_entry_id first, then transaction_voucher_links
@@ -377,17 +374,17 @@ export async function propagateUnderlagForBookedTransaction(
         )
       }
       if (!underlagSettled) continue
-      // CAS on the null predicate so a concurrent stamp stays a no-op, and
-      // unique_violation tolerated: on a samlingsverifikat only one item can
-      // hold the UNIQUE created_journal_entry_id, and the inbox list derives
-      // "booked" from the transaction's state for the rest.
+      // CAS on the null predicate so a concurrent stamp stays a no-op. Every
+      // matched item gets its stamp: on a samlingsverifikat N items share one
+      // created_journal_entry_id (the UNIQUE that let only the first one land
+      // was dropped in migration 20260911120500).
       const { error: stampError } = await supabase
         .from('invoice_inbox_items')
         .update({ created_journal_entry_id: journalEntryId })
         .eq('id', inbox.id)
         .eq('company_id', companyId)
         .is('created_journal_entry_id', null)
-      if (stampError && stampError.code !== UNIQUE_VIOLATION) {
+      if (stampError) {
         log.error('Failed to stamp inbox item created_journal_entry_id', {
           inbox_item_id: inbox.id,
           journal_entry_id: journalEntryId,

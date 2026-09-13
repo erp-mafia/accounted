@@ -35,6 +35,27 @@ describe('getStructuredError', () => {
     expect(result.remediation?.tool).toBe('gnubok_lock_period')
   })
 
+  // close_period / lock_period / run_year_end (MCP) and period-service throw
+  // these as plain strings. They used to fall through to UNKNOWN_ERROR with
+  // "Något gick fel" (feedback seq 392722: close_period after run_year_end).
+  it('infers PERIOD_ALREADY_CLOSED from the plain "Period is already closed" throw', () => {
+    const result = getStructuredError(new Error('Period is already closed'))
+    expect(result.code).toBe('PERIOD_ALREADY_CLOSED')
+    expect(result.retryable).toBe(false)
+    expect(result.message_sv).toMatch(/redan stängd/)
+    expect(result.remediation?.description).toMatch(/gnubok_run_year_end/)
+    expect(result.remediation?.tool).toBe('gnubok_list_fiscal_periods')
+  })
+
+  it('infers PERIOD_LOCK_ALREADY_LOCKED from the plain "Period is already locked" throw', () => {
+    const result = getStructuredError(new Error('Period is already locked'))
+    expect(result.code).toBe('PERIOD_LOCK_ALREADY_LOCKED')
+    expect(result.retryable).toBe(false)
+    expect(result.message_sv).toBe('Perioden är redan låst.')
+    expect(result.remediation?.description).toMatch(/do not lock first/)
+    expect(result.remediation?.tool).toBe('gnubok_unlock_period')
+  })
+
   it('maps an over-long reason to VALIDATION_ERROR with a specific Swedish message', () => {
     const result = getStructuredError(new Error('reason must be 500 characters or fewer'))
     expect(result.code).toBe('VALIDATION_ERROR')
@@ -137,3 +158,38 @@ describe('retryable contract (always present, transient inference)', () => {
     expect(result.retryable).toBe(true)
   })
 })
+
+describe('getStructuredError: throw-site remediation', () => {
+  it('lets a thrown error carry its own remediation over the registry entry', () => {
+    // SI_CREATE_INVALID_INPUT has no registry remediation (it is shared with
+    // the REST create route, where an MCP tool hint would be wrong), so the
+    // inbox staging tool attaches the fix it knows at the throw site.
+    const err = Object.assign(new Error('Extracted invoice has no usable total'), {
+      code: 'SI_CREATE_INVALID_INPUT',
+      remediation: {
+        description: 'Set totals from the underlag, then retry.',
+        tool: 'gnubok_set_inbox_extracted_data',
+        args: { inbox_item_id: 'inbox-1' },
+      },
+    })
+    const result = getStructuredError(err)
+    expect(result.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(result.remediation).toEqual({
+      description: 'Set totals from the underlag, then retry.',
+      tool: 'gnubok_set_inbox_extracted_data',
+      args: { inbox_item_id: 'inbox-1' },
+    })
+    expect(result.retryable).toBe(false)
+  })
+
+  it('ignores a malformed throw-site remediation and keeps the registry one', () => {
+    const err = Object.assign(new Error('Period must be locked before closing'), {
+      remediation: { tool: 'gnubok_lock_period' }, // no description: not a hint
+    })
+    const result = getStructuredError(err)
+    expect(result.code).toBe('PERIOD_NOT_LOCKED')
+    expect(result.remediation?.tool).toBe('gnubok_lock_period')
+    expect(result.remediation?.description).toBeTruthy()
+  })
+})
+

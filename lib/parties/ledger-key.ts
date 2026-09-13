@@ -1,4 +1,4 @@
-import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { normalizeCounterpartyName, TRAILING_MONTH_TOKENS } from '@/lib/bookkeeping/counterparty-templates'
 
 /**
  * Legibility key for a voucher description: the identity string an observed
@@ -96,7 +96,51 @@ export function displayNameFromVoucherText(raw: string): string {
     .replace(/\s+/g, ' ')
     .replace(/^[,\s]+|[,\s]+$/g, '')
     .trim()
-  return cleaned.length >= 2 ? cleaned : raw.trim()
+  const named = stripTrailingWhenAndWho(cleaned)
+  return named.length >= 2 ? named : cleaned.length >= 2 ? cleaned : raw.trim()
+}
+
+// Legal forms that look like initials but name the company: never stripped.
+const LEGAL_FORM_TOKENS = new Set(['AB', 'HB', 'KB', 'EF', 'AS', 'SA', 'NV', 'BV', 'SE', 'OY', 'AG', 'SL', 'SP', 'SRL', 'SPA'])
+
+// Legal forms that are words in their own right, matched in any case.
+const LEGAL_FORM_WORDS = new Set([
+  'ab', 'aktiebolag', 'hb', 'kb', 'ltd', 'limited', 'oy', 'gmbh', 'inc', 'sarl', 'publ', 'filial',
+  'pbc', 'llc', 'plc', 'corp', 'corporation', 'aps', 'srl', 'spa', 'sas', 'bv', 'nv', 'ag',
+])
+
+/**
+ * Whether a name carries a legal form: "Anthropic, PBC", "Visma Spcs AB",
+ * "Anthropic Ireland Limited". A name that does is a legal entity, not a
+ * brand, and one brand can be several of them with different tax
+ * treatment; the list must never fold them into one word. The short
+ * ambiguous forms (AS, SE, EF, SA, SP) count only written in capitals.
+ */
+export function hasLegalForm(name: string): boolean {
+  return name
+    .split(/\s+/)
+    .map((t) => t.replace(/[.,()]/g, ''))
+    .some((t) => LEGAL_FORM_WORDS.has(t.toLowerCase()) || (t === t.toUpperCase() && LEGAL_FORM_TOKENS.has(t)))
+}
+
+/**
+ * "KjellCo Oktober", "Resend Jul", "Supabase JW Maj", "Kontorsplatser j": a
+ * trailing month or a one- or two-letter initial says when and who, not
+ * which company. Same rule
+ * as the bank-side key, minus the legal forms ("Visma Spcs AB" keeps its AB).
+ * Always keeps at least one token.
+ */
+export function stripTrailingWhenAndWho(s: string): string {
+  const tokens = s.trim().split(/\s+/).filter(Boolean)
+  while (tokens.length > 1) {
+    const last = tokens[tokens.length - 1]!
+    if (LEGAL_FORM_TOKENS.has(last.toUpperCase().replace(/\./g, ''))) break
+    const isMonth = TRAILING_MONTH_TOKENS.has(last.toLowerCase())
+    const isInitials = /^[A-ZÅÄÖ]{1,2}$/.test(last) || /^[a-zåäö]$/.test(last)
+    if (!isMonth && !isInitials) break
+    tokens.pop()
+  }
+  return tokens.join(' ')
 }
 
 const LEGACY_AP_PREFIX = /^(levfakt|levfkt|leverantörsfaktura från|leverantörsfaktura|levbet|faktura|kvitto|utgift)\s+/

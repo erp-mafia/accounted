@@ -14,13 +14,20 @@ export type PeppolInvoiceRecord = Invoice & { customer?: Customer | null; items?
 
 type RouteLog = Parameters<typeof errorResponseFromCode>[1]
 
+/**
+ * The registry code the built response carries (and, for a failed BIS
+ * preflight, the issue codes), so a caller can log the refusal without
+ * reading the body.
+ */
+type RefusedPeppolResult = { ok: false; code: string; issues?: string[]; response: NextResponse }
+
 export type LoadPeppolRecordsResult =
   | { ok: true; invoice: PeppolInvoiceRecord; company: CompanySettings }
-  | { ok: false; response: NextResponse }
+  | RefusedPeppolResult
 
 export type LoadPeppolDocumentResult =
   | { ok: true; document: GeneratedPeppolInvoice; invoice: PeppolInvoiceRecord; company: CompanySettings }
-  | { ok: false; response: NextResponse }
+  | RefusedPeppolResult
 
 /**
  * Fetch the invoice (with customer and lines) and the company settings the
@@ -48,6 +55,7 @@ export async function loadPeppolRecords(args: {
   if (invoiceError || !invoice) {
     return {
       ok: false,
+      code: 'INVOICE_NOT_FOUND',
       response: privateNoStore(errorResponseFromCode(
         'INVOICE_NOT_FOUND',
         args.log,
@@ -65,6 +73,7 @@ export async function loadPeppolRecords(args: {
   if (companyError || !company) {
     return {
       ok: false,
+      code: 'INVOICE_SEND_COMPANY_SETTINGS_MISSING',
       response: privateNoStore(errorResponseFromCode(
         'INVOICE_SEND_COMPANY_SETTINGS_MISSING',
         args.log,
@@ -89,10 +98,11 @@ export function generatePeppolDocumentOrResponse(args: {
   company: CompanySettings
   log: RouteLog
   requestId: string
-}): { ok: true; document: GeneratedPeppolInvoice } | { ok: false; response: NextResponse } {
+}): { ok: true; document: GeneratedPeppolInvoice } | RefusedPeppolResult {
   if (!args.invoice.customer) {
     return {
       ok: false,
+      code: 'VALIDATION_ERROR',
       response: privateNoStore(errorResponseFromCode('VALIDATION_ERROR', args.log, {
         requestId: args.requestId,
         messageSv: 'Fakturan saknar en kund som kan användas för Peppol-export.',
@@ -112,6 +122,8 @@ export function generatePeppolDocumentOrResponse(args: {
     const first = document.issues[0]
     return {
       ok: false,
+      code: 'VALIDATION_ERROR',
+      issues: document.issues.map((item) => item.code),
       response: privateNoStore(errorResponseFromCode('VALIDATION_ERROR', args.log, {
         requestId: args.requestId,
         messageSv: first?.messageSv,

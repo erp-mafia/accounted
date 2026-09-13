@@ -84,18 +84,3 @@ export const SourceSignalsSchema = z.object({
 })
 
 export type SourceSignals = z.infer<typeof SourceSignalsSchema>
-
-// Output of the full composer pipeline.
-export interface ComposedProfile {
-  companyId: string
-  horizontalAtoms: string[]
-  verticalAtoms: string[]
-  modifierAtoms: string[]
-  isMultiVertical: boolean
-  verificationQuestions: string[]
-  uncertaintyNotes: string[]
-  profileSummary: string
-  sourceSignals: SourceSignals
-  composerModel: string
-  composedAt: string
-}

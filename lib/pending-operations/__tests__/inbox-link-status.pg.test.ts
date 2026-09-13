@@ -182,22 +182,27 @@ describe('commitCreateVoucher inbox link (book-direct kvitto)', () => {
     expect((await readInbox(inboxId)).created_journal_entry_id).toBe(je1)
   })
 
-  it('UNIQUE(created_journal_entry_id) blocks two inbox rows pointing at the same verifikat', async () => {
+  it('two inbox rows may point at the same verifikat (no UNIQUE on created_journal_entry_id)', async () => {
+    // Invoice + payment confirmation on one verifikat. The UNIQUE that this
+    // test used to pin (migration 20260515090000) made the second stamp fail
+    // with 23505 and left the item "unprocessed" forever; migration
+    // 20260911120500 dropped it. The race guard is the null predicate above,
+    // which is per row and unaffected. Full proof lives in
+    // tests/pg/invoice-inbox-shared-voucher.pg.test.ts.
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const inboxA = await insertInboxItem({ userId, companyId })
     const inboxB = await insertInboxItem({ userId, companyId })
     const jeId = await insertDraftJournalEntry({ userId, companyId, fiscalPeriodId })
 
-    await getPool().query(
-      `UPDATE public.invoice_inbox_items SET created_journal_entry_id = $1 WHERE id = $2`,
-      [jeId, inboxA],
-    )
-    await expect(
-      getPool().query(
-        `UPDATE public.invoice_inbox_items SET created_journal_entry_id = $1 WHERE id = $2`,
-        [jeId, inboxB],
-      ),
-    ).rejects.toThrow(/unique|invoice_inbox_items_created_je/i)
+    for (const inboxId of [inboxA, inboxB]) {
+      const res = await getPool().query(
+        `UPDATE public.invoice_inbox_items SET created_journal_entry_id = $1 ${WHERE}`,
+        [jeId, inboxId, companyId],
+      )
+      expect(res.rows).toHaveLength(1)
+    }
+    expect((await readInbox(inboxA)).created_journal_entry_id).toBe(jeId)
+    expect((await readInbox(inboxB)).created_journal_entry_id).toBe(jeId)
   })
 })
 

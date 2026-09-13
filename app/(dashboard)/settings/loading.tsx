@@ -1,10 +1,11 @@
+import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
 
 export default function SettingsLoading() {
   return (
     <div className="space-y-8">
-      <Skeleton className="h-8 w-44" />
+      <PageHeader title={<Skeleton className="h-4 w-44" />} />
       <div className="grid gap-8 md:grid-cols-[220px_1fr]">
         <aside className="hidden space-y-2 md:block">
           {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (

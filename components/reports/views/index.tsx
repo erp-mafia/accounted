@@ -15,6 +15,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, FileText, Percent } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ReportBodyLoading } from '@/components/reports/ReportLoading'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { EmptyState } from '@/components/ui/empty-state'
 import { FyPicker } from '@/components/common/FyPicker'
@@ -29,6 +30,7 @@ import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import { PageHeader } from '@/components/ui/page-header'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
@@ -783,6 +785,8 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
   const [error, setError] = useState<string | null>(null)
   const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
   const latestVouchers = formatLatestVouchers(data?.latest_vouchers)
+  // Shell v2: the export menu and the latest-voucher line share one row.
+  const v2 = useShell() === 'v2'
 
   useEffect(() => {
     setLoading(true)
@@ -828,17 +832,19 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu
-        items={[
+      <div className={v2 ? 'flex flex-wrap items-center justify-between gap-3' : 'contents'}>
+        {latestVouchers && (
+          <p className="text-sm text-muted-foreground">
+            {t('latest_posted_vouchers')}: {latestVouchers}
+          </p>
+        )}
+        <ReportExportMenu
+          items={[
           { format: 'pdf', href: `/api/reports/resultatrapport/pdf?${reportQs}` },
           { format: 'xlsx', href: `/api/reports/resultatrapport/xlsx?${reportQs}` },
-        ]}
-      />
-      {latestVouchers && (
-        <p className="text-sm text-muted-foreground">
-          {t('latest_posted_vouchers')}: {latestVouchers}
-        </p>
-      )}
+          ]}
+        />
+      </div>
 
       <Card>
         <CardContent className="p-0">
@@ -955,6 +961,8 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
   const [error, setError] = useState<string | null>(null)
   const reportQs = reportQuery(periodId, dateRange)
   const latestVouchers = formatLatestVouchers(data?.latest_vouchers)
+  // Shell v2: the export menu and the latest-voucher line share one row.
+  const v2 = useShell() === 'v2'
 
   useEffect(() => {
     setLoading(true)
@@ -997,17 +1005,19 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu
-        items={[
+      <div className={v2 ? 'flex flex-wrap items-center justify-between gap-3' : 'contents'}>
+        {latestVouchers && (
+          <p className="text-sm text-muted-foreground">
+            {t('latest_posted_vouchers')}: {latestVouchers}
+          </p>
+        )}
+        <ReportExportMenu
+          items={[
           { format: 'pdf', href: `/api/reports/balansrapport/pdf?${reportQs}` },
           { format: 'xlsx', href: `/api/reports/balansrapport/xlsx?${reportQs}` },
-        ]}
-      />
-      {latestVouchers && (
-        <p className="text-sm text-muted-foreground">
-          {t('latest_posted_vouchers')}: {latestVouchers}
-        </p>
-      )}
+          ]}
+        />
+      </div>
 
       <Card>
         <CardContent className="p-0">
@@ -1562,7 +1572,7 @@ function VatStepper({
 
   return (
     <div
-      className="mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
+      className="report-narrow mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
       role="tablist"
       aria-label="Momsdeklarationens steg"
     >
@@ -2015,12 +2025,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
     return (
       <div className="space-y-8">
         {bareHeader}
-        <Card>
-          <CardContent className="p-6 space-y-4">
-            <Skeleton className="h-5 w-32" />
-            <Skeleton className="h-64" />
-          </CardContent>
-        </Card>
+        <ReportBodyLoading />
       </div>
     )
   }
@@ -2138,16 +2143,17 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   return (
     <VatDrillContext.Provider value={{ fiscalPeriodId: isYearly ? fiscalPeriodId : undefined }}>
     <div className="space-y-8">
-      {/* Standalone page: the title row carries the primary action (locked
-          convention 9), so Exportera sits beside the H1 and the period chips
-          get their own row below. XML and PDF live in "Lämna in": they are
-          filing artifacts, not report exports. */}
+      {/* Standalone page: Exportera sits beside the H1 as a secondary
+          control. The primary action belongs to the step in front of the
+          person (Korrigera alla, Bokför momsen, Lämna in), not to the
+          spreadsheet (Jakob, 2026-09-09). XML and PDF live in "Lämna in":
+          they are filing artifacts, not report exports. */}
       {pageTitle && (
         <PageHeader
           title={pageTitle}
           action={
             <ReportExportMenu
-              variant="default"
+              variant="outline"
               items={[
                 { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
               ]}
@@ -2198,7 +2204,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
             )}
             {!pageTitle && (
               <ReportExportMenu
-                variant="default"
+                variant="outline"
                 items={[
                   { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
                 ]}
@@ -2218,14 +2224,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
         </Card>
       )}
 
-      {!error && (awaitingFiscalPeriod || (loading && !data)) && (
-        <Card>
-          <CardContent className="p-6 space-y-4">
-            <Skeleton className="h-5 w-48" />
-            <Skeleton className="h-64" />
-          </CardContent>
-        </Card>
-      )}
+      {!error && (awaitingFiscalPeriod || (loading && !data)) && <ReportBodyLoading />}
 
       {data && !awaitingFiscalPeriod && (
         <div
@@ -2251,7 +2250,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           />
 
           {activeStep === 1 && (
-            <section className="mx-auto max-w-3xl space-y-3">
+            <section className="report-narrow mx-auto max-w-3xl space-y-3">
               <VatChecksCard
               checks={checks}
               periodType={periodType}
@@ -2270,7 +2269,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
 
           {activeStep === 2 && (
             <section className="space-y-3">
-              <div className="mx-auto max-w-2xl">
+              <div className="report-narrow mx-auto max-w-2xl">
             <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
               <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Momsdeklaration · {data.period.start} till {data.period.end}
@@ -2466,7 +2465,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           )}
 
           {activeStep === 3 && (
-            <section className="mx-auto max-w-3xl space-y-3">
+            <section className="report-narrow mx-auto max-w-3xl space-y-3">
               <VatBookingCard
               checksBlocked={checksBlocked}
               proposal={settlement.proposal}
@@ -3015,27 +3014,30 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
   return (
     <div className="space-y-4">
       <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, dateRange, dimensionFilter)}` }]} />
-      {/* Account range filter: flat toolbar on the panel, no box */}
-      <div className="flex flex-wrap items-end gap-4">
+      {/* Account range filter: flat toolbar on the panel, no box. In v2 the
+          labels go (field-label) and the placeholders say what the fields are. */}
+      <div className="flex flex-wrap items-end gap-3">
         <div>
-          <Label htmlFor="gl-account-from">Konto från</Label>
+          <Label htmlFor="gl-account-from" className="field-label">Konto från</Label>
           <Input
             id="gl-account-from"
             type="text"
             value={accountFrom}
             onChange={(e) => setAccountFrom(e.target.value)}
-            placeholder="t.ex. 1510"
+            placeholder="Från konto"
+            aria-label="Konto från"
             className="mt-1 w-32"
           />
         </div>
         <div>
-          <Label htmlFor="gl-account-to">Konto till</Label>
+          <Label htmlFor="gl-account-to" className="field-label">Konto till</Label>
           <Input
             id="gl-account-to"
             type="text"
             value={accountTo}
             onChange={(e) => setAccountTo(e.target.value)}
-            placeholder="t.ex. 1519"
+            placeholder="Till konto"
+            aria-label="Konto till"
             className="mt-1 w-32"
           />
         </div>

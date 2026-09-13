@@ -9,7 +9,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till kollektivanställda (gruppkonto)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -20,7 +20,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Bruttolöner (före skatt) till kollektivanställda.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -31,7 +31,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till kollektivanställda',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -42,7 +42,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Vinstandelar till kollektivanställda',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -53,7 +53,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Lön växa-stöd kollektivanställda 10,21 %',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -64,7 +64,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avgångsvederlag till kollektivanställda',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -75,7 +75,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Bruttolöneavdrag, kollektivanställda',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -86,7 +86,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Upplupna löner och vinstandelar till kollektivanställda',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -97,7 +97,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till kollektivanställda (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -108,7 +108,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till kollektivanställda (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -119,7 +119,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Vinstandelar till kollektivanställda (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -130,7 +130,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avgångsvederlag till kollektivanställda (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -141,7 +141,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Bruttolöneavdrag, kollektivanställda (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -152,7 +152,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Upplupna löner och vinstandelar till kollektivanställda (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -163,7 +163,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till kollektivanställda för ej arbetad tid',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -174,7 +174,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Sjuklöner till kollektivanställda',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -185,7 +185,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Semesterlöner till kollektivanställda.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -196,7 +196,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Föräldraersättning till kollektivanställda',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -207,7 +207,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga löner till kollektivanställda för ej arbetad tid',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -218,7 +218,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Justering av skuld för intjänade semesterdagar som ännu inte tagits ut.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -229,7 +229,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till tjänstemän och företagsledare (gruppkonto)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -240,7 +240,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Bruttolöner till tjänstemän.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -251,7 +251,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till tjänstemän',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -262,7 +262,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Vinstandelar till tjänstemän',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -273,7 +273,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Lön växa-stöd tjänstemän 10,21 %',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -284,7 +284,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avgångsvederlag till tjänstemän',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -295,7 +295,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Bruttolöneavdrag, tjänstemän',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -306,7 +306,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Upplupna löner och vinstandelar till tjänstemän',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -317,7 +317,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -328,7 +328,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -339,7 +339,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Tantiem till företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -350,7 +350,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avgångsvederlag till företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -361,7 +361,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Bruttolöneavdrag, företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -372,7 +372,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Upplupna löner och tantiem till företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -383,7 +383,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till tjänstemän och ftgsledare (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -394,7 +394,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till tjänstemän och ftgsledare (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -405,7 +405,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Vinstandelar till tjänstemän och ftgsledare (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -416,7 +416,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avgångsvederlag till tjänstemän och ftgsledare (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -427,7 +427,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Bruttolöneavdrag, tjänstemän och ftgsledare (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -438,7 +438,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Upplupna löner och vinstandelar till tjänstemän och ftgsledare (utlandsanställda)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -449,7 +449,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Styrelsearvoden',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -460,7 +460,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Löner till tjänstemän och företagsledare för ej arbetad tid',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -471,7 +471,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Sjuklöner till tjänstemän',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -482,7 +482,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Sjuklöner till företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -493,7 +493,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Föräldraersättning till tjänstemän',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -504,7 +504,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Föräldraersättning till företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -515,7 +515,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Semesterlöner till tjänstemän',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -526,7 +526,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Semesterlöner till företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -537,7 +537,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga löner till tjänstemän för ej arbetad tid',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -548,7 +548,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga löner till företagsledare för ej arbetad tid',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -559,7 +559,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Justering av semesterlöneskuld för tjänstemän.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -570,7 +570,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förändring av semesterlöneskuld till tjänstemän',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -581,7 +581,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förändring av semesterlöneskuld till företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -592,7 +592,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnadsersättningar och förmåner (gruppkonto)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -603,7 +603,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnadsersättningar till anställda, t.ex. milersättning och traktamente.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -614,7 +614,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Ersättningar för sammanträden m.m.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -625,7 +625,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Ersättningar för förslagsverksamhet och uppfinningar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -636,7 +636,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Ersättningar för/bidrag till bostadskostnader',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -647,7 +647,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Ersättningar för/bidrag till måltidskostnader',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -658,7 +658,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Ersättningar för/bidrag till resor till och från arbetsplatsen',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -669,7 +669,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Ersättningar för/bidrag till arbetskläder',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -680,7 +680,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Ersättningar för/bidrag till arbetsmaterial och arbetsverktyg',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -691,7 +691,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Felräkningspengar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -702,7 +702,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga kontanta extraersättningar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -713,7 +713,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Traktamenten vid tjänsteresa',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -724,7 +724,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Skattefria traktamenten, Sverige',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -735,7 +735,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Skattepliktiga traktamenten, Sverige',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -746,7 +746,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Skattefria traktamenten, utlandet',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -757,7 +757,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Skattepliktiga traktamenten, utlandet',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -768,7 +768,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Bilersättningar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -779,7 +779,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Skattefria bilersättningar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -790,7 +790,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Skattepliktiga bilersättningar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -801,7 +801,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Ersättning för trängselskatt, skattefri',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -812,7 +812,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Ersättningar för föreskrivna arbetskläder',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -823,7 +823,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Representationsersättningar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -834,7 +834,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnader för förmåner till anställda',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -845,7 +845,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnader för fri bostad',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -856,7 +856,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnader för fria eller subventionerade måltider',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -867,7 +867,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnader för fria resor till och från arbetsplatsen',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -878,7 +878,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnader för fria eller subventionerade arbetskläder',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -889,7 +889,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnader för fri bil',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -900,7 +900,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Subventionerad ränta',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -911,7 +911,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnader för lånedatorer',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -922,7 +922,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Anställdas ersättning för erhållna förmåner',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -933,7 +933,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga kostnader för förmåner',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -944,7 +944,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga kostnadsersättningar och förmåner',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -955,7 +955,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnad för trängselskatteförmån',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -966,7 +966,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnad för förmån av hushållsnära tjänster',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -977,7 +977,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Pensionskostnader (gruppkonto)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -988,7 +988,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Premiebetalningar för tjänstepension till anställda.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -999,7 +999,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Premier för kollektiva pensionsförsäkringar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1010,7 +1010,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Premier för individuella pensionsförsäkringar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1021,7 +1021,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förändring av pensionsskuld',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1032,7 +1032,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avdrag för räntedel i pensionskostnad',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1043,7 +1043,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förändring av pensionsstiftelsekapital',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1054,7 +1054,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Överföring av medel till pensionsstiftelse',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1065,7 +1065,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Gottgörelse från pensionsstiftelse',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1076,7 +1076,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Pensionsutbetalningar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1087,7 +1087,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Pensionsutbetalningar till f.d. kollektivanställda',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1098,7 +1098,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Pensionsutbetalningar till f.d. tjänstemän',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1109,7 +1109,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Pensionsutbetalningar till f.d. företagsledare',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1120,7 +1120,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förvaltnings- och kreditförsäkringsavgifter',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1131,7 +1131,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga pensionskostnader',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1142,7 +1142,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Sociala och andra avgifter enligt lag och avtal (gruppkonto)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1153,7 +1153,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Lagstadgade sociala avgifter (ca 31,42% av bruttolonen) till Skatteverket.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1164,7 +1164,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Arbetsgivaravgifter för löner och ersättningar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1175,7 +1175,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Arbetsgivaravgifter för förmånsvärden',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1186,7 +1186,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Arbetsgivaravgifter på skattepliktiga kostnadsersättningar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1197,7 +1197,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Arbetsgivaravgifter på arvoden',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1208,7 +1208,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Arbetsgivaravgifter på bruttolöneavdrag m.m.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1219,7 +1219,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Beräknade sociala avgifter på upplupna semesterlöner och andra löneskulder.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1230,7 +1230,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Särskild löneskatt',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1241,7 +1241,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Särskild löneskatt för vissa försäkringsersättningar m.m.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1252,7 +1252,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Särskild löneskatt pensionskostnader, deklarationspost',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1263,7 +1263,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Särskild löneskatt på pensionskostnader (24,26%).',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1274,7 +1274,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avkastningsskatt på pensionsmedel',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1285,7 +1285,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avkastningsskatt 15 % försäkringsföretag m.fl. samt avsatt till pensioner',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1296,7 +1296,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avkastningsskatt 15 % utländska pensionsförsäkringar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1307,7 +1307,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avkastningsskatt 30 % utländska försäkringsföretag m.fl.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1318,7 +1318,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avkastningsskatt 30 % utländska kapitalförsäkringar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1329,7 +1329,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Premier för arbetsmarknadsförsäkringar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1340,7 +1340,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Arbetsmarknadsförsäkringar',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1351,7 +1351,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Arbetsmarknadsförsäkringar pensionsförsäkringspremier, deklarationspost',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1362,7 +1362,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Gruppförsäkringspremier',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1373,7 +1373,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Grupplivförsäkringspremier',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1384,7 +1384,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Gruppsjukförsäkringspremier',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1395,7 +1395,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Gruppolycksfallsförsäkringspremier',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1406,7 +1406,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga gruppförsäkringspremier',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1417,7 +1417,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga sociala och andra avgifter enligt lag och avtal',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1428,7 +1428,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga personalkostnader (gruppkonto)',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1439,7 +1439,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Kostnader för utbildning, kurser och konferenser för anställda.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1450,7 +1450,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Sjuk- och hälsovård',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1461,7 +1461,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Sjuk- och hälsovård, avdragsgill',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1472,7 +1472,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Sjuk- och hälsovård, ej avdragsgill',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1483,7 +1483,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Sjukvårdsförsäkring, ej avdragsgill',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1494,7 +1494,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Personalrepresentation',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1505,7 +1505,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avdragsgill intern representation, t.ex. personalfester och jullunch.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1516,7 +1516,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Personalrepresentation, ej avdragsgill',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1527,7 +1527,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Sjuklöneförsäkring',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1538,7 +1538,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förändring av personalstiftelsekapital',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1549,7 +1549,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avsättning till personalstiftelse',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1560,7 +1560,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Gottgörelse från personalstiftelse',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1571,7 +1571,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Diverse personalkostnader som inte ryms i andra underkonton.',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1582,7 +1582,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Personalrekrytering',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1593,7 +1593,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Begravningshjälp',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1604,7 +1604,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Fritidsverksamhet',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1615,7 +1615,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga personalkostnader',
-    sru_code: '7322',
+    sru_code: '7514',
     k2_excluded: false,
   },
   {
@@ -1626,7 +1626,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Nedskrivningar av immateriella anläggningstillgångar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1637,7 +1637,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Nedskrivningar av byggnader och mark',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1648,7 +1648,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Nedskrivningar av maskiner respektive inventarier',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1659,7 +1659,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Nedskrivningar av maskiner och andra tekniska anläggningar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1670,7 +1670,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Nedskrivningar av inventarier, verktyg och installationer',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1681,7 +1681,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Nedskrivningar av övriga materiella anläggningstillgångar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1692,7 +1692,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Nedskrivningar av vissa omsättningstillgångar',
-    sru_code: '7325',
+    sru_code: '7516',
     k2_excluded: false,
   },
   {
@@ -1703,7 +1703,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Återföring av nedskrivningar av immateriella anläggningstillgångar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1714,7 +1714,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Återföring av nedskrivningar av byggnader och mark',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1725,7 +1725,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Återföring av nedskrivningar av maskiner respektive inventarier',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1736,7 +1736,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Återföring av nedskrivningar av maskiner och andra tekniska anläggningar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1747,7 +1747,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Återföring av nedskrivningar av inventarier, verktyg och installationer',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1758,7 +1758,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Återföring av nedskrivningar av övriga materiella anläggningstillgångar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1769,7 +1769,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'credit',
     description: 'Återföring av nedskrivningar av vissa omsättningstillgångar',
-    sru_code: '7325',
+    sru_code: '7516',
     k2_excluded: false,
   },
   {
@@ -1780,7 +1780,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Planmässig avskrivning av goodwill, patent och andra immateriella tillgångar.',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1791,7 +1791,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på balanserade utgifter',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1802,7 +1802,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på koncessioner m.m.',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1813,7 +1813,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på patent',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1824,7 +1824,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på licenser',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1835,7 +1835,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på varumärken',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1846,7 +1846,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på hyresrätter',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1857,7 +1857,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på goodwill',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1868,7 +1868,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på övriga immateriella anläggningstillgångar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1879,7 +1879,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Årlig värdeminskning på byggnader. Typiskt 2-5% per är beroende på byggnadstyp.',
-    sru_code: '7324',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1890,7 +1890,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på byggnader',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1901,7 +1901,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på markanläggningar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1912,7 +1912,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på övriga byggnader',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1923,7 +1923,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på maskiner respektive inventarier',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1934,7 +1934,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på maskiner och andra tekniska anläggningar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1945,7 +1945,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Årlig värdeminskning på inventarier, maskiner och verktyg.',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1956,7 +1956,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på leasade tillgångar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1967,7 +1967,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på övriga materiella anläggningstillgångar',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1978,7 +1978,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Avskrivningar på förbättringsutgifter på annans fastighet',
-    sru_code: '7325',
+    sru_code: '7515',
     k2_excluded: false,
   },
   {
@@ -1989,7 +1989,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Orealiserade positiva/negativa värdeförändringar på säkringsinstrument',
-    sru_code: '7360',
+    sru_code: '7517',
     k2_excluded: true,
   },
   {
@@ -2000,7 +2000,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förluster som uppstår vid valutaväxling eller betalningar i utländsk valuta.',
-    sru_code: '7360',
+    sru_code: '7517',
     k2_excluded: false,
   },
   {
@@ -2011,7 +2011,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förlust vid avyttring av immateriella och materiella anläggningstillgångar.',
-    sru_code: '7321',
+    sru_code: '7517',
     k2_excluded: false,
   },
   {
@@ -2022,7 +2022,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förlust vid avyttring av immateriella anläggningstillgångar',
-    sru_code: '7360',
+    sru_code: '7517',
     k2_excluded: false,
   },
   {
@@ -2033,7 +2033,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förlust vid avyttring av byggnader och mark',
-    sru_code: '7360',
+    sru_code: '7517',
     k2_excluded: false,
   },
   {
@@ -2044,7 +2044,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Förlust vid avyttring av maskiner och inventarier',
-    sru_code: '7360',
+    sru_code: '7517',
     k2_excluded: false,
   },
   {
@@ -2055,7 +2055,7 @@ export const CLASS_7_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'expense',
     normal_balance: 'debit',
     description: 'Övriga rörelsekostnader',
-    sru_code: '7360',
+    sru_code: '7517',
     k2_excluded: false,
   },
 ]

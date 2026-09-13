@@ -121,26 +121,35 @@ describe('isMembershipDormant', () => {
 })
 
 describe('getMultiUserState', () => {
-  it('is entitled on self-hosted without touching the DB', async () => {
+  // The resolution paths below only run with the seat gate armed; the
+  // default (off, issue #2494) is pinned in the isMultiUserEnforced suite.
+  beforeEach(() => {
+    vi.stubEnv('MULTI_USER_SEAT_GATE', 'true')
+  })
+
+  it('is entitled on self-hosted without touching the DB, even with the gate armed', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
     const supabase = makeSupabase({}) // would be frozen if the gate ran
     expect((await getMultiUserState(supabase, COMPANY)).state).toBe('entitled')
   })
 
-  it('is entitled under the dev bypass', async () => {
-    vi.stubEnv('NODE_ENV', 'development')
-    const supabase = makeSupabase({})
+  it('is entitled without touching the DB when the gate is off (the default)', async () => {
+    vi.stubEnv('MULTI_USER_SEAT_GATE', '')
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: { data: [] }, // would read as frozen
+    })
     expect((await getMultiUserState(supabase, COMPANY)).state).toBe('entitled')
   })
 
-  it('FORCE_PAYWALL activates the real gate in development', async () => {
-    vi.stubEnv('NODE_ENV', 'development')
+  it('FORCE_PAYWALL alone does not arm the seat gate', async () => {
+    vi.stubEnv('MULTI_USER_SEAT_GATE', '')
     vi.stubEnv('FORCE_PAYWALL', 'true')
     const supabase = makeSupabase({
       companies: { data: { team_id: null } },
       capability_grants: { data: [] },
     })
-    expect((await getMultiUserState(supabase, COMPANY)).state).toBe('frozen')
+    expect((await getMultiUserState(supabase, COMPANY)).state).toBe('entitled')
   })
 
   it('is frozen for a non-UUID company id', async () => {
@@ -215,6 +224,19 @@ describe('getMultiUserState', () => {
 })
 
 describe('isMembershipActive', () => {
+  beforeEach(() => {
+    vi.stubEnv('MULTI_USER_SEAT_GATE', 'true')
+  })
+
+  it('non-owner in a company with no grants stays active when the gate is off (the default)', async () => {
+    vi.stubEnv('MULTI_USER_SEAT_GATE', '')
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: { data: [] },
+    })
+    expect(await isMembershipActive(supabase, COMPANY, 'member')).toBe(true)
+  })
+
   it('owner passes without a grants read', async () => {
     const supabase = makeSupabase({}) // would be frozen if consulted
     expect(await isMembershipActive(supabase, COMPANY, 'owner')).toBe(true)
@@ -238,11 +260,20 @@ describe('isMembershipActive', () => {
 })
 
 describe('isMultiUserEnforced', () => {
-  it('is enforced in the test environment (NODE_ENV=test, hosted)', () => {
+  it('is OFF by default on hosted (issue #2494: a trial end freezes nobody)', () => {
+    expect(isMultiUserEnforced()).toBe(false)
+  })
+  it('FORCE_PAYWALL does not arm it', () => {
+    vi.stubEnv('FORCE_PAYWALL', 'true')
+    expect(isMultiUserEnforced()).toBe(false)
+  })
+  it('MULTI_USER_SEAT_GATE=true arms it on hosted', () => {
+    vi.stubEnv('MULTI_USER_SEAT_GATE', 'true')
     expect(isMultiUserEnforced()).toBe(true)
   })
-  it('is not enforced on self-hosted', () => {
+  it('is never enforced on self-hosted, even when armed', () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    vi.stubEnv('MULTI_USER_SEAT_GATE', 'true')
     expect(isMultiUserEnforced()).toBe(false)
   })
 })

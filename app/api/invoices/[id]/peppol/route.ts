@@ -5,7 +5,7 @@ import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { ensureInitialized } from '@/lib/init'
-import { stagePeppolDelivery } from '@/lib/invoices/peppol-delivery'
+import { isFiscalPeriodMissingError, stagePeppolDelivery } from '@/lib/invoices/peppol-delivery'
 import { loadPeppolDocument } from '@/lib/invoices/peppol-document'
 import { getPeppolTransportAvailability } from '@/lib/invoices/peppol-transport'
 
@@ -83,6 +83,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         },
       }, { status: 201 }))
     } catch (err) {
+      if (isFiscalPeriodMissingError(err)) {
+        return privateNoStore(errorResponseFromCode('PEPPOL_FISCAL_PERIOD_MISSING', log, {
+          requestId,
+          details: { invoice_date: loaded.invoice.invoice_date },
+        }))
+      }
       return privateNoStore(errorResponse(err, log, { requestId }))
     }
   },

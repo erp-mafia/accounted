@@ -72,7 +72,7 @@ import {
   generateFullArchive,
   generateBaseDataArchive,
 } from '@/lib/reports/full-archive-export'
-import type { GoogleDriveConnection, GoogleDriveLastSync } from '../../types'
+import type { CloudConnection, CloudLastSync } from '../../types'
 
 const mockRefreshAccessToken = vi.mocked(refreshAccessToken)
 const mockEnsureFolder = vi.mocked(ensureFolder)
@@ -83,8 +83,8 @@ const mockGenerateFullArchive = vi.mocked(generateFullArchive)
 const mockGenerateBaseDataArchive = vi.mocked(generateBaseDataArchive)
 
 function makeConnection(
-  overrides: Partial<GoogleDriveConnection> = {}
-): GoogleDriveConnection {
+  overrides: Partial<CloudConnection> = {}
+): CloudConnection {
   return {
     refresh_token_encrypted: 'encrypted-token',
     account_email: 'user@example.com',
@@ -100,8 +100,8 @@ const ENTRY = { id: 'e-1', fiscal_period_id: 'p-2024', updated_at: '2024-06-01T0
 const AUDIT_AT = '2026-07-01T00:00:00Z'
 
 interface MockData {
-  connection?: GoogleDriveConnection | null
-  lastSync?: GoogleDriveLastSync | null
+  connection?: CloudConnection | null
+  lastSync?: CloudLastSync | null
   periods?: (typeof PERIOD)[]
   entries?: (typeof ENTRY)[]
   docs?: {
@@ -195,7 +195,7 @@ const PERIOD_FP = `v${ARCHIVE_FORMAT_VERSION}|1|${ENTRY.updated_at}|0||docs:1`
 const BASE_FP = `v${ARCHIVE_FORMAT_VERSION}|${AUDIT_AT}|0||docs:1`
 const README_FP = `v${ARCHIVE_FORMAT_VERSION}|${sha256('README TEXT').slice(0, 16)}`
 
-function upToDateLastSync(): GoogleDriveLastSync {
+function upToDateLastSync(): CloudLastSync {
   return {
     at: '2026-07-11T03:00:00.000Z',
     folder_id: 'company-1',
@@ -351,7 +351,7 @@ describe('performSync per-fiscal-year layout', () => {
     const lastSyncSaves = upsert.mock.calls.filter(([p]) => p.key === LAST_SYNC_KEY)
     // Progressive persistence: one snapshot per upload + the final one.
     expect(lastSyncSaves.length).toBe(4)
-    const final = lastSyncSaves[lastSyncSaves.length - 1][0].value as GoogleDriveLastSync
+    const final = lastSyncSaves[lastSyncSaves.length - 1][0].value as CloudLastSync
     expect(final.files).toHaveLength(3)
     expect(final.total_size_bytes).toBe(8 + 16 + Buffer.from('README TEXT').length)
     const periodFile = final.files!.find((f) => f.kind === 'period')!
@@ -484,7 +484,7 @@ describe('performSync size limits and document fallback', () => {
       expect.objectContaining({ include_documents: true })
     )
     const lastSyncSaves = upsert.mock.calls.filter(([p]) => p.key === LAST_SYNC_KEY)
-    const final = lastSyncSaves[lastSyncSaves.length - 1][0].value as GoogleDriveLastSync
+    const final = lastSyncSaves[lastSyncSaves.length - 1][0].value as CloudLastSync
     const periodFile = final.files!.find((f) => f.kind === 'period')!
     expect(periodFile.included_documents).toBe(false)
     expect(periodFile.fingerprint).toContain('docs:0')

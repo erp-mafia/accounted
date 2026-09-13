@@ -619,6 +619,16 @@ export function AccountPickerDialog({
                 Tidigare bortvald: markera för att synka i detta bolag
               </p>
             )}
+            {/* Known card sub-account that mirrors the main account (Svea's
+                BOKIO_Debit_Business): every purchase already arrives on the
+                main account, so syncing this one only adds an opposite-sign
+                "Okänd transaktion" twin per purchase (issue #2565). Unchecked
+                by default, still selectable. */}
+            {!account.claimed_by_company_id && account.mirror_card_account && (
+              <p className="text-xs text-muted-foreground">
+                Kortkonto som speglar huvudkontot: köpen finns redan där. Hämtas inte om du inte markerar det.
+              </p>
+            )}
           </div>
           {account.balance !== undefined && (
             <p className="text-sm font-medium tabular-nums shrink-0">

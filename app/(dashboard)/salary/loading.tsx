@@ -1,13 +1,11 @@
+import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 
 export default function SalaryLoading() {
   return (
     <div className="space-y-8">
       {/* Title (24px) + single "Starta körning" action (pill) */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-9 w-40 rounded-full" />
-      </div>
+      <PageHeader title={<Skeleton className="h-4 w-32" />} action={<Skeleton className="h-9 w-40 rounded-full" />} />
 
       {/* Borderless table of salary runs: header row + single-line rows */}
       <div>

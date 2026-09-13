@@ -62,6 +62,20 @@ const EXAMPLE_SIGNOFF = {
   reopen_reason: null,
 }
 
+// Documents what the list handler reads (it parses the two values itself).
+const SignoffListQuery = z.object({
+  limit: z
+    .number()
+    .int()
+    .max(200)
+    .optional()
+    .describe('Maximum number of sign-offs, at most 200 (default 50).'),
+  include_reopened: z
+    .string()
+    .optional()
+    .describe('true or 1 also returns reopened (undone) sign-offs with their reopen stamp. Default: active only.'),
+})
+
 registerEndpoint({
   operation: 'reconciliation.accounts.signoff.list',
   method: 'GET',
@@ -82,6 +96,7 @@ registerEndpoint({
   idempotent: true,
   reversible: true,
   dryRunSupported: false,
+  request: { query: SignoffListQuery },
   response: { success: dataEnvelope(SignoffListResponse) },
 })
 

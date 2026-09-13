@@ -21,7 +21,7 @@ import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
-import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
+import TemplateApplyButton from '@/components/bookkeeping/TemplateApplyButton'
 import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { sourceTypeForTemplateCategory } from '@/lib/bookkeeping/template-source-type'
 import { TemplateForm } from '@/components/settings/TemplateForm'
@@ -1771,7 +1771,7 @@ export default function JournalEntryForm({
             <Plus className="h-3 w-3 mr-1" />
             {t('add_line')}
           </Button>
-          <BookingTemplatePicker
+          <TemplateApplyButton
             onApply={handleTemplateApply}
             entityType={company?.entity_type}
           />
@@ -1979,7 +1979,7 @@ export default function JournalEntryForm({
             <Plus className="h-3 w-3 mr-1" />
             {t('add_line')}
           </Button>
-          <BookingTemplatePicker
+          <TemplateApplyButton
             onApply={handleTemplateApply}
             entityType={company?.entity_type}
           />

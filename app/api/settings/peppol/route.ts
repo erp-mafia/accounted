@@ -5,10 +5,15 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { ensureInitialized } from '@/lib/init'
 import { getPeppolAccess, getPeppolAccessSummary } from '@/lib/invoices/peppol-access'
 import {
+  canRetryPeppolRegistration,
   deregisterCompanyFromPeppolReceiving,
+  describePeppolParticipantEligibility,
   getPeppolRegistration,
+  isStalePeppolPending,
   registerCompanyForPeppolReceiving,
+  type PeppolParticipantEligibility,
   type PeppolRegistrationRow,
+  type PeppolTransportVerdict,
 } from '@/lib/invoices/peppol-registration'
 import {
   getPeppolTransport,
@@ -21,6 +26,17 @@ import type { CompanySettings } from '@/types'
 
 ensureInitialized()
 
+// The connector transport waits up to 60 s for the hosted access point; the
+// platform default would cut the registration off mid-call and leave a
+// pending row behind.
+export const maxDuration = 90
+
+type ParticipantSettings = Pick<CompanySettings, 'org_number' | 'company_name' | 'vat_number' | 'city' | 'country'>
+
+/**
+ * Minimized row for the settings page. `last_error` stays server-side: it is
+ * raw provider prose for ops; the page translates `last_error_code` instead.
+ */
 function registrationPayload(row: PeppolRegistrationRow | null) {
   if (!row) return null
   return {
@@ -31,9 +47,26 @@ function registrationPayload(row: PeppolRegistrationRow | null) {
     status: row.status,
     registered_at: row.registered_at,
     deregistered_at: row.deregistered_at,
-    last_error: row.last_error,
+    last_error_code: row.last_error_code,
+    stale_pending: isStalePeppolPending(row),
+    // Decided here, next to the registry: the page never guesses whether a
+    // stored code is worth retrying.
+    can_retry: canRetryPeppolRegistration(row),
     updated_at: row.updated_at,
   }
+}
+
+/** Response context for a transport verdict: the hosted detail and code travel in `details`, the pair also goes to the log. */
+function verdictContext(result: PeppolTransportVerdict, requestId: string | undefined) {
+  return {
+    requestId,
+    reason: [result.reason, result.detail].filter(Boolean).join(': ') || undefined,
+    details: { reason: result.detail, code: result.reason },
+  }
+}
+
+function isTransportVerdict(result: { ok: false; code: string }): result is PeppolTransportVerdict {
+  return result.code === 'PEPPOL_REGISTRATION_REJECTED' || result.code === 'PEPPOL_REGISTRATION_FAILED'
 }
 
 function resolveTransport(): { transport: PeppolTransport; provider: string } | null {
@@ -53,12 +86,27 @@ export const GET = withRouteContext(
       const registration = resolved
         ? await getPeppolRegistration({ supabase, companyId, provider: resolved.provider })
         : null
+      // Eligibility is answered up front so a company that cannot be
+      // registered (personnummer, missing org number) sees why before it
+      // asks the operators for a receiving slot.
+      const { data: settings, error: settingsError } = await supabase
+        .from('company_settings')
+        .select('org_number, company_name, vat_number, city, country')
+        .eq('company_id', companyId)
+        .maybeSingle()
+      // A failed read is a server error, never "no organisation number":
+      // that verdict would hide the receiving offer from an eligible company.
+      if (settingsError) throw new Error(`Failed to read company settings: ${settingsError.message}`)
+      const participant: PeppolParticipantEligibility = settings
+        ? describePeppolParticipantEligibility(settings as unknown as ParticipantSettings)
+        : { ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' }
       const access = await getPeppolAccessSummary({ supabase, service: createServiceClient(), companyId })
       return privateNoStore(NextResponse.json({
         data: {
           transport: availability,
           receiving_supported: !!resolved?.transport.registerRecipient,
           access,
+          participant,
           registration: registrationPayload(registration),
         },
       }))
@@ -103,13 +151,14 @@ export const POST = withRouteContext(
         companyId,
         userId: user.id,
         transport: resolved.transport,
-        settings: settings as Pick<CompanySettings, 'org_number' | 'company_name' | 'vat_number' | 'city' | 'country'>,
+        settings: settings as unknown as ParticipantSettings,
       })
       if (!result.ok) {
-        return privateNoStore(errorResponseFromCode(result.code, log, {
-          requestId,
-          ...('detail' in result && result.detail ? { details: { reason: result.detail } } : {}),
-        }))
+        return privateNoStore(errorResponseFromCode(
+          result.code,
+          log,
+          isTransportVerdict(result) ? verdictContext(result, requestId) : { requestId },
+        ))
       }
       return privateNoStore(NextResponse.json({
         data: { registration: registrationPayload(result.registration) },
@@ -136,10 +185,11 @@ export const DELETE = withRouteContext(
         transport: resolved.transport,
       })
       if (!result.ok) {
-        return privateNoStore(errorResponseFromCode(result.code, log, {
-          requestId,
-          ...('detail' in result && result.detail ? { details: { reason: result.detail } } : {}),
-        }))
+        return privateNoStore(errorResponseFromCode(
+          result.code,
+          log,
+          isTransportVerdict(result) ? verdictContext(result, requestId) : { requestId },
+        ))
       }
       return privateNoStore(NextResponse.json({
         data: { registration: registrationPayload(result.registration) },

@@ -2,24 +2,15 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useLocale } from 'next-intl'
-import { Brain, Loader2, Pin, PinOff, Pencil, Plus, RotateCcw, Trash2, X } from 'lucide-react'
+import { Brain, Loader2, Pin, Plus } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
-import {
-  SettingsGroup,
-  SettingsReveal,
-  SettingsRow,
-  SettingsRowEnd,
-  SettingsRowNote,
-  SettingsSeg,
-  SettingsSelect,
-  SettingsTextarea,
-} from '@/components/settings/SettingsRows'
+import { SettingsSeg, SettingsSelect, SettingsTextarea } from '@/components/settings/SettingsRows'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatDateLong } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -239,123 +230,94 @@ export function AgentMemoryPanel() {
     setEditingId(null)
   }
 
-  // The view wrapper in AssistantSettingsContent already provides the gap
-  // under the segmented control, so the group starts flush (pt-0).
+  // One clean list, the way every other v2 register reads: a toolbar (the
+  // kind filter, the hidden toggle, the add button), a count line, then rows
+  // of content with their meta beneath and quiet actions that show on hover.
   return (
-    <SettingsGroup
-      label="Vad min assistent kommer ihåg"
-      help={
-        <>
-          Bokföringsassistenten använder dessa anteckningar för att ge dig rätt råd. Fäst det som
-          alltid ska vara med, redigera fel, eller dölj det som inte längre stämmer. Upp till 30
-          minnen ingår i samtal per tur.
-        </>
-      }
-      className="pt-0 first:pt-0"
-    >
-      {/* Toolbar row: kind filter + the add-memory entry point. */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-1 py-3">
-        <SettingsSeg
-          value={kindFilter}
-          onChange={setKindFilter}
-          options={KIND_FILTER}
-          aria-label="Filtrera minnen"
-        />
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
+        <button
+          type="button"
+          onClick={() => setIncludeDismissed((v) => !v)}
+          aria-pressed={includeDismissed}
+          className={cn(QUIET_LINK_CLASS, 'ml-1 text-[12.5px]')}
+        >
+          {includeDismissed ? 'Dölj dolda' : 'Visa dolda'}
+        </button>
+        <HelpPopover className="shrink-0">
+          Bokföringsassistenten använder dessa anteckningar för att ge dig rätt råd. Fäst det som alltid
+          ska vara med, redigera fel, eller dölj det som inte längre stämmer. Upp till 30 minnen ingår i
+          samtal per tur.
+        </HelpPopover>
         {canWrite && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowAdd((v) => !v)}
-            disabled={adding}
-          >
-            <Plus className="mr-2 h-4 w-4" />
+          <Button size="sm" className="ml-auto" onClick={() => setShowAdd((v) => !v)} disabled={adding}>
+            <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
             Lägg till minne
           </Button>
         )}
       </div>
 
-      {canWrite && (
-        <SettingsReveal open={showAdd}>
-          <div className="space-y-3 py-3">
-            <SettingsTextarea
-              value={newContent}
-              onChange={(e) => setNewContent(e.target.value)}
-              placeholder="T.ex. Vi använder Stripe för B2C-betalningar; utbetalningar landar på 1930 var måndag."
-              rows={3}
-              maxLength={2000}
-              aria-label="Nytt minne"
-              className="w-full border-border"
-            />
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Typ</span>
-                <SettingsSelect
-                  value={newKind}
-                  onChange={(e) => setNewKind(e.target.value as Kind)}
-                  aria-label="Typ"
-                >
-                  {(Object.keys(KIND_LABEL) as Kind[]).map((k) => (
-                    <option key={k} value={k}>{KIND_LABEL[k]}</option>
-                  ))}
-                </SettingsSelect>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => { setShowAdd(false); setNewContent('') }}>
-                  Avbryt
-                </Button>
-                <Button size="sm" onClick={addMemory} disabled={adding || newContent.trim().length < 2}>
-                  {adding ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Spara
-                </Button>
-              </div>
+      {canWrite && showAdd && (
+        <div className="space-y-3 border-b border-border pb-4">
+          <SettingsTextarea
+            value={newContent}
+            onChange={(e) => setNewContent(e.target.value)}
+            placeholder="T.ex. Vi använder Stripe för B2C-betalningar; utbetalningar landar på 1930 var måndag."
+            rows={3}
+            maxLength={2000}
+            autoFocus
+            aria-label="Nytt minne"
+            className="w-full border-border"
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Typ</span>
+              <SettingsSelect value={newKind} onChange={(e) => setNewKind(e.target.value as Kind)} aria-label="Typ">
+                {(Object.keys(KIND_LABEL) as Kind[]).map((k) => (
+                  <option key={k} value={k}>{KIND_LABEL[k]}</option>
+                ))}
+              </SettingsSelect>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => { setShowAdd(false); setNewContent('') }}>
+                Avbryt
+              </Button>
+              <Button size="sm" onClick={addMemory} disabled={adding || newContent.trim().length < 2}>
+                {adding ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Spara
+              </Button>
             </div>
           </div>
-        </SettingsReveal>
+        </div>
       )}
 
-      <SettingsRow label="Visa dolda">
-        <SettingsRowEnd>
-          <Switch
-            checked={includeDismissed}
-            onCheckedChange={setIncludeDismissed}
-            aria-label="Visa dolda"
-          />
-        </SettingsRowEnd>
-      </SettingsRow>
-
-      {/* Dynamic status stays visible; the static "how it's used" copy lives
-          in the group help above. */}
-      {rows && (
-        <p className="px-1 pt-3">
-          <SettingsRowNote className="tabular-nums">
-            {counts.active} aktiva · {counts.pinned} fästa
-            {includeDismissed && counts.dismissed > 0 ? ` · ${counts.dismissed} dolda` : ''}
-          </SettingsRowNote>
+      {rows && rows.length > 0 && (
+        <p className="text-[12px] tabular-nums text-muted-foreground">
+          {counts.active} aktiva · {counts.pinned} fästa
+          {includeDismissed && counts.dismissed > 0 ? ` · ${counts.dismissed} dolda` : ''}
         </p>
       )}
 
       {/* Live region always mounted so the failure is announced when it
           appears, not merely inserted. */}
-      <div role="status" aria-live="polite" className="min-w-0 px-1 pt-3">
+      <div role="status" aria-live="polite" className="min-w-0">
         {loadError && (
           <AttnLine
-            action={
-              loadError.detail
-                ? undefined
-                : { label: 'Försök igen', onClick: () => setReloadKey((k) => k + 1) }
-            }
+            action={loadError.detail ? undefined : { label: 'Försök igen', onClick: () => setReloadKey((k) => k + 1) }}
           >
-            {loadError.detail
-              ? `Minnena kunde inte läsas in just nu. ${loadError.detail}`
-              : 'Minnena kunde inte läsas in just nu.'}
+            {loadError.detail ? `Minnena kunde inte läsas in just nu. ${loadError.detail}` : 'Minnena kunde inte läsas in just nu.'}
           </AttnLine>
         )}
       </div>
 
       {rows === null && !loadError && (
-        <div className="space-y-3 pt-3">
-          {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-16 w-full" />
+        <div aria-busy>
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="space-y-2 border-b border-border/60 py-3.5">
+              <Skeleton className="h-3.5 w-3/4" />
+              <Skeleton className="h-3 w-40" />
+            </div>
           ))}
         </div>
       )}
@@ -375,44 +337,29 @@ export function AgentMemoryPanel() {
             const isBusy = busyId === row.id
             const dimmed = !row.is_active
             return (
-              <li
-                key={row.id}
-                className={cn(
-                  'border-b border-border px-1 py-3 transition-colors',
-                  dimmed && 'opacity-70',
+              <li key={row.id} className={cn('group flex items-start gap-3 border-b border-border/60 py-3.5', dimmed && 'opacity-60')}>
+                {canWrite && row.is_active ? (
+                  <button
+                    type="button"
+                    onClick={() => patch(row.id, { is_pinned: !row.is_pinned })}
+                    disabled={isBusy}
+                    className={cn(
+                      'mt-0.5 shrink-0 rounded-sm p-1 transition-colors duration-150',
+                      row.is_pinned ? 'text-foreground' : 'text-muted-foreground/50 hover:text-foreground',
+                    )}
+                    aria-label={row.is_pinned ? 'Lossa' : 'Fäst'}
+                    title={row.is_pinned ? 'Lossa' : 'Fäst: minnet skickas alltid med'}
+                  >
+                    <Pin className={cn('h-3.5 w-3.5', row.is_pinned && 'fill-current')} />
+                  </button>
+                ) : (
+                  <span className="mt-0.5 shrink-0 p-1">
+                    {row.is_pinned && <Pin className="h-3.5 w-3.5 fill-current text-foreground" />}
+                  </span>
                 )}
-              >
-                <div className="flex items-start gap-3">
-                  {canWrite && row.is_active ? (
-                    <button
-                      onClick={() => patch(row.id, { is_pinned: !row.is_pinned })}
-                      disabled={isBusy}
-                      className={cn(
-                        'mt-0.5 shrink-0 rounded-sm p-1.5 transition-colors duration-150',
-                        row.is_pinned
-                          ? 'bg-secondary text-foreground'
-                          : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
-                      )}
-                      aria-label={row.is_pinned ? 'Lossa' : 'Fäst'}
-                      title={row.is_pinned ? 'Lossa' : 'Fäst: säkerställer att minnet alltid skickas med'}
-                    >
-                      {row.is_pinned ? <Pin className="h-4 w-4 fill-current" /> : <PinOff className="h-4 w-4" />}
-                    </button>
-                  ) : (
-                    <div className="mt-0.5 shrink-0 p-1.5">
-                      {row.is_pinned && <Pin className="h-4 w-4 fill-current text-foreground" />}
-                    </div>
-                  )}
-
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] text-muted-foreground">
-                        {KIND_LABEL[row.kind]} · {SOURCE_LABEL[row.source]}
-                      </span>
-                      {dimmed && <Badge variant="secondary">Dold</Badge>}
-                    </div>
-
-                    {isEditing ? (
+                <div className="min-w-0 flex-1">
+                  {isEditing ? (
+                    <div className="space-y-2">
                       <SettingsTextarea
                         value={editDraft}
                         onChange={(e) => setEditDraft(e.target.value)}
@@ -422,87 +369,47 @@ export function AgentMemoryPanel() {
                         aria-label="Redigera minne"
                         className="w-full border-border"
                       />
-                    ) : (
-                      <p className="whitespace-pre-wrap break-words text-sm text-foreground">{row.content}</p>
-                    )}
-
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                      <p className="text-[11px] text-muted-foreground tabular-nums">
-                        Skapad {formatDateLong(row.created_at)}
-                        {row.updated_at !== row.created_at && ` · uppdaterad ${formatDateLong(row.updated_at)}`}
-                      </p>
-
-                      {canWrite && (
-                        <div className="flex items-center gap-1">
-                          {isEditing ? (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setEditingId(null)}
-                                disabled={isBusy}
-                              >
-                                <X className="h-4 w-4" />
-                                <span className="sr-only">Avbryt</span>
-                              </Button>
-                              <Button
-                                size="sm"
-                                onClick={() => saveEdit(row)}
-                                disabled={isBusy || editDraft.trim().length < 2}
-                              >
-                                {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Spara'}
-                              </Button>
-                            </>
-                          ) : row.is_active ? (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => startEdit(row)}
-                                disabled={isBusy}
-                              >
-                                <Pencil className="mr-1 h-3.5 w-3.5" />
-                                Redigera
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => patch(row.id, { is_active: false })}
-                                disabled={isBusy}
-                              >
-                                {isBusy ? (
-                                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <Trash2 className="mr-1 h-3.5 w-3.5" />
-                                )}
-                                Dölj
-                              </Button>
-                            </>
-                          ) : (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => patch(row.id, { is_active: true })}
-                              disabled={isBusy}
-                            >
-                              {isBusy ? (
-                                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <RotateCcw className="mr-1 h-3.5 w-3.5" />
-                              )}
-                              Återställ
-                            </Button>
-                          )}
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" onClick={() => saveEdit(row)} disabled={isBusy || editDraft.trim().length < 2}>
+                          {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Spara'}
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => setEditingId(null)} disabled={isBusy}>
+                          Avbryt
+                        </Button>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <p className="whitespace-pre-wrap break-words text-[13.5px] leading-6 text-foreground">{row.content}</p>
+                  )}
+                  <p className="mt-1 text-[11.5px] tabular-nums text-muted-foreground">
+                    {KIND_LABEL[row.kind]} · {SOURCE_LABEL[row.source]} · {formatDateLong(row.created_at)}
+                    {row.updated_at !== row.created_at && ` · uppdaterad ${formatDateLong(row.updated_at)}`}
+                    {dimmed && ' · dold'}
+                  </p>
                 </div>
+                {canWrite && !isEditing && (
+                  <div className={cn('flex shrink-0 items-center gap-3 pt-0.5', HOVER_REVEAL_CLASS)}>
+                    {row.is_active ? (
+                      <>
+                        <button type="button" onClick={() => startEdit(row)} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12px]')}>
+                          Redigera
+                        </button>
+                        <button type="button" onClick={() => patch(row.id, { is_active: false })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12px]')}>
+                          Dölj
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" onClick={() => patch(row.id, { is_active: true })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12px]')}>
+                        Återställ
+                      </button>
+                    )}
+                  </div>
+                )}
               </li>
             )
           })}
         </ul>
       )}
-    </SettingsGroup>
+    </div>
   )
 }

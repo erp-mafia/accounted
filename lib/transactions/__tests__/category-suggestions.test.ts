@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   buildMerchantHistory,
   getSuggestedCategories,
+  getSuggestedTemplates,
   merchantHistoryFor,
+  rowProposal,
+  type SuggestedTemplate,
 } from '../category-suggestions'
+import { makeTransaction } from '@/tests/helpers'
 import type { Transaction } from '@/types'
 
 /**
@@ -203,5 +207,45 @@ describe('getSuggestedCategories: counterparty history', () => {
       { expense_office: 5 },
     )
     expect(result).toEqual([])
+  })
+})
+
+describe('getSuggestedTemplates: rules that matched vs templates used lately', () => {
+  const tx = makeTransaction({ description: 'Autogiro Telia 4471028', merchant_name: 'Telia', amount: -2487.5, mcc_code: null })
+  const base = {
+    id: 'r1', user_id: 'u1', company_id: 'co-1', rule_name: 'Telia', rule_type: 'description_pattern' as const, priority: 100,
+    mcc_codes: null, merchant_pattern: null, description_pattern: null, amount_min: null, amount_max: null,
+    debit_account: null, credit_account: null, vat_treatment: null, vat_debit_account: null, vat_credit_account: null,
+    risk_level: 'LOW', default_private: false, requires_review: false, confidence_score: 0.9,
+    capitalization_threshold: null, capitalized_debit_account: null, source: 'user_description' as const,
+    user_description: null, template_id: null, is_active: true, created_at: '', updated_at: '',
+  }
+
+  it('marks a rule that matched the row as rule, first, with the template it names', async () => {
+    const out = await getSuggestedTemplates(tx, 'aktiebolag', [
+      { ...base, description_pattern: 'telia', template_id: 'telecom_mobile' },
+    ] as never)
+    expect(out[0]).toMatchObject({ template_id: 'telecom_mobile', source: 'rule', rule_own: true, rule_requires_review: false })
+  })
+
+  it('finds the catalog template for a rule that only names an account', async () => {
+    const out = await getSuggestedTemplates(tx, 'aktiebolag', [
+      { ...base, merchant_pattern: '^telia', debit_account: '6211' },
+    ] as never)
+    expect(out[0]?.source).toBe('rule')
+    expect(out[0]?.debit_account).toBe('6211')
+  })
+
+  it('offers a template a rule points at but did not match as recent, below a keyword match', async () => {
+    const out = await getSuggestedTemplates(tx, 'aktiebolag', [
+      { ...base, description_pattern: 'spotify', template_id: 'representation_external' },
+    ] as never)
+    const recent = out.find((s: SuggestedTemplate) => s.template_id === 'representation_external')
+    expect(recent?.source).toBe('recent')
+    expect(out[out.length - 1]?.source).toBe('recent')
+    expect(out.some((s: SuggestedTemplate) => s.source === 'rule')).toBe(false)
+    // The row never wears it: without a match the chip says Välj kategori.
+    expect(rowProposal(out)?.source).not.toBe('recent')
+    expect(rowProposal([recent!])).toBeUndefined()
   })
 })

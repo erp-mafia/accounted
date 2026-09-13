@@ -53,12 +53,21 @@ describe('gnubok_year_end_readiness: registration', () => {
   // therefore name every kind the caller can DO something about ahead of time;
   // the four period-state kinds are summarized, since nothing can be
   // pre-checked about them.
+  // period_locked joins them: its blocker message already says what to do
+  // (unlock; run_year_end locks the period itself), and tools/list sits a
+  // handful of tokens under its ceiling (payload-size.bench.test.ts), so the
+  // description keeps summarizing it as period-state instead of naming it.
   const PERIOD_STATE_KINDS = new Set([
     'period_not_found',
     'period_not_ended',
     'period_already_closed',
+    'period_locked',
     'closing_entry_exists',
   ])
+
+  it('maps the PERIOD_LOCKED readiness code to the period_locked kind', () => {
+    expect(YEAR_END_BLOCKER_KIND.PERIOD_LOCKED).toBe('period_locked')
+  })
 
   it('names every actionable blocker kind the tool can emit', () => {
     const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!

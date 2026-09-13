@@ -136,7 +136,7 @@ export type StreamEvent =
       // The agent successfully wrote a memory mid-conversation (remember_fact
       // or forget_fact). Stream-time only: not persisted. The chat surface
       // renders a discreet "Sparat: …" chip so users know memory happened
-      // without having to visit /settings/agent-memory.
+      // without having to visit /settings/assistant?view=memory.
       kind: 'memory_captured'
       tool_use_id: string
       action: 'remembered' | 'forgotten'

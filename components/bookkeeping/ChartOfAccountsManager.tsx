@@ -529,8 +529,8 @@ export default function ChartOfAccountsManager() {
 
   // Page header + toolbar render even while loading so the chrome is stable.
   const header = (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <h1 className="font-display text-2xl leading-8 tracking-tight">{tNav('chart_of_accounts')}</h1>
+    <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{tNav('chart_of_accounts')}</h1>
       <div className="flex items-center gap-4">
         <Badge variant="outline" className="font-normal">{t('bas_version_chip')}</Badge>
         <button type="button" className={QUIET_LINK_CLASS} onClick={() => setPruneDialogOpen(true)}>

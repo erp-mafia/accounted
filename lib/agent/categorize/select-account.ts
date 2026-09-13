@@ -288,19 +288,22 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
   const samples = Math.max(1, input.samples ?? DEFAULT_SAMPLES)
 
   const service = getAiService()
-  const picks: RawPick[] = []
-  let model = ''
-  for (let i = 0; i < samples; i++) {
-    const result = await service.generateStructured({
-      tier: input.tier ?? 'assistant',
-      system: SYSTEM_PROMPT,
-      prompt,
-      maxTokens: input.maxTokens ?? DEFAULT_MAX_TOKENS,
-      schema,
-    })
-    model = result.model
-    picks.push(parsePick(result.value, validIds))
-  }
+  // Self-consistency samples are independent draws of the same prompt, so
+  // they run together: three sequential calls made the person wait three
+  // times for one answer.
+  const results = await Promise.all(
+    Array.from({ length: samples }, () =>
+      service.generateStructured({
+        tier: input.tier ?? 'assistant',
+        system: SYSTEM_PROMPT,
+        prompt,
+        maxTokens: input.maxTokens ?? DEFAULT_MAX_TOKENS,
+        schema,
+      }),
+    ),
+  )
+  const picks: RawPick[] = results.map((r) => parsePick(r.value, validIds))
+  const model = results[results.length - 1]?.model ?? ''
 
   // Majority vote across samples (self-consistency).
   const tally = new Map<string, number>()

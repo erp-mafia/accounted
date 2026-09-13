@@ -1,4 +1,4 @@
-import type { GoogleDriveSchedule } from '../types'
+import type { CloudSchedule } from '../types'
 
 const STOCKHOLM_TZ = 'Europe/Stockholm'
 
@@ -49,7 +49,7 @@ export function stockholmHourToUtcHour(hour: number, now: Date = new Date()): nu
  * carries no valid hour. `hour_local` (Europe/Stockholm wall-clock, stable
  * across DST) wins over the legacy `hour_utc`.
  */
-function scheduleSlotForDay(schedule: GoogleDriveSchedule, now: Date): Date | null {
+function scheduleSlotForDay(schedule: CloudSchedule, now: Date): Date | null {
   if (isValidHour(schedule.hour_local)) {
     return stockholmSlotForDay(now, schedule.hour_local)
   }
@@ -69,7 +69,7 @@ function scheduleSlotForDay(schedule: GoogleDriveSchedule, now: Date): Date | nu
  * instead of silently losing the whole day.
  */
 export function isScheduleDue(
-  schedule: GoogleDriveSchedule | null | undefined,
+  schedule: CloudSchedule | null | undefined,
   now: Date
 ): boolean {
   if (!schedule?.enabled) return false

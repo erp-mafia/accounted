@@ -155,11 +155,39 @@ function inferCode(message: string): string | null {
   if (/already has a journal entry/i.test(message)) return 'TRANSACTION_ALREADY_CATEGORIZED'
   if (/already been sent/i.test(message) || /already sent/i.test(message)) return 'INVOICE_ALREADY_SENT'
   if (/locked\/closed fiscal period/i.test(message)) return 'PERIOD_LOCKED'
+  // close_period / lock_period / run_year_end and period-service throw these
+  // as plain strings; without a code they surfaced as UNKNOWN_ERROR with
+  // "Något gick fel" (feedback seq 392722, close_period after run_year_end).
+  if (/Period is already closed|already closed/i.test(message)) return 'PERIOD_ALREADY_CLOSED'
+  if (/Period is already locked|already locked/i.test(message)) return 'PERIOD_LOCK_ALREADY_LOCKED'
   if (/Bokföringen är låst/i.test(message)) return 'PERIOD_LOCKED'
   if (/Transaction not found/i.test(message)) return 'NOT_FOUND'
   if (/Invoice not found/i.test(message)) return 'NOT_FOUND'
   if (/must be \d+ characters or fewer/i.test(message)) return 'VALIDATION_ERROR'
   return null
+}
+
+/**
+ * A thrown error may carry its own remediation when the fix depends on the
+ * call site (which inbox item to repair, which tool re-stages it) and the
+ * registry entry is shared with surfaces where that hint would be wrong.
+ * Only a well-formed hint is honored; anything else falls back to the
+ * registry.
+ */
+function extractRemediation(error: unknown): StructuredErrorRemediation | null {
+  if (typeof error !== 'object' || error === null) return null
+  const raw = (error as Record<string, unknown>).remediation
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const hint = raw as Record<string, unknown>
+  if (typeof hint.description !== 'string' || hint.description.trim() === '') return null
+  return {
+    description: hint.description,
+    ...(typeof hint.tool === 'string' ? { tool: hint.tool } : {}),
+    ...(typeof hint.resource === 'string' ? { resource: hint.resource } : {}),
+    ...(typeof hint.args === 'object' && hint.args !== null && !Array.isArray(hint.args)
+      ? { args: hint.args as Record<string, unknown> }
+      : {}),
+  }
 }
 
 function extractEnglishMessage(error: unknown): string {
@@ -198,7 +226,8 @@ export function getStructuredError(
   if (code === 'UNKNOWN_ERROR' && transient) code = 'TRANSIENT_ERROR'
 
   const entry = getErrorEntry(code)
-  let remediation = entry?.remediation
+  // The throw site knows more than the registry when it attaches a hint.
+  let remediation = extractRemediation(error) ?? entry?.remediation
 
   // Specialize INSUFFICIENT_SCOPE with the actual scope name when known.
   if (code === 'INSUFFICIENT_SCOPE' && options.attemptedScope && remediation) {

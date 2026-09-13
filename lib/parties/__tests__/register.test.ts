@@ -65,6 +65,7 @@ describe('defaultRoles', () => {
     cadenceDays: null,
     rhythm: null,
     dominantAccount: null,
+    dominantAccountName: null,
     dominantShare: null,
     variants: [],
     ...over,

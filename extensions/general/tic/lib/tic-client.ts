@@ -189,12 +189,33 @@ export async function searchCompanyByOrgNumber(
     return returned.includes(cleaned) || cleaned.includes(returned)
   }
 
-  const match = data.hits.find((hit) => {
-    const returned = hit.document?.registrationNumber?.replace(/[\s-]/g, '') ?? ''
-    return returned.length > 0 && numbersRelated(returned)
-  })
+  const related = data.hits
+    .map((hit) => hit.document)
+    .filter((doc): doc is TICCompanyDocument => {
+      const returned = doc?.registrationNumber?.replace(/[\s-]/g, '') ?? ''
+      return returned.length > 0 && numbersRelated(returned)
+    })
 
-  return match?.document ?? null
+  return pickPreferredRegistration(related)
+}
+
+/**
+ * A person can register an enskild firma more than once; Lens then holds one
+ * document per registration (`...0001`, `...0002`, ...) and every one of them
+ * embeds the same personnummer. Typesense ranks them by text relevance, which
+ * is arbitrary here, so choose deterministically: an active registration
+ * beats a ceased one, and among equals the most recently registered wins.
+ * (Support case 2026-09-08: a firm closed in 2012 outranked the owner's
+ * current one and its name and address were written into the new company.)
+ */
+function pickPreferredRegistration(docs: TICCompanyDocument[]): TICCompanyDocument | null {
+  if (docs.length === 0) return null
+  const ceased = (doc: TICCompanyDocument): boolean =>
+    doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
+  return docs.reduce((best, doc) => {
+    if (ceased(doc) !== ceased(best)) return ceased(doc) ? best : doc
+    return (doc.registrationDate ?? 0) > (best.registrationDate ?? 0) ? doc : best
+  })
 }
 
 /**

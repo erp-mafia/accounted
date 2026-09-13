@@ -16,7 +16,15 @@ import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Plus, FileInput, Lock, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react'
+import { Plus, FileInput, Lock, ArrowUp, ArrowDown, ArrowUpDown, SlidersHorizontal } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { useShell } from '@/components/dashboard/ShellProvider'
 import Link from 'next/link'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -36,6 +44,7 @@ import {
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { FiscalPeriod, SupplierInvoice } from '@/types'
+import { useCompanySettings } from '@/components/settings/useSettings'
 
 const NewSupplierInvoiceDialog = dynamic(
   () => import('@/components/supplier-invoices/NewSupplierInvoiceDialog'),
@@ -181,6 +190,13 @@ export default function SupplierInvoicesPage() {
   const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ListTab>('all')
+  // The flow (UI v2 PR 6) lives on each invoice as a strip; the list keeps
+  // the status picker in both shells (founder call 2026-09-07: a bar of
+  // stages over two invoices was chrome, not information).
+  const { settings: companySettings } = useCompanySettings()
+  // Shell v2: grouping sits behind a gear at the right and Betalfiler is in
+  // the nav, so the toolbar is the status chip, the search and the year.
+  const shell = useShell()
   const [searchTerm, setSearchTerm] = useState('')
   // null = the API's default order (förfallodatum stigande).
   const [sort, setSort] = useState<SupplierInvoiceListSort | null>(null)
@@ -515,9 +531,9 @@ export default function SupplierInvoicesPage() {
           The help popover carries the payment model (convention 7): approval
           attests for payment; payments reconcile via bank matching, so there
           is deliberately no mark-as-paid button here. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <span className="flex items-center gap-2">
-          <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+          <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
           <HelpPopover>{t('help_body')}</HelpPopover>
         </span>
         {canWrite ? (
@@ -559,16 +575,18 @@ export default function SupplierInvoicesPage() {
                   : undefined,
           }))}
         />
-        <ContextPicker
-          value={groupMode}
-          onChange={(id) => updateGroup(id as GroupMode)}
-          ariaLabel={t('group_picker_aria')}
-          triggerLabel={`${t('group_by')} · ${t(GROUP_LABEL_KEYS[groupMode])}`}
-          items={GROUP_MODES.map((mode) => ({
-            id: mode,
-            label: t(GROUP_LABEL_KEYS[mode]),
-          }))}
-        />
+        {shell !== 'v2' && (
+          <ContextPicker
+            value={groupMode}
+            onChange={(id) => updateGroup(id as GroupMode)}
+            ariaLabel={t('group_picker_aria')}
+            triggerLabel={`${t('group_by')} · ${t(GROUP_LABEL_KEYS[groupMode])}`}
+            items={GROUP_MODES.map((mode) => ({
+              id: mode,
+              label: t(GROUP_LABEL_KEYS[mode]),
+            }))}
+          />
+        )}
         <ToolbarSearch
           containerClassName="min-w-[190px]"
           placeholder={t('search_placeholder')}
@@ -576,9 +594,11 @@ export default function SupplierInvoicesPage() {
           onChange={(e) => setSearchTerm(e.target.value)}
         />
         <div className="ml-auto flex items-center gap-4">
-          <Link href="/supplier-invoices/payment-files" className={QUIET_LINK_CLASS}>
-            {t('payment_files_link')}
-          </Link>
+          {shell !== 'v2' && (
+            <Link href="/supplier-invoices/payment-files" className={QUIET_LINK_CLASS}>
+              {t('payment_files_link')}
+            </Link>
+          )}
           <FyPicker
             value={fyPeriodId}
             onChange={(periodId, period) => {
@@ -587,6 +607,30 @@ export default function SupplierInvoicesPage() {
             }}
             includeAllOption
           />
+          {shell === 'v2' && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn('h-8 w-8 text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
+                  aria-label={t('group_picker_aria')}
+                  title={t('group_by')}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuRadioGroup value={groupMode} onValueChange={(v) => updateGroup(v as GroupMode)}>
+                  {GROUP_MODES.map((mode) => (
+                    <DropdownMenuRadioItem key={mode} value={mode}>
+                      {t(GROUP_LABEL_KEYS[mode])}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
 
@@ -845,7 +889,7 @@ export default function SupplierInvoicesPage() {
                       className={cn(TD_CLASS, 'whitespace-nowrap text-right')}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {canApprove && (
+                      {canApprove && companySettings?.accounting_method !== 'cash' && (
                         <button
                           type="button"
                           className={cn(
