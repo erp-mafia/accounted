@@ -1335,7 +1335,7 @@ async function resolveJournalEntryRef(
 //
 // The staging pre-check runs the exact same countUnbookedInPeriod the commit
 // path (lockPeriod) enforces, imported from period-service so the two legal
-// guards cannot drift apart. See the DECISIONS.md 2026-07-26 lock-guard entry
+// guards cannot drift apart. See the DECISIONS.md archive 2026-07-26 lock-guard entry
 // for the predicate semantics.
 
 async function categorizeTransactionCore(
@@ -2384,7 +2384,7 @@ interface VatCompletenessFinding {
 
 /**
  * Serialize findings for an agent. Unlike the web UI (which deliberately hides
- * the rule ids as visual noise, DECISIONS 2026-07-24), the machine surface
+ * the rule ids as visual noise, DECISIONS.md archive 2026-07-24), the machine surface
  * carries `code`: an agent needs a stable key to branch on, not prose.
  */
 function toCompletenessFindings(checks: VatDeclarationCheck[]): VatCompletenessFinding[] {
@@ -5796,10 +5796,9 @@ export const tools: McpTool[] = [
 
       // Same document truth as the verifikat surface: the RPC keys "has
       // underlag" on document_attachments (current version) + waivers, never
-      // transactions.document_id: the two columns diverged historically
-      // (P1-3, dev_docs/mcp_optimization_plan.md) and this surface is the
-      // bank-driven SUBSET of gnubok_list_verifikat_without_documents by
-      // construction.
+      // transactions.document_id: the two columns diverged historically and
+      // this surface is the bank-driven SUBSET of
+      // gnubok_list_verifikat_without_documents by construction.
       const { data, error } = await supabase.rpc('transactions_without_documents', {
         p_company_id: companyId,
         p_since: since,
@@ -13806,12 +13805,12 @@ export const tools: McpTool[] = [
       }
 
       if (!supplierId) {
-        // Structured resolution failure instead of a dead end (P1-4,
-        // dev_docs/mcp_optimization_plan.md): a thrown error here stops the
-        // whole inbox pipeline for small ad hoc vendors. Return staged:false
-        // with near-miss candidates the agent can pass as supplier_id_override,
-        // or a create-supplier next hint when nothing is close. Fuzzy scores
-        // never auto-resolve: the agent/human confirms against the underlag.
+        // Structured resolution failure instead of a dead end: a thrown error
+        // here stops the whole inbox pipeline for small ad hoc vendors. Return
+        // staged:false with near-miss candidates the agent can pass as
+        // supplier_id_override, or a create-supplier next hint when nothing is
+        // close. Fuzzy scores never auto-resolve: the agent/human confirms
+        // against the underlag.
         const extractedName = supplierIdentity.name
         const extractedOrg = supplierIdentity.orgNumber
 

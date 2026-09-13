@@ -24,7 +24,7 @@ export type PeriodiseringEntityType = EntityType
  * compared against the subtotal_sek-derived amount, and when no SEK amount
  * can be resolved the floor is skipped entirely rather than compared against
  * a number in the wrong currency (mirrors the accrual-k2-hint decision,
- * DECISIONS.md 2026-07-26).
+ * DECISIONS.md archive 2026-07-26).
  */
 export const PERIODISERING_MATERIALITY_FLOOR_SEK = 5000
 
@@ -184,7 +184,7 @@ function buildSuggestion(args: {
   // comparison uses the periodisation share of subtotal_sek; when no SEK
   // amount is available the floor is SKIPPED entirely, because tagging on an
   // amount in the wrong currency is strictly worse than not tagging
-  // (accrual-k2-hint precedent, DECISIONS.md 2026-07-26).
+  // (accrual-k2-hint precedent, DECISIONS.md archive 2026-07-26).
   const touchesPersonnelCost = itemAccounts.some((a) => /^7[0-6]/.test(a ?? ''))
   const isSek = !currency || currency === 'SEK'
   let periodisationAmountSek: number | null = null

@@ -8,7 +8,7 @@ paths:
 
 Use the `/supabase-migration` skill for new migrations.
 
-**Location**: `supabase/migrations/`: 680+ files. Early migrations use sequential numbering (`20240101000001`-`20240101000038`), later ones use real timestamps.
+**Location**: `supabase/migrations/`. Early migrations use sequential numbering (`20240101000001`-`20240101000038`), later ones use real timestamps.
 
 ## Migration Rules
 

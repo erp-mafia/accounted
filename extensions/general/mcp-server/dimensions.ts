@@ -1,6 +1,5 @@
 /**
- * Dimension helpers for the MCP server (PR3 of the dimensions plan:
- * dev_docs/dimensions_implementation_plan.md §6).
+ * Dimension helpers for the MCP server.
  *
  * Two responsibilities, shared by the dimension tools and the dims-bag write
  * tools (gnubok_create_voucher / gnubok_correct_entry):

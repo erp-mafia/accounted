@@ -1,6 +1,5 @@
 /**
- * Dimension resolver: the single place line dimensions are normalized
- * (dev_docs/dimensions_implementation_plan.md).
+ * Dimension resolver: the single place line dimensions are normalized.
  *
  * Storage model: journal_entry_lines.dimensions is a JSONB map keyed by SIE
  * dimension number ({"1":"KS01","6":"P001"}) and is the single source of
@@ -139,9 +138,8 @@ export function dimensionsBagKey(dimensions?: LineDimensions): string {
 
 /**
  * Soft registry validation of the dimensions referenced by a set of entry
- * lines (dev_docs/dimensions_implementation_plan.md, PR3). Called from
- * createDraftEntry/updateDraftEntry after balance validation and before any
- * insert, so a rejection leaves no orphan rows.
+ * lines. Called from createDraftEntry/updateDraftEntry after balance
+ * validation and before any insert, so a rejection leaves no orphan rows.
  *
  * Semantics:
  *  1. Untagged entries are free: if no line carries a dimension, the function

@@ -7,7 +7,7 @@
  *
  * BFL 3 kap sets NO minimum length for a first räkenskapsår: it may be
  * shorter than 12 months when bokföringsskyldigheten begins, with no floor
- * (Bolagsverket: "hur kort som helst"). See DECISIONS.md 2026-07-25 / PR
+ * (Bolagsverket: "hur kort som helst"). See DECISIONS.md archive 2026-07-25 / PR
  * #1165, which removed the same invented 6-month floor from the validator.
  * The `months >= 1` guard below is structural, not legal: it drops end
  * months that fall before the start month.

@@ -8,9 +8,9 @@ import { accountNumberSchema } from '@/lib/invariants/zod'
  *
  * One reusable bookkeeping pattern, as data: the accounts it touches, which
  * side each lands on, and how a total amount is split across them. A pack is
- * pure data forever. It never carries executable code or DDL, which is the
- * lock recorded in `dev_docs/niche_factory.md` and what makes a pack safe to
- * accept from an author who is not us.
+ * pure data forever. It never carries executable code or DDL, which is a
+ * locked decision and what makes a pack safe to accept from an author who is
+ * not us.
  *
  * ## Why the catalogue moved out of a migration
  *

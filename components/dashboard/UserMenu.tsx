@@ -79,7 +79,6 @@ function CompanyMark({ name }: { name: string }) {
  * Sticky bottom-of-sidebar user block: avatar initials, name, active company,
  * chevron. Opens an upward popover aligned with the nav column holding
  * identity, the company-switcher flyout, account links and logout.
- * Concept reference: ui_migration_plan.md PR 2.
  */
 export default function UserMenu({
   userName,

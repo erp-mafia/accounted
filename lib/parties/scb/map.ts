@@ -1,8 +1,7 @@
 /**
  * From SCB's Je layout to party facts. Codes come from "Variabelbeskrivning
- * API" (SCB:s allmänna företagsregister, 28 pages, saved in
- * dev_docs/scb_docs); labels are Swedish because the dossier shows them as
- * they are and the register is Swedish by nature.
+ * API" (SCB:s allmänna företagsregister, 28 pages); labels are Swedish because
+ * the dossier shows them as they are and the register is Swedish by nature.
  */
 
 export interface ScbFact {

@@ -13,7 +13,7 @@ import { deductionSekConverter, SCHABLON_WORK_TYPES, type DeductionType } from '
  * fil". There is NO submission API: the file replaces per-ärende manual
  * entry, the upload + signature (e-legitimation) stays with the user.
  *
- * Schema (vendored in dev_docs/skatteverket/husavdrag/):
+ * Schema:
  *   root:  http://xmls.skatteverket.se/se/skatteverket/ht/begaran/6.0
  *   types: http://xmls.skatteverket.se/se/skatteverket/ht/komponent/begaran/6.0
  *

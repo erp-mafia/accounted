@@ -14,7 +14,7 @@ import { settleRotRutPayoutRequest } from '@/lib/invoices/rot-rut-settle'
  *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
  * The journal entry IS the accounting record here, so engine failure blocks
- * the operation (see .claude/skills/erp-api-route, payment entries block).
+ * the operation (see .claude/rules/api-routes.md on entries that are the accounting record).
  * amount defaults to decided_total, falling back to requested_total. If the
  * amount equals requested_total the request completes as 'paid'; anything
  * lower records 'partially_paid' with decided_total = amount.

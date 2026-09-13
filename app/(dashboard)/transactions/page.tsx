@@ -264,7 +264,7 @@ async function fetchExpensePayoutMatches(
 // Fetch the potential invoice/supplier-invoice matches referenced by a page
 // of transactions in one parallel round trip. A single-query PostgREST embed
 // on potential_supplier_invoice_id is blocked until that FK exists in the
-// prod schema cache (see DECISIONS.md 2026-07-06).
+// prod schema cache (see DECISIONS.md archive 2026-07-06).
 async function fetchPotentialMatches(
   supabase: SupabaseClient,
   companyId: string | null,

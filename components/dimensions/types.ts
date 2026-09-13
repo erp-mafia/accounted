@@ -1,6 +1,5 @@
 /**
- * Client-side contract types for the dimensions registry API (PR2 of
- * dev_docs/dimensions_implementation_plan.md).
+ * Client-side contract types for the dimensions registry API.
  *
  * The routes live under /api/dimensions and are built against the same locked
  * contract: this module codes against the contract, not the route files, so

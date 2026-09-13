@@ -727,8 +727,7 @@ export const RotRutReclaimSchema = z.object({
   booking_date: isoDate,
 })
 
-// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst
-// (dev_docs/skatteverket/husavdrag/exempel_beslut.json + ht.raml).
+// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst.
 export const RotRutBeslutFileSchema = z.object({
   version: z.string(),
   // Utförarens orgnr, 12 digits with 16-prefix in SKV's file.
@@ -1575,8 +1574,8 @@ export const StrikeLinesSchema = z
 // ============================================================
 // Dimension registry schemas (kostnadsställe/projekt)
 // ============================================================
-// dev_docs/dimensions_implementation_plan.md §6. The registry tables
-// (dimensions/dimension_values) shipped in 20260702084500_dimensions_substrate.
+// The registry tables (dimensions/dimension_values) shipped in
+// 20260702084500_dimensions_substrate.
 
 /**
  * Object code for USER-CREATED dimension values: strict Fortnox format.
@@ -2544,7 +2543,7 @@ export const UpdateSettingsSchema = z.object({
   // AI agent flow
   ai_flow_enabled: z.boolean().optional(),
   // Dimensions (kostnadsställe/projekt): UI-visibility toggle only, never
-  // load-bearing for correctness (dev_docs/dimensions_implementation_plan.md §2).
+  // load-bearing for correctness.
   dimensions_enabled: z.boolean().optional(),
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
   // for correctness (trips created via API/MCP work regardless).

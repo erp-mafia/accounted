@@ -69,7 +69,7 @@ export async function generateDimensionPnl(
   // ── Totalt column: identical inputs to resultatrapport ─────────
   // closingEntry must match resultatrapport exactly or the two stop
   // reconciling, and a closed year reads zero without it (see resultatrapport
-  // and DECISIONS.md:632).
+  // and DECISIONS.md archive 2026-07-29).
   const tb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
     closingEntry: 'exclude-all-year-end',
     toDate: options?.toDate,

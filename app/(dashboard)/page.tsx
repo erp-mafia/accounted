@@ -24,8 +24,8 @@ import type { DashboardShell } from '@/types'
 export const dynamic = 'force-dynamic'
 
 // Home route = Hem (concept scene 14): greeting + Att göra + Fortsätt.
-// The KPI/revenue/deadline widgets left the page (founder direction,
-// dev_docs/last_session_resume.md §8), which also pruned their fetches:
+// The KPI/revenue/deadline widgets left the page (founder direction),
+// which also pruned their fetches:
 // the journal-line YTD aggregation, unpaid-invoice totals and deadline
 // queries are gone and the page got faster.
 //

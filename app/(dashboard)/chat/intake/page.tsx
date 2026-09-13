@@ -10,8 +10,6 @@ export const dynamic = 'force-dynamic'
 // intent='onboarding.intake' in fresh-start mode; AgentChat auto-fires the
 // first invoke which creates the conversation row, and we swap the URL to
 // /chat/[id] when the new id streams back.
-//
-// Plan ref: dev_docs/specialized-agent-plan.md §7 Phase C.
 export default async function ChatIntakePage() {
   const [{ user }, companyId] = await Promise.all([
     getDashboardAuthContext(),

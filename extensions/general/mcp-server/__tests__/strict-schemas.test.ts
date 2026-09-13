@@ -3,8 +3,7 @@
  *
  * Every tool's `inputSchema` must declare `additionalProperties: false` so
  * agents receive a clear rejection on typos/hallucinated fields instead of a
- * silent ignore. This is item 8 of the agent-native API plan
- * (dev_docs/api_ai_architecture/PLAN.md).
+ * silent ignore.
  *
  * If this test fires on a newly authored tool, add the field to the tool's
  * top-level inputSchema. Don't relax the guard.

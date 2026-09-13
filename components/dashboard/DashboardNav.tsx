@@ -170,8 +170,7 @@ type NavLabelKey =
   | 'automations'
   | 'back_to_clients'
 
-// Nav layout (July 2026, UI-migration concept, dev_docs/ui_migration_plan.md
-// PR 2): same routes, concept structure.
+// Nav layout (July 2026, UI-migration concept): same routes, concept structure.
 //   top of rail          : collapse toggle (64px icon rail when collapsed;
 //                          state persists in user_preferences.ui_state).
 //   top section          : flat, no header: Hem, Assistent (Flöden joins
@@ -240,7 +239,7 @@ interface NavItem {
   betaBadge?: boolean
 }
 
-// Nav layout per the UI-migration concept (ui_migration_plan.md PR 2):
+// Nav layout per the UI-migration concept:
 // same destinations, concept ordering, with the Register and Bokslut
 // sub-lists as folds.
 const navItems: NavItem[] = [

@@ -37,7 +37,7 @@ interface CurrencyOption {
   name: string
 }
 
-// Unit list mirrors the invoice line editor (app/(dashboard)/invoices/new/page.tsx).
+// Unit list mirrors the invoice line editor (components/invoices/InvoiceEditor.tsx).
 const UNITS = ['st', 'tim', 'dag', 'månad', 'km', 'kg'] as const
 
 // Legal Swedish VAT rates as integer percent. Matches vatRatePercent in

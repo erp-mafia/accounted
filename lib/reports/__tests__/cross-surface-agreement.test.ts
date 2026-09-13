@@ -8,7 +8,7 @@
  * tests the agreement itself.
  *
  * There are deliberately TWO families, and they are allowed to disagree with
- * each other while Stage 2 of #1051 is outstanding (DECISIONS.md:632):
+ * each other while Stage 2 of #1051 is outstanding (DECISIONS.md archive 2026-07-29):
  *
  *   statutory   (closingEntry 'exclude-final' + a post-closing balance sheet)
  *               reports årets resultat AFTER bokslutsdispositioner and skatt.
@@ -213,7 +213,7 @@ describe('the known gap between the two families', () => {
     expect(gap).toBe(160_000) // 100 000 periodiseringsfond + 60 000 skatt
 
     // This gap is Stage 2 of #1051, deliberately outstanding
-    // (DECISIONS.md:632). When generateIncomeStatement moves to
+    // (DECISIONS.md archive 2026-07-29). When generateIncomeStatement moves to
     // 'exclude-final', the operational family joins the statutory one and this
     // expectation becomes gap === 0.
   })

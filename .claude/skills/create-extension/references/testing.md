@@ -18,13 +18,13 @@ beforeEach(() => { vi.clearAllMocks(); eventBus.clear() })
 
 ```typescript
 const mockCtx: ExtensionContext = {
-  userId: 'user-123', extensionId: 'my-extension',
+  userId: 'user-123', companyId: 'company-123', extensionId: 'my-extension',
   supabase: createMockSupabase() as any,
-  emit: vi.fn(),
-  settings: { get: vi.fn().mockResolvedValue({ featureEnabled: true }), set: vi.fn() },
+  emit: vi.fn().mockResolvedValue(undefined),
+  settings: { get: vi.fn().mockResolvedValue({ featureEnabled: true }), set: vi.fn(), clear: vi.fn() },
   storage: { download: vi.fn(), upload: vi.fn(), getPublicUrl: vi.fn() },
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  services: { ingestTransactions: vi.fn() },
+  services: { ingestTransactions: vi.fn(), getCashAccounts: vi.fn(), getPrimaryCashAccount: vi.fn() },
 }
 ```
 
@@ -33,14 +33,14 @@ const mockCtx: ExtensionContext = {
 ```typescript
 it('should process events', async () => {
   const handler = myExt.eventHandlers!.find(h => h.eventType === 'transaction.synced')!.handler
-  await handler({ transactions: [makeTransaction()], userId: 'user-123' }, mockCtx)
+  await handler({ transactions: [makeTransaction()], userId: 'user-123', companyId: 'company-123' }, mockCtx)
   expect(mockCtx.supabase.from).toHaveBeenCalled()
 })
 
 it('should skip when disabled', async () => {
   mockCtx.settings.get = vi.fn().mockResolvedValue({ featureEnabled: false })
   const handler = myExt.eventHandlers!.find(h => h.eventType === 'transaction.synced')!.handler
-  await handler({ transactions: [], userId: 'user-123' }, mockCtx)
+  await handler({ transactions: [], userId: 'user-123', companyId: 'company-123' }, mockCtx)
   expect(mockCtx.supabase.from).not.toHaveBeenCalled()
 })
 ```

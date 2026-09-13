@@ -1,15 +1,15 @@
 # Whitelabel fork checklist
 
-Accounted is whitelabel-friendly: every user-visible brand reference reads from a single `BrandingService` (`lib/branding/service.ts`). If you don't override anything, the app behaves exactly like upstream gnubok. To run your own brand on top of Accounted, fork the repo and override the values you care about.
+Accounted is whitelabel-friendly: every user-visible brand reference reads from a single `BrandingService` (`lib/branding/service.ts`). If you don't override anything, the app behaves exactly like upstream Accounted. To run your own brand on top of Accounted, fork the repo and override the values you care about.
 
 ## Quick start
 
 ```bash
-# 1. Fork erp-mafia/gnubok on GitHub → you/your-brand
+# 1. Fork erp-mafia/accounted on GitHub → you/your-brand
 # 2. Clone and add upstream remote (one-time)
 git clone https://github.com/you/your-brand
 cd your-brand
-git remote add upstream https://github.com/erp-mafia/gnubok
+git remote add upstream https://github.com/erp-mafia/accounted
 
 # 3. Copy the example branding extension
 cp -r extensions/general/_example-branding extensions/general/your-brand
@@ -155,7 +155,7 @@ jobs:
 
       - name: Add upstream and fetch
         run: |
-          git remote add upstream https://github.com/erp-mafia/gnubok
+          git remote add upstream https://github.com/erp-mafia/accounted
           git fetch upstream main
 
       - name: Create sync branch and merge
@@ -185,7 +185,7 @@ jobs:
             --base main \
             --head "${{ steps.merge.outputs.branch }}" \
             --title "Sync from upstream Accounted" \
-            --body "Automated weekly sync from \`erp-mafia/gnubok@main\`."
+            --body "Automated weekly sync from \`erp-mafia/accounted@main\`."
 
       - name: Report conflict
         if: steps.merge.outputs.status == 'conflict'

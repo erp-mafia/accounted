@@ -107,7 +107,7 @@ export const GET = withRouteContext('report.kpi', async (request, { supabase, co
       // which reads agg.tb (equally unexcluded). The expense-composition KPI is
       // therefore blank for a closed year; changing it moves a displayed figure
       // for every company that ran bokslut, which is Stage 2 of #1051
-      // (DECISIONS.md:632), so it is recorded as a follow-up rather than done here.
+      // (DECISIONS.md archive 2026-07-29), so it is recorded as a follow-up rather than done here.
       generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include' }),
       generateARLedger(supabase, companyId),
       generateMonthlyBreakdown(supabase, companyId, periodId, { dimensions }),

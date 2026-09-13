@@ -8,8 +8,7 @@ import { mapSetupEntityType } from '@/lib/company-lookup/entity-type-map'
 import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
 
 /**
- * Pure state machine for the journey onboarding
- * (dev_docs/onboarding_migration_plan.md). The component renders `step`,
+ * Pure state machine for the journey onboarding. The component renders `step`,
  * dispatches actions, and performs the side effects (the single TIC lookup
  * via fetchCompanyLookup, the createCompanyFromOnboarding call); the reducer
  * owns every transition and every settings write.

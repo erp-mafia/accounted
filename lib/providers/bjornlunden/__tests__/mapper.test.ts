@@ -11,7 +11,7 @@ import {
 
 /**
  * Fixture-driven tests against payload shapes captured from the BL sandbox
- * (dev_docs/bjorn_lunden/fixtures/, 2026-06). The shapes matter more than the
+ * (2026-06), trimmed and inlined below. The shapes matter more than the
  * values: `status` is an ARRAY of numeric codes, customer and supplier use
  * different field names for the same concepts, and journal `amount` carries
  * the debit/credit sign.

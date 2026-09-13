@@ -7,7 +7,7 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 [![pg-real tests](https://github.com/erp-mafia/accounted/actions/workflows/test-pg-real.yml/badge.svg)](https://github.com/erp-mafia/accounted/actions/workflows/test-pg-real.yml)
 [![Docker](https://github.com/erp-mafia/accounted/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/erp-mafia/accounted/actions/workflows/docker-publish.yml)
 
-[Website](https://accounted.se) · [Hosted app](https://app.gnubok.se) · [Documentation](https://docs.gnubok.se)
+[Website](https://accounted.se) · [Hosted app](https://app.accounted.se) · [Documentation](https://docs.gnubok.se)
 
 <!-- Hero screenshot goes here (pending founder-approved shot):
 ![Accounted dashboard](docs/assets/hero.png)
@@ -19,7 +19,7 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 
 **Agent-native.** The full bookkeeping engine is exposed as 150+ MCP (Model Context Protocol) tools with scoped API keys or OAuth, so an AI agent can do the books in Accounted: categorize transactions, draft vouchers, reconcile periods, and prepare declarations. Posting is staged for human approval, so the agent proposes and you decide.
 
-**Yours to run.** AGPL-3.0 licensed and fully self-hostable with Docker and Supabase. Use the hosted version at [app.gnubok.se](https://app.gnubok.se) or run your own.
+**Yours to run.** AGPL-3.0 licensed and fully self-hostable with Docker and Supabase. Use the hosted version at [app.accounted.se](https://app.accounted.se) or run your own.
 
 ## Features
 

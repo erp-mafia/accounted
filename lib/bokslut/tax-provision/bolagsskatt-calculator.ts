@@ -223,7 +223,7 @@ export async function getBookedBolagsskatt(
   const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
     // The contract above is an OPEN period, where no closing entry exists, so
     // 'include' and 'exclude-final' agree. Left as 'include' to keep the tax
-    // path byte-identical: DECISIONS.md:632 records that this call chain
+    // path byte-identical: DECISIONS.md archive 2026-07-29 records that this call chain
     // already caused a too-high-tax customer bug once.
     closingEntry: 'include',
   })

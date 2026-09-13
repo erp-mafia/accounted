@@ -27,7 +27,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  *  3. `company_settings.employer_registered` (nullable, 20260717151000): whether
  *     the company is registered as an employer with Skatteverket. The column is
  *     nullable precisely so that "nobody ever attested this" is representable
- *     (DECISIONS.md 2026-07-17), so a non-null value settles the question in
+ *     (DECISIONS.md archive 2026-07-17), so a non-null value settles the question in
  *     BOTH directions.
  *  4. `company_settings.pays_salaries` (NOT NULL DEFAULT false, 20260401000000):
  *     the "Betalar löner" toggle on /settings/tax. `true` is evidence. `false`

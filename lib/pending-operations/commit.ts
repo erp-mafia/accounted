@@ -4,8 +4,9 @@
  * Used by:
  *   - The web UI commit route (app/api/pending-operations/[id]/commit/route.ts)
  *     when a human clicks "Approve"
- *   - The MCP server (extensions/general/mcp-server/server.ts) when a trusted
- *     agent stages a low-risk op that the company has opted in to auto-commit
+ *   - The bulk-approval route (app/api/pending-operations/bulk-commit/route.ts)
+ *   - The MCP server (extensions/general/mcp-server/server.ts) when an agent
+ *     relays a human approval
  *
  * Both paths converge here so the same audit trail, event emission, error
  * handling, and status transition logic apply.
@@ -285,7 +286,7 @@ export interface CommitOptions {
    * 'bulk_accept'. MCP approvals pass the relaying credential: 'api_key'
    * (gnubok-mcp bridge) or 'agent' (OAuth connector), so the immutable layer
    * records that the acknowledgment was agent-relayed rather than a
-   * first-party human session (agent_first_vision.md §8 P0-1). Every path is
+   * first-party human session. Every path is
    * still human-approval-gated; agent auto-commit was removed in
    * 20260505190027_drop_agent_auto_commit.
    */
@@ -7373,8 +7374,8 @@ async function commitLinkTransactionJournalEntry(
  * Execute a pending_operation by type, update its status row, and return a
  * normalized CommitResult.
  *
- * Used by both the human-approval route and the auto-commit path. Status row
- * transitions are applied here so the two callers stay consistent.
+ * Used by every approval path (web single and bulk approval, MCP-relayed
+ * approval). Status row transitions are applied here so they stay consistent.
  *
  * When opts.actor is set, the entire executor runs inside a runWithActor()
  * scope so EVERY journal-entry commit the operation makes (regardless of
@@ -7457,8 +7458,8 @@ async function commitPendingOperationInner(
   }
 
   // ── Atomic claim: flip status pending → committing in a single conditional
-  //    update. If 0 rows are affected, another caller (auto-commit ↔ human
-  //    approval, or two parallel approvals) already claimed this op and we
+  //    update. If 0 rows are affected, another caller (two parallel approvals,
+  //    e.g. web and MCP) already claimed this op and we
   //    must not run side-effects. Without this, both callers can pass the
   //    in-memory status check and double-book journal entries, send duplicate
   //    emails, etc.

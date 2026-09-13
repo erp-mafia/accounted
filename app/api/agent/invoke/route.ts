@@ -75,8 +75,6 @@ const BodySchema = z.object({
 // `kind` identifies the event type: see lib/agent/chat/run-turn.ts StreamEvent.
 //
 // Auth: the user must be a member of the resolved company.
-//
-// Plan ref: dev_docs/specialized-agent-plan.md §9 (chat loop).
 export async function POST(request: Request) {
   const { user, supabase, error } = await requireAuth()
   if (error) return error

@@ -71,7 +71,7 @@ export async function generateResultatrapport(
   // 'exclude-all-year-end', NOT 'exclude-final', so this report keeps showing
   // the same profit as the formal Resultaträkning. Moving
   // generateIncomeStatement to 'exclude-final' is Stage 2 of #1051 and
-  // deliberately deferred: see DECISIONS.md:632. When that lands, this call
+  // deliberately deferred: see DECISIONS.md archive 2026-07-29. When that lands, this call
   // site moves with it.
   const currentTb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
     closingEntry: 'exclude-all-year-end',

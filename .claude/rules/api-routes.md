@@ -5,8 +5,6 @@ paths:
 
 # API Route Pattern
 
-Use the `/erp-api-route` skill when scaffolding new endpoints.
-
 **Default: wrap every cookie-session route in `withRouteContext`** (`lib/api/with-route-context.ts`). It is the only path that enforces MFA (AAL2) on hosted: it calls `requireAuth()`, resolves the active `companyId`, optionally gates non-viewer role (`requireWrite: true`), and converts thrown errors into the canonical envelope. **Never hand-roll `supabase.auth.getUser()` in a route**: that skips MFA. CI enforces this via the ratchet guard (`npm run check:guards`); a new route calling `getUser()` directly fails the build.
 
 ```typescript
@@ -41,10 +39,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 - Routes that emit events must call `ensureInitialized()` at module level.
 - Opt out of `withRouteContext` only when the route genuinely can't guarantee a company context (e.g. onboarding): then call `requireAuth()` directly so MFA is still enforced.
 - API-key auth (`/api/v1/*`) uses `createServiceClientNoCookies()` + `v1ErrorResponse`; every query still filters by `company_id`.
+- Journal entries a route creates: when the entry IS the accounting record (mark paid, mark sent under kontantmetoden, payout settle), a failed commit fails the request, otherwise AP/AR diverges from the ledger. When the entry is a side effect of the primary action (e.g. categorizing a transaction), log the failure with `log` and let the primary action succeed.
 
 ## Endpoint map (`app/api/`)
 
-560 `route.ts` files under 55 top-level families (2026-08-26). Counts in parentheses; regenerate with `find app/api -name route.ts | awk -F/ '{print $3}' | sort | uniq -c`.
+Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift; regenerate with `find app/api -name route.ts | awk -F/ '{print $3}' | sort | uniq -c`.
 
 - `/api/v1/*` (111): the public API-key REST surface (`withApiV1`, `lib/api/v1/`). Companies (list + create), customers, invoices, suppliers, supplier-invoices, transactions (incl. `{id}/ignore` POST/DELETE: no verifikat, the locked-period escape hatch for non-business rows), journal-entries, fiscal-periods, accounts, articles, documents, dimensions, employees, salary-runs, reports (16, incl. balance-sheet/income-statement PDFs), reconciliation (11, account-keyed), imports, operations, compliance, skatteverket/vat-declarations, settings, inbox-items, voucher-gap-explanations, webhooks, webhook-deliveries, openapi.json, health
 - `/api/bookkeeping/*` (64): accounts, account-balances, fiscal-periods, journal-entries (CRUD/reverse/correct), journal-entry-lines, accruals, voucher-gaps, voucher-sequences, no-doc-required, fix-cash-mismatch

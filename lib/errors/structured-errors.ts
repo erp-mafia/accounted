@@ -8,9 +8,7 @@
  *   - message_en: English message for agents and developer logs
  *   - remediation: optional pointer to a fix (tool/resource/description)
  *
- * Adding a new code = add a row here. The error-code-matrix in
- * `.claude/plans/for-all-of-those-mutable-sunset.md` lists the codes per
- * operation; keep that document and this file in sync.
+ * Adding a new code = add a row here.
  *
  * Codes follow `<DOMAIN>_<OPERATION>_<CAUSE>` naming. Stable forever once
  * shipped: agents pattern-match on them.
@@ -4510,7 +4508,7 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
   },
 }
 
-// Dimensions registry (kostnadsställe/projekt): dev_docs/dimensions_implementation_plan.md §6
+// Dimensions registry (kostnadsställe/projekt)
 const DIMENSION: Record<string, StructuredErrorEntry> = {
   DIMENSION_NOT_FOUND: {
     httpStatus: 404,
