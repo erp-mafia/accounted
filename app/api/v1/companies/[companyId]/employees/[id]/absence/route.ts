@@ -43,9 +43,9 @@ const AbsenceDay = z.object({
 
 const RangeQuery = z
   .object({
-    from: isoDate,
-    to: isoDate,
-    type: AbsenceTypeSchema.optional(),
+    from: isoDate.describe('YYYY-MM-DD. First day of the range (inclusive). Required.'),
+    to: isoDate.describe('YYYY-MM-DD. Last day of the range (inclusive), not before from. Required.'),
+    type: AbsenceTypeSchema.optional().describe('Only days of this absence type. Default: every type.'),
   })
   .refine((v) => v.from <= v.to, { message: 'from must be <= to', path: ['from'] })
 
@@ -84,6 +84,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: RangeQuery },
   response: { success: listEnvelope(AbsenceDay) },
 })
 
@@ -279,6 +280,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: true,
+  request: { query: RangeQuery },
   response: { success: dataEnvelope(DeleteRangeResponse) },
 })
 

@@ -47,6 +47,25 @@ const StatusResponse = z.object({
   unexplained_difference: z.number().nullable(),
 })
 
+const StatusQuery = z.object({
+  date_from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe('YYYY-MM-DD. Window start (inclusive). Omit for no lower bound.'),
+  date_to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe('YYYY-MM-DD. Window end (inclusive). Omit for no upper bound.'),
+  // Settlement account (BAS code), e.g. '1930' / '1932'. Defaults to 1930.
+  account_number: z
+    .string()
+    .regex(/^\d{4}$/)
+    .optional()
+    .describe('Settlement account (4-digit BAS number of a bank account, e.g. 1932). Default: 1930. Any other number must belong to one of the company\'s cash accounts.'),
+})
+
 registerEndpoint({
   operation: 'reconciliation.bank.status',
   method: 'GET',
@@ -92,6 +111,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: StatusQuery },
   response: { success: dataEnvelope(StatusResponse) },
 })
 
@@ -99,13 +119,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'reconciliation.bank.status',
   async (request, ctx) => {
     const url = new URL(request.url)
-    const Filters = z.object({
-      date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-      date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-      // Settlement account (BAS code), e.g. '1930' / '1932'. Defaults to 1930.
-      account_number: z.string().regex(/^\d{4}$/).optional(),
-    })
-    const parsed = Filters.safeParse({
+    const parsed = StatusQuery.safeParse({
       date_from: url.searchParams.get('date_from') ?? undefined,
       date_to: url.searchParams.get('date_to') ?? undefined,
       account_number: url.searchParams.get('account_number') ?? undefined,

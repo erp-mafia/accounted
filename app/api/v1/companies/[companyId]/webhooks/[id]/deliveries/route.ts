@@ -15,7 +15,12 @@ import { paginated } from '@/lib/api/v1/response'
 import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
-import { decodeDefaultCursor, encodeDefaultCursor, parsePaginationParams } from '@/lib/api/v1/pagination'
+import {
+  decodeDefaultCursor,
+  encodeDefaultCursor,
+  parsePaginationParams,
+  PaginationQueryShape,
+} from '@/lib/api/v1/pagination'
 
 const DELIVERY_COLUMNS =
   'id, webhook_id, event_type, status, attempts, next_attempt_at, response_status, response_body, error, request_id, created_at, delivered_at'
@@ -33,6 +38,14 @@ const DeliverySummary = z.object({
   request_id: z.string().nullable(),
   created_at: z.string(),
   delivered_at: z.string().nullable(),
+})
+
+const DeliveriesQuery = z.object({
+  ...PaginationQueryShape,
+  delivery_id: z
+    .string()
+    .optional()
+    .describe('Return only this delivery (its id). Combine with the webhook id in the path.'),
 })
 
 registerEndpoint({
@@ -76,6 +89,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: DeliveriesQuery },
   response: { success: listEnvelope(DeliverySummary) },
 })
 

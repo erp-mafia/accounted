@@ -44,20 +44,20 @@ Response `200`:
   data: {
     id: string,
     file_name: string,
-    mime_type: string,
+    mime_type: string | null,
     file_size_bytes: number,
     sha256_hash: string,
     version: number,
     is_current_version: boolean,
-    upload_source: string,
-    journal_entry_id: string,
-    journal_entry_line_id: string,
+    upload_source: string | null,
+    journal_entry_id: string | null,
+    journal_entry_line_id: string | null,
     created_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -113,7 +113,7 @@ Response `200`:
   data: {
     id: string,
     file_name: string,
-    mime_type: string,
+    mime_type: string | null,
     sha256_hash: string,
     is_current_version: boolean,
     download_url: string,
@@ -122,7 +122,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -170,6 +170,7 @@ Sets journal_entry_id (and optionally journal_entry_line_id) on an existing docu
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -186,11 +187,11 @@ Example request:
 Response `200`:
 ```ts
 {
-  data: { id: string, journal_entry_id: string, journal_entry_line_id: string, file_name: string },
+  data: { id: string, journal_entry_id: string, journal_entry_line_id: string | null, file_name: string },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -255,7 +256,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>

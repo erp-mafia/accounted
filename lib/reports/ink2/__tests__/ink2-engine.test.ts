@@ -51,9 +51,10 @@ describe('INK2R Account Mappings', () => {
       expect(findSRUCodeForAccount('1099')).toBe('7201')
     })
 
-    it('1080-1089 -> 7202 (Förskott immateriella)', () => {
-      expect(findSRUCodeForAccount('1080')).toBe('7202')
-      expect(findSRUCodeForAccount('1089')).toBe('7202')
+    it('1088 -> 7202 (Förskott immateriella); 1080-1087 and 1089 stay on 7201', () => {
+      expect(findSRUCodeForAccount('1088')).toBe('7202')
+      expect(findSRUCodeForAccount('1080')).toBe('7201')
+      expect(findSRUCodeForAccount('1089')).toBe('7201')
     })
 
     it('1100-1119, 1130-1179, 1190-1199 -> 7214 (Byggnader och mark)', () => {
@@ -79,15 +80,22 @@ describe('INK2R Account Mappings', () => {
       expect(findSRUCodeForAccount('1299')).toBe('7215')
     })
 
-    it('1500-1519 -> 7251 (Kundfordringar)', () => {
-      expect(findSRUCodeForAccount('1500')).toBe('7251')
+    it('151x-155x and 158x -> 7251 (Kundfordringar); 1500-1509 has no post', () => {
       expect(findSRUCodeForAccount('1510')).toBe('7251')
       expect(findSRUCodeForAccount('1519')).toBe('7251')
+      expect(findSRUCodeForAccount('1520')).toBe('7251')
+      expect(findSRUCodeForAccount('1559')).toBe('7251')
+      expect(findSRUCodeForAccount('1580')).toBe('7251')
+      expect(findSRUCodeForAccount('1500')).toBeNull()
     })
 
-    it('1520-1559 -> 7261 (Övriga fordringar, not 7251)', () => {
-      expect(findSRUCodeForAccount('1520')).toBe('7261')
-      expect(findSRUCodeForAccount('1550')).toBe('7261')
+    it('161x, 163x-165x, 168x-169x -> 7261 (Övriga fordringar)', () => {
+      expect(findSRUCodeForAccount('1610')).toBe('7261')
+      expect(findSRUCodeForAccount('1630')).toBe('7261')
+      expect(findSRUCodeForAccount('1650')).toBe('7261')
+      expect(findSRUCodeForAccount('1680')).toBe('7261')
+      expect(findSRUCodeForAccount('1573')).toBe('7261')
+      expect(findSRUCodeForAccount('1673')).toBe('7261')
     })
 
     it('1700-1799 -> 7263 (Förutbetalda kostnader)', () => {
@@ -256,20 +264,20 @@ describe('INK2R Account Mappings', () => {
   describe('no overlap between mappings', () => {
     it('representative boundary accounts match exactly one mapping', () => {
       const testAccounts = [
-        '1079', '1080', // 7201/7202 boundary
-        '1089', '1090', // 7202/7201 boundary
+        '1087', '1088', // 7201/7202 boundary
+        '1088', '1089', // 7202/7201 boundary
         '1099', '1100', // 7201/7214 boundary
         '1119', '1120', // 7214/7216 boundary
         '1129', '1130', // 7216/7214 boundary
         '1199', '1200', // 7214/7215 boundary
         '1299', '1311', // 7215/7230 boundary
-        '1519', '1520', // 7251/7261 boundary
-        '1559', '1560', // 7261/7252 boundary
+        '1589', '1610', // 7251/7261 boundary
+        '1559', '1560', // 7251/7252 boundary
         '1930', '1999', // 7281 bank accounts
         '2089', '2090', // 7301/7302 boundary
         '2099', '2110', // 7302/7321 boundary
-        '2439', '2440', // 7361/7365 boundary
-        '2449', '2450', // 7365/7363 boundary
+        '2439', '2440', // 7363/7365 boundary
+        '2449', '2450', // 7365/7364 boundary
         '2499', '2500', // 7369/7368 boundary
         '2599', '2600', // 7368/7369 boundary
         '2899', '2900', // 7369/7370 boundary

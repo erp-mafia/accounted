@@ -828,8 +828,9 @@ export async function listSkattekontoPaymentDue(
 export async function countSkattekontoPaymentDue(
   supabase: SupabaseClient,
   companyId: string,
+  today: string = todayIsoStockholm(),
 ): Promise<number> {
-  return (await listSkattekontoPaymentDue(supabase, companyId)) ? 1 : 0
+  return (await listSkattekontoPaymentDue(supabase, companyId, today)) ? 1 : 0
 }
 
 /**

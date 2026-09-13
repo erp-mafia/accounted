@@ -25,6 +25,7 @@ Returns the customer-receivable ledger as of `as_of_date` (defaults to today). E
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `as_of_date` | query | `string` | no | YYYY-MM-DD, a real calendar date between 2000 and next year. Default: today (UTC). |
 
 Response `200`:
 ```ts
@@ -33,7 +34,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -75,6 +76,7 @@ Returns the annual avgifter basis per employee for `year`, summed across booked 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `year` | query | `number` | yes | Year, 2020-2100. Required. |
 
 Response `200`:
 ```ts
@@ -83,7 +85,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -126,6 +128,9 @@ Returns assets / liabilities / equity grouped into BAS sections, with the period
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `to_date` | query | `string` | no | YYYY-MM-DD inside the fiscal period: the position as of this date. Default: the period end. |
+| `as_of` | query | `string` | no | Alias for to_date. Pass one or the other, not both. |
 
 Response `200`:
 ```ts
@@ -134,7 +139,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -181,6 +186,9 @@ Renders the balansräkning as application/pdf, byte-equivalent to the dashboard 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `to_date` | query | `string` | no | YYYY-MM-DD inside the fiscal period: the position as of this date. Default: the period end. |
+| `as_of` | query | `string` | no | Alias for to_date. Pass one or the other, not both. |
 
 Response `200` (`application/pdf`).
 
@@ -203,6 +211,7 @@ Validates that the target period's opening balances (IB) equal the prior period'
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
 
 Response `200`:
 ```ts
@@ -211,7 +220,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -253,6 +262,9 @@ Returns every posted journal line in the period grouped by account, with opening
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `account_from` | query | `string` | no | Lowest account number to include (inclusive), 3-8 digits, e.g. 3000. |
+| `account_to` | query | `string` | no | Highest account number to include (inclusive), 3-8 digits, e.g. 3999. |
 
 Response `200`:
 ```ts
@@ -261,7 +273,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -303,6 +315,9 @@ Returns the period's revenue and expenses grouped by BAS class with subtotals (g
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `from_date` | query | `string` | no | YYYY-MM-DD, inside the fiscal period. Omit with to_date for the whole period. |
+| `to_date` | query | `string` | no | YYYY-MM-DD, inside the fiscal period and not before from_date. |
 
 Response `200`:
 ```ts
@@ -311,7 +326,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -358,6 +373,9 @@ Renders the resultaträkning as application/pdf, byte-equivalent to the dashboar
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `from_date` | query | `string` | no | YYYY-MM-DD, inside the fiscal period. Omit with to_date for the whole period. |
+| `to_date` | query | `string` | no | YYYY-MM-DD, inside the fiscal period and not before from_date. |
 
 Response `200` (`application/pdf`).
 
@@ -381,6 +399,7 @@ Returns every committed journal entry in the period with its voucher number, dat
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
 
 Response `200`:
 ```ts
@@ -389,7 +408,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -429,6 +448,7 @@ Returns revenue + expenses + net result per calendar month inside the fiscal per
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
 
 Response `200`:
 ```ts
@@ -437,7 +457,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -480,6 +500,9 @@ Returns per-employee salary figures (gross / tax / net / avgifter / vacation acc
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `year` | query | `number` | yes | Payroll year, 2020-2100. Required. |
+| `month_from` | query | `number` | no | First month to include, 1-12 (inclusive). |
+| `month_to` | query | `number` | no | Last month to include, 1-12 (inclusive). |
 
 Response `200`:
 ```ts
@@ -488,7 +511,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -532,6 +555,9 @@ Returns the period's SIE4 export as text/plain UTF-8. Includes #FNAMN / #ORGNR h
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `exclude_closing` | query | `string` | no | true leaves the year-end closing verifikat (source_type year_end) out of the #VER records, for importing into a system that books its own closing. Default: included. Archive the default, complete export. |
+| `encoding` | query | `string` | no | cp437 returns CP437 bytes for legacy desktop importers. Default: UTF-8. |
 
 Response `200` (`text/plain`).
 
@@ -554,6 +580,7 @@ Returns the supplier-payable ledger as of `as_of_date` (defaults to today). Each
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `as_of_date` | query | `string` | no | YYYY-MM-DD, a real calendar date between 2000 and next year. Default: today (UTC). |
 
 Response `200`:
 ```ts
@@ -562,7 +589,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -605,6 +632,7 @@ Returns the per-account opening balance + period debit/credit + closing balance 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
 
 Response `200`:
 ```ts
@@ -618,7 +646,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -670,6 +698,7 @@ Returns per-employee semesterlöneskuld balances as of year-end based on their v
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `year` | query | `number` | yes | Year, 2020-2100. Required. |
 
 Response `200`:
 ```ts
@@ -678,7 +707,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -722,6 +751,10 @@ Computes momsdeklaration rutor for the given period_type / year / period. The re
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_type` | query | `"monthly" \| "quarterly" \| "yearly"` | yes | Declaration period length. Required. |
+| `year` | query | `number` | yes | Calendar year of the period, 2000-2100. Required. |
+| `period` | query | `number` | yes | Period number within the year: 1-12 for monthly, 1-4 for quarterly, 1 for yearly. Required. |
+| `accounting_method` | query | `"accrual" \| "cash"` | no | Accepted for backward compatibility; has no effect on the figures. |
 
 Response `200`:
 ```ts
@@ -730,7 +763,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>

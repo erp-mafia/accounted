@@ -262,7 +262,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Pågående projekt och förskott för immateriella anläggningstillgångar',
-    sru_code: '7202',
+    sru_code: '7201',
     k2_excluded: false,
   },
   {
@@ -273,7 +273,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Pågående projekt för immateriella anläggningstillgångar',
-    sru_code: '7202',
+    sru_code: '7201',
     // Ej K2: pagaende egenupparbetade immateriella projekt ar forbjudna under
     // BFNAR 2016:10 punkt 10.4 (egenupparbetade immateriella far inte aktiveras).
     // Saknades i 20260225103139-backfillen; DB-raderna rattas i 20260805112000.
@@ -760,7 +760,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Pågående nyanläggningar och förskott för maskiner respektive inventarier',
-    sru_code: '7215',
+    sru_code: '7217',
     k2_excluded: false,
   },
   {
@@ -771,7 +771,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Pågående nyanläggningar, maskiner respektive inventarier',
-    sru_code: '7215',
+    sru_code: '7217',
     k2_excluded: false,
   },
   {
@@ -782,7 +782,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Förskott för maskiner respektive inventarier',
-    sru_code: '7215',
+    sru_code: '7217',
     k2_excluded: false,
   },
   {
@@ -1046,7 +1046,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Andelar i övriga företag som det finns ett ägarintresse i',
-    sru_code: '7231',
+    sru_code: '7233',
     k2_excluded: false,
   },
   {
@@ -1057,7 +1057,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Ackumulerade nedskrivningar av andelar i övriga företag som det finns ett ägarintresse i',
-    sru_code: '7231',
+    sru_code: '7233',
     k2_excluded: false,
   },
   {
@@ -1123,7 +1123,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Långfristiga fordringar hos övriga företag som det finns ett ägarintresse i',
-    sru_code: '7232',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1134,7 +1134,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Ackumulerade nedskrivningar av långfristiga fordringar hos övriga företag som det finns ett ägarintresse i',
-    sru_code: '7232',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1266,7 +1266,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Långfristiga fordringar som inte faller under andra kategorier, t.ex. deposition.',
-    sru_code: '7233',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1277,7 +1277,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Långfristiga reversfordringar',
-    sru_code: '7233',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1288,7 +1288,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Långfristiga fordringar hos anställda',
-    sru_code: '7233',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1299,7 +1299,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Lämnade depositioner, långfristiga',
-    sru_code: '7233',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1310,7 +1310,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Derivat',
-    sru_code: '7233',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1321,7 +1321,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kapitalförsäkring',
-    sru_code: '7233',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1332,7 +1332,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Långfristiga kontraktsfordringar',
-    sru_code: '7233',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1343,7 +1343,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Långfristiga kundfordringar',
-    sru_code: '7233',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1354,7 +1354,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Ackumulerade nedskrivningar av andra långfristiga fordringar',
-    sru_code: '7233',
+    sru_code: '7235',
     k2_excluded: false,
   },
   {
@@ -1508,7 +1508,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Halvfabrikat och arbeten under tillverkning som ännu inte slutförts.',
-    sru_code: '7244',
+    sru_code: '7245',
     k2_excluded: false,
   },
   {
@@ -1519,7 +1519,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Pågående arbeten, nedlagda kostnader',
-    sru_code: '7244',
+    sru_code: '7245',
     k2_excluded: false,
   },
   {
@@ -1530,7 +1530,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Pågående arbeten, fakturering',
-    sru_code: '7244',
+    sru_code: '7245',
     k2_excluded: false,
   },
   {
@@ -1541,7 +1541,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Förändring av pågående arbeten',
-    sru_code: '7244',
+    sru_code: '7245',
     k2_excluded: false,
   },
   {
@@ -1552,7 +1552,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Förskott för varor och tjänster',
-    sru_code: '7244',
+    sru_code: '7246',
     k2_excluded: false,
   },
   {
@@ -1563,7 +1563,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Remburser',
-    sru_code: '7244',
+    sru_code: '7246',
     k2_excluded: false,
   },
   {
@@ -1574,7 +1574,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Övriga förskott till leverantörer',
-    sru_code: '7244',
+    sru_code: '7246',
     k2_excluded: false,
   },
   {
@@ -1585,7 +1585,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Övriga lagertillgångar',
-    sru_code: '7245',
+    sru_code: '7244',
     k2_excluded: false,
   },
   {
@@ -1596,7 +1596,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Lager av värdepapper',
-    sru_code: '7245',
+    sru_code: '7244',
     k2_excluded: false,
   },
   {
@@ -1607,7 +1607,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Lager av fastigheter',
-    sru_code: '7245',
+    sru_code: '7244',
     k2_excluded: false,
   },
   {
@@ -1618,7 +1618,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Djur som klassificeras som omsättningstillgång',
-    sru_code: '7245',
+    sru_code: '7244',
     k2_excluded: false,
   },
   {
@@ -1706,7 +1706,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Växelfordringar',
-    sru_code: '7261',
+    sru_code: '7251',
     k2_excluded: false,
   },
   {
@@ -1717,7 +1717,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Osäkra växelfordringar',
-    sru_code: '7261',
+    sru_code: '7251',
     k2_excluded: false,
   },
   {
@@ -1728,7 +1728,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'credit',
     description: 'Nedskrivning av växelfordringar',
-    sru_code: '7261',
+    sru_code: '7251',
     k2_excluded: false,
   },
   {
@@ -1739,7 +1739,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kontraktsfordringar',
-    sru_code: '7261',
+    sru_code: '7251',
     k2_excluded: false,
   },
   {
@@ -1750,7 +1750,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kontraktsfordringar',
-    sru_code: '7261',
+    sru_code: '7251',
     k2_excluded: false,
   },
   {
@@ -1761,7 +1761,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Belånade kontraktsfordringar',
-    sru_code: '7261',
+    sru_code: '7251',
     k2_excluded: false,
   },
   {
@@ -1772,7 +1772,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Tvistiga kontraktsfordringar',
-    sru_code: '7261',
+    sru_code: '7251',
     k2_excluded: false,
   },
   {
@@ -1783,7 +1783,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Nedskrivning av kontraktsfordringar',
-    sru_code: '7261',
+    sru_code: '7251',
     k2_excluded: false,
   },
   {
@@ -1794,7 +1794,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Konsignationsfordringar',
-    sru_code: '7261',
+    sru_code: '7251',
     k2_excluded: false,
   },
   {
@@ -1904,7 +1904,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kundfordringar hos övriga företag som det finns ett ägarintresse i',
-    sru_code: '7252',
+    sru_code: '7261',
     k2_excluded: false,
   },
   {
@@ -2025,7 +2025,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kortfristiga fordringar hos koncernföretag',
-    sru_code: '7261',
+    sru_code: '7252',
     k2_excluded: false,
   },
   {
@@ -2036,7 +2036,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kortfristiga fordringar hos moderföretag',
-    sru_code: '7261',
+    sru_code: '7252',
     k2_excluded: false,
   },
   {
@@ -2047,7 +2047,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kortfristiga fordringar hos dotterföretag',
-    sru_code: '7261',
+    sru_code: '7252',
     k2_excluded: false,
   },
   {
@@ -2058,7 +2058,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kortfristiga fordringar hos andra koncernföretag',
-    sru_code: '7261',
+    sru_code: '7252',
     k2_excluded: false,
   },
   {
@@ -2069,7 +2069,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kortfristiga fordringar hos intresseföretag, gemensamt styrda företag och övriga företag som det finns ett ägarintresse i',
-    sru_code: '7261',
+    sru_code: '7252',
     k2_excluded: false,
   },
   {
@@ -2080,7 +2080,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kortfristiga fordringar hos intresseföretag',
-    sru_code: '7261',
+    sru_code: '7252',
     k2_excluded: false,
   },
   {
@@ -2091,7 +2091,7 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     account_type: 'asset',
     normal_balance: 'debit',
     description: 'Kortfristiga fordringar hos gemensamt styrda företag',
-    sru_code: '7261',
+    sru_code: '7252',
     k2_excluded: false,
   },
   {

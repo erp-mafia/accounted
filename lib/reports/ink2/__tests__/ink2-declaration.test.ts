@@ -201,6 +201,23 @@ describe('generateINK2Declaration: closed fiscal year', () => {
     expect(result.ink2r['7550']).toBe(0)
   })
 
+  it('files a negative net on a plus/minus row in the minus-box field (7510), never as a negative 7411', async () => {
+    // Lager minskade med 50 000: a debit on 4990 is a cost. The official BAS
+    // kopplingstabell puts the net on 7411 when positive and on 7510 when
+    // negative; the form has a box for each.
+    const closed = [...CLOSED_ROWS, row('4990', 'Förändring av lager', 50_000)]
+    const preClosing = [...PRE_CLOSING_ROWS, row('4990', 'Förändring av lager', 50_000)]
+    stubTrialBalances(closed, preClosing)
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.ink2r['7411']).toBe(0)
+    expect(result.ink2r['7510']).toBe(50_000)
+    expect(result.breakdown['7510'].accounts.map((a) => a.accountNumber)).toEqual(['4990'])
+    expect(result.breakdown['7411'].accounts).toEqual([])
+    expect(result.totals.operatingResult).toBe(550_000)
+    expect(result.totals.aretsResultat).toBe(392_000)
+  })
+
   it('computes the result subtotals', async () => {
     const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
 

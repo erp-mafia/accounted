@@ -15,6 +15,19 @@ import { getAccountStatus } from '@/lib/reconciliation/service'
 
 const DATE = ISO_DATE_RE
 
+const StatusQuery = z.object({
+  date_from: z
+    .string()
+    .regex(DATE)
+    .optional()
+    .describe('YYYY-MM-DD. Bank: start of the bridge window (default 1 January of the current year). Skattekonto: scopes the item lists only; the bridge is anchored at the saldo snapshot.'),
+  date_to: z
+    .string()
+    .regex(DATE)
+    .optional()
+    .describe('YYYY-MM-DD. Bank: end of the bridge window (default today). Skattekonto: scopes the item lists only.'),
+})
+
 registerEndpoint({
   operation: 'reconciliation.accounts.status',
   method: 'GET',
@@ -65,6 +78,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
+  request: { query: StatusQuery },
   response: { success: dataEnvelope(ReconciliationStatusSchema) },
 })
 
@@ -79,11 +93,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; accountKey: 
       })
     }
     const url = new URL(request.url)
-    const Filters = z.object({
-      date_from: z.string().regex(DATE).optional(),
-      date_to: z.string().regex(DATE).optional(),
-    })
-    const parsed = Filters.safeParse({
+    const parsed = StatusQuery.safeParse({
       date_from: url.searchParams.get('date_from') ?? undefined,
       date_to: url.searchParams.get('date_to') ?? undefined,
     })

@@ -29,15 +29,25 @@ Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registe
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `status` | query | `"draft" \| "sent" \| "paid" \| "partially_paid" \| "overdue" \| "cancelled" \| "credited"` | no | Only invoices in this status. |
+| `customer_id` | query | `string` | no | Only invoices to this customer (id). |
+| `document_type` | query | `"invoice" \| "proforma" \| "delivery_note" \| "quote"` | no | Only this document type. Default: every type. |
+| `quote_status` | query | `"open" \| "accepted" \| "declined" \| "expired"` | no | Quotes only (implies document_type=quote). expired = open with valid_until before today. |
+| `currency` | query | `string` | no | 3-letter ISO 4217 code, uppercase (e.g. SEK, EUR). |
+| `date_from` | query | `string` | no | YYYY-MM-DD. Invoices with invoice_date on or after this date. |
+| `date_to` | query | `string` | no | YYYY-MM-DD. Invoices with invoice_date on or before this date. |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
+| `expand` | query | `string` | no | Comma-separated related records to embed: customer, items. An unknown key returns 400 VALIDATION_ERROR. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, invoice_number: string, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string, quote_status: "open" | "accepted" | "declined" | "expired", currency: string, subtotal: number, vat_amount: number, total: number, remaining_amount: number, paid_at: string, created_at: string }[],
+  data: { id: string, invoice_number: string | null, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string | null, quote_status: "open" | "accepted" | "declined" | "expired" | null, currency: string, subtotal: number, vat_amount: number, total: number, remaining_amount: number, paid_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -106,6 +116,7 @@ Creates an invoice in draft status. The F-series invoice_number is allocated ato
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -134,8 +145,8 @@ Request body:
   external_invoice_number?: string | "",
   self_billing_agreement_ref?: string,
   received_date?: string | "",
-  payment_cash_account_id?: string | "",
-  items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number, vat_rate?: number, article_id?: string, revenue_account?: string, sales_order_item_id?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
+  payment_cash_account_id?: string | "" | null,
+  items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number | null, vat_rate?: number, article_id?: string | null, revenue_account?: string | null, sales_order_item_id?: string | null, deduction_type?: "rot" | "rut" | null, labor_hours?: number | null, work_type?: string | null, housing_designation?: string | null, apartment_number?: string | null, brf_org_number?: string | "" | null, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[]
 }
 ```
 
@@ -162,14 +173,14 @@ Response `200`:
 {
   data: {
     id: string,
-    invoice_number: string,
+    invoice_number: string | null,
     customer_id: string,
     invoice_date: string,
     due_date: string,
     status: string,
     document_type: string,
-    valid_until?: string,
-    quote_status?: string,
+    valid_until?: string | null,
+    quote_status?: string | null,
     currency: string,
     subtotal: number,
     vat_amount: number,
@@ -180,7 +191,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -231,31 +242,32 @@ Returns the full invoice record with the customer embedded. Pass ?expand=items f
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `expand` | query | `string` | no | Comma-separated related records to embed: items, payments. An unknown key returns 400 VALIDATION_ERROR. |
 
 Response `200`:
 ```ts
 {
   data: {
     id: string,
-    invoice_number: string,
+    invoice_number: string | null,
     customer_id: string,
     invoice_date: string,
     due_date: string,
     status: string,
     document_type: string,
-    valid_until?: string,
-    quote_status?: string,
-    quote_decided_at?: string,
+    valid_until?: string | null,
+    quote_status?: string | null,
+    quote_decided_at?: string | null,
     currency: string,
     total: number,
     remaining_amount: number,
-    paid_at: string,
+    paid_at: string | null,
     created_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -312,6 +324,7 @@ Partial update for invoices in draft status. Allowed fields: invoice_date, due_d
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -324,7 +337,7 @@ Request body:
   notes?: string | unknown,
   default_dimensions?: Record<string, string>,
   payment_cash_account_id?: string | unknown,
-  items?: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number, vat_rate?: number, article_id?: string, revenue_account?: string, sales_order_item_id?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
+  items?: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number | null, vat_rate?: number, article_id?: string | null, revenue_account?: string | null, sales_order_item_id?: string | null, deduction_type?: "rot" | "rut" | null, labor_hours?: number | null, work_type?: string | null, housing_designation?: string | null, apartment_number?: string | null, brf_org_number?: string | "" | null, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[]
 }
 ```
 
@@ -341,25 +354,25 @@ Response `200`:
 {
   data: {
     id: string,
-    invoice_number: string,
+    invoice_number: string | null,
     customer_id: string,
     invoice_date: string,
     due_date: string,
     status: string,
     document_type: string,
-    valid_until?: string,
-    quote_status?: string,
-    quote_decided_at?: string,
+    valid_until?: string | null,
+    quote_status?: string | null,
+    quote_decided_at?: string | null,
     currency: string,
     total: number,
     remaining_amount: number,
-    paid_at: string,
+    paid_at: string | null,
     created_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -405,6 +418,7 @@ Removes an invoice in draft status. An unnumbered draft (never finalized: no F-s
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -413,7 +427,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -457,6 +471,7 @@ Creates a credit note referencing the original invoice. The credit note carries 
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -479,13 +494,13 @@ Response `200`:
     credited_invoice_id: string,
     status: "sent",
     total: number,
-    journal_entry_id: string,
+    journal_entry_id: string | null,
     warnings?: { code: string, message: string }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -535,6 +550,7 @@ Marks a sent / overdue invoice as paid (or partially_paid). Books the payment vi
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -564,14 +580,14 @@ Response `200`:
     total: number,
     paid_amount: number,
     remaining_amount: number,
-    paid_at: string,
-    journal_entry_id: string,
+    paid_at: string | null,
+    journal_entry_id: string | null,
     warnings?: { code: string, message: string }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -621,6 +637,7 @@ Marks a draft invoice as sent: for invoices delivered outside Accounted (an exte
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `200`:
 ```ts
@@ -630,13 +647,13 @@ Response `200`:
     invoice_number: string,
     status: "sent",
     total: number,
-    journal_entry_id: string,
+    journal_entry_id: string | null,
     warnings?: { code: string, message: string }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -708,6 +725,7 @@ Sets quote_status on a quote (document_type=quote) to open, accepted or declined
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -726,18 +744,18 @@ Response `200`:
 {
   data: {
     id: string,
-    invoice_number: string,
+    invoice_number: string | null,
     document_type: "quote",
     status: string,
     quote_status: "open" | "accepted" | "declined",
     effective_quote_status: "open" | "accepted" | "declined" | "expired",
-    quote_decided_at: string,
-    valid_until: string
+    quote_decided_at: string | null,
+    valid_until: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -792,6 +810,7 @@ The full send pipeline: preflight PDF render → allocate F-series number atomic
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -818,17 +837,17 @@ Response `200`:
     invoice_number: string,
     status: "sent",
     total: number,
-    message_id: string,
+    message_id: string | null,
     sent_to: string,
-    cc: string,
+    cc: string | null,
     cc_addresses: string[],
-    journal_entry_id: string,
+    journal_entry_id: string | null,
     warnings?: { code: string, message: string }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
@@ -881,11 +900,12 @@ Bulk-creation endpoint. Each invoice in the request array is validated and inser
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
 {
-  invoices: { customer_id: string, invoice_date: string, due_date: string, delivery_date?: string | "", currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK", document_type?: "invoice" | "proforma" | "delivery_note" | "quote", valid_until?: string | "", your_reference?: string, our_reference?: string, invoice_marking?: string, notes?: string, payment_link_url?: string | "", payment_link_auto?: boolean, deduction_personnummer?: string, deduction_housing_designation?: string, deduction_apartment_number?: string, deduction_brf_org_number?: string | "", save_as_draft?: boolean, ore_rounding?: boolean, default_dimensions?: Record<string, string>, is_self_billed?: boolean, external_invoice_number?: string | "", self_billing_agreement_ref?: string, received_date?: string | "", payment_cash_account_id?: string | "", items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number, vat_rate?: number, article_id?: string, revenue_account?: string, sales_order_item_id?: string, deduction_type?: "rot" | "rut", labor_hours?: number, work_type?: string, housing_designation?: string, apartment_number?: string, brf_org_number?: string | "", accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[] }[],
+  invoices: { customer_id: string, invoice_date: string, due_date: string, delivery_date?: string | "", currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK", document_type?: "invoice" | "proforma" | "delivery_note" | "quote", valid_until?: string | "", your_reference?: string, our_reference?: string, invoice_marking?: string, notes?: string, payment_link_url?: string | "", payment_link_auto?: boolean, deduction_personnummer?: string, deduction_housing_designation?: string, deduction_apartment_number?: string, deduction_brf_org_number?: string | "", save_as_draft?: boolean, ore_rounding?: boolean, default_dimensions?: Record<string, string>, is_self_billed?: boolean, external_invoice_number?: string | "", self_billing_agreement_ref?: string, received_date?: string | "", payment_cash_account_id?: string | "" | null, items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number | null, vat_rate?: number, article_id?: string | null, revenue_account?: string | null, sales_order_item_id?: string | null, deduction_type?: "rot" | "rut" | null, labor_hours?: number | null, work_type?: string | null, housing_designation?: string | null, apartment_number?: string | null, brf_org_number?: string | "" | null, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[] }[],
   all_or_nothing?: boolean
 }
 ```
@@ -922,7 +942,7 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
