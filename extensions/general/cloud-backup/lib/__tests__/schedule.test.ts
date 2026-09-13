@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { isScheduleDue, stockholmHourToUtcHour } from '../schedule'
-import type { GoogleDriveSchedule } from '../../types'
+import type { CloudSchedule } from '../../types'
 
-function makeSchedule(overrides: Partial<GoogleDriveSchedule> = {}): GoogleDriveSchedule {
+function makeSchedule(overrides: Partial<CloudSchedule> = {}): CloudSchedule {
   return {
     enabled: true,
     hour_utc: 3,

@@ -47,8 +47,11 @@ Use `:paramName`; dispatcher extracts as `_paramName` search params:
 ## Dispatcher Flow
 
 1. Extract `extensionId` and `routePath` from URL segments
-2. Auth check (401) → match method+path (404) → AI consent check (403 for AI extensions)
-3. Extract path params → create `ExtensionContext` → call handler
+2. Per-extension runtime flag: `skatteverket` answers 503 `EXTENSION_DISABLED` unless `SKATTEVERKET_ENABLED=true`
+3. Match method + path (404); a route setting both `skipAuth` and `skipCompanyContext` is a 500 misconfiguration
+4. `skipAuth: true` routes (OAuth callbacks, inbound webhooks) run immediately, with no auth and no `ctx`
+5. `requireAuth()`, which enforces MFA on hosted; `skipCompanyContext: true` routes then run without `ctx`
+6. Resolve the company, run the paid-capability gate (`EXTENSION_REQUIRED_CAPABILITY` in `lib/entitlements/keys.ts`), extract path params, create `ExtensionContext`, call the handler
 
 ## Settings Route Pattern
 

@@ -91,26 +91,6 @@ describe('docker crontabs mirror vercel.json', () => {
       expect(raw[raw.length - 1], `trailing newline in crontab.${variant}`).toBe(0x0a)
     }
   })
-
-  it('keeps the two variants identical apart from the variant header line and the EXTRA_JOBS tail', () => {
-    const hosted = crontabText('hosted').split('\n')
-    const selfHosted = crontabText('self-hosted').split('\n')
-    const shared = Math.min(hosted.length, selfHosted.length)
-    const differing = hosted.slice(0, shared).filter((line, i) => line !== selfHosted[i])
-
-    // Any real divergence in the shared prefix must come from
-    // SCHEDULE_OVERRIDES, which is empty today. If that changes, widen this
-    // expectation deliberately.
-    expect(differing).toEqual([expect.stringContaining('# Variant: hosted')])
-
-    // The self-hosted file may only be longer by its EXTRA_JOBS block: one
-    // blank line, one comment line, one line per extra job.
-    const extraLines = EXTRA_JOBS['self-hosted'].length
-    const hostedExtraLines = EXTRA_JOBS.hosted.length
-    expect(selfHosted.length - hosted.length).toBe(
-      (extraLines > 0 ? extraLines + 2 : 0) - (hostedExtraLines > 0 ? hostedExtraLines + 2 : 0),
-    )
-  })
 })
 
 describe('EXTRA_JOBS', () => {
@@ -157,8 +137,8 @@ describe('exclusion and override tables', () => {
     ]
     const rendered = buildCrontab(sample, 'self-hosted', {
       excluded: { '/api/drop/cron': 'vercel-only, cannot work self-hosted' },
-      overrides: { hosted: {}, 'self-hosted': { '/api/keep/cron': '*/30 * * * *' } },
-      extraJobs: { hosted: [], 'self-hosted': [] },
+      overrides: { 'self-hosted': { '/api/keep/cron': '*/30 * * * *' } },
+      extraJobs: { 'self-hosted': [] },
     })
     const jobs = parseCrontab(rendered)
 
@@ -169,9 +149,8 @@ describe('exclusion and override tables', () => {
   it('renders extra jobs after the vercel.json jobs under their own comment line', () => {
     const rendered = buildCrontab([{ path: '/api/keep/cron', schedule: '0 1 * * *' }], 'self-hosted', {
       excluded: {},
-      overrides: { hosted: {}, 'self-hosted': {} },
+      overrides: { 'self-hosted': {} },
       extraJobs: {
-        hosted: [],
         'self-hosted': [{ path: '/api/only-here/cron', schedule: '17 * * * *', reason: 'test' }],
       },
     })
@@ -180,19 +159,19 @@ describe('exclusion and override tables', () => {
       { path: '/api/only-here/cron', schedule: '17 * * * *' },
     ])
     expect(rendered).toContain('# self-hosted-only jobs, not in vercel.json')
-    // hosted gets no tail at all when it has no extra jobs
-    const hosted = buildCrontab([{ path: '/api/keep/cron', schedule: '0 1 * * *' }], 'hosted', {
+    // A variant with no extra jobs gets no tail at all
+    const noExtras = buildCrontab([{ path: '/api/keep/cron', schedule: '0 1 * * *' }], 'self-hosted', {
       excluded: {},
-      overrides: { hosted: {}, 'self-hosted': {} },
-      extraJobs: { hosted: [], 'self-hosted': [] },
+      overrides: { 'self-hosted': {} },
+      extraJobs: { 'self-hosted': [] },
     })
-    expect(hosted).not.toContain('not in vercel.json')
+    expect(noExtras).not.toContain('not in vercel.json')
   })
 
   it('renders the curl invocation with unexpanded shell variables', () => {
-    const rendered = buildCrontab([{ path: '/api/x/cron', schedule: '0 1 * * *' }], 'hosted', {
+    const rendered = buildCrontab([{ path: '/api/x/cron', schedule: '0 1 * * *' }], 'self-hosted', {
       excluded: {},
-      overrides: { hosted: {}, 'self-hosted': {} },
+      overrides: { 'self-hosted': {} },
     })
     expect(rendered).toContain(
       'curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/x/cron',

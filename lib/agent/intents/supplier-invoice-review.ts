@@ -20,8 +20,6 @@ import { renderAgentGroundRules } from './shared-rules'
 //   3. Detect reverse charge cases (EU, bygg)
 //   4. Verify ML 17 kap 24§ mandatory fields are present
 //   5. Propose BAS account + VAT code
-//
-// Plan ref: dev_docs/specialized-agent-plan.md §8 (V1 intent #5).
 
 interface SupplierInvoiceReviewArgs {
   supplier_invoice_id: string

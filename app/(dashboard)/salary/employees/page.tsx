@@ -40,9 +40,8 @@ export default function EmployeesPage() {
   const searchParams = useSearchParams()
 
   // The "Ny anställd" modal is driven by the URL (?new=1) so every entry
-  // point (the header button, the empty state, and the legacy
-  // /salary/employees/new redirect) opens the same dialog, and the browser
-  // back button closes it. Same pattern as /invoices.
+  // point (the header button and the empty state) opens the same dialog, and
+  // the browser back button closes it. Same pattern as /invoices.
   const showNewEmployee = searchParams.has('new')
   const closeNewEmployee = () => router.replace('/salary/employees', { scroll: false })
   const openNewEmployee = () => router.push('/salary/employees?new=1', { scroll: false })

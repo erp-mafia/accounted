@@ -179,3 +179,85 @@ describe('GET /api/salary/runs/[id]/preview', () => {
     expect(data.pensionEntry).toBeNull()
   })
 })
+
+describe('GET /api/salary/runs/[id]/preview: previews the booking builder (feedback seq 384229)', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
+  })
+
+  type Line = { account_number: string; debit_amount: number; credit_amount: number }
+  const sum = (lines: Line[], side: 'debit_amount' | 'credit_amount') =>
+    Math.round(lines.reduce((s, l) => s + l[side], 0) * 100) / 100
+
+  it('previews a bilförmån run balanced: no 7385 debit without a counterpart', async () => {
+    enqueue({ data: CALCULATED_RUN }) // salary_runs
+    enqueue({
+      data: [
+        {
+          ...EMPLOYEE_ROW,
+          line_items: [
+            { item_type: 'base_salary', amount: 51158, account_number: '7210', is_net_deduction: false, is_gross_deduction: false },
+            // The benefit raises the tax base but has no cash flow: the
+            // booking skips it, so the preview must too.
+            { item_type: 'benefit_car', amount: 7049, account_number: '7385', is_net_deduction: false, is_gross_deduction: false },
+          ],
+        },
+      ],
+    }) // salary_run_employees
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/preview'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    expect(response.status).toBe(200)
+    const { data } = await response.json()
+
+    const lines = data.salaryEntry.lines as Line[]
+    expect(lines.some((l) => l.account_number === '7385')).toBe(false)
+    expect(lines.find((l) => l.account_number === '7210')?.debit_amount).toBe(51158)
+    expect(lines.find((l) => l.account_number === '2710')?.credit_amount).toBe(12268)
+    expect(lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(38890)
+    expect(sum(lines, 'debit_amount')).toBe(sum(lines, 'credit_amount'))
+    expect(data.salaryEntry.balanced).toBe(true)
+    expect(data.salaryEntry.difference).toBe(0)
+    expect(data.avgifterEntry.balanced).toBe(true)
+    expect(data.balanced).toBe(true)
+  })
+
+  it('applies the per-employee tax override exactly like the booking', async () => {
+    enqueue({ data: CALCULATED_RUN }) // salary_runs
+    enqueue({ data: [{ ...EMPLOYEE_ROW, tax_withheld_override: 12000 }] }) // salary_run_employees
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/preview'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    expect(response.status).toBe(200)
+    const { data } = await response.json()
+    const lines = data.salaryEntry.lines as Line[]
+    expect(lines.find((l) => l.account_number === '2710')?.credit_amount).toBe(12000)
+    expect(lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(39158)
+    expect(data.salaryEntry.balanced).toBe(true)
+  })
+
+  it('drops the zero-shaped avgifter entry for a run without avgifter, like the booking', async () => {
+    enqueue({ data: CALCULATED_RUN }) // salary_runs
+    enqueue({
+      data: [{ ...EMPLOYEE_ROW, avgifter_amount: 0, avgifter_basis: 0, employee: { employment_type: 'employee', f_skatt_status: 'f_skatt' } }],
+    }) // salary_run_employees
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/preview'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    expect(response.status).toBe(200)
+    const { data } = await response.json()
+    expect(data.avgifterEntry).toBeNull()
+    expect(data.salaryEntry.balanced).toBe(true)
+    expect(data.balanced).toBe(true)
+  })
+})

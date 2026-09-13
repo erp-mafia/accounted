@@ -80,7 +80,7 @@ jobs:
         # directories' node_modules. NODE_PATH is not an alternative here, the
         # ESM loader ignores it (CommonJS only).
         # Version tracks the exact package.json pin: 0.32.0 broke Bedrock
-        # streaming in prod (DECISIONS.md 2026-07-08) and check:guards enforces
+        # streaming in prod (DECISIONS.md archive 2026-07-08) and check:guards enforces
         # 0.29.1 repo-wide, so this job must not be the one place running an
         # unvetted build. Pinned exact + --ignore-scripts because this is the
         # privileged job (write token in env): no floating @latest, and no

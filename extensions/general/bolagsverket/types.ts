@@ -1,12 +1,11 @@
 /**
  * DTOs for Bolagsverket's REST services for digital inlämning av
- * årsredovisning, hand-written from Teknisk guide v3.4 (dev_docs/bokslut/
- * GUIDE.md §5 + §8 trafikexempel) and Anslutningsanvisning v1.7.
+ * årsredovisning, hand-written from Teknisk guide v3.4 (GUIDE §5 + §8
+ * trafikexempel) and Anslutningsanvisning v1.7.
  *
  * NOTE: the official OpenAPI 2.0 servicespecifikationer are still pending
- * manual download (dev_docs/bokslut/INDEX.md checklist → api/). When they
- * land, reconcile these types against the specs: the specs win on conflict
- * (GUIDE §5.1).
+ * manual download. When they land, reconcile these types against the specs:
+ * the specs win on conflict (GUIDE §5.1).
  */
 
 export type BolagsverketEnvironment = 'test' | 'accept' | 'prod'

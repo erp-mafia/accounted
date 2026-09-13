@@ -20,7 +20,6 @@ import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Loader2, SlidersHorizontal, Check } from 'lucide-react'
-import { useShell } from '@/components/dashboard/ShellProvider'
 import { useUiState } from '@/lib/hooks/use-ui-state'
 import { persistUiState } from '@/lib/ui-state/client'
 import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
@@ -264,7 +263,7 @@ async function fetchExpensePayoutMatches(
 // Fetch the potential invoice/supplier-invoice matches referenced by a page
 // of transactions in one parallel round trip. A single-query PostgREST embed
 // on potential_supplier_invoice_id is blocked until that FK exists in the
-// prod schema cache (see DECISIONS.md 2026-07-06).
+// prod schema cache (see DECISIONS.md archive 2026-07-06).
 async function fetchPotentialMatches(
   supabase: SupabaseClient,
   companyId: string | null,
@@ -452,19 +451,14 @@ export default function TransactionsPage() {
   const searchParams = useSearchParams()
   const t = useTranslations('transactions')
   const whyFor = useProposalWhy()
-  // Shell v2 (dev_docs/ui_v2_build_plan.md, PR 4): Kategori and Konto columns
-  // plus per-user column visibility (ui_state.tx_columns). v1 keeps the
-  // five-column row untouched.
-  const shell = useShell()
+  // Kategori and Konto columns plus per-user column visibility
+  // (ui_state.tx_columns), UI v2 PR 4.
   const tSkvCard = useTranslations('tx_skattekonto_card')
   const { uiState } = useUiState()
   const [hiddenColumns, setHiddenColumns] = useState<string[] | null>(null)
   const txColumns = useMemo(
-    () =>
-      shell === 'v2'
-        ? resolveTxColumns({ hidden: hiddenColumns ?? uiState?.tx_columns?.hidden })
-        : null,
-    [shell, hiddenColumns, uiState?.tx_columns?.hidden],
+    () => resolveTxColumns({ hidden: hiddenColumns ?? uiState?.tx_columns?.hidden }),
+    [hiddenColumns, uiState?.tx_columns?.hidden],
   )
   const setColumnsHidden = (next: string[]) => {
     setHiddenColumns(next)
@@ -542,7 +536,7 @@ export default function TransactionsPage() {
   // Template picker dialog
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false)
   const [templatePickerTransaction, setTemplatePickerTransaction] = useState<TransactionWithInvoice | null>(null)
-  // Shell v2: the element the picker opens beside (chip or Bokför button); null = the dialog.
+  // The element the picker opens beside (chip or Bokför button); null = the dialog.
   const [templatePickerAnchor, setTemplatePickerAnchor] = useState<HTMLElement | null>(null)
   // The picker renders non-modal (agent sheet stays usable); hand-restore
   // page modality while it is open. See useDashShellInert in ui/dialog.tsx.
@@ -744,12 +738,12 @@ export default function TransactionsPage() {
     const tail = acct.account_number ? `••${acct.account_number.slice(-4)}` : acct.ledger_account
     return `${bank} ${tail}`.trim()
   }
-  // Shell v2: the brand mark next to the Konto text (bank, Stripe, Skatteverket).
+  // The brand mark next to the Konto text (bank, Stripe, Skatteverket).
   const accountLogoFor = (tx: TransactionWithInvoice): string | null => {
     const acct = tx.cash_account_id ? cashAccounts.find((a) => a.id === tx.cash_account_id) : undefined
     return acct ? bankLogoUrl(acct.bank_name, acct.name) : null
   }
-  // Shell v2: the top suggestion (counterparty template, then keyword/MCC)
+  // The top suggestion (counterparty template, then keyword/MCC)
   // stands in the Kategori cell so the person sees what Bokför will do
   // before clicking anything. Suggestions arrive with the list
   // (fetchCategorySuggestions), so nothing is computed on click.
@@ -3944,7 +3938,7 @@ export default function TransactionsPage() {
 
   function openCategoryDialog(transaction: TransactionWithInvoice, anchor?: HTMLElement) {
     setTemplatePickerTransaction(transaction)
-    setTemplatePickerAnchor(shell === 'v2' ? (anchor ?? null) : null)
+    setTemplatePickerAnchor(anchor ?? null)
     setTemplatePickerOpen(true)
   }
 
@@ -3961,7 +3955,7 @@ export default function TransactionsPage() {
     openReview(tx, proposalFromTemplate(template, 'manual'), true)
   }
 
-  // Shell v2: Bokför on a row that carries a proposal goes straight to the
+  // Bokför on a row that carries a proposal goes straight to the
   // review with that template set; no picker in between.
   function bookProposal(transaction: TransactionWithInvoice) {
     const s = rowProposal(templateSuggestions[transaction.id])
@@ -4205,35 +4199,33 @@ export default function TransactionsPage() {
             and on a brutet rakenskapsar they were not momsdeklaration
             quarters, so they misled more than they scoped. */}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {/* Shell v2: column visibility, persisted per user. */}
-          {txColumns && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                  aria-label={t('columns_button')}
-                  title={t('columns_button')}
+          {/* Column visibility, persisted per user. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                aria-label={t('columns_button')}
+                title={t('columns_button')}
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[12rem]">
+              {TX_COLUMNS.filter((c) => c.optional).map((c) => (
+                <DropdownMenuItem
+                  key={c.id}
+                  onSelect={(e) => e.preventDefault()}
+                  onClick={() => toggleColumn(c.id)}
                 >
-                  <SlidersHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[12rem]">
-                {TX_COLUMNS.filter((c) => c.optional).map((c) => (
-                  <DropdownMenuItem
-                    key={c.id}
-                    onSelect={(e) => e.preventDefault()}
-                    onClick={() => toggleColumn(c.id)}
-                  >
-                    <Check className={cn('h-4 w-4', txColumns.has(c.id) ? 'opacity-100' : 'opacity-0')} />
-                    {t(c.labelKey)}
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuItem onClick={() => setColumnsHidden([])}>{t('columns_reset')}</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+                  <Check className={cn('h-4 w-4', txColumns.has(c.id) ? 'opacity-100' : 'opacity-0')} />
+                  {t(c.labelKey)}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuItem onClick={() => setColumnsHidden([])}>{t('columns_reset')}</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {/* Quiet cue that a scope change is reconciling behind the rendered
               list (the list itself never swaps to a skeleton for it). */}
           {isScopeRefreshing && (
@@ -4314,12 +4306,10 @@ export default function TransactionsPage() {
               <div
                 className={cn(
                   'flex items-center gap-x-5 gap-y-2 text-[12.5px] animate-fade-in',
-                  shell === 'v2'
-                    ? // Shell v2: a floating bar centred over the panel (concept
-                      // .floatbar), so it stays in view however far down the
-                      // selection reaches and the list does not shift under it.
-                      'fixed bottom-4 left-1/2 z-30 max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-x-auto whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 shadow-lg md:left-[calc(50%+var(--nav-w)/2)]'
-                    : 'flex-wrap border-b border-border px-1 py-2.5',
+                  // A floating bar centred over the panel (concept .floatbar),
+                  // so it stays in view however far down the selection
+                  // reaches and the list does not shift under it.
+                  'fixed bottom-4 left-1/2 z-30 max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-x-auto whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 shadow-lg md:left-[calc(50%+var(--nav-w)/2)]',
                 )}
               >
                 {batchProgress ? (
@@ -4400,22 +4390,20 @@ export default function TransactionsPage() {
               </div>
             )}
 
-            {/* Negative margin + matching padding: lets the hover-revealed
-                checkbox/chevron hang into the page margins without being
-                clipped by the overflow container, while the columns stay
-                flush with the page edges. */}
-            <div className={cn('overflow-x-auto', txColumns ? '-mx-4 px-4 md:-mx-6 md:px-6' : '-mx-5 px-5 md:-mx-8 md:px-8')}>
+            {/* Negative margin + matching padding: the scroll container runs
+                to the panel edges while the columns keep the page padding. */}
+            <div className="overflow-x-auto -mx-4 px-4 md:-mx-6 md:px-6">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
-                    <th className={cn(TH_CLASS, txColumns ? 'w-7 !pl-0 !pr-2' : 'w-0 !p-0')} aria-hidden="true"></th>
-                    {(!txColumns || txColumns.has('date')) && (
+                    <th className={cn(TH_CLASS, 'w-7 !pl-0 !pr-2')} aria-hidden="true"></th>
+                    {txColumns.has('date') && (
                       <th className={cn(TH_CLASS, '!pl-0')}>{t('th_date')}</th>
                     )}
                     <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
-                    {txColumns?.has('category') && <th className={TH_CLASS}>{t('th_category')}</th>}
-                    {txColumns?.has('account') && <th className={TH_CLASS}>{t('th_account')}</th>}
-                    {(!txColumns || txColumns.has('amount')) && (
+                    {txColumns.has('category') && <th className={TH_CLASS}>{t('th_category')}</th>}
+                    {txColumns.has('account') && <th className={TH_CLASS}>{t('th_account')}</th>}
+                    {txColumns.has('amount') && (
                       <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
                     )}
                     <th className={cn(TH_CLASS, 'text-right !pr-0')}>{t('th_status')}</th>
@@ -4454,12 +4442,12 @@ export default function TransactionsPage() {
                         cashAccounts={cashAccounts}
                         onToggleSelect={toggleBatchSelect}
                         preMigrationCutoff={sieCoverageEnd}
-                        columns={txColumns ?? undefined}
-                        accountLabel={txColumns ? accountLabelFor(item.data) : null}
-                        categoryLabel={txColumns ? categoryLabelFor(item.data) : null}
-                        accountLogo={txColumns ? accountLogoFor(item.data) : null}
-                        proposal={txColumns ? proposalFor(item.data) : null}
-                        onBookProposal={txColumns ? bookProposal : undefined}
+                        columns={txColumns}
+                        accountLabel={accountLabelFor(item.data)}
+                        categoryLabel={categoryLabelFor(item.data)}
+                        accountLogo={accountLogoFor(item.data)}
+                        proposal={proposalFor(item.data)}
+                        onBookProposal={bookProposal}
                       />
                     ) : (
                       <SkattekontoInboxCard
@@ -4475,9 +4463,9 @@ export default function TransactionsPage() {
                         onBokfor={handleSkvBokfor}
                         onMatch={r => setSkvMatchTarget(r)}
                         onIgnore={handleSkvIgnore}
-                        columns={txColumns ?? undefined}
-                        accountLabel={txColumns ? tSkvCard('account_label', { account: SKATTEKONTO_ACCOUNT }) : null}
-                        accountLogo={txColumns ? '/logos/skatteverket_color.svg' : null}
+                        columns={txColumns}
+                        accountLabel={tSkvCard('account_label', { account: SKATTEKONTO_ACCOUNT })}
+                        accountLogo="/logos/skatteverket_color.svg"
                       />
                     ),
                   )}
@@ -4676,8 +4664,9 @@ export default function TransactionsPage() {
           Esc and veil-click still close: the picker holds no user input.
           Clicks in the assistant don't dismiss: data-agent-ui counts as
           inside (see DialogContent). */}
-      {/* The picker's props, shared by the v2 popover and the v1 dialog. */}
-      {templatePickerOpen && shell === 'v2' && templatePickerAnchor && (
+      {/* The picker's props, shared by the anchored popover and the dialog
+          (opened without an anchor). */}
+      {templatePickerOpen && templatePickerAnchor && (
         <CategoryPopover anchor={templatePickerAnchor} onClose={() => setTemplatePickerOpen(false)}>
           <div className="flex items-center justify-between gap-3 border-b border-border/70 px-3 py-2 text-[12.5px]">
             {templatePickerTransaction && (
@@ -4697,7 +4686,7 @@ export default function TransactionsPage() {
           </div>
         </CategoryPopover>
       )}
-      {templatePickerOpen && !(shell === 'v2' && templatePickerAnchor) && <Dialog open onOpenChange={setTemplatePickerOpen} modal={false}>
+      {templatePickerOpen && !templatePickerAnchor && <Dialog open onOpenChange={setTemplatePickerOpen} modal={false}>
         <DialogVeil />
         {/* Width capped at the space left of a docked sheet (--agent-sheet-w
             is docked-only) so the picker never clips off-screen left on

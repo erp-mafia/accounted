@@ -800,15 +800,17 @@ describe('listSkattekontoPaymentDue', () => {
   })
 
   it('counts 1 when a payment is due and 0 otherwise', async () => {
+    // Pin "today" like the list tests above: the charge below fell due on
+    // 2026-09-12, and reading the real clock made this test expire on 09-13.
     enqueue({
       data: [{ transaktionsdatum: '2026-09-12', forfallodatum: '2026-09-12', belopp_skatteverket: -1000 }],
     })
     enqueue({ data: null })
     enqueue({ data: company })
     enqueue({ data: null })
-    await expect(countSkattekontoPaymentDue(supabase, COMPANY)).resolves.toBe(1)
+    await expect(countSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBe(1)
     enqueue({ data: [] })
     enqueue({ data: null })
-    await expect(countSkattekontoPaymentDue(supabase, COMPANY)).resolves.toBe(0)
+    await expect(countSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBe(0)
   })
 })

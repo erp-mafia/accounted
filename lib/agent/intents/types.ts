@@ -2,8 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 // Intent definition shape. One file per intent under lib/agent/intents/<id>.ts
 // declares its capture, atom set, tool scope, prompt template, and model.
-//
-// Plan ref: dev_docs/specialized-agent-plan.md §8.
 
 export interface AgentIntent<Args = Record<string, unknown>, Captured = unknown> {
   // Stable id, e.g. 'transaction.categorization', 'general.help'. Persisted on

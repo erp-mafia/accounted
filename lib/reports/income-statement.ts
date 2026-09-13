@@ -28,7 +28,7 @@ export async function generateIncomeStatement(
   // pre-closing activity for the year.
   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
     // Operational convention, unchanged. Moving this to 'exclude-final' is
-    // Stage 2 of #1051 and deliberately deferred: see DECISIONS.md:632.
+    // Stage 2 of #1051 and deliberately deferred: see DECISIONS.md archive 2026-07-29.
     closingEntry: 'exclude-all-year-end',
     fromDate: options?.fromDate,
     toDate: options?.toDate,

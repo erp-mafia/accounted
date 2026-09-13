@@ -382,8 +382,8 @@ export async function agiLasUppPeriod(
  *
  * Use this to surface validation errors per HU to the user before they
  * generate and submit a full XML underlag. The JSON property names follow
- * the v1.7 spec §7: see lib/salary/agi/huvuduppgift-json.ts for the typed
- * builder.
+ * the v1.7 spec §7: see AGIKontrolleraHUSchema in
+ * lib/salary/agi/kontrollera-schemas.ts for the validated shape.
  */
 export async function agiKontrolleraHU(
   supabase: SupabaseClient,
@@ -413,8 +413,8 @@ export async function agiKontrolleraHU(
 /**
  * POST /underlag/individuppgift/kontrollera: pre-flight validation of a
  * single IU as JSON without saving anything. JSON property names follow
- * the v1.7 spec §8: see lib/salary/agi/individuppgift-json.ts for the
- * typed builder.
+ * the v1.7 spec §8: see AGIKontrolleraIUSchema in
+ * lib/salary/agi/kontrollera-schemas.ts for the validated shape.
  */
 export async function agiKontrolleraIU(
   supabase: SupabaseClient,

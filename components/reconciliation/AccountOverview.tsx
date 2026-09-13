@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -9,10 +9,9 @@ import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type {
   ReconciliationAccount,
@@ -27,7 +26,6 @@ import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
 import { ReconciliationSummary } from './ReconciliationSummary'
 import { PairRow, PairsHead } from './ReconciliationPairs'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
-import { useShell } from '@/components/dashboard/ShellProvider'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
@@ -35,10 +33,10 @@ const SkattekontoBookDialog = dynamic(
 )
 
 /**
- * The body of the Avstämning page for one selected account: the four tiles
- * (outside, ledger, difference, unexplained), the bridge that explains the
- * difference, the actions row, and the full-width banded table of the rows
- * behind the bridge. Everything comes from the PR 2 dashboard routes; the
+ * The body of the Avstämning flow for one account: the strip of four figures
+ * (outside, ledger, difference, unexplained) with the verdict sentence and
+ * the bridge behind a disclosure, the actions row, and the full-width banded
+ * table of paired rows behind the bridge. Everything comes from the PR 2 dashboard routes; the
  * same service functions feed the v1 API and the MCP tools, so what the page
  * shows is what an agent sees.
  */
@@ -72,19 +70,17 @@ export interface ReconciliationWindow {
 
 interface AccountOverviewProps {
   account: ReconciliationAccount
-  /** The other bank accounts in the rail: targets for "Flytta till konto". */
+  /** The company's other bank accounts: targets for "Flytta till konto". */
   otherBankAccounts?: ReconciliationAccount[]
-  /** The account rail. Rendered inside the summary grid so the items table below can span the full page width (the approved layout). */
-  rail: ReactNode
   /** The selected period: scopes the bank bridge and the item windows; its end is the default sign-off date. */
   window: ReconciliationWindow
-  /** Called after any write so the rail can refresh its status dots. */
+  /** Called after any write so the account table can refresh its statuses. */
   onChanged: () => void
-  /** Shell v2: opens the manual match view; the v1 segmented control does this. */
+  /** Opens the manual match view. */
   onMatchManually?: () => void
 }
 
-export function AccountOverview({ account, rail, otherBankAccounts = [], window, onChanged, onMatchManually }: AccountOverviewProps) {
+export function AccountOverview({ account, otherBankAccounts = [], window, onChanged, onMatchManually }: AccountOverviewProps) {
   const t = useTranslations('reconciliation')
   const locale = useLocale()
   const { toast } = useToast()
@@ -101,9 +97,6 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
   const autorunRequested = searchParams.get('autorun') === '1'
   const autorunDone = useRef(false)
 
-  // Shell v2: no rail (the account table is the landing) and one summary
-  // table instead of the tiles and the bridge list.
-  const v2 = useShell() === 'v2'
   const isSkv = account.kind === 'skattekonto'
   // Manual accounts have no rows to match or book: the body is the balance
   // bridge (IB, movement, UB against a specification or the signer's
@@ -417,15 +410,11 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when the status first loads
   }, [autorunRequested, isSkv, status])
 
-  // v2 rows are pairs (outside | sign | ledger); v1 keeps the five-column row.
-  const Row = v2 ? PairRow : ItemRow
-
   // ---- render -------------------------------------------------------------
 
   if (loadError) {
     return (
-      <div className={cn(!v2 && 'grid gap-8 lg:grid-cols-[220px_1fr]')}>
-        {!v2 && rail}
+      <div>
         <div className="min-w-0">
           <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>
             {t('load_failed')}
@@ -436,55 +425,36 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
   }
 
   if (!status || !items) {
-    if (v2) {
-      // The silhouette of the page that follows: the strip of figures, the
-      // action row and the paired rows, so nothing moves when the data lands.
-      return (
-        <div className="space-y-6" aria-busy>
-          <div className="grid grid-cols-2 gap-6 border-b border-border pb-4 md:grid-cols-4">
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="space-y-2">
-                <Skeleton className="h-3 w-24" />
-                <Skeleton className="h-6 w-28" />
-              </div>
-            ))}
-          </div>
-          <div className="flex items-center gap-4">
-            <Skeleton className="h-9 w-64 rounded-full" />
-            <Skeleton className="h-3 w-24" />
-            <Skeleton className="h-3 w-24" />
-          </div>
-          <div className="space-y-px">
-            <div className="flex items-center gap-6 border-b border-border py-2">
-              <Skeleton className="h-3 w-12" />
-              <Skeleton className="h-3 w-24" />
-              <Skeleton className="ml-auto h-3 w-16" />
-            </div>
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="flex items-center gap-6 border-b border-border/60 py-3.5">
-                <Skeleton className="h-3.5 w-20" />
-                <Skeleton className="h-3.5 w-48" />
-                <Skeleton className="ml-auto h-3.5 w-20" />
-              </div>
-            ))}
-          </div>
-        </div>
-      )
-    }
+    // The silhouette of the page that follows: the strip of figures, the
+    // action row and the paired rows, so nothing moves when the data lands.
     return (
-      <div className="grid gap-8 lg:grid-cols-[220px_1fr]" aria-busy>
-        {rail}
-        <div className="min-w-0 space-y-6">
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border">
+      <div className="space-y-6" aria-busy>
+        <div className="grid grid-cols-2 gap-6 border-b border-border pb-4 md:grid-cols-4">
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="bg-background p-4">
-              <Skeleton className="h-3 w-32" />
-              <Skeleton className="mt-3 h-6 w-28" />
+            <div key={i} className="space-y-2">
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-6 w-28" />
             </div>
           ))}
         </div>
-        <Skeleton className="h-4 w-72" />
-        <Skeleton className="h-40 w-full" />
+        <div className="flex items-center gap-4">
+          <Skeleton className="h-9 w-64 rounded-full" />
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-3 w-24" />
+        </div>
+        <div className="space-y-px">
+          <div className="flex items-center gap-6 border-b border-border py-2">
+            <Skeleton className="h-3 w-12" />
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="ml-auto h-3 w-16" />
+          </div>
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-6 border-b border-border/60 py-3.5">
+              <Skeleton className="h-3.5 w-20" />
+              <Skeleton className="h-3.5 w-48" />
+              <Skeleton className="ml-auto h-3.5 w-20" />
+            </div>
+          ))}
         </div>
       </div>
     )
@@ -586,11 +556,6 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
       : null
 
   const unexplained = status.unexplained_difference
-  const attn = status.stale
-    ? t('stale_line', { source: sourceLabel })
-    : unexplained != null && Math.abs(unexplained) >= 0.005
-      ? t('unexplained_line', { amount: formatCurrency(unexplained, currency) })
-      : null
 
   const bucketLabel = (bucket: ReconciliationItemBucket): string => {
     switch (bucket) {
@@ -614,7 +579,7 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     (byBucket.get('unmatched_external')?.length ?? 0) +
     (byBucket.get('unmatched_ledger')?.length ?? 0)
 
-  // Shell v2: the verdict in one sentence. The difference once, then what
+  // The verdict in one sentence. The difference once, then what
   // explains it as the bridge's own counted lines ("9 omatchade
   // banktransaktioner"), then what is left unexplained only when it differs
   // from the difference itself. The full bridge stays behind a disclosure.
@@ -651,90 +616,53 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
 
   return (
     <div className="space-y-6">
-      <div className={cn(!v2 && 'grid gap-8 lg:grid-cols-[220px_1fr]')}>
-        {!v2 && rail}
+      <div>
         <div className="min-w-0 space-y-6">
-      {v2 ? (
-        <div className="space-y-3">
-          {/* The two sides and what separates them, on one line (Kick's
-              reconciliation strip): the outside, the ledger, the difference,
-              the part of it nothing explains. */}
-          <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-b border-border pb-4 md:grid-cols-4">
-            {tiles.map((tile) => (
-              <div key={tile.key} className="min-w-0">
-                <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
-                  <span className="truncate">{tile.label}</span>
-                  {tile.help && <InfoTooltip content={tile.help} iconClassName="h-3 w-3" />}
-                </div>
-                <div
-                  className={cn(
-                    'mt-1 text-[20px] font-semibold leading-tight tabular-nums',
-                    tile.tone === 'ok' && 'text-success',
-                    tile.tone === 'attn' && 'text-warning',
-                  )}
-                  data-ph-mask
-                >
-                  {tile.value}
-                </div>
-                {tile.sub && <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{tile.sub}</div>}
+      <div className="space-y-3">
+        {/* The two sides and what separates them, on one line (Kick's
+            reconciliation strip): the outside, the ledger, the difference,
+            the part of it nothing explains. */}
+        <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-b border-border pb-4 md:grid-cols-4">
+          {tiles.map((tile) => (
+            <div key={tile.key} className="min-w-0">
+              <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+                <span className="truncate">{tile.label}</span>
+                {tile.help && <InfoTooltip content={tile.help} iconClassName="h-3 w-3" />}
               </div>
-            ))}
-          </div>
-          <p className={cn('text-[13.5px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
-            {verdict}
-            {verdictUnexplained && <span className="ml-1 text-warning">{verdictUnexplained}</span>}
-            <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3 text-[12.5px]')}>
-              {bridgeOpen ? t('v2_hide_bridge') : t('v2_show_bridge')}
-            </button>
-          </p>
-          {bridgeOpen && (
-            <div className="space-y-2">
-              <ReconciliationSummary status={status} kind={account.kind} specificationLabel={specificationLabel} />
-              {bankReportedLine && (
-                <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
-                  {bankReportedLine}
-                </p>
-              )}
+              <div
+                className={cn(
+                  'mt-1 text-[20px] font-semibold leading-tight tabular-nums',
+                  tile.tone === 'ok' && 'text-success',
+                  tile.tone === 'attn' && 'text-warning',
+                )}
+                data-ph-mask
+              >
+                {tile.value}
+              </div>
+              {tile.sub && <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{tile.sub}</div>}
             </div>
-          )}
+          ))}
         </div>
-      ) : (
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border stagger-enter">
-        {tiles.map((tile) => (
-          <div key={tile.key} className="bg-background px-4 py-3.5">
-            <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
-              {tile.label}
-              {tile.help && <InfoTooltip content={tile.help} iconClassName="h-3 w-3" />}
-            </div>
-            <div
-              className={cn(
-                'mt-1 text-[22px] font-semibold leading-tight tabular-nums',
-                tile.tone === 'ok' && 'text-success',
-                tile.tone === 'attn' && 'text-warning',
-              )}
-              data-ph-mask
-            >
-              {tile.value}
-            </div>
-            {tile.sub && <div className="mt-0.5 text-[11.5px] text-muted-foreground">{tile.sub}</div>}
-          </div>
-        ))}
-      </div>
-      )}
-
-      {!v2 && bankReportedLine && (
-        <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
-          {bankReportedLine}
+        <p className={cn('text-[13.5px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
+          {verdict}
+          {verdictUnexplained && <span className="ml-1 text-warning">{verdictUnexplained}</span>}
+          <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3 text-[12.5px]')}>
+            {bridgeOpen ? t('v2_hide_bridge') : t('v2_show_bridge')}
+          </button>
         </p>
-      )}
+        {bridgeOpen && (
+          <div className="space-y-2">
+            <ReconciliationSummary status={status} kind={account.kind} specificationLabel={specificationLabel} />
+            {bankReportedLine && (
+              <p className="text-[12.5px] text-muted-foreground" data-ph-mask>
+                {bankReportedLine}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
 
-      {v2 ? (
-        status.stale ? <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine> : null
-      ) : attn ? (
-        <AttnLine>{attn}</AttnLine>
-      ) : status.is_reconciled ? (
-        <p className="text-[13px] text-muted-foreground">{t('reconciled_line')}</p>
-      ) : null}
+      {status.stale ? <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine> : null}
 
       {status.signoff && (
         <p className="group flex items-center gap-2 text-[13px] text-muted-foreground">
@@ -753,30 +681,6 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         </p>
       )}
 
-      {/* Bridge: how the difference is explained (v2 has it in the summary table). */}
-      {!v2 && status.bridge.length > 0 && (
-        <dl className="max-w-[520px] text-[13px]">
-          {status.bridge.map((line) => (
-            <div
-              key={line.key}
-              className="flex items-baseline justify-between gap-4 border-b border-border/60 py-1.5 last:border-b-0"
-            >
-              <dt className="text-muted-foreground">
-                {locale === 'en' ? line.label_en : line.label_sv}
-                {line.count != null && line.count > 0 && (
-                  <span className="ml-1.5 tabular-nums text-muted-foreground/70" data-ph-mask>
-                    ({line.count})
-                  </span>
-                )}
-              </dt>
-              <dd className="tabular-nums" data-ph-mask>
-                {formatCurrency(line.amount, currency)}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      )}
-
       {/* Actions row: the work, then the way to the richer surfaces. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         {proposedCount > 0 && (
@@ -789,17 +693,12 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
             {t('action_book_rows', { count: bookableIds.length })}
           </Button>
         )}
-        {!v2 && !isSkv && !isManual && (
-          <Button size="sm" variant="outline" onClick={() => void runMatcher()} disabled={busy !== null} aria-busy={busy === 'matcher'}>
-            {t('action_run_bank_matcher')}
-          </Button>
-        )}
         {signoffEnabled && (
-          <Button size="sm" variant={v2 || status.is_reconciled ? 'default' : 'outline'} onClick={() => setSignoffOpen(true)} disabled={busy !== null}>
+          <Button size="sm" onClick={() => setSignoffOpen(true)} disabled={busy !== null}>
             {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
           </Button>
         )}
-        {v2 && !isSkv && !isManual && (
+        {!isSkv && !isManual && (
           <button type="button" className={QUIET_LINK_CLASS} onClick={() => void runMatcher()} disabled={busy !== null} aria-busy={busy === 'matcher'}>
             {t('action_run_bank_matcher')}
           </button>
@@ -825,28 +724,6 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         )}
       </div>
 
-      {/* Underlag for the balansdag in play: the signed date, else the date the next sign-off would cover. v2 puts it under the list. */}
-      {!v2 && (
-        <ReconciliationUnderlag
-          accountKey={account.account_key}
-          throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
-        />
-      )}
-
-      {!v2 && items.older_unmatched_count > 0 && (
-        <p className="text-[12.5px] text-muted-foreground">
-          {t('older_unmatched', { count: items.older_unmatched_count })}
-          {isSkv && (
-            <>
-              {' · '}
-              <Link href="/skattekonto" className={QUIET_LINK_CLASS}>
-                {t('older_show')}
-              </Link>
-            </>
-          )}
-        </p>
-      )}
-
         </div>
       </div>
 
@@ -868,20 +745,10 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
       ) : items.items.length === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
       ) : (
-        <div className={cn('overflow-x-auto', !v2 && '-mx-4 sm:mx-0')}>
+        <div className="overflow-x-auto">
           <table className="w-full text-[13px]">
             <thead>
-              {v2 ? (
-                <PairsHead externalLabel={isSkv ? t('v2_side_external_skv') : t('v2_side_external_bank')} />
-              ) : (
-              <tr>
-                <th className={cn(TH_CLASS, 'w-[110px]')}>{t('col_date')}</th>
-                <th className={TH_CLASS}>{t('col_event')}</th>
-                <th className={cn(TH_CLASS, 'w-[140px] text-right')}>{t('col_amount')}</th>
-                <th className={cn(TH_CLASS, 'w-[34%]')}>{t('col_voucher')}</th>
-                <th className={cn(TH_CLASS, 'w-[170px]')} />
-              </tr>
-              )}
+              <PairsHead externalLabel={isSkv ? t('v2_side_external_skv') : t('v2_side_external_bank')} />
             </thead>
             <tbody className="stagger-enter">
               {BUCKET_ORDER.map((bucket) => {
@@ -899,11 +766,8 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
                   <Fragment key={bucket}>
                     <tr className="bg-muted/30">
                       <td
-                        colSpan={v2 ? 7 : 5}
-                        className={cn(
-                          'py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground',
-                          v2 ? 'px-0' : 'px-4',
-                        )}
+                        colSpan={7}
+                        className="px-0 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
                       >
                         <span className="flex items-center gap-3">
                           <span>
@@ -926,7 +790,7 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
                     </tr>
                     {!folded &&
                       rows.map((item) => (
-                        <Row
+                        <PairRow
                           key={item.item_id}
                           item={item}
                           isSkv={isSkv}
@@ -959,27 +823,25 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
       )}
 
-      {v2 && (
-        <div className="space-y-2 border-t border-border pt-4">
-          {items.older_unmatched_count > 0 && (
-            <p className="text-[12.5px] text-muted-foreground">
-              {t('older_unmatched', { count: items.older_unmatched_count })}
-              {isSkv && (
-                <>
-                  {' · '}
-                  <Link href="/skattekonto" className={QUIET_LINK_CLASS}>
-                    {t('older_show')}
-                  </Link>
-                </>
-              )}
-            </p>
-          )}
-          <ReconciliationUnderlag
-            accountKey={account.account_key}
-            throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
-          />
-        </div>
-      )}
+      <div className="space-y-2 border-t border-border pt-4">
+        {items.older_unmatched_count > 0 && (
+          <p className="text-[12.5px] text-muted-foreground">
+            {t('older_unmatched', { count: items.older_unmatched_count })}
+            {isSkv && (
+              <>
+                {' · '}
+                <Link href="/skattekonto" className={QUIET_LINK_CLASS}>
+                  {t('older_show')}
+                </Link>
+              </>
+            )}
+          </p>
+        )}
+        <ReconciliationUnderlag
+          accountKey={account.account_key}
+          throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
+        />
+      </div>
 
       {isSkv && (
         <SkattekontoBookDialog
@@ -1028,226 +890,4 @@ function toDialogRow(item: ReconciliationItem): SkattekontoTransactionWithSugges
     booking_suggestion: undefined,
     booking_gate: null,
   } as unknown as SkattekontoTransactionWithSuggestion
-}
-
-interface ItemRowProps {
-  item: ReconciliationItem
-  isSkv: boolean
-  sourceLabel: string
-  currency: string
-  busy: boolean
-  anyBusy: boolean
-  onMatch: () => void
-  onUnmatch: () => void
-  onIgnore: () => void
-  onUnignore: () => void
-  onBook: () => void
-  /** "Märk som IB" for a ledger row without a bank counterpart (bank accounts). */
-  onMarkIb?: () => void
-  /** Other bank accounts a stray transaction can be moved to. */
-  moveTargets: ReconciliationAccount[]
-  onMove: (target: ReconciliationAccount) => void
-}
-
-function ItemRow({
-  item,
-  isSkv,
-  sourceLabel,
-  currency,
-  busy,
-  anyBusy,
-  onMatch,
-  onUnmatch,
-  onIgnore,
-  onUnignore,
-  onBook,
-  onMarkIb,
-  moveTargets,
-  onMove,
-}: ItemRowProps) {
-  const t = useTranslations('reconciliation')
-  const can = (a: ReconciliationItem['actions'][number]) => item.actions.includes(a)
-  const voucherOf = (e: { voucher_series?: string | null; voucher_number?: number | null }) =>
-    e.voucher_number != null ? formatVoucher({ voucher_series: e.voucher_series, voucher_number: e.voucher_number }) : null
-
-  // The voucher column: for a ledger item, its own voucher; for an external
-  // item, the linked or proposed verifikat.
-  let voucherCell: React.ReactNode = null
-  if (item.side === 'ledger') {
-    const v = voucherOf(item)
-    voucherCell = (
-      <span className="flex items-center gap-2">
-        <Link href={`/bookkeeping/${item.item_id}`} className={QUIET_LINK_CLASS} data-ph-mask>
-          {v ?? item.item_id.slice(0, 8)}
-        </Link>
-        {item.entry_status === 'draft' && <Chip>{t('chip_draft')}</Chip>}
-        {item.entry_status === 'reversed' && <Chip>{t('chip_reversed')}</Chip>}
-        {item.awaiting_external && <Chip>{t('chip_awaiting', { source: sourceLabel })}</Chip>}
-      </span>
-    )
-  } else if (item.proposal && item.proposal.vouchers && item.proposal.vouchers.length > 1) {
-    // An explaining set (#2293): "= A57 + A58", the legs' amounts underneath,
-    // one Koppla that links the row to all of them.
-    const p = item.proposal
-    const setVouchers = p.vouchers ?? []
-    const sameDay = setVouchers.every((v) => v.entry_date === item.date)
-    voucherCell = (
-      <span className="flex flex-col gap-0.5">
-        <span
-          className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5"
-          title={t('proposal_set_title', { count: setVouchers.length })}
-        >
-          <span className="text-muted-foreground" aria-hidden>
-            =
-          </span>
-          {setVouchers.map((v, i) => (
-            <Fragment key={v.journal_entry_id}>
-              {i > 0 && (
-                <span className="text-muted-foreground" aria-hidden>
-                  +
-                </span>
-              )}
-              <Link href={`/bookkeeping/${v.journal_entry_id}`} className={QUIET_LINK_CLASS} data-ph-mask>
-                {voucherOf(v) ?? v.journal_entry_id.slice(0, 8)}
-              </Link>
-            </Fragment>
-          ))}
-          <span className="text-[11px] text-muted-foreground">
-            {t('confidence', { percent: Math.round(p.confidence * 100) })}
-          </span>
-        </span>
-        <span className="truncate text-[12px] tabular-nums text-muted-foreground" data-ph-mask>
-          {setVouchers.map((v) => formatCurrency(v.amount, currency)).join(' + ')}
-          {sameDay ? ` · ${t('proposal_set_same_day')}` : ''}
-        </span>
-      </span>
-    )
-  } else if (item.proposal) {
-    const p = item.proposal
-    voucherCell = (
-      <span className="flex flex-col gap-0.5">
-        <span className="flex items-center gap-2">
-          <Link href={`/bookkeeping/${p.journal_entry_id}`} className={QUIET_LINK_CLASS} data-ph-mask>
-            {voucherOf(p) ?? p.journal_entry_id.slice(0, 8)}
-          </Link>
-          <span className="text-[11.5px] tabular-nums text-muted-foreground">{formatDate(p.entry_date)}</span>
-          <span className="text-[11px] text-muted-foreground">
-            {t('confidence', { percent: Math.round(p.confidence * 100) })}
-          </span>
-        </span>
-        <span className="truncate text-[12px] text-muted-foreground" data-ph-mask>
-          {p.description}
-        </span>
-      </span>
-    )
-  } else if (item.linked_journal_entry_id) {
-    voucherCell = (
-      <span className="flex items-center gap-2">
-        <Link href={`/bookkeeping/${item.linked_journal_entry_id}`} className={QUIET_LINK_CLASS} data-ph-mask>
-          {item.linked_journal_entry_id.slice(0, 8)}
-        </Link>
-        {item.link_problem === 'entry_draft' && <Chip>{t('chip_draft')}</Chip>}
-        {item.link_problem === 'entry_reversed' && <Chip>{t('chip_reversed')}</Chip>}
-        {item.link_problem === 'entry_missing' && <Chip>{t('chip_missing')}</Chip>}
-      </span>
-    )
-  }
-
-  const openHref = item.item_type === 'transaction' ? `/transactions?highlight=${item.item_id}` : null
-
-  return (
-    <tr className="group">
-      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>{formatDate(item.date)}</td>
-      <td className={cn(TD_CLASS, 'max-w-0')}>
-        <span className="block truncate" data-ph-mask title={item.description}>
-          {item.description}
-        </span>
-      </td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
-        {formatCurrency(item.amount, currency)}
-      </td>
-      <td className={cn(TD_CLASS, 'max-w-0')}>{voucherCell}</td>
-      <td className={cn(TD_CLASS, 'text-right')}>
-        <span className="flex items-center justify-end gap-1.5">
-          {can('match') && item.proposal && (
-            <Button size="sm" variant="outline" onClick={onMatch} disabled={anyBusy} aria-busy={busy}>
-              {t('row_match')}
-            </Button>
-          )}
-          {can('book') && isSkv && (
-            <Button size="sm" variant="outline" onClick={onBook} disabled={anyBusy}>
-              {t('row_book')}
-            </Button>
-          )}
-          {can('book') && !isSkv && openHref && (
-            <Button size="sm" variant="outline" asChild>
-              <Link href={openHref}>{t('row_open')}</Link>
-            </Button>
-          )}
-          {can('review') && item.side === 'ledger' && (
-            <Link href={`/bookkeeping/${item.item_id}`} className={QUIET_LINK_CLASS}>
-              {t('row_review')}
-            </Link>
-          )}
-          {can('unmatch') && (
-            <button
-              type="button"
-              onClick={onUnmatch}
-              disabled={anyBusy}
-              className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
-            >
-              {t('row_unmatch')}
-            </button>
-          )}
-          {can('ignore') && (
-            <button
-              type="button"
-              onClick={onIgnore}
-              disabled={anyBusy}
-              className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
-            >
-              {t('row_ignore')}
-            </button>
-          )}
-          {can('unignore') && (
-            <button type="button" onClick={onUnignore} disabled={anyBusy} className={QUIET_LINK_CLASS}>
-              {t('row_unignore')}
-            </button>
-          )}
-          {onMarkIb && (
-            <button type="button" onClick={onMarkIb} disabled={anyBusy} className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}>
-              {t('row_mark_ib')}
-            </button>
-          )}
-          {moveTargets.length > 0 && (
-            <select
-              aria-label={t('row_move')}
-              value=""
-              disabled={anyBusy}
-              onChange={(e) => {
-                const target = moveTargets.find((a) => a.account_key === e.target.value)
-                if (target) onMove(target)
-              }}
-              className={cn('h-7 rounded-full border border-border bg-background px-2 text-[11.5px] text-muted-foreground', HOVER_REVEAL_CLASS)}
-            >
-              <option value="">{t('row_move')}</option>
-              {moveTargets.map((a) => (
-                <option key={a.account_key} value={a.account_key}>
-                  {a.name} ({a.account_number})
-                </option>
-              ))}
-            </select>
-          )}
-        </span>
-      </td>
-    </tr>
-  )
-}
-
-function Chip({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="whitespace-nowrap rounded-full bg-muted px-1.5 py-px text-[10.5px] text-muted-foreground">
-      {children}
-    </span>
-  )
 }

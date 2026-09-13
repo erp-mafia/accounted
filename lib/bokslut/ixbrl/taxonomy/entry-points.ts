@@ -4,8 +4,8 @@
  * An entry point fixes three things for a generated instance document:
  *   1. The schemaRefs (the årsredovisning report + the fastställelseintyg
  *      "COA" report (certificate of adoption) exactly as in the official
- *      examples; allowed ÅR/FI/RB combinations per
- *      dev_docs/bokslut/kombinationer-taxonomirapporter-v1.4-screenshot.png).
+ *      examples; allowed ÅR/FI/RB combinations per the "kombinationer
+ *      taxonomirapporter" v1.4 list).
  *   2. The xmlns prefix → namespace URI map. The 2024-09-12 K2 generation
  *      still uses the 2021-10-31 base-concept namespaces (se-gen-base,
  *      se-cd-base, se-mem-base): verified against the entry-point XSD import

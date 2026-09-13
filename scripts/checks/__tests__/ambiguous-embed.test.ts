@@ -116,7 +116,7 @@ describe('ambiguous-embed: both hint forms PostgREST accepts', () => {
 
 describe('ambiguous-embed: chain resolution', () => {
   it('resolves .from() through its OWN chain, not the nearest one above', () => {
-    // scripts/seed-demo-account.ts: a journal_entries!inner embed from
+    // Seen in a (since removed) demo seeding script: a journal_entries!inner embed from
     // journal_entry_lines (a single-foreign-key pair) sits below an unrelated
     // .from('journal_entries'). Pairing by proximity flags it wrongly.
     const source = `

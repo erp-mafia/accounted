@@ -23,7 +23,7 @@
  * Everything else is user-created and therefore deletable (subject to the
  * separate "booked rows are immutable" rule):
  *   - manual add via POST /api/transactions      → `import_source = null`
- *   - create-from-document                        → `import_source = 'manual'`
+ *   - legacy create-from-document rows            → `import_source = 'manual'`
  *   - MCP / agent create                          → `import_source = 'mcp'`
  *
  * Safe-by-default: this is an ALLOWLIST of known user-created sources. Any other

@@ -20,7 +20,7 @@ import { generateNEDeclaration } from './ne-bilaga/ne-engine'
  *   operational         reports the result BEFORE bokslutsdispositioner and
  *                       skatt, so it legitimately differs today. The gap is
  *                       explained rather than flagged. When Stage 2 of #1051
- *                       lands (DECISIONS.md:632) the families converge and
+ *                       lands (DECISIONS.md archive 2026-07-29) the families converge and
  *                       EXPECTED_OPERATIONAL_GAP can be dropped.
  *
  * Swedish labels: this surfaces next to the bokslut and declaration figures

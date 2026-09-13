@@ -16,7 +16,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { ReconciliationAccount, ReconciliationItem } from '@/lib/reconciliation/schemas'
 
 /**
- * Shell v2 rows of the reconciliation flow (concept reconflow, the pairs):
+ * Rows of the reconciliation flow (concept reconflow, the pairs):
  * the outside on the left, the ledger on the right, and between them the
  * sign that says whether they agree. A row with nothing on one side is the
  * work: a bank row with no verifikat, or a verifikat with no bank row. One

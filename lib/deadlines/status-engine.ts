@@ -14,7 +14,6 @@
 
 import { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import type { DeadlineStatus } from '@/types'
 
 const log = createLogger('deadline-status')
 
@@ -22,28 +21,6 @@ const log = createLogger('deadline-status')
  * Number of days before deadline when status changes to action_needed
  */
 export const ACTION_NEEDED_THRESHOLD_DAYS = 14
-
-/**
- * Valid manual status transitions
- */
-export const MANUAL_TRANSITIONS: Record<DeadlineStatus, DeadlineStatus[]> = {
-  upcoming: ['action_needed', 'in_progress'],
-  action_needed: ['in_progress', 'submitted'],
-  in_progress: ['submitted', 'action_needed'],
-  submitted: ['confirmed', 'in_progress'],
-  confirmed: [], // Terminal state
-  overdue: ['in_progress', 'submitted'], // Can recover from overdue
-}
-
-/**
- * Check if a manual status transition is valid
- */
-export function isValidTransition(
-  currentStatus: DeadlineStatus,
-  newStatus: DeadlineStatus
-): boolean {
-  return MANUAL_TRANSITIONS[currentStatus].includes(newStatus)
-}
 
 /**
  * Calculate days until a deadline
@@ -117,60 +94,6 @@ export async function updateDeadlineStatuses(
   }
 
   return { updated, newlyOverdue, newlyActionNeeded }
-}
-
-/**
- * Manually update a deadline's status
- */
-export async function updateDeadlineStatus(
-  supabase: SupabaseClient,
-  deadlineId: string,
-  companyId: string,
-  newStatus: DeadlineStatus
-): Promise<{ success: boolean; error?: string }> {
-  // Fetch current deadline
-  const { data: deadline, error: fetchError } = await supabase
-    .from('deadlines')
-    .select('status, is_completed')
-    .eq('id', deadlineId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (fetchError || !deadline) {
-    return { success: false, error: 'Deadline not found' }
-  }
-
-  // Check if transition is valid
-  if (!isValidTransition(deadline.status, newStatus)) {
-    return {
-      success: false,
-      error: `Invalid transition from ${deadline.status} to ${newStatus}`,
-    }
-  }
-
-  // Update the status
-  const updates: Record<string, unknown> = {
-    status: newStatus,
-    status_changed_at: new Date().toISOString(),
-  }
-
-  // If marking as confirmed, also mark as completed
-  if (newStatus === 'confirmed') {
-    updates.is_completed = true
-    updates.completed_at = new Date().toISOString()
-  }
-
-  const { error: updateError } = await supabase
-    .from('deadlines')
-    .update(updates)
-    .eq('id', deadlineId)
-    .eq('company_id', companyId)
-
-  if (updateError) {
-    return { success: false, error: updateError.message }
-  }
-
-  return { success: true }
 }
 
 /**

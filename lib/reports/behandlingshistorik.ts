@@ -1558,9 +1558,6 @@ export function collapseBursts(
   return out
 }
 
-/** @deprecated name kept for readers of the first revision; use collapseBursts. */
-export const collapseAccountBursts = collapseBursts
-
 const MAX_LISTED_OBJECTS = 5
 
 function summariseRun(run: RawBehandlingshistorikEvent[], rule: CollapseRule): RawBehandlingshistorikEvent {

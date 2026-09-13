@@ -13,9 +13,6 @@ export const dynamic = 'force-dynamic'
 
 // /onboarding/agent: Phase A (real-timed build) and Phase B (review) of the
 // specialized accountant agent build sequence.
-//
-// Plan refs: dev_docs/specialized-agent-plan.md §7 (Build-sequence UX),
-// §15 Phase 2 (Build-sequence UX).
 export default async function AgentOnboardingPage() {
   const supabase = await createClient()
 

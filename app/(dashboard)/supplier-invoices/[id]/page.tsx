@@ -8,9 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
+import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
-import { HelpPopover } from '@/components/ui/help-popover'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,7 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Loader2, Pencil, Plus, CalendarClock, MoreHorizontal } from 'lucide-react'
+import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Loader2, Pencil, Plus, CalendarClock, MoreHorizontal } from 'lucide-react'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
@@ -40,7 +39,6 @@ import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import useSWR from 'swr'
-import { useShell } from '@/components/dashboard/ShellProvider'
 import { StageSteps } from '@/components/supplier-invoices/StagePipeline'
 import { stagesFor, type InvoiceLifecycle, type SupplierInvoiceLadderStage } from '@/lib/supplier-invoices/stages'
 import { formatAmount, formatCurrency } from '@/lib/utils'
@@ -179,12 +177,11 @@ function InlineAccountCell({
 export default function SupplierInvoiceDetailPage() {
   const { canWrite } = useCanWrite()
   const { settings: companySettings } = useCompanySettings()
-  // Shell v2 (UI v2 PR 6): the invoice's place on the flow, derived server-side.
-  const shell = useShell()
+  // The invoice's place on the flow (UI v2 PR 6), derived server-side.
   const routeParams = useParams()
   const invoiceIdParam = typeof routeParams.id === 'string' ? routeParams.id : ''
   const { data: lifecycle, mutate: mutateLifecycle } = useSWR<InvoiceLifecycle | null>(
-    shell === 'v2' && invoiceIdParam ? `/api/supplier-invoices/lifecycle?ids=${invoiceIdParam}` : null,
+    invoiceIdParam ? `/api/supplier-invoices/lifecycle?ids=${invoiceIdParam}` : null,
     async (url: string) => {
       const res = await fetch(url)
       if (!res.ok) return null
@@ -763,7 +760,6 @@ export default function SupplierInvoiceDetailPage() {
   // header's one primary while the invoice is attested and in no open file.
   // Markera betald stays for the person who paid by hand, as a secondary.
   const canAddToFile =
-    shell === 'v2' &&
     !invoice.is_credit_note &&
     ['approved', 'overdue'].includes(invoice.status) &&
     !!invoice.approved_at &&
@@ -807,30 +803,10 @@ export default function SupplierInvoiceDetailPage() {
 
   return (
     <div className="space-y-8 stagger-enter">
-      {/* Back link + prev/next record pager on their own quiet row, so the
-          title below keeps a stable position while stepping between records */}
-      {shell !== 'v2' && (
-      <div className="flex items-center justify-between gap-4">
-        <button
-          type="button"
-          onClick={() => router.push('/supplier-invoices')}
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          aria-label={t('back_aria')}
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {tCommon('back')}
-        </button>
-        <DetailPager
-          contextKey={listContextKey('supplier-invoices', company?.id)}
-          basePath="/supplier-invoices"
-          currentId={String(params.id)}
-          className="shrink-0"
-        />
-      </div>
-      )}
-
       {/* Header: serif title with one status element, a quiet meta line, and
-          the next step on the right. Everything else lives in the ⋯ menu. */}
+          the next step on the right. Everything else lives in the ⋯ menu.
+          The sidebar says where we are, so there is no back link; the
+          prev/next pager sits in the bar. */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
@@ -852,14 +828,12 @@ export default function SupplierInvoiceDetailPage() {
         </div>
 
         <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
-          {shell === 'v2' && (
-            <DetailPager
-              contextKey={listContextKey('supplier-invoices', company?.id)}
-              basePath="/supplier-invoices"
-              currentId={String(params.id)}
-              className="shrink-0"
-            />
-          )}
+          <DetailPager
+            contextKey={listContextKey('supplier-invoices', company?.id)}
+            basePath="/supplier-invoices"
+            currentId={String(params.id)}
+            className="shrink-0"
+          />
           {/* The supplier's own document, reviewed in the browser (#1190). */}
           {invoice.document_id && (
             <DocumentViewButton
@@ -889,29 +863,6 @@ export default function SupplierInvoiceDetailPage() {
               {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
               {t('add_to_payment_file')}
             </Button>
-          )}
-          {/* The bock (#2220): "I have entered this payment in the bank".
-              A labelled checkbox rather than a button, because it is a fact
-              the user records, not an action that posts anything. In v2 it
-              sits in the Betalning section, where the fact belongs. */}
-          {showBankEntered && shell !== 'v2' && (
-            <label
-              className={cn(
-                'inline-flex h-9 select-none items-center gap-2 px-2 text-[13px]',
-                canWrite && !isProcessing ? 'cursor-pointer' : 'cursor-default',
-                processingAction === 'bank_entered' && 'opacity-50',
-              )}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              <Checkbox
-                checked={!!invoice.bank_entered_at}
-                disabled={isProcessing || !canWrite}
-                onCheckedChange={(value) => void handleBankEntered(value === true)}
-                aria-label={t('bank_entered_aria')}
-                className="border-foreground"
-              />
-              {t('bank_entered_label')}
-            </label>
           )}
           {/* Attest gates payment: while attest is still pending, Markera
               betald steps back to a secondary so the header keeps one next
@@ -982,7 +933,7 @@ export default function SupplierInvoiceDetailPage() {
         </div>
       </div>
 
-      {shell === 'v2' && lifecycle && (
+      {lifecycle && (
         <StageSteps
           stages={stagesFor(companySettings?.accounting_method)}
           current={lifecycle.stage}
@@ -990,125 +941,50 @@ export default function SupplierInvoiceDetailPage() {
         />
       )}
 
-      {/* Shell v2: the invoice head is one line of facts. The number is the
-          title, the dates that moved are on the strip, so only the supplier
-          and the document facts remain. */}
-      {shell === 'v2' ? (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px] text-muted-foreground" data-ph-mask>
-          {invoice.supplier && (
-            <Link href={`/suppliers/${invoice.supplier.id}`} className="text-foreground hover:underline">
-              {invoice.supplier.name}
-            </Link>
-          )}
-          {invoice.supplier?.org_number && (
-            <span>
-              {t('def_org_number')} <span className="tabular-nums text-foreground">{invoice.supplier.org_number}</span>
-            </span>
-          )}
-          <span>
-            {t('invoice_date_label')} <span className="tabular-nums text-foreground">{formatDate(invoice.invoice_date)}</span>
-          </span>
-          <span>
-            {t('due_date_label')} <span className="tabular-nums text-foreground">{formatDate(invoice.due_date)}</span>
-          </span>
-          <span>
-            {t('arrival_number_label')} <span className="tabular-nums text-foreground">#{invoice.arrival_number}</span>
-          </span>
-          {invoice.payment_reference && (
-            <span>
-              {t('ocr_reference_label')} <span className="tabular-nums text-foreground">{invoice.payment_reference}</span>
-            </span>
-          )}
-          {invoice.reverse_charge && <span>{t('reverse_charge_badge')}</span>}
-          {invoice.is_credit_note && (
-            <span>
-              {t('def_credits')}{' '}
-              {creditedOriginal ? (
-                <Link href={`/supplier-invoices/${creditedOriginal.id}`} className="text-foreground hover:underline">
-                  {creditedOriginal.supplier_invoice_number
-                    ? t('title_invoice', { number: creditedOriginal.supplier_invoice_number })
-                    : t('arrival_header', { number: creditedOriginal.arrival_number })}
-                </Link>
-              ) : (
-                t('credit_note_banner_original_fallback')
-              )}
-            </span>
-          )}
-        </div>
-      ) : (
-      <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
+      {/* The invoice head is one line of facts. The number is the title, the
+          dates that moved are on the strip, so only the supplier and the
+          document facts remain. */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px] text-muted-foreground" data-ph-mask>
         {invoice.supplier && (
-          <DetailSection kicker={t('supplier_section_title')}>
-            <DefRow label={t('def_name')}>
-              <Link href={`/suppliers/${invoice.supplier.id}`} className="hover:underline">
-                {invoice.supplier.name}
-              </Link>
-            </DefRow>
-            {invoice.supplier.org_number && (
-              <DefRow label={t('def_org_number')}>
-                <span className="tabular-nums">{invoice.supplier.org_number}</span>
-              </DefRow>
-            )}
-            <DefRow label={t('def_email')}>
-              {invoice.supplier.email ? (
-                <a href={`mailto:${invoice.supplier.email}`} className="hover:underline">
-                  {invoice.supplier.email}
-                </a>
-              ) : (
-                <DefEmpty />
-              )}
-            </DefRow>
-          </DetailSection>
+          <Link href={`/suppliers/${invoice.supplier.id}`} className="text-foreground hover:underline">
+            {invoice.supplier.name}
+          </Link>
         )}
-
-        <DetailSection
-          kicker={t('invoice_info_title')}
-          // A credit note carries no edit/delete affordances of its own; the
-          // way to undo it lives on the original, explained behind the "?".
-          help={invoice.is_credit_note ? <HelpPopover>{t('credit_note_help')}</HelpPopover> : undefined}
-        >
-          <DefRow label={t('arrival_number_label')}>
-            <span className="tabular-nums">{invoice.arrival_number}</span>
-          </DefRow>
-          <DefRow label={t('invoice_number_label')}>
-            {invoice.supplier_invoice_number || <DefEmpty />}
-          </DefRow>
-          <DefRow label={t('invoice_date_label')}>
-            <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
-          </DefRow>
-          <DefRow label={t('due_date_label')}>
-            <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
-          </DefRow>
-          {invoice.delivery_date && (
-            <DefRow label={t('delivery_date_label')}>
-              <span className="tabular-nums">{formatDate(invoice.delivery_date)}</span>
-            </DefRow>
-          )}
-          {invoice.payment_reference && (
-            <DefRow label={t('ocr_reference_label')}>
-              <span className="tabular-nums">{invoice.payment_reference}</span>
-            </DefRow>
-          )}
-          {invoice.reverse_charge && (
-            <DefRow label={t('vat_label')}>{t('reverse_charge_badge')}</DefRow>
-          )}
-          {/* The invoice a credit note cancels, as a row, not a banner. */}
-          {invoice.is_credit_note && (
-            <DefRow label={t('def_credits')}>
-              {creditedOriginal ? (
-                <Link href={`/supplier-invoices/${creditedOriginal.id}`} className="hover:underline">
-                  {creditedOriginal.supplier_invoice_number
-                    ? t('title_invoice', { number: creditedOriginal.supplier_invoice_number })
-                    : t('arrival_header', { number: creditedOriginal.arrival_number })}
-                </Link>
-              ) : (
-                <span className="text-muted-foreground">{t('credit_note_banner_original_fallback')}</span>
-              )}
-            </DefRow>
-          )}
-        </DetailSection>
+        {invoice.supplier?.org_number && (
+          <span>
+            {t('def_org_number')} <span className="tabular-nums text-foreground">{invoice.supplier.org_number}</span>
+          </span>
+        )}
+        <span>
+          {t('invoice_date_label')} <span className="tabular-nums text-foreground">{formatDate(invoice.invoice_date)}</span>
+        </span>
+        <span>
+          {t('due_date_label')} <span className="tabular-nums text-foreground">{formatDate(invoice.due_date)}</span>
+        </span>
+        <span>
+          {t('arrival_number_label')} <span className="tabular-nums text-foreground">#{invoice.arrival_number}</span>
+        </span>
+        {invoice.payment_reference && (
+          <span>
+            {t('ocr_reference_label')} <span className="tabular-nums text-foreground">{invoice.payment_reference}</span>
+          </span>
+        )}
+        {invoice.reverse_charge && <span>{t('reverse_charge_badge')}</span>}
+        {invoice.is_credit_note && (
+          <span>
+            {t('def_credits')}{' '}
+            {creditedOriginal ? (
+              <Link href={`/supplier-invoices/${creditedOriginal.id}`} className="text-foreground hover:underline">
+                {creditedOriginal.supplier_invoice_number
+                  ? t('title_invoice', { number: creditedOriginal.supplier_invoice_number })
+                  : t('arrival_header', { number: creditedOriginal.arrival_number })}
+              </Link>
+            ) : (
+              t('credit_note_banner_original_fallback')
+            )}
+          </span>
+        )}
       </div>
-      )}
 
       {/* Invoice lines: the list-page table idiom straight on the panel, with
           the totals as a right-aligned block and the total in the serif. */}
@@ -1201,14 +1077,17 @@ export default function SupplierInvoiceDetailPage() {
       {/* Payment: paid / remaining always, plus the payment events once any
           exist, so a partly paid invoice exposes what is still open. */}
       <DetailSection kicker={t('payment_section')}>
-        {shell === 'v2' && lifecycle?.batch && (
+        {lifecycle?.batch && (
           <DefRow label={t('payment_file_label')}>
             <Link href="/supplier-invoices/payment-files" className="hover:underline underline-offset-4">
               {t('payment_file_created', { date: formatDate(lifecycle.batch.created_at) })}
             </Link>
           </DefRow>
         )}
-        {shell === 'v2' && showBankEntered && !lifecycle?.batch && (
+        {/* The bock (#2220): "I have entered this payment in the bank". A
+            labelled checkbox rather than a button, because it is a fact the
+            user records, not an action that posts anything. */}
+        {showBankEntered && !lifecycle?.batch && (
           <DefRow label={t('bank_entered_label')}>
             <label className={cn('inline-flex select-none items-center gap-2', canWrite && !isProcessing ? 'cursor-pointer' : 'cursor-default', processingAction === 'bank_entered' && 'opacity-50')}>
               <Checkbox

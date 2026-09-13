@@ -18,6 +18,7 @@ import type {
 import {
   INK2R_ASSET_CODES,
   INK2R_EQUITY_LIABILITY_CODES,
+  INK2R_SIGN_TWINS,
 } from './types'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
 
@@ -115,11 +116,11 @@ function createEmptyINK2RRutor(): INK2RRutor {
     '7350': 0, '7351': 0, '7352': 0, '7353': 0, '7354': 0,
     '7360': 0, '7361': 0, '7362': 0, '7363': 0, '7364': 0,
     '7365': 0, '7366': 0, '7367': 0, '7369': 0, '7368': 0, '7370': 0,
-    '7410': 0, '7411': 0, '7412': 0, '7413': 0,
+    '7410': 0, '7411': 0, '7510': 0, '7412': 0, '7413': 0,
     '7511': 0, '7512': 0, '7513': 0, '7514': 0, '7515': 0, '7516': 0, '7517': 0,
-    '7414': 0, '7415': 0, '7423': 0, '7416': 0, '7417': 0,
+    '7414': 0, '7518': 0, '7415': 0, '7519': 0, '7423': 0, '7530': 0, '7416': 0, '7520': 0, '7417': 0,
     '7521': 0, '7522': 0,
-    '7524': 0, '7419': 0, '7420': 0, '7525': 0, '7421': 0, '7422': 0,
+    '7524': 0, '7419': 0, '7420': 0, '7525': 0, '7421': 0, '7526': 0, '7422': 0, '7527': 0,
     '7528': 0,
     '7450': 0, '7550': 0,
   }
@@ -294,8 +295,9 @@ export async function generateINK2Declaration(
   ])
 
   for (const accountNumber of allAccountNumbers) {
-    // Skip account 8999: årets resultat is calculated
-    if (accountNumber === '8999') continue
+    // Skip 899x (årets resultat, resultat): 7450/7550 are calculated from the
+    // other posts, so a balance here would be counted twice.
+    if (accountNumber >= '8990' && accountNumber <= '8999') continue
 
     const mapping = findMappingForAccount(accountNumber)
 
@@ -362,25 +364,41 @@ export async function generateINK2Declaration(
     breakdown[code].total = ink2r[code]
   }
 
+  // Rows with a plus box and a minus box: a negative net is filed as a
+  // positive amount in the minus-box field (BAS kopplingstabell "Om netto -",
+  // e.g. lager decrease 7510, resultat från andelar 7518/7519/7530/7520).
+  for (const [positive, negative] of INK2R_SIGN_TWINS) {
+    if (ink2r[positive] >= 0) continue
+    const moved = -ink2r[positive]
+    ink2r[negative] += moved
+    ink2r[positive] = 0
+    breakdown[negative].accounts.push(
+      ...breakdown[positive].accounts.map((a) => ({ ...a, amount: -a.amount })),
+    )
+    breakdown[negative].total = ink2r[negative]
+    breakdown[positive] = { accounts: [], total: 0 }
+  }
+
   // Calculate totals
   const totalAssets = ASSET_CODES.reduce((sum, code) => sum + ink2r[code], 0)
   const totalEquityLiabilities = EQUITY_LIABILITY_CODES.reduce((sum, code) => sum + ink2r[code], 0)
 
   // Operating result: revenue minus costs (costs are positive per Skatteverket convention)
   const operatingResult =
-    ink2r['7410'] + ink2r['7411'] + ink2r['7412'] + ink2r['7413']
+    ink2r['7410'] + ink2r['7411'] - ink2r['7510'] + ink2r['7412'] + ink2r['7413']
     - ink2r['7511'] - ink2r['7512'] - ink2r['7513'] - ink2r['7514']
     - ink2r['7515'] - ink2r['7516'] - ink2r['7517']
 
   // Financial items: income minus costs
   const financialItems =
-    ink2r['7414'] + ink2r['7415'] + ink2r['7423'] + ink2r['7416'] + ink2r['7417']
+    ink2r['7414'] - ink2r['7518'] + ink2r['7415'] - ink2r['7519']
+    + ink2r['7423'] - ink2r['7530'] + ink2r['7416'] - ink2r['7520'] + ink2r['7417']
     - ink2r['7521'] - ink2r['7522']
 
   // Bokslutsdispositioner: subtract debit-normal, add credit-normal and net
   const bokslutsdispositioner =
     - ink2r['7524'] + ink2r['7419'] + ink2r['7420'] - ink2r['7525']
-    + ink2r['7421'] + ink2r['7422']
+    + ink2r['7421'] - ink2r['7526'] + ink2r['7422'] - ink2r['7527']
 
   // Result before tax
   const resultBeforeTax = operatingResult + financialItems + bokslutsdispositioner

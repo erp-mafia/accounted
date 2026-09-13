@@ -314,12 +314,27 @@ export const arcimMigrationExtension: Extension = {
           const consents = allConsents.filter(c => c.status === 1)
 
           // Get SIE import history
+          const SIE_IMPORT_COLUMNS = 'id, filename, status, accounts_count, transactions_count, company_name, fiscal_year_start, fiscal_year_end, imported_at, created_at'
           const { data: sieImports } = await supabase
             .from('sie_imports')
-            .select('id, filename, status, accounts_count, transactions_count, company_name, fiscal_year_start, fiscal_year_end, imported_at, created_at')
+            .select(SIE_IMPORT_COLUMNS)
             .eq('company_id', companyId)
             .order('created_at', { ascending: false })
             .limit(10)
+
+          // The history above is for display. Whether a completed import
+          // EXISTS is asked on its own: failed and replaced rows can push the
+          // completed one out of the newest-10 window, and the wizard then
+          // gated Visma/Bokio behind "SIE krävs först" for a company that had
+          // imported. Same predicate as the /migrate guard.
+          const { data: latestCompletedSieImport } = await supabase
+            .from('sie_imports')
+            .select(SIE_IMPORT_COLUMNS)
+            .eq('company_id', companyId)
+            .eq('status', 'completed')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
 
           // Get entity counts (to show what's already been imported)
           const [
@@ -341,6 +356,8 @@ export const arcimMigrationExtension: Extension = {
               createdAt: c.createdAt,
             })),
             sieImports: sieImports ?? [],
+            hasCompletedSieImport: latestCompletedSieImport != null,
+            latestCompletedSieImport: latestCompletedSieImport ?? null,
             entityCounts: {
               customers: customerCount ?? 0,
               suppliers: supplierCount ?? 0,

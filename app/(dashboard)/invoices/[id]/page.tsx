@@ -51,7 +51,6 @@ import { isPaymentConfirmationEligible } from '@/lib/invoices/payment-confirmati
 import { contentDispositionFilename } from '@/lib/api/content-disposition'
 import {
   Loader2,
-  ArrowLeft,
   Send,
   CheckCircle,
   FileCheck2,
@@ -99,7 +98,6 @@ import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { useBranding } from '@/lib/branding/brand-context'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
-import { useShell } from '@/components/dashboard/ShellProvider'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
 interface PeppolDeliveryView {
@@ -163,7 +161,6 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const canEmail = useCapability(CAPABILITY.email_send)
   const { id } = use(params)
   const router = useRouter()
-  const shell = useShell()
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoice_detail')
@@ -1465,7 +1462,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       router.push(
         invoice.credited_invoice_id
           ? `/invoices/${invoice.credited_invoice_id}`
-          : '/invoices',
+          : (invoice.document_type || 'invoice') === 'quote'
+            ? '/quotes'
+            : '/invoices',
       )
     } catch (error) {
       toast({
@@ -1757,31 +1756,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   return (
     <div className="space-y-8 stagger-enter">
-      {/* Back link + prev/next record pager on their own quiet row, so the
-          title below keeps a stable position while stepping between records.
-          Shell v2: the sidebar says where we are and the pager sits in the
-          top bar, so the row goes. */}
-      {shell !== 'v2' && (
-      <div className="flex items-center justify-between gap-4">
-        <button
-          type="button"
-          onClick={() => router.back()}
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t('back')}
-        </button>
-        <DetailPager
-          contextKey={listContextKey('invoices', company?.id)}
-          basePath="/invoices"
-          currentId={id}
-        />
-      </div>
-      )}
-
       {/* Header: serif title with one status element, a quiet meta line, and
           the next step on the right. Everything else lives in the ⋯ menu.
-          The page-header hooks turn it into the v2 top bar. */}
+          The page-header hooks turn it into the top bar: the sidebar says
+          where we are, so there is no back link, and the prev/next pager
+          sits in the bar. */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
@@ -1803,14 +1782,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </div>
 
         <div className="page-header-action flex shrink-0 flex-wrap items-center gap-2">
-          {shell === 'v2' && (
-            <DetailPager
-              contextKey={listContextKey('invoices', company?.id)}
-              basePath="/invoices"
-              currentId={id}
-              className="shrink-0"
-            />
-          )}
+          <DetailPager
+            contextKey={listContextKey(isQuote ? 'quotes' : 'invoices', company?.id)}
+            basePath="/invoices"
+            currentId={id}
+            className="shrink-0"
+          />
           {isEditableDraft && canWrite && (
             <Button variant="outline" asChild>
               <Link href={`/invoices/${invoice.id}/edit`}>
@@ -2076,7 +2053,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     <DropdownMenuSeparator />
                     {isProforma || isQuote ? (
                       <DropdownMenuItem
-                        onSelect={() => void updateStatus('cancelled')}
+                        // A cancelled quote is done with: back to Offerter,
+                        // the way deleting a draft returns to its list.
+                        onSelect={() =>
+                          void updateStatus('cancelled').then((ok) => {
+                            if (ok && isQuote) router.push('/quotes')
+                          })
+                        }
                         disabled={isUpdating || !canWrite}
                         className="text-destructive focus:text-destructive"
                       >

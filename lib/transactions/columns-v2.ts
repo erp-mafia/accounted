@@ -1,5 +1,5 @@
 /**
- * Transaktioner columns in shell v2 (dev_docs/ui_v2_build_plan.md, PR 4).
+ * Transaktioner columns (UI v2 PR 4).
  * Fixed order; the user hides or shows the optional ones and the choice
  * persists in user_preferences.ui_state.tx_columns. Beskrivning and Status
  * cannot be hidden: the row would lose its name and its action.

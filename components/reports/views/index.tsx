@@ -30,7 +30,6 @@ import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { useShell } from '@/components/dashboard/ShellProvider'
 import { PageHeader } from '@/components/ui/page-header'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
@@ -694,8 +693,6 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
   const [error, setError] = useState<string | null>(null)
   const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
   const latestVouchers = formatLatestVouchers(data?.latest_vouchers)
-  // Shell v2: the export menu and the latest-voucher line share one row.
-  const v2 = useShell() === 'v2'
 
   useEffect(() => {
     setLoading(true)
@@ -741,7 +738,8 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
 
   return (
     <div className="space-y-4">
-      <div className={v2 ? 'flex flex-wrap items-center justify-between gap-3' : 'contents'}>
+      {/* The export menu and the latest-voucher line share one row. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
         {latestVouchers && (
           <p className="text-sm text-muted-foreground">
             {t('latest_posted_vouchers')}: {latestVouchers}
@@ -842,8 +840,6 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
   const [error, setError] = useState<string | null>(null)
   const reportQs = reportQuery(periodId, dateRange)
   const latestVouchers = formatLatestVouchers(data?.latest_vouchers)
-  // Shell v2: the export menu and the latest-voucher line share one row.
-  const v2 = useShell() === 'v2'
 
   useEffect(() => {
     setLoading(true)
@@ -886,7 +882,8 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
 
   return (
     <div className="space-y-4">
-      <div className={v2 ? 'flex flex-wrap items-center justify-between gap-3' : 'contents'}>
+      {/* The export menu and the latest-voucher line share one row. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
         {latestVouchers && (
           <p className="text-sm text-muted-foreground">
             {t('latest_posted_vouchers')}: {latestVouchers}
@@ -1348,7 +1345,7 @@ function VatStepper({
 
   return (
     <div
-      className="report-narrow mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
+      className="flex w-full items-center gap-3 overflow-x-auto px-1"
       role="tablist"
       aria-label="Momsdeklarationens steg"
     >
@@ -2026,7 +2023,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           />
 
           {activeStep === 1 && (
-            <section className="report-narrow mx-auto max-w-3xl space-y-3">
+            <section className="space-y-3">
               <VatChecksCard
               checks={checks}
               periodType={periodType}
@@ -2045,7 +2042,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
 
           {activeStep === 2 && (
             <section className="space-y-3">
-              <div className="report-narrow mx-auto max-w-2xl">
+              <div>
             <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
               <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Momsdeklaration · {data.period.start} till {data.period.end}
@@ -2241,7 +2238,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           )}
 
           {activeStep === 3 && (
-            <section className="report-narrow mx-auto max-w-3xl space-y-3">
+            <section className="space-y-3">
               <VatBookingCard
               checksBlocked={checksBlocked}
               proposal={settlement.proposal}
@@ -2790,8 +2787,8 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
   return (
     <div className="space-y-4">
       <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, dateRange, dimensionFilter)}` }]} />
-      {/* Account range filter: flat toolbar on the panel, no box. In v2 the
-          labels go (field-label) and the placeholders say what the fields are. */}
+      {/* Account range filter: flat toolbar on the panel, no box. The labels
+          are hidden (field-label) and the placeholders say what the fields are. */}
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <Label htmlFor="gl-account-from" className="field-label">Konto från</Label>

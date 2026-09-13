@@ -1,6 +1,6 @@
 /**
  * Tests for POST /api/user/ui-state: the per-user UI preference bag
- * (nav collapse/fold state, split-button create modes).
+ * (split-button create modes, assistant panel geometry, column visibility).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -33,17 +33,17 @@ describe('POST /api/user/ui-state', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const res = await POST(request({ nav_collapsed: true }))
+    const res = await POST(request({ create_mode: { bookkeeping: 'mall' } }))
     expect(res.status).toBe(401)
   })
 
   it('returns 400 on unknown keys (strict schema)', async () => {
-    const res = await POST(request({ nav_collapsed: true, evil: 'x' }))
+    const res = await POST(request({ create_mode: { bookkeeping: 'mall' }, evil: 'x' }))
     expect(res.status).toBe(400)
   })
 
   it('returns 400 on wrong value types', async () => {
-    const res = await POST(request({ nav_collapsed: 'yes' }))
+    const res = await POST(request({ create_mode: { bookkeeping: 42 } }))
     expect(res.status).toBe(400)
   })
 
@@ -118,19 +118,19 @@ describe('POST /api/user/ui-state', () => {
   it('merges the patch into the existing ui_state', async () => {
     // select existing row
     enqueue({
-      data: { ui_state: { nav_collapsed: false, nav_folds: { register: true } } },
+      data: { ui_state: { create_mode: { bookkeeping: 'mall' }, tx_columns: { hidden: ['date'] } } },
     })
     // upsert result
     enqueue({ data: null })
 
     const { status, body } = await parseJsonResponse<{
-      data: { ui_state: { nav_collapsed: boolean; nav_folds: Record<string, boolean> } }
-    }>(await POST(request({ nav_folds: { bokslut: true } })))
+      data: { ui_state: { create_mode: Record<string, string>; tx_columns: { hidden: string[] } } }
+    }>(await POST(request({ create_mode: { invoices: 'offert' } })))
 
     expect(status).toBe(200)
     expect(body.data.ui_state).toEqual({
-      nav_collapsed: false,
-      nav_folds: { register: true, bokslut: true },
+      create_mode: { bookkeeping: 'mall', invoices: 'offert' },
+      tx_columns: { hidden: ['date'] },
     })
   })
 
@@ -139,11 +139,11 @@ describe('POST /api/user/ui-state', () => {
     enqueue({ data: null }) // upsert
 
     const { status, body } = await parseJsonResponse<{
-      data: { ui_state: { nav_collapsed: boolean } }
-    }>(await POST(request({ nav_collapsed: true })))
+      data: { ui_state: { tx_columns: { hidden: string[] } } }
+    }>(await POST(request({ tx_columns: { hidden: ['account'] } })))
 
     expect(status).toBe(200)
-    expect(body.data.ui_state).toEqual({ nav_collapsed: true })
+    expect(body.data.ui_state).toEqual({ tx_columns: { hidden: ['account'] } })
   })
 
   it('returns 400 when a trial_expired_ack key is not a company UUID', async () => {
@@ -192,20 +192,44 @@ describe('POST /api/user/ui-state', () => {
     enqueue({ data: null })
     enqueue({ data: null, error: { message: 'boom' } })
 
-    const res = await POST(request({ nav_collapsed: true }))
+    const res = await POST(request({ create_mode: { bookkeeping: 'mall' } }))
     expect(res.status).toBe(500)
   })
 
-  it('accepts the shell opt-in and keeps the rest of the bag', async () => {
-    enqueue({ data: { ui_state: { nav_collapsed: true } } })
+  it('accepts the retired shell and nav keys from old clients without storing them', async () => {
+    enqueue({ data: { ui_state: { tx_columns: { hidden: ['date'] } } } })
     enqueue({ data: null })
 
     const { status, body } = await parseJsonResponse<{
-      data: { ui_state: { shell: string; nav_collapsed: boolean } }
+      data: { ui_state: Record<string, unknown> }
+    }>(
+      await POST(
+        request({
+          shell: 'v1',
+          nav_collapsed: true,
+          nav_folds: { register: true },
+          create_mode: { bookkeeping: 'mall' },
+        }),
+      ),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.ui_state).toEqual({
+      tx_columns: { hidden: ['date'] },
+      create_mode: { bookkeeping: 'mall' },
+    })
+  })
+
+  it('returns 200 for a lone retired key and leaves the bag as it was', async () => {
+    enqueue({ data: { ui_state: { tx_columns: { hidden: ['date'] } } } })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: { ui_state: Record<string, unknown> }
     }>(await POST(request({ shell: 'v2' })))
 
     expect(status).toBe(200)
-    expect(body.data.ui_state).toEqual({ nav_collapsed: true, shell: 'v2' })
+    expect(body.data.ui_state).toEqual({ tx_columns: { hidden: ['date'] } })
   })
 
   it('returns 400 on an unknown shell value', async () => {

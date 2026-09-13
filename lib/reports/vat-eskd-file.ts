@@ -3,7 +3,7 @@ import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
 
 /**
  * Maps each momsdeklaration ruta to its eSKDUpload XML tag, per Skatteverket's
- * "Skapa en fil" specification (dev_docs/skatteverket/moms). The tag order in
+ * "Skapa en fil" specification. The tag order in
  * the emitted file follows the ruta order defined below, which matches the SKV
  * form/file layout. ruta49 (MomsBetala) is the mandatory summering and is always
  * emitted last.
@@ -96,7 +96,7 @@ function toESkdPeriod(periodEnd: string): string {
  * calculated rutor. This is the file a user uploads under "Deklarera via fil";
  * unlike the PDF (a read/record copy) this is a real submission artifact.
  *
- * Format rules (dev_docs/skatteverket/moms/momsdeklaration_via_etjänst.txt):
+ * Format rules:
  * - Whole kronor only, no decimals; öre are truncated (shared with the PDF via
  *   buildFiledAmounts so the two documents always tie out).
  * - Only rutor with a value are emitted, except <MomsBetala> (ruta49) which is

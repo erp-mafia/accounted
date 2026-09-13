@@ -14,8 +14,6 @@ import { renderAgentGroundRules } from './shared-rules'
 // gnubok_create_invoice / send_invoice are NOT in the tool list because
 // the form already submits to those endpoints: the agent shouldn't race
 // the form.
-//
-// Plan ref: dev_docs/specialized-agent-plan.md §8 (V1 intent #2).
 
 interface InvoiceDraftArgs {
   // null when the user opened the agent before picking a customer.

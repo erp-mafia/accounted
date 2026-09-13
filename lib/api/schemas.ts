@@ -727,8 +727,7 @@ export const RotRutReclaimSchema = z.object({
   booking_date: isoDate,
 })
 
-// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst
-// (dev_docs/skatteverket/husavdrag/exempel_beslut.json + ht.raml).
+// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst.
 export const RotRutBeslutFileSchema = z.object({
   version: z.string(),
   // Utförarens orgnr, 12 digits with 16-prefix in SKV's file.
@@ -1575,8 +1574,8 @@ export const StrikeLinesSchema = z
 // ============================================================
 // Dimension registry schemas (kostnadsställe/projekt)
 // ============================================================
-// dev_docs/dimensions_implementation_plan.md §6. The registry tables
-// (dimensions/dimension_values) shipped in 20260702084500_dimensions_substrate.
+// The registry tables (dimensions/dimension_values) shipped in
+// 20260702084500_dimensions_substrate.
 
 /**
  * Object code for USER-CREATED dimension values: strict Fortnox format.
@@ -2211,13 +2210,6 @@ export const LinkTransactionJournalEntrySchema = z.object({
   invoice_id: uuid.optional(),
 })
 
-export const CreateTransactionFromDocumentSchema = z.object({
-  inbox_item_id: uuid,
-  amount: z.number().refine((n) => n !== 0, 'Amount must be non-zero'),
-  transaction_date: isoDate,
-  description: z.string().min(1).max(500),
-})
-
 /**
  * POST /api/transactions/[id]/match-rot-rut-payout: settle one or several
  * ROT/RUT begäran with the bank row that carried Skatteverkets utbetalning.
@@ -2551,7 +2543,7 @@ export const UpdateSettingsSchema = z.object({
   // AI agent flow
   ai_flow_enabled: z.boolean().optional(),
   // Dimensions (kostnadsställe/projekt): UI-visibility toggle only, never
-  // load-bearing for correctness (dev_docs/dimensions_implementation_plan.md §2).
+  // load-bearing for correctness.
   dimensions_enabled: z.boolean().optional(),
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
   // for correctness (trips created via API/MCP work regardless).
@@ -2559,6 +2551,12 @@ export const UpdateSettingsSchema = z.object({
   // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
   // for correctness (the pages and APIs work regardless).
   sales_orders_enabled: z.boolean().optional(),
+  // Invoice document type toggles (offert, proforma, återkommande,
+  // självfaktura): UI-visibility only, never load-bearing for correctness.
+  quotes_enabled: z.boolean().optional(),
+  proforma_enabled: z.boolean().optional(),
+  recurring_invoices_enabled: z.boolean().optional(),
+  self_billing_enabled: z.boolean().optional(),
   // Data analysis consent (#1346): gates cross-company analysis of this
   // company's bookkeeping outcomes. Flipped by a human in the settings UI
   // only; deliberately absent from the v1 REST / MCP settings pick lists.
@@ -2619,36 +2617,6 @@ export const CreateFiscalPeriodSchema = z.object({
     path: ['period_end'],
   }
 )
-
-// ============================================================
-// Mapping rule schemas
-// ============================================================
-
-export const CreateMappingRuleSchema = z.object({
-  rule_name: z.string().min(1, 'Rule name is required'),
-  rule_type: MappingRuleTypeSchema,
-  priority: z.number().int().min(0).optional(),
-  mcc_codes: z.array(z.string()).optional(),
-  merchant_pattern: z.string().optional(),
-  description_pattern: z.string().optional(),
-  amount_min: z.number().optional(),
-  amount_max: z.number().optional(),
-  debit_account: accountNumber,
-  credit_account: accountNumber,
-  vat_treatment: z.string().optional(),
-  risk_level: RiskLevelSchema.optional(),
-  default_private: z.boolean().optional(),
-  requires_review: z.boolean().optional(),
-  confidence_score: z.number().min(0).max(1).optional(),
-})
-
-export const EvaluateMappingRulesSchema = z.union([
-  z.object({ transaction_id: uuid }),
-  z.object({
-    description: z.string().optional(),
-    amount: z.number(),
-  }).passthrough(),
-])
 
 // ============================================================
 // Deadline schemas
@@ -2748,10 +2716,6 @@ export const BankLinkSchema = z
     message: 'Ange journal_entry_id eller allocations, inte båda.',
     path: ['journal_entry_id'],
   })
-
-export const BankUnlinkSchema = z.object({
-  transaction_id: uuid,
-})
 
 /**
  * Re-tag a mis-typed bank-account opening balance (a manual/import voucher that

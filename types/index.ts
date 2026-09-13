@@ -171,13 +171,10 @@ export interface FiscalYearResetRpcResult {
 }
 
 // Shape of user_preferences.ui_state. All fields optional: the bag grows
-// as UI surfaces add preferences (UI migration plan PR 2/3).
+// as UI surfaces add preferences (UI migration plan PR 2/3). Stored bags may
+// still carry retired keys (shell, nav_collapsed, nav_folds) from the old
+// Standard layout; nothing reads them.
 export interface UserUiState {
-  nav_collapsed?: boolean
-  nav_folds?: {
-    register?: boolean
-    bokslut?: boolean
-  }
   // Split-button last-used create modes, keyed per surface (plan PR 3/4),
   // e.g. create_mode.bookkeeping = 'mall'.
   create_mode?: Record<string, string>
@@ -190,15 +187,9 @@ export interface UserUiState {
   // (companyId -> ISO timestamp of the ack). Lives on the user so each
   // member of a company sees the notice once.
   trial_expired_ack?: Record<string, string>
-  // Dashboard shell. 'v2' is the full-bleed frame with the page title in a
-  // top bar (founder decision 2026-09-07, dev_docs/ui_v2_build_plan.md).
-  // Absent or 'v1' keeps the centered max-w-5xl panel until v2 is default.
-  shell?: DashboardShell
-  // Transaktioner column visibility in shell v2 (lib/transactions/columns-v2).
+  // Transaktioner column visibility (lib/transactions/columns-v2).
   tx_columns?: { hidden?: string[] }
 }
-
-export type DashboardShell = 'v1' | 'v2'
 
 export type AgentPanelMode = 'docked' | 'floating'
 
@@ -586,6 +577,15 @@ export interface CompanySettings {
   // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
   // for correctness (the /sales-orders pages and APIs work regardless).
   sales_orders_enabled: boolean
+
+  // Invoice document type toggles (migration 20260912190000): hide the
+  // optional invoice kinds from the UI for companies that never use them.
+  // Default true. UI-visibility only, never load-bearing for correctness:
+  // existing documents stay listed and the API/MCP work regardless.
+  quotes_enabled: boolean
+  proforma_enabled: boolean
+  recurring_invoices_enabled: boolean
+  self_billing_enabled: boolean
   // Per-company counter behind generate_sales_order_number (OR-<n>).
   next_sales_order_number?: number
 

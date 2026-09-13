@@ -60,7 +60,7 @@ export function SuggestionQueue({
   onOpen: (id: string) => void
   /** Open the SCB picker for a row without an org number; undefined hides the link. */
   /**
-   * Shell v2: one line per row, the selection actions in a floating bar that
+   * One line per row, the selection actions in a floating bar that
    * appears with the first tick, and the near-duplicate hint as a muted
    * word instead of a warning chip.
    */

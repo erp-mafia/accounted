@@ -48,8 +48,6 @@ import {
   UpdateSettingsSchema,
   // Fiscal period schemas
   CreateFiscalPeriodSchema,
-  // Mapping rule schemas
-  CreateMappingRuleSchema,
   // Deadline schemas
   CreateDeadlineSchema,
   // Account schemas
@@ -57,7 +55,6 @@ import {
   UpdateAccountSchema,
   // Reconciliation schemas
   BankLinkSchema,
-  BankUnlinkSchema,
   RunReconciliationSchema,
   // Update schemas
   UpdateCustomerSchema,
@@ -65,7 +62,6 @@ import {
   UpdateSupplierInvoiceSchema,
   // Correct/evaluate schemas
   CorrectJournalEntrySchema,
-  EvaluateMappingRulesSchema,
   // Report query schemas
   VatDeclarationQuerySchema,
   PaginationQuerySchema,
@@ -2093,81 +2089,6 @@ describe('CreateFiscalPeriodSchema', () => {
 })
 
 // ============================================================
-// Mapping rule schemas
-// ============================================================
-
-describe('CreateMappingRuleSchema', () => {
-  it('accepts valid rule', () => {
-    const result = CreateMappingRuleSchema.safeParse({
-      rule_name: 'Office rent',
-      rule_type: 'merchant_name',
-      merchant_pattern: 'Vasakronan',
-      debit_account: '5010',
-      credit_account: '1930',
-    })
-    expect(result.success).toBe(true)
-  })
-
-  it('accepts rule with all optional fields', () => {
-    const result = CreateMappingRuleSchema.safeParse({
-      rule_name: 'Restaurant meals',
-      rule_type: 'mcc_code',
-      priority: 5,
-      mcc_codes: ['5812', '5811'],
-      debit_account: '6071',
-      credit_account: '1930',
-      vat_treatment: 'reduced_12',
-      risk_level: 'LOW',
-      default_private: false,
-      requires_review: true,
-      confidence_score: 0.85,
-    })
-    expect(result.success).toBe(true)
-  })
-
-  it('rejects missing debit_account', () => {
-    const result = CreateMappingRuleSchema.safeParse({
-      rule_name: 'Test',
-      rule_type: 'merchant_name',
-      credit_account: '1930',
-    })
-    expect(result.success).toBe(false)
-  })
-
-  it('rejects invalid account format', () => {
-    const result = CreateMappingRuleSchema.safeParse({
-      rule_name: 'Test',
-      rule_type: 'merchant_name',
-      debit_account: '50',
-      credit_account: '1930',
-    })
-    expect(result.success).toBe(false)
-  })
-
-  it('rejects confidence_score > 1', () => {
-    const result = CreateMappingRuleSchema.safeParse({
-      rule_name: 'Test',
-      rule_type: 'merchant_name',
-      debit_account: '5010',
-      credit_account: '1930',
-      confidence_score: 1.5,
-    })
-    expect(result.success).toBe(false)
-  })
-
-  it('rejects negative confidence_score', () => {
-    const result = CreateMappingRuleSchema.safeParse({
-      rule_name: 'Test',
-      rule_type: 'merchant_name',
-      debit_account: '5010',
-      credit_account: '1930',
-      confidence_score: -0.1,
-    })
-    expect(result.success).toBe(false)
-  })
-})
-
-// ============================================================
 // Deadline schemas
 // ============================================================
 
@@ -2674,23 +2595,6 @@ describe('UpdateAccountSchema', () => {
 // Bank reconciliation new schemas
 // ============================================================
 
-describe('BankUnlinkSchema', () => {
-  it('accepts valid transaction_id', () => {
-    const result = BankUnlinkSchema.safeParse({ transaction_id: validUuid })
-    expect(result.success).toBe(true)
-  })
-
-  it('rejects missing transaction_id', () => {
-    const result = BankUnlinkSchema.safeParse({})
-    expect(result.success).toBe(false)
-  })
-
-  it('rejects non-UUID transaction_id', () => {
-    const result = BankUnlinkSchema.safeParse({ transaction_id: 'txn-123' })
-    expect(result.success).toBe(false)
-  })
-})
-
 describe('RunReconciliationSchema', () => {
   it('accepts empty object (all optional)', () => {
     const result = RunReconciliationSchema.safeParse({})
@@ -2795,52 +2699,6 @@ describe('CorrectJournalEntrySchema', () => {
 })
 
 // ============================================================
-// Evaluate mapping rules schema
-// ============================================================
-
-describe('EvaluateMappingRulesSchema', () => {
-  it('accepts valid transaction_id', () => {
-    const result = EvaluateMappingRulesSchema.safeParse({ transaction_id: validUuid })
-    expect(result.success).toBe(true)
-  })
-
-  it('accepts raw transaction data with amount', () => {
-    const result = EvaluateMappingRulesSchema.safeParse({
-      description: 'Office supplies',
-      amount: -500,
-    })
-    expect(result.success).toBe(true)
-  })
-
-  it('accepts raw data with all fields', () => {
-    const result = EvaluateMappingRulesSchema.safeParse({
-      description: 'Spotify',
-      amount: -129,
-      merchant_name: 'Spotify AB',
-      mcc_code: '5815',
-      date: '2025-03-15',
-    })
-    expect(result.success).toBe(true)
-  })
-
-  it('rejects non-UUID transaction_id', () => {
-    // First branch fails (invalid UUID), second branch matches only if amount is present
-    const result = EvaluateMappingRulesSchema.safeParse({ transaction_id: 'not-uuid' })
-    expect(result.success).toBe(false)
-  })
-
-  it('rejects empty object (no transaction_id and no amount)', () => {
-    const result = EvaluateMappingRulesSchema.safeParse({})
-    expect(result.success).toBe(false)
-  })
-
-  it('rejects missing amount in raw data', () => {
-    const result = EvaluateMappingRulesSchema.safeParse({ description: 'Test' })
-    expect(result.success).toBe(false)
-  })
-})
-
-// ============================================================
 // Cross-schema consistency tests
 // ============================================================
 
@@ -2866,14 +2724,6 @@ describe('Cross-schema consistency', () => {
         account_name: 'Test',
         account_type: 'expense',
         normal_balance: 'debit',
-      }).success).toBe(false)
-
-      // Mapping rule accounts
-      expect(CreateMappingRuleSchema.safeParse({
-        rule_name: 'Test',
-        rule_type: 'merchant_name',
-        debit_account: acct,
-        credit_account: '1930',
       }).success).toBe(false)
     }
   })

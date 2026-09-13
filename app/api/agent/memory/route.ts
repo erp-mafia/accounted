@@ -6,7 +6,7 @@ import { validateBody, validateQuery } from '@/lib/api/validate'
 // GET /api/agent/memory
 //
 // Lists memory entries for the active company, ordered by pin > relevance >
-// recency. Powers /settings/agent-memory (transparency UI per plan §11).
+// recency. Powers /settings/assistant?view=memory (transparency UI per plan §11).
 //
 // Query params:
 //   include_dismissed: 'true' includes is_active=false rows (audit view).
@@ -20,7 +20,7 @@ import { validateBody, validateQuery } from '@/lib/api/validate'
 // foundational facts as `kind=fact`, `source=user_taught` with an elevated
 // relevance score so they land in the top-30 prompt block.
 //
-// Also usable from /settings/agent-memory ("Lägg till minne" affordance) and
+// Also usable from /settings/assistant?view=memory ("Lägg till minne" affordance) and
 // post-Phase 4 explicit "Kom ihåg det här" surfaces.
 
 const KIND = ['fact', 'preference', 'pattern', 'correction'] as const

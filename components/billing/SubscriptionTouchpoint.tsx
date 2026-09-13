@@ -15,9 +15,7 @@ import { useCompany } from '@/contexts/CompanyContext'
  *   trial_expired /
  *   lapsed_subscription -> a muted pill linking to /settings/billing. This is
  *                          the navigation affordance a lapsed user could not
- *                          find (2026-08-18 report), so it is NOT dismissable
- *                          and, unlike the countdown, stays visible when the
- *                          sidebar is collapsed (icon-only with aria-label).
+ *                          find (2026-08-18 report), so it is NOT dismissable.
  *
  * Hidden for sandbox/demo (no checkout; sandbox companies carry trial grants
  * too) and for paying companies. Muted chrome tone throughout: status colors
@@ -25,11 +23,9 @@ import { useCompany } from '@/contexts/CompanyContext'
  */
 export function SubscriptionTouchpoint({
   variant,
-  collapsed = false,
   onNavigate,
 }: {
   variant: 'sidebar' | 'mobile'
-  collapsed?: boolean
   onNavigate?: () => void
 }) {
   const { entitlementState, trialEndsAt, isSandbox } = useCompany()
@@ -82,25 +78,6 @@ export function SubscriptionTouchpoint({
         <span className="text-sm flex-1">{label}</span>
         <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
       </Link>
-    )
-  }
-
-  // Sidebar. The countdown keeps its pre-existing behavior of hiding when the
-  // rail is collapsed; the lapsed CTA must not vanish, so it collapses to an
-  // icon-only link instead.
-  if (collapsed) {
-    if (!lapsed) return null
-    return (
-      <div className="flex flex-shrink-0 justify-center pb-2">
-        <Link
-          href="/settings/billing"
-          title={label}
-          aria-label={label}
-          className="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
-        >
-          <Icon className="h-[17px] w-[17px]" />
-        </Link>
-      </div>
     )
   }
 

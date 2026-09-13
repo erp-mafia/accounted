@@ -25,7 +25,7 @@ import {
   type AnlaggningAsset,
 } from './anlaggningstillgangar-note'
 import { computeAssetNoteFigures, loadPostedSchedules } from './asset-note-figures'
-import { resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
+import { hasMedelantalOverride, resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
 import type {
   ArsredovisningData,
   EgenKapitalRow,
@@ -469,6 +469,47 @@ interface PeriodRow {
   period_end: string
 }
 
+/**
+ * Medelantal anställda note body, plus a warning when the figure is missing
+ * rather than zero. The FTE average is computed from Löner employee records
+ * only; a company whose salary is booked without them (hand-booked, SIE
+ * import, a migrated year) computes 0 and used to read "Bolaget har inte
+ * haft några anställda" while 7xxx carried a full year of löner (feedback
+ * seq 366434). Posted activity on 7000-7399 in the period with no manual
+ * figure is the signal that the roster, not the payroll, is empty: the note
+ * then says the figure is missing and the preview flags it. An explicit
+ * override (0 included) is the user's statement and wins. Pure; shared by
+ * the K2 and K3 noter builders so the two frameworks cannot disagree.
+ */
+export function resolveMedelantalNote(args: {
+  medelantal: number
+  hasOverride: boolean
+  tbFullRows: Array<Pick<TrialBalanceRow, 'account_number' | 'period_debit' | 'period_credit'>>
+}): { body: string; warning: string | null } {
+  if (args.medelantal > 0) {
+    return {
+      body: `Under räkenskapsåret har medeltalet anställda uppgått till ${args.medelantal}.`,
+      warning: null,
+    }
+  }
+  // Period activity, not the closing net: with the closing entry included
+  // every 7xxx account nets to zero after bokslut.
+  const salaryPosted = args.tbFullRows.some(
+    (r) =>
+      r.account_number >= '7000' &&
+      r.account_number <= '7399' &&
+      ((r.period_debit || 0) !== 0 || (r.period_credit || 0) !== 0),
+  )
+  if (!args.hasOverride && salaryPosted) {
+    return {
+      body: 'Uppgift om medelantal anställda saknas: ange antalet under Årsredovisning (not Medelantal anställda).',
+      warning:
+        'Löner är bokförda på konto 7000-7399 men medelantal anställda kunde inte beräknas (inga anställda registrerade under Löner): ange antalet under Årsredovisning (not Medelantal anställda).',
+    }
+  }
+  return { body: 'Bolaget har inte haft några anställda under räkenskapsåret.', warning: null }
+}
+
 export function calculateSoliditet(mapping: K2MappingResult): number | null {
   const totalAssets = mapping.totals.tillgangar.current
   if (totalAssets <= 0) return null
@@ -775,14 +816,17 @@ async function buildK2Noter(
     periodEnd,
   )
   if (medelantal > 0 || entityType === 'aktiebolag') {
+    const medelantalNote = resolveMedelantalNote({
+      medelantal,
+      hasOverride: hasMedelantalOverride(narrative?.medelantal_anstallda_override),
+      tbFullRows,
+    })
     notes.push({
       number: notes.length + 1,
       title: 'Medelantal anställda',
-      body:
-        medelantal > 0
-          ? `Under räkenskapsåret har medeltalet anställda uppgått till ${medelantal}.`
-          : 'Bolaget har inte haft några anställda under räkenskapsåret.',
+      body: medelantalNote.body,
     })
+    if (medelantalNote.warning) warnings.push(medelantalNote.warning)
   }
 
   // Långfristiga skulder förfallande efter mer än fem år (ÅRL 5:13 §).
@@ -1178,14 +1222,17 @@ async function buildK3Noter(
     periodEndIso,
   )
   if (medelantal > 0 || entityType === 'aktiebolag') {
+    const medelantalNote = resolveMedelantalNote({
+      medelantal,
+      hasOverride: hasMedelantalOverride(narrative?.medelantal_anstallda_override),
+      tbFullRows,
+    })
     notes.push({
       number: notes.length + 1,
       title: 'Medelantal anställda',
-      body:
-        medelantal > 0
-          ? `Under räkenskapsåret har medeltalet anställda uppgått till ${medelantal}.`
-          : 'Bolaget har inte haft några anställda under räkenskapsåret.',
+      body: medelantalNote.body,
     })
+    if (medelantalNote.warning) warnings.push(medelantalNote.warning)
   }
 
   // 6. Långfristiga skulder förfallande efter mer än fem år (ÅRL 5:13 §).

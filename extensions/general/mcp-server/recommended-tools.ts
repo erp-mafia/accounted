@@ -23,6 +23,11 @@
  * for every company; applicability is the agent's judgment call.
  */
 import { workflowSkills } from './skills'
+import {
+  SEARCH_ONLY_READ_NOTE,
+  SEARCH_ONLY_WRITE_NOTE,
+  type ToolCallableVia,
+} from './tool-reach'
 
 export interface WorkflowLoadout {
   /** Stable snake_case workflow key (e.g. "categorize_month"). */
@@ -152,6 +157,63 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
     ],
   },
 ]
+
+/** What annotateLoadoutTools needs to know about one registry tool. */
+export interface RecommendedToolClassification {
+  /** Scope the tool requires (TOOL_SCOPE_MAP); null for unscoped tools. */
+  required_scope: string | null
+  callable_via: ToolCallableVia
+}
+
+/** One tool inside a recommended_tools loadout, as the briefing returns it. */
+export interface RecommendedToolEntry {
+  name: string
+  /**
+   * false: this API key, on a client that only loads tools/list, cannot
+   * invoke the tool. blocked_by + note say why.
+   */
+  callable: boolean
+  blocked_by?: 'scope' | 'catalog'
+  note?: string
+}
+
+/**
+ * Flags every tool of a loadout as callable or not for THIS key and a
+ * tools/list-only client, without dropping any: the agent should see what the
+ * workflow needs and why a step is out of reach (feedback seq 372962: a key
+ * without reconciliation:* scopes was handed the reconcile_month loadout and
+ * every call failed on scope; search-only writes in it were reported as
+ * missing tools). Callable tools come first, call order preserved within each
+ * half, so a harness that batch-loads the head of the list gets only tools
+ * that work.
+ */
+export function annotateLoadoutTools(
+  toolNames: readonly string[],
+  classify: (toolName: string) => RecommendedToolClassification,
+  grantedScopes: ReadonlySet<string>,
+): RecommendedToolEntry[] {
+  const entries = toolNames.map((name): RecommendedToolEntry => {
+    const { required_scope, callable_via } = classify(name)
+    // Scope first: it is enforced server-side for every client, so it blocks
+    // even a client that can name unlisted tools, and the key owner fixes it.
+    if (required_scope && !grantedScopes.has(required_scope)) {
+      return {
+        name,
+        callable: false,
+        blocked_by: 'scope',
+        note: `requires ${required_scope}: not granted to this API key`,
+      }
+    }
+    if (callable_via === 'none') {
+      return { name, callable: false, blocked_by: 'catalog', note: SEARCH_ONLY_WRITE_NOTE }
+    }
+    if (callable_via === 'call_tool') {
+      return { name, callable: true, note: SEARCH_ONLY_READ_NOTE }
+    }
+    return { name, callable: true }
+  })
+  return [...entries.filter((e) => e.callable), ...entries.filter((e) => !e.callable)]
+}
 
 /**
  * Fails fast when a loadout references a tool or workflow skill that does not

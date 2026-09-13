@@ -4,8 +4,9 @@
  * Used by:
  *   - The web UI commit route (app/api/pending-operations/[id]/commit/route.ts)
  *     when a human clicks "Approve"
- *   - The MCP server (extensions/general/mcp-server/server.ts) when a trusted
- *     agent stages a low-risk op that the company has opted in to auto-commit
+ *   - The bulk-approval route (app/api/pending-operations/bulk-commit/route.ts)
+ *   - The MCP server (extensions/general/mcp-server/server.ts) when an agent
+ *     relays a human approval
  *
  * Both paths converge here so the same audit trail, event emission, error
  * handling, and status transition logic apply.
@@ -285,7 +286,7 @@ export interface CommitOptions {
    * 'bulk_accept'. MCP approvals pass the relaying credential: 'api_key'
    * (gnubok-mcp bridge) or 'agent' (OAuth connector), so the immutable layer
    * records that the acknowledgment was agent-relayed rather than a
-   * first-party human session (agent_first_vision.md §8 P0-1). Every path is
+   * first-party human session. Every path is
    * still human-approval-gated; agent auto-commit was removed in
    * 20260505190027_drop_agent_auto_commit.
    */
@@ -4221,9 +4222,15 @@ async function precheckDocumentLink(
  * (feedback 2026-08-24..26, three companies).
  *
  * Same shape as the create_voucher + inbox_item_id stamp: CAS on the null
- * link columns so a concurrent claim stays a no-op, and unique_violation
- * tolerated because the UNIQUE on created_journal_entry_id lets only one
- * inbox item point at a samlingsverifikat. Best-effort by design: the link is
+ * link columns so a concurrent claim of the same inbox row stays a no-op.
+ * Several inbox items may carry the same created_journal_entry_id (an invoice
+ * and its payment confirmation on one verifikat): migration 20260911120500
+ * dropped the UNIQUE that made every stamp after the first fail with 23505,
+ * which this helper used to swallow, leaving the item "unprocessed" forever
+ * (feedback seq 389343, 395894, 395931, 366701). Zero matched rows is the
+ * remaining quiet outcome (the document never came through the inbox, or the
+ * row was already claimed, typically by create_supplier_invoice_from_inbox)
+ * and is logged so the trail is visible. Best-effort by design: the link is
  * already committed and inbox bookkeeping must not roll it back.
  */
 async function stampInboxItemForLinkedDocument(
@@ -4232,18 +4239,26 @@ async function stampInboxItemForLinkedDocument(
   documentId: string,
   journalEntryId: string,
 ): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('invoice_inbox_items')
     .update({ created_journal_entry_id: journalEntryId })
     .eq('document_id', documentId)
     .eq('company_id', companyId)
     .is('created_journal_entry_id', null)
     .is('created_supplier_invoice_id', null)
-  if (error && error.code !== '23505') {
+    .select('id')
+  if (error) {
     log.warn('Failed to mark inbox item handled after document link (link still committed)', {
       documentId,
       journalEntryId,
       error: error.message,
+    })
+    return
+  }
+  if (!data || data.length === 0) {
+    log.warn('No inbox item stamped after document link: document has no inbox row or it was already claimed', {
+      documentId,
+      journalEntryId,
     })
   }
 }
@@ -4863,9 +4878,18 @@ async function commitCreateSupplierInvoiceFromInbox(
   }
 
   const reverseCharge = vatTreatment === 'reverse_charge'
-  const subtotalRounded = Math.round(subtotal * 100) / 100
-  const vatAmountRounded = Math.round(vatAmount * 100) / 100
-  const totalRounded = Math.round(total * 100) / 100
+  // Omvänd skattskyldighet: the registration entry credits 2440 with the sum
+  // of the line nets (the fiktiv 2614/2645 pair nets to zero), so that sum is
+  // the only payable the reskontra can carry. Staging registers the net since
+  // feedback seq 366701, but an op staged before that fix, or a tampered one,
+  // still carries the document's gross (919.20 + 229.80 = 1149.00 on the
+  // reported invoice) and would leave remaining_amount 1149 against 919.20 in
+  // the GL: never trust a staged header under reverse charge. VAT the seller
+  // charged on a reverse-charge invoice is not deductible and is not booked.
+  const itemNetSum = rawItems.reduce((sum, item) => sum + (finite(item.line_total) ?? 0), 0)
+  const subtotalRounded = reverseCharge ? roundOre(itemNetSum) : Math.round(subtotal * 100) / 100
+  const vatAmountRounded = reverseCharge ? 0 : Math.round(vatAmount * 100) / 100
+  const totalRounded = reverseCharge ? subtotalRounded : Math.round(total * 100) / 100
   // Fed the already-rounded figures so a SEK invoice (rate 1) gets
   // total_sek === total to the öre instead of the two roundings disagreeing on
   // an exact-half value. The old `exchangeRate ? … : null` guard left all three
@@ -5819,15 +5843,16 @@ async function commitCreateVoucher(
     const documentId = params.document_id as string | undefined
     let inboxLinked = false
     if (inboxItemId) {
-      // Race guard: the UNIQUE constraint on
-      // invoice_inbox_items.created_journal_entry_id (migration 20260515090000)
-      // stops two inbox items from being linked to the same JE, but it does
-      // NOT stop two concurrent commits of different staged ops on the same
-      // inbox item from overwriting each other (the second UPDATE on the same
-      // row trivially satisfies UNIQUE). We add a `.is('created_journal_entry_id', null)`
-      // predicate so only the first commit succeeds; the loser sees a
-      // zero-rows-updated result and surfaces a structured warning. We also
-      // require .eq('created_supplier_invoice_id', null) so a concurrent
+      // Race guard: two concurrent commits of different staged ops on the
+      // same inbox item must not overwrite each other, and no constraint
+      // catches that (a second UPDATE of the same row is invisible to any
+      // cross-row UNIQUE; the one on created_journal_entry_id from migration
+      // 20260515090000 was dropped in 20260911120500 because several inbox
+      // items legitimately back one verifikat). The
+      // `.is('created_journal_entry_id', null)` predicate is the guard: only
+      // the first commit succeeds; the loser sees a zero-rows-updated result
+      // and surfaces a structured warning. We also require
+      // .is('created_supplier_invoice_id', null) so a concurrent
       // create_supplier_invoice_from_inbox doesn't get clobbered either.
       // Only the link column is written: the status CHECK allows received|error
       // (migration 20260504180000), so writing 'confirmed' here would fail the
@@ -7349,8 +7374,8 @@ async function commitLinkTransactionJournalEntry(
  * Execute a pending_operation by type, update its status row, and return a
  * normalized CommitResult.
  *
- * Used by both the human-approval route and the auto-commit path. Status row
- * transitions are applied here so the two callers stay consistent.
+ * Used by every approval path (web single and bulk approval, MCP-relayed
+ * approval). Status row transitions are applied here so they stay consistent.
  *
  * When opts.actor is set, the entire executor runs inside a runWithActor()
  * scope so EVERY journal-entry commit the operation makes (regardless of
@@ -7433,8 +7458,8 @@ async function commitPendingOperationInner(
   }
 
   // ── Atomic claim: flip status pending → committing in a single conditional
-  //    update. If 0 rows are affected, another caller (auto-commit ↔ human
-  //    approval, or two parallel approvals) already claimed this op and we
+  //    update. If 0 rows are affected, another caller (two parallel approvals,
+  //    e.g. web and MCP) already claimed this op and we
   //    must not run side-effects. Without this, both callers can pass the
   //    in-memory status check and double-book journal entries, send duplicate
   //    emails, etc.

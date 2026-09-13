@@ -1,7 +1,7 @@
 import type { CategorizationTemplateSource, VatTreatment } from '@/types'
 
 /**
- * Regler (UI v2 PR 5, dev_docs/ui_v2_build_plan.md): the pure view of a
+ * Regler (UI v2 PR 5): the pure view of a
  * counterparty template as a rule. The row is categorization_templates; this
  * module derives the ladder position, the origin, the direction and the
  * "when → then" tokens the pages translate. No database access, so both the

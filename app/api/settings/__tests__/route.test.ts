@@ -177,6 +177,41 @@ describe('PUT /api/settings', () => {
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
   })
 
+  it('accepts the invoice type visibility toggles', async () => {
+    enqueueMany([
+      { data: { entity_type: 'enskild_firma', onboarding_complete: true } }, // fetch oldSettings
+      { data: { id: 's1', quotes_enabled: false, recurring_invoices_enabled: false } }, // update ... returning
+      { data: null, count: 5 },                                               // deadlines count (has some -> no regen)
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { quotes_enabled: false, recurring_invoices_enabled: false },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      data: { quotes_enabled: boolean; recurring_invoices_enabled: boolean }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.quotes_enabled).toBe(false)
+    expect(body.data.recurring_invoices_enabled).toBe(false)
+    expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-boolean invoice type toggle value', async () => {
+    enqueueMany([
+      { data: { entity_type: 'enskild_firma', onboarding_complete: true } }, // fetch oldSettings
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { proforma_enabled: 'nej' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    expect(response.status).toBe(400)
+  })
+
   it('accepts the data_analysis_opt_in consent toggle', async () => {
     enqueueMany([
       { data: { entity_type: 'enskild_firma', onboarding_complete: true } }, // fetch oldSettings

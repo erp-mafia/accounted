@@ -37,8 +37,8 @@ interface DashboardContentProps {
  * Hem (concept scene 14): greeting, then the two panes side by side:
  * Att göra (obligations, lib/worklist) and Fortsätt (in-progress work,
  * lib/worklist/resume). KPI tiles, revenue/expense cards and the deadline/tax
- * widgets left the page (founder direction, dev_docs/last_session_resume.md
- * §8): the numbers live at /kpi and /reports, deadlines render as Bevaka rows.
+ * widgets left the page (founder direction): the numbers live at /kpi and
+ * /reports, deadlines render as Bevaka rows.
  */
 export default function DashboardContent({
   companyId,

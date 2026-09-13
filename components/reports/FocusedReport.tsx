@@ -2,10 +2,8 @@
 
 import { Suspense, useState } from 'react'
 import dynamic from 'next/dynamic'
-import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { ChevronLeft } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ReportBodyLoading, ReportPageLoading } from '@/components/reports/ReportLoading'
@@ -14,7 +12,6 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
-import { useShell } from '@/components/dashboard/ShellProvider'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import type { FiscalPeriod } from '@/types'
 
@@ -79,9 +76,8 @@ function FocusedReportInner({
   const [isReady, setIsReady] = useState(false)
 
   const report = getReport(slug)
-  // Shell v2: the nav names Rapporter, so no back link over the title, and
-  // the period presets and the dimension picker share one row.
-  const v2 = useShell() === 'v2'
+  // The nav names Rapporter, so no back link over the title, and the period
+  // presets and the dimension picker share one row.
   const showRange = DATE_RANGE_SLUGS.has(slug) && !!selectedPeriodBounds
   const showDim = DIMENSION_FILTER_SLUGS.has(slug) && !!selectedPeriod
   // Calendar (VAT family) and param-less reports don't need a fiscal period.
@@ -103,16 +99,6 @@ function FocusedReportInner({
 
   return (
     <div className="space-y-8">
-      {!isStandalone && !v2 && (
-        <Link
-          href="/reports"
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          {t('back_to_library')}
-        </Link>
-      )}
-
       {/* Standalone pages (Momsdeklaration) render their own PageHeader so
           the primary action can live on the title row; the view receives the
           title via pageTitle instead. */}
@@ -144,12 +130,13 @@ function FocusedReportInner({
         />
       )}
 
-      {/* v1: only when a filter renders, an empty row would still take the
-          stack's gap. v2: one toolbar row per report, the pickers on the
-          left and the report's Exportera on the right (ReportExportMenu
-          portals into the slot), so no report spends a row on one button. */}
-      {(showRange || showDim || (v2 && !isStandalone)) && (
-        <div className={v2 ? 'flex flex-wrap items-center gap-x-6 gap-y-3' : 'contents'}>
+      {/* One toolbar row per report: the pickers on the left and the
+          report's Exportera on the right (ReportExportMenu portals into the
+          slot), so no report spends a row on one button. A standalone page
+          with no filter renders no row, which would still take the stack's
+          gap. */}
+      {(showRange || showDim || !isStandalone) && (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           {showRange && selectedPeriodBounds && (
             <ReportDateRange
               periodStart={selectedPeriodBounds.start}
@@ -159,7 +146,7 @@ function FocusedReportInner({
             />
           )}
           {showDim && <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />}
-          {v2 && !isStandalone && <div id={REPORT_TOOLBAR_SLOT_ID} className="ml-auto flex items-center gap-2" />}
+          {!isStandalone && <div id={REPORT_TOOLBAR_SLOT_ID} className="ml-auto flex items-center gap-2" />}
         </div>
       )}
 

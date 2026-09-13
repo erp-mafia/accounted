@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { TD_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,7 +16,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { TxColumnId } from '@/lib/transactions/columns-v2'
 import { HUE_DOT_CLASS, accountHue } from '@/lib/bookkeeping/template-group-colors'
-import { AlertCircle, Landmark, Link2, Loader2, MoreHorizontal } from 'lucide-react'
+import { AlertCircle, Link2, Loader2, MoreHorizontal } from 'lucide-react'
 import type {
   SkattekontoBookingSuggestion,
   SkattekontoMatchSuggestion,
@@ -25,14 +25,12 @@ import type {
 
 /**
  * Skattekonto-rad in the /transactions inbox, rendered as a dry-table row
- * (concept scene 10). The Skatteverket chip is the cue that this row is
+ * (concept scene 10) with the same columns as a bank row, although it is
  * fundamentally different from a bank tx: different counter-account (1630 vs
- * 1930), different categorization rules. No foldout: both actions fit inline.
- *
- * Shell v2 (`columns` set): the row takes the same columns as a bank row.
- * The Kategori cell shows what Bokför will do (the rule's account), the
- * Konto cell names the source, and the actions collapse to one button plus
- * a menu, so the row reads like its neighbours instead of a special case.
+ * 1930), different categorization rules. The Kategori cell shows what Bokför
+ * will do (the rule's account), the Konto cell names the source, and the
+ * actions are one button plus a menu, so the row reads like its neighbours
+ * instead of a special case. No foldout.
  */
 export default function SkattekontoInboxCard({
   row,
@@ -66,11 +64,11 @@ export default function SkattekontoInboxCard({
    *  booking it (skattekonto rows are never deleted). The parent owns the
    *  confirm dialog and the PATCH. */
   onIgnore?: (row: StoredSkattekontoTransaction) => void
-  /** Shell v2: the visible columns (lib/transactions/columns-v2). Unset in v1. */
-  columns?: ReadonlySet<TxColumnId>
-  /** Shell v2: text for the Konto cell (the source account). */
+  /** The visible columns (lib/transactions/columns-v2). */
+  columns: ReadonlySet<TxColumnId>
+  /** Text for the Konto cell (the source account). */
   accountLabel?: string | null
-  /** Shell v2: the Skatteverket mark for the Konto cell. */
+  /** The Skatteverket mark for the Konto cell. */
   accountLogo?: string | null
 }) {
   const t = useTranslations('tx_skattekonto_card')
@@ -79,7 +77,7 @@ export default function SkattekontoInboxCard({
   const shiftHeld = useRef(false)
   const amount = Number(row.belopp_skatteverket)
   const isIncome = amount > 0
-  const show = (c: TxColumnId) => !columns || columns.has(c)
+  const show = (c: TxColumnId) => columns.has(c)
   const suggestionLabel = bookingSuggestion
     ? bookingSuggestion.account_name || bookingSuggestion.label || bookingSuggestion.account
     : null
@@ -106,10 +104,9 @@ export default function SkattekontoInboxCard({
       // removal window.
       inert={isExiting || undefined}
     >
-      {/* Always-visible selection checkbox (concept .cb) */}
-      {/* Zero-width cell: the checkbox hangs in the left page margin so
-          the date column can sit flush with the page edge. */}
-      <td className={cn(TD_CLASS, 'select-none', columns ? 'w-7 !pl-0 !pr-2' : 'relative w-0 !p-0')}>
+      {/* Always-visible selection checkbox (concept .cb) in a real first
+          column: the full-bleed panel has no margin for it to hang in. */}
+      <td className={cn(TD_CLASS, 'select-none', 'w-7 !pl-0 !pr-2')}>
         {selectable && (
           <Checkbox
             checked={isSelected}
@@ -120,7 +117,7 @@ export default function SkattekontoInboxCard({
             aria-label={t('select_row')}
             className={cn(
               'border-foreground duration-150',
-              columns ? 'block' : 'absolute -left-5 top-1/2 -translate-y-1/2 md:-left-6',
+              'block',
               isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
             )}
           />
@@ -138,34 +135,15 @@ export default function SkattekontoInboxCard({
       <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
         <span className="row-collapsible flex min-w-0 items-center gap-2">
           <span className="truncate">{row.transaktionstext}</span>
-          {/* v2 names the source in the Konto column instead. */}
-          {!columns && (
-            <Badge variant="outline" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal">
-              <Landmark className="h-3 w-3" />
-              {t('skv_badge')}
-            </Badge>
-          )}
           {matchSuggestion && (
             <Badge variant="warning" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px]">
               <AlertCircle className="h-3 w-3" />
               {duplicateLabel}
             </Badge>
           )}
-          {/* What "Bokför" will do: the deterministic rule match, muted so it
-              reads as information, not state. Suppressed on likely duplicates
-              where linking (not booking) is the recommended action. */}
-          {bookingSuggestion && !matchSuggestion && !columns && (
-            <span className="hidden shrink-0 whitespace-nowrap text-xs text-muted-foreground md:inline">
-              {t('suggestion_line', {
-                account: bookingSuggestion.account_name
-                  ? `${bookingSuggestion.account} ${bookingSuggestion.account_name}`
-                  : bookingSuggestion.account,
-              })}
-            </span>
-          )}
         </span>
       </td>
-      {columns?.has('category') && (
+      {columns.has('category') && (
         <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
           {/* What Bokför will do; the dialog behind it is where the account changes. */}
           <button
@@ -184,7 +162,7 @@ export default function SkattekontoInboxCard({
           </button>
         </td>
       )}
-      {columns?.has('account') && (
+      {columns.has('account') && (
         <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
           <span className="inline-flex items-center gap-2">
             {accountLogo && (
@@ -208,103 +186,45 @@ export default function SkattekontoInboxCard({
         </td>
       )}
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
-        {columns ? (
-          <span className="row-collapsible inline-flex items-center justify-end gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 px-3.5 text-xs"
-              onClick={() => (matchSuggestion ? onMatch(row) : onBokfor(row))}
-              disabled={processing}
-            >
-              {processing ? (
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-              ) : matchSuggestion ? (
-                <Link2 className="mr-1 h-3 w-3" />
-              ) : null}
-              {matchSuggestion ? t('link_to_voucher') : t('book')}
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="mr-2 h-7 w-7 text-muted-foreground hover:text-foreground"
-                  aria-label={t('more_actions_aria')}
-                  title={t('more_actions_aria')}
-                  disabled={processing}
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {matchSuggestion ? (
-                  <DropdownMenuItem onClick={() => onBokfor(row)}>{t('book_anyway')}</DropdownMenuItem>
-                ) : (
-                  <DropdownMenuItem onClick={() => onMatch(row)}>{t('match_to_voucher')}</DropdownMenuItem>
-                )}
-                {onIgnore && <DropdownMenuItem onClick={() => onIgnore(row)}>{t('ignore')}</DropdownMenuItem>}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </span>
-        ) : (
-        <span className="row-collapsible inline-flex items-center justify-end gap-3">
-          {matchSuggestion ? (
-            <>
-              {/* Likely duplicate: linking beats re-booking, so it leads. */}
+        <span className="row-collapsible inline-flex items-center justify-end gap-2">
+          {/* Likely duplicate: linking beats re-booking, so it leads. */}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-3.5 text-xs"
+            onClick={() => (matchSuggestion ? onMatch(row) : onBokfor(row))}
+            disabled={processing}
+          >
+            {processing ? (
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            ) : matchSuggestion ? (
+              <Link2 className="mr-1 h-3 w-3" />
+            ) : null}
+            {matchSuggestion ? t('link_to_voucher') : t('book')}
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
               <Button
-                size="sm"
-                variant="outline"
-                className="h-7 px-3.5 text-xs"
-                onClick={() => onMatch(row)}
+                variant="ghost"
+                size="icon"
+                className="mr-2 h-7 w-7 text-muted-foreground hover:text-foreground"
+                aria-label={t('more_actions_aria')}
+                title={t('more_actions_aria')}
                 disabled={processing}
               >
-                <Link2 className="mr-1 h-3 w-3" />
-                {t('link_to_voucher')}
+                <MoreHorizontal className="h-4 w-4" />
               </Button>
-              <button
-                type="button"
-                className={QUIET_LINK_CLASS}
-                onClick={() => onBokfor(row)}
-                disabled={processing}
-              >
-                {t('book_anyway')}
-              </button>
-            </>
-          ) : (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 px-3.5 text-xs"
-                onClick={() => onBokfor(row)}
-                disabled={processing}
-              >
-                {processing && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-                {t('book')}
-              </Button>
-              <button
-                type="button"
-                className={QUIET_LINK_CLASS}
-                onClick={() => onMatch(row)}
-                disabled={processing}
-              >
-                {t('match_to_voucher')}
-              </button>
-            </>
-          )}
-          {onIgnore && (
-            <button
-              type="button"
-              className={QUIET_LINK_CLASS}
-              onClick={() => onIgnore(row)}
-              disabled={processing}
-            >
-              {t('ignore')}
-            </button>
-          )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {matchSuggestion ? (
+                <DropdownMenuItem onClick={() => onBokfor(row)}>{t('book_anyway')}</DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onClick={() => onMatch(row)}>{t('match_to_voucher')}</DropdownMenuItem>
+              )}
+              {onIgnore && <DropdownMenuItem onClick={() => onIgnore(row)}>{t('ignore')}</DropdownMenuItem>}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </span>
-        )}
       </td>
     </tr>
   )

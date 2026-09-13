@@ -17,14 +17,15 @@ interface PageHeaderProps {
 }
 
 export function PageHeader({ title, description, action, help }: PageHeaderProps) {
-  // The page-header* class hooks carry no styling of their own: they let
-  // shell v2 ([data-shell="v2"] in globals.css) turn this header into the
-  // panel's top bar without any page changing its markup.
+  // The page-header* class hooks carry no styling of their own: the
+  // .page-header rules in globals.css turn this header into the panel's top
+  // bar, and pages that hand-roll a header reuse the same hooks.
   return (
     <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-8">
       <div className="page-header-lead">
         <div className="flex items-center gap-2">
-          {/* Locked at exactly 24px/32px (UI-migration convention 2).
+          {/* Sized for the top bar by .page-header-title in globals.css
+              (UI-migration convention 2).
               data-ph-unmask: page titles are static i18n chrome in session
               replays; a page whose title carries user data must wrap it in
               data-ph-mask at the call site. */}

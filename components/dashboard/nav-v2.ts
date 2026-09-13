@@ -25,6 +25,9 @@ export interface NavGateFlags {
   employerOnly?: boolean
   requiresDimensions?: boolean
   requiresSalesOrders?: boolean
+  // Offerter: company_settings.quotes_enabled (UI-visibility gate only; the
+  // /quotes page and the APIs work regardless, existing quotes are kept).
+  requiresQuotes?: boolean
   requiresWebshop?: boolean
   requiresMileage?: boolean
   requiresExpenses?: boolean
@@ -37,9 +40,9 @@ export interface NavGateFlags {
 }
 
 /**
- * Shell v2 sidebar tree (dev_docs/ui_v2_build_plan.md, PR 2). Sections are
- * the prototype's BOLAGET list; a section's sub-items render under it while
- * the section is active, so nothing the v1 rail reached becomes a dead end.
+ * Sidebar tree (UI v2 PR 2, the default since PR #2390). Sections are the
+ * prototype's BOLAGET list; a section's sub-items render under it while the
+ * section is active, so nothing the old rail reached became a dead end.
  * Every href here already has a page; PR 3 to PR 8 change what the pages
  * show, not where they live. Settings, help and the company switcher live
  * in the user menu at the bottom, so the sidebar has no bottom group.
@@ -92,6 +95,9 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     labelKey: 'v2_invoicing',
     icon: ReceiptText,
     sub: [
+      // A quote is not an invoice (founder direction 2026-09-12): its own row
+      // above Kundfakturor, shown while quotes are switched on in settings.
+      { href: '/quotes', labelKey: 'quotes', requiresQuotes: true },
       // Återkommande opens from Ny faktura; it is a way to make invoices, not a place.
       { href: '/invoices', labelKey: 'invoices' },
       { href: '/sales-orders', labelKey: 'sales_orders', requiresSalesOrders: true },

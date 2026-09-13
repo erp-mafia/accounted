@@ -34,7 +34,7 @@ General prohibitions:
 
 - **Stop and ask; do not guess.** Especially for anything touching posted entries, the production database, money math, or Swedish tax law.
 - **Swedish domain questions are never answered from training data.** Load the matching `swedish-*` skill (vat, accounting-compliance, invoice-compliance, payroll, year-end-closing, sie-import-export, sru-filing, financial-reporting, asset-accounting, project-accounting, tax-planning, e-invoicing).
-- Scaffolding has skills; use them instead of improvising: `/erp-api-route` (API routes), `/supabase-migration` (migrations), `/create-extension` (extensions), `/frontend-design` (new UI), `vercel:deploy` (deployment).
+- Scaffolding has skills; use them instead of improvising: `/supabase-migration` (migrations), `/create-extension` (extensions), `/frontend-design` (new UI), `vercel:deploy` (deployment). API routes follow `.claude/rules/api-routes.md`, which loads automatically under `app/api/`.
 
 ## Fix From First Principles
 
@@ -116,4 +116,4 @@ Don't duplicate these here; they auto-load when you touch matching paths:
 
 ## Decision Log
 
-When you make a non-obvious choice (picked approach A over B, declined a dependency, stopped because a rule here forbade something), append one line to `DECISIONS.md` (repo root): `[YYYY-MM-DD] <decision>: <why>`. Check that file before re-litigating a past decision.
+When you make a non-obvious choice (picked approach A over B, declined a dependency, stopped because a rule here forbade something), append one line of at most 300 characters to `DECISIONS.md` (repo root): `[YYYY-MM-DD] <decision>: <why>`; the detail belongs in the PR body. Check that file before re-litigating a past decision (entries before 2026-08-01 are archived in git history, see its header).

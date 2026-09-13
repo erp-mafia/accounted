@@ -6,7 +6,7 @@ import { validateBody } from '@/lib/api/validate'
 // PATCH /api/agent/memory/[id]
 //
 // Mutate a single memory entry. Powers the list/edit/pin/dismiss affordances
-// on /settings/agent-memory (plan §11).
+// on /settings/assistant?view=memory (plan §11).
 //
 //   content: edit the durable text (kind never changes; that would
 //                muddle the audit lineage). Append-only is preserved by

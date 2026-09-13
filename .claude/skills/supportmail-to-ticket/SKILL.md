@@ -1,11 +1,11 @@
 ---
 name: supportmail-to-ticket
-description: "Triage Accounted customer support emails and turn them into GitHub issues in the erp-mafia/gnubok repo. Use this skill whenever the user invokes /supportmail-to-ticket (with or without a number argument), or asks to 'triage support mail', 'turn support emails into tickets', 'process Accounted support', 'check the support inbox and file issues', or any similar phrasing involving the Accounted support mailbox. Also trigger this skill if the user mentions [Accounted support] emails and wants them converted into actionable work, even if they don't use the exact slash command."
+description: "Triage Accounted customer support emails and turn them into GitHub issues in the erp-mafia/accounted repo. Use this skill whenever the user invokes /supportmail-to-ticket (with or without a number argument), or asks to 'triage support mail', 'turn support emails into tickets', 'process Accounted support', 'check the support inbox and file issues', or any similar phrasing involving the Accounted support mailbox. Also trigger this skill if the user mentions [Accounted support] emails and wants them converted into actionable work, even if they don't use the exact slash command."
 ---
 
 # supportmail-to-ticket
 
-Triage `[Accounted support]` emails from Gmail, cross-reference them against the local erp-base codebase, and draft GitHub issues for the `erp-mafia/gnubok` repo, with inline user approval before anything gets created.
+Triage `[Accounted support]` emails from Gmail, cross-reference them against the local erp-base codebase, and draft GitHub issues for the `erp-mafia/accounted` repo, with inline user approval before anything gets created.
 
 ## Invocation
 
@@ -132,7 +132,7 @@ The goal: strip anything that identifies the **specific customer or their employ
 **Duplicate check (before presenting)**: For each draft, run:
 
 ```bash
-gh issue list --repo erp-mafia/gnubok --state open --limit 100 --json number,title,body,url
+gh issue list --repo erp-mafia/accounted --state open --limit 100 --json number,title,body,url
 ```
 
 Parse the JSON output and scan titles + bodies for:
@@ -199,7 +199,7 @@ EOF
 
 # Create the issue
 gh issue create \
-  --repo erp-mafia/gnubok \
+  --repo erp-mafia/accounted \
   --title "<approved title>" \
   --body-file /tmp/issue-body-<N>.md \
   --label "<label1>" --label "<label2>"
@@ -211,7 +211,7 @@ The command prints the new issue's URL on success: capture it for the summary. U
 
 ```bash
 gh issue comment <issue-number> \
-  --repo erp-mafia/gnubok \
+  --repo erp-mafia/accounted \
   --body "Another customer report of this issue. Gmail thread ID: \`<threadId>\`."
 ```
 
@@ -219,9 +219,9 @@ gh issue comment <issue-number> \
 
 - Available labels in this skill: `bug`, `feature`, `report`, `improvement`, `error`, plus priority (`priority:high`, `priority:medium`, `priority:low`).
 - If `gh issue create` fails with an error mentioning an unknown label (exit code non-zero, stderr contains `"could not add label"` or `"not found"`), retry the command without that `--label` flag and tell the user which labels are missing so they can create them manually: do **not** attempt to create labels automatically.
-- You can check available labels once at the start of phase 5 with: `gh label list --repo erp-mafia/gnubok --limit 100 --json name`, useful if multiple label errors happen in a row.
+- You can check available labels once at the start of phase 5 with: `gh label list --repo erp-mafia/accounted --limit 100 --json name`, useful if multiple label errors happen in a row.
 
-**Project board**: Issues are created in the `erp-mafia/gnubok` repo. The Accounted project board (`erp-mafia/projects/...`) aggregates issues but adding to a project via `gh` requires `gh project item-add` with the project number and GraphQL scopes that may not be in the current auth token. After creating issues, output the project URL once and remind the user they may want to drag the new issues onto the board. Example wording: *"Issues created. If you want them on the Accounted project board, you'll need to add them manually at https://github.com/orgs/erp-mafia/projects, or run `gh project item-add` if you have project scopes on your token."*
+**Project board**: Issues are created in the `erp-mafia/accounted` repo. The Accounted project board (`erp-mafia/projects/...`) aggregates issues but adding to a project via `gh` requires `gh project item-add` with the project number and GraphQL scopes that may not be in the current auth token. After creating issues, output the project URL once and remind the user they may want to drag the new issues onto the board. Example wording: *"Issues created. If you want them on the Accounted project board, you'll need to add them manually at https://github.com/orgs/erp-mafia/projects, or run `gh project item-add` if you have project scopes on your token."*
 
 ### Phase 6: Summary
 
@@ -229,8 +229,8 @@ End with a compact summary:
 
 ```
 Created 2 issues:
-- #47 Fix SIE import failure for first fiscal year: https://github.com/erp-mafia/gnubok/issues/47
-- #48 Investigate bank import for banks without BankID: https://github.com/erp-mafia/gnubok/issues/48
+- #47 Fix SIE import failure for first fiscal year: https://github.com/erp-mafia/accounted/issues/47
+- #48 Investigate bank import for banks without BankID: https://github.com/erp-mafia/accounted/issues/48
 
 Commented on 1 existing:
 - #42: added new customer report

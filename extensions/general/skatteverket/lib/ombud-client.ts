@@ -9,7 +9,7 @@ const log = createLogger('skatteverket-ombud-client')
  * Client for Skatteverket's "Ombudshantering via API" v2 (scope `obr`).
  *
  * Source: Tjänstebeskrivning Ombudshantering via API v2.0, dokumentversion
- * 1.0 (2022-06-16), mirrored in dev_docs/skatteverket/ombudshantering/.
+ * 1.0 (2022-06-16).
  * Base URI `{host}/behorighet/ombudshantering/v2`, JSON over HTTPS, headers
  * Accept + content-type application/json, Authorization Bearer, client_id,
  * client_secret, skv_client_correlation_id. Operations:
@@ -36,7 +36,7 @@ const log = createLogger('skatteverket-ombud-client')
  *
  * Two things the service description does not pin down, deliberately
  * handled tolerantly and logged so the first live call against the test
- * service settles them (see dev_docs/skatteverket/ombudshantering/README.md):
+ * service settles them:
  *   - the JSON envelope of list responses (bare array vs. an object holding
  *     the list): both are accepted,
  *   - the rollbeteckning codes for "Juridiskt läsombud" and "Momsdeklaration,

@@ -24,7 +24,6 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useShell } from '@/components/dashboard/ShellProvider'
 import Link from 'next/link'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -191,15 +190,14 @@ export default function SupplierInvoicesPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ListTab>('all')
   // The flow (UI v2 PR 6) lives on each invoice as a strip; the list keeps
-  // the status picker in both shells (founder call 2026-09-07: a bar of
-  // stages over two invoices was chrome, not information).
+  // the status picker (founder call 2026-09-07: a bar of stages over two
+  // invoices was chrome, not information).
   const { settings: companySettings } = useCompanySettings()
-  // Shell v2: grouping sits behind a gear at the right and Betalfiler is in
-  // the nav, so the toolbar is the status chip, the search and the year.
-  const shell = useShell()
   const [searchTerm, setSearchTerm] = useState('')
   // null = the API's default order (förfallodatum stigande).
   const [sort, setSort] = useState<SupplierInvoiceListSort | null>(null)
+  // Grouping sits behind a gear at the right and Betalfiler is in the nav,
+  // so the toolbar is the status chip, the search and the year.
   const [groupMode, setGroupMode] = useState<GroupMode>(() => {
     const param = searchParams.get('group')
     return param && GROUP_MODES.includes(param as never) ? (param as GroupMode) : 'none'
@@ -575,18 +573,6 @@ export default function SupplierInvoicesPage() {
                   : undefined,
           }))}
         />
-        {shell !== 'v2' && (
-          <ContextPicker
-            value={groupMode}
-            onChange={(id) => updateGroup(id as GroupMode)}
-            ariaLabel={t('group_picker_aria')}
-            triggerLabel={`${t('group_by')} · ${t(GROUP_LABEL_KEYS[groupMode])}`}
-            items={GROUP_MODES.map((mode) => ({
-              id: mode,
-              label: t(GROUP_LABEL_KEYS[mode]),
-            }))}
-          />
-        )}
         <ToolbarSearch
           containerClassName="min-w-[190px]"
           placeholder={t('search_placeholder')}
@@ -594,11 +580,6 @@ export default function SupplierInvoicesPage() {
           onChange={(e) => setSearchTerm(e.target.value)}
         />
         <div className="ml-auto flex items-center gap-4">
-          {shell !== 'v2' && (
-            <Link href="/supplier-invoices/payment-files" className={QUIET_LINK_CLASS}>
-              {t('payment_files_link')}
-            </Link>
-          )}
           <FyPicker
             value={fyPeriodId}
             onChange={(periodId, period) => {
@@ -607,30 +588,28 @@ export default function SupplierInvoicesPage() {
             }}
             includeAllOption
           />
-          {shell === 'v2' && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn('h-8 w-8 text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
-                  aria-label={t('group_picker_aria')}
-                  title={t('group_by')}
-                >
-                  <SlidersHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuRadioGroup value={groupMode} onValueChange={(v) => updateGroup(v as GroupMode)}>
-                  {GROUP_MODES.map((mode) => (
-                    <DropdownMenuRadioItem key={mode} value={mode}>
-                      {t(GROUP_LABEL_KEYS[mode])}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn('h-8 w-8 text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
+                aria-label={t('group_picker_aria')}
+                title={t('group_by')}
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuRadioGroup value={groupMode} onValueChange={(v) => updateGroup(v as GroupMode)}>
+                {GROUP_MODES.map((mode) => (
+                  <DropdownMenuRadioItem key={mode} value={mode}>
+                    {t(GROUP_LABEL_KEYS[mode])}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -696,9 +675,9 @@ export default function SupplierInvoicesPage() {
           }
         />
       ) : (
-        /* Column budget (#2262): the content column is at most 960px (max-w-5xl
-           minus px-8) and 948px on a 1280-wide laptop, at every desktop size,
-           so viewport breakpoints cannot buy room. Every nowrap column adds its
+        /* Column budget (#2262): the content column is the viewport minus the
+           sidebar, the frame gutter and the page padding, about 1000px on a
+           1280-wide laptop. Every nowrap column adds its
            widest header or cell to the table's minimum width; past the budget
            the wrapper scrolls sideways, Leverantör collapses to its header
            width and Status is cut at the edge. That is why the list carries
