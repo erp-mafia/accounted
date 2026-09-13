@@ -16,6 +16,7 @@ import {
   type ASPSP,
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
+import { ensureBankFeedAdapters } from './lib/bank-feed'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions, countLiveSiblings } from './lib/session-sharing'
 import {
@@ -34,6 +35,11 @@ import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import type { StoredAccount } from './types'
 import type { Transaction } from '@/types'
 
+
+// The extension contributes its bank feed adapters (direct and via Accounted
+// Connect) to the ledger's registry; lib/bank-feed decides which one serves
+// a company. Registered here so every route of the extension sees them.
+ensureBankFeedAdapters()
 // Per-user limits keep one tenant from spamming any single bank handler.
 // Sliding 60s windows: generous enough for legitimate retry, tight enough
 // to prevent UUID probing or status-machine abuse.
