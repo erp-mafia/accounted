@@ -17,4 +17,5 @@ export const ENABLED_EXTENSION_IDS: ReadonlySet<string> = new Set([
   'shopify',
   'zettle',
   'mail',
+  'push-notifications',
 ])

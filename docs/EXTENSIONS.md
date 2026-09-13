@@ -79,7 +79,7 @@ extensions/
     example-logger/           ← Minimal example extension (index.ts only, no manifest)
 ```
 
-Which of these are compiled in is decided by `extensions.config.json`; today that is everything except `bolagsverket`, `push-notifications`, `_example-branding` and `example-logger`.
+Which of these are compiled in is decided by `extensions.config.json`; today that is everything except `bolagsverket`, `_example-branding` and `example-logger`.
 
 Each extension directory contains a `manifest.json` declaring metadata, entry point, workspace component path, required env vars, and npm dependencies.
 

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAiService, type AiChatTurn, type AiTier, type AiToolDef } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
+import { swedishToday } from '@/lib/utils'
 import { EmptyModelAnswerError } from './errors'
 import { buildLedgerTools } from './ledger-tools'
 import { buildAssistantSnapshot } from './snapshot'
@@ -85,7 +86,8 @@ Regler:
 - Svara på svenska, kort och konkret.
 - Hitta ALDRIG på siffror, konton eller belopp. Ange bara tal du faktiskt har underlag för.
 - KontoNUMMER är strängar (t.ex. "1930"), aldrig tal att räkna på.
-- Föreslå aldrig att bokföra eller ändra något direkt; du beskriver och vägleder, användaren beslutar.`
+- Föreslå aldrig att bokföra eller ändra något direkt; du beskriver och vägleder, användaren beslutar.
+- Du är Accounteds assistent för det här företaget. Nämn inte underliggande modellleverantör (Google, OpenAI, Anthropic m.fl.) om användaren inte frågar uttryckligen om tekniken.`
 
 // With tools: the model can and should fetch the real figures itself.
 const TOOL_RULES = `
@@ -98,8 +100,20 @@ ${FISCAL_YEAR_RULE}`
 const NO_TOOL_RULES = `
 - Svara utifrån den kontext du får. Om kontexten inte räcker för att svara: säg det och beskriv vad som saknas, gissa inte.`
 
-function systemPrompt(hasTools: boolean): string {
-  return BASE_RULES + (hasTools ? TOOL_RULES : NO_TOOL_RULES)
+/**
+ * Always-on system prefix. Mirrors lib/agent/chat/system-prompt.ts "# Dagens
+ * datum": without it, openai-compatible models (e.g. Gemini on self-host)
+ * fall back to training-cutoff "now" and invent months like december 2023
+ * when the user says "den här månaden".
+ */
+function dateAnchor(today: string): string {
+  return `Dagens datum: ${today}. Använd det som "nu" för alla relativa tidsuttryck ("den här månaden", "i år", "förra kvartalet", "förfallen"). Din träningsdata har ett tidigare brytdatum: lita på det här datumet, inte på din egen känsla för vilken dag det är, och fråga inte användaren vilket datum det är.
+
+`
+}
+
+function systemPrompt(hasTools: boolean, today: string = swedishToday()): string {
+  return dateAnchor(today) + BASE_RULES + (hasTools ? TOOL_RULES : NO_TOOL_RULES)
 }
 
 /** Read the company's own basic profile for grounding. Company-scoped: never another tenant's data. */

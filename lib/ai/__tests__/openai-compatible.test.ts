@@ -72,7 +72,12 @@ describe('createOpenAICompatibleService', () => {
   it('builds the provider from AI_BASE_URL / AI_API_KEY', () => {
     createOpenAICompatibleService(readAiConfig())
     expect(createdWith).toHaveBeenCalledWith(
-      expect.objectContaining({ baseURL: 'https://api.berget.ai/v1', apiKey: 'sk-berget-example', supportsStructuredOutputs: false })
+      expect.objectContaining({
+        baseURL: 'https://api.berget.ai/v1',
+        apiKey: 'sk-berget-example',
+        supportsStructuredOutputs: false,
+        fetch: expect.any(Function),
+      })
     )
   })
 
@@ -119,6 +124,51 @@ describe('createOpenAICompatibleService', () => {
     expect(prompt[1].content).toEqual([{ type: 'text', text: 'Vad är min största utgift?' }])
     expect(prompt[2].content).toEqual([{ type: 'text', text: '12 345 kr på 5010.' }])
     expect(prompt[3].content).toEqual([{ type: 'text', text: 'Och förra månaden?' }])
+  })
+
+  function toolCallResponse(toolName: string, callId: string) {
+    return {
+      content: [
+        {
+          type: 'tool-call',
+          toolCallId: callId,
+          toolName,
+          input: '{}',
+        },
+      ],
+      finishReason: { unified: 'tool-calls', raw: undefined },
+      usage: {
+        inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined },
+      },
+      warnings: [],
+    }
+  }
+
+  function isToolChoiceNone(toolChoice: unknown): boolean {
+    return toolChoice === 'none' || (typeof toolChoice === 'object' && toolChoice !== null && (toolChoice as { type?: string }).type === 'none')
+  }
+
+  it('forces a text answer on the last tool step when the budget would otherwise end on tool calls', async () => {
+    let call = 0
+    doGenerate.mockImplementation(async (options: { toolChoice?: unknown }) => {
+      call++
+      if (isToolChoiceNone(options.toolChoice)) {
+        return textResponse('Sammanfattning utan fler verktygsanrop.')
+      }
+      return toolCallResponse('gnubok_get_vat_report', `call-${call}`)
+    })
+    const execute = vi.fn().mockResolvedValue({ ok: true })
+    const svc = createOpenAICompatibleService(readAiConfig())
+    const result = await svc.generateText({
+      tier: 'assistant',
+      prompt: 'Momsen?',
+      maxTokens: 100,
+      tools: [{ name: 'gnubok_get_vat_report', description: 'd', jsonSchema: { type: 'object' }, execute }],
+      maxSteps: 2,
+    })
+    expect(result.text).toBe('Sammanfattning utan fler verktygsanrop.')
+    expect(doGenerate.mock.calls.some((c) => isToolChoiceNone(c[0].toolChoice))).toBe(true)
   })
 
   it('generateText forwards read-only tools to the model when provided', async () => {

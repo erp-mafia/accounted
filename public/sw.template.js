@@ -22,7 +22,7 @@ self.addEventListener('push', (event) => {
     return
   }
 
-  const { title, body, icon, badge, tag, data, actions } = payload
+  const { title, body, icon, badge, tag, data, actions, appBadge } = payload
 
   const options = {
     body: body || '',
@@ -35,8 +35,23 @@ self.addEventListener('push', (event) => {
     requireInteraction: false,
   }
 
+  const badgeCount = typeof appBadge === 'number' ? appBadge : data?.appBadge
+  const applyAppBadge = () => {
+    if (typeof badgeCount !== 'number') return Promise.resolve()
+    if (badgeCount > 0 && self.registration.setAppBadge) {
+      return self.registration.setAppBadge(badgeCount)
+    }
+    if (badgeCount <= 0 && self.registration.clearAppBadge) {
+      return self.registration.clearAppBadge()
+    }
+    return Promise.resolve()
+  }
+
   event.waitUntil(
-    self.registration.showNotification(title || '__NEXT_PUBLIC_BRANDING_APP_NAME__', options)
+    Promise.all([
+      self.registration.showNotification(title || '__NEXT_PUBLIC_BRANDING_APP_NAME__', options),
+      applyAppBadge(),
+    ])
   )
 })
 

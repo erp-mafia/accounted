@@ -97,7 +97,7 @@ if [ -n "$SUBST_PATHS" ]; then
   E_SESSION_WARNING_MS=$(sed_esc "${NEXT_PUBLIC_SESSION_WARNING_MS:-}")
   E_SESSION_TIMEOUT_FORCE_ALL=$(sed_esc "${NEXT_PUBLIC_SESSION_TIMEOUT_FORCE_ALL:-}")
   E_TURNSTILE_SITE_KEY=$(sed_esc "${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}")
-  E_BRANDING_APP_NAME=$(sed_esc "${NEXT_PUBLIC_BRANDING_APP_NAME:-Gnubok}")
+  E_BRANDING_APP_NAME=$(sed_esc "${NEXT_PUBLIC_BRANDING_APP_NAME:-Accounted}")
 
   # File-type coverage:
   #   *.js: client + server bundles

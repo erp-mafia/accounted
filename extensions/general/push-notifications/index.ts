@@ -269,7 +269,7 @@ export const pushNotificationsExtension: Extension = {
   ],
   settingsPanel: {
     label: 'Push-notiser',
-    path: '/settings/extensions/push-notifications',
+    path: '/settings/account',
   },
   async onInstall(ctx) {
     await ctx.settings.set('settings', DEFAULT_SETTINGS)

@@ -1,7 +1,15 @@
 import { NextResponse } from 'next/server'
 import type { ApiRouteDefinition, ExtensionContext } from '@/lib/extensions/types'
-import { getVapidPublicKey } from './notification-sender'
+import { requireAuth } from '@/lib/auth/require-auth'
+import { getVapidPublicKey, sendTestPushToUser } from './notification-sender'
 import { getSettings, saveSettings } from './index'
+
+async function userIdFrom(ctx?: ExtensionContext): Promise<string | null> {
+  if (ctx?.userId) return ctx.userId
+  const auth = await requireAuth()
+  if (auth.error) return null
+  return auth.user.id
+}
 
 // ============================================================
 // /subscribe: GET: get VAPID public key for client-side subscription
@@ -31,7 +39,10 @@ async function handlePostSubscribe(
   request: Request,
   ctx?: ExtensionContext
 ): Promise<Response> {
-  const userId = ctx!.userId
+  const userId = await userIdFrom(ctx)
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   const { createClient } = await import('@/lib/supabase/server')
   const supabase = await createClient()
 
@@ -109,7 +120,10 @@ async function handleDeleteSubscribe(
   request: Request,
   ctx?: ExtensionContext
 ): Promise<Response> {
-  const userId = ctx!.userId
+  const userId = await userIdFrom(ctx)
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   const { createClient } = await import('@/lib/supabase/server')
   const supabase = await createClient()
 
@@ -147,7 +161,10 @@ async function handleGetSettings(
   _request: Request,
   ctx?: ExtensionContext
 ): Promise<Response> {
-  const userId = ctx!.userId
+  const userId = await userIdFrom(ctx)
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   const settings = await getSettings(userId)
   // null means the row exists but could not be read: surfacing the defaults
   // here would show toggles in a state the user may have switched off.
@@ -168,7 +185,10 @@ async function handleUpdateSettings(
   request: Request,
   ctx?: ExtensionContext
 ): Promise<Response> {
-  const userId = ctx!.userId
+  const userId = await userIdFrom(ctx)
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   const body = await request.json()
 
   const allowedKeys = [
@@ -203,6 +223,34 @@ async function handleUpdateSettings(
 }
 
 // ============================================================
+// /test: POST: send one push to this user's stored subscriptions
+// ============================================================
+
+async function handlePostTest(
+  _request: Request,
+  ctx?: ExtensionContext
+): Promise<Response> {
+  const userId = await userIdFrom(ctx)
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!getVapidPublicKey()) {
+    return NextResponse.json(
+      { error: 'Push notifications not configured' },
+      { status: 500 }
+    )
+  }
+  const { createClient } = await import('@/lib/supabase/server')
+  const supabase = await createClient()
+  const result = await sendTestPushToUser(supabase, userId)
+  if (!result.sent) {
+    const status = result.reason === 'no_subscriptions' ? 409 : 500
+    return NextResponse.json({ error: result.reason ?? 'send_failed' }, { status })
+  }
+  return NextResponse.json({ success: true })
+}
+
+// ============================================================
 // Route definitions
 // ============================================================
 
@@ -210,26 +258,37 @@ export const pushNotificationsApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'GET',
     path: '/subscribe',
+    skipCompanyContext: true,
     handler: handleGetSubscribe,
   },
   {
     method: 'POST',
     path: '/subscribe',
+    skipCompanyContext: true,
     handler: handlePostSubscribe,
   },
   {
     method: 'DELETE',
     path: '/subscribe',
+    skipCompanyContext: true,
     handler: handleDeleteSubscribe,
   },
   {
     method: 'GET',
     path: '/settings',
+    skipCompanyContext: true,
     handler: handleGetSettings,
   },
   {
     method: 'PUT',
     path: '/settings',
+    skipCompanyContext: true,
     handler: handleUpdateSettings,
+  },
+  {
+    method: 'POST',
+    path: '/test',
+    skipCompanyContext: true,
+    handler: handlePostTest,
   },
 ]

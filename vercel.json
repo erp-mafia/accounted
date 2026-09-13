@@ -119,6 +119,10 @@
       "schedule": "30 5 * * *"
     },
     {
+      "path": "/api/extensions/push-notifications/cron",
+      "schedule": "0 9 * * *"
+    },
+    {
       "path": "/api/notifications/bookkeeping-digest/cron",
       "schedule": "45 5 * * *"
     },

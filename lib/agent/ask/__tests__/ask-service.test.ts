@@ -45,6 +45,8 @@ describe('answerAssistantQuestion', () => {
     const call = generateText.mock.calls[0][0]
     expect(call.tier).toBe('assistant')
     expect(call.system).toContain('bokföringsassistent')
+    expect(call.system).toMatch(/Dagens datum: \d{4}-\d{2}-\d{2}/)
+    expect(call.system).toContain('Nämn inte underliggande modellleverantör')
     expect(call.prompt).toContain('Nordvik Bygg AB')
     expect(call.prompt).toContain('(aktiebolag)')
     expect(call.prompt).toContain('Fråga: Hur bokför jag en lunch?')

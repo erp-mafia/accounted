@@ -10,10 +10,8 @@ import { createClient } from '@/lib/supabase/client'
 /**
  * Per-user opt-in for the daily "nytt att bokfora" email digest
  * (notification_settings.email_digest_enabled, default false; consumed by
- * the bookkeeping-digest cron). Lives on the core account tab: the
- * push-notifications extension has its own settings panel with the same
- * toggle, but that extension is not enabled on hosted, so this is the
- * reachable switch.
+ * the bookkeeping-digest cron). Lives on the core account tab so the
+ * digest stays reachable even when the push-notifications extension is off.
  */
 export function EmailDigestToggle() {
   const t = useTranslations('settings')
