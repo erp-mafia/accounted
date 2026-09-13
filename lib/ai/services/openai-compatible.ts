@@ -31,6 +31,15 @@ import type {
 
 const DEFAULT_MAX_STEPS = 4
 
+function addUsage(a: AiUsage, b: AiUsage): AiUsage {
+  return {
+    inputTokens: (a.inputTokens ?? 0) + (b.inputTokens ?? 0),
+    outputTokens: (a.outputTokens ?? 0) + (b.outputTokens ?? 0),
+    cacheCreationInputTokens: (a.cacheCreationInputTokens ?? 0) + (b.cacheCreationInputTokens ?? 0),
+    cacheReadInputTokens: (a.cacheReadInputTokens ?? 0) + (b.cacheReadInputTokens ?? 0),
+  }
+}
+
 /** Earlier turns as message turns, then the prompt as the final user message. */
 function messagesWithHistory(prompt: string, history: AiChatTurn[]): ModelMessage[] {
   const prior: ModelMessage[] = history.map((t) =>
@@ -179,19 +188,53 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
       // Only attach tools when the configured model advertises tool use; a
       // text-only local model still answers, just from the prompt (+ snapshot).
       const tools = capabilities.toolUse ? toSdkTools(req.tools) : undefined
+      const maxSteps = req.maxSteps ?? DEFAULT_MAX_STEPS
+      const hasHistory = req.history && req.history.length > 0
+      const initialMessages: ModelMessage[] = hasHistory
+        ? messagesWithHistory(req.prompt, req.history)
+        : [{ role: 'user', content: req.prompt }]
+
       const result = await generateText({
         model: provider(model),
         ...(req.system ? { system: req.system } : {}),
         // The SDK takes either `prompt` or `messages`, never both: a plain
         // single-turn call keeps `prompt`; a conversation sends the earlier
         // turns as real messages with the prompt as the final user turn.
-        ...(req.history && req.history.length > 0
-          ? { messages: messagesWithHistory(req.prompt, req.history) }
-          : { prompt: req.prompt }),
+        ...(hasHistory ? { messages: initialMessages } : { prompt: req.prompt }),
         maxOutputTokens: req.maxTokens,
-        ...(tools ? { tools, stopWhen: stepCountIs(req.maxSteps ?? DEFAULT_MAX_STEPS) } : {}),
+        ...(tools
+          ? {
+              tools,
+              stopWhen: stepCountIs(maxSteps),
+              // Mirror anthropic-family: the last allowed step must answer in
+              // prose. Without this, a VAT-style first question can burn the
+              // whole step budget on tool calls and return empty text.
+              prepareStep: ({ stepNumber }) =>
+                stepNumber === maxSteps - 1 ? { toolChoice: 'none' as const } : {},
+            }
+          : {}),
       })
-      return { text: result.text.trim(), model, usage: usageOf(result) }
+
+      let text = result.text.trim()
+      let usage = usageOf(result)
+
+      // Belt-and-suspenders: if the model still ends tool-only (ignored
+      // toolChoice, or max_tokens on the last step), replay the transcript
+      // once more with tools declared but toolChoice none.
+      if (!text && tools && result.steps.length > 0) {
+        const final = await generateText({
+          model: provider(model),
+          ...(req.system ? { system: req.system } : {}),
+          messages: [...initialMessages, ...result.response.messages],
+          maxOutputTokens: req.maxTokens,
+          tools,
+          toolChoice: 'none',
+        })
+        text = final.text.trim()
+        usage = addUsage(usage, usageOf(final))
+      }
+
+      return { text, model, usage }
     },
 
     async generateStructured(req: GenerateStructuredRequest): Promise<GenerateStructuredResult> {
