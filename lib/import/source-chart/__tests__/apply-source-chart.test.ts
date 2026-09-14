@@ -253,6 +253,36 @@ describe('applySourceChartCsv', () => {
     expect(notices).toEqual([])
   })
 
+  it('names the accounts it could not translate, in table order', () => {
+    // A bare count sends the user hunting through paginated pages for rows it
+    // will not identify. Ascending, so the line reads in the order the table
+    // shows. Ruta 06 and 50 are real and correctly coded in the source; this
+    // project just has no treatment for either.
+    const { summary } = applySourceChartCsv(
+      [
+        mapping('4545', 'Beskattningsunderlag import 25%'),
+        mapping('3402', 'Egna uttag av tjänster'),
+        mapping('3401', 'Egna uttag av varor'),
+      ],
+      csv(
+        'True;4545;Beskattningsunderlag import 25%;50-25%',
+        'True;3402;Egna uttag av tjänster;06-25%',
+        'True;3401;Egna uttag av varor;06-25%',
+      ),
+    )
+    expect(summary.accountsWithoutTreatment).toEqual(['3401', '3402', '4545'])
+    // Derived from the list, so the sentence can never name three and count two.
+    expect(summary.codesWithoutTreatment).toBe(summary.accountsWithoutTreatment.length)
+  })
+
+  it('leaves a translated account out of the list', () => {
+    const { summary } = applySourceChartCsv(
+      [mapping('3058', 'Försäljn varor EG momsfri'), mapping('3401', 'Egna uttag av varor')],
+      csv('True;3058;Försäljn varor EG momsfri;35-0%', 'True;3401;Egna uttag av varor;06-25%'),
+    )
+    expect(summary.accountsWithoutTreatment).toEqual(['3401'])
+  })
+
   it('does not touch a remapped row, only identity mappings', () => {
     // 3056 redirected to 3051 takes the target's treatment, not the source
     // account's code: applySourceVatCodes guards this and the guard matters,

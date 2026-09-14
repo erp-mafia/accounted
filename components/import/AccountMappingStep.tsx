@@ -80,12 +80,36 @@ type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'low_confi
 const PAGE_SIZE = 50
 
 /**
+ * How many account numbers the untranslated-code line names before it stops
+ * counting them out. Six four-digit numbers fit the line; the realistic case is
+ * one or two, since the untranslatable rutor are 06 and 50.
+ */
+const UNTRANSLATED_ACCOUNTS_LISTED = 6
+
+/**
  * The momsdeklaration box the built-in BAS mapping already routes this account
  * to, or undefined when it has none. Kept in sync with ACCOUNT_RUTA by the
  * drift test in lib/vat/__tests__/moms-box-mapping.test.ts.
  */
 function basBoxFor(mapping: AccountMapping): string | undefined {
   return ACCOUNT_TO_BOX[mapping.targetAccount ?? mapping.sourceAccount]
+}
+
+/**
+ * The account numbers, capped: "3401, 3402" or "3401, 3402, ... och 4 till".
+ * The tail is its own key rather than a hard-coded "och", which is a different
+ * word in the other locale.
+ */
+function untranslatedAccountList(
+  accounts: string[],
+  t: ReturnType<typeof useTranslations<'chart_of_accounts'>>,
+): string {
+  const shown = accounts.slice(0, UNTRANSLATED_ACCOUNTS_LISTED).join(', ')
+  if (accounts.length <= UNTRANSLATED_ACCOUNTS_LISTED) return shown
+  return t('source_chart_untranslated_more', {
+    accounts: shown,
+    rest: accounts.length - UNTRANSLATED_ACCOUNTS_LISTED,
+  })
 }
 
 export default function AccountMappingStep({
@@ -348,10 +372,17 @@ export default function AccountMappingStep({
           )}
           {/* The other half of what the file did, on screen next to the first
               half. Not a notice: notices are problems with the file, and
-              ImportNotices folds all but one away. */}
-          {sourceChart && sourceChart.summary.codesWithoutTreatment > 0 && (
+              ImportNotices folds all but one away.
+
+              Named, not just counted: the rows are scattered across paginated
+              pages, so a bare number sends the user hunting for rows it will
+              not identify. */}
+          {sourceChart && sourceChart.summary.accountsWithoutTreatment.length > 0 && (
             <p className="text-sm text-muted-foreground">
-              {t('source_chart_untranslated', { count: sourceChart.summary.codesWithoutTreatment })}
+              {t('source_chart_untranslated', {
+                count: sourceChart.summary.accountsWithoutTreatment.length,
+                accounts: untranslatedAccountList(sourceChart.summary.accountsWithoutTreatment, t),
+              })}
             </p>
           )}
           {/* The import's own notice system for what went wrong with the file,

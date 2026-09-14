@@ -37,12 +37,18 @@ export interface SourceChartSummary {
   /** Of those, the ones that resolved to a treatment. */
   treatmentsApplied: number
   /**
-   * Codes read but not translated: a real ruta this project has no
-   * AccountVatTreatment for. Today that is 06 (momspliktiga egna uttag) and
-   * 50 (beskattningsunderlag vid import); 37 and 38 were in this list until
-   * triangulation_eu_goods existed. The row keeps the code for display and
-   * stays in the review list with its label suggestion.
+   * The accounts whose code was read but not translated: a real ruta this
+   * project has no AccountVatTreatment for. Today that is 06 (momspliktiga
+   * egna uttag) and 50 (beskattningsunderlag vid import); 37 and 38 were in
+   * this group until triangulation_eu_goods existed. Each row keeps its code
+   * for display and stays in the review list with its label suggestion.
+   *
+   * The accounts rather than a count, because a count sends the user hunting
+   * through paginated pages for rows it will not name. Ascending, so the
+   * order matches the table.
    */
+  accountsWithoutTreatment: string[]
+  /** Length of the above. Derived, so the number and the list cannot disagree. */
   codesWithoutTreatment: number
 }
 
@@ -57,6 +63,7 @@ export function emptySourceChartSummary(): SourceChartSummary {
     activeInChart: 0,
     codesApplied: 0,
     treatmentsApplied: 0,
+    accountsWithoutTreatment: [],
     codesWithoutTreatment: 0,
   }
 }
@@ -149,7 +156,13 @@ export function applySourceChartCsv(
       notices: accounts.length > 0
         ? [...notices, makeNotice('source_chart_no_codes', 'action')]
         : notices,
-      summary: { ...summaryBase, codesApplied: 0, treatmentsApplied: 0, codesWithoutTreatment: 0 },
+      summary: {
+        ...summaryBase,
+        codesApplied: 0,
+        treatmentsApplied: 0,
+        accountsWithoutTreatment: [],
+        codesWithoutTreatment: 0,
+      },
     }
   }
 
@@ -187,6 +200,10 @@ export function applySourceChartCsv(
   const touched = applied.filter((mapping, i) => mapping !== base[i])
   const codesApplied = touched.filter((m) => m.providerVatCode).length
   const treatmentsApplied = touched.filter((m) => m.providerVatTreatment).length
+  const accountsWithoutTreatment = touched
+    .filter((m) => m.providerVatCode && !m.providerVatTreatment)
+    .map((m) => m.sourceAccount)
+    .sort()
 
   // Deliberately NOT a notice. Notices are what went wrong with the FILE, and
   // ImportNotices folds everything but the first away, which is right for a
@@ -200,7 +217,8 @@ export function applySourceChartCsv(
       ...summaryBase,
       codesApplied,
       treatmentsApplied,
-      codesWithoutTreatment: codesApplied - treatmentsApplied,
+      accountsWithoutTreatment,
+      codesWithoutTreatment: accountsWithoutTreatment.length,
     },
   }
 }
