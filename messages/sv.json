@@ -5883,7 +5883,7 @@
     "source_chart_prompt": "Har du kontoplanen från Spiris Bokföring? Ladda upp den för samma räkenskapsår, så fylls momskoderna i.",
     "source_chart_action": "Ladda upp kontoplan",
     "source_chart_replace": "Byt fil",
-    "source_chart_applied": "{count} konton fick momskod från kontoplanen.",
+    "source_chart_applied": "{count} konton fick momskod från kontoplanen ({format}).",
     "source_chart_untranslated": "{count} koder gick inte att tolka och lämnas för granskning.",
     "source_chart_help": "En CSV-export av kontoplanen ur systemet du lämnar. SIE-filen innehåller inga momskoder, så utan den kan momskoden bara gissas från kontonamnet.",
     "source_chart_help_year": "Ta kontoplanen för samma räkenskapsår som SIE-filen. Både konton och momskoder ändras mellan åren, så en kontoplan från fel år kan sätta fel momskod på rätt konto.",

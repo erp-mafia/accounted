@@ -1,3 +1,9 @@
+import {
+  SOURCE_CHART_FORMATS,
+  supportedFormatLabels,
+  type SourceChartFormat,
+} from './formats'
+
 /**
  * Parser for a source accounting system's chart-of-accounts CSV export.
  *
@@ -30,14 +36,31 @@ export interface SourceChartAccount {
 
 export interface ParsedSourceChart {
   accounts: SourceChartAccount[]
+  /**
+   * The format the header was recognised as, or null when none matched. Worth
+   * surfacing: detection that guesses wrong in silence is worse than asking,
+   * and naming what was read is what makes a wrong guess visible.
+   */
+  format: SourceChartFormat | null
   /** Problems worth showing the user; never thrown, so a partial file still helps. */
   warnings: string[]
 }
 
-const HEADER_ACCOUNT_NUMBER = 'AccountNumber'
-const HEADER_ACCOUNT_NAME = 'AccountName'
-const HEADER_VAT_CODE = 'VatCodeAndPercent'
-const HEADER_IS_ACTIVE = 'IsActive'
+/**
+ * The first format whose required columns are all present in the header when
+ * split on that format's delimiter. Column sets are fingerprints, so the first
+ * match is the only match in practice.
+ */
+function detectFormat(firstLine: string): { format: SourceChartFormat; header: string[] } | null {
+  for (const format of SOURCE_CHART_FORMATS) {
+    const header = splitCsvLine(firstLine, format.delimiter).map((h) => h.trim())
+    const { accountNumber, accountName } = format.columns
+    if (header.includes(accountNumber) && header.includes(accountName)) {
+      return { format, header }
+    }
+  }
+  return null
+}
 
 /**
  * Split one CSV line on semicolons, honouring double-quoted fields.
@@ -47,7 +70,7 @@ const HEADER_IS_ACTIVE = 'IsActive'
  * one. Account names carrying a semicolon are the case that makes a plain
  * split wrong.
  */
-function splitCsvLine(line: string): string[] {
+function splitCsvLine(line: string, delimiter: string): string[] {
   const fields: string[] = []
   let field = ''
   let inQuotes = false
@@ -69,7 +92,7 @@ function splitCsvLine(line: string): string[] {
       inQuotes = true
       continue
     }
-    if (char === ';') {
+    if (char === delimiter) {
       fields.push(field)
       field = ''
       continue
@@ -92,39 +115,33 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
   // is named "﻿IsActive" and never matches.
   const text = content.replace(/^﻿/, '')
   const lines = text.split(/\r\n|\n|\r/).filter((line) => line.trim() !== '')
-
   if (lines.length === 0) {
-    return { accounts: [], warnings: ['Filen är tom.'] }
+    return { accounts: [], format: null, warnings: ['Filen är tom.'] }
   }
 
-  const header = splitCsvLine(lines[0]).map((h) => h.trim())
-  const columnOf = (name: string) => header.indexOf(name)
-
-  const numberAt = columnOf(HEADER_ACCOUNT_NUMBER)
-  const nameAt = columnOf(HEADER_ACCOUNT_NAME)
-  const vatAt = columnOf(HEADER_VAT_CODE)
-  const activeAt = columnOf(HEADER_IS_ACTIVE)
-
-  if (numberAt === -1 || nameAt === -1) {
-    // A comma-separated file parses as a single column, which is the most
-    // likely reason to land here, so say so instead of naming the columns.
-    // Name the system, not the columns. This parser reads one export format,
-    // and a file that fails here is far more likely to be a correct chart from
-    // a system we do not read yet than a broken Spiris file; telling its owner
-    // that AccountNumber is missing sends them looking for a fault in a file
-    // that has none.
-    const looksCommaSeparated = header.length === 1 && header[0].includes(',')
+  const detected = detectFormat(lines[0])
+  if (!detected) {
+    // Name what is supported, not what the file lacks. A file that fails here
+    // is far more likely to be a correct chart from a system this does not
+    // read yet than a broken one, and telling its owner that AccountNumber is
+    // missing sends them looking for a fault that is not there.
     warnings.push(
-      looksCommaSeparated
-        ? 'Filen är kommaseparerad. Spiris Bokföring exporterar semikolonseparerat, så den här kommer troligen från ett annat system, och de formaten stöds inte än.'
-        : 'Filen ser inte ut som en kontoplansexport från Spiris Bokföring. Andra system exporterar i andra format, och de stöds inte än.',
+      `Filen känns inte igen som en kontoplansexport. Formaten som kan läsas i dag: ${supportedFormatLabels().join(', ')}.`,
     )
-    return { accounts: [], warnings }
+    return { accounts: [], format: null, warnings }
   }
+
+  const { format, header } = detected
+  const columnOf = (name: string | undefined) => (name === undefined ? -1 : header.indexOf(name))
+
+  const numberAt = columnOf(format.columns.accountNumber)
+  const nameAt = columnOf(format.columns.accountName)
+  const vatAt = columnOf(format.columns.vatCode)
+  const activeAt = columnOf(format.columns.isActive)
 
   if (vatAt === -1) {
     warnings.push(
-      `Kolumnen ${HEADER_VAT_CODE} saknas, så inga momskoder kan hämtas ur filen.`,
+      `Kontoplanen från ${format.label} saknar momskodskolumn, så inga momskoder kan hämtas ur filen.`,
     )
   }
 
@@ -133,7 +150,7 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
   let malformed = 0
 
   for (let i = 1; i < lines.length; i++) {
-    const fields = splitCsvLine(lines[i])
+    const fields = splitCsvLine(lines[i], format.delimiter)
     const accountNumber = (fields[numberAt] ?? '').trim()
     if (!/^\d{3,}$/.test(accountNumber)) {
       malformed++
@@ -160,5 +177,5 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
     warnings.push('Filen innehöll inga konton.')
   }
 
-  return { accounts, warnings }
+  return { accounts, format, warnings }
 }

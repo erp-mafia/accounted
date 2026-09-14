@@ -96,10 +96,14 @@ describe('applySourceChartCsv', () => {
 
   it('leaves the mappings alone when the file cannot be read', () => {
     const input = [mapping('3051', 'Försäljn varor 25% sv')]
-    const { mappings, warnings, summary } = applySourceChartCsv(input, 'IsActive,AccountNumber\nTrue,3051\n')
+    const { mappings, warnings, summary } = applySourceChartCsv(
+      input,
+      'Konto;Benämning;Momskod\r\n3001;Försäljning;MP1\r\n',
+    )
     expect(mappings).toBe(input)
-    expect(warnings[0]).toContain('kommaseparerad')
+    expect(warnings[0]).toContain('Spiris Bokföring')
     expect(summary.codesApplied).toBe(0)
+    expect(summary.formatLabel).toBeNull()
   })
 
   it('says so when the chart carries no momskoder at all', () => {

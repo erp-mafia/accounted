@@ -50,17 +50,25 @@ describe('parseSourceChartCsv', () => {
     expect(parseSourceChartCsv(csv).accounts).toHaveLength(1)
   })
 
-  it('says so when the file is comma separated instead of semicolon', () => {
-    // The likeliest way a user brings the wrong file, and naming the columns
-    // would send them looking for a problem that is not there.
-    const { accounts, warnings } = parseSourceChartCsv(
-      'IsActive,AccountNumber,AccountName\nTrue,3051,Test\n',
+  it('names what it can read when the header matches no format', () => {
+    // A file that lands here is far more likely to be a correct chart from a
+    // system this does not read yet than a broken one, so the warning lists
+    // what is supported instead of blaming the file.
+    const { accounts, format, warnings } = parseSourceChartCsv(
+      'Konto;Benämning;Momskod\r\n3001;Försäljning;MP1\r\n',
     )
     expect(accounts).toEqual([])
-    expect(warnings[0]).toContain('kommaseparerad')
-    // Names the system, not the columns: the file is probably fine, just from
-    // somewhere we do not read yet.
-    expect(warnings[0]).toContain('annat system')
+    expect(format).toBeNull()
+    expect(warnings[0]).toContain('Spiris Bokföring')
+    expect(warnings[0]).not.toContain('AccountNumber')
+  })
+
+  it('detects the format and names it back', () => {
+    // Detection that guesses wrong in silence is worse than asking, so what it
+    // read the file as has to be visible.
+    const { format } = parseSourceChartCsv(spirisCsv('True;3051;Test;05-25%'))
+    expect(format?.id).toBe('spiris')
+    expect(format?.label).toBe('Spiris Bokföring')
   })
 
   it('still returns the chart when the VAT column is missing, and says why it is empty', () => {
@@ -69,7 +77,8 @@ describe('parseSourceChartCsv', () => {
     expect(accounts).toEqual([
       { accountNumber: '3051', accountName: 'Test', vatCode: null, isActive: true },
     ])
-    expect(warnings[0]).toContain('VatCodeAndPercent')
+    expect(warnings[0]).toContain('Spiris Bokföring')
+    expect(warnings[0]).toContain('momskodskolumn')
   })
 
   it('treats a missing IsActive column as all active, never all inactive', () => {
@@ -96,7 +105,7 @@ describe('parseSourceChartCsv', () => {
   })
 
   it('reports an empty file instead of throwing', () => {
-    expect(parseSourceChartCsv('')).toEqual({ accounts: [], warnings: ['Filen är tom.'] })
+    expect(parseSourceChartCsv('')).toEqual({ accounts: [], format: null, warnings: ['Filen är tom.'] })
     expect(parseSourceChartCsv('﻿\r\n').warnings[0]).toBe('Filen är tom.')
   })
 

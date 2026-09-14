@@ -1,7 +1,6 @@
 import { applySourceVatCodes } from '@/lib/import/account-vat-treatment'
 import type { AccountMapping } from '@/lib/import/types'
 import { parseSourceChartCsv } from './parse-chart-csv'
-import { spirisVatTreatment } from './spiris-vat-codes'
 
 /**
  * Apply a source system's chart export to a set of account mappings.
@@ -18,6 +17,11 @@ import { spirisVatTreatment } from './spiris-vat-codes'
  */
 
 export interface SourceChartSummary {
+  /**
+   * What the header was recognised as, named back so a wrong detection is
+   * visible rather than silent. Null when no format matched.
+   */
+  formatLabel: string | null
   /** Accounts the file described, whether or not this import uses them. */
   accountsInChart: number
   /** Of those, the ones the source system still offers for posting. */
@@ -49,7 +53,7 @@ export function applySourceChartCsv(
   mappings: AccountMapping[],
   content: string,
 ): SourceChartResult {
-  const { accounts, warnings } = parseSourceChartCsv(content)
+  const { accounts, format, warnings } = parseSourceChartCsv(content)
 
   const codesByAccount = new Map<string, string>()
   for (const account of accounts) {
@@ -57,11 +61,12 @@ export function applySourceChartCsv(
   }
 
   const summaryBase = {
+    formatLabel: format?.label ?? null,
     accountsInChart: accounts.length,
     activeInChart: accounts.filter((a) => a.isActive).length,
   }
 
-  if (codesByAccount.size === 0) {
+  if (!format || codesByAccount.size === 0) {
     return {
       mappings,
       warnings: accounts.length > 0
@@ -71,7 +76,9 @@ export function applySourceChartCsv(
     }
   }
 
-  const applied = applySourceVatCodes(mappings, codesByAccount, spirisVatTreatment)
+  // The detected format brings its own code vocabulary, so a second vendor is
+  // an entry in SOURCE_CHART_FORMATS rather than a branch here.
+  const applied = applySourceVatCodes(mappings, codesByAccount, format.translate)
 
   // Counted on the result rather than as a delta: the guided SIE import has no
   // other source of provider codes, so what is on the mappings afterwards is

@@ -285,8 +285,13 @@ export default function AccountMappingStep({
           {onSourceChartSelected && (
             <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
               <span>
-                {sourceChart
-                  ? t('source_chart_applied', { count: sourceChart.summary.treatmentsApplied })
+                {sourceChart?.summary.formatLabel
+                  ? t('source_chart_applied', {
+                      count: sourceChart.summary.treatmentsApplied,
+                      // Named back so a wrong detection is visible: the format
+                      // is read from the header, never picked by the user.
+                      format: sourceChart.summary.formatLabel,
+                    })
                   : t('source_chart_prompt')}
               </span>
               <label>
