@@ -1,3 +1,5 @@
+import { isAccountNumber } from '@/lib/invariants/account-number'
+import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import {
   SOURCE_CHART_FORMATS,
   supportedFormatLabels,
@@ -42,8 +44,12 @@ export interface ParsedSourceChart {
    * and naming what was read is what makes a wrong guess visible.
    */
   format: SourceChartFormat | null
-  /** Problems worth showing the user; never thrown, so a partial file still helps. */
-  warnings: string[]
+  /**
+   * What the parse noticed, in the import-wide notice shape (severity + i18n
+   * code under `import_notices.*`), never thrown: a partial file still helps.
+   * `action` is something the user must act on, `notice` is worth knowing.
+   */
+  notices: ImportNotice[]
 }
 
 /**
@@ -110,13 +116,17 @@ function isTrue(value: string): boolean {
 }
 
 export function parseSourceChartCsv(content: string): ParsedSourceChart {
-  const warnings: string[] = []
+  const notices: ImportNotice[] = []
   // Strip the BOM before anything reads the first header, or the first column
   // is named "﻿IsActive" and never matches.
   const text = content.replace(/^﻿/, '')
   const lines = text.split(/\r\n|\n|\r/).filter((line) => line.trim() !== '')
   if (lines.length === 0) {
-    return { accounts: [], format: null, warnings: ['Filen är tom.'] }
+    return {
+      accounts: [],
+      format: null,
+      notices: [makeNotice('source_chart_empty_file', 'action')],
+    }
   }
 
   const detected = detectFormat(lines[0])
@@ -125,10 +135,12 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
     // is far more likely to be a correct chart from a system this does not
     // read yet than a broken one, and telling its owner that AccountNumber is
     // missing sends them looking for a fault that is not there.
-    warnings.push(
-      `Filen känns inte igen som en kontoplansexport. Formaten som kan läsas i dag: ${supportedFormatLabels().join(', ')}.`,
+    notices.push(
+      makeNotice('source_chart_unrecognised', 'action', {
+        formats: supportedFormatLabels().join(', '),
+      }),
     )
-    return { accounts: [], format: null, warnings }
+    return { accounts: [], format: null, notices }
   }
 
   const { format, header } = detected
@@ -140,8 +152,8 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
   const activeAt = columnOf(format.columns.isActive)
 
   if (vatAt === -1) {
-    warnings.push(
-      `Kontoplanen från ${format.label} saknar momskodskolumn, så inga momskoder kan hämtas ur filen.`,
+    notices.push(
+      makeNotice('source_chart_no_vat_column', 'action', { format: format.label }),
     )
   }
 
@@ -152,7 +164,10 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
   for (let i = 1; i < lines.length; i++) {
     const fields = splitCsvLine(lines[i], format.delimiter)
     const accountNumber = (fields[numberAt] ?? '').trim()
-    if (!/^\d{3,}$/.test(accountNumber)) {
+    // The shared BAS rule, not a local regex: lib/invariants/account-number.ts
+    // exists because this one was written out at twenty sites. A chart row that
+    // is not four digits is a group heading or a broken row, never an account.
+    if (!isAccountNumber(accountNumber)) {
       malformed++
       continue
     }
@@ -170,12 +185,14 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
     })
   }
 
+  // A skipped row is worth knowing but costs nothing: it folds away behind
+  // "Visa N anmärkningar" rather than taking the one ochre sentence.
   if (malformed > 0) {
-    warnings.push(`${malformed} rader hoppades över eftersom kontonumret saknades eller var ogiltigt.`)
+    notices.push(makeNotice('source_chart_rows_skipped', 'notice', { count: malformed }))
   }
   if (accounts.length === 0) {
-    warnings.push('Filen innehöll inga konton.')
+    notices.push(makeNotice('source_chart_no_accounts', 'action'))
   }
 
-  return { accounts, format, warnings }
+  return { accounts, format, notices }
 }

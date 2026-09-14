@@ -134,23 +134,23 @@ describe('applySourceChartCsv', () => {
 
   it('leaves the mappings alone when the file cannot be read', () => {
     const input = [mapping('3051', 'Försäljn varor 25% sv')]
-    const { mappings, warnings, summary } = applySourceChartCsv(
+    const { mappings, notices, summary } = applySourceChartCsv(
       input,
       'Konto;Benämning;Momskod\r\n3001;Försäljning;MP1\r\n',
     )
     expect(mappings).toBe(input)
-    expect(warnings[0]).toContain('Spiris Bokföring')
+    expect(notices[0]?.code).toBe('source_chart_unrecognised')
     expect(summary.codesApplied).toBe(0)
     expect(summary.formatLabel).toBeNull()
   })
 
   it('says so when the chart carries no momskoder at all', () => {
-    const { mappings, warnings } = applySourceChartCsv(
+    const { mappings, notices } = applySourceChartCsv(
       [mapping('3051', 'Test')],
       csv('True;3051;Test;', 'True;3052;Test 2;'),
     )
     expect(mappings[0].providerVatCode).toBeUndefined()
-    expect(warnings).toContain('Kontoplanen innehöll inga momskoder.')
+    expect(notices.map((n) => n.code)).toContain('source_chart_no_codes')
   })
 
   it('ignores chart rows this import does not map', () => {
@@ -198,7 +198,7 @@ describe('applySourceChartCsv', () => {
     )
     const second = applySourceChartCsv(first.mappings, 'Konto;Benämning\r\n3058;Något\r\n')
     expect(second.mappings[0].providerVatCode).toBe('35-0%')
-    expect(second.warnings[0]).toContain('känns inte igen')
+    expect(second.notices[0]?.code).toBe('source_chart_unrecognised')
   })
 
   it('will not overwrite a treatment the user has already confirmed', () => {

@@ -59,8 +59,9 @@ const COST_TREATMENT: Record<string, AccountVatTreatment> = {
   '37': 'triangulation_eu_goods',
   // Both are omvänd skattskyldighet inom Sverige. Which ruta gets filed is
   // decided downstream by resolveVatTreatmentRuta from the account number, so
-  // the 23/24 split the source system made is not carried through. See the
-  // note on lossy rutor below.
+  // the 23/24 split the source system made is not carried through. Lossy on
+  // purpose: the account number is the better source, and carrying two
+  // treatments that resolve identically would add a state nothing reads.
   '23': 'reverse_charge_domestic',
   '24': 'reverse_charge_domestic',
 }

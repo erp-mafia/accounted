@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import SIEJobProgress from '@/components/import/SIEJobProgress'
 import { uploadSIEFile } from '@/lib/import/sie-job-client'
-import { legacyNotices } from '@/lib/import/notices'
+import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
 import { fetchAccounts } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
@@ -916,7 +916,7 @@ function SIEImportWizard({
   // label. Enrichment, never a precondition: a file that cannot be read leaves
   // the mappings untouched and reports why.
   const [sourceChart, setSourceChart] =
-    useState<{ summary: SourceChartSummary; warnings: string[] } | null>(null)
+    useState<{ summary: SourceChartSummary; notices: ImportNotice[] } | null>(null)
 
   // Read through a ref rather than the closed-over value: the file is read
   // asynchronously, and a momskod the user changes while it loads would
@@ -950,17 +950,23 @@ function SIEImportWizard({
       const csvText = await file.text()
       const result = applySourceChartCsv(mappingsRef.current, csvText, basAccountsRef.current)
       setMappings(result.mappings)
-      setSourceChart({ summary: result.summary, warnings: result.warnings })
+      setSourceChart({ summary: result.summary, notices: result.notices })
     } catch (err) {
       // Through getErrorMessage like every other catch in this file, so a real
       // cause reaches the user instead of being flattened into one sentence.
+      // legacyNotices is the sanctioned bridge for a string that has no
+      // structured twin: the message is already mapped, and inventing a code
+      // per failure mode of file.text() would name nothing useful.
       setSourceChart({
         summary: emptySourceChartSummary(),
-        warnings: [
-          err instanceof Error
-            ? getErrorMessage(err)
-            : 'Kontoplanen kunde inte läsas in. Kontrollera att filen finns kvar och försök igen.',
-        ],
+        notices: legacyNotices(
+          [
+            err instanceof Error
+              ? getErrorMessage(err)
+              : 'Kontoplanen kunde inte läsas in. Kontrollera att filen finns kvar och försök igen.',
+          ],
+          'action',
+        ),
       })
     }
   }, [])

@@ -9,10 +9,10 @@ function spirisCsv(...rows: string[]): string {
 
 describe('parseSourceChartCsv', () => {
   it('reads the shape a Spiris export actually has', () => {
-    const { accounts, warnings } = parseSourceChartCsv(
+    const { accounts, notices } = parseSourceChartCsv(
       spirisCsv('True;3051;Försäljn varor 25% sv;05-25%', 'False;3056;Försäljn varor till EG;'),
     )
-    expect(warnings).toEqual([])
+    expect(notices).toEqual([])
     expect(accounts).toEqual([
       { accountNumber: '3051', accountName: 'Försäljn varor 25% sv', vatCode: '05-25%', isActive: true },
       { accountNumber: '3056', accountName: 'Försäljn varor till EG', vatCode: null, isActive: false },
@@ -54,13 +54,18 @@ describe('parseSourceChartCsv', () => {
     // A file that lands here is far more likely to be a correct chart from a
     // system this does not read yet than a broken one, so the warning lists
     // what is supported instead of blaming the file.
-    const { accounts, format, warnings } = parseSourceChartCsv(
+    const { accounts, format, notices } = parseSourceChartCsv(
       'Konto;Benämning;Momskod\r\n3001;Försäljning;MP1\r\n',
     )
     expect(accounts).toEqual([])
     expect(format).toBeNull()
-    expect(warnings[0]).toContain('Spiris Bokföring')
-    expect(warnings[0]).not.toContain('AccountNumber')
+    // Names what CAN be read rather than what the file lacks; the labels ride
+    // in as a param so the sentence stays one i18n key.
+    expect(notices[0]).toEqual({
+      code: 'source_chart_unrecognised',
+      severity: 'action',
+      params: { formats: 'Spiris Bokföring' },
+    })
   })
 
   it('detects the format and names it back', () => {
@@ -73,12 +78,15 @@ describe('parseSourceChartCsv', () => {
 
   it('still returns the chart when the VAT column is missing, and says why it is empty', () => {
     const csv = 'IsActive;AccountNumber;AccountName\r\nTrue;3051;Test\r\n'
-    const { accounts, warnings } = parseSourceChartCsv(csv)
+    const { accounts, notices } = parseSourceChartCsv(csv)
     expect(accounts).toEqual([
       { accountNumber: '3051', accountName: 'Test', vatCode: null, isActive: true },
     ])
-    expect(warnings[0]).toContain('Spiris Bokföring')
-    expect(warnings[0]).toContain('momskodskolumn')
+    expect(notices[0]).toEqual({
+      code: 'source_chart_no_vat_column',
+      severity: 'action',
+      params: { format: 'Spiris Bokföring' },
+    })
   })
 
   it('treats a missing IsActive column as all active, never all inactive', () => {
@@ -88,11 +96,17 @@ describe('parseSourceChartCsv', () => {
   })
 
   it('counts the rows it skipped rather than failing the file', () => {
-    const { accounts, warnings } = parseSourceChartCsv(
+    const { accounts, notices } = parseSourceChartCsv(
       spirisCsv('True;3051;Bra;05-25%', 'True;;Utan nummer;', 'True;ABC;Bokstäver;'),
     )
     expect(accounts).toHaveLength(1)
-    expect(warnings[0]).toContain('2 rader')
+    // 'notice', not 'action': a skipped row folds away behind the toggle
+    // instead of taking the one ochre sentence the step allows.
+    expect(notices[0]).toEqual({
+      code: 'source_chart_rows_skipped',
+      severity: 'notice',
+      params: { count: 2 },
+    })
   })
 
   it('keeps the first of a duplicated account number', () => {
@@ -105,8 +119,9 @@ describe('parseSourceChartCsv', () => {
   })
 
   it('reports an empty file instead of throwing', () => {
-    expect(parseSourceChartCsv('')).toEqual({ accounts: [], format: null, warnings: ['Filen är tom.'] })
-    expect(parseSourceChartCsv('﻿\r\n').warnings[0]).toBe('Filen är tom.')
+    const empty = { code: 'source_chart_empty_file', severity: 'action' }
+    expect(parseSourceChartCsv('')).toEqual({ accounts: [], format: null, notices: [empty] })
+    expect(parseSourceChartCsv('﻿\r\n').notices[0]).toEqual(empty)
   })
 
   it('ignores blank lines between rows', () => {

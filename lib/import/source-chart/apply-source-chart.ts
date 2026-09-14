@@ -3,6 +3,7 @@ import {
   enrichAccountMappingsWithVat,
   vatRateComesFromLabel,
 } from '@/lib/import/account-vat-treatment'
+import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import type { AccountMapping } from '@/lib/import/types'
 import type { BASAccount } from '@/types'
 import { parseSourceChartCsv } from './parse-chart-csv'
@@ -17,7 +18,7 @@ import { parseSourceChartCsv } from './parse-chart-csv'
  * so the guided SIE import can offer it on its own.
  *
  * Enrichment, never a precondition. A file that cannot be read leaves the
- * mappings untouched and returns its complaint in `warnings`; the mapping step
+ * mappings untouched and returns its complaint in `notices`; the mapping step
  * falls back to the label suggestion exactly as it does today.
  */
 
@@ -62,7 +63,14 @@ export function emptySourceChartSummary(): SourceChartSummary {
 
 export interface SourceChartResult {
   mappings: AccountMapping[]
-  warnings: string[]
+  /**
+   * Everything this file wants to say, in the shape ImportNotices renders:
+   * one ochre sentence, the rest folded, the statistics behind the info
+   * tooltip. The import already had that system; a second one beside it is
+   * how a renamed account came to render in the same ochre as an unbalanced
+   * ledger (see lib/import/notices.ts).
+   */
+  notices: ImportNotice[]
   summary: SourceChartSummary
 }
 
@@ -122,7 +130,7 @@ export function applySourceChartCsv(
   content: string,
   existingAccounts: BASAccount[] = [],
 ): SourceChartResult {
-  const { accounts, format, warnings } = parseSourceChartCsv(content)
+  const { accounts, format, notices } = parseSourceChartCsv(content)
 
   const codesByAccount = new Map<string, string>()
   for (const account of accounts) {
@@ -138,9 +146,9 @@ export function applySourceChartCsv(
   if (!format || codesByAccount.size === 0) {
     return {
       mappings,
-      warnings: accounts.length > 0
-        ? [...warnings, 'Kontoplanen innehöll inga momskoder.']
-        : warnings,
+      notices: accounts.length > 0
+        ? [...notices, makeNotice('source_chart_no_codes', 'action')]
+        : notices,
       summary: { ...summaryBase, codesApplied: 0, treatmentsApplied: 0, codesWithoutTreatment: 0 },
     }
   }
@@ -180,14 +188,20 @@ export function applySourceChartCsv(
   const codesApplied = touched.filter((m) => m.providerVatCode).length
   const treatmentsApplied = touched.filter((m) => m.providerVatTreatment).length
 
+  const codesWithoutTreatment = codesApplied - treatmentsApplied
+
   return {
     mappings: applied,
-    warnings,
+    // info, not notice: the rows are already in the review list, so there is
+    // nothing to do beyond what the step already asks for.
+    notices: codesWithoutTreatment > 0
+      ? [...notices, makeNotice('source_chart_untranslated', 'info', { count: codesWithoutTreatment })]
+      : notices,
     summary: {
       ...summaryBase,
       codesApplied,
       treatmentsApplied,
-      codesWithoutTreatment: codesApplied - treatmentsApplied,
+      codesWithoutTreatment,
     },
   }
 }

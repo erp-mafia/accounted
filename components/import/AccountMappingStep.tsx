@@ -34,7 +34,8 @@ import type { AccountMapping } from '@/lib/import/types'
 import { isValidBASRange } from '@/lib/import/account-mapper'
 import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
 import type { SourceChartSummary } from '@/lib/import/source-chart/apply-source-chart'
-import { AttnLine } from '@/components/ui/attn-line'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import type { ImportNotice } from '@/lib/import/notices'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
@@ -69,7 +70,7 @@ interface AccountMappingStepProps {
    */
   onSourceChartSelected?: (file: File) => void
   /** What the last accepted file did, for the line above the table. */
-  sourceChart?: { summary: SourceChartSummary; warnings: string[] } | null
+  sourceChart?: { summary: SourceChartSummary; notices: ImportNotice[] } | null
   onContinue: () => void
   onBack: () => void
 }
@@ -345,18 +346,11 @@ export default function AccountMappingStep({
               />
             </div>
           )}
-          {sourceChart && sourceChart.summary.codesWithoutTreatment > 0 && (
-            <p className="text-sm text-muted-foreground">
-              {t('source_chart_untranslated', { count: sourceChart.summary.codesWithoutTreatment })}
-            </p>
-          )}
-          {/* Every warning, joined into the one sentence convention 6 allows,
-              rather than the first one. A file routinely earns two ("N rader
-              hoppades över" and "Kontoplanen innehöll inga momskoder"), and
-              showing only the first left the more useful half unsaid. */}
-          {sourceChart && sourceChart.warnings.length > 0 && (
-            <AttnLine>{sourceChart.warnings.join(' ')}</AttnLine>
-          )}
+          {/* The import's own notice system, not a second one beside it: one
+              ochre sentence, the rest behind "Visa N anmärkningar", the
+              statistics in the info tooltip. Renders nothing when the file had
+              nothing to say, so it costs no space in the common case. */}
+          {sourceChart && <ImportNotices notices={sourceChart.notices} />}
 
           {/* Search and filter */}
           <div className="flex gap-4">

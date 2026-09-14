@@ -15,9 +15,16 @@ import { parseSpirisVatCode, spirisVatTreatment } from './spiris-vat-codes'
  * dropdown turns a rename into a wrong answer on a correct file. Detection is
  * reported back instead, so a wrong guess is visible rather than silent.
  */
+/**
+ * Supported source chart format identifiers. A named union like
+ * BankFileFormatId next door, so adding a vendor is one line here rather than
+ * a change to the interface itself.
+ */
+export type SourceChartFormatId = 'spiris'
+
 export interface SourceChartFormat {
   /** Stable id, used in code and tests, never shown. */
-  id: 'spiris'
+  id: SourceChartFormatId
   /** What to call it when telling the user what was read. */
   label: string
   delimiter: ';' | ','
@@ -48,8 +55,9 @@ export interface SourceChartFormat {
 export const SOURCE_CHART_FORMATS: readonly SourceChartFormat[] = [
   {
     id: 'spiris',
-    // Both names, because the rename is recent enough that a user may know it
-    // by either and the word has to be recognisable when it is read back.
+    // The current name only. The old one is where a user who knows the product
+    // by it will actually look: source_chart_help_where spells out "I Spiris
+    // Bokföring, tidigare Visma eEkonomi" next to the menu path.
     label: 'Spiris Bokföring',
     delimiter: ';',
     columns: {
