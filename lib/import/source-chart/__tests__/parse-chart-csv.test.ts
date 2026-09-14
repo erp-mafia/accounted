@@ -58,6 +58,9 @@ describe('parseSourceChartCsv', () => {
     )
     expect(accounts).toEqual([])
     expect(warnings[0]).toContain('kommaseparerad')
+    // Names the system, not the columns: the file is probably fine, just from
+    // somewhere we do not read yet.
+    expect(warnings[0]).toContain('annat system')
   })
 
   it('still returns the chart when the VAT column is missing, and says why it is empty', () => {

@@ -1,7 +1,14 @@
 import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
 
 /**
- * Spiris VAT codes, which name the momsdeklaration ruta directly.
+ * Spiris Bokföring VAT codes, which name the momsdeklaration ruta directly.
+ *
+ * Spiris Bokföring was called Visma eEkonomi until recently, and the rename is
+ * worth knowing here for a reason beyond recognising the product: this repo
+ * already has a `visma` provider, and the Fortnox momskod prefill deliberately
+ * left it out because the API answers opaque VatCodeIds that need a /vatcodes
+ * lookup. The chart CSV from the same product needs no lookup at all, so the
+ * file route reaches a provider the API route gave up on.
  *
  * This is the easy end of the provider-code problem. Fortnox ships opaque
  * mnemonics that need a lookup table and land on an ambiguous ruta about half

@@ -108,11 +108,16 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
   if (numberAt === -1 || nameAt === -1) {
     // A comma-separated file parses as a single column, which is the most
     // likely reason to land here, so say so instead of naming the columns.
+    // Name the system, not the columns. This parser reads one export format,
+    // and a file that fails here is far more likely to be a correct chart from
+    // a system we do not read yet than a broken Spiris file; telling its owner
+    // that AccountNumber is missing sends them looking for a fault in a file
+    // that has none.
     const looksCommaSeparated = header.length === 1 && header[0].includes(',')
     warnings.push(
       looksCommaSeparated
-        ? 'Filen verkar vara kommaseparerad. Kontoplanen ska vara semikolonseparerad.'
-        : `Kolumnerna ${HEADER_ACCOUNT_NUMBER} och ${HEADER_ACCOUNT_NAME} saknas i filens rubrikrad.`,
+        ? 'Filen är kommaseparerad. Spiris Bokföring exporterar semikolonseparerat, så den här kommer troligen från ett annat system, och de formaten stöds inte än.'
+        : 'Filen ser inte ut som en kontoplansexport från Spiris Bokföring. Andra system exporterar i andra format, och de stöds inte än.',
     )
     return { accounts: [], warnings }
   }
