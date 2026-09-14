@@ -32,6 +32,13 @@ const Schema = z.object({
   company_id: z.string().uuid().optional(),
   /** Extracted receipt/invoice text, if the caller already has it. */
   underlag: z.string().max(24_000).optional(),
+  /**
+   * A document attached in the review dialog before the booking exists. It
+   * is not on the transaction row yet, so the read is made with it directly
+   * (company-scoped in gatherUnderlag) and never stored: the stored read is
+   * keyed on the row's own document_id.
+   */
+  document_id: z.string().uuid().optional(),
   /** Self-consistency samples (default 3). */
   samples: z.number().int().min(1).max(5).optional(),
 })
@@ -102,8 +109,9 @@ export const POST = withRouteContext(
 
       // The read made before anyone opened the row (the ten-minute cron, or
       // an earlier open) answers at once while it is fresh; a caller who
-      // brings its own underlag or sample count wants a new one.
-      if (parsed.data.underlag == null && parsed.data.samples == null) {
+      // brings its own underlag, a document, or a sample count wants a new one.
+      const attachedDocumentId = parsed.data.document_id
+      if (parsed.data.underlag == null && parsed.data.samples == null && !attachedDocumentId) {
         const stored = await loadReads(supabase, companyId, [transaction.id]).catch(() => new Map())
         const read = stored.get(transaction.id)
         if (read && readIsFresh(read, transaction)) return NextResponse.json({ data: read })
@@ -113,11 +121,14 @@ export const POST = withRouteContext(
         entityType,
         vatRegistered,
         underlag: parsed.data.underlag,
+        documentId: attachedDocumentId,
         samples: parsed.data.samples,
       })
       // Keep it for the list and the next open. Best effort: a failed
-      // store never costs the caller the answer.
-      await storeRead(supabase, companyId, read).catch(() => undefined)
+      // store never costs the caller the answer. A read made with a
+      // dialog-attached document is not stored: the row does not carry
+      // that document yet, so the list would treat it as stale at once.
+      if (!attachedDocumentId) await storeRead(supabase, companyId, read).catch(() => undefined)
       return NextResponse.json({ data: read })
     } catch (err) {
       return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })

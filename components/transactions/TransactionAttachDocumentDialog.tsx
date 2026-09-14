@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import {
   Dialog,
@@ -49,6 +49,8 @@ export default function TransactionAttachDocumentDialog({
   const tDetach = useTranslations('tx_detach')
   const { toast } = useToast()
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  // The whole dialog takes a dropped file, not only the dashed box.
+  const dropSurfaceRef = useRef<HTMLDivElement>(null)
   const [pickedDoc, setPickedDoc] = useState<AvailableInboxDoc | null>(null)
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
   const [isAttaching, setIsAttaching] = useState(false)
@@ -117,7 +119,12 @@ export default function TransactionAttachDocumentDialog({
         onOpenChange(o)
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent
+        ref={dropSurfaceRef}
+        className="sm:max-w-lg"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>{t('description')}</DialogDescription>
@@ -179,6 +186,7 @@ export default function TransactionAttachDocumentDialog({
             maxFiles={1}
             compact
             disabled={isAttaching}
+            dropSurfaceRef={dropSurfaceRef}
           />
           {pickedDoc && (
             <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">

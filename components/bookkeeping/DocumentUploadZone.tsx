@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -24,6 +25,14 @@ interface DocumentUploadZoneProps {
   maxFiles?: number
   disabled?: boolean
   compact?: boolean
+  /**
+   * An ancestor (typically the dialog content) that takes a dropped file as
+   * if it landed in the dashed box. While a file is dragged over it, the
+   * whole surface is outlined and a drop anywhere on it uploads, so nobody
+   * has to hit the small box (or, missing it, have the browser open the
+   * file in the tab).
+   */
+  dropSurfaceRef?: React.RefObject<HTMLElement | null>
 }
 
 let uploadCounter = 0
@@ -95,6 +104,10 @@ function extractErrorMessage(err: unknown, locale: string): string | null {
   return null
 }
 
+function hasFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes('Files')
+}
+
 export default function DocumentUploadZone({
   files,
   onFilesChange,
@@ -102,11 +115,17 @@ export default function DocumentUploadZone({
   maxFiles = 5,
   disabled = false,
   compact = false,
+  dropSurfaceRef,
 }: DocumentUploadZoneProps) {
   const t = useTranslations('document_upload')
   const locale = useLocale()
   const [isDragging, setIsDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const zoneRef = useRef<HTMLDivElement>(null)
+  // The surface's outline is a fixed overlay over the surface's box (the
+  // surface scrolls, an absolute child would scroll with it). Null while no
+  // file is over the surface.
+  const [surfaceRect, setSurfaceRect] = useState<DOMRect | null>(null)
 
   const uploadFile = useCallback(async (file: UploadedFile): Promise<UploadedFile> => {
     const formData = new FormData()
@@ -240,12 +259,92 @@ export default function DocumentUploadZone({
     onFilesChange(files.filter((_, i) => i !== index))
   }, [files, onFilesChange])
 
+  // Whole-surface drop. Native listeners on the surface element: a
+  // dragenter/dragleave pair fires for every child crossed, so a depth
+  // counter tells "left the surface" from "moved between its children". A
+  // drop inside the dashed box is the box's own (React) handler's: skipped
+  // here so one drop never uploads twice.
+  useEffect(() => {
+    const surface = dropSurfaceRef?.current
+    if (!surface || disabled) return
+    let depth = 0
+    const reset = () => {
+      depth = 0
+      setSurfaceRect(null)
+    }
+    const onDragEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return
+      depth += 1
+      if (depth === 1) setSurfaceRect(surface.getBoundingClientRect())
+    }
+    const onDragOver = (e: DragEvent) => {
+      if (!hasFiles(e)) return
+      // Without this the browser refuses the drop (and would open the file).
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+      // The drag may already be over the surface when these listeners
+      // attach (a dialog that mounts this zone on its first dragenter):
+      // then the enter was never seen, and the first over stands in for it.
+      if (depth === 0) {
+        depth = 1
+        setSurfaceRect(surface.getBoundingClientRect())
+      }
+    }
+    const onDragLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) setSurfaceRect(null)
+    }
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return
+      e.preventDefault()
+      reset()
+      if (zoneRef.current && e.target instanceof Node && zoneRef.current.contains(e.target)) return
+      handleFiles(Array.from(e.dataTransfer?.files ?? []))
+    }
+    surface.addEventListener('dragenter', onDragEnter)
+    surface.addEventListener('dragover', onDragOver)
+    surface.addEventListener('dragleave', onDragLeave)
+    surface.addEventListener('drop', onDrop)
+    // A drag that ends anywhere else (dropped on the desktop, escaped) never
+    // sends the surface a dragleave: clear the outline on the global end.
+    window.addEventListener('dragend', reset)
+    window.addEventListener('drop', reset)
+    return () => {
+      surface.removeEventListener('dragenter', onDragEnter)
+      surface.removeEventListener('dragover', onDragOver)
+      surface.removeEventListener('dragleave', onDragLeave)
+      surface.removeEventListener('drop', onDrop)
+      window.removeEventListener('dragend', reset)
+      window.removeEventListener('drop', reset)
+    }
+  }, [dropSurfaceRef, disabled, handleFiles])
+
   const isUploading = files.some((f) => f.status === 'uploading')
 
   return (
     <div className="min-w-0 space-y-2">
+      {/* Surface outline: sits above the dialog (z-50) and a docked agent
+          sheet (z-60), lets every event through to the surface beneath. */}
+      {surfaceRect &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            aria-hidden="true"
+            className="pointer-events-none fixed z-[70] flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-background/85"
+            style={{ top: surfaceRect.top, left: surfaceRect.left, width: surfaceRect.width, height: surfaceRect.height }}
+          >
+            <div className="flex flex-col items-center gap-2 text-center">
+              <Upload className="h-8 w-8 text-primary" />
+              <p className="text-sm font-medium text-foreground">{t('drop_surface_prompt')}</p>
+              <p className="text-xs text-muted-foreground">{t('format_hint')}</p>
+            </div>
+          </div>,
+          document.body,
+        )}
       {/* Drop zone */}
       <div
+        ref={zoneRef}
         className={`
           relative border-2 border-dashed rounded-lg text-center transition-colors
           ${compact ? 'p-3' : 'p-6'}

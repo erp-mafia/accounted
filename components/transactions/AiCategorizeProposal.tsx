@@ -58,10 +58,38 @@ interface Props {
   initial?: AssistantRead | null
 }
 
-function pickFrom(read: AssistantRead): AssistantPick | null {
+/** The pick a read carries, complete enough to open a review on; null when the assistant found nothing. */
+export function pickFromRead(read: AssistantRead): AssistantPick | null {
   if (!read.account) return null
   const label = read.candidates.find((c) => c.account === read.account)?.label ?? getAccountName(read.account)
   return { account: read.account, vat: read.vat_treatment ?? 'none', category: read.category, label }
+}
+
+/** Where the read came from, for the calibration sample logged on book. */
+export function proposalMetaFromRead(read: AssistantRead, pick: AssistantPick): AiProposalMeta {
+  const source = read.from_candidate
+    ? (read.candidates.find((c) => c.account === read.account)?.source ?? 'candidate')
+    : 'category'
+  return {
+    account: pick.account,
+    confidence: read.confidence,
+    agreement: read.agreement,
+    modelConfidence: read.model_confidence,
+    source,
+  }
+}
+
+const LINE_CLASS = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground'
+
+/** The assistant's one-line "working" status (avatar + text), pulsing. Shared with the review dialog's own document read. */
+export function AiStatusLine({ text }: { text: string }) {
+  const { identity } = useAgentSheet()
+  return (
+    <p className={cn(LINE_CLASS, 'animate-pulse')}>
+      <AgentAvatar avatarId={identity.avatarId} size="xs" className="h-4 w-4 flex-none" alt="" />
+      {text}
+    </p>
+  )
 }
 
 export default function AiCategorizeProposal({
@@ -110,20 +138,11 @@ export default function AiCategorizeProposal({
   useEffect(() => {
     if (state.status !== 'ready') return
     const read = state.read
-    const pick = pickFrom(read)
+    const pick = pickFromRead(read)
     if (!pick) return
     if (!reportedRef.current) {
       reportedRef.current = true
-      const source = read.from_candidate
-        ? (read.candidates.find((c) => c.account === read.account)?.source ?? 'candidate')
-        : 'category'
-      onProposal?.({
-        account: pick.account,
-        confidence: read.confidence,
-        agreement: read.agreement,
-        modelConfidence: read.model_confidence,
-        source,
-      })
+      onProposal?.(proposalMetaFromRead(read, pick))
     }
     // Only a pick with something behind it (a candidate, or a confident model
     // read) fills the dialog on its own; a low guess waits for the person.
@@ -132,21 +151,16 @@ export default function AiCategorizeProposal({
     onTake(pick, { auto: true })
   }, [state, autoApply, onTake, onProposal])
 
-  const line = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground'
+  const line = LINE_CLASS
   const mark = <AgentAvatar avatarId={identity.avatarId} size="xs" className="h-4 w-4 flex-none" alt="" />
 
   if (state.status === 'silent') return null
   if (state.status === 'loading') {
-    return (
-      <p className={cn(line, 'animate-pulse')}>
-        {mark}
-        {hasUnderlag ? t('ai_reading') : t('ai_looking')}
-      </p>
-    )
+    return <AiStatusLine text={hasUnderlag ? t('ai_reading') : t('ai_looking')} />
   }
 
   const read = state.read
-  const pick = pickFrom(read)
+  const pick = pickFromRead(read)
   const why = read.reasoning ? (expanded ? read.reasoning : firstSentence(read.reasoning)) : ''
   const hasMore = !!read.reasoning && why !== read.reasoning.trim()
   const more = hasMore ? (

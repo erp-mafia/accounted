@@ -5521,6 +5521,7 @@
     "network_error": "Uppladdningen misslyckades: nätverksfel",
     "unsupported_type": "Filtypen stöds inte",
     "too_large": "Filen är för stor (max 10 MB)",
+    "drop_surface_prompt": "Släpp filen här för att bifoga underlaget",
     "compact_prompt": "Dra och släpp eller klicka",
     "prompt": "Dra och släpp filer här",
     "format_hint": "PDF eller bild (max 10 MB)",

@@ -334,6 +334,11 @@ describe('stripBankNoise', () => {
   it('is a no-op when no noise phrases are present', () => {
     expect(stripBankNoise('lokalhyra mars 2026')).toBe('lokalhyra mars 2026')
   })
+
+  it('strips Handelsbanken\'s truncated "internet bet" so it never reads as an internet subscription', () => {
+    expect(stripBankNoise('internet bet 1')).toBe('1')
+    expect(stripBankNoise('internet bet 1 if skadeförsäkring')).toBe('1 if skadeförsäkring')
+  })
 })
 
 // ============================================================

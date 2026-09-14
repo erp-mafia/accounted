@@ -5521,6 +5521,7 @@
     "network_error": "Upload failed: network error",
     "unsupported_type": "This file type is not supported",
     "too_large": "The file is too large (max 10 MB)",
+    "drop_surface_prompt": "Drop the file here to attach it as underlag",
     "compact_prompt": "Drag and drop or click",
     "prompt": "Drag and drop files here",
     "format_hint": "PDF or image (max 10 MB)",
