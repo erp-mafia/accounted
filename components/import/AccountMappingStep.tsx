@@ -346,10 +346,17 @@ export default function AccountMappingStep({
               />
             </div>
           )}
-          {/* The import's own notice system, not a second one beside it: one
-              ochre sentence, the rest behind "Visa N anmärkningar", the
-              statistics in the info tooltip. Renders nothing when the file had
-              nothing to say, so it costs no space in the common case. */}
+          {/* The other half of what the file did, on screen next to the first
+              half. Not a notice: notices are problems with the file, and
+              ImportNotices folds all but one away. */}
+          {sourceChart && sourceChart.summary.codesWithoutTreatment > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {t('source_chart_untranslated', { count: sourceChart.summary.codesWithoutTreatment })}
+            </p>
+          )}
+          {/* The import's own notice system for what went wrong with the file,
+              not a second one beside it. Renders nothing when there was
+              nothing wrong, so it costs no space in the common case. */}
           {sourceChart && <ImportNotices notices={sourceChart.notices} />}
 
           {/* Search and filter */}

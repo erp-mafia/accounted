@@ -188,25 +188,19 @@ export function applySourceChartCsv(
   const codesApplied = touched.filter((m) => m.providerVatCode).length
   const treatmentsApplied = touched.filter((m) => m.providerVatTreatment).length
 
-  const codesWithoutTreatment = codesApplied - treatmentsApplied
-
+  // Deliberately NOT a notice. Notices are what went wrong with the FILE, and
+  // ImportNotices folds everything but the first away, which is right for a
+  // twenty-notice SIE import and wrong for this: the count is half of the
+  // answer to "what did my file do", and the other half is the summary line
+  // beside it. Two sentences of one thought, both on screen.
   return {
     mappings: applied,
-    // 'notice', not 'info'. The tiers in lib/import/notices.ts split on what
-    // happened, not on how much the user must do about it: info is for work
-    // that succeeded (accounts renamed, IB derived, duplicates skipped) and
-    // notice is for work that partly did not (rows skipped, dimension codes
-    // dropped). A code the translator could not read belongs in the second
-    // group. It also keeps the line reachable: the fold toggle is a real
-    // button, while the info tier hangs off a hover-only span.
-    notices: codesWithoutTreatment > 0
-      ? [...notices, makeNotice('source_chart_untranslated', 'notice', { count: codesWithoutTreatment })]
-      : notices,
+    notices,
     summary: {
       ...summaryBase,
       codesApplied,
       treatmentsApplied,
-      codesWithoutTreatment,
+      codesWithoutTreatment: codesApplied - treatmentsApplied,
     },
   }
 }

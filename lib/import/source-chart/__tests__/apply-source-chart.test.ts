@@ -240,21 +240,17 @@ describe('applySourceChartCsv', () => {
     expect(mappings[0].providerVatCode).toBeUndefined()
   })
 
-  it('files an unreadable code as a notice, not as info', () => {
-    // The tiers split on what happened, not on how much is left to do: info is
-    // for work that succeeded, notice for work that partly did not. It also
-    // decides reachability, since the fold toggle is a button and the info tier
-    // hangs off a hover-only span.
+  it('counts an unreadable code in the summary, not in the notices', () => {
+    // The step renders this count as a plain line beside "N konton fick
+    // momskod": two sentences of one answer. A notice would fold it away,
+    // because ImportNotices shows one and hides the rest, which is right for a
+    // file that went wrong and wrong for a file that worked.
     const { summary, notices } = applySourceChartCsv(
       [mapping('3401', 'Egna uttag av varor')],
       csv('True;3401;Egna uttag av varor;06-25%'),
     )
     expect(summary.codesWithoutTreatment).toBe(1)
-    expect(notices).toContainEqual({
-      code: 'source_chart_untranslated',
-      severity: 'notice',
-      params: { count: 1 },
-    })
+    expect(notices).toEqual([])
   })
 
   it('does not touch a remapped row, only identity mappings', () => {
