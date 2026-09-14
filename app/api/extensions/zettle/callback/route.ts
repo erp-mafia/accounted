@@ -15,6 +15,7 @@ import {
   exchangeCodeForTokens,
   fetchUserSelf,
 } from '@/extensions/general/zettle/lib/oauth'
+import { ZETTLE_DEFAULT_ORGANIZATION_NAME } from '@/extensions/general/zettle/lib/organization-name'
 
 // This route emits zettle.connected (audit trail). ensureInitialized() must
 // run at module load so the event_log handler has subscribed before the first
@@ -151,7 +152,8 @@ export async function GET(request: Request) {
       .from('zettle_connections')
       .update({
         organization_uuid: userSelf.organizationUuid,
-        organization_name: null,
+        // users/self has no display name; default until the merchant renames.
+        organization_name: ZETTLE_DEFAULT_ORGANIZATION_NAME,
         refresh_token_encrypted: encryptCredential(tokens.refresh_token),
         status: 'active',
         connected_at: new Date().toISOString(),

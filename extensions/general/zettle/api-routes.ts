@@ -11,11 +11,13 @@ import { isZettleConfigured } from './lib/credentials'
 import { buildAuthorizeUrl, disconnectApplication, refreshAccessToken } from './lib/oauth'
 import { refreshTokenOf } from './lib/credentials'
 import { syncZettlePurchases } from './lib/order-sync'
+import { parseZettleOrganizationName } from './lib/organization-name'
 import type { ZettleConnection, ZettleStatusResponse } from './types'
 
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
+const RATE_LIMIT_RENAME = { maxRequests: 20, windowMs: 60_000 }
 
 const NOT_CONFIGURED_MESSAGE =
   'Zettle-integrationen är inte konfigurerad på den här installationen.'
@@ -262,6 +264,76 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
         return NextResponse.json({ error: 'Inget anslutet Zettle-konto.' }, { status: 404 })
       }
       return NextResponse.json({ success: true, enabled: body.enabled })
+    },
+  },
+  {
+    method: 'POST',
+    path: '/organization-name',
+    handler: async (request: Request, ctx?: ExtensionContext) => {
+      const auth = await requireUserAndCompany(ctx)
+      if (auth instanceof NextResponse) return auth
+
+      const capabilityBlocked = await requireCapability(
+        auth.supabase,
+        auth.companyId,
+        CAPABILITY.zettle_sync,
+      )
+      if (capabilityBlocked) return capabilityBlocked
+
+      const rl = await checkRateLimit({
+        prefix: 'zettle:organization-name',
+        identifier: auth.userId,
+        ...RATE_LIMIT_RENAME,
+      })
+      if (!rl.ok) return rl.response!
+
+      const body = (await request.json().catch(() => ({}))) as {
+        organization_name?: unknown
+      }
+      const parsed = parseZettleOrganizationName(body.organization_name)
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 })
+      }
+
+      const { data: updated, error: updateError } = await auth.supabase
+        .from('zettle_connections')
+        .update({ organization_name: parsed.name })
+        .eq('company_id', auth.companyId)
+        .eq('status', 'active')
+        .select('id')
+
+      if (updateError) {
+        return NextResponse.json(
+          { error: 'Kunde inte spara butiksnamnet. Försök igen.' },
+          { status: 500 },
+        )
+      }
+      if (!updated || updated.length === 0) {
+        return NextResponse.json({ error: 'Inget anslutet Zettle-konto.' }, { status: 404 })
+      }
+
+      // Orders.Butik shows store_label || store_scope; keep existing rows in
+      // sync so a rename does not leave the UUID visible until the next feed.
+      const connectionIds = updated.map((row) => row.id)
+      const { error: backfillError } = await auth.supabase
+        .from('webshop_orders')
+        .update({ store_label: parsed.name })
+        .eq('company_id', auth.companyId)
+        .eq('platform', 'zettle')
+        .in('connection_id', connectionIds)
+
+      if (backfillError) {
+        return NextResponse.json(
+          {
+            success: true,
+            organization_name: parsed.name,
+            warning: 'Namnet sparades, men befintliga ordrar kunde inte uppdateras.',
+          },
+          { status: 200 },
+        )
+      }
+
+      return NextResponse.json({ success: true, organization_name: parsed.name })
     },
   },
   {
