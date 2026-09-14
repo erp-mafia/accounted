@@ -32,6 +32,8 @@ import {
 } from 'lucide-react'
 import type { AccountMapping } from '@/lib/import/types'
 import { isValidBASRange } from '@/lib/import/account-mapper'
+import type { SourceChartSummary } from '@/lib/import/source-chart/apply-source-chart'
+import { AttnLine } from '@/components/ui/attn-line'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
@@ -58,6 +60,14 @@ interface AccountMappingStepProps {
   ) => void
   /** Accept the suggested VAT treatment for every unreviewed row at once. */
   onConfirmAllVatTreatments: () => void
+  /**
+   * Hand the picked chart export up as text. The parent owns `mappings`, so it
+   * owns applying the file too; this step only collects it, the same division
+   * the bulk confirm already uses.
+   */
+  onSourceChartSelected?: (csvText: string) => void
+  /** What the last accepted file did, for the line above the table. */
+  sourceChart?: { summary: SourceChartSummary; warnings: string[] } | null
   onContinue: () => void
   onBack: () => void
 }
@@ -72,6 +82,8 @@ export default function AccountMappingStep({
   onMappingChange,
   onVatTreatmentChange,
   onConfirmAllVatTreatments,
+  onSourceChartSelected,
+  sourceChart,
   onContinue,
   onBack,
 }: AccountMappingStepProps) {
@@ -255,6 +267,46 @@ export default function AccountMappingStep({
               {t('unmapped_out_of_range_help', { accounts: unmappedAccounts.join(', ') })}
             </p>
           )}
+
+          {/* The source system's own momskoder, if the user has them.
+              A quiet line rather than a drop zone: this step is already dense,
+              and convention 6 puts attention in one sentence, not a banner.
+              Optional throughout, the step works exactly as before without it. */}
+          {onSourceChartSelected && (
+            <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+              <span>
+                {sourceChart
+                  ? t('source_chart_applied', { count: sourceChart.summary.treatmentsApplied })
+                  : t('source_chart_prompt')}
+              </span>
+              <label>
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    // Reset first: picking the same file twice must fire again,
+                    // which it does not if the value is left in place.
+                    event.target.value = ''
+                    if (file) void file.text().then(onSourceChartSelected)
+                  }}
+                />
+                <Button variant="outline" size="sm" className="h-8" asChild>
+                  <span>
+                    {sourceChart ? t('source_chart_replace') : t('source_chart_action')}
+                  </span>
+                </Button>
+              </label>
+              <InfoTooltip content={t('source_chart_help')} />
+            </div>
+          )}
+          {sourceChart && sourceChart.summary.codesWithoutTreatment > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {t('source_chart_untranslated', { count: sourceChart.summary.codesWithoutTreatment })}
+            </p>
+          )}
+          {sourceChart?.warnings[0] && <AttnLine>{sourceChart.warnings[0]}</AttnLine>}
 
           {/* Search and filter */}
           <div className="flex gap-4">

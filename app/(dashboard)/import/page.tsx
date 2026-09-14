@@ -76,6 +76,10 @@ import {
   enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
 } from '@/lib/import/account-vat-treatment'
+import {
+  applySourceChartCsv,
+  type SourceChartSummary,
+} from '@/lib/import/source-chart/apply-source-chart'
 import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
 import type { TheaterModel } from '@/lib/import/theater-model'
 
@@ -906,6 +910,21 @@ function SIEImportWizard({
     setMappings((prev) => applyVatTreatmentReviewAll(prev))
   }, [])
 
+  // The source system's chart export, when the user has one. SIE4 carries no
+  // momskoder, so without it the mapping step can only guess from the account
+  // label. Enrichment, never a precondition: a file that cannot be read leaves
+  // the mappings untouched and reports why.
+  const [sourceChart, setSourceChart] =
+    useState<{ summary: SourceChartSummary; warnings: string[] } | null>(null)
+
+  // Computed outside the setMappings updater on purpose: an updater must stay
+  // pure, and React runs it twice in StrictMode.
+  const handleSourceChartSelected = useCallback((csvText: string) => {
+    const result = applySourceChartCsv(mappings, csvText)
+    setMappings(result.mappings)
+    setSourceChart({ summary: result.summary, warnings: result.warnings })
+  }, [mappings])
+
   const confirmVatReview = useCallback(() => {
     if (mappings.some((mapping) =>
       mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
@@ -1077,6 +1096,7 @@ function SIEImportWizard({
         <AccountMappingStep mappings={mappings} basAccounts={basAccounts}
           onMappingChange={handleMappingChange} onVatTreatmentChange={handleVatTreatmentChange}
           onConfirmAllVatTreatments={handleConfirmAllVatTreatments}
+          onSourceChartSelected={handleSourceChartSelected} sourceChart={sourceChart}
           onContinue={confirmVatReview} onBack={goBack} />
       )}
       {duplicateImportId && <label className="flex items-center gap-3 text-sm">
