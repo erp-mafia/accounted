@@ -49,15 +49,27 @@ describe('applySourceChartCsv', () => {
   })
 
   it('keeps an untranslatable code visible instead of dropping it', () => {
-    // Ruta 38, trepartsförsäljning: a real code with no treatment here. The
-    // row must keep the code and stay up for review.
+    // Ruta 50, beskattningsunderlag vid import: a real code with no treatment
+    // here. The row must keep the code and stay up for review.
     const { mappings, summary } = applySourceChartCsv(
+      [mapping('4545', 'Import av varor, 25 % moms')],
+      csv('True;4545;Import av varor, 25 % moms;50-25%'),
+    )
+    expect(mappings[0].providerVatCode).toBe('50-25%')
+    expect(mappings[0].providerVatTreatment).toBeNull()
+    expect(summary).toMatchObject({ codesApplied: 1, treatmentsApplied: 0, codesWithoutTreatment: 1 })
+  })
+
+  it('translates trepartshandel now that there is a treatment for it', () => {
+    // Ruta 38 used to land in the untranslatable set and the row fell through
+    // to the label, which reads EU and varor and answered EU-varor: ruta 35,
+    // a different transaction with a different reporting duty.
+    const { mappings } = applySourceChartCsv(
       [mapping('3057', 'Treparts försäljn varor till EG 25%')],
       csv('True;3057;Treparts försäljn varor till EG 25%;38-0%'),
     )
-    expect(mappings[0].providerVatCode).toBe('38-0%')
-    expect(mappings[0].providerVatTreatment).toBeNull()
-    expect(summary).toMatchObject({ codesApplied: 1, treatmentsApplied: 0, codesWithoutTreatment: 1 })
+    expect(mappings[0].providerVatTreatment).toBe('triangulation_eu_goods')
+    expect(mappings[0].defaultVatTreatment).toBe('triangulation_eu_goods')
   })
 
   it('lets the label fill an untranslated row, and leaves it distinguishable', () => {
@@ -65,17 +77,20 @@ describe('applySourceChartCsv', () => {
     // filling the row, so the user is not left with an empty select. But the
     // pair (code present, provider treatment null) has to survive, because it
     // is the only thing that tells the step this suggestion came from the
-    // account name and not from the code beside it. Ruta 38 is
-    // trepartshandel; the label lands on EU-varor, which is ruta 35, and
-    // printing the code alone would read as confirmation of a box the source
-    // system did not name.
+    // account name and not from the code beside it.
+    //
+    // Constructed rather than observed: since ruta 38 became translatable,
+    // every code this project cannot read (06 uttag, 50 import) sits on a
+    // label the suggester also declines, so no export in hand produces the
+    // combination. The contract still has to hold the next time a ruta is
+    // added or removed, which is what this pins. Export label, import code.
     const { mappings } = applySourceChartCsv(
-      [mapping('3057', 'Treparts försäljn varor till EG 25%')],
-      csv('True;3057;Treparts försäljn varor till EG 25%;38-0%'),
+      [mapping('3055', 'Försäljn varor utanför EG momsfri')],
+      csv('True;3055;Försäljn varor utanför EG momsfri;06-25%'),
     )
     const [enriched] = enrichAccountMappingsWithVat(mappings, [])
-    expect(enriched.defaultVatTreatment).toBe('reverse_charge_eu_goods')
-    expect(enriched.providerVatCode).toBe('38-0%')
+    expect(enriched.defaultVatTreatment).toBe('export_goods')
+    expect(enriched.providerVatCode).toBe('06-25%')
     expect(enriched.providerVatTreatment).toBeNull()
   })
 

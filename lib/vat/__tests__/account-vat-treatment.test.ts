@@ -41,6 +41,33 @@ describe('resolveVatTreatmentRuta', () => {
   })
 })
 
+describe('trepartshandel', () => {
+  it('files the middleman on both sides of the trade', () => {
+    expect(resolveVatTreatmentRuta('triangulation_eu_goods', 3)).toEqual({ box: 'ruta38', side: 'credit' })
+    expect(resolveVatTreatmentRuta('triangulation_eu_goods', 4)).toEqual({ box: 'ruta37', side: 'debit' })
+  })
+
+  it('carries no rate on either side, purchases included', () => {
+    // The purchase side is the one that can go wrong: the fall-through for
+    // reverse charge answers 0.25 on classes 4 to 6, and a middleman does not
+    // self-assess acquisition VAT at all. The scheme exists precisely so the
+    // tax is accounted for by the final buyer in the destination country.
+    expect(defaultRateForVatTreatment('triangulation_eu_goods', 3)).toBe(0)
+    expect(defaultRateForVatTreatment('triangulation_eu_goods', 4)).toBe(0)
+    expect(defaultRateForVatTreatment('triangulation_eu_goods', 5)).toBe(0)
+  })
+
+  it('reads a Treparts label without taking the rate the name states', () => {
+    // "Treparts försäljn varor till EG 25%" names 25 %, and the purchase-side
+    // twin in the same chart names none. The percentage is a goods category in
+    // that naming scheme, not a sats, and the trade carries neither.
+    expect(suggestVatTreatment('3057', 'Treparts försäljn varor till EG 25%'))
+      .toEqual({ treatment: 'triangulation_eu_goods', rate: 0 })
+    expect(suggestVatTreatment('4055', 'Trepartsförv varor fr EG'))
+      .toEqual({ treatment: 'triangulation_eu_goods', rate: 0 })
+  })
+})
+
 describe('suggestVatTreatment', () => {
   it('suggests the issue examples from labels, not SIE metadata', () => {
     expect(suggestVatTreatment('3041', 'Försäljning tjänst 25% sv')).toEqual({

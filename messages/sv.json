@@ -5865,6 +5865,7 @@
     "vat_treatment_exempt": "Momsfri försäljning (ruta 42)",
     "vat_treatment_reverse_charge_domestic": "Omvänd skattskyldighet Sverige",
     "vat_treatment_reverse_charge_eu_goods": "EU-varor",
+    "vat_treatment_triangulation_eu_goods": "Trepartshandel, mellanman (ruta 37/38)",
     "vat_treatment_reverse_charge_eu_services": "EU-tjänster",
     "vat_treatment_reverse_charge_non_eu_services": "Inköp av tjänster utanför EU",
     "vat_treatment_export_goods": "Export av varor utanför EU",

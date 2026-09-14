@@ -101,6 +101,7 @@ export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side
   '3403': { box: 'ruta06', side: 'credit' },
   // Revenue: EU goods/services → ruta 35/39
   '3108': { box: 'ruta35', side: 'credit' },  // Varuförsäljning till EU
+  '3107': { box: 'ruta38', side: 'credit' },  // Mellanmans försäljning, trepartshandel
   '3308': { box: 'ruta39', side: 'credit' },  // Tjänsteförsäljning till EU
   // Revenue: export/other → ruta 36/40/42
   '3105': { box: 'ruta36', side: 'credit' },  // Varuförsäljning export
@@ -117,6 +118,7 @@ export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side
   '3232': { box: 'ruta41', side: 'credit' },  // Omvänd betalningsskyldighet, övriga (skrot m.m.)
   '3233': { box: 'ruta41', side: 'credit' },  // Omvänd betalningsskyldighet, övriga
   // Reverse-charge purchase bases (debit on cost accounts) → ruta 20-24, 50
+  '4512': { box: 'ruta37', side: 'debit' },   // Mellanmans inköp, trepartshandel
   '4515': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 25%
   '4516': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 12%
   '4517': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 6%

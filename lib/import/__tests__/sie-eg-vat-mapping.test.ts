@@ -72,7 +72,9 @@ describe('SIE import: EG-labelled accounts (EU-BAS 97)', () => {
     ['3046', 'reverse_charge_eu_services', 0, 'ruta39'],
     ['3048', 'reverse_charge_eu_services', 0, 'ruta39'],
     ['3055', 'export_goods', 0, 'ruta36'],
-    ['3057', 'reverse_charge_eu_goods', 0, 'ruta35'],
+    // Was reverse_charge_eu_goods until triangulation_eu_goods existed: the
+    // label says "Treparts", and a middleman's onward sale is ruta 38, not 35.
+    ['3057', 'triangulation_eu_goods', 0, 'ruta38'],
     ['3058', 'reverse_charge_eu_goods', 0, 'ruta35'],
     ['4056', 'reverse_charge_eu_goods', 0.25, 'ruta20'],
     ['4057', 'reverse_charge_eu_goods', 0.12, 'ruta20'],

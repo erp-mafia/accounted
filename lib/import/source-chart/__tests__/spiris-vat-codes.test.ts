@@ -48,15 +48,17 @@ describe('spirisVatTreatment', () => {
     ['22-25%', '4531', 'reverse_charge_non_eu_services'],
     ['23-25%', '4415', 'reverse_charge_domestic'],
     ['24-25%', '4425', 'reverse_charge_domestic'],
+    ['38-0%', '3107', 'triangulation_eu_goods'],
+    ['37-0%', '4512', 'triangulation_eu_goods'],
   ])('translates %s on %s', (code, account, expected) => {
     expect(spirisVatTreatment(code, account)).toBe(expected)
   })
 
   it.each([
     ['06-25%', '3401', 'momspliktiga egna uttag'],
-    ['37-0%', '4055', 'trepartsförvärv'],
-    ['38-0%', '3057', 'trepartsförsäljning'],
+    ['06-12%', '3402', 'momspliktiga egna uttag'],
     ['50-25%', '4545', 'beskattningsunderlag vid import'],
+    ['50-6%', '4547', 'beskattningsunderlag vid import'],
   ])('answers null for %s, which is %s', (code, account) => {
     // Real codes this project has no treatment for. Null is not a failure:
     // applySourceVatCodes keeps the code on the mapping and leaves the row in

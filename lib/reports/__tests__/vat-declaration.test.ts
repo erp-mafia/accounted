@@ -154,6 +154,43 @@ describe('rutorFromTotals: explicit account VAT treatments', () => {
   })
 })
 
+describe('rutorFromTotals: ruta 37/38 (trepartshandel)', () => {
+  it('projects the standard BAS accounts into both sides of the trade', () => {
+    // Both boxes existed in the declaration type, the eSKD field map and the
+    // periodisk sammanställning reconciliation, but nothing ever put a value
+    // in them: no treatment resolved to 37 or 38 and neither BAS account was
+    // mapped, so every declaration filed trepartshandel as zero.
+    const totals = new Map([
+      ['3107', { debit: 0, credit: 250_000 }],
+      ['4512', { debit: 250_000, credit: 0 }],
+    ])
+    const rutor = rutorFromTotals(totals)
+    expect(rutor.ruta38).toBe(250_000)
+    expect(rutor.ruta37).toBe(250_000)
+  })
+
+  it('carries no output or input VAT, which is the point of the scheme', () => {
+    const totals = new Map([['3107', { debit: 0, credit: 250_000 }]])
+    const rutor = rutorFromTotals(totals)
+    expect(rutor.ruta10).toBe(0)
+    expect(rutor.ruta30).toBe(0)
+    expect(rutor.ruta48).toBe(0)
+    // And it must not leak into ordinary intra-EU supply, which is a
+    // different transaction with a different reporting duty.
+    expect(rutor.ruta35).toBe(0)
+  })
+
+  it('takes a custom account through the treatment, not just the BAS number', () => {
+    // An EU-BAS 97 chart calls it 3057, so the static map alone is not enough.
+    const totals = new Map([['3057', { debit: 0, credit: 90_000 }]])
+    const rutor = rutorFromTotals(totals, {
+      mappingByAccount: new Map([['3057', { box: 'ruta38', side: 'credit' }]]),
+      explicitAccounts: new Set(['3057']),
+    })
+    expect(rutor.ruta38).toBe(90_000)
+  })
+})
+
 describe('rutorFromTotals: ruta 41 (omvänd skattskyldighet, sales side)', () => {
   it('projects 3231/3232/3233 credit balances into ruta 41', () => {
     const totals = new Map([

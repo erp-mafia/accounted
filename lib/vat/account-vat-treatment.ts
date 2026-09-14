@@ -5,7 +5,7 @@ export const ACCOUNT_VAT_TREATMENTS = [
   'reverse_charge_domestic', 'reverse_charge_eu_goods',
   'reverse_charge_eu_services', 'reverse_charge_non_eu_services',
   'export_goods', 'export_services', 'vmb', 'rental_voluntary',
-  'oss',
+  'oss', 'triangulation_eu_goods',
 ] as const
 
 export type AccountVatTreatment = typeof ACCOUNT_VAT_TREATMENTS[number]
@@ -29,6 +29,7 @@ const REVENUE_RUTA: Partial<Record<AccountVatTreatment, keyof VatDeclarationRuto
   standard_25: 'ruta05', reduced_12: 'ruta05', reduced_6: 'ruta05',
   exempt: 'ruta42', reverse_charge_domestic: 'ruta41',
   reverse_charge_eu_goods: 'ruta35', reverse_charge_eu_services: 'ruta39',
+  triangulation_eu_goods: 'ruta38',
   export_goods: 'ruta36', export_services: 'ruta40', vmb: 'ruta07',
   rental_voluntary: 'ruta08',
   oss: null,
@@ -44,6 +45,11 @@ export function resolveVatTreatmentRuta(
     return box ? { box, side: 'credit' } : null
   }
   if (accountClass < 4 || accountClass > 6) return null
+  // Trepartshandel: the middleman declares the purchase in ruta 37 and the
+  // onward sale in ruta 38, with no output or input VAT on either. One
+  // treatment rather than two, resolved by account class, exactly as
+  // reverse_charge_eu_goods already is.
+  if (treatment === 'triangulation_eu_goods') return { box: 'ruta37', side: 'debit' }
   if (treatment === 'reverse_charge_eu_goods') return { box: 'ruta20', side: 'debit' }
   if (treatment === 'reverse_charge_eu_services') return { box: 'ruta21', side: 'debit' }
   if (treatment === 'reverse_charge_non_eu_services') return { box: 'ruta22', side: 'debit' }
@@ -82,6 +88,15 @@ export function defaultRateForVatTreatment(
   if (treatment === 'vmb' || treatment === 'oss') return null
   if (treatment === 'rental_voluntary') return 0.25
   if (treatment === 'export_goods' || treatment === 'export_services') return 0
+  // Trepartshandel is zero on BOTH sides, so it cannot take the reverse-charge
+  // fall-through below. The middleman does not self-assess acquisition VAT at
+  // all: that is the simplification the scheme exists for, and the tax is
+  // accounted for by the final buyer in the destination country. Without this
+  // line a purchase account would default to 25 % and invent a rate the trade
+  // does not have.
+  if (treatment === 'triangulation_eu_goods') return 0
+  // Reverse charge on a class 4 to 6 account carries a real acquisition rate,
+  // which drives the rc-basis check.
   return accountClass >= 4 && accountClass <= 6 ? 0.25 : 0
 }
 
@@ -147,6 +162,11 @@ export function suggestVatTreatment(
     if (/omvänd/.test(name)) return { treatment: 'reverse_charge_domestic', rate: 0 }
     if ((/export/.test(name) || OUTSIDE_UNION.test(name)) && /var/.test(name)) return { treatment: 'export_goods', rate: 0 }
     if ((/export/.test(name) || OUTSIDE_UNION.test(name)) && /tjänst|tjanst/.test(name)) return { treatment: 'export_services', rate: 0 }
+    // Before the plain EU-goods rule, which would otherwise swallow it: a
+    // trepartshandel label names EU and varor too, but files ruta 38, not 35.
+    if (/trepart/.test(name) && /var/.test(name)) {
+      return { treatment: 'triangulation_eu_goods', rate: 0 }
+    }
     if (UNION.test(name) && /var/.test(name)) {
       // BAS 3106 "Försäljning varor till annat EU-land, momspliktig" carries
       // Swedish moms below the OSS threshold and destination-country moms
@@ -171,6 +191,7 @@ export function suggestVatTreatment(
   if (OUTSIDE_UNION.test(name) && /tjänst|tjanst/.test(name)) {
     return { treatment: 'reverse_charge_non_eu_services', rate }
   }
+  if (/trepart/.test(name) && /var/.test(name)) return { treatment: 'triangulation_eu_goods', rate: 0 }
   if (UNION.test(name) && /var/.test(name)) return { treatment: 'reverse_charge_eu_goods', rate }
   if (UNION.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate }
   return null

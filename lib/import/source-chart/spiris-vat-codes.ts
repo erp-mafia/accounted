@@ -36,6 +36,7 @@ const REVENUE_TREATMENT: Record<string, AccountVatTreatment> = {
   '07': 'vmb',
   '08': 'rental_voluntary',
   '35': 'reverse_charge_eu_goods',
+  '38': 'triangulation_eu_goods',
   '36': 'export_goods',
   '39': 'reverse_charge_eu_services',
   '40': 'export_services',
@@ -48,6 +49,7 @@ const COST_TREATMENT: Record<string, AccountVatTreatment> = {
   '20': 'reverse_charge_eu_goods',
   '21': 'reverse_charge_eu_services',
   '22': 'reverse_charge_non_eu_services',
+  '37': 'triangulation_eu_goods',
   // Both are omvänd skattskyldighet inom Sverige. Which ruta gets filed is
   // decided downstream by resolveVatTreatmentRuta from the account number, so
   // the 23/24 split the source system made is not carried through. See the
@@ -64,15 +66,13 @@ const COST_TREATMENT: Record<string, AccountVatTreatment> = {
  * suggestion and stays in the review list rather than being silently dropped.
  *
  *   06  momspliktiga egna uttag
- *   37  trepartsförvärv
- *   38  trepartsförsäljning
  *   50  beskattningsunderlag vid import
  *
  * Class 2 rutor (10, 11, 12, 30, 31, 32, 48, 60, 61, 62) are not listed: those
  * sit on the VAT accounts themselves, which this project maps structurally
  * rather than through an account treatment.
  */
-const UNTRANSLATABLE_RUTOR = new Set(['06', '37', '38', '50'])
+const UNTRANSLATABLE_RUTOR = new Set(['06', '50'])
 
 /** Parse a raw Spiris code, or null when it is blank or malformed. */
 export function parseSpirisVatCode(raw: string): SpirisVatCode | null {

@@ -5865,6 +5865,7 @@
     "vat_treatment_exempt": "VAT-exempt sales (box 42)",
     "vat_treatment_reverse_charge_domestic": "Domestic reverse charge",
     "vat_treatment_reverse_charge_eu_goods": "EU goods",
+    "vat_treatment_triangulation_eu_goods": "Triangulation, intermediary (boxes 37/38)",
     "vat_treatment_reverse_charge_eu_services": "EU services",
     "vat_treatment_reverse_charge_non_eu_services": "Services purchased outside the EU",
     "vat_treatment_export_goods": "Goods exported outside the EU",
