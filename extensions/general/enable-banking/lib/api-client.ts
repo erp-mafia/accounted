@@ -38,6 +38,20 @@ export interface ASPSP {
   auth_methods?: AuthMethod[]
 }
 
+/**
+ * A credential Enable Banking's hosted page asks the PSU for before the bank
+ * flow starts (Handelsbanken business: `userId` = 12-digit personnummer,
+ * `companyId` = 10-digit organisationsnummer). `template` is the regex the
+ * page validates against; the page itself shows no format hint.
+ */
+export interface AuthMethodCredential {
+  name: string
+  title?: string
+  required?: boolean
+  description?: string
+  template?: string
+}
+
 export interface AuthMethod {
   name: string
   title?: string
@@ -48,6 +62,7 @@ export interface AuthMethod {
   // explicitly via auth_method (it is not the implicit default).
   hidden_method?: boolean
   psu_types?: ('personal' | 'business')[]
+  credentials?: AuthMethodCredential[]
 }
 
 export interface AuthResponse {
@@ -616,7 +631,8 @@ export async function startAuthorization(
   state: string,
   psuType: 'personal' | 'business' = 'personal',
   authMethod?: string,
-  companyId?: string
+  companyId?: string,
+  credentials?: Record<string, string>
 ): Promise<AuthResponse> {
   // Calculate consent validity (90 days)
   const validUntil = new Date()
@@ -629,6 +645,8 @@ export async function startAuthorization(
     redirect_url: string
     psu_type: 'personal' | 'business'
     auth_method?: string
+    credentials?: Record<string, string>
+    credentials_autosubmit?: boolean
   } = {
     access: {
       valid_until: validUntil.toISOString()
@@ -643,6 +661,14 @@ export async function startAuthorization(
   }
   if (authMethod) {
     requestBody.auth_method = authMethod
+  }
+  // Credentials we already know (the company's organisationsnummer) go in
+  // prefilled; Enable Banking's page still asks for the rest (the signer's
+  // personnummer). autosubmit stays off so the person sees and can correct
+  // the value before the bank flow starts.
+  if (credentials && Object.keys(credentials).length > 0) {
+    requestBody.credentials = credentials
+    requestBody.credentials_autosubmit = false
   }
 
   // In connector mode the hosted bank proxy meters the per-company connection

@@ -944,6 +944,21 @@ describe('connector mode', () => {
     expect(headers['Authorization']).toBe('Bearer gnubok_ck_testsecret')
   })
 
+  it('sends prefilled credentials with autosubmit off, and neither field when there is nothing to prefill', async () => {
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
+    await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '5568098239' })
+    const withCredentials = JSON.parse(String(lastCall().init.body))
+    expect(withCredentials.credentials).toEqual({ companyId: '5568098239' })
+    expect(withCredentials.credentials_autosubmit).toBe(false)
+    expect(withCredentials.auth_method).toBe('BANKID')
+
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a2' }))
+    await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-2', 'business', 'BANKID', 'company-42', {})
+    const without = JSON.parse(String(lastCall().init.body))
+    expect(without).not.toHaveProperty('credentials')
+    expect(without).not.toHaveProperty('credentials_autosubmit')
+  })
+
   it('binds /sessions to the signed connector_state when one is passed', async () => {
     fetchSpy.mockResolvedValue(okJson({ session_id: 's1', accounts: [], access: { valid_until: '2027-01-01' } }))
     await createSession('auth-code', 'signed-connector-state')
