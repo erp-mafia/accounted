@@ -962,7 +962,7 @@ describe('connector mode', () => {
   it('retries once without credentials when the upstream rejects the prefilled ones with a 4xx', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     fetchSpy
-      .mockResolvedValueOnce(new Response('{"error":"credentials not accepted"}', { status: 400 }))
+      .mockResolvedValueOnce(new Response('{"error":"companyId 8501011234 not accepted"}', { status: 400 }))
       .mockResolvedValueOnce(okJson({ url: 'https://bank/auth', authorization_id: 'a-retry' }))
     const result = await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '8501011234' })
     expect(result.authorization_id).toBe('a-retry')
@@ -981,7 +981,8 @@ describe('connector mode', () => {
 
   it('does not retry a 5xx, and the failure log never carries the credential value', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    fetchSpy.mockResolvedValue(new Response('upstream down', { status: 503 }))
+    // An upstream that echoes the submitted value back in its body.
+    fetchSpy.mockResolvedValue(new Response('companyId 8501011234 not accepted', { status: 503 }))
     await expect(
       startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '8501011234' }),
     ).rejects.toThrow('503')

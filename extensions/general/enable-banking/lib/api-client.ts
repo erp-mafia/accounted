@@ -697,10 +697,10 @@ export async function startAuthorization(
   // way it always worked, and let Enable Banking's page ask for the value.
   // A 5xx is upstream trouble either way and is not retried here.
   if (!response.ok && sentBody.credentials && response.status >= 400 && response.status < 500) {
-    const rejected = await response.text()
+    // The upstream body is not logged: a validation error can echo the
+    // submitted value back, and a sole trader's companyId is a personnummer.
     console.warn('[enable-banking] startAuthorization rejected prefilled credentials; retrying without', {
       status: response.status,
-      body: rejected,
       aspspName,
       aspspCountry,
       psuType,
@@ -715,22 +715,27 @@ export async function startAuthorization(
 
   if (!response.ok) {
     const body = await response.text()
+    // A request that carried credentials gets neither its body nor the
+    // upstream's echoed back into a log line or an error message: a sole
+    // trader's companyId is their personnummer.
+    const carriedCredentials = !!sentBody.credentials
     console.error('[enable-banking] startAuthorization failed', {
       status: response.status,
       statusText: response.statusText,
-      body,
+      body: carriedCredentials ? '[omitted: request carried credentials]' : body,
       aspspName,
       aspspCountry,
       psuType,
       redirectUrl,
       apiUrl: ENABLE_BANKING_API_URL,
-      // A sole trader's companyId is their personnummer: never in a log line.
       requestBody: JSON.stringify({
         ...sentBody,
-        ...(sentBody.credentials ? { credentials: '[redacted]' } : {}),
+        ...(carriedCredentials ? { credentials: '[redacted]' } : {}),
       }),
     })
-    throw new Error(`Failed to start bank connection (${response.status}): ${body}`)
+    throw new Error(
+      `Failed to start bank connection (${response.status})${carriedCredentials ? '' : `: ${body}`}`,
+    )
   }
 
   return response.json()
