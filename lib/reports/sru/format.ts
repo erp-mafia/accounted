@@ -1,3 +1,5 @@
+import { truncateToWholeKronor } from '@/lib/money'
+
 /**
  * Field formatters shared by the SRU generators (INK2 and NE-bilaga). SRU is a
  * Skatteverket line format: dates are YYYYMMDD, times HHMMSS, amounts are hela
@@ -22,5 +24,5 @@ export function sruTime(date: Date): string {
 
 /** Format an integer amount: hela kronor, no decimals/thousands separators, öre truncated. */
 export function sruAmount(amount: number): string {
-  return Math.trunc(amount).toString()
+  return truncateToWholeKronor(amount).toString()
 }

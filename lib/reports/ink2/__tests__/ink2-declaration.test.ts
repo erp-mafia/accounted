@@ -446,3 +446,31 @@ describe('generateINK2Declaration: cross-surface self-check', () => {
     expect(result.warnings.some((w) => w.includes('stämmer inte med det bokförda resultatet'))).toBe(false)
   })
 })
+
+describe('generateINK2Declaration: whole-krona drift (#2597)', () => {
+  /**
+   * Three ordinary two-decimal revenue balances whose öre add up to a whole
+   * krona: 1033.54 + 1203.03 + 259.43. Accumulated as doubles they reach
+   * 2495.99999999999955, and the local Math.floor this engine used to carry
+   * filed 2495 for a nettoomsättning actually worth 2496.
+   *
+   * This case lives here rather than in lib/__tests__/whole-krona-drift.test.ts
+   * with the rest of the bug class: the engine needs the trial-balance and
+   * company fixtures built above, and duplicating them would be worse than
+   * splitting the class across two files.
+   */
+  const DRIFTING_REVENUE: TrialBalanceRow[] = [
+    ...PRE_CLOSING_ROWS.filter((r) => r.account_number !== '3001'),
+    row('3001', 'Försäljning varor', -1033.54),
+    row('3002', 'Försäljning tjänster', -1203.03),
+    row('3003', 'Försäljning övrigt', -259.43),
+  ]
+
+  it('files the krona that the öre of nettoomsättning add up to', async () => {
+    stubTrialBalances(CLOSED_ROWS, DRIFTING_REVENUE)
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.ink2r['7410']).toBe(2496)
+  })
+})

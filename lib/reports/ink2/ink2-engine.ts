@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { truncateToWholeKronor } from '@/lib/money'
 import {
   SIGN_RECLASSIFICATION_RULES,
   selectReclassifiedAccounts,
@@ -78,11 +79,14 @@ const SIGN_RECLASSIFICATION_ROUTES: Record<
 }
 
 /**
- * Truncate to nearest krona (drop öre) per SFL 22 kap. 1 §
+ * Truncate to nearest krona (drop öre) per SFL 22 kap. 1 §, via the canonical
+ * helper in lib/money. The local copy this replaced floored the raw accumulated
+ * double, so a ruta whose contributions summed to 2495.99999999999955 filed
+ * 2495 (#2597). truncateToWholeKronor rounds to öre first; it is otherwise
+ * identical, including truncation toward zero on negatives, and additionally
+ * normalises the -0 that Math.ceil leaves.
  */
-function truncateToKrona(value: number): number {
-  return value >= 0 ? Math.floor(value) : Math.ceil(value)
-}
+const truncateToKrona = truncateToWholeKronor
 
 /**
  * Slack allowed before a difference counts as a real disagreement. Every INK2

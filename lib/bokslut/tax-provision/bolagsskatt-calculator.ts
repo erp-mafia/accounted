@@ -264,12 +264,18 @@ export async function calculateBolagsskatt(
   const schablonintaktPeriodiseringsfond = adjustments.schablonintaktPeriodiseringsfond ?? 0
   const otherAdjustments = adjustments.other ?? 0
 
-  const taxableResult =
+  // roundOre the sum before it is floored below: five independently sourced
+  // doubles can land just under a whole ten (715.21 + 19196.29 + 1515.44 +
+  // 19658.68 + 15024.38 is 56109.99999999999), and the floor to tens then
+  // takes the base 10 kr low instead of 1 (#2597). It also keeps the value
+  // stored on the computation record, which the UI shows, free of drift.
+  const taxableResult = roundOre(
     resultBeforeTax +
     nonDeductibleExpenses -
     nonTaxableIncome +
     schablonintaktPeriodiseringsfond +
-    otherAdjustments
+    otherAdjustments,
+  )
 
   // Round down to a whole 10 SEK before applying the rate. Negative taxable
   // result means no tax provision (handled as inrullat underskott in INK2).

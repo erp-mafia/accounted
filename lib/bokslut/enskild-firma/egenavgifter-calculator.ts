@@ -1,3 +1,4 @@
+import { roundOre } from '@/lib/money'
 import type { EfDeclarationItem } from './types'
 
 /** Full egenavgifter rate (born 1959 or later, active business, 7 karensdagar). */
@@ -60,10 +61,13 @@ export function calculateEgenavgifter(input: EgenavgifterInput): EfDeclarationIt
 
   const priorSchablon = input.priorYearSchablonavdrag ?? 0
   const priorActual = input.priorYearActualCharged ?? 0
-  const netSurplus = Math.max(
+  // roundOre before either use below: this is a sum of doubles, and
+  // Math.floor on one that drifted just under a whole krona takes the
+  // schablonavdrag a krona low (#2597).
+  const netSurplus = roundOre(Math.max(
     0,
     input.surplusBeforeEgenavgifter + priorSchablon - priorActual,
-  )
+  ))
   const schablonavdrag = Math.floor(netSurplus * rates.schablon)
   const estimatedEgenavgifter = Math.round(netSurplus * rates.avgifter)
 

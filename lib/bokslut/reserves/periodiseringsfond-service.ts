@@ -149,11 +149,11 @@ export interface PfondAvsattningComputation {
  * or zero desired).
  */
 export function proposeAvsattning(input: PfondAvsattningInput): ProposedDisposition | null {
-  const base = Math.max(0, Math.floor(input.skattemassigtResultatBeforeAvsattning))
+  const base = Math.max(0, Math.floor(roundOre(input.skattemassigtResultatBeforeAvsattning)))
   const maxAmount = Math.floor(base * PFOND_AB_RATE)
   // The 25 % cap applies to the YEAR's total avsättning: anything already
   // booked on this year's cohort account consumes headroom.
-  const alreadyProvisioned = Math.max(0, Math.floor(input.alreadyProvisioned ?? 0))
+  const alreadyProvisioned = Math.max(0, Math.floor(roundOre(input.alreadyProvisioned ?? 0)))
   const headroom = Math.max(0, maxAmount - alreadyProvisioned)
   const desiredAmount = Math.max(0, Math.floor(input.desiredAmount ?? headroom))
   const actualAmount = Math.min(desiredAmount, headroom)
