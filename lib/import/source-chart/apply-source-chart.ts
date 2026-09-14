@@ -192,10 +192,15 @@ export function applySourceChartCsv(
 
   return {
     mappings: applied,
-    // info, not notice: the rows are already in the review list, so there is
-    // nothing to do beyond what the step already asks for.
+    // 'notice', not 'info'. The tiers in lib/import/notices.ts split on what
+    // happened, not on how much the user must do about it: info is for work
+    // that succeeded (accounts renamed, IB derived, duplicates skipped) and
+    // notice is for work that partly did not (rows skipped, dimension codes
+    // dropped). A code the translator could not read belongs in the second
+    // group. It also keeps the line reachable: the fold toggle is a real
+    // button, while the info tier hangs off a hover-only span.
     notices: codesWithoutTreatment > 0
-      ? [...notices, makeNotice('source_chart_untranslated', 'info', { count: codesWithoutTreatment })]
+      ? [...notices, makeNotice('source_chart_untranslated', 'notice', { count: codesWithoutTreatment })]
       : notices,
     summary: {
       ...summaryBase,
