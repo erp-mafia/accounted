@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { applySourceChartCsv } from '../apply-source-chart'
+import { enrichAccountMappingsWithVat } from '@/lib/import/account-vat-treatment'
 import type { AccountMapping } from '@/lib/import/types'
 
 function mapping(account: string, name: string, target = account): AccountMapping {
@@ -57,6 +58,25 @@ describe('applySourceChartCsv', () => {
     expect(mappings[0].providerVatCode).toBe('38-0%')
     expect(mappings[0].providerVatTreatment).toBeNull()
     expect(summary).toMatchObject({ codesApplied: 1, treatmentsApplied: 0, codesWithoutTreatment: 1 })
+  })
+
+  it('lets the label fill an untranslated row, and leaves it distinguishable', () => {
+    // Both halves of the recorded decision, pinned together. The label keeps
+    // filling the row, so the user is not left with an empty select. But the
+    // pair (code present, provider treatment null) has to survive, because it
+    // is the only thing that tells the step this suggestion came from the
+    // account name and not from the code beside it. Ruta 38 is
+    // trepartshandel; the label lands on EU-varor, which is ruta 35, and
+    // printing the code alone would read as confirmation of a box the source
+    // system did not name.
+    const { mappings } = applySourceChartCsv(
+      [mapping('3057', 'Treparts försäljn varor till EG 25%')],
+      csv('True;3057;Treparts försäljn varor till EG 25%;38-0%'),
+    )
+    const [enriched] = enrichAccountMappingsWithVat(mappings, [])
+    expect(enriched.defaultVatTreatment).toBe('reverse_charge_eu_goods')
+    expect(enriched.providerVatCode).toBe('38-0%')
+    expect(enriched.providerVatTreatment).toBeNull()
   })
 
   it('leaves the mappings alone when the file cannot be read', () => {

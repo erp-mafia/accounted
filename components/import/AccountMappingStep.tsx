@@ -298,7 +298,20 @@ export default function AccountMappingStep({
                   </span>
                 </Button>
               </label>
-              <InfoTooltip content={t('source_chart_help')} />
+              {/* Three paragraphs rather than one: the year rule is the one
+                  that silently produces a wrong answer, so it gets its own,
+                  and the menu path is what saves a trip back to the old
+                  system. Wider than the 280px default to keep them readable. */}
+              <InfoTooltip
+                maxWidth="340px"
+                content={
+                  <span className="block space-y-2">
+                    <span className="block">{t('source_chart_help')}</span>
+                    <span className="block">{t('source_chart_help_year')}</span>
+                    <span className="block">{t('source_chart_help_where')}</span>
+                  </span>
+                }
+              />
             </div>
           )}
           {sourceChart && sourceChart.summary.codesWithoutTreatment > 0 && (
@@ -488,9 +501,17 @@ export default function AccountMappingStep({
                             </SelectContent>
                           </Select>
                         </div>
+                        {/* A code we could not translate keeps its label
+                            suggestion by decision, but the line must say so.
+                            Printing the code alone next to a treatment it does
+                            not mean reads as confirmation: ruta 38 is
+                            trepartshandel and the label lands on EU-varor,
+                            which is ruta 35. */}
                         {mapping.providerVatCode ? (
                           <p className="mt-1 text-xs text-muted-foreground">
-                            {t('vat_treatment_source_code', { code: mapping.providerVatCode })}
+                            {mapping.providerVatTreatment
+                              ? t('vat_treatment_source_code', { code: mapping.providerVatCode })
+                              : t('vat_treatment_source_code_unreadable', { code: mapping.providerVatCode })}
                           </p>
                         ) : null}
                         </>
