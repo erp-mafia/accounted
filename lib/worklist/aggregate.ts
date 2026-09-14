@@ -6,6 +6,8 @@ import {
   countDeadlinesNeedingAction,
   countExpensePayoutsDue,
   countInboxDocuments,
+  countHeldDocuments,
+  countUnclassifiedDocuments,
   countOverdueInvoices,
   countPendingOperations,
   countReconciliationDue,
@@ -74,6 +76,8 @@ export async function getWorklistCounts(
     reconciliationDue,
     expensePayout,
     skattekontoPaymentDue,
+    documentRelevance,
+    documentUnclassified,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -95,6 +99,8 @@ export async function getWorklistCounts(
     options.skattekontoPaymentDue !== undefined
       ? Promise.resolve(options.skattekontoPaymentDue).then((p) => (p ? 1 : 0))
       : countSkattekontoPaymentDue(supabase, companyId),
+    countHeldDocuments(supabase, companyId),
+    countUnclassifiedDocuments(supabase, companyId),
   ])
 
   return {
@@ -111,6 +117,8 @@ export async function getWorklistCounts(
       reconciliation_due: reconciliationDue,
       expense_payout: expensePayout,
       skattekonto_payment_due: skattekontoPaymentDue,
+      document_relevance: documentRelevance,
+      document_unclassified: documentUnclassified,
     },
     total:
       bookTransaction +
@@ -123,6 +131,8 @@ export async function getWorklistCounts(
       pendingOperations +
       reconciliationDue +
       expensePayout +
-      skattekontoPaymentDue,
+      skattekontoPaymentDue +
+      documentRelevance +
+      documentUnclassified,
   }
 }

@@ -250,6 +250,31 @@ export async function countVerifikatMissingDocument(
   }
 }
 
+/** Arkiv: documents held at the door, waiting for "rör det här bolaget?". */
+export async function countHeldDocuments(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('document_attachments')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('admission_state', 'held')
+  if (error) return logAndZero('document_relevance', companyId, error)
+  return count ?? 0
+}
+
+/** Arkiv: admitted documents whose current model classification is 'other' or uncertain. */
+export async function countUnclassifiedDocuments(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('document_classifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('is_current', true)
+    .eq('decided_by', 'model')
+    .eq('relevance', 'relevant')
+    .or('doc_type.eq.other,confidence.lt.0.6')
+  if (error) return logAndZero('document_unclassified', companyId, error)
+  return count ?? 0
+}
+
 /** Overdue customer invoices (not credited). */
 export async function countOverdueInvoices(
   supabase: SupabaseClient,
