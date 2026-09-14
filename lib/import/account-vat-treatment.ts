@@ -186,30 +186,42 @@ export function isInVatReviewList(
 }
 
 /**
- * The `editedThisStep` set after a confirm. Pass a source account for the
- * per-row check, nothing for "Bekräfta alla föreslagna".
+ * The `editedThisStep` set after the per-row confirm released one account.
  *
- * This exists because the release is what both confirm paths got wrong, in the
- * same way, one after the other: the per-row check was inert on an edited row
- * until it released that row, and the bulk confirm left every edited row behind
- * until it cleared the set. The component cannot be unit tested here (this repo
- * scopes tests to lib/ and app/api/), so the part that broke twice lives where
- * it can be.
+ * This and {@link releaseAllConfirmed} exist because the release is what both
+ * confirm paths got wrong, in the same way, one after the other: the per-row
+ * check was inert on an edited row until it released that row, and the bulk
+ * confirm left every edited row behind until it cleared the set. The component
+ * cannot be unit tested here (this repo scopes tests to lib/ and app/api/), so
+ * the part that broke twice lives where it can be.
+ *
+ * Two functions rather than one with an optional account: there, a `undefined`
+ * reaching the argument by accident would clear the whole set instead of doing
+ * nothing, and clearing everything is not a failure mode worth leaving one
+ * typo away.
  *
  * Returns the same set instance when nothing changes, so React state does not
  * churn on a confirm that releases nothing.
  */
-export function releaseConfirmed(
+export function releaseConfirmedRow(
   editedThisStep: ReadonlySet<string>,
-  sourceAccount?: string,
+  sourceAccount: string,
 ): ReadonlySet<string> {
-  if (sourceAccount === undefined) {
-    return editedThisStep.size === 0 ? editedThisStep : new Set()
-  }
   if (!editedThisStep.has(sourceAccount)) return editedThisStep
   const next = new Set(editedThisStep)
   next.delete(sourceAccount)
   return next
+}
+
+/**
+ * The `editedThisStep` set after "Bekräfta alla föreslagna": empty, because the
+ * bulk confirm speaks for every row the list is showing. See
+ * {@link releaseConfirmedRow} for why this is its own function.
+ */
+export function releaseAllConfirmed(
+  editedThisStep: ReadonlySet<string>,
+): ReadonlySet<string> {
+  return editedThisStep.size === 0 ? editedThisStep : new Set()
 }
 
 export function applyVatTreatmentReview(

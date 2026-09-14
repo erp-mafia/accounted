@@ -35,7 +35,8 @@ import { isValidBASRange } from '@/lib/import/account-mapper'
 import {
   isInVatReviewList,
   needsVatTreatmentReview,
-  releaseConfirmed,
+  releaseAllConfirmed,
+  releaseConfirmedRow,
 } from '@/lib/import/account-vat-treatment'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
@@ -154,6 +155,12 @@ export default function AccountMappingStep({
 
   // Reset page when filter or search changes
   const handleFilterChange = (newFilter: FilterType) => {
+    // Clicking the badge you are already standing on is a no-op, not a reset.
+    // The badges call this unconditionally, and the review badge is the most
+    // clickable thing on the screen while you are editing a row: without this
+    // guard one stray click empties editedThisStep and the half-finished row
+    // vanishes, which is the very bug this component is being fixed for.
+    if (newFilter === filter) return
     setFilter(newFilter)
     setCurrentPage(1)
     // Re-entering the review filter should offer what is still outstanding,
@@ -184,7 +191,7 @@ export default function AccountMappingStep({
     treatment: AccountVatTreatment | null,
     rate: number | null,
   ) => {
-    setEditedThisStep((prev) => releaseConfirmed(prev, sourceAccount))
+    setEditedThisStep((prev) => releaseConfirmedRow(prev, sourceAccount))
     onVatTreatmentChange(sourceAccount, treatment, rate)
   }
 
@@ -194,7 +201,7 @@ export default function AccountMappingStep({
   // list by editedThisStep, so the bulk confirm would leave behind exactly the
   // rows the user worked on and the counter would disagree with the list again.
   const handleVatConfirmAll = () => {
-    setEditedThisStep((prev) => releaseConfirmed(prev))
+    setEditedThisStep((prev) => releaseAllConfirmed(prev))
     onConfirmAllVatTreatments()
   }
 
@@ -210,8 +217,15 @@ export default function AccountMappingStep({
     const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.7).length
     const manual = mappings.filter((m) => m.isOverride).length
     const vatReview = mappings.filter(needsVatTreatmentReview).length
-    return { unmapped, newAccounts, lowConfidence, manual, vatReview }
-  }, [mappings, knownTargets])
+    // Two different questions, and conflating them is what put a "(0)" label on
+    // a filter that was still listing rows. vatReview is how many decisions are
+    // still owed: it gates Fortsätt and names the reason on that button.
+    // vatListed is how many rows the review filter actually shows, which is
+    // what its badge should count and what the bulk confirm acts on. They
+    // differ exactly while a row is held open mid-edit.
+    const vatListed = mappings.filter((m) => isInVatReviewList(m, editedThisStep)).length
+    return { unmapped, newAccounts, lowConfidence, manual, vatReview, vatListed }
+  }, [mappings, knownTargets, editedThisStep])
 
   // After the mapper's self-map rule, an unmapped row is always a number
   // outside 1000-8999: nothing can be created for it, so the user must pick a
@@ -251,12 +265,12 @@ export default function AccountMappingStep({
           {/* Stats */}
           <div className="flex gap-4 flex-wrap">
             <Badge
-              variant={filter === 'vat_review' ? 'default' : stats.vatReview > 0 ? 'secondary' : 'outline'}
+              variant={filter === 'vat_review' ? 'default' : stats.vatListed > 0 ? 'secondary' : 'outline'}
               className="cursor-pointer"
               onClick={() => handleFilterChange('vat_review')}
             >
               <AlertCircle className="h-3 w-3 mr-1" />
-              {t('vat_review_filter', { count: stats.vatReview })}
+              {t('vat_review_filter', { count: stats.vatListed })}
             </Badge>
             <Badge
               variant={filter === 'unmapped' ? 'destructive' : stats.unmapped > 0 ? 'destructive' : 'secondary'}
@@ -325,7 +339,7 @@ export default function AccountMappingStep({
                 <SelectItem value="all">Visa alla</SelectItem>
                 <SelectItem value="unmapped">Ej mappade</SelectItem>
                 <SelectItem value="new_account">{t('new_account_filter', { count: stats.newAccounts })}</SelectItem>
-                <SelectItem value="vat_review">{t('vat_review_filter', { count: stats.vatReview })}</SelectItem>
+                <SelectItem value="vat_review">{t('vat_review_filter', { count: stats.vatListed })}</SelectItem>
                 <SelectItem value="low_confidence">Osäkra</SelectItem>
                 <SelectItem value="manual">Manuellt satta</SelectItem>
               </SelectContent>
@@ -591,14 +605,14 @@ export default function AccountMappingStep({
           Tillbaka
         </Button>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          {stats.vatReview > 0 && stats.unmapped === 0 && (
+          {stats.vatListed > 0 && stats.unmapped === 0 && (
             <Button
               variant="outline"
               className="min-h-11"
               onClick={handleVatConfirmAll}
             >
               <CheckCircle className="mr-2 h-4 w-4" />
-              {t('vat_review_confirm_all', { count: stats.vatReview })}
+              {t('vat_review_confirm_all', { count: stats.vatListed })}
             </Button>
           )}
           <Button className="min-h-11" onClick={onContinue} disabled={!canContinue}>

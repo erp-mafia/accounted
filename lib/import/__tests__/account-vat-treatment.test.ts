@@ -6,7 +6,8 @@ import {
   enrichAccountMappingsWithVat,
   applyVatTreatmentReviewAll,
   isInVatReviewList,
-  releaseConfirmed,
+  releaseAllConfirmed,
+  releaseConfirmedRow,
   needsVatTreatmentReview,
 } from '../account-vat-treatment'
 import type { AccountMapping } from '../types'
@@ -278,24 +279,32 @@ describe('vat review list visibility', () => {
     const [confirmed] = applyVatTreatmentReviewAll([edited])
     expect(needsVatTreatmentReview(confirmed)).toBe(false)
     expect(isInVatReviewList(confirmed, new Set(['4515']))).toBe(true)
-    expect(isInVatReviewList(confirmed, releaseConfirmed(new Set(['4515'])))).toBe(false)
+    expect(isInVatReviewList(confirmed, releaseAllConfirmed(new Set(['4515'])))).toBe(false)
   })
 })
 
-describe('releaseConfirmed', () => {
+describe('releaseConfirmedRow / releaseAllConfirmed', () => {
   it('drops just the confirmed row', () => {
-    expect([...releaseConfirmed(new Set(['4515', '4535']), '4515')]).toEqual(['4535'])
+    expect([...releaseConfirmedRow(new Set(['4515', '4535']), '4515')]).toEqual(['4535'])
   })
 
   it('clears every row for the bulk confirm', () => {
-    expect(releaseConfirmed(new Set(['4515', '4535'])).size).toBe(0)
+    expect(releaseAllConfirmed(new Set(['4515', '4535'])).size).toBe(0)
   })
 
   it('returns the same set when there is nothing to release', () => {
     const held = new Set(['4515'])
-    expect(releaseConfirmed(held, '9999')).toBe(held)
+    expect(releaseConfirmedRow(held, '9999')).toBe(held)
     const empty: ReadonlySet<string> = new Set()
-    expect(releaseConfirmed(empty)).toBe(empty)
+    expect(releaseAllConfirmed(empty)).toBe(empty)
+  })
+
+  it('leaves the other rows alone when one is confirmed', () => {
+    // The per-row confirm must not behave like the bulk one. They were a single
+    // function with an optional account until review pointed out that one stray
+    // undefined would silently clear everything.
+    const held = new Set(['4515', '4535', '4531'])
+    expect([...releaseConfirmedRow(held, '4535')].sort()).toEqual(['4515', '4531'])
   })
 })
 
