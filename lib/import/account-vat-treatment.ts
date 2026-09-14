@@ -158,11 +158,16 @@ export function needsVatTreatmentReview(mapping: AccountMapping): boolean {
  * touched through one of the two selects during this step stays in the list
  * even once it counts as reviewed. Each row carries a momskod AND a separate
  * sats, and changing either marks the row reviewed, so a list keyed on the
- * narrow predicate drops the row after the first of the two is set. Picking a
- * treatment also assigns a default rate (0.25 for reverse charge on class 4 to
- * 6), so the row that vanishes is frequently the one still carrying the wrong
- * rate: "Inköp varor 12% EG" becomes 25% and disappears before it can be
- * corrected.
+ * narrow predicate drops the row after the first of the two is set. That is
+ * true whatever the rate ends up being, so the fix does not rest on the rate
+ * being wrong.
+ *
+ * It often is, though. Picking a treatment also assigns a default rate, and
+ * while vatRateFromLabel (#2596) now reads the sats out of a label that names
+ * one ("Inköp varor 12% EU"), the ordinary BAS spellings name none: 4515
+ * "Inköp varor EU" and 4535 "Inköp tjänster EU" still fall back to 0.25 for
+ * reverse charge on class 4 to 6. A 12 % or 6 % acquisition booked on one of
+ * those is exactly the row that vanishes before its rate can be corrected.
  *
  * `editedThisStep` holds only per-select edits. The per-row confirm button and
  * "Bekräfta alla föreslagna" deliberately do not feed it: those say "done with

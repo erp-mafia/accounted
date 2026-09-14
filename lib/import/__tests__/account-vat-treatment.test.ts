@@ -213,42 +213,46 @@ describe('applyVatTreatmentReviewAll', () => {
 describe('vat review list visibility', () => {
   const NONE: ReadonlySet<string> = new Set()
 
-  // Mirrors the real row: a class 4 purchase account whose label says 12%, so
-  // picking the treatment assigns the wrong default rate and the sats select
-  // still has to be reached.
+  // An EU purchase account whose label names no percentage, which is the
+  // ordinary BAS spelling (4515 "Inköp varor EU", 4535 "Inköp tjänster EU").
+  // vatRateFromLabel (#2596) reads the sats out of labels that state one, so a
+  // label like "Inköp varor 12% EU" now defaults correctly; these do not, and
+  // fall back to 25 %. A 12 % or 6 % acquisition booked here still has to reach
+  // the sats select, which is what makes the row's visibility matter.
   function row() {
-    return enrichAccountMappingsWithVat([mapping('4057', 'Inköp varor 12% EU')], [])
+    return enrichAccountMappingsWithVat([mapping('4515', 'Inköp varor EU')], [])
   }
 
   it('counts a row as outstanding until it is reviewed', () => {
     const [before] = row()
     expect(needsVatTreatmentReview(before)).toBe(true)
-    const [after] = applyVatTreatmentReview(row(), '4057', 'reverse_charge_eu_goods', 0.25)
+    const [after] = applyVatTreatmentReview(row(), '4515', 'reverse_charge_eu_goods', 0.25)
     expect(needsVatTreatmentReview(after)).toBe(false)
   })
 
   it('keeps a row in the list between setting its momskod and its sats', () => {
     // The bug: picking the treatment marks the row reviewed, and a list keyed
-    // on needsVatTreatmentReview drops it before the 25% default can be
-    // corrected to the 12% the label states.
+    // on needsVatTreatmentReview drops it before the 25 % default can be
+    // corrected. It drops the row whether or not the default happened to be
+    // right, so the fix does not depend on the rate being wrong.
     const [afterTreatment] = applyVatTreatmentReview(
-      row(), '4057', 'reverse_charge_eu_goods', 0.25,
+      row(), '4515', 'reverse_charge_eu_goods', 0.25,
     )
     expect(isInVatReviewList(afterTreatment, NONE)).toBe(false)
-    expect(isInVatReviewList(afterTreatment, new Set(['4057']))).toBe(true)
+    expect(isInVatReviewList(afterTreatment, new Set(['4515']))).toBe(true)
 
     // And the rate is still correctable while it is visible.
     const [afterRate] = applyVatTreatmentReview(
-      [afterTreatment], '4057', 'reverse_charge_eu_goods', 0.12,
+      [afterTreatment], '4515', 'reverse_charge_eu_goods', 0.12,
     )
     expect(afterRate.defaultVatRate).toBe(0.12)
-    expect(isInVatReviewList(afterRate, new Set(['4057']))).toBe(true)
+    expect(isInVatReviewList(afterRate, new Set(['4515']))).toBe(true)
   })
 
   it('shows an outstanding row whether or not it has been edited', () => {
     const [outstanding] = row()
     expect(isInVatReviewList(outstanding, NONE)).toBe(true)
-    expect(isInVatReviewList(outstanding, new Set(['4057']))).toBe(true)
+    expect(isInVatReviewList(outstanding, new Set(['4515']))).toBe(true)
   })
 
   it('never pulls in a row that was not up for review', () => {
