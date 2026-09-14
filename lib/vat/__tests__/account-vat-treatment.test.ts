@@ -41,6 +41,34 @@ describe('resolveVatTreatmentRuta', () => {
   })
 })
 
+describe('momsfria EU-inköp', () => {
+  it('declines a momsfri EU purchase rather than inventing a reverse charge', () => {
+    // BAS 4518 exists beside 4515 to 4517 and is deliberately absent from
+    // ACCOUNT_RUTA: an exempt acquisition is not self-assessed, so there is
+    // nothing to declare. Visma eEkonomi says the same by leaving the code
+    // blank on its equivalent account. Without the rule the label reads EU
+    // and varor, answers reverse charge, and defaults to 25 % because the
+    // name states no percentage.
+    expect(suggestVatTreatment('4059', 'Inköp varor EG momsfri')).toBeNull()
+    expect(suggestVatTreatment('4518', 'Inköp av råvaror och material från annat EU-land momsfri')).toBeNull()
+  })
+
+  it('still reads the taxable EU purchases beside it', () => {
+    expect(suggestVatTreatment('4056', 'Inköp varor 25% EG'))
+      .toEqual({ treatment: 'reverse_charge_eu_goods', rate: 0.25 })
+    expect(suggestVatTreatment('4057', 'Inköp varor 12% EG'))
+      .toEqual({ treatment: 'reverse_charge_eu_goods', rate: 0.12 })
+  })
+
+  it('leaves the sales side alone, where momsfri EU goods ARE ruta 35', () => {
+    // The asymmetry is in the tax, not the code: a momsfri supply is a
+    // zero-rated intra-EU supply and belongs in ruta 35, while a momsfri
+    // acquisition belongs nowhere.
+    expect(suggestVatTreatment('3058', 'Försäljn varor EG momsfri'))
+      .toEqual({ treatment: 'reverse_charge_eu_goods', rate: 0 })
+  })
+})
+
 describe('trepartshandel', () => {
   it('files the middleman on both sides of the trade', () => {
     expect(resolveVatTreatmentRuta('triangulation_eu_goods', 3)).toEqual({ box: 'ruta38', side: 'credit' })

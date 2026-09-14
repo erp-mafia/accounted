@@ -192,6 +192,18 @@ export function suggestVatTreatment(
     return { treatment: 'reverse_charge_non_eu_services', rate }
   }
   if (/trepart/.test(name) && /var/.test(name)) return { treatment: 'triangulation_eu_goods', rate: 0 }
+  // An exempt intra-EU acquisition is not self-assessed, so there is nothing
+  // to declare and no rate to carry. This is not a new judgement: BAS lists
+  // 4518 "Inköp av råvaror och material från annat EU-land momsfri" beside
+  // 4515 to 4517 and only the latter three are in ACCOUNT_RUTA, and Visma
+  // eEkonomi leaves the VAT code blank on its equivalent account while filling
+  // in the 25/12/6 ones. Without this the label reads EU and varor, answers
+  // reverse charge, finds no percentage in the name and defaults to 25 %:
+  // wrong box and an invented rate.
+  //
+  // Purchases only. On the sales side a momsfri EU supply IS ruta 35, which is
+  // what the rule below correctly gives it.
+  if (/momsfri|utan moms/.test(name) && UNION.test(name)) return null
   if (UNION.test(name) && /var/.test(name)) return { treatment: 'reverse_charge_eu_goods', rate }
   if (UNION.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate }
   return null

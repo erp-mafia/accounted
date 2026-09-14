@@ -79,7 +79,6 @@ describe('SIE import: EG-labelled accounts (EU-BAS 97)', () => {
     ['4056', 'reverse_charge_eu_goods', 0.25, 'ruta20'],
     ['4057', 'reverse_charge_eu_goods', 0.12, 'ruta20'],
     ['4058', 'reverse_charge_eu_goods', 0.06, 'ruta20'],
-    ['4059', 'reverse_charge_eu_goods', 0.25, 'ruta20'],
   ])('maps %s to %s and its ruta', (account, treatment, rate, ruta) => {
     const { mappings } = runImportChain()
     const row = mappings.find((m) => m.sourceAccount === account)
@@ -89,6 +88,22 @@ describe('SIE import: EG-labelled accounts (EU-BAS 97)', () => {
     expect(
       resolveVatTreatmentRuta(row!.defaultVatTreatment!, Number(account[0]), account),
     ).toEqual({ box: ruta, side: Number(account[0]) === 3 ? 'credit' : 'debit' })
+  })
+
+  it('declines a momsfri EU purchase instead of charging it 25 %', () => {
+    // 4059 "Inköp varor EG momsfri" asserted reverse_charge_eu_goods at 25 %
+    // and ruta 20 until the chart export from the source system showed the
+    // question was already settled elsewhere: BAS lists 4518 "...från annat
+    // EU-land momsfri" beside 4515 to 4517 and leaves only it out of
+    // ACCOUNT_RUTA, and Visma eEkonomi fills in the code on the 25/12/6
+    // accounts and leaves this one blank. An exempt acquisition is not
+    // self-assessed, so there is nothing to declare, and the 25 % came from
+    // the label naming no percentage rather than from the trade.
+    const { mappings } = runImportChain()
+    const row = mappings.find((m) => m.sourceAccount === '4059')
+    expect(row?.defaultVatTreatment).toBeNull()
+    expect(row?.defaultVatRate).toBeNull()
+    expect(row?.requiresVatTreatmentReview).toBe(true)
   })
 
   it('leaves momspliktig EU-varuförsäljning for review rather than guessing', () => {
