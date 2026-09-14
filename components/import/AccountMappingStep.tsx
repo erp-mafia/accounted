@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -107,6 +107,7 @@ export default function AccountMappingStep({
     return hasUnmapped ? 'unmapped' : hasVatReview ? 'vat_review' : 'all'
   })
   const [currentPage, setCurrentPage] = useState(1)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Targets the dropdown can name: the caller's list (the company chart, or
   // chart + BAS). A mapped target outside it is an account the import will
@@ -295,31 +296,39 @@ export default function AccountMappingStep({
                     })
                   : t('source_chart_prompt')}
               </span>
-              <label>
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  className="hidden"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0]
-                    // Reset first: picking the same file twice must fire again,
-                    // which it does not if the value is left in place.
-                    event.target.value = ''
-                    if (file) onSourceChartSelected(file)
-                  }}
-                />
-                <Button variant="outline" size="sm" className="h-8" asChild>
-                  <span>
-                    {/* Keyed to the same thing as the line beside it: a file
-                        whose format was not recognised leaves nothing to
-                        replace, so offering "Byt fil" next to the invitation
-                        would have the two controls describe opposite states. */}
-                    {sourceChart?.summary.formatLabel
-                      ? t('source_chart_replace')
-                      : t('source_chart_action')}
-                  </span>
-                </Button>
-              </label>
+              {/* A real button that opens a hidden input, the same shape
+                  every other file picker in this repo uses (LogoUpload,
+                  BookingTemplatesPanel, UnderlagImportWizard). A <label>
+                  wrapping a display:none input takes the control out of the
+                  tab order entirely: the label is not focusable and neither
+                  is the input, so the feature would exist only for a mouse. */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  // Reset first: picking the same file twice must fire again,
+                  // which it does not if the value is left in place.
+                  event.target.value = ''
+                  if (file) onSourceChartSelected(file)
+                }}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {/* Keyed to the same thing as the line beside it: a file
+                    whose format was not recognised leaves nothing to
+                    replace, so offering "Byt fil" next to the invitation
+                    would have the two controls describe opposite states. */}
+                {sourceChart?.summary.formatLabel
+                  ? t('source_chart_replace')
+                  : t('source_chart_action')}
+              </Button>
               {/* Three paragraphs rather than one: the year rule is the one
                   that silently produces a wrong answer, so it gets its own,
                   and the menu path is what saves a trip back to the old
@@ -341,7 +350,13 @@ export default function AccountMappingStep({
               {t('source_chart_untranslated', { count: sourceChart.summary.codesWithoutTreatment })}
             </p>
           )}
-          {sourceChart?.warnings[0] && <AttnLine>{sourceChart.warnings[0]}</AttnLine>}
+          {/* Every warning, joined into the one sentence convention 6 allows,
+              rather than the first one. A file routinely earns two ("N rader
+              hoppades över" and "Kontoplanen innehöll inga momskoder"), and
+              showing only the first left the more useful half unsaid. */}
+          {sourceChart && sourceChart.warnings.length > 0 && (
+            <AttnLine>{sourceChart.warnings.join(' ')}</AttnLine>
+          )}
 
           {/* Search and filter */}
           <div className="flex gap-4">

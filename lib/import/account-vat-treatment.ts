@@ -8,13 +8,6 @@ import {
 import type { AccountMapping } from './types'
 
 /**
- * The momssats to suggest next to a provider-translated treatment. A
- * reverse-charge code names the ruta the basis feeds, never the acquisition
- * rate, and the label is the only place the 12%/6% purchase accounts say so
- * (Fortnox 4516 "Inköp varor EU 12%" and 4515 share IVEU). Every other
- * treatment fixes its own rate.
- */
-/**
  * Whether the suggested rate is read off the account label rather than fixed by
  * the treatment.
  *
@@ -32,6 +25,13 @@ export function vatRateComesFromLabel(
   return accountClass >= 4 && treatment.startsWith('reverse_charge')
 }
 
+/**
+ * The momssats to suggest next to a provider-translated treatment. A
+ * reverse-charge code names the ruta the basis feeds, never the acquisition
+ * rate, and the label is the only place the 12%/6% purchase accounts say so
+ * (Fortnox 4516 "Inköp varor EU 12%" and 4515 share IVEU). Every other
+ * treatment fixes its own rate.
+ */
 function providerSuggestedRate(
   treatment: AccountVatTreatment,
   accountClass: number,
@@ -62,7 +62,16 @@ function providerSuggestedRate(
  *
  * Only class 3-6 identity mappings are touched, the same rows the label
  * suggestion covers: a remapped account gets the target's treatment, and
- * classes 1-2 and 7-8 carry no treatment.
+ * classes 1-2 and 7-8 carry no treatment. A row already marked reviewed is
+ * left alone too: that flag means either the user answered the row or the
+ * company's own chart already carries a treatment for the account, and a
+ * source file does not get to overwrite either of those. Reachable only
+ * since the chart CSV made this runnable from inside the mapping step; the
+ * provider-API path runs before the step is rendered, where no row is
+ * reviewed yet.
+ *
+ * Every row it does not touch is returned BY REFERENCE, which is what lets a
+ * caller tell what this file changed from what an earlier one did.
  */
 export function applySourceVatCodes(
   mappings: AccountMapping[],
@@ -73,6 +82,7 @@ export function applySourceVatCodes(
     if (!mapping.targetAccount || mapping.sourceAccount !== mapping.targetAccount) return mapping
     const accountClass = Number(mapping.sourceAccount.charAt(0))
     if (accountClass < 3 || accountClass > 6) return mapping
+    if (mapping.vatTreatmentReviewed) return mapping
 
     const code = codesByAccount.get(mapping.sourceAccount)?.trim()
     if (!code) return mapping

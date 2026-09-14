@@ -933,6 +933,14 @@ function SIEImportWizard({
     mappingsRef.current = mappings
   }, [mappings])
 
+  // The company's own chart, for the same reason and read the same way: a
+  // second file has to restore the rows the first one touched, and restoring
+  // one means re-deriving it against this list.
+  const basAccountsRef = useRef(basAccounts)
+  useEffect(() => {
+    basAccountsRef.current = basAccounts
+  }, [basAccounts])
+
   // One try around the whole body, so this can never reject: the caller is an
   // onChange that discards the promise, and an unhandled rejection would leave
   // the step looking exactly as if no file had been chosen. Reading the file is
@@ -940,7 +948,7 @@ function SIEImportWizard({
   const handleSourceChartSelected = useCallback(async (file: File) => {
     try {
       const csvText = await file.text()
-      const result = applySourceChartCsv(mappingsRef.current, csvText)
+      const result = applySourceChartCsv(mappingsRef.current, csvText, basAccountsRef.current)
       setMappings(result.mappings)
       setSourceChart({ summary: result.summary, warnings: result.warnings })
     } catch (err) {

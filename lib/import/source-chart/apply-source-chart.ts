@@ -1,8 +1,10 @@
 import {
   applySourceVatCodes,
+  enrichAccountMappingsWithVat,
   vatRateComesFromLabel,
 } from '@/lib/import/account-vat-treatment'
 import type { AccountMapping } from '@/lib/import/types'
+import type { BASAccount } from '@/types'
 import { parseSourceChartCsv } from './parse-chart-csv'
 
 /**
@@ -35,8 +37,10 @@ export interface SourceChartSummary {
   treatmentsApplied: number
   /**
    * Codes read but not translated: a real ruta this project has no
-   * AccountVatTreatment for (06, 37, 38, 50). The row keeps the code for
-   * display and stays in the review list with its label suggestion.
+   * AccountVatTreatment for. Today that is 06 (momspliktiga egna uttag) and
+   * 50 (beskattningsunderlag vid import); 37 and 38 were in this list until
+   * triangulation_eu_goods existed. The row keeps the code for display and
+   * stays in the review list with its label suggestion.
    */
   codesWithoutTreatment: number
 }
@@ -63,13 +67,60 @@ export interface SourceChartResult {
 }
 
 /**
+ * Undo what an earlier chart did, so a second file REPLACES the first instead
+ * of layering onto it.
+ *
+ * Without this, picking a new file leaves every code the old one put on an
+ * account the new one does not mention. That is not a corner case: it is the
+ * documented recovery path. The help text warns that a chart from the wrong
+ * räkenskapsår puts a wrong code on a right account, the button then offers
+ * "Byt fil", and in a Spiris export the accounts a given year's chart omits
+ * are exactly the ones that were inactive that year.
+ *
+ * Restoring means re-deriving the row from the account label, which is what
+ * enrichAccountMappingsWithVat does once the provider facts are cleared: one
+ * call for the whole set, so the function's internal chart lookup is built
+ * once rather than per row.
+ *
+ * A reviewed row is left as it is, code and all. The flag means the user
+ * answered it or the company's chart already had a treatment, and neither is
+ * this file's to revert.
+ */
+function clearPreviousChart(
+  mappings: AccountMapping[],
+  existingAccounts: BASAccount[],
+): AccountMapping[] {
+  const fromPreviousChart = (mapping: AccountMapping) =>
+    Boolean(mapping.providerVatCode) && !mapping.vatTreatmentReviewed
+
+  const stale = mappings.filter(fromPreviousChart)
+  if (stale.length === 0) return mappings
+
+  const restored = new Map(
+    enrichAccountMappingsWithVat(
+      stale.map((mapping) => ({ ...mapping, providerVatCode: null, providerVatTreatment: null })),
+      existingAccounts,
+    ).map((mapping) => [mapping.sourceAccount, mapping]),
+  )
+  return mappings.map((mapping) =>
+    fromPreviousChart(mapping) ? restored.get(mapping.sourceAccount) ?? mapping : mapping,
+  )
+}
+
+/**
  * `content` is the file already decoded as text. Spiris writes UTF-8 with a
  * BOM, which the parser strips; a file in another encoding still yields usable
  * codes, since those are ASCII, but mojibake account names.
+ *
+ * `existingAccounts` is the company's own chart, needed only to restore a row
+ * a previous file had touched: the same list enrichAccountMappingsWithVat was
+ * given when the mappings were first built, so a restored row lands exactly
+ * where it started.
  */
 export function applySourceChartCsv(
   mappings: AccountMapping[],
   content: string,
+  existingAccounts: BASAccount[] = [],
 ): SourceChartResult {
   const { accounts, format, warnings } = parseSourceChartCsv(content)
 
@@ -94,9 +145,14 @@ export function applySourceChartCsv(
     }
   }
 
+  // Only now that the file is known to be usable: a chart that could not be
+  // read must leave the previous one standing, which is what the early return
+  // above promises.
+  const base = clearPreviousChart(mappings, existingAccounts)
+
   // The detected format brings its own code vocabulary, so a second vendor is
   // an entry in SOURCE_CHART_FORMATS rather than a branch here.
-  const translated = applySourceVatCodes(mappings, codesByAccount, format.translate)
+  const translated = applySourceVatCodes(base, codesByAccount, format.translate)
 
   // Where applySourceVatCodes reads the rate off the account label, the chart
   // outranks it: a chart may state 20-12% on an account whose name carries no
@@ -115,11 +171,14 @@ export function applySourceChartCsv(
     return { ...mapping, defaultVatRate: stated }
   })
 
-  // Counted on the result rather than as a delta: the guided SIE import has no
-  // other source of provider codes, so what is on the mappings afterwards is
-  // what this file put there, and a total is what the step wants to show.
-  const codesApplied = applied.filter((m) => m.providerVatCode).length
-  const treatmentsApplied = applied.filter((m) => m.providerVatTreatment).length
+  // Counted over the rows THIS file changed, not over everything carrying a
+  // code: a row the user confirmed from an earlier chart keeps that chart's
+  // code, and counting it would have the line claim this file did work it did
+  // not do. applySourceVatCodes returns every row it skips by reference, so
+  // identity is the whole test.
+  const touched = applied.filter((mapping, i) => mapping !== base[i])
+  const codesApplied = touched.filter((m) => m.providerVatCode).length
+  const treatmentsApplied = touched.filter((m) => m.providerVatTreatment).length
 
   return {
     mappings: applied,

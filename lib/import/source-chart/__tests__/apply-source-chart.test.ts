@@ -164,6 +164,82 @@ describe('applySourceChartCsv', () => {
     expect(summary).toMatchObject({ accountsInChart: 2, activeInChart: 1, codesApplied: 1 })
   })
 
+  it('replaces the previous chart instead of layering onto it', () => {
+    // The wrong-year mistake the help text warns about, and the recovery the
+    // "Byt fil" button offers. A 2021 chart lists 3045; the 2022 chart does
+    // not, because the account went inactive. Before this, 3045 kept the 2021
+    // code forever and only restarting the wizard cleared it.
+    const first = applySourceChartCsv(
+      [mapping('3045', 'Försäljn tjänst utanför EG momsfri'), mapping('3041', 'Försäljning tjänst 25% sv')],
+      csv('True;3045;Försäljn tjänst utanför EG momsfri;40-0%', 'True;3041;Försäljning tjänst 25% sv;05-25%'),
+    )
+    expect(first.mappings[0].providerVatCode).toBe('40-0%')
+
+    const second = applySourceChartCsv(
+      first.mappings,
+      csv('True;3041;Försäljning tjänst 25% sv;05-12%'),
+    )
+    // Restored to what the label alone says, which is where it started.
+    expect(second.mappings[0].providerVatCode).toBeNull()
+    expect(second.mappings[0].providerVatTreatment).toBeNull()
+    expect(second.mappings[0].defaultVatTreatment).toBe('export_services')
+    // And the row the new file does describe takes the new file's answer.
+    expect(second.mappings[1].providerVatCode).toBe('05-12%')
+    expect(second.mappings[1].defaultVatTreatment).toBe('reduced_12')
+    // Counted over what THIS file did, so the line cannot claim the one
+    // account it described was two.
+    expect(second.summary).toMatchObject({ accountsInChart: 1, codesApplied: 1, treatmentsApplied: 1 })
+  })
+
+  it('leaves the previous chart standing when the new file cannot be read', () => {
+    const first = applySourceChartCsv(
+      [mapping('3058', 'Försäljn varor EG momsfri')],
+      csv('True;3058;Försäljn varor EG momsfri;35-0%'),
+    )
+    const second = applySourceChartCsv(first.mappings, 'Konto;Benämning\r\n3058;Något\r\n')
+    expect(second.mappings[0].providerVatCode).toBe('35-0%')
+    expect(second.warnings[0]).toContain('känns inte igen')
+  })
+
+  it('will not overwrite a treatment the user has already confirmed', () => {
+    // The upload sits above the table in the same step, so confirming a few
+    // rows and then remembering the chart export is an ordinary order of
+    // events. The source system does not get to undo an answer the user gave.
+    const confirmed: AccountMapping = {
+      ...mapping('3056', 'Försäljn varor till EG 25% momspliktig'),
+      defaultVatTreatment: 'oss',
+      defaultVatRate: null,
+      vatTreatmentSuggested: false,
+      vatTreatmentReviewed: true,
+      requiresVatTreatmentReview: true,
+    }
+    const { mappings, summary } = applySourceChartCsv(
+      [confirmed],
+      csv('True;3056;Försäljn varor till EG 25% momspliktig;35-0%'),
+    )
+    expect(mappings[0].defaultVatTreatment).toBe('oss')
+    expect(mappings[0].vatTreatmentReviewed).toBe(true)
+    expect(mappings[0].providerVatCode).toBeUndefined()
+    expect(summary.codesApplied).toBe(0)
+  })
+
+  it('will not overwrite a treatment the company chart already carries', () => {
+    // Same flag, different origin: enrichAccountMappingsWithVat marks a row
+    // reviewed when the account already has a treatment in Accounted, and a
+    // re-sync must not walk that back to the old system's answer.
+    const existing = enrichAccountMappingsWithVat(
+      [mapping('3058', 'Försäljn varor EG momsfri')],
+      [{ account_number: '3058', default_vat_treatment: 'exempt', default_vat_rate: 0 } as never],
+    )
+    const { mappings } = applySourceChartCsv(
+      existing,
+      csv('True;3058;Försäljn varor EG momsfri;35-0%'),
+      [{ account_number: '3058', default_vat_treatment: 'exempt', default_vat_rate: 0 } as never],
+    )
+    expect(mappings[0].defaultVatTreatment).toBe('exempt')
+    expect(mappings[0].providerVatCode).toBeUndefined()
+  })
+
   it('does not touch a remapped row, only identity mappings', () => {
     // 3056 redirected to 3051 takes the target's treatment, not the source
     // account's code: applySourceVatCodes guards this and the guard matters,
