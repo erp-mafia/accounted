@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
   Inbox,
   Upload,
@@ -472,6 +473,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const detailRequestRef = useRef(0)
   const docRequestRef = useRef(0)
   const [inboxAddress, setInboxAddress] = useState<InboxAddress | null>(null)
+  const { dialogProps: rotateDialogProps, confirm: confirmRotate } = useDestructiveConfirm()
   // We asked for the inbox address and did not get an answer we can trust
   // (5xx, network, unparseable). Distinct from a 404, which honestly means no
   // address is provisioned yet.
@@ -1310,11 +1312,18 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     // read failed and we cannot rule one out. Rotating retires the old address,
     // and suppliers plus forwarding rules already point at it, so the one case
     // that must never skip this dialog is the one where we are unsure.
-    if (
-      (inboxAddress || addressLoadFailed) &&
-      !confirm('Skapa en ny inkorgsadress? Den gamla slutar att fungera.')
-    ) {
-      return
+    // The rotate control sits one icon away from Copy, so a slip lands here.
+    // An in-app dialog (not window.confirm) names the consequence and puts
+    // the irreversible action on a destructive button.
+    if (inboxAddress || addressLoadFailed) {
+      const ok = await confirmRotate({
+        title: t('rotate_confirm_title'),
+        description: t('rotate_confirm_description'),
+        confirmLabel: t('rotate_confirm_label'),
+        cancelLabel: t('rotate_confirm_cancel'),
+        variant: 'destructive',
+      })
+      if (!ok) return
     }
     setIsRotating(true)
     try {
@@ -1335,7 +1344,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } finally {
       setIsRotating(false)
     }
-  }, [toast, inboxAddress, addressLoadFailed])
+  }, [toast, inboxAddress, addressLoadFailed, confirmRotate, t])
 
   // ── Render ─────────────────────────────────────────────────
 
@@ -2168,6 +2177,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         }}
       />
     )}
+    <DestructiveConfirmDialog {...rotateDialogProps} />
     </div>
   )
 }
@@ -2312,7 +2322,8 @@ function InboxAddressBar({
           className="text-muted-foreground hover:text-foreground shrink-0"
           onClick={onRotate}
           disabled={isRotating}
-          title="Rotera till ny adress"
+          aria-label={t('rotate_address')}
+          title={t('rotate_address')}
         >
           {isRotating ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
