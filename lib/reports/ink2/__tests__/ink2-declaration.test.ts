@@ -22,6 +22,7 @@ vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
 }))
 
 import { generateINK2Declaration } from '../ink2-engine'
+import { generateSRUSubmission, validateBlanketterSru } from '../sru-generator'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import type { TrialBalanceRow } from '@/types'
@@ -448,29 +449,35 @@ describe('generateINK2Declaration: cross-surface self-check', () => {
 })
 
 describe('generateINK2Declaration: whole-krona drift (#2597)', () => {
-  /**
-   * Three ordinary two-decimal revenue balances whose öre add up to a whole
-   * krona: 1033.54 + 1203.03 + 259.43. Accumulated as doubles they reach
-   * 2495.99999999999955, and the local Math.floor this engine used to carry
-   * filed 2495 for a nettoomsättning actually worth 2496.
-   *
-   * This case lives here rather than in lib/__tests__/whole-krona-drift.test.ts
-   * with the rest of the bug class: the engine needs the trial-balance and
-   * company fixtures built above, and duplicating them would be worse than
-   * splitting the class across two files.
-   */
-  const DRIFTING_REVENUE: TrialBalanceRow[] = [
-    ...PRE_CLOSING_ROWS.filter((r) => r.account_number !== '3001'),
-    row('3001', 'Försäljning varor', -1033.54),
-    row('3002', 'Försäljning tjänster', -1203.03),
-    row('3003', 'Försäljning övrigt', -259.43),
-  ]
-
-  it('files the krona that the öre of nettoomsättning add up to', async () => {
-    stubTrialBalances(CLOSED_ROWS, DRIFTING_REVENUE)
+  // All three repro sums from #2597, their negative counterparts, and clean
+  // controls. Check the exported field as well as the calculation result.
+  it.each([
+    { balances: [1033.54, 1203.03, 259.43], expected: 2496 },
+    { balances: [1668.37, 210.04, 132.59], expected: 2011 },
+    { balances: [1686, 1275.82, 688.18], expected: 3650 },
+    { balances: [-1033.54, -1203.03, -259.43], expected: -2496 },
+    { balances: [-1668.37, -210.04, -132.59], expected: -2011 },
+    { balances: [-1686, -1275.82, -688.18], expected: -3650 },
+    { balances: [1000, 1200, 296], expected: 2496 },
+    { balances: [1000, 1200, 295.99], expected: 2495 },
+    { balances: [-1000, -1200, -295.99], expected: -2495 },
+    { balances: [0, 0, 0], expected: 0 },
+  ])('files revenue $balances as $expected kronor', async ({ balances, expected }) => {
+    const revenue = [
+      ...PRE_CLOSING_ROWS.filter((r) => r.account_number !== '3001'),
+      row('3001', 'Försäljning varor', -balances[0]),
+      row('3002', 'Försäljning tjänster', -balances[1]),
+      row('3003', 'Försäljning övrigt', -balances[2]),
+    ]
+    stubTrialBalances(CLOSED_ROWS, revenue)
 
     const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    expect(result.ink2r['7410']).toBe(expected)
+    expect(result.breakdown['7410'].total).toBe(expected)
 
-    expect(result.ink2r['7410']).toBe(2496)
+    const { blanketterSru } = generateSRUSubmission(result)
+    expect(validateBlanketterSru(blanketterSru)).toEqual({ isValid: true, errors: [] })
+    const revenueFields = blanketterSru.split('\r\n').filter((line) => line.startsWith('#UPPGIFT 7410 '))
+    expect(revenueFields).toEqual(expected === 0 ? [] : [`#UPPGIFT 7410 ${expected}`])
   })
 })

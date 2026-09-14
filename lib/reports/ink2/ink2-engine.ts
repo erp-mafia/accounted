@@ -79,16 +79,6 @@ const SIGN_RECLASSIFICATION_ROUTES: Record<
 }
 
 /**
- * Truncate to nearest krona (drop öre) per SFL 22 kap. 1 §, via the canonical
- * helper in lib/money. The local copy this replaced floored the raw accumulated
- * double, so a ruta whose contributions summed to 2495.99999999999955 filed
- * 2495 (#2597). truncateToWholeKronor rounds to öre first; it is otherwise
- * identical, including truncation toward zero on negatives, and additionally
- * normalises the -0 that Math.ceil leaves.
- */
-const truncateToKrona = truncateToWholeKronor
-
-/**
  * Slack allowed before a difference counts as a real disagreement. Every INK2
  * field is truncated to whole kronor per SFL 22 kap. 1 §, so a few öre of
  * truncation residual can accumulate across the form legitimately.
@@ -357,14 +347,15 @@ export async function generateINK2Declaration(
       breakdown[code].accounts.push({
         accountNumber: contribution.accountNumber,
         accountName: contribution.accountName,
-        amount: truncateToKrona(amount),
+        amount: truncateToWholeKronor(amount),
       })
     }
   }
 
-  // Truncate all INK2R rutor to whole kronor
+  // Normalize accumulated float drift to öre before dropping them. A raw
+  // sum of 2495.99999999999955 represents 2496 kronor (#2597).
   for (const code of allCodes) {
-    ink2r[code] = truncateToKrona(ink2r[code])
+    ink2r[code] = truncateToWholeKronor(ink2r[code])
     breakdown[code].total = ink2r[code]
   }
 
@@ -488,7 +479,7 @@ export async function generateINK2Declaration(
   // booked result of 469 542 kr, nothing warned, because the balance sheet
   // still tied out on its own. A customer found it instead.
   if (resultClosedIntoEquity) {
-    const bookedResult = truncateToKrona(-(balanceSheetBalances.get('2099') ?? 0))
+    const bookedResult = truncateToWholeKronor(-(balanceSheetBalances.get('2099') ?? 0))
     const declaredResult = aretsResultat
     if (Math.abs(bookedResult - declaredResult) > ROUNDING_TOLERANCE_KR) {
       warnings.push(
