@@ -153,13 +153,19 @@ export default function AccountMappingStep({
     return filteredMappings.slice(start, start + PAGE_SIZE)
   }, [filteredMappings, currentPage])
 
-  // Reset page when filter or search changes
+  /**
+   * Switch filter, reset to page one, and end the review editing session.
+   *
+   * Re-entering the review filter should offer what is still outstanding, not
+   * the rows finished during the previous visit, so editedThisStep is dropped.
+   *
+   * Changing to the filter you are already on is a no-op rather than a reset:
+   * the badges call this unconditionally, and the review badge is the most
+   * clickable thing on screen while you are editing a row, so without the guard
+   * one stray click empties editedThisStep and the half-finished row vanishes,
+   * which is the very bug this component is being fixed for.
+   */
   const handleFilterChange = (newFilter: FilterType) => {
-    // Clicking the badge you are already standing on is a no-op, not a reset.
-    // The badges call this unconditionally, and the review badge is the most
-    // clickable thing on the screen while you are editing a row: without this
-    // guard one stray click empties editedThisStep and the half-finished row
-    // vanishes, which is the very bug this component is being fixed for.
     if (newFilter === filter) return
     setFilter(newFilter)
     setCurrentPage(1)
@@ -168,9 +174,11 @@ export default function AccountMappingStep({
     setEditedThisStep(new Set())
   }
 
-  // Used by the momskod and sats selects only: a row being edited must stay
-  // in the list until the user is done with it. The per-row confirm button
-  // calls onVatTreatmentChange directly, so it still clears the row.
+  /**
+   * The momskod and sats selects, which mark a row edited so it stays in the
+   * review list until the user is done with it. Only these two feed the set:
+   * both confirm paths release from it instead.
+   */
   const handleVatSelectChange = (
     sourceAccount: string,
     treatment: AccountVatTreatment | null,
@@ -182,10 +190,12 @@ export default function AccountMappingStep({
     onVatTreatmentChange(sourceAccount, treatment, rate)
   }
 
-  // The per-row confirm means "done with this row", so it releases the row
-  // from the sticky set as well as marking it reviewed. Without the release
-  // the button is inert on a row the user has edited: the row is held in the
-  // list by editedThisStep and clicking the check changes nothing on screen.
+  /**
+   * The per-row confirm check. It means "done with this row", so it releases
+   * the row as well as marking it reviewed. Without the release the button is
+   * inert on a row the user has edited: the row is held in the list by
+   * editedThisStep and clicking the check changes nothing on screen.
+   */
   const handleVatConfirm = (
     sourceAccount: string,
     treatment: AccountVatTreatment | null,
@@ -195,11 +205,13 @@ export default function AccountMappingStep({
     onVatTreatmentChange(sourceAccount, treatment, rate)
   }
 
-  // "Bekräfta alla föreslagna" is the same statement for every suggested row at
-  // once, so it has to release every one of them. Marking them reviewed is not
-  // enough: any row the user had touched through a select is still held in the
-  // list by editedThisStep, so the bulk confirm would leave behind exactly the
-  // rows the user worked on and the counter would disagree with the list again.
+  /**
+   * "Bekräfta alla föreslagna": the same statement for every row the list is
+   * showing, so it has to release every one of them. Marking them reviewed is
+   * not enough, because a row the user touched through a select is held by
+   * editedThisStep regardless, and the bulk confirm would leave behind exactly
+   * the rows the user worked on.
+   */
   const handleVatConfirmAll = () => {
     setEditedThisStep((prev) => releaseAllConfirmed(prev))
     onConfirmAllVatTreatments()
