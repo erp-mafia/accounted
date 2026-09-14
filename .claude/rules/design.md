@@ -8,6 +8,12 @@ paths:
 
 Always use the `/frontend-design` skill for new UI. The conventions below are locked: deviating from them on existing pages is a regression.
 
+## Before drawing or building any UI: the shell is v2, read it from main
+
+There is exactly one shell: `components/dashboard/SidebarV2.tsx` + `components/dashboard/nav-v2.ts` (220px sidebar, 15px icons, sub-items under a hairline) and the sticky 48px top bar (`.page-header` in `app/globals.css`: 13px/500 title, `?` beside it, primary action right), with a full-bleed panel and 24px side padding. Shell v1 (`DashboardNav.tsx`, `max-w-5xl` MainContainer, 256px sidebar, 24px serif page titles) was removed on 2026-09-13 (#2578). Anything that still shows v1 is a stale checkout, not the product: on 2026-09-14 a design canvas was drawn on v1 because the session's branch was three weeks behind main.
+
+Before any UI work, mockup or design canvas: run `git fetch origin` and check `git merge-base --is-ancestor origin/main HEAD`. If the checkout is behind, read the shell and the page you are matching from `origin/main` (`git show origin/main:<path>`) or work in a fresh worktree off `origin/main`. Mockups match the v2 shell exactly: no page `h1`, the title in the top bar, tables edge to edge.
+
 ## Users
 
 Swedish sole traders (enskild firma) and small business owners (aktiebolag) who manage their own bookkeeping. They are not accountants; they are professionals (consultants, freelancers, shop owners) who want to stay compliant without hiring one. They use Accounted in short, focused sessions: sending an invoice, categorizing bank transactions, filing a VAT declaration. Speed and clarity matter.

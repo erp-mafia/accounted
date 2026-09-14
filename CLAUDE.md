@@ -32,6 +32,7 @@ General prohibitions:
 
 ## When Uncertain
 
+- **UI work starts from `origin/main`, never from a stale checkout.** The only shell is v2 (SidebarV2 + top bar); see the first section of `.claude/rules/design.md`.
 - **Stop and ask; do not guess.** Especially for anything touching posted entries, the production database, money math, or Swedish tax law.
 - **Swedish domain questions are never answered from training data.** Load the matching `swedish-*` skill (vat, accounting-compliance, invoice-compliance, payroll, year-end-closing, sie-import-export, sru-filing, financial-reporting, asset-accounting, project-accounting, tax-planning, e-invoicing).
 - Scaffolding has skills; use them instead of improvising: `/supabase-migration` (migrations), `/create-extension` (extensions), `/frontend-design` (new UI), `vercel:deploy` (deployment). API routes follow `.claude/rules/api-routes.md`, which loads automatically under `app/api/`.
