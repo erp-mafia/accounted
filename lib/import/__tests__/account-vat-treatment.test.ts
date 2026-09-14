@@ -215,12 +215,15 @@ describe('applyVatTreatmentReviewAll', () => {
 describe('vat review list visibility', () => {
   const NONE: ReadonlySet<string> = new Set()
 
-  // An EU purchase account whose label names no percentage, which is the
-  // ordinary BAS spelling (4515 "Inköp varor EU", 4535 "Inköp tjänster EU").
-  // vatRateFromLabel (#2596) reads the sats out of labels that state one, so a
-  // label like "Inköp varor 12% EU" now defaults correctly; these do not, and
-  // fall back to 25 %. A 12 % or 6 % acquisition booked here still has to reach
-  // the sats select, which is what makes the row's visibility matter.
+  /**
+   * An EU purchase account whose label names no percentage, which is the
+   * ordinary BAS spelling (4515 "Inköp varor EU", 4535 "Inköp tjänster EU").
+   *
+   * vatRateFromLabel (#2596) reads the sats out of labels that state one, so a
+   * label like "Inköp varor 12% EU" now defaults correctly; these do not, and
+   * fall back to 25 %. A 12 % or 6 % acquisition booked here still has to reach
+   * the sats select, which is what makes the row's visibility matter.
+   */
   function row() {
     return enrichAccountMappingsWithVat([mapping('4515', 'Inköp varor EU')], [])
   }
