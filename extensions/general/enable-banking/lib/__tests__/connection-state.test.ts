@@ -6,6 +6,7 @@ import {
   sortConnectionsByPrecedence,
   EXPIRY_WARNING_DAYS,
   STALE_SYNC_DAYS,
+  PENDING_ABANDON_MS,
 } from '../connection-state'
 
 const NOW = new Date('2026-08-19T12:00:00Z').getTime()
@@ -35,9 +36,24 @@ function conn(overrides: {
 describe('getConnectionUiState', () => {
   it('maps DB statuses straight through', () => {
     expect(getConnectionUiState(conn({ status: 'pending_selection' }), NOW)).toBe('pending_selection')
-    expect(getConnectionUiState(conn({ status: 'pending' }), NOW)).toBe('pending')
+    expect(getConnectionUiState(conn({ status: 'pending', created_at: new Date(NOW - 5000).toISOString() }), NOW)).toBe('pending')
     expect(getConnectionUiState(conn({ status: 'error' }), NOW)).toBe('error')
     expect(getConnectionUiState(conn({ status: 'expired' }), NOW)).toBe('expired')
+  })
+
+  it('treats a pending row older than the abandon window as an abandoned attempt', () => {
+    const justStarted = new Date(NOW - 30 * 1000).toISOString()
+    expect(getConnectionUiState(conn({ status: 'pending', created_at: justStarted }), NOW)).toBe('pending')
+    const atWindow = new Date(NOW - PENDING_ABANDON_MS).toISOString()
+    expect(getConnectionUiState(conn({ status: 'pending', created_at: atWindow }), NOW)).toBe('abandoned')
+    const halfHour = new Date(NOW - 28 * 60 * 1000).toISOString()
+    expect(getConnectionUiState(conn({ status: 'pending', created_at: halfHour }), NOW)).toBe('abandoned')
+  })
+
+  it('keeps a pending row pending when created_at is unknown', () => {
+    const { created_at: _omit, ...row } = conn({ status: 'pending' })
+    void _omit
+    expect(getConnectionUiState(row, NOW)).toBe('pending')
   })
 
   it('classifies a healthy active row as active', () => {
@@ -145,5 +161,19 @@ describe('buildPageAttentionSentence', () => {
   it('counts days since sync for the stale state', () => {
     const attention = selectPageAttention([conn({ last_synced_at: iso(-10) })], NOW)!
     expect(buildPageAttentionSentence(attention, NOW)).toContain('ingen synkning på 10 dagar')
+  })
+
+  it('tells the user to start over for an abandoned attempt, and a fresh attempt earns no sentence', () => {
+    const stale = new Date(NOW - PENDING_ABANDON_MS - 1000).toISOString()
+    const attention = selectPageAttention(
+      [conn({ status: 'pending', created_at: stale, bank_name: 'Handelsbanken' })],
+      NOW,
+    )!
+    expect(attention.state).toBe('abandoned')
+    expect(buildPageAttentionSentence(attention, NOW)).toBe(
+      'Handelsbanken: anslutningen slutfördes inte hos banken. Starta bankkopplingen på nytt och slutför alla steg direkt.',
+    )
+    const fresh = new Date(NOW - 5000).toISOString()
+    expect(selectPageAttention([conn({ status: 'pending', created_at: fresh })], NOW)).toBeNull()
   })
 })

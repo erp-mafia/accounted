@@ -24,6 +24,9 @@ interface BankConnectionStatusProps {
   onDisconnect: (connectionId: string) => void
   onReconnect?: (connection: BankConnection, psuType?: 'personal' | 'business') => void
   onManageAccounts?: (connectionId: string) => void
+  /** Start the bank flow over for an attempt that never came back from the
+   *  bank (abandoned 'pending' row). The connect route sweeps that row. */
+  onRetry?: (connection: BankConnection) => void
   isSyncing?: boolean
 }
 
@@ -41,6 +44,7 @@ export function BankConnectionStatus({
   onDisconnect,
   onReconnect,
   onManageAccounts,
+  onRetry,
   isSyncing = false,
 }: BankConnectionStatusProps) {
   const [now] = useState(() => Date.now())
@@ -72,6 +76,34 @@ export function BankConnectionStatus({
     if (hoursAgo < 24) return `${hoursAgo}h sedan`
     const daysAgo = Math.floor(hoursAgo / 24)
     return `${daysAgo}d sedan`
+  }
+
+  // An attempt the bank never answered: the user timed out or closed the
+  // bank's page, so no callback ran and the row stayed 'pending'. It is not
+  // a connection and never was, so it gets no spinner and no "Åtgärd krävs"
+  // badge: one sentence, start over or remove.
+  if (uiState === 'abandoned') {
+    return (
+      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-1 py-3">
+        <span className="text-sm font-medium">{connection.bank_name}</span>
+        <span className="text-xs text-muted-foreground">Anslutningen slutfördes inte hos banken</span>
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {onRetry && (
+            <Button size="sm" onClick={() => onRetry(connection)}>
+              Försök igen
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => onDisconnect(connection.id)}
+          >
+            Ta bort
+          </Button>
+        </span>
+      </div>
+    )
   }
 
   // In-flight authorization: the row exists but the user is still at the

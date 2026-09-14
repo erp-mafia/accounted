@@ -575,13 +575,40 @@ export default function BankingSettingsPanel() {
     }
   }
 
+  // Start over for an attempt the bank never answered (abandoned 'pending'
+  // row). A fresh connect, not a reconnect: the reconnect path parks a
+  // failed retry as a permanent 'error' card, while the connect route
+  // sweeps the stale pending row before it starts. The bank identity comes
+  // off the row itself (provider slug ends with the country code).
+  function handleRetryConnect(connection: BankConnection) {
+    const country = connection.provider?.split('-').pop()?.toUpperCase() || 'SE'
+    void startFreshConnect(
+      { name: connection.bank_name, country },
+      connection.psu_type ?? undefined,
+    )
+  }
+
   async function handleDisconnectBank(connectionId: string) {
-    const ok = await confirm({
-      title: 'Koppla bort bank?',
-      description: 'PSD2-samtycket kommer återkallas. Befintliga transaktioner påverkas inte.',
-      confirmLabel: 'Koppla bort',
-      variant: 'warning',
-    })
+    // A 'pending' row never got a consent: nothing to revoke, so the
+    // question is about removing the attempt, not disconnecting a bank.
+    const neverCompleted = bankConnections.some(
+      (c) => c.id === connectionId && c.status === 'pending',
+    )
+    const ok = await confirm(
+      neverCompleted
+        ? {
+            title: 'Ta bort anslutningsförsöket?',
+            description: 'Försöket slutfördes aldrig hos banken, så det finns inget samtycke att återkalla.',
+            confirmLabel: 'Ta bort',
+            variant: 'warning',
+          }
+        : {
+            title: 'Koppla bort bank?',
+            description: 'PSD2-samtycket kommer återkallas. Befintliga transaktioner påverkas inte.',
+            confirmLabel: 'Koppla bort',
+            variant: 'warning',
+          },
+    )
     if (!ok) return
 
     try {
@@ -605,10 +632,11 @@ export default function BankingSettingsPanel() {
       }
 
       console.log('[enable-banking] Bank disconnected', { connectionId })
-      toast({
-        title: 'Bank bortkopplad',
-        description: 'Bankanslutningen och PSD2-samtycket har återkallats',
-      })
+      toast(
+        neverCompleted
+          ? { title: 'Försöket borttaget', description: 'Du kan starta bankkopplingen på nytt när du vill.' }
+          : { title: 'Bank bortkopplad', description: 'Bankanslutningen och PSD2-samtycket har återkallats' },
+      )
       fetchConnections()
     } catch (error) {
       console.error('[enable-banking] Disconnect flow failed', {
@@ -806,6 +834,7 @@ export default function BankingSettingsPanel() {
               onSync={handleSyncTransactions}
               onDisconnect={handleDisconnectBank}
               onReconnect={handleReconnect}
+              onRetry={handleRetryConnect}
               onManageAccounts={(connectionId) => setPickerConnectionId(connectionId)}
               isSyncing={syncingConnectionId === connection.id}
             />
