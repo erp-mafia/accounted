@@ -193,6 +193,26 @@ export function suggestMappings(
 }
 
 /**
+ * What the mapper did with an account. `null` only when there is no target at
+ * all, a state the unmapped filter already owns.
+ *
+ * `from_file` is deliberately not "the company's own account": `bas_range`
+ * covers both a source system's invention (a Fortnox 4599) and a standard
+ * sub-account our reference does not carry (1241 Personbilar), and nothing here
+ * can tell them apart. See DECISIONS.md 2026-09-12.
+ */
+export type AccountMatchKind = 'bas' | 'from_file' | 'redirected' | 'manual'
+
+export function resolveAccountMatch(mapping: AccountMapping): AccountMatchKind | null {
+  if (!mapping.targetAccount) return null
+  // Before the identity check: remapping an account to itself is still a choice.
+  if (mapping.isOverride) return 'manual'
+  if (mapping.targetAccount !== mapping.sourceAccount) return 'redirected'
+  if (mapping.matchType === 'bas_range') return 'from_file'
+  return 'bas'
+}
+
+/**
  * Validate that all accounts are mapped
  */
 export function validateMappings(mappings: AccountMapping[]): {
