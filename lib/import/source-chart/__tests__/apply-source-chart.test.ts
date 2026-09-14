@@ -48,6 +48,30 @@ describe('applySourceChartCsv', () => {
     expect(mappings[0].defaultVatRate).toBe(0.25)
   })
 
+  it('takes the rate the code states over the one the label implies', () => {
+    // applySourceVatCodes derives the rate from the account name, which is the
+    // weaker source. A chart is free to code 20-12% on an account whose name
+    // carries no percentage, and the label fallback then answers 25 %: the
+    // wrong rate bucket, which makes the filing gate flag correct vouchers as
+    // rc-basis gaps.
+    const { mappings } = applySourceChartCsv(
+      [mapping('4515', 'Inköp varor EU')],
+      csv('True;4515;Inköp varor EU;20-12%'),
+    )
+    expect(mappings[0].providerVatTreatment).toBe('reverse_charge_eu_goods')
+    expect(mappings[0].defaultVatRate).toBe(0.12)
+  })
+
+  it('leaves the rate alone when the code states none', () => {
+    // The bare form names a box but no sats, so there is nothing to prefer and
+    // the treatment's own default stands.
+    const { mappings } = applySourceChartCsv(
+      [mapping('3051', 'Försäljn varor 25% sv')],
+      csv('True;3051;Försäljn varor 25% sv;05-25%'),
+    )
+    expect(mappings[0].defaultVatRate).toBe(0.25)
+  })
+
   it('keeps an untranslatable code visible instead of dropping it', () => {
     // Ruta 50, beskattningsunderlag vid import: a real code with no treatment
     // here. The row must keep the code and stay up for review.

@@ -62,11 +62,12 @@ interface AccountMappingStepProps {
   /** Accept the suggested VAT treatment for every unreviewed row at once. */
   onConfirmAllVatTreatments: () => void
   /**
-   * Hand the picked chart export up as text. The parent owns `mappings`, so it
-   * owns applying the file too; this step only collects it, the same division
-   * the bulk confirm already uses.
+   * Hand the picked chart export up as a File. The parent owns `mappings`, so
+   * it owns reading and applying the file too; this step only collects it, the
+   * same division the bulk confirm already uses. Passing the File rather than
+   * its text keeps the read where the state that must report a failed one is.
    */
-  onSourceChartSelected?: (csvText: string) => void
+  onSourceChartSelected?: (file: File) => void
   /** What the last accepted file did, for the line above the table. */
   sourceChart?: { summary: SourceChartSummary; warnings: string[] } | null
   onContinue: () => void
@@ -304,12 +305,18 @@ export default function AccountMappingStep({
                     // Reset first: picking the same file twice must fire again,
                     // which it does not if the value is left in place.
                     event.target.value = ''
-                    if (file) void file.text().then(onSourceChartSelected)
+                    if (file) onSourceChartSelected(file)
                   }}
                 />
                 <Button variant="outline" size="sm" className="h-8" asChild>
                   <span>
-                    {sourceChart ? t('source_chart_replace') : t('source_chart_action')}
+                    {/* Keyed to the same thing as the line beside it: a file
+                        whose format was not recognised leaves nothing to
+                        replace, so offering "Byt fil" next to the invitation
+                        would have the two controls describe opposite states. */}
+                    {sourceChart?.summary.formatLabel
+                      ? t('source_chart_replace')
+                      : t('source_chart_action')}
                   </span>
                 </Button>
               </label>

@@ -1,5 +1,5 @@
 import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
-import { spirisVatTreatment } from './spiris-vat-codes'
+import { parseSpirisVatCode, spirisVatTreatment } from './spiris-vat-codes'
 
 /**
  * The chart-of-accounts export formats this project can read.
@@ -33,6 +33,16 @@ export interface SourceChartFormat {
   }
   /** This vendor's VAT code vocabulary. Signature matches applySourceVatCodes. */
   translate: (code: string, accountNumber: string) => AccountVatTreatment | null
+  /**
+   * The momssats the code itself states, or null when it states none.
+   *
+   * Separate from translate because applySourceVatCodes only asks for a
+   * treatment, and the rate it derives from that comes from the account label.
+   * The label is the weaker source: a chart is free to code 20-12% on an
+   * account whose name carries no percentage, and guessing then files 25 %
+   * against an explicit 12 %.
+   */
+  rateFromCode: (code: string) => number | null
 }
 
 export const SOURCE_CHART_FORMATS: readonly SourceChartFormat[] = [
@@ -49,6 +59,7 @@ export const SOURCE_CHART_FORMATS: readonly SourceChartFormat[] = [
       isActive: 'IsActive',
     },
     translate: spirisVatTreatment,
+    rateFromCode: (code) => parseSpirisVatCode(code)?.rate ?? null,
   },
 ]
 

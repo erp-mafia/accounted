@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import SIEJobProgress from '@/components/import/SIEJobProgress'
 import { uploadSIEFile } from '@/lib/import/sie-job-client'
 import { legacyNotices } from '@/lib/import/notices'
@@ -78,6 +78,7 @@ import {
 } from '@/lib/import/account-vat-treatment'
 import {
   applySourceChartCsv,
+  emptySourceChartSummary,
   type SourceChartSummary,
 } from '@/lib/import/source-chart/apply-source-chart'
 import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
@@ -917,13 +918,31 @@ function SIEImportWizard({
   const [sourceChart, setSourceChart] =
     useState<{ summary: SourceChartSummary; warnings: string[] } | null>(null)
 
-  // Computed outside the setMappings updater on purpose: an updater must stay
-  // pure, and React runs it twice in StrictMode.
-  const handleSourceChartSelected = useCallback((csvText: string) => {
-    const result = applySourceChartCsv(mappings, csvText)
+  // Read through a ref rather than the closed-over value: the file is read
+  // asynchronously, and a momskod the user changes while it loads would
+  // otherwise be computed against the pre-edit snapshot and silently reverted.
+  // The work stays outside the setMappings updater, which must remain pure
+  // because React runs it twice in StrictMode.
+  const mappingsRef = useRef(mappings)
+  mappingsRef.current = mappings
+
+  const handleSourceChartSelected = useCallback(async (file: File) => {
+    let csvText: string
+    try {
+      csvText = await file.text()
+    } catch {
+      // Every other failure in this path reports itself through `warnings`;
+      // without this one the step looks exactly as if no file had been chosen.
+      setSourceChart({
+        summary: emptySourceChartSummary(),
+        warnings: ['Filen kunde inte läsas. Kontrollera att den finns kvar och försök igen.'],
+      })
+      return
+    }
+    const result = applySourceChartCsv(mappingsRef.current, csvText)
     setMappings(result.mappings)
     setSourceChart({ summary: result.summary, warnings: result.warnings })
-  }, [mappings])
+  }, [])
 
   const confirmVatReview = useCallback(() => {
     if (mappings.some((mapping) =>

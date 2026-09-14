@@ -38,6 +38,21 @@ export interface SourceChartSummary {
   codesWithoutTreatment: number
 }
 
+/**
+ * The summary for a file that never got as far as being parsed, so a caller
+ * that fails on the read itself can still report through the same shape.
+ */
+export function emptySourceChartSummary(): SourceChartSummary {
+  return {
+    formatLabel: null,
+    accountsInChart: 0,
+    activeInChart: 0,
+    codesApplied: 0,
+    treatmentsApplied: 0,
+    codesWithoutTreatment: 0,
+  }
+}
+
 export interface SourceChartResult {
   mappings: AccountMapping[]
   warnings: string[]
@@ -78,7 +93,18 @@ export function applySourceChartCsv(
 
   // The detected format brings its own code vocabulary, so a second vendor is
   // an entry in SOURCE_CHART_FORMATS rather than a branch here.
-  const applied = applySourceVatCodes(mappings, codesByAccount, format.translate)
+  const translated = applySourceVatCodes(mappings, codesByAccount, format.translate)
+
+  // applySourceVatCodes derives the rate from the account label, which is the
+  // weaker source: the chart may state 20-12% on an account whose name carries
+  // no percentage, and the label fallback then files 25 %. Where the code names
+  // a rate it wins, which is the whole reason for reading the chart.
+  const applied = translated.map((mapping) => {
+    if (!mapping.providerVatCode || !mapping.providerVatTreatment) return mapping
+    const stated = format.rateFromCode(mapping.providerVatCode)
+    if (stated === null || stated === mapping.defaultVatRate) return mapping
+    return { ...mapping, defaultVatRate: stated }
+  })
 
   // Counted on the result rather than as a delta: the guided SIE import has no
   // other source of provider codes, so what is on the mappings afterwards is
