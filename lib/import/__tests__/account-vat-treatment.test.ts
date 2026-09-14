@@ -6,6 +6,7 @@ import {
   enrichAccountMappingsWithVat,
   applyVatTreatmentReviewAll,
   isInVatReviewList,
+  releaseConfirmed,
   needsVatTreatmentReview,
 } from '../account-vat-treatment'
 import type { AccountMapping } from '../types'
@@ -267,6 +268,34 @@ describe('vat review list visibility', () => {
     const confirmed = applyVatTreatmentReviewAll(row())
     expect(confirmed.every((m) => !needsVatTreatmentReview(m))).toBe(true)
     expect(confirmed.every((m) => !isInVatReviewList(m, NONE))).toBe(true)
+  })
+
+  it('holds a reviewed row until the set releases it, which is the confirm\'s job', () => {
+    // Marking a row reviewed is NOT enough to take it out of the list: the
+    // sticky set outranks it by design. Both confirm paths therefore have to
+    // release, and this is the assertion that says so.
+    const [edited] = applyVatTreatmentReview(row(), '4515', 'reverse_charge_eu_goods', 0.25)
+    const [confirmed] = applyVatTreatmentReviewAll([edited])
+    expect(needsVatTreatmentReview(confirmed)).toBe(false)
+    expect(isInVatReviewList(confirmed, new Set(['4515']))).toBe(true)
+    expect(isInVatReviewList(confirmed, releaseConfirmed(new Set(['4515'])))).toBe(false)
+  })
+})
+
+describe('releaseConfirmed', () => {
+  it('drops just the confirmed row', () => {
+    expect([...releaseConfirmed(new Set(['4515', '4535']), '4515')]).toEqual(['4535'])
+  })
+
+  it('clears every row for the bulk confirm', () => {
+    expect(releaseConfirmed(new Set(['4515', '4535'])).size).toBe(0)
+  })
+
+  it('returns the same set when there is nothing to release', () => {
+    const held = new Set(['4515'])
+    expect(releaseConfirmed(held, '9999')).toBe(held)
+    const empty: ReadonlySet<string> = new Set()
+    expect(releaseConfirmed(empty)).toBe(empty)
   })
 })
 

@@ -169,9 +169,13 @@ export function needsVatTreatmentReview(mapping: AccountMapping): boolean {
  * reverse charge on class 4 to 6. A 12 % or 6 % acquisition booked on one of
  * those is exactly the row that vanishes before its rate can be corrected.
  *
- * `editedThisStep` holds only per-select edits. The per-row confirm button and
- * "Bekräfta alla föreslagna" deliberately do not feed it: those say "done with
- * this row", and the row leaving the list is the point.
+ * `editedThisStep` holds only per-select edits. Both confirm paths, the per-row
+ * check and "Bekräfta alla föreslagna", say "done with this row", so neither
+ * feeds the set and both must RELEASE from it. Not feeding it is not enough: a
+ * row the user reached through a select is held here regardless of being
+ * reviewed, so a confirm that only marks it reviewed leaves behind precisely
+ * the rows the user worked on. The callers own that release, because this
+ * predicate is given the set rather than owning it.
  */
 export function isInVatReviewList(
   mapping: AccountMapping,
@@ -179,6 +183,33 @@ export function isInVatReviewList(
 ): boolean {
   if (needsVatTreatmentReview(mapping)) return true
   return Boolean(mapping.requiresVatTreatmentReview) && editedThisStep.has(mapping.sourceAccount)
+}
+
+/**
+ * The `editedThisStep` set after a confirm. Pass a source account for the
+ * per-row check, nothing for "Bekräfta alla föreslagna".
+ *
+ * This exists because the release is what both confirm paths got wrong, in the
+ * same way, one after the other: the per-row check was inert on an edited row
+ * until it released that row, and the bulk confirm left every edited row behind
+ * until it cleared the set. The component cannot be unit tested here (this repo
+ * scopes tests to lib/ and app/api/), so the part that broke twice lives where
+ * it can be.
+ *
+ * Returns the same set instance when nothing changes, so React state does not
+ * churn on a confirm that releases nothing.
+ */
+export function releaseConfirmed(
+  editedThisStep: ReadonlySet<string>,
+  sourceAccount?: string,
+): ReadonlySet<string> {
+  if (sourceAccount === undefined) {
+    return editedThisStep.size === 0 ? editedThisStep : new Set()
+  }
+  if (!editedThisStep.has(sourceAccount)) return editedThisStep
+  const next = new Set(editedThisStep)
+  next.delete(sourceAccount)
+  return next
 }
 
 export function applyVatTreatmentReview(

@@ -32,7 +32,11 @@ import {
 } from 'lucide-react'
 import type { AccountMapping } from '@/lib/import/types'
 import { isValidBASRange } from '@/lib/import/account-mapper'
-import { isInVatReviewList, needsVatTreatmentReview } from '@/lib/import/account-vat-treatment'
+import {
+  isInVatReviewList,
+  needsVatTreatmentReview,
+  releaseConfirmed,
+} from '@/lib/import/account-vat-treatment'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
@@ -180,13 +184,18 @@ export default function AccountMappingStep({
     treatment: AccountVatTreatment | null,
     rate: number | null,
   ) => {
-    setEditedThisStep((prev) => {
-      if (!prev.has(sourceAccount)) return prev
-      const next = new Set(prev)
-      next.delete(sourceAccount)
-      return next
-    })
+    setEditedThisStep((prev) => releaseConfirmed(prev, sourceAccount))
     onVatTreatmentChange(sourceAccount, treatment, rate)
+  }
+
+  // "Bekräfta alla föreslagna" is the same statement for every suggested row at
+  // once, so it has to release every one of them. Marking them reviewed is not
+  // enough: any row the user had touched through a select is still held in the
+  // list by editedThisStep, so the bulk confirm would leave behind exactly the
+  // rows the user worked on and the counter would disagree with the list again.
+  const handleVatConfirmAll = () => {
+    setEditedThisStep((prev) => releaseConfirmed(prev))
+    onConfirmAllVatTreatments()
   }
 
   const handleSearchChange = (term: string) => {
@@ -586,7 +595,7 @@ export default function AccountMappingStep({
             <Button
               variant="outline"
               className="min-h-11"
-              onClick={onConfirmAllVatTreatments}
+              onClick={handleVatConfirmAll}
             >
               <CheckCircle className="mr-2 h-4 w-4" />
               {t('vat_review_confirm_all', { count: stats.vatReview })}
