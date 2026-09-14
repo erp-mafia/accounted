@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Customers (2026-09)
+
+- **Sole traders (enskild firma)** (#2367, 2026-09-13): an \`org_number\` shaped like a Swedish personnummer is now accepted on \`customer_type=swedish_business\`. A sole trader has no separate organisationsnummer: its owner's personnummer IS the firm's org number, so the old blanket \`400 CUSTOMER_ORG_NUMBER_IS_PERSONAL\` made a real customer impossible to register as a business. The refusal now applies to \`eu_business\` and \`non_eu_business\` only, where the value cannot be an org number at all; \`individual\` is unchanged (a personnummer there is still moved into \`personal_number\`). The data-minimisation reason behind the old rule moved to the read paths where it belongs: \`GET /customers\` returns \`org_number\` and \`vat_number\` as \`null\` for any row whose \`org_number\` is a personnummer, the masking individual rows already had. \`GET /customers/{id}\` still returns the full value.
+
 ### Chart of accounts (2026-09)
 
 - **Order** (2026-09-11): \`GET /accounts\` returns accounts in \`account_number\` order, the BAS sequence it always documented. It used to sort by the stored \`sort_order\`, which is \`0\` on every account seeded at company creation, so the seeded accounts came first and the rest followed.

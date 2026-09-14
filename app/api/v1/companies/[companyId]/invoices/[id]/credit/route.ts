@@ -14,7 +14,12 @@
  *      On items failure, rolls back the credit-note row (scoped DELETE).
  *   4. Flips the original invoice to status='credited'.
  *   5. Posts the reverse journal entry via createCreditNoteJournalEntry
- *      (accrual only: cash basis defers recognition to refund time).
+ *      whenever the original sale reached the ledger: always under
+ *      faktureringsmetoden, and under kontantmetoden once the original was
+ *      paid or otherwise booked (its payment verifikat booked revenue +
+ *      utgående moms, so the credit must reverse them). A kontantmetod
+ *      invoice carrying no booking signal at all books nothing: recognition
+ *      still waits for cash.
  *   6. Emits credit_note.created.
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable. The credit-note row
@@ -37,6 +42,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { eventBus } from '@/lib/events'
 import type { AccountingMethod, CreditNote, EntityType, Invoice } from '@/types'
 
@@ -45,7 +51,7 @@ const CreditNoteRequest = z.object({
 })
 
 const ORIGINAL_INVOICE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions, deduction_reclaimed_total'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, invoice_marking, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions, deduction_reclaimed_total, journal_entry_id, paid_at, paid_amount'
 
 // default_dimensions stays in this projection: the inserted credit-note row is
 // handed to createCreditNoteJournalEntry, which reads the bag off the row so
@@ -74,7 +80,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/credit',
   summary: 'Issue a credit note (kreditfaktura) against an invoice.',
   description:
-    'Creates a credit note referencing the original invoice. The credit note carries reversed-sign amounts (matching the original line for line) and gets invoice_number=KR-<original>. The original invoice transitions to status=credited. Under faktureringsmetoden, posts a reversing journal entry (Credit AR 1510 / Debit revenue + Debit output VAT). Under kontantmetoden the credit note still creates the row but defers the reversal entry until refund. The credit note is dated today (Europe/Stockholm); a locked or closed period returns 400 INVOICE_CREDIT_PERIOD_LOCKED. Idempotent and dry-runnable. Emits credit_note.created.',
+    'Creates a credit note referencing the original invoice. The credit note carries reversed-sign amounts (matching the original line for line) and gets invoice_number=KR-<original>. The original invoice transitions to status=credited. Posts a reversing journal entry (Debit revenue + Debit output VAT / Credit AR 1510) whenever the original sale reached the ledger: always under faktureringsmetoden, and under kontantmetoden once the original was paid or otherwise booked (status paid, a linked verifikat, a payment date, or a non-zero paid amount). Only a kontantmetod invoice carrying none of those signals is credited without an entry, because nothing has been recognised yet. The credit note is dated today (Europe/Stockholm); a locked or closed period returns 400 INVOICE_CREDIT_PERIOD_LOCKED. Idempotent and dry-runnable. Emits credit_note.created.',
   useWhen:
     'You need to legally cancel an issued invoice (ML 17 kap 22-23§). The original invoice cannot be edited once issued: credit it and reissue corrected.',
   doNotUseFor:
@@ -83,7 +89,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory. Retried credits with the same key replay the cached response: no duplicate credit note is created.',
     'The original invoice must be in sent / paid / overdue status. Drafts, cancelled invoices, and already-credited invoices are rejected with specific error codes.',
     'Credit-note items mirror the original\'s lines with negated values. To credit only part of an invoice (line-level), credit the full invoice first then reissue with the corrected lines.',
-    'Under kontantmetoden no journal entry is created here: refund booking is deferred. A `JOURNAL_ENTRY_NOT_POSTED` warning is NOT emitted in this case (the deferral is correct, not a failure).',
+    'Under kontantmetoden a journal entry is posted only when the original carries a booking signal (status paid, a linked verifikat, a payment date, or a non-zero paid amount): crediting an invoice with none of those creates the row without an entry, and no `JOURNAL_ENTRY_NOT_POSTED` warning is emitted (the deferral is correct, not a failure). Use the dry run to read `would_create_journal_entry` before committing.',
   ],
   example: {
     request: { reason: 'Felaktig kund' },
@@ -309,7 +315,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         'accrual') as AccountingMethod
     const entityType = ((settings as { entity_type?: string } | null)?.entity_type ??
       'enskild_firma') as EntityType
-    const wouldCreateJournalEntry = accountingMethod === 'accrual'
+    // Same decision the dashboard delegates to this helper: a credit note
+    // reverses whatever actually reached the ledger, so kontantmetoden books
+    // it for a PAID original and skips only the still-unpaid one (issue #2552).
+    const wouldCreateJournalEntry = creditNoteNeedsJournalEntry(accountingMethod, original)
 
     if (ctx.dryRun) {
       return dryRunPreview(
@@ -398,7 +407,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Step 4: post the reverse journal entry (accrual only). Best-effort.
+    // Step 4: post the reverse journal entry when the original reached the
+    // ledger. Best-effort.
     let journalEntryId: string | null = null
     if (wouldCreateJournalEntry) {
       try {

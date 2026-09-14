@@ -18,7 +18,10 @@
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { WhatsAppPhoneLink } from '@/types'
+import { createLogger } from '@/lib/logger'
 import { encryptPhone, hashPhone, hashSecret, maskPhone } from './phone-crypto'
+
+const log = createLogger('whatsapp-inbox/linking')
 
 /** Uppercased twin of generate_inbox_local_part's ambiguity-free alphabet
  *  (no I/L/O/U, no 0/1): codes survive being read aloud or retyped. */
@@ -222,16 +225,41 @@ export async function createPhoneLink(
   return { link: link as WhatsAppPhoneLink, conversationId: conversation?.id ?? null }
 }
 
-/** Active (non-revoked) link for a phone hash, or null. */
+/**
+ * Outcome of looking up a phone:
+ *  - WhatsAppPhoneLink: an active link exists, the sender is known.
+ *  - null: no active link. A verdict about the PHONE, so the caller may run
+ *    the unknown-sender path (M1 greeting, M2 bad code).
+ *  - 'transient_error': the read could not be executed (DB error, statement
+ *    timeout). No verdict at all: collapsing it into null greets an
+ *    already-linked user with the onboarding text and invites a second link
+ *    flow (#2365), so the caller must claim nothing and ask for a resend.
+ *    Same tri-state idiom as LinkCodeConsumption above.
+ */
+export type PhoneLinkLookup = WhatsAppPhoneLink | null | 'transient_error'
+
+/** Active (non-revoked) link for a phone hash, null when there is none, or
+ *  'transient_error' when the lookup itself failed. */
 export async function lookupActiveLink(
   serviceClient: SupabaseClient,
   phoneHash: string,
-): Promise<WhatsAppPhoneLink | null> {
-  const { data } = await serviceClient
+): Promise<PhoneLinkLookup> {
+  const { data, error } = await serviceClient
     .from('whatsapp_phone_links')
     .select('*')
     .eq('phone_hash', phoneHash)
     .is('revoked_at', null)
     .maybeSingle()
+  if (error) {
+    // The error itself is the only signal that separates a one-off timeout
+    // from a standing condition: two active rows for one phone hash fail this
+    // read the same way on every message, forever. Nothing identifying is
+    // logged, the phone hash is peppered and never appears here.
+    log.warn('phone link lookup failed; reporting transient', {
+      code: error.code,
+      error: error.message,
+    })
+    return 'transient_error'
+  }
   return (data as WhatsAppPhoneLink | null) ?? null
 }

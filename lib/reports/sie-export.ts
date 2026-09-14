@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { getBranding } from '@/lib/branding/service'
@@ -50,6 +51,10 @@ export async function generateSIEExport(
   companyId: string,
   options: SIEExportOptions
 ): Promise<string> {
+  return withSIEPeriodRead(supabase,companyId,'sie_export',() => generateSIEExportSnapshot(supabase,companyId,options))
+}
+
+async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: string,options: SIEExportOptions): Promise<string> {
 
   // Fetch fiscal period
   const { data: period } = await supabase

@@ -143,11 +143,36 @@ describe('GET /api/export/customers', () => {
   })
 
   it('keeps the raw org number for business customers', async () => {
-    // Org numbers are public registry data: they export untouched, and the
-    // masking branch only engages when org_number is absent.
+    // A legal entity's org number is public registry data: it exports
+    // untouched, and the masking branch only engages when org_number is
+    // absent or is itself a personnummer.
     enqueue({ data: { company_name: 'Acme AB' } })
     const res = await GET(createMockRequest('/api/export/customers', { searchParams: { format: 'csv' } }), { params: Promise.resolve({}) })
     const text = Buffer.from(await res.arrayBuffer()).toString('utf-8')
     expect(text).toContain('5560217780')
+  })
+
+  it('masks an org number that IS a personnummer, on a business row too (#2367)', async () => {
+    // An enskild firma has no org number of its own: the owner's personnummer
+    // is the firm's identifier, so it leaves the system masked like one.
+    mockFetchAllRows.mockResolvedValue([
+      {
+        ...CUSTOMER,
+        id: 'c4',
+        name: 'Bertil Bengtsson Bygg',
+        customer_type: 'swedish_business',
+        org_number: '19900101-1234', // synthetic
+        vat_number: null,
+        personal_number: null,
+      },
+    ])
+    enqueue({ data: { company_name: 'Acme AB' } })
+
+    const res = await GET(createMockRequest('/api/export/customers', { searchParams: { format: 'csv' } }), { params: Promise.resolve({}) })
+    expect(res.status).toBe(200)
+
+    const text = Buffer.from(await res.arrayBuffer()).toString('utf-8')
+    expect(text).toContain('********-1234')
+    expect(text).not.toContain('19900101')
   })
 })

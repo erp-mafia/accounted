@@ -233,6 +233,15 @@ export interface EntryKeyInput {
   key: string
   /** Shift held: Shift+Tab navigates backwards and never commits. */
   shiftKey?: boolean
+  /**
+   * An IME composition is open (issue #2447). Android keyboards (Gboard
+   * autocorrecting a free-text description) report every keydown during a
+   * composition as keyCode 229 / key 'Unidentified', including the action
+   * key: acting on one would commit the row with the pre-correction text.
+   * Derive it with isComposingKey so every caller reads the event the same
+   * way.
+   */
+  composing?: boolean
   query: string
   /** The suggestion popover is open. */
   open: boolean
@@ -247,12 +256,31 @@ export type EntryKeyAction =
   | { kind: 'none' }
 
 /**
+ * Whether a key event is an IME composition artefact rather than a real key
+ * press. `isComposing` is the standard signal; `keyCode === 229` is the
+ * legacy one Android/Chrome still sends (and the only one some Gboard
+ * versions send), and a key of 'Unidentified' is what comes with it.
+ */
+export function isComposingKey(event: {
+  isComposing?: boolean
+  keyCode?: number
+  key?: string
+}): boolean {
+  return Boolean(event.isComposing) || event.keyCode === 229 || event.key === 'Unidentified'
+}
+
+/**
  * What Enter and Tab do in the unified entry row. Both commit: a highlighted
  * article wins, otherwise the typed text becomes a free-text row. With nothing
  * typed neither commits: Enter is swallowed by the caller (never submits the
  * form) and Tab passes through so the row is not a focus trap.
+ *
+ * A composing key never commits. Touch keyboards have no Tab at all, so the
+ * keyboard is only one way into a row: the ghost cells, the suggestion list
+ * and the "Lägg till rad" button commit without one (issue #2447).
  */
 export function resolveEntryKey(input: EntryKeyInput): EntryKeyAction {
+  if (input.composing) return { kind: 'none' }
   if (input.key !== 'Enter' && input.key !== 'Tab') return { kind: 'none' }
   if (input.key === 'Tab' && input.shiftKey) return { kind: 'none' }
   if (input.open && input.activeIdx >= 0 && input.activeIdx < input.matchCount) {

@@ -28,6 +28,7 @@ import {
   maskCustomerRow,
 } from '@/lib/customers/protect-personal-number'
 import { maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
+import { orgNumberIsPersonalIdentifier } from '@/lib/customers/personal-number-shape'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import { eventBus } from '@/lib/events'
 import type { Customer } from '@/types'
@@ -92,7 +93,7 @@ registerEndpoint({
     'Fetching a single customer you already know the id of: use GET /api/v1/companies/{companyId}/customers/{id}. Suppliers are a separate resource.',
   pitfalls: [
     'Archived customers are hidden by default; the dashboard makes the same choice.',
-    'org_number is included so callers can match against external CRM identifiers; for sole traders (enskild firma) it equals the personnummer.',
+    'org_number is included so callers can match against external CRM identifiers, except where it is a natural person\'s identity number: a sole trader (enskild firma) has no org number of its own, so its org_number and vat_number come back null in the list. Read the record with GET /customers/{id} for the full value.',
   ],
   example: {
     response: {
@@ -209,10 +210,17 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // principle carry it. Masking is free when the value never appears and
     // protective if it ever does. Adding 'eu_individual' as a first-class
     // customer_type for EU natural persons is a separate product decision.
+    //
+    // An enskild firma registered as customer_type='swedish_business' is the
+    // same disclosure without the individual type: it has no org number of
+    // its own, so org_number holds the owner's personnummer and vat_number is
+    // derived from it. Masked here on the same grounds (#2367).
     const INDIVIDUAL_TYPES = new Set(['individual', 'eu_individual'])
 
     const customers = trimmed.map((r) => {
-      const isIndividual = INDIVIDUAL_TYPES.has(r.customer_type)
+      const isIndividual =
+        INDIVIDUAL_TYPES.has(r.customer_type)
+        || orgNumberIsPersonalIdentifier(r.customer_type, r.org_number)
       return {
         id: r.id,
         name: r.name,
@@ -289,7 +297,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory: calls without it return 400 VALIDATION_ERROR.',
     'org_number uniqueness is enforced at the database level; duplicate inserts return 409 CUSTOMER_DUPLICATE_ORG_NUMBER.',
     'A personnummer-shaped org_number on customer_type=individual is treated as the personnummer submitted in the wrong field: it is stored encrypted as personal_number, returned masked (********-1234), and org_number is left empty. Prefer passing it as personal_number. Next to a different personal_number in the same body it is a 400.',
-    'An org_number shaped like a Swedish personnummer is rejected for business customer_types: create the customer as customer_type=individual with personal_number so the number is masked and protected.',
+    'An org_number shaped like a Swedish personnummer is accepted on customer_type=swedish_business: a sole trader (enskild firma) has no separate org number, so its owner\'s personnummer is the firm\'s identifier, and the list endpoint masks it. It is rejected for eu_business and non_eu_business, which cannot have one.',
     'personal_number is accepted only for customer_type=individual, stored encrypted, and returned in the masked form ********-1234.',
     'If default_payment_terms is omitted, it defaults to the company setting invoice_default_days, falling back to 30.',
     'VIES validation runs only on commit. Dry-run skips the external call and leaves vat_number_validated=false in the preview.',

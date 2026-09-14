@@ -104,7 +104,7 @@ exports[`invoice mail (template class: invoice) > unbranded: template output unc
     <!-- Greeting -->
     <div style="margin-bottom: 30px;">
       <p style="margin: 0 0 15px 0;">
-        Hej Erik,
+        Hej Erik Andersson,
       </p>
       <p style="margin: 0;">
         Tack för ditt förtroende! Bifogat hittar du din faktura.
@@ -145,7 +145,7 @@ exports[`invoice mail (template class: invoice) > unbranded: template output unc
          for the attribute context: a URL may legally contain quotes. -->
     
 
-    <!-- Payment Details -->
+    <!-- Payment Details: mirrors the PDF payment box row for row. -->
     
     <div style="margin-bottom: 30px;">
       <h2 style="margin: 0 0 15px 0; font-size: 16px; font-weight: 600; color: #1a1a1a;">
@@ -153,22 +153,18 @@ exports[`invoice mail (template class: invoice) > unbranded: template output unc
       </h2>
       <table style="width: 100%; border-collapse: collapse;">
         
-        
-        
-        
         <tr>
-          <td style="padding: 6px 0; color: #666; font-size: 14px;">Meddelande:</td>
+          <td style="padding: 6px 0; color: #666; font-size: 14px; width: 140px;">Meddelande:</td>
           <td style="padding: 6px 0; font-weight: 500;">F-1001</td>
         </tr>
+        
       </table>
     </div>
     
 
     <!-- Footer -->
     <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
-      <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">
-        Har du frågor om fakturan? Svara direkt på detta mejl så hjälper vi dig.
-      </p>
+      
       <p style="margin: 0; color: #666; font-size: 14px;">
         Med vänliga hälsningar,<br>
         <strong style="color: #1a1a1a;">Kund AB</strong>
@@ -232,7 +228,7 @@ exports[`reminder mail (template class: reminder) > unbranded: canonical action 
       <!-- Greeting and Message -->
       <div style="margin-bottom: 30px;">
         <p style="margin: 0 0 15px 0;">
-          Hej Erik,
+          Hej Erik Andersson,
         </p>
 
         <p style="margin: 0 0 15px 0;">Vi vill påminna dig om att faktura F-1001 förföll till betalning den 2026-06-01. Om du redan har betalat kan du bortse från denna påminnelse.</p>
@@ -282,13 +278,11 @@ exports[`reminder mail (template class: reminder) > unbranded: canonical action 
         </h2>
         <table style="width: 100%; border-collapse: collapse;">
           
-          
-          
-          
           <tr>
-            <td style="padding: 6px 0; color: #666; font-size: 14px;">Meddelande:</td>
+            <td style="padding: 6px 0; color: #666; font-size: 14px; width: 140px;">Meddelande:</td>
             <td style="padding: 6px 0; font-weight: 500;">F-1001</td>
           </tr>
+          
         </table>
       </div>
 
@@ -304,9 +298,7 @@ exports[`reminder mail (template class: reminder) > unbranded: canonical action 
 
       <!-- Footer -->
       <div style="padding-top: 20px; border-top: 1px solid #e5e7eb;">
-        <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">
-          Har du frågor? Svara direkt på detta mejl så hjälper vi dig.
-        </p>
+        
         <p style="margin: 0; color: #666; font-size: 14px;">
           Med vänliga hälsningar,<br>
           <strong>Kund AB</strong>

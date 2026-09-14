@@ -36,6 +36,8 @@ import {
   InvalidMappingResultError,
   JournalEntryNotBalancedError,
   JournalEntryNotFoundError,
+  JournalLineBothSidesNonZeroError,
+  JournalLineNegativeAmountError,
   CurrencyRevaluationAlreadyExistsError,
   MeaninglessCorrectionError,
   NoOpenPeriodForDateError,
@@ -450,6 +452,22 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
     return {
       code: err.code,
       details: { totalDebit: err.totalDebit, totalCredit: err.totalCredit, kind: err.kind },
+    }
+  }
+  // Both malformed-line errors. Without an arm here they fall through to the
+  // INTERNAL_ERROR default below and a caller-side mistake surfaces as a 500
+  // on /api/v1; the negative-amount arm was missing for the same reason.
+  if (
+    err instanceof JournalLineNegativeAmountError ||
+    err instanceof JournalLineBothSidesNonZeroError
+  ) {
+    return {
+      code: err.code,
+      details: {
+        accountNumber: err.accountNumber,
+        debitAmount: err.debitAmount,
+        creditAmount: err.creditAmount,
+      },
     }
   }
   if (err instanceof FiscalPeriodNotFoundError) return { code: err.code }

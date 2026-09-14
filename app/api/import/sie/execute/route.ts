@@ -1,143 +1,45 @@
-import { NextResponse } from 'next/server'
-import { parseSIEFile, detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
+import { after, NextResponse } from 'next/server'
+import { detectEncoding, decodeBuffer, parseSIEFile } from '@/lib/import/sie-parser'
 import { suggestMappings } from '@/lib/import/account-mapper'
-import { executeSIEImport, checkDuplicateImport } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import type { AccountMapping, SIEAccountMappingRecord } from '@/lib/import/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
+import { submitSIEJob } from '@/lib/import/sie-jobs'
+import { runSIEWorker } from '@/lib/import/sie-job-worker'
+import { SIE_LIMITS } from '@/lib/import/sie-job-contract'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import type { SIEAccountMappingRecord } from '@/lib/import/types'
+import { readSIERequestFile } from '@/lib/import/sie-intake'
 
-// SIE imports with many vouchers need extended execution time
 export const maxDuration = 300
 
-/** POST /api/import/sie/execute: execute the SIE import. */
-export const POST = withRouteContext(
-  'sie_import.execute',
-  async (request, ctx) => {
-    const { user, supabase, companyId, log, requestId } = ctx
-
-    const formData = await request.formData()
-    const file = formData.get('file') as File | null
-    const mappingsJson = formData.get('mappings') as string | null
-    const optionsJson = formData.get('options') as string | null
-
-    if (!file) {
-      return errorResponseFromCode('SIE_PARSE_NO_FILE', log, { requestId })
+/** Submit an execution; no ledger work runs before the 202 response. */
+export const POST = withRouteContext('sie_import.execute', async (request,ctx) => {
+  const {supabase,companyId,user,log,requestId} = ctx
+  try {
+    const form = await request.formData()
+    const file = await readSIERequestFile(form,supabase,companyId)
+    if (!(file instanceof File)) return errorResponseFromCode('SIE_PARSE_NO_FILE',log,{requestId})
+    if (!/\.(sie|se|si)$/i.test(file.name)) return errorResponseFromCode('SIE_PARSE_INVALID_TYPE',log,{requestId})
+    if (file.size > SIE_LIMITS.fileBytes) return errorResponseFromCode('SIE_PARSE_FILE_TOO_LARGE',log,{requestId})
+    if (!file.size) return errorResponseFromCode('SIE_PARSE_EMPTY',log,{requestId})
+    const options = SIEJobOptionsSchema.parse(JSON.parse(String(form.get('options') ?? '{}')))
+    const buffer = await file.arrayBuffer()
+    const content = decodeBuffer(buffer,detectEncoding(buffer))
+    let mappings
+    if (form.get('mappings')) mappings = SIEJobMappingsSchema.parse(JSON.parse(String(form.get('mappings'))))
+    else {
+      const stored = await fetchAllRows<SIEAccountMappingRecord>(({from,to}) => supabase.from('sie_account_mappings')
+        .select('*').eq('company_id',companyId).order('source_account').range(from,to))
+      mappings = SIEJobMappingsSchema.parse(suggestMappings(parseSIEFile(content).accounts,BAS_REFERENCE,stored))
     }
-
-    const opLog = log.child({ filename: file.name, sizeBytes: file.size })
-
-    try {
-      // The voucherSeries option is a fallback for vouchers that arrive without
-      // a series (SIE4I subsystem files); the import engine preserves each
-      // #VER's source series per voucher.
-      const parsedOptions = optionsJson ? JSON.parse(optionsJson) : null
-      const { data: companySettings } = await supabase
-        .from('company_settings')
-        .select('default_voucher_series')
-        .eq('company_id', companyId)
-        .maybeSingle()
-      const companyDefaultSeries = companySettings?.default_voucher_series || 'B'
-
-      const options = parsedOptions ?? {
-        createFiscalPeriod: true,
-        importOpeningBalances: true,
-        importTransactions: true,
-        voucherSeries: companyDefaultSeries,
-        updateAccountNames: true,
-      }
-
-      const arrayBuffer = await file.arrayBuffer()
-      const encoding = detectEncoding(arrayBuffer)
-      const content = decodeBuffer(arrayBuffer, encoding)
-
-      const parsed = parseSIEFile(content)
-
-      const duplicate = await checkDuplicateImport(supabase, companyId!, content)
-      if (duplicate) {
-        return errorResponseFromCode('SIE_DUPLICATE_FILE', opLog, {
-          requestId,
-          details: { importId: duplicate.id, importedAt: duplicate.imported_at },
-        })
-      }
-
-      let mappings: AccountMapping[]
-
-      if (mappingsJson) {
-        mappings = JSON.parse(mappingsJson)
-      } else {
-        const { data: storedMappings } = await supabase
-          .from('sie_account_mappings')
-          .select('*')
-          .eq('company_id', companyId)
-
-        mappings = suggestMappings(
-          parsed.accounts,
-          BAS_REFERENCE,
-          (storedMappings as SIEAccountMappingRecord[]) || undefined,
-        )
-      }
-
-      const unmapped = mappings.filter((m) => !m.targetAccount)
-      if (unmapped.length > 0) {
-        return errorResponseFromCode('SIE_IMPORT_UNMAPPED_ACCOUNTS', opLog, {
-          requestId,
-          details: {
-            unmappedCount: unmapped.length,
-            unmappedAccounts: unmapped.slice(0, 5).map((m) => ({
-              account: m.sourceAccount,
-              name: m.sourceName,
-            })),
-          },
-        })
-      }
-
-      // Account creation (and #KONTO renames) happen inside executeSIEImport
-      // via syncMappedAccounts: the pre-create block that used to live here
-      // was a duplicate of that logic.
-      const result = await executeSIEImport(
-        supabase,
-        companyId!,
-        user.id,
-        parsed,
-        mappings,
-        {
-          filename: file.name,
-          fileContent: content,
-          createFiscalPeriod: options.createFiscalPeriod,
-          importOpeningBalances: options.importOpeningBalances,
-          importTransactions: options.importTransactions,
-          voucherSeries: options.voucherSeries || companyDefaultSeries,
-          // Series for the Ingående balanser voucher (issue #1882). Optional:
-          // executeSIEImport falls back to a series the file's vouchers do
-          // not use, never the hardcoded 'A' that shifted the A numbering.
-          // Type-checked: this route has no Zod schema on options, and a
-          // non-string must fall back, not crash mid-import.
-          openingBalanceSeries:
-            typeof options.openingBalanceSeries === 'string'
-              ? options.openingBalanceSeries
-              : undefined,
-          updateAccountNames: options.updateAccountNames ?? true,
-          markImportedNoDocRequired: options.markImportedNoDocRequired ?? false,
-        },
-      )
-
-      if (!result.success) {
-        return errorResponseFromCode('SIE_IMPORT_FAILED', opLog, {
-          requestId,
-          details: { result },
-        })
-      }
-
-      return NextResponse.json({ success: true, result })
-    } catch (err) {
-      opLog.error('sie execute unexpected error', err as Error)
-      return errorResponseFromCode('SIE_IMPORT_UNEXPECTED', opLog, {
-        requestId,
-        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
-      })
-    }
-  },
-  { requireWrite: true },
-)
+    const job = await submitSIEJob(supabase,companyId!,user.id,content,mappings,{...options,filename:file.name},file)
+    after(async () => { await runSIEWorker({importId:job.id}) })
+    return NextResponse.json({data:{importId:job.id,state:job.job_state,statusUrl:`/api/import/sie/${job.id}`}},
+      {status:202,headers:{Location:`/api/import/sie/${job.id}`,'Retry-After':'2'}})
+  } catch (error) {
+    if (error instanceof SyntaxError) return errorResponseFromCode('VALIDATION_ERROR',log,{requestId})
+    return errorResponse(error,log,{requestId})
+  }
+},{requireWrite:true})

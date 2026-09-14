@@ -172,4 +172,20 @@ describe('parseCustomersFile', () => {
     expect(result.rows[3].country).toBe('SE')
     expect(result.rows[3].is_valid).toBe(true)
   })
+  // Detection now reports -1 rather than claiming column 0 as the name (#2548),
+  // so the preview must still parse: confidence is 0, so the UI shows the
+  // mapping step with these rows and the user picks the real name column.
+  it('still previews rows when no name column was detected', () => {
+    const buffer = buildXlsx([
+      ['Kundnummer', 'Postnr'],
+      ['K-001', '11122'],
+    ])
+
+    const result = parseCustomersFile(buffer, 'kunder.xlsx')
+
+    expect(result.detected_columns.name_col).toBe(-1)
+    expect(result.detected_columns.confidence).toBe(0)
+    expect(result.rows).toHaveLength(1)
+    expect(result.rows[0].name).toBe('K-001')
+  })
 })

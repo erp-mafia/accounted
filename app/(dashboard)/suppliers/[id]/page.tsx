@@ -11,7 +11,7 @@ import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, Lock } from 'lucide-react'
+import { Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatAmount, formatDate } from '@/lib/utils'
 import SupplierForm from '@/components/suppliers/SupplierForm'
@@ -23,7 +23,6 @@ import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
 import { formatOrgNumber } from '@/lib/utils'
-import { useShell } from '@/components/dashboard/ShellProvider'
 
 // Supplier invoices carry their own currency; "kr" is only correct for SEK.
 function amountWithCurrency(amount: number, currency?: string | null): string {
@@ -46,7 +45,6 @@ export default function SupplierDetailPage() {
   const params = useParams()
   const router = useRouter()
   const { toast } = useToast()
-  const shell = useShell()
   const t = useTranslations('supplier_detail')
   const tParties = useTranslations('parties')
   const [supplier, setSupplier] = useState<Supplier & { stats?: SupplierStats } | null>(null)
@@ -204,16 +202,6 @@ export default function SupplierDetailPage() {
     <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type/org kicker, quiet actions right */}
       <div>
-        {shell !== 'v2' && (
-        <Link
-          href="/suppliers"
-          className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"
-          aria-label={t('back_aria')}
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t('back')}
-        </Link>
-        )}
         <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="page-header-lead min-w-0">
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>

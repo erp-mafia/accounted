@@ -69,6 +69,7 @@ import {
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
+import { defaultVatRateForTreatment } from '@/lib/vat/supplier-invoice-line-checks'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
@@ -2673,8 +2674,16 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Failed to get arrival number' }, { status: 500 })
         }
 
+        // The stored treatment, resolved once: it decides what a line that
+        // omits vat_rate falls back to and whether the engine may book any
+        // ingaende moms at all (#2553).
+        const vatTreatment = body.vat_treatment || 'standard_25'
+
         const items = body.items.map((bodyItem, index) => {
-          const vatRate = bodyItem.vat_rate ?? 0.25
+          // An omitted rate follows the invoice's vat_treatment, not a
+          // blanket 25 % (#2553): exempt, export and reverse_charge carry no
+          // Swedish moms, reduced_12 / reduced_6 carry their own rate.
+          const vatRate = bodyItem.vat_rate ?? defaultVatRateForTreatment(vatTreatment)
           const lineTotal = bodyItem.amount != null
             ? Math.round(bodyItem.amount * 100) / 100
             : Math.round((bodyItem.quantity ?? 1) * (bodyItem.unit_price ?? 0) * 100) / 100
@@ -2744,7 +2753,7 @@ export const invoiceInboxExtension: Extension = {
             // Which day's kurs the SEK amounts were translated at: the audit
             // trail that makes them verifiable (BFL 5 kap).
             exchange_rate_date: fx.rate.exchangeRateDate,
-            vat_treatment: body.vat_treatment || 'standard_25',
+            vat_treatment: vatTreatment,
             reverse_charge: body.reverse_charge || false,
             payment_reference: body.payment_reference || null,
             subtotal: roundOre(subtotal),

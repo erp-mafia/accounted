@@ -8,15 +8,15 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'sie_import.get',
-  async (_request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId }, { params }) => {
     const { id } = await params
 
     const { data, error } = await supabase
       .from('sie_imports')
-      .select('*')
+      .select(new URL(request.url).searchParams.has('progress') ? 'id,company_id,fiscal_period_id,job_state,job_kind,job_phase,chunks_total,chunks_done,transactions_count,prepared_through,error_message,job_result,supersedes_import_id' : '*')
       .eq('id', id)
       .eq('company_id', companyId)
-      .single()
+      .maybeSingle()
 
     if (error) {
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
@@ -32,12 +32,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
 /**
  * DELETE /api/import/sie/[id]
- * Delete an import record.
- *
- * Only failed or pending imports can be deleted. Completed imports have created
- * journal entries that are part of räkenskapsinformation: deleting the metadata
- * without reversing entries would leave orphaned bookkeeping data, and deleting
- * both is prohibited under BFL 7 kap (7-year retention).
+ * Retain import history, including legacy failed rows whose outcome is unknown.
  */
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   'sie_import.delete',
@@ -47,7 +42,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Check current status before deleting
     const { data: importRecord } = await supabase
       .from('sie_imports')
-      .select('status')
+      .select('status, job_state')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -56,23 +51,9 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Import not found' }, { status: 404 })
     }
 
-    if (importRecord.status === 'completed') {
-      return NextResponse.json({
-        error: 'Slutförd import kan inte raderas. Importerade verifikationer ingår i räkenskapsinformationen (BFL 7 kap).',
-      }, { status: 403 })
-    }
-
-    const { error } = await supabase
-      .from('sie_imports')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', companyId)
-
-    if (error) {
-      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-    }
-
-    return NextResponse.json({ success: true })
+    return NextResponse.json({
+      error: 'Importhistoriken bevaras. Fortsätt eller ångra importen i stället.',
+    }, { status: 403 })
   },
   { requireWrite: true },
 )

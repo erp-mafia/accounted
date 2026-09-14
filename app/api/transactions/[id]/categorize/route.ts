@@ -24,6 +24,7 @@ import {
   escapeLikePattern,
   normalizeOcrReference,
 } from '@/lib/invoices/duplicate-payment-guard'
+import { matchesNormalizedReference } from '@/lib/invoices/ocr-keys'
 import {
   invoiceAmountSek,
   magnitudesWithinTolerance,
@@ -772,10 +773,12 @@ export const POST = withRouteContext(
         }
       }
 
-      // OCR pass: if the bank-tx reference matches an open invoice's
-      // invoice_number, surface it regardless of customer-name match. This
-      // catches the common case where the bank populated `reference` but
-      // neither merchant_name nor description carried the customer name.
+      // OCR pass: if the bank-tx reference matches an open invoice's reference
+      // keys (its invoice_number, or the OCR the invoice printed: same digits
+      // plus a Luhn check digit), surface it regardless of customer-name
+      // match. This catches the common case where the bank populated
+      // `reference` but neither merchant_name nor description carried the
+      // customer name.
       const txReference = (transaction as Transaction & { reference?: string | null }).reference
       const normalizedTxRef = normalizeOcrReference(txReference ?? null)
       if (normalizedTxRef) {
@@ -797,7 +800,7 @@ export const POST = withRouteContext(
         )
         for (const res of refSweepResults) {
           for (const row of (res.data ?? []) as unknown as CandidateRow[]) {
-            if (normalizeOcrReference(row.invoice_number) !== normalizedTxRef) continue
+            if (!matchesNormalizedReference(row.invoice_number, normalizedTxRef)) continue
             if (!comparable(row)) continue
             if (!openInvoiceCandidates.some((existing) => existing.id === row.id)) {
               openInvoiceCandidates.unshift(row)
@@ -811,8 +814,7 @@ export const POST = withRouteContext(
           requestId,
           details: {
             candidates: openInvoiceCandidates.slice(0, 5).map((inv) => {
-              const reasonOcr =
-                normalizedTxRef && normalizeOcrReference(inv.invoice_number) === normalizedTxRef
+              const reasonOcr = matchesNormalizedReference(inv.invoice_number, normalizedTxRef)
               return {
                 invoice_id: inv.id,
                 invoice_number: inv.invoice_number,

@@ -11,6 +11,7 @@ import {
   Home,
   Receipt,
   ReceiptText,
+  FileText,
   Users,
   ArrowLeftRight,
   BookOpen,
@@ -30,7 +31,6 @@ import {
   Package,
   Tag,
   Tags,
-  ChevronRight,
   Sparkles,
   Percent,
   Landmark,
@@ -40,10 +40,6 @@ import {
   FileCheck,
   FileSpreadsheet,
   ScrollText,
-  PanelLeft,
-  PanelLeftClose,
-  Library,
-  BookCheck,
   Briefcase,
   ArrowLeft,
   Workflow,
@@ -67,9 +63,8 @@ import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
-import { persistUiState } from '@/lib/ui-state/client'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
-import type { DashboardShell, EntityType, UserUiState } from '@/types'
+import type { EntityType } from '@/types'
 import { SidebarV2 } from './SidebarV2'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags, type NavV2Item } from './nav-v2'
 
@@ -96,6 +91,10 @@ interface DashboardNavProps {
   // Drives visibility of the Kundorder row: same mechanism as
   // dimensionsEnabled, fetched by the dashboard layout.
   salesOrdersEnabled?: boolean
+  // Whether offerter (company_settings.quotes_enabled) is switched on. Same
+  // mechanism as salesOrdersEnabled, but default true: quotes are on unless
+  // the company switched them off.
+  quotesEnabled?: boolean
   // Whether the company has a webshop hooked up (active WooCommerce/Shopify
   // connection, or existing webshop_orders rows). Drives visibility of the
   // Order row: same mechanism as paysSalaries, fetched by the layout.
@@ -106,7 +105,7 @@ interface DashboardNavProps {
   hasMileage?: boolean
   // Whether the Utlägg row shows: existing expense_claims rows. New utlägg
   // start from the Underlag pane ("Vem betalade?"), so the page only earns a
-  // rail row once there is a person to pay out. Computed by the layout.
+  // nav row once there is a person to pay out. Computed by the layout.
   hasExpenseClaims?: boolean
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
@@ -115,12 +114,6 @@ interface DashboardNavProps {
   // distinct from the active COMPANY shown by CompanySwitcher up top.
   userName?: string | null
   userEmail?: string | null
-  // Server-read user_preferences.ui_state: seeds sidebar collapse + fold
-  // state so the first client render matches the server-stamped width.
-  initialUiState?: UserUiState
-  // Dashboard shell (ui_state.shell). 'v2' swaps the desktop sidebar for
-  // SidebarV2 (220px, sections with sub-items); mobile nav is shared.
-  shell?: DashboardShell
 }
 
 type NavLabelKey =
@@ -131,6 +124,7 @@ type NavLabelKey =
   | 'kpi'
   | 'invoice_inbox'
   | 'invoices'
+  | 'quotes'
   | 'sales_orders'
   | 'webshop_orders'
   | 'customers'
@@ -164,34 +158,22 @@ type NavLabelKey =
   | 'automations'
   | 'back_to_clients'
 
-// Nav layout (July 2026, UI-migration concept, dev_docs/ui_migration_plan.md
-// PR 2): same routes, concept structure.
-//   top of rail          : collapse toggle (64px icon rail when collapsed;
-//                          state persists in user_preferences.ui_state).
-//   top section          : flat, no header: Hem, Assistent (Flöden joins
-//                          when the flow engine exists).
+// Two navigations over the same routes. Desktop: SidebarV2, the section
+// tree in nav-v2.ts (sub-items under the active section, user block at the
+// bottom). Phone: the bottom bar plus the menu sheet, built from `navItems`:
+//   top section          : flat, no header: Hem, Assistent.
 //   four groups          : static headers (Arbeta, Analys, Data,
-//                          Skatt & bokslut); the Register (Data) and
-//                          Bokslut (Skatt) sub-lists are animated folds.
-//   bottom user block    : sticky; avatar + name + active company, opens
-//                          the upward UserMenu with the company-switcher
-//                          flyout, account links and logout.
-// Help + Settings are NOT in `navItems`; they live in the user menu.
+//                          Skatt & bokslut).
+// Help + Settings are NOT in `navItems`; they live in the user menu and in
+// the sheet's Mitt konto rows.
 // Pending (Granskning) stays visible at all times: the badge carries the count.
 type GroupKey = 'top' | 'arbeta' | 'analys' | 'data' | 'skatt'
-// Folds: collapsible sub-lists inside a group (concept: Register under DATA,
-// Bokslut under SKATT & BOKSLUT). Child rows render text-indented behind a
-// hairline; open/closed state persists in user_preferences.ui_state.
-type FoldKey = 'register' | 'bokslut'
 
 interface NavItem {
   href: string
   labelKey: NavLabelKey
   icon: typeof LayoutDashboard
   group: GroupKey
-  // When set, the item renders inside this fold (consecutive items with the
-  // same fold key form one fold block at that position in the group).
-  fold?: FoldKey
   // Payroll surfaces: visible only to employers: every aktiebolag (unchanged
   // behaviour) plus any company that has registered as an employer via
   // company_settings.pays_salaries (e.g. an enskild firma with staff). #782
@@ -204,6 +186,9 @@ interface NavItem {
   // company_settings.sales_orders_enabled (UI-visibility gate only; the
   // pages and APIs work regardless).
   requiresSalesOrders?: boolean
+  // Offerter: visible while company_settings.quotes_enabled is on (UI
+  // visibility only; /quotes and the APIs work regardless).
+  requiresQuotes?: boolean
   // Webshop surfaces: visible only when the company has an active
   // WooCommerce/Shopify connection or already-imported order rows.
   // UI-visibility gate only; the page and APIs work regardless.
@@ -231,9 +216,8 @@ interface NavItem {
   betaBadge?: boolean
 }
 
-// Nav layout per the UI-migration concept (ui_migration_plan.md PR 2):
-// same destinations, concept ordering, with the Register and Bokslut
-// sub-lists as folds.
+// The phone menu's destinations in concept ordering; the desktop sidebar
+// applies the same gates to nav-v2.ts.
 const navItems: NavItem[] = [
   // Top section: flat list, always visible, no header. (Flöden joins here
   // when the flow engine exists.)
@@ -251,6 +235,8 @@ const navItems: NavItem[] = [
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
   // Kundorder: opt-in via the bookkeeping settings toggle (UI gate only).
   { href: '/sales-orders', labelKey: 'sales_orders', icon: ClipboardList, group: 'arbeta', requiresSalesOrders: true },
+  // Offerter: a quote is not an invoice, so its own row above Kundfakturor.
+  { href: '/quotes', labelKey: 'quotes', icon: FileText, group: 'arbeta', requiresQuotes: true },
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   // Webshop orders: visible only for companies that actually have a webshop
   // hooked up (active WooCommerce/Shopify connection or existing order rows).
@@ -272,30 +258,30 @@ const navItems: NavItem[] = [
   // Analys: read the numbers.
   { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'analys' },
   { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'analys' },
-  // Data: the Register fold (master data) + Importera/exportera as its own
+  // Data: the registers (master data) + Importera/exportera as its own
   // row. Anställda is a register (you edit an employee rarely, you run
   // payroll monthly), so it lives here while Löner stays in Arbeta.
-  { href: '/customers', labelKey: 'customers', icon: Users, group: 'data', fold: 'register' },
-  { href: '/suppliers', labelKey: 'suppliers', icon: Truck, group: 'data', fold: 'register' },
-  { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data', fold: 'register' },
-  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', fold: 'register', employerOnly: true },
-  { href: '/assets', labelKey: 'assets', icon: Package, group: 'data', fold: 'register' },
-  { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'data', fold: 'register' },
-  { href: '/dimensions', labelKey: 'dimensions', icon: Tags, group: 'data', fold: 'register', requiresDimensions: true },
+  { href: '/customers', labelKey: 'customers', icon: Users, group: 'data' },
+  { href: '/suppliers', labelKey: 'suppliers', icon: Truck, group: 'data' },
+  { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data' },
+  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', employerOnly: true },
+  { href: '/assets', labelKey: 'assets', icon: Package, group: 'data' },
+  { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'data' },
+  { href: '/dimensions', labelKey: 'dimensions', icon: Tags, group: 'data', requiresDimensions: true },
   { href: '/import', labelKey: 'import', icon: Upload, group: 'data' },
   // Skatt & bokslut: everything submitted to the state; the year-end chain
   // (periodiseringar → årsbokslut → årsredovisning → inkomstdeklaration)
-  // lives in the Bokslut fold in workflow order; the last two are
+  // lives in workflow order; the last two are
   // entity-gated because the surface only exists for one company form.
   { href: '/reports/vat-declaration', labelKey: 'vat_declaration', icon: Percent, group: 'skatt' },
   { href: '/skattekonto', labelKey: 'skattekonto', icon: Landmark, group: 'skatt' },
   { href: '/deadlines', labelKey: 'deadlines', icon: CalendarClock, group: 'skatt' },
-  { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt', fold: 'bokslut' },
-  { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt', fold: 'bokslut' },
-  { href: '/reports/bokslutsbilagor', labelKey: 'bokslutsbilagor', icon: FolderArchive, group: 'skatt', fold: 'bokslut' },
-  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', fold: 'bokslut', entityOnly: 'aktiebolag' },
-  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', fold: 'bokslut', entityOnly: 'aktiebolag' },
-  { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', fold: 'bokslut', entityOnly: 'enskild_firma' },
+  { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt' },
+  { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt' },
+  { href: '/reports/bokslutsbilagor', labelKey: 'bokslutsbilagor', icon: FolderArchive, group: 'skatt' },
+  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: 'aktiebolag' },
+  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'aktiebolag' },
+  { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'enskild_firma' },
 ]
 
 // Byrå cockpit sidebar (lean mode): while a byrå team member is on a
@@ -316,36 +302,6 @@ const COCKPIT_PATHS = ['/byra', '/clients']
 const isCockpitPath = (pathname: string) =>
   COCKPIT_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))
 
-// Fold header presentation (label + icon). The fold rows themselves come
-// from navItems entries carrying the matching `fold` key.
-const foldConfig: Record<FoldKey, { labelKey: string; icon: typeof LayoutDashboard }> = {
-  register: { labelKey: 'fold_register', icon: Library },
-  bokslut: { labelKey: 'fold_bokslut', icon: BookCheck },
-}
-
-// Splits a group's items into a render sequence of plain items and fold
-// blocks (consecutive same-fold items become one block).
-type NavSegment =
-  | { type: 'item'; item: NavItem }
-  | { type: 'fold'; key: FoldKey; items: NavItem[] }
-
-function segmentItems(items: NavItem[]): NavSegment[] {
-  const segments: NavSegment[] = []
-  for (const item of items) {
-    if (item.fold) {
-      const last = segments[segments.length - 1]
-      if (last && last.type === 'fold' && last.key === item.fold) {
-        last.items.push(item)
-      } else {
-        segments.push({ type: 'fold', key: item.fold, items: [item] })
-      }
-    } else {
-      segments.push({ type: 'item', item })
-    }
-  }
-  return segments
-}
-
 // Map known extension hrefs to nav translation keys so sidebar labels translate.
 // Extensions whose manifest label happens to be English-ready can stay null.
 function extensionLabelKey(href: string): string | null {
@@ -361,7 +317,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState, shell = 'v1' }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -431,37 +387,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     return hasCompany || ALWAYS_ENABLED.has(base) || base.startsWith('/settings')
   }
   type ExpandableGroup = Exclude<GroupKey, 'top'>
-
-  // Sidebar collapse (64px icon rail). The width is CSS-variable-driven:
-  // #dash-shell sets --nav-w inline (server-rendered from ui_state), and
-  // both the aside and <main> read it, so one property flip resizes the
-  // whole shell in lockstep. The React state only drives which sidebar
-  // variant renders.
-  const [collapsed, setCollapsed] = useState(initialUiState?.nav_collapsed === true)
-  const toggleCollapsed = () => {
-    const next = !collapsed
-    setCollapsed(next)
-    document
-      .getElementById('dash-shell')
-      ?.style.setProperty('--nav-w', next ? '64px' : '248px')
-    persistUiState({ nav_collapsed: next })
-  }
-
-  // Fold state (Register, Bokslut). Closed by default; an active child
-  // route forces its fold open so deep links never land in a hidden row.
-  const [foldsOpen, setFoldsOpen] = useState<Record<FoldKey, boolean>>({
-    register: initialUiState?.nav_folds?.register ?? false,
-    bokslut: initialUiState?.nav_folds?.bokslut ?? false,
-  })
-  const toggleFold = (key: FoldKey) => {
-    setFoldsOpen((prev) => {
-      const next = { ...prev, [key]: !prev[key] }
-      persistUiState({ nav_folds: { [key]: next[key] } })
-      return next
-    })
-  }
-  const isFoldOpen = (key: FoldKey, items: NavItem[]) =>
-    foldsOpen[key] || items.some((it) => isActive(it.href))
 
   const openMobileMenu = () => {
     if (closeTimerRef.current) {
@@ -606,8 +531,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
   const isEmployer = entityType === 'aktiebolag' || paysSalaries
 
-  // One gate for both shells: a surface hides for the same reason in the
-  // v1 rail and the v2 section tree (nav-v2.ts).
+  // One gate for both navigations: a surface hides for the same reason in
+  // the sidebar tree (nav-v2.ts) and in the phone menu.
   const passesGates = (item: NavGateFlags) => {
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
@@ -618,6 +543,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // bookkeeping settings toggle (company_settings.dimensions_enabled).
     if (item.requiresDimensions && !dimensionsEnabled) return false
     if (item.requiresSalesOrders && !salesOrdersEnabled) return false
+    if (item.requiresQuotes && !quotesEnabled) return false
     // Webshop surfaces are hidden until a store is connected (or order rows
     // already exist from a since-disconnected store).
     if (item.requiresWebshop && !hasWebshop) return false
@@ -667,11 +593,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         { key: 'skatt', items: filteredItems.filter((i) => i.group === 'skatt') },
       ]
 
-  // Flat leaf list for the collapsed 64px icon rail: fold children render
-  // as plain icons (group headers and fold headers disappear).
-  const railItems = [...topItems, ...sidebarGroups.flatMap(({ items }) => items)]
-
-  // Shell v2 tree: the same gates applied to sections and their sub-items.
+  // Nav tree: the same gates applied to sections and their sub-items.
   // In cockpit mode the lean cockpit list is the whole sidebar.
   const gateTree = (items: NavV2Item[]): NavV2Item[] =>
     items.filter(passesGates).map((i) => ({ ...i, sub: i.sub?.filter(passesGates) }))
@@ -692,8 +614,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const allMobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = cockpitMode
     ? cockpitNavItems.map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
     : [
-        // The phone bar names the page the way the sidebar does: Att göra in v2.
-        { href: '/', labelKey: (shell === 'v2' ? 'v2_todo' : 'home') as NavLabelKey, icon: Home },
+        // The phone bar names the page the way the sidebar does: Att göra.
+        { href: '/', labelKey: 'v2_todo' as NavLabelKey, icon: Home },
         { href: '/chat', labelKey: 'assistant', icon: Sparkles },
         { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight },
       ]
@@ -702,11 +624,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     (item) => item.href !== '/chat' || agentIdentity.isVerified,
   )
 
-  const renderBadge = (item: NavItem | { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean }, position: 'sidebar' | 'mobile') => {
+  const renderBadge = (item: { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean }) => {
     const baseClass =
-      position === 'sidebar'
-        ? 'ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5'
-        : 'rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5'
+      'rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5'
     if (item.comingSoon) return <span className={baseClass}>{tNav('badge_coming_soon')}</span>
     if (item.devBadge) return <span className={baseClass}>{tNav('badge_dev')}</span>
     if (item.betaBadge) return <span className={baseClass}>{tNav('badge_beta')}</span>
@@ -720,458 +640,66 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         ? pendingOpsCount
         : null
 
-  const countBubble = (badge: number) => (
-    <span data-ph-mask className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
-      {badge > 99 ? '99+' : badge}
-    </span>
-  )
-
-  // One sidebar row (expanded sidebar). Fold children render text-indented
-  // without an icon behind the fold's hairline (concept PR 2).
-  const renderSidebarItem = (item: NavItem, opts?: { child?: boolean }) => {
-    const active = isActive(item.href)
-    const enabled = isItemEnabled(item.href) && !item.comingSoon
-    const badge = badgeFor(item.href)
-    const decorBadge = renderBadge(item, 'sidebar')
-    const content = (
-      <>
-        {!opts?.child &&
-          renderNavIcon(
-            item,
-            cn(
-              'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
-              active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
-            ),
-          )}
-        <span className="flex-1">{tNav(item.labelKey)}</span>
-        {decorBadge ? decorBadge : badge !== null && countBubble(badge)}
-      </>
-    )
-    const baseClass = cn(
-      'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-      enabled
-        ? cn(
-            'transition-colors duration-150',
-            active
-              ? 'bg-secondary text-foreground font-medium'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
-          )
-        : 'text-muted-foreground/40 cursor-not-allowed',
-    )
-    return enabled ? (
-      <NavLink key={item.href} href={item.href} className={baseClass}>
-        {content}
-      </NavLink>
-    ) : (
-      <div
-        key={item.href}
-        className={baseClass}
-        aria-disabled="true"
-        title={item.comingSoon ? tNav('badge_coming_soon') : tNav('needs_company_tooltip')}
-      >
-        {content}
-      </div>
-    )
-  }
-
-  // Fold block: header row + grid-rows 0fr/1fr height animation, children
-  // indented behind a hairline left edge.
-  const renderFold = (segKey: FoldKey, items: NavItem[]) => {
-    const open = isFoldOpen(segKey, items)
-    const cfg = foldConfig[segKey]
-    const FoldIcon = cfg.icon
-    return (
-      <div key={segKey}>
-        <button
-          type="button"
-          onClick={() => toggleFold(segKey)}
-          aria-expanded={open}
-          className="group flex w-full items-center px-3 py-[7px] text-[13px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
-        >
-          <FoldIcon className="mr-2.5 h-[15px] w-[15px] flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
-          <span className="flex-1 text-left">{tNav(cfg.labelKey)}</span>
-          <ChevronRight
-            className={cn('h-3 w-3 transition-transform duration-200', open && 'rotate-90')}
-          />
-        </button>
-        <div
-          className="grid transition-[grid-template-rows] duration-300 ease-out"
-          style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-        >
-          <div className="overflow-hidden">
-            <div className="ml-[19px] border-l border-border pl-1.5 py-px space-y-px">
-              {items.map((item) => renderSidebarItem(item, { child: true }))}
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Collapsed 64px rail: icon-only rows, native title tooltips, count
-  // bubbles pinned to the icon corner.
-  const renderRailItem = (
-    item: {
-      href: string
-      labelKey: NavLabelKey
-      icon: typeof LayoutDashboard
-      comingSoon?: boolean
-      /** Cross-origin href: render a plain <a>, no client-router prefetch. */
-      external?: boolean
-      /** Extra tooltip context (e.g. "Hanteras via {domain}"). */
-      hint?: string | null
-    },
-  ) => {
-    const active = isActive(item.href)
-    const enabled = isItemEnabled(item.href) && !item.comingSoon
-    const badge = badgeFor(item.href)
-    const label = tNav(item.labelKey)
-    const title = item.hint ? `${label} · ${item.hint}` : label
-    const inner = (
-      <span className="relative">
-        {renderNavIcon(
-          item,
-          cn('h-[17px] w-[17px]', active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'),
-        )}
-        {badge !== null && (
-          <span data-ph-mask className="absolute -top-2 -right-2.5 min-w-[15px] h-[15px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5">
-            {badge > 99 ? '99' : badge}
-          </span>
-        )}
-      </span>
-    )
-    const baseClass = cn(
-      'group flex h-9 w-9 items-center justify-center rounded-lg',
-      enabled
-        ? cn('transition-colors duration-150', active ? 'bg-secondary' : 'hover:bg-secondary/60')
-        : 'opacity-40 cursor-not-allowed',
-    )
-    if (enabled && item.external) {
-      return (
-        <a key={item.href} href={item.href} className={baseClass} title={title} aria-label={title}>
-          {inner}
-        </a>
-      )
-    }
-    return enabled ? (
-      <NavLink key={item.href} href={item.href} className={baseClass} title={title} aria-label={title}>
-        {inner}
-      </NavLink>
-    ) : (
-      <div key={item.href} className={baseClass} title={title} aria-disabled="true">
-        {inner}
-      </div>
-    )
-  }
-
   return (
     <>
-      {/* Desktop sidebar. Shell v2 renders SidebarV2 instead; the mobile
-          nav below is shared by both shells. */}
-      {shell === 'v2' ? (
-        <SidebarV2
-          top={v2Top}
-          company={v2Company}
-          groupLabel={cockpitMode ? '' : tNav('v2_group_company')}
-          label={(key) => tNav(key as NavLabelKey)}
-          isActive={isActive}
-          isEnabled={isItemEnabled}
-          badgeFor={v2BadgeFor}
-          renderIcon={(item, className) => (item.icon ? renderNavIcon({ href: item.href, icon: item.icon }, className) : null)}
-          needsCompanyTitle={tNav('needs_company_tooltip')}
-          betaLabel={tNav('badge_beta')}
-          mainNavLabel={tNav('main_navigation')}
-          brand={<BrandHomeLink showLabel />}
-          backLink={
-            byraTeam && !cockpitMode ? (
-              <div className="mb-2">
-                {cockpitExternal ? (
-                  <a
-                    href={cockpitHref}
-                    title={cockpitHint ?? undefined}
-                    className="group flex items-center rounded-lg px-3 py-[7px] text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
-                  >
-                    <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
-                    <span className="flex-1 min-w-0">
-                      <span className="block">{tNav('back_to_clients')}</span>
-                      <span className="block truncate text-[11px] text-muted-foreground">{cockpitHint}</span>
-                    </span>
-                  </a>
-                ) : (
-                  <NavLink
-                    href={cockpitHref}
-                    className="group flex items-center rounded-lg px-3 py-[7px] text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
-                  >
-                    <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
-                    <span className="flex-1">{tNav('back_to_clients')}</span>
-                  </NavLink>
-                )}
-                <div className="mx-3 mt-2 border-t border-border/60" />
-              </div>
-            ) : null
-          }
-          userBlock={
-            <div className="flex-shrink-0">
-              <SubscriptionTouchpoint variant="sidebar" collapsed={false} />
-              <div className="mx-3 border-t border-border/60" />
-              <div className="px-3 py-2">
-                <UserMenu
-                  userName={userName}
-                  userEmail={userEmail}
-                  isSandbox={isSandbox}
-                  collapsed={false}
-                  cockpitMode={cockpitMode}
-                  onLogout={() => void handleLogout()}
-                />
-              </div>
-            </div>
-          }
-        />
-      ) : (
-      <aside className="hidden md:fixed md:inset-y-0 md:z-10 md:flex md:w-[var(--nav-w)] md:flex-col md:transition-[width] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)]">
-        {/* Borderless on the frame: the panel next to it carries the border */}
-        <div className="flex min-h-0 flex-1 flex-col bg-transparent">
-          {/* Sidebar header: brand mark left, collapse toggle right. The
-              concept hangs the nav column and the panel from the same top
-              line, so this row sits level with the panel's top edge. */}
-          <div
-            className={cn(
-              'flex flex-shrink-0 items-center pt-3 pb-2',
-              collapsed
-                ? 'flex-col justify-center gap-1'
-                : 'justify-between pl-5 pr-3',
-            )}
-          >
-            {/* Brand mark (WL-12 slice A3): brand logo on branded hosts,
-                the exact legacy image everywhere else. The expanded sidebar
-                also shows the brand domain prefix beside the mark. */}
-            <BrandHomeLink showLabel={!collapsed} />
-            <button
-              type="button"
-              onClick={toggleCollapsed}
-              aria-label={collapsed ? tNav('expand_nav') : tNav('collapse_nav')}
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
-            >
-              {collapsed ? (
-                <PanelLeft className="h-4 w-4" />
+      {/* Desktop sidebar; under md the mobile nav below takes over. */}
+      <SidebarV2
+        top={v2Top}
+        company={v2Company}
+        groupLabel={cockpitMode ? '' : tNav('v2_group_company')}
+        label={(key) => tNav(key as NavLabelKey)}
+        isActive={isActive}
+        isEnabled={isItemEnabled}
+        badgeFor={v2BadgeFor}
+        renderIcon={(item, className) => (item.icon ? renderNavIcon({ href: item.href, icon: item.icon }, className) : null)}
+        needsCompanyTitle={tNav('needs_company_tooltip')}
+        betaLabel={tNav('badge_beta')}
+        mainNavLabel={tNav('main_navigation')}
+        brand={<BrandHomeLink showLabel />}
+        backLink={
+          byraTeam && !cockpitMode ? (
+            <div className="mb-2">
+              {cockpitExternal ? (
+                <a
+                  href={cockpitHref}
+                  title={cockpitHint ?? undefined}
+                  className="group flex items-center rounded-lg px-3 py-[7px] text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
+                >
+                  <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
+                  <span className="flex-1 min-w-0">
+                    <span className="block">{tNav('back_to_clients')}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">{cockpitHint}</span>
+                  </span>
+                </a>
               ) : (
-                <PanelLeftClose className="h-4 w-4" />
+                <NavLink
+                  href={cockpitHref}
+                  className="group flex items-center rounded-lg px-3 py-[7px] text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
+                >
+                  <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
+                  <span className="flex-1">{tNav('back_to_clients')}</span>
+                </NavLink>
               )}
-            </button>
-          </div>
-
-          {/* Nav items in their own scroll container so the user block
-              below stays sticky (concept PR 2). */}
-          <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pt-1 pb-2">
-            {/* Both states stay mounted and crossfade past each other while
-                the aside width animates: no DOM swap, one continuous motion.
-                The inactive layer is absolute (no layout), faded, nudged
-                sideways and inert. */}
-              {/* data-ph-unmask: nav labels are static i18n chrome; count
-                  bubbles inside carry data-ph-mask (nearest tag wins). */}
-              <nav
-                data-ph-unmask
-                aria-hidden={!collapsed}
-                inert={!collapsed ? true : undefined}
-                className={cn(
-                  'flex w-16 flex-col items-center gap-px px-2 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
-                  collapsed
-                    ? 'opacity-100 translate-x-0'
-                    : 'pointer-events-none absolute inset-x-0 top-1 opacity-0 -translate-x-3',
-                )}
-                aria-label={tNav('main_navigation')}
-              >
-                {/* Rail counterpart of the back-to-clients link. */}
-                {byraTeam &&
-                  !cockpitMode &&
-                  renderRailItem({
-                    href: cockpitHref,
-                    labelKey: 'back_to_clients',
-                    icon: ArrowLeft,
-                    external: cockpitExternal,
-                    hint: cockpitHint,
-                  })}
-                {railItems.map((item) => renderRailItem(item))}
-                {visibleExtensionNavItems.map((item) => {
-                  const Icon = resolveIcon(item.icon)
-                  const labelTranslationKey = extensionLabelKey(item.href)
-                  const label = labelTranslationKey ? tNav(labelTranslationKey) : item.label
-                  const active = isActive(item.href)
-                  return (
-                    <NavLink
-                      key={item.href}
-                      href={item.href}
-                      title={label}
-                      aria-label={label}
-                      className={cn(
-                        'group flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-150',
-                        active ? 'bg-secondary' : 'hover:bg-secondary/60',
-                      )}
-                    >
-                      <Icon
-                        className={cn(
-                          'h-[17px] w-[17px]',
-                          active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
-                        )}
-                      />
-                    </NavLink>
-                  )
-                })}
-              </nav>
-            <nav
-              data-ph-unmask
-              aria-hidden={collapsed}
-              inert={collapsed ? true : undefined}
-              className={cn(
-                'w-[248px] px-3 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
-                collapsed
-                  ? 'pointer-events-none absolute inset-x-0 top-1 opacity-0 translate-x-3'
-                  : 'opacity-100 translate-x-0',
-              )}
-              aria-label={tNav('main_navigation')}
-            >
-              {/* Byrå members inside a company: pinned route back to the
-                  cockpit, above everything, separated by a hairline. */}
-              {byraTeam && !cockpitMode && (
-                <div className="mb-2">
-                  {cockpitExternal ? (
-                    <a
-                      href={cockpitHref}
-                      title={cockpitHint ?? undefined}
-                      className="group flex items-center px-3 py-[7px] text-[13px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
-                    >
-                      <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
-                      <span className="flex-1 min-w-0">
-                        <span className="block">{tNav('back_to_clients')}</span>
-                        {/* Visible cross-host hint: title alone never surfaces
-                            on touch, and the hop lands on the other host's
-                            login (per-host sessions), so say where it goes. */}
-                        <span className="block truncate text-[11px] text-muted-foreground">
-                          {cockpitHint}
-                        </span>
-                      </span>
-                    </a>
-                  ) : (
-                    <NavLink
-                      href={cockpitHref}
-                      className="group flex items-center px-3 py-[7px] text-[13px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
-                    >
-                      <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
-                      <span className="flex-1">{tNav('back_to_clients')}</span>
-                    </NavLink>
-                  )}
-                  <div className="mx-3 mt-2 border-t border-border/60" />
-                </div>
-              )}
-
-              {/* Top section: flat, no header. Hem, Assistent. */}
-              <div className="mb-4 space-y-px">
-                {topItems.map((item) => renderSidebarItem(item))}
-              </div>
-
-              {/* Groups: Arbeta, Analys, Data, Skatt & bokslut. Static
-                  headers; only the Register/Bokslut folds collapse. */}
-              {sidebarGroups
-                .filter(({ items }) => items.length > 0)
-                .map(({ key, items }) => (
-                  <div key={key} className="mb-4">
-                    <div className="px-3 pb-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em]">
-                      {tNav(groupLabelKey[key])}
-                    </div>
-                    <div className="space-y-px">
-                      {segmentItems(items).map((seg) =>
-                        seg.type === 'item'
-                          ? renderSidebarItem(seg.item)
-                          : renderFold(seg.key, seg.items),
-                      )}
-                      {/* Extension nav items land in Arbeta since extension
-                          workspaces are work surfaces. Future categorised
-                          extensions can opt into a different group via
-                          their manifest. */}
-                      {key === 'arbeta' &&
-                        visibleExtensionNavItems.map((item) => {
-                          const Icon = resolveIcon(item.icon)
-                          const active = isActive(item.href)
-                          const enabled = hasCompany
-                          const labelTranslationKey = extensionLabelKey(item.href)
-                          const label = labelTranslationKey
-                            ? tNav(labelTranslationKey)
-                            : item.label
-                          const content = (
-                            <>
-                              <Icon
-                                className={cn(
-                                  'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
-                                  active
-                                    ? 'text-primary'
-                                    : 'text-muted-foreground group-hover:text-foreground',
-                                )}
-                              />
-                              {label}
-                            </>
-                          )
-                          const baseClass = cn(
-                            'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-                            enabled
-                              ? cn(
-                                  'transition-colors duration-150',
-                                  active
-                                    ? 'bg-secondary text-foreground font-medium'
-                                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
-                                )
-                              : 'text-muted-foreground/40 cursor-not-allowed',
-                          )
-                          return enabled ? (
-                            <NavLink key={item.href} href={item.href} className={baseClass}>
-                              {content}
-                            </NavLink>
-                          ) : (
-                            <div
-                              key={item.href}
-                              className={baseClass}
-                              aria-disabled="true"
-                              title={tNav('needs_company_tooltip')}
-                            >
-                              {content}
-                            </div>
-                          )
-                        })}
-                    </div>
-                  </div>
-                ))}
-            </nav>
-          </div>
-
-          {/* Subscription touchpoint: trial countdown while the trial runs,
-              a persistent muted upgrade link once it (or a subscription) has
-              lapsed. Hides itself for sandbox/demo and paying companies. */}
-          <SubscriptionTouchpoint variant="sidebar" collapsed={collapsed} />
-
-          {/* Sticky user block (bottom-left): avatar, name, active company.
-              Opens the upward user menu with the company-switcher flyout,
-              account links and logout (concept PR 2). The hairline above is
-              inset to the content edges, not edge-to-edge (concept). */}
+              <div className="mx-3 mt-2 border-t border-border/60" />
+            </div>
+          ) : null
+        }
+        userBlock={
           <div className="flex-shrink-0">
-            <div
-              className={cn(
-                'border-t border-border/60',
-                collapsed ? 'mx-2' : 'mx-3',
-              )}
-            />
-            <div className={cn(collapsed ? 'px-2 py-2' : 'px-3 py-2')}>
+            <SubscriptionTouchpoint variant="sidebar" />
+            <div className="mx-3 border-t border-border/60" />
+            <div className="px-3 py-2">
               <UserMenu
                 userName={userName}
                 userEmail={userEmail}
                 isSandbox={isSandbox}
-                collapsed={collapsed}
                 cockpitMode={cockpitMode}
                 onLogout={() => void handleLogout()}
               />
             </div>
           </div>
-        </div>
-      </aside>
-      )}
+        }
+      />
 
       {/* Mobile bottom navigation. data-mobile-nav is the brand-style hook:
           on branded hosts the brand style block re-tints the bar's tokens
@@ -1320,7 +848,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
                   const badge: number | null = null
-                  const decorBadge = renderBadge(item, 'mobile')
+                  const decorBadge = renderBadge(item)
                   const content = (
                     <>
                       {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
@@ -1376,7 +904,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                         : item.href === '/pending' && pendingOpsCount > 0
                           ? pendingOpsCount
                           : null
-                      const decorBadge = renderBadge(item, 'mobile')
+                      const decorBadge = renderBadge(item)
                       const content = (
                         <>
                           {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}

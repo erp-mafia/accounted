@@ -6,6 +6,7 @@ import {
   createQueuedMockSupabase,
   makeTransaction,
 } from '@/tests/helpers'
+import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { eventBus } from '@/lib/events'
 import { BookkeepingDatabaseError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 
@@ -1281,6 +1282,67 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(body.error.details.candidates).toHaveLength(1)
     expect(body.error.details.candidates[0].invoice_id).toBe('inv-1')
     expect(body.error.details.candidates[0].match_reason).toBe('name_amount_fuzzy')
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('suggests the invoice when the bank reference is the printed OCR, check digit and all', async () => {
+    // The payer used the OCR from the invoice PDF: the invoice number's digits
+    // plus a Luhn check digit. Neither merchant_name nor description names the
+    // customer, so only the OCR pass can find it (issue #2555).
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: 12500,
+      description: 'Bg inbetalning',
+      merchant_name: null,
+      reference: generateOcrReference('2026-0042'),
+      journal_entry_id: null,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '1930',
+      credit_account: '1510',
+    })
+
+    // Customer lookup by description: no name match, so no customer sweep runs.
+    enqueue({ data: [], error: null })
+    // OCR pass (one sweep: the transaction is in kronor).
+    enqueue({
+      data: [
+        {
+          id: 'inv-1',
+          invoice_number: '2026-0042',
+          invoice_date: '2026-05-01',
+          due_date: '2026-05-31',
+          remaining_amount: 12500,
+          total: 12500,
+          currency: 'SEK',
+          total_sek: 12500,
+          exchange_rate: null,
+          customer: { name: 'Acme AB' },
+        },
+      ],
+      error: null,
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'income_services' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { candidates: Array<{ invoice_id: string; match_reason: string }> } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_SUGGEST_CI_MATCH')
+    expect(body.error.details.candidates).toHaveLength(1)
+    expect(body.error.details.candidates[0].invoice_id).toBe('inv-1')
+    expect(body.error.details.candidates[0].match_reason).toBe('ocr_exact')
     expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
   })
 

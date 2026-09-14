@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { cloudBackupExtension } from '../index'
 import { isScheduleDue } from '../lib/schedule'
 import type { ExtensionContext } from '@/lib/extensions/types'
-import type { GoogleDriveSchedule } from '../types'
+import type { CloudSchedule } from '../types'
 
 function findRoute(method: string, path: string) {
   const route = cloudBackupExtension.apiRoutes?.find(
@@ -20,7 +20,7 @@ function makeRequest(body: unknown): Request {
   })
 }
 
-function makeContext(existing: GoogleDriveSchedule | null): {
+function makeContext(existing: CloudSchedule | null): {
   ctx: ExtensionContext
   set: ReturnType<typeof vi.fn>
 } {
@@ -50,7 +50,7 @@ describe('PUT /schedule', () => {
 
   it('clears a stale hour_local on an hour_utc-only update so the UTC hour wins', async () => {
     // Existing schedule fires at 05:00 Stockholm (03:00 UTC in summer).
-    const existing: GoogleDriveSchedule = {
+    const existing: CloudSchedule = {
       enabled: true,
       hour_utc: 3,
       hour_local: 5,
@@ -68,7 +68,7 @@ describe('PUT /schedule', () => {
     expect(res.status).toBe(200)
 
     expect(set).toHaveBeenCalledTimes(1)
-    const stored = set.mock.calls[0][1] as GoogleDriveSchedule
+    const stored = set.mock.calls[0][1] as CloudSchedule
     expect(stored.hour_utc).toBe(14)
     // The stale local hour must not survive: the scheduler prefers
     // hour_local, so keeping 5 would make the schedule ignore 14:00 UTC.
@@ -87,7 +87,7 @@ describe('PUT /schedule', () => {
       ctx
     )
     expect(res.status).toBe(200)
-    const stored = set.mock.calls[0][1] as GoogleDriveSchedule
+    const stored = set.mock.calls[0][1] as CloudSchedule
     expect(stored.hour_local).toBe(5)
     expect([3, 4]).toContain(stored.hour_utc) // CEST vs CET mirror
   })

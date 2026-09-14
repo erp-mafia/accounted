@@ -90,9 +90,39 @@ export function isAccountVatTreatment(value: unknown): value is AccountVatTreatm
     (ACCOUNT_VAT_TREATMENTS as readonly string[]).includes(value)
 }
 
+/**
+ * The union's name as it appears in Swedish account labels. "EG" (Europeiska
+ * gemenskapen) is the pre-Lisbon term; charts created before the 2009 rename
+ * kept it, and a single chart routinely carries both spellings, because
+ * accounts added later picked up current BAS names while the older ones were
+ * never renamed. Both spellings mean the same rutor, so the vocabulary is
+ * defined once here instead of being spelled out at each of the six places
+ * that test for it: a term added to one branch and forgotten in another is
+ * exactly how the EG labels came to be read as momsfri.
+ *
+ * OUTSIDE_UNION must be tested before UNION everywhere, since "utanför EU"
+ * also satisfies UNION. Its trailing \b keeps "utanför Europa" from reading
+ * as a sale outside the union.
+ */
+const UNION = /\b(?:eu|eg)\b/
+const OUTSIDE_UNION = /utanför\s+(?:eu|eg)\b/
+
 export interface SuggestedVatTreatment {
   treatment: AccountVatTreatment
   rate: number | null
+}
+
+/**
+ * The momssats an account label spells out ("Inköp varor EU 12%", "Försäljning
+ * 6 % moms"), or null when it names none. Shared by the label suggestion and
+ * the provider-code prefill: a source system's reverse-charge code says
+ * which ruta the basis feeds but not the acquisition rate, and Fortnox ships
+ * 4516/4517-style 12% and 6% accounts under the same IVEU code as 4515.
+ */
+export function vatRateFromLabel(label: string): 0.25 | 0.12 | 0.06 | null {
+  const percent = /\b(25|12|6)\s*%/.exec(label)
+  if (!percent) return null
+  return percent[1] === '25' ? 0.25 : percent[1] === '12' ? 0.12 : 0.06
 }
 
 /**
@@ -107,17 +137,17 @@ export function suggestVatTreatment(
   const accountClass = Number(accountNumber.charAt(0))
   if (accountClass < 3 || accountClass > 6) return null
   const name = accountName.toLocaleLowerCase('sv-SE')
-  const percent = /\b(25|12|6)\s*%/.exec(name)
-  const rate = percent ? Number(percent[1]) / 100 : 0.25
+  const percent = vatRateFromLabel(name)
+  const rate = percent ?? 0.25
 
   if (accountClass === 3) {
     if (/\boss\b|one stop shop|unionsordning/.test(name)) return { treatment: 'oss', rate: null }
     if (/vmb|vinstmarginal/.test(name)) return { treatment: 'vmb', rate: null }
     if (/hyra|uthyrning/.test(name) && /frivillig/.test(name)) return { treatment: 'rental_voluntary', rate }
     if (/omvänd/.test(name)) return { treatment: 'reverse_charge_domestic', rate: 0 }
-    if (/export|utanför eu/.test(name) && /var/.test(name)) return { treatment: 'export_goods', rate: 0 }
-    if (/export|utanför eu/.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'export_services', rate: 0 }
-    if (/\beu\b/.test(name) && /var/.test(name)) {
+    if ((/export/.test(name) || OUTSIDE_UNION.test(name)) && /var/.test(name)) return { treatment: 'export_goods', rate: 0 }
+    if ((/export/.test(name) || OUTSIDE_UNION.test(name)) && /tjänst|tjanst/.test(name)) return { treatment: 'export_services', rate: 0 }
+    if (UNION.test(name) && /var/.test(name)) {
       // BAS 3106 "Försäljning varor till annat EU-land, momspliktig" carries
       // Swedish moms below the OSS threshold and destination-country moms
       // (OSS) above it. The label cannot tell which, so leave the row for
@@ -125,7 +155,7 @@ export function suggestVatTreatment(
       if (/momspliktig/.test(name)) return null
       return { treatment: 'reverse_charge_eu_goods', rate: 0 }
     }
-    if (/\beu\b/.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate: 0 }
+    if (UNION.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate: 0 }
     if (/momsfri|utan moms/.test(name)) return { treatment: 'exempt', rate: 0 }
     if (/försälj|forsalj|intäkt|intakt/.test(name) && percent) {
       return {
@@ -137,11 +167,11 @@ export function suggestVatTreatment(
   }
 
   if (/omvänd/.test(name) && /sverige|svensk|inrikes/.test(name)) return { treatment: 'reverse_charge_domestic', rate }
-  if (/utanför eu|import/.test(name) && /var/.test(name)) return null
-  if (/utanför eu/.test(name) && /tjänst|tjanst/.test(name)) {
+  if ((OUTSIDE_UNION.test(name) || /import/.test(name)) && /var/.test(name)) return null
+  if (OUTSIDE_UNION.test(name) && /tjänst|tjanst/.test(name)) {
     return { treatment: 'reverse_charge_non_eu_services', rate }
   }
-  if (/\beu\b/.test(name) && /var/.test(name)) return { treatment: 'reverse_charge_eu_goods', rate }
-  if (/\beu\b/.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate }
+  if (UNION.test(name) && /var/.test(name)) return { treatment: 'reverse_charge_eu_goods', rate }
+  if (UNION.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate }
   return null
 }

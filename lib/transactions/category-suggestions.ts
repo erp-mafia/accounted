@@ -110,8 +110,8 @@ export function merchantHistoryFor(
  * merchantHistory is the category history FOR THIS TRANSACTION'S counterparty
  * (see buildMerchantHistory/merchantHistoryFor): never a company-wide
  * frequency map. Global padding produced identical ~0.5 four-way spreads on
- * every transaction, which agents correctly read as no signal
- * (mcp_optimization_plan P2-1); an empty result is the honest answer.
+ * every transaction, which agents correctly read as no signal; an empty
+ * result is the honest answer.
  */
 /** Whether a mapping rule's pattern (merchant, description, or MCC) hits this transaction. */
 export function mappingRuleMatches(

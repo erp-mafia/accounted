@@ -1,7 +1,9 @@
 import { z } from 'zod'
 import {
-  CreateRecurringScheduleSchema,
-  UpdateRecurringScheduleSchema,
+  CreateRecurringScheduleObjectSchema,
+  UpdateRecurringScheduleObjectSchema,
+  refineCreateRecurringSchedule,
+  refineUpdateRecurringSchedule,
 } from '@/lib/api/schemas'
 
 /**
@@ -12,13 +14,16 @@ import {
  * enforced (mirrors UpdateCustomerParamsSchema).
  *
  * The field rules live in lib/api/schemas.ts (shared with the cookie-session
- * routes); this module only adds the staged-params envelope.
+ * routes); this module only adds the staged-params envelope, and .strict()
+ * on the object form before the shared refinements.
  */
-
-export const CreateRecurringScheduleParamsSchema = CreateRecurringScheduleSchema.strict()
-
-const RecurringScheduleChangesSchema = UpdateRecurringScheduleSchema
+export const CreateRecurringScheduleParamsSchema = CreateRecurringScheduleObjectSchema
   .strict()
+  .superRefine(refineCreateRecurringSchedule)
+
+const RecurringScheduleChangesSchema = UpdateRecurringScheduleObjectSchema
+  .strict()
+  .superRefine(refineUpdateRecurringSchedule)
   .superRefine((changes, ctx) => {
     if (Object.keys(changes).length === 0) {
       ctx.addIssue({

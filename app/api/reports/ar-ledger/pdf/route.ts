@@ -98,4 +98,4 @@ export const GET = withRouteContext('report.ar_ledger.pdf', async (request, { su
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

@@ -20,6 +20,11 @@ import { eventBus } from '@/lib/events'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import {
+  applyRecurringPlaceholders,
+  buildRecurringPlaceholderValues,
+} from '@/lib/invoices/recurring-placeholders'
+import { isTextLine } from '@/lib/invoices/recurring-schedule-items'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { renderToBuffer } from '@react-pdf/renderer'
@@ -49,6 +54,7 @@ import {
   exceedsInvoiceEmailRecipientLimit,
   invoiceEmailRecipientCount,
   resolveInvoiceEmailRecipients,
+  resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
 import {
   hasRequiredInvoicePaymentAccount,
@@ -243,10 +249,13 @@ export async function executeRecurringSchedule(
   const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated, customer.country)
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
-  // 2. Compute amounts (mirrors POST /api/invoices).
-  const items = (schedule.items || []).slice().sort((a, b) => a.sort_order - b.sort_order)
+  // 2. Compute amounts (mirrors POST /api/invoices). Text rows carry no
+  //    amounts and never book: they are copied onto the invoice as text rows
+  //    but stay out of totals, VAT and the rate gate below.
+  const allItems = (schedule.items || []).slice().sort((a, b) => a.sort_order - b.sort_order)
+  const items = allItems.filter((item) => !isTextLine(item))
   if (items.length === 0) {
-    throw new Error(`schedule ${schedule.id} has no items`)
+    throw new Error(`schedule ${schedule.id} has no billable items`)
   }
 
   // VAT registration gate, mirroring buildInvoiceWriteData (issue #1719): a
@@ -293,6 +302,16 @@ export async function executeRecurringSchedule(
   const due = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()))
   due.setUTCDate(due.getUTCDate() + schedule.payment_terms_days)
   const dueDate = due.toISOString().slice(0, 10)
+
+  // Placeholders ({månad}, {år}, {periodstart} ...) resolve against the
+  // invoice date and the schedule's current period; month names follow the
+  // customer's invoice language. The schedule text itself is never rewritten.
+  const placeholderValues = buildRecurringPlaceholderValues({
+    runDate: invoiceDate,
+    periodStart: schedule.period_start ?? null,
+    intervalMonths: schedule.interval_months ?? 1,
+    lang: customer.language === 'en' ? 'en' : 'sv',
+  })
 
   // 4. Foreign currency: fetch exchange rate.
   let exchangeRate: number | null = null
@@ -349,7 +368,7 @@ export async function executeRecurringSchedule(
       reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
       your_reference: schedule.your_reference,
       our_reference: schedule.our_reference,
-      notes: schedule.notes,
+      notes: applyRecurringPlaceholders(schedule.notes, placeholderValues),
       // Carried verbatim so cron-spawned invoices book with the same
       // dimension tags a manually created invoice would (PR7 propagation
       // in lib/bookkeeping/invoice-entries.ts reads these columns).
@@ -369,14 +388,33 @@ export async function executeRecurringSchedule(
   // so generated invoices fall back to the VAT-treatment-derived revenue account.
   // Wiring per-article overrides into recurring invoices needs a schema change
   // and is deliberately out of the artikelregister MVP scope.
-  const itemRows = items.map((item, index) => {
+  const itemRows = allItems.map((item, index) => {
+    const description = applyRecurringPlaceholders(item.description, placeholderValues)
+    if (isTextLine(item)) {
+      // Same shape as a manually added text row (build-invoice-write.ts):
+      // description only, every amount zero, never booked.
+      return {
+        invoice_id: invoice.id,
+        sort_order: index,
+        line_type: 'text' as const,
+        description,
+        quantity: 0,
+        unit: '',
+        unit_price: 0,
+        line_total: 0,
+        vat_rate: 0,
+        vat_amount: 0,
+        dimensions: {},
+      }
+    }
     const itemRate = item.vat_rate != null ? item.vat_rate : vatRules.rate
     const lineTotal = item.quantity * item.unit_price
     const itemVat = Math.round((lineTotal * itemRate) / 100 * 100) / 100
     return {
       invoice_id: invoice.id,
       sort_order: index,
-      description: item.description,
+      line_type: 'product' as const,
+      description,
       quantity: item.quantity,
       unit: item.unit,
       unit_price: item.unit_price,
@@ -571,7 +609,6 @@ async function sendInvoiceFromSchedule(
     configuredBcc: company.invoice_email_bcc_addresses,
     customerCc: invoice.customer.invoice_email_cc_addresses,
     customerBcc: invoice.customer.invoice_email_bcc_addresses,
-    legacyCc: company.email,
   })
   if (exceedsInvoiceEmailRecipientLimit(recipients)) {
     log.warn('invoice has too many email recipients; recurring schedule cannot auto-send', {
@@ -640,7 +677,9 @@ async function sendInvoiceFromSchedule(
     }),
   )
 
-  const emailData = { invoice: renderableInvoice, customer: invoice.customer, company }
+  // Cron send: no user to fall back to for Reply-To.
+  const replyTo = resolveInvoiceReplyTo(company)
+  const emailData = { invoice: renderableInvoice, customer: invoice.customer, company, replyTo }
   const filename = invoicePdfFilename({
     companyName: company.company_name,
     customerName: invoice.customer.name,
@@ -667,7 +706,7 @@ async function sendInvoiceFromSchedule(
       subject,
       html,
       text,
-      replyTo: company.email || undefined,
+      replyTo,
       fromName: company.company_name ?? undefined,
       from: await resolveInvoiceSender(supabase, companyId, company.company_name),
       filename,

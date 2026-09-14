@@ -12,12 +12,9 @@
 :root {
   color-scheme: light;
 
-  /* Sidebar column width (frame layout). Default for shells that don't
-     override it; the dashboard shell (#dash-shell) sets it inline from
-     user_preferences.ui_state (248px expanded / 64px collapsed rail) and
-     the nav toggle updates it client-side. aside and <main> both read the
-     variable so they stay in lockstep. */
-  --nav-w: 248px;
+  /* Sidebar column width (frame layout): the dashboard sidebar (SidebarV2)
+     and the panel's left offset both read it, so they stay in lockstep. */
+  --nav-w: 220px;
 
   /* Width the docked assistant panel claims from the page panel. Default is
      the plain frame gutter, so the layout is correct before any JS runs; the
@@ -851,15 +848,14 @@ input[type="number"] {
   animation: prefill-settle 0.9s ease-out both;
 }
 
-/* Dashboard shell v2 (founder decision 2026-09-07, dev_docs/ui_v2_build_plan.md).
-   Opt-in per user via ui_state.shell, rendered as data-shell on #main-content.
-   The PageHeader keeps its markup and becomes the panel's 48px top bar:
-   sticky, full width, 13px/500 body-face title, help and primary action on
-   the same line, description hidden (it lives behind the "?" popover).
-   The negative margins undo MainContainer's v2 padding (pt-4, px-4/md:px-6),
-   so keep the two in step. v1 pages are untouched: nothing here matches
-   without the attribute. */
-[data-shell="v2"] .page-header {
+/* Dashboard top bar (founder decision 2026-09-07, PR #2390). The PageHeader
+   keeps its markup and becomes the panel's 48px top bar: sticky, full width,
+   13px/500 body-face title, help and primary action on the same line,
+   description hidden (it lives behind the "?" popover). The negative margins
+   undo MainContainer's padding (pt-4, px-4/md:px-6), so keep the two in
+   step. Unlayered on purpose: these rules must beat the Tailwind utilities
+   PageHeader and the hand-rolled headers carry. */
+.page-header {
   position: sticky;
   top: 0;
   z-index: 20;
@@ -873,17 +869,17 @@ input[type="number"] {
   background: hsl(var(--background));
 }
 @media (min-width: 768px) {
-  [data-shell="v2"] .page-header {
+  .page-header {
     margin-left: -1.5rem;
     margin-right: -1.5rem;
     padding-left: 1.5rem;
     padding-right: 1.5rem;
   }
 }
-[data-shell="v2"] .page-header-lead {
+.page-header-lead {
   min-width: 0;
 }
-[data-shell="v2"] .page-header-title {
+.page-header-title {
   font-family: var(--font-body);
   font-size: 13px;
   line-height: 20px;
@@ -892,29 +888,22 @@ input[type="number"] {
   white-space: nowrap;
 }
 /* A field label above a picker (PERIOD, DIMENSION) makes a toolbar two rows
-   tall; in v2 the pickers' own values say what they are, in the top bar and
-   in a page's filter row alike. */
-[data-shell="v2"] .field-label {
+   tall; the pickers' own values say what they are, in the top bar and in a
+   page's filter row alike. */
+.field-label {
   display: none;
 }
-/* Pages that centre a narrow column in v1 (Momsdeklaration) run full
-   width in v2, like every other v2 page. Styling-free hook. */
-[data-shell="v2"] .report-narrow {
-  max-width: none;
-  margin-left: 0;
-  margin-right: 0;
-}
-[data-shell="v2"] .page-header-desc {
+.page-header-desc {
   display: none;
 }
 /* A detail page's facts line (counterparty, dates, org number) stays in the
    bar, inline after the title, instead of vanishing like a description. */
-[data-shell="v2"] .page-header-lead:has(.page-header-meta) {
+.page-header-lead:has(.page-header-meta) {
   display: flex;
   align-items: center;
   gap: 0.75rem;
 }
-[data-shell="v2"] .page-header-meta {
+.page-header-meta {
   margin: 0;
   min-width: 0;
   font-size: 12.5px;
@@ -923,12 +912,12 @@ input[type="number"] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-[data-shell="v2"] .page-header-meta > * {
+.page-header-meta > * {
   display: inline;
 }
-[data-shell="v2"] .page-header-action {
+.page-header-action {
   width: auto;
 }
-[data-shell="v2"] .page-header-action > * {
+.page-header-action > * {
   width: auto;
 }

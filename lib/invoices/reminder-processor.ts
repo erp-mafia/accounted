@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr'
 import { getEmailService } from '@/lib/email/service'
 import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
 import { resolveInvoiceSender, type InvoiceSenderIdentity } from '@/lib/email/invoice-sender'
+import { resolveInvoiceReplyTo } from '@/lib/invoices/email-recipients'
 import {
   generateReminderEmailHtml,
   generateReminderEmailText,
@@ -148,10 +149,13 @@ export async function sendReminder(
   const baseUrl = getBaseUrlForBrand(brandSender.brand)
   const actionUrl = `${baseUrl}/invoice-action/${actionToken}`
 
+  // Cron send: no user to fall back to for Reply-To.
+  const replyTo = resolveInvoiceReplyTo(company)
   const emailData = {
     invoice,
     customer,
     company,
+    replyTo,
     reminderLevel,
     daysOverdue,
     actionUrl,
@@ -163,7 +167,7 @@ export async function sendReminder(
     subject: generateReminderEmailSubject(emailData),
     html: generateReminderEmailHtml(emailData),
     text: generateReminderEmailText(emailData),
-    replyTo: company.email || undefined,
+    replyTo,
     fromName: company.company_name || undefined,
     ...(brandSender.fromAddress ? { fromAddress: brandSender.fromAddress } : {}),
     // The company's own verified sender wins over the brand address

@@ -35,6 +35,11 @@ export function CompanySettingsContent() {
     node.scrollIntoView({ block: 'start' })
     history.replaceState(null, '', window.location.pathname + window.location.search)
   }, [])
+  const scrollToArchive = useCallback((node: HTMLDivElement | null) => {
+    if (!node || window.location.hash !== '#archive-start-fresh') return
+    node.scrollIntoView({ block: 'start' })
+    history.replaceState(null, '', window.location.pathname + window.location.search)
+  }, [])
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
@@ -103,7 +108,9 @@ export function CompanySettingsContent() {
         <DataAnalysisToggle />
       </SettingsGroup>
 
-      <CompanyDangerZone />
+      <div id="archive-start-fresh" ref={scrollToArchive}>
+        <CompanyDangerZone />
+      </div>
     </div>
   )
 }

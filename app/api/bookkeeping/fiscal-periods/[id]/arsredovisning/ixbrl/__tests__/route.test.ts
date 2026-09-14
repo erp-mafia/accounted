@@ -30,6 +30,9 @@ function mkParams(id = 'period-1') {
 function authedSupabase() {
   const { supabase } = createQueuedMockSupabase()
   supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+  supabase.rpc.mockImplementation(async (name: string) => ({
+    data: name === 'acquire_sie_period_read' ? 'lease-1' : null, error: null,
+  }))
   vi.mocked(createClient).mockResolvedValue(supabase as never)
   return supabase
 }

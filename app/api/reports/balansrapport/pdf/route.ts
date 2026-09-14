@@ -73,4 +73,4 @@ export const GET = withRouteContext('report.balansrapport.pdf', async (request, 
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

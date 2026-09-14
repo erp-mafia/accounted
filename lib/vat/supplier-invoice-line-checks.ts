@@ -115,3 +115,56 @@ export function findUnflaggedForeignZeroVatRows(
   })
   return rows
 }
+
+/**
+ * VAT treatments under which a SUPPLIER invoice carries no Swedish input VAT
+ * to deduct (issue #2553).
+ *
+ * - `exempt`: the supply is undantagen (ML 10 kap: bank- och
+ *   forsakringstjanster, hyra, vard, utbildning), so the supplier charges no
+ *   moms and there is nothing to debit on 2641. The gross is the cost.
+ * - `export`: an odd label on a purchase, but it carries the same fact: the
+ *   invoice has no Swedish moms on it (a non-EU seller's invoice, or a
+ *   purchase whose moms is handled at customs). Nothing was debiterad
+ *   ingaende moms, so nothing goes on 2641 either.
+ *
+ * `reverse_charge` is deliberately NOT in this set. It also carries no
+ * debiterad moms, but it is routed by the invoice's `reverse_charge` boolean
+ * into the fiktiv 2614/2645 pair, which is a different posting and already
+ * correct; adding it here would only duplicate that gate.
+ */
+const NO_INPUT_VAT_TREATMENTS: ReadonlySet<string> = new Set(['exempt', 'export'])
+
+/**
+ * False when the invoice's vat_treatment means no ingaende moms may be
+ * booked, whatever the stored line rates say. The stored rate cannot be
+ * trusted on its own: supplier_invoice_items.vat_rate carries a NOT NULL
+ * DEFAULT 0.25, so a row written before this contract existed can still hold
+ * 25 % on an exempt invoice.
+ */
+export function treatmentDeductsInputVat(vatTreatment: string | null | undefined): boolean {
+  return !NO_INPUT_VAT_TREATMENTS.has(vatTreatment ?? '')
+}
+
+/**
+ * The vat_rate a supplier invoice line falls back to when the caller omits
+ * it, derived from the invoice's vat_treatment instead of the blanket 25 %
+ * every create path used to assume (issue #2553). An omitted rate on an
+ * exempt or export invoice used to book 25 % input VAT the supplier never
+ * charged, and a reduced_12 / reduced_6 invoice silently booked 25 %.
+ */
+export function defaultVatRateForTreatment(vatTreatment: string | null | undefined): number {
+  switch (vatTreatment) {
+    case 'reduced_12':
+      return 0.12
+    case 'reduced_6':
+      return 0.06
+    case 'reverse_charge':
+    case 'export':
+    case 'exempt':
+      return 0
+    default:
+      // standard_25 and an unset treatment keep the historical default.
+      return 0.25
+  }
+}

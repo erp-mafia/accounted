@@ -12,6 +12,7 @@ import {
   InvalidMappingResultError,
   JournalEntryNotBalancedError,
   JournalEntryNotFoundError,
+  JournalLineBothSidesNonZeroError,
   JournalLineNegativeAmountError,
   accountsNotInChartResponse,
   bookkeepingErrorResponse,
@@ -199,6 +200,20 @@ describe('JournalLineNegativeAmountError', () => {
     const body = await res!.json()
     expect(body.error.code).toBe('JOURNAL_LINE_NEGATIVE_AMOUNT')
     expect(body.error.details).toEqual({ accountNumber: '3740', debitAmount: -0.25, creditAmount: 0 })
+  })
+})
+
+describe('JournalLineBothSidesNonZeroError', () => {
+  it('carries the offending line and maps to a structured 400 (#2551)', async () => {
+    const err = new JournalLineBothSidesNonZeroError('1930', 100, 100)
+    expect(err.code).toBe('JOURNAL_LINE_BOTH_SIDES_NONZERO')
+    expect(err.accountNumber).toBe('1930')
+    expect(isBookkeepingError(err)).toBe(true)
+    const res = bookkeepingErrorResponse(err)
+    expect(res?.status).toBe(400)
+    const body = await res!.json()
+    expect(body.error.code).toBe('JOURNAL_LINE_BOTH_SIDES_NONZERO')
+    expect(body.error.details).toEqual({ accountNumber: '1930', debitAmount: 100, creditAmount: 100 })
   })
 })
 

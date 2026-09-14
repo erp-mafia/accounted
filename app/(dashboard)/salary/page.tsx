@@ -156,7 +156,7 @@ export default function SalaryPage() {
               eyebrow={tStart('salary_eyebrow_start')}
               title={tStart('salary_title')}
               body={tStart('salary_body_no_employees')}
-              primary={{ label: tStart('salary_primary_add'), href: '/salary/employees/new' }}
+              primary={{ label: tStart('salary_primary_add'), href: '/salary/employees?new=1' }}
             />
           </div>
         ) : (

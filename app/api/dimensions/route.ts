@@ -4,7 +4,7 @@
  *
  * Calls ensure_company_dimensions first so the system dims (1 = Kostnadsställe,
  * 6 = Projekt) always exist: lazy seeding keeps core zero-config for companies
- * that never touch dimensions (dev_docs/dimensions_implementation_plan.md §6).
+ * that never touch dimensions.
  *
  * Response contract (PR2: the register UI builds against this exactly):
  *   200 { dimensions: [{ id, sie_dim_no, name, resets_annually, is_system,
@@ -47,7 +47,7 @@ export const GET = withRouteContext(
   'dimension.list',
   async (_request, ctx) => {
     // dimensions_enabled is deliberately NOT enforced here: it is a
-    // UI-visibility flag only (dev_docs/dimensions_implementation_plan.md §2).
+    // UI-visibility flag only.
     // Agents/MCP and SIE import must operate on the registry regardless of the
     // toggle; the security boundary is company scoping (withRouteContext + RLS).
     const { supabase, companyId, log, requestId } = ctx

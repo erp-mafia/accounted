@@ -2,7 +2,7 @@
  * Integration tests for POST /api/v1/companies/:companyId/imports/sie.
  *
  * Regression: the route used to pass [] as account mappings, which
- * executeSIEImport's mapping-coverage guard rejects for any real file
+ * durable job admission's mapping-coverage guard rejects for any real file
  * (before that guard existed, every voucher was silently skipped). The
  * route must generate mappings server-side from the file's #KONTO records,
  * like the dashboard execute route does.
@@ -24,27 +24,13 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
-const { executeSIEImportMock, checkDuplicateImportMock, startOperationMock } = vi.hoisted(() => ({
-  executeSIEImportMock: vi.fn(),
-  checkDuplicateImportMock: vi.fn().mockResolvedValue(null),
-  startOperationMock: vi.fn().mockResolvedValue({ id: 'op-1' }),
+const { submitSIEJobMock } = vi.hoisted(() => ({
+  submitSIEJobMock: vi.fn(),
 }))
 
-vi.mock('@/lib/import/sie-import', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/import/sie-import')>(
-    '@/lib/import/sie-import',
-  )
-  return {
-    ...actual,
-    executeSIEImport: executeSIEImportMock,
-    checkDuplicateImport: checkDuplicateImportMock,
-  }
-})
-vi.mock('@/lib/api/v1/operations', () => ({
-  startOperation: startOperationMock,
-  completeOperation: vi.fn().mockResolvedValue(undefined),
-  failOperation: vi.fn().mockResolvedValue(undefined),
-}))
+vi.mock('@/lib/import/sie-jobs', () => ({ submitSIEJob: submitSIEJobMock }))
+vi.mock('next/server', async (load) => ({...await load<typeof import('next/server')>(), after:vi.fn()}))
+vi.mock('@/lib/import/sie-job-worker', () => ({runSIEWorker:vi.fn()}))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST } from '../route'
@@ -122,18 +108,8 @@ beforeEach(() => {
     scopes: ['bookkeeping:write'],
     mode: 'live',
   })
-  checkDuplicateImportMock.mockResolvedValue(null)
-  startOperationMock.mockResolvedValue({ id: 'op-1' })
-  executeSIEImportMock.mockResolvedValue({
-    success: true,
-    importId: 'imp-1',
-    fiscalPeriodId: 'fp-1',
-    openingBalanceEntryId: 'ob-1',
-    journalEntriesCreated: 1,
-    journalEntryIds: ['je-1'],
-    errors: [],
-    warnings: [],
-    replacedPriorImport: null,
+  submitSIEJobMock.mockResolvedValue({
+    id: 'op-1', job_state: 'queued', fiscal_period_id: 'fp-1',
   })
   mockServiceClient.mockReturnValue(
     makeFlexibleSupabase({
@@ -151,8 +127,8 @@ describe('POST /imports/sie', () => {
     const body = await res.json()
     expect(body.data.operation_id).toBe('op-1')
 
-    expect(executeSIEImportMock).toHaveBeenCalledTimes(1)
-    const mappings = executeSIEImportMock.mock.calls[0][4] as Array<{
+    expect(submitSIEJobMock).toHaveBeenCalledTimes(1)
+    const mappings = submitSIEJobMock.mock.calls[0][4] as Array<{
       sourceAccount: string
       sourceName: string
       targetAccount: string
@@ -167,14 +143,14 @@ describe('POST /imports/sie', () => {
   it('defaults updateAccountNames to true', async () => {
     await callRoute()
 
-    const options = executeSIEImportMock.mock.calls[0][5] as Record<string, unknown>
+    const options = submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>
     expect(options.updateAccountNames).toBe(true)
   })
 
   it('passes updateAccountNames: false through from the options JSON', async () => {
     await callRoute({ updateAccountNames: false })
 
-    const options = executeSIEImportMock.mock.calls[0][5] as Record<string, unknown>
+    const options = submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>
     expect(options.updateAccountNames).toBe(false)
   })
 
@@ -182,18 +158,18 @@ describe('POST /imports/sie', () => {
     const res = await callRoute({ updateAccountNamez: true })
 
     expect(res.status).toBe(400)
-    expect(executeSIEImportMock).not.toHaveBeenCalled()
+    expect(submitSIEJobMock).not.toHaveBeenCalled()
   })
 
   it('passes openingBalanceSeries through and leaves it undefined by default (issue #1882)', async () => {
     await callRoute({ openingBalanceSeries: 'K' })
-    let options = executeSIEImportMock.mock.calls[0][5] as Record<string, unknown>
+    let options = submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>
     expect(options.openingBalanceSeries).toBe('K')
 
-    executeSIEImportMock.mockClear()
+    submitSIEJobMock.mockClear()
     await callRoute()
-    options = executeSIEImportMock.mock.calls[0][5] as Record<string, unknown>
-    // Undefined lets executeSIEImport pick a series the file's own vouchers
+    options = submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>
+    // Undefined lets job preparation pick a series the file's own vouchers
     // do not use, instead of a hardcoded default that could collide.
     expect(options.openingBalanceSeries).toBeUndefined()
   })

@@ -9,7 +9,7 @@ import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
 import { AccountLogo } from './ReconciliationRail'
 
 /**
- * Shell v2 landing of the Avstämning page (concept P.recon): one row per
+ * Landing of the Avstämning page (concept P.recon): one row per
  * account, what its outside source is and when it was read, how many rows
  * still need a look, what is unexplained, when it was last signed off, and
  * the one button that opens the flow for it. The balance accounts without a

@@ -493,6 +493,10 @@ export function getErrorMessage(
         return 'En verifikationsrad har ett negativt belopp. Boka beloppet på motsatt sida i stället.'
       }
 
+      if (structured.code === 'JOURNAL_LINE_BOTH_SIDES_NONZERO') {
+        return 'En verifikationsrad kan inte ha både debet och kredit nollskilda.'
+      }
+
       if (structured.code === 'FISCAL_PERIOD_NOT_FOUND') {
         return 'Räkenskapsperioden kunde inte hittas.'
       }

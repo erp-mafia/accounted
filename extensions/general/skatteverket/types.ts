@@ -79,7 +79,7 @@ export interface SkatteverketTokens {
 
 // ── AGI (Arbetsgivardeklaration) types ──────────────────────────
 //
-// Field shapes mirror the Skatteverket RAMLs in dev_docs/:
+// Field shapes mirror the Skatteverket RAMLs:
 //   • arbetsgivardeklaration-inlamning(1.7.7)             (XML ingest + JSON status)
 //   • arbetsgivardeklaration-hantera-redovisningsperiod(1.2.8) (period management)
 //
@@ -222,7 +222,6 @@ export interface SkatteverketAGIKontrollsvarFel {
 // ── Skattekonto (tax account) types ────────────────────────────
 //
 // Field names match Skatteverket's Skattekonto API v2.1.0 JSON schema.
-// Spec: dev_docs/skattekonto(2.1.0)/skattekonto-extern.raml
 // Amount fields are in SEK (whole or decimal); negative = debt to SKV.
 
 /** Response from GET /skattekonton/{omfragad}/saldo */

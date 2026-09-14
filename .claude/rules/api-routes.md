@@ -5,8 +5,6 @@ paths:
 
 # API Route Pattern
 
-Use the `/erp-api-route` skill when scaffolding new endpoints.
-
 **Default: wrap every cookie-session route in `withRouteContext`** (`lib/api/with-route-context.ts`). It is the only path that enforces MFA (AAL2) on hosted: it calls `requireAuth()`, resolves the active `companyId`, optionally gates non-viewer role (`requireWrite: true`), and converts thrown errors into the canonical envelope. **Never hand-roll `supabase.auth.getUser()` in a route**: that skips MFA. CI enforces this via the ratchet guard (`npm run check:guards`); a new route calling `getUser()` directly fails the build.
 
 ```typescript
@@ -41,23 +39,24 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 - Routes that emit events must call `ensureInitialized()` at module level.
 - Opt out of `withRouteContext` only when the route genuinely can't guarantee a company context (e.g. onboarding): then call `requireAuth()` directly so MFA is still enforced.
 - API-key auth (`/api/v1/*`) uses `createServiceClientNoCookies()` + `v1ErrorResponse`; every query still filters by `company_id`.
+- Journal entries a route creates: when the entry IS the accounting record (mark paid, mark sent under kontantmetoden, payout settle), a failed commit fails the request, otherwise AP/AR diverges from the ledger. When the entry is a side effect of the primary action (e.g. categorizing a transaction), log the failure with `log` and let the primary action succeed.
 
 ## Endpoint map (`app/api/`)
 
-560 `route.ts` files under 55 top-level families (2026-08-26). Counts in parentheses; regenerate with `find app/api -name route.ts | awk -F/ '{print $3}' | sort | uniq -c`.
+Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift; regenerate with `find app/api -name route.ts | awk -F/ '{print $3}' | sort | uniq -c`.
 
 - `/api/v1/*` (111): the public API-key REST surface (`withApiV1`, `lib/api/v1/`). Companies (list + create), customers, invoices, suppliers, supplier-invoices, transactions (incl. `{id}/ignore` POST/DELETE: no verifikat, the locked-period escape hatch for non-business rows), journal-entries, fiscal-periods, accounts, articles, documents, dimensions, employees, salary-runs, reports (16, incl. balance-sheet/income-statement PDFs), reconciliation (11, account-keyed), imports, operations, compliance, skatteverket/vat-declarations, settings, inbox-items, voucher-gap-explanations, webhooks, webhook-deliveries, openapi.json, health
-- `/api/bookkeeping/*` (64): accounts, account-balances, account-totals, fiscal-periods, journal-entries (CRUD/reverse/correct), journal-entry-lines, mapping-rules, accruals, voucher-gaps, voucher-sequences, no-doc-required, fix-cash-mismatch
+- `/api/bookkeeping/*` (64): accounts, account-balances, fiscal-periods, journal-entries (CRUD/reverse/correct), journal-entry-lines, accruals, voucher-gaps, voucher-sequences, no-doc-required, fix-cash-mismatch
 - `/api/reports/*` (58): GL, TB, BS/IS (+ balansrapport/resultatrapport), AR/supplier ledger, VAT, periodisk sammanställning, SIE, INK2, NE-bilaga, KPI, audit-trail, behandlingshistorik, bokslutsbilagor, continuity, monthly, dimension-pnl, kassaflödesanalys, statement-reconciliation, full-archive, salary-journal, vacation-liability, avgifter-basis
-- `/api/salary/*` (36): employees, payroll-config, tax-tables, KU, runs, vacation-balances, vacation-year-close
+- `/api/salary/*` (36): employees, payroll-config, tax-tables, KU, runs
 - `/api/invoices/*` (28), `/api/supplier-invoices/*` (16): CRUD + state transitions, bulk-book, recurring, reminders, self-billed, preview-pdf, next-number; supplier side adds exists + payment-batches (betalfil)
 - `/api/import/*` (26): bank-file, SIE (parse/execute/mappings), skattekonto-file, opening-balance, articles, customers, suppliers, documents
 - `/api/extensions/*` (21): `ext/[...path]` dynamic extension routes (catch-all → `/api/extensions/ext/{extensionId}/{routePath}`, path params as `_paramName` query), `[sector]` listing, plus first-party callbacks (enable-banking, cloud-backup, invoice-inbox, whatsapp-inbox, shopify, woocommerce, stripe, skatteverket, push-notifications)
-- `/api/transactions/*` (20): list/detail, categorize/uncategorize, book, ignore, match-{invoice,supplier-invoice} (+ preview), match-batch, batch-match-invoices, bulk-book, create-from-document, suggest-categories, attach-document, link-journal-entry, cash-account, duplicate-payment-check, refresh-exchange-rate
+- `/api/transactions/*` (20): list/detail, categorize/uncategorize, book, ignore, match-{invoice,supplier-invoice} (+ preview), match-batch, batch-match-invoices, bulk-book, suggest-categories, attach-document, link-journal-entry, cash-account, duplicate-payment-check, refresh-exchange-rate
 - `/api/settings/*` (19): company settings, api-keys, oauth-clients, booking-templates, counterparty-templates, logo, invoice-font, peppol, signals (eu-trade, ku, rot-rut)
-- `/api/reconciliation/*` (18): `accounts` + `accounts/[accountKey]/*` (account-keyed engine, #1833: bridge, items + ignore, links, attachments, residual, signoff + reopen) and the legacy `bank/*` verbs (run, status, link/unlink, unmatched-entries, confirm-suggestions, mark-opening-balance)
-- `/api/agent/*` (16): ask, invoke, composer, conversations (+ reject-pending), categorize (+ outcome), memory, knowledge, skills, profile (+ verify), feedback, onboarding/stream
-- `/api/documents/*` (12): CRUD, versions, inline, link/detach, integrity, extraction-status, verify (+ cron), counts, inbox-available
+- `/api/reconciliation/*` (18): `accounts` + `accounts/[accountKey]/*` (account-keyed engine, #1833: bridge, items + ignore, links, attachments, residual, signoff + reopen) and the legacy `bank/*` verbs (run, status, link, unmatched-entries, confirm-suggestions, mark-opening-balance)
+- `/api/agent/*` (16): ask, invoke, conversations (+ reject-pending), categorize (+ outcome), memory, knowledge, skills, profile (+ verify), feedback, onboarding/stream
+- `/api/documents/*` (12): CRUD, versions, inline, link/detach, integrity, extraction-status, verify cron, counts, inbox-available
 - `/api/company/*` (10), `/api/team/*` (5), `/api/user/*` (4), `/api/account/*` (2): company CRUD, current, members + invites, check-org-number, migration-reset; team invite/accept/members; preferences, profile, locale, ui-state; delete, password
 - `/api/dimensions/*` (9): CRUD, rules, tagging, import-existing
 - `/api/pending-operations/*` (7): list/detail, bulk-commit, bulk-reject, expire

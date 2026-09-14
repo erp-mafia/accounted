@@ -1,19 +1,18 @@
 /**
  * Risk tier classification for pending_operations.
  *
- * Used by lib/pending-operations/should-auto-commit.ts to decide whether a
- * staged proposal from a trusted agent can be auto-committed without human
- * review.
+ * Stamped as risk_level on staged proposals (MCP server staging,
+ * lib/receipt-hunt/hunt.ts). Agent auto-commit was removed in #394
+ * (20260505190027_drop_agent_auto_commit): every staged operation needs
+ * human approval, whatever its tier.
  *
  * Tiering principles:
  *   - **low**: no booking impact, no external side-effects, no audit risk.
- *     A reasonable bookkeeper would never want to manually approve these.
  *   - **medium**: reversible booking impact (drafts, transaction
- *     categorization that can be uncategorized). Auto-commit is allowed for
- *     trusted agents under a configurable monetary threshold.
+ *     categorization that can be uncategorized).
  *   - **high**: irreversible or compliance-critical. Sends external messages,
- *     locks/closes periods, or affects tax filings. NEVER auto-committed,
- *     regardless of company opt-in or trust level.
+ *     locks/closes periods, or affects tax filings. Excluded from bulk
+ *     approval, and the approval card asks for a typed confirmation.
  */
 
 export type RiskLevel = 'low' | 'medium' | 'high'
@@ -312,8 +311,8 @@ export function getRiskLevel(
 }
 
 /**
- * High-risk operations are NEVER auto-committed, regardless of company opt-in
- * or actor trust. Encoded here (not in DB config) so it can't be bypassed.
+ * High-risk operations are excluded from bulk approval and need a typed
+ * confirmation. Encoded here (not in DB config) so it can't be bypassed.
  */
 export function isHighRisk(operationType: string, params?: Record<string, unknown>): boolean {
   return getRiskLevel(operationType, params) === 'high'

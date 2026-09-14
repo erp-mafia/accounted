@@ -6,8 +6,8 @@ import RulesList from '@/components/rules/RulesList'
 export const dynamic = 'force-dynamic'
 
 /**
- * Regler (UI v2 PR 5, dev_docs/ui_v2_build_plan.md): the company's
- * counterparty rules on the trust ladder. Reachable from the v2 sidebar
+ * Regler (UI v2 PR 5): the company's counterparty rules on the trust
+ * ladder. Reachable from the sidebar
  * (Transaktioner › Regler); the v1 settings panel keeps working beside it.
  */
 export default async function RulesPage() {

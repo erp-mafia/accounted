@@ -19,17 +19,17 @@ afterEach(() => {
 
 describe('persistUiState', () => {
   it('POSTs the patch to /api/user/ui-state', () => {
-    persistUiState({ nav_collapsed: true })
+    persistUiState({ tx_columns: { hidden: ['account'] } })
     expect(fetchMock).toHaveBeenCalledWith('/api/user/ui-state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nav_collapsed: true }),
+      body: JSON.stringify({ tx_columns: { hidden: ['account'] } }),
     })
   })
 
   it('swallows network failures', () => {
     fetchMock.mockRejectedValue(new Error('offline'))
-    expect(() => persistUiState({ nav_collapsed: false })).not.toThrow()
+    expect(() => persistUiState({ create_mode: { bookkeeping: 'mall' } })).not.toThrow()
   })
 })
 

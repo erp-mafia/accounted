@@ -13,7 +13,7 @@ npx tsx scripts/create-extension.ts \
   --name my-extension --sector general --category operations \
   --description "Short description"
 ```
-Sectors: `general`, `restaurant`, `construction`, `hotel`, `tech`, `ecommerce`, `export`
+Sector: `general` (`SectorSlug` in `lib/extensions/types.ts` accepts only `general`; the script still offers other sectors, which fail type-checking)
 Categories: `import`, `operations`, `reports`, `accounting`
 
 **2. Enable**: add `"my-extension"` to `extensions.config.json`
@@ -59,8 +59,6 @@ export const myExtensionExtension: Extension = {
   eventHandlers: [
     { eventType: 'transaction.synced', handler: handleSomeEvent },
   ],
-  settingsPanel: { label: 'My Extension', path: '/settings/extensions/my-extension' },
-  async onInstall(ctx) { await ctx.settings.set('settings', DEFAULT_SETTINGS) },
 }
 ```
 
@@ -97,10 +95,10 @@ For a workspace page, set `"workspace": "@/components/extensions/general/MyExten
 
 ```typescript
 interface ExtensionContext {
-  userId: string; extensionId: string
+  userId: string; companyId: string; extensionId: string
   supabase: SupabaseClient         // Pre-authenticated
-  emit(event: CoreEvent): void     // Publish core events
-  settings: ExtensionSettings      // get<T>(key?) / set<T>(key, value): stored in extension_data table
+  emit(event: CoreEvent): Promise<void>  // Publish core events
+  settings: ExtensionSettings      // get<T>(key?) / set<T>(key, value): extension_data, per company
   storage: ExtensionStorage        // download / upload / getPublicUrl
   log: ExtensionLogger             // info / warn / error (scoped)
   services: ExtensionServices      // Core services (e.g., ingestTransactions)
@@ -114,8 +112,8 @@ interface ExtensionContext {
 | `eventHandlers`: react to core events | [Event Handlers](references/event-handlers.md) |
 | `apiRoutes`: HTTP endpoints | [API Routes](references/api-routes.md) |
 | `services`: named functions for core | [Services](references/services-patterns.md) |
-| `settingsPanel` / workspace UI | [Workspace & UI](references/workspace-ui.md) |
-| `mappingRuleTypes`, `onInstall`/`onUninstall` | [Extension Interface](references/extension-interface.md) |
+| Workspace UI and settings panel (manifest `workspace`, `lib/extensions/settings-panel-registry.tsx`) | [Workspace & UI](references/workspace-ui.md) |
+| Other fields on the type (`settingsPanel`, `sidebarItems`, `mappingRuleTypes`, `onInstall`, ...) are declared but not read by core | [Extension Interface](references/extension-interface.md) |
 
 ## Common Mistakes
 

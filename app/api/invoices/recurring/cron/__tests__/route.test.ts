@@ -259,3 +259,49 @@ describe('GET /api/invoices/recurring/cron', () => {
     expect(body.results[0].skipReason).toBe('already_ran_today')
   })
 })
+
+describe('GET /api/invoices/recurring/cron: billing period', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    updatePayloads.length = 0
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('advances period_start by one interval after a successful run', async () => {
+    vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+    enqueue({ data: [makeSchedule({ interval_months: 3, period_start: '2026-07-01' })], error: null })
+    enqueue({ data: [{ id: 's-1' }], error: null }) // atomic claim
+    executeRecurringSchedule.mockResolvedValue({ invoiceId: 'inv-1', invoiceNumber: 'F-1', autoSent: true, warning: null })
+
+    const { body } = await parseJsonResponse<CronBody>(await GET(req()))
+    expect(body.succeeded).toBe(1)
+    const bump = updatePayloads.find((u) => u.table === 'recurring_invoice_schedules' && 'next_run_date' in u.payload)
+    expect(bump!.payload.period_start).toBe('2026-10-01')
+  })
+
+  it('never writes period_start for a schedule without one', async () => {
+    vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+    enqueue({ data: [makeSchedule({ period_start: null })], error: null })
+    enqueue({ data: [{ id: 's-1' }], error: null })
+    executeRecurringSchedule.mockResolvedValue({ invoiceId: 'inv-1', invoiceNumber: 'F-1', autoSent: true, warning: null })
+
+    await GET(req())
+    const bump = updatePayloads.find((u) => u.table === 'recurring_invoice_schedules' && 'next_run_date' in u.payload)
+    expect(bump!.payload).not.toHaveProperty('period_start')
+  })
+
+  it('leaves period_start alone when a stale schedule is rolled forward without an invoice', async () => {
+    vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+    enqueue({ data: [makeSchedule({ next_run_date: '2026-07-05', day_of_month: 5, period_start: '2026-07-01' })], error: null })
+    enqueue({ data: null, error: null })
+
+    await GET(req())
+    expect(executeRecurringSchedule).not.toHaveBeenCalled()
+    const roll = updatePayloads.find((u) => u.table === 'recurring_invoice_schedules')
+    expect(roll!.payload).not.toHaveProperty('period_start')
+  })
+})

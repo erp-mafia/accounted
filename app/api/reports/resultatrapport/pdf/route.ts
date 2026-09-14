@@ -82,4 +82,4 @@ export const GET = withRouteContext('report.resultatrapport.pdf', async (request
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

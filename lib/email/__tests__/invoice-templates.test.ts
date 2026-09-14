@@ -31,7 +31,7 @@ const invoice = makeInvoice({
 
 describe('invoice email templates', () => {
   describe('Swedish customer (default)', () => {
-    const customer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se', language: 'sv' })
+    const customer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
     const data = { invoice, customer, company }
 
     it('uses Swedish chrome in HTML', () => {
@@ -66,7 +66,7 @@ describe('invoice email templates', () => {
   })
 
   describe('English customer', () => {
-    const customer = makeCustomer({ name: 'Jane Doe', email: 'jane@example.com', language: 'en' })
+    const customer = makeCustomer({ name: 'Jane Doe', customer_type: 'individual', email: 'jane@example.com', language: 'en' })
     const data = { invoice, customer, company }
 
     it('uses English chrome in HTML', () => {
@@ -146,8 +146,8 @@ describe('invoice email templates', () => {
   })
 
   describe('custom email texts (invoice_email_texts)', () => {
-    const svCustomer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se', language: 'sv' })
-    const enCustomer = makeCustomer({ name: 'Jane Doe', email: 'jane@example.com', language: 'en' })
+    const svCustomer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
+    const enCustomer = makeCustomer({ name: 'Jane Doe', customer_type: 'individual', email: 'jane@example.com', language: 'en' })
 
     const fullOverrides = makeCompanySettings({
       company_name: 'Acme AB',
@@ -168,7 +168,7 @@ describe('invoice email templates', () => {
     })
 
     it('renders sv overrides in the HTML variant, keeping structural parts', () => {
-      const html = generateInvoiceEmailHtml({ invoice, customer: svCustomer, company: fullOverrides })
+      const html = generateInvoiceEmailHtml({ invoice, customer: svCustomer, company: fullOverrides, replyTo: 'faktura@acme.se' })
       expect(html).toContain('Hejsan Erik!')
       expect(html).toContain('H\u00e4r kommer m\u00e5nadens faktura.')
       expect(html).toContain('Allt gott,')
@@ -389,8 +389,8 @@ describe('invoice email templates', () => {
       total: 12500,
       payment_link_url: 'https://buy.stripe.com/test_quote',
     })
-    const svCustomer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se', language: 'sv' })
-    const enCustomer = makeCustomer({ name: 'Jane Doe', email: 'jane@example.com', language: 'en' })
+    const svCustomer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
+    const enCustomer = makeCustomer({ name: 'Jane Doe', customer_type: 'individual', email: 'jane@example.com', language: 'en' })
 
     it('uses the Swedish quote subject', () => {
       expect(generateInvoiceEmailSubject({ invoice: quote, customer: svCustomer, company }))
@@ -403,7 +403,7 @@ describe('invoice email templates', () => {
     })
 
     it('sv HTML: attached quote, Giltig till, no payment section and no pay-online button', () => {
-      const html = generateInvoiceEmailHtml({ invoice: quote, customer: svCustomer, company })
+      const html = generateInvoiceEmailHtml({ invoice: quote, customer: svCustomer, company, replyTo: 'faktura@acme.se' })
       expect(html).toContain('Offert fr\u00e5n Acme AB')
       expect(html).toContain('Offertnummer:')
       expect(html).toContain('Offertdatum:')
@@ -419,7 +419,7 @@ describe('invoice email templates', () => {
     })
 
     it('en HTML: attached quote, Valid until, no payment section and no pay-online button', () => {
-      const html = generateInvoiceEmailHtml({ invoice: quote, customer: enCustomer, company })
+      const html = generateInvoiceEmailHtml({ invoice: quote, customer: enCustomer, company, replyTo: 'faktura@acme.se' })
       expect(html).toContain('Quote from Acme AB')
       expect(html).toContain('Quote number:')
       expect(html).toContain('Attached you will find our quote. The quote is valid until 2026-10-02.')
@@ -475,7 +475,7 @@ describe('invoice email templates', () => {
   })
 
   describe('payment link (payment_link_url)', () => {
-    const svCustomer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se', language: 'sv' })
+    const svCustomer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
     const linkUrl = 'https://buy.stripe.com/test_abc123'
 
     it('renders a pay-online button in HTML and the URL in plain text when set', () => {
@@ -488,7 +488,7 @@ describe('invoice email templates', () => {
     })
 
     it('uses the English label for English customers', () => {
-      const enCustomer = makeCustomer({ name: 'Jane Doe', email: 'jane@example.com', language: 'en' })
+      const enCustomer = makeCustomer({ name: 'Jane Doe', customer_type: 'individual', email: 'jane@example.com', language: 'en' })
       const linked = makeInvoice({ invoice_number: '1042', payment_link_url: linkUrl })
       const html = generateInvoiceEmailHtml({ invoice: linked, customer: enCustomer, company })
       expect(html).toContain('Pay online')
@@ -523,7 +523,7 @@ describe('invoice email templates', () => {
   })
 
   describe('öresavrundning: "Att betala" matches the PDF', () => {
-    const svCustomer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se', language: 'sv' })
+    const svCustomer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
 
     it('rounds the SEK total to whole kronor when rounding is on (company default)', () => {
       const oreInvoice = makeInvoice({ invoice_number: '1042', total: 1234.56 })
@@ -624,7 +624,7 @@ describe('payment confirmation email templates', () => {
   })
 
   describe('Swedish customer', () => {
-    const customer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se', language: 'sv' })
+    const customer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
     const data = { invoice: paidInvoice, customer, company }
 
     it('subject names the invoice and the sender', () => {
@@ -670,7 +670,7 @@ describe('payment confirmation email templates', () => {
   })
 
   describe('English customer', () => {
-    const customer = makeCustomer({ name: 'John Smith', email: 'john@example.com', language: 'en' })
+    const customer = makeCustomer({ name: 'John Smith', customer_type: 'individual', email: 'john@example.com', language: 'en' })
     const data = { invoice: paidInvoice, customer, company }
 
     it('uses English chrome', () => {
@@ -686,5 +686,135 @@ describe('payment confirmation email templates', () => {
       expect(text).toContain('Paid on: 2026-06-10')
       expect(text).toContain('Amount paid: 12,500.00 SEK')
     })
+  })
+})
+
+describe('greeting name (issue: "Hej {förnamn}" printed the first word of the firm)', () => {
+  it('greets by the contact person first name when one is set', () => {
+    const customer = makeCustomer({ name: 'Eminos Bygg AB', contact_person: 'Anna Svensson', language: 'sv' })
+    const html = generateInvoiceEmailHtml({ invoice, customer, company })
+    expect(html).toContain('Hej Anna,')
+    expect(generateInvoiceEmailText({ invoice, customer, company })).toContain('Hej Anna,')
+  })
+
+  it('greets a company without a contact person by its full name, never a truncated one', () => {
+    const customer = makeCustomer({ name: 'Eminos Bygg AB', contact_person: null, language: 'sv' })
+    const html = generateInvoiceEmailHtml({ invoice, customer, company })
+    expect(html).toContain('Hej Eminos Bygg AB,')
+    expect(html).not.toContain('Hej Eminos,')
+  })
+
+  it('feeds the same name into the {förnamn} placeholder of custom texts', () => {
+    const customer = makeCustomer({ name: 'Eminos Bygg AB', contact_person: 'Anna Svensson', language: 'sv' })
+    const custom = makeCompanySettings({
+      ...company,
+      invoice_email_texts: { sv: { greeting: 'Hejsan {förnamn}!' } },
+    })
+    expect(generateInvoiceEmailText({ invoice, customer, company: custom })).toContain('Hejsan Anna!')
+  })
+})
+
+describe('payment reference matches the PDF payment box', () => {
+  const customer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
+
+  it('shows the bankgiro and the OCR reference (with its Luhn check digit) exactly like the PDF', () => {
+    const bgCompany = makeCompanySettings({ ...company, bankgiro: '123-4567' })
+    const html = generateInvoiceEmailHtml({ invoice, customer, company: bgCompany })
+    const text = generateInvoiceEmailText({ invoice, customer, company: bgCompany })
+    expect(html).toContain('Bankgiro:')
+    expect(html).toContain('123-4567')
+    // 1042 + Luhn check digit 1 = 10421: the "extra digit" is the check digit.
+    expect(html).toContain('OCR/Referens:')
+    expect(html).toContain('10421')
+    expect(html).not.toContain('Meddelande:')
+    expect(text).toContain('Bankgiro: 123-4567')
+    expect(text).toContain('OCR/Referens: 10421')
+  })
+
+  it('falls back to the invoice number as a plain message when the PDF prints no OCR', () => {
+    // No bankgiro/plusgiro: the PDF has no OCR row, so the email must not
+    // invent a reference the faktura does not carry.
+    const html = generateInvoiceEmailHtml({ invoice, customer, company })
+    expect(html).toContain('Meddelande:')
+    expect(html).toContain('1042')
+    expect(html).not.toContain('OCR/Referens:')
+    expect(html).not.toContain('10421')
+
+    // OCR switched off in settings: same fallback.
+    const offCompany = makeCompanySettings({ ...company, bankgiro: '123-4567', invoice_show_ocr: false })
+    expect(generateInvoiceEmailText({ invoice, customer, company: offCompany })).toContain('Meddelande: 1042')
+  })
+
+  it('hides a bankgiro the company chose not to print on the invoice', () => {
+    const hidden = makeCompanySettings({ ...company, bankgiro: '123-4567', invoice_show_bankgiro: false })
+    const html = generateInvoiceEmailHtml({ invoice, customer, company: hidden })
+    expect(html).not.toContain('Bankgiro:')
+    // The PDF still prints the OCR row in this case, so the email does too.
+    expect(html).toContain('OCR/Referens:')
+  })
+
+  it('never shows an OCR reference to an English-language customer', () => {
+    const enCustomer = makeCustomer({ name: 'Jane Doe', customer_type: 'individual', email: 'jane@example.com', language: 'en' })
+    const bgCompany = makeCompanySettings({ ...company, bankgiro: '123-4567' })
+    const html = generateInvoiceEmailHtml({ invoice, customer: enCustomer, company: bgCompany })
+    expect(html).toContain('Reference:')
+    expect(html).toContain('1042')
+    expect(html).not.toContain('10421')
+  })
+})
+
+describe('"Svara direkt på detta mejl" only when a Reply-To is set', () => {
+  const customer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
+
+  it('prints the line when the message carries a reply address', () => {
+    const data = { invoice, customer, company, replyTo: 'faktura@acme.se' }
+    expect(generateInvoiceEmailHtml(data)).toContain('Svara direkt på detta mejl')
+    expect(generateInvoiceEmailText(data)).toContain('Svara direkt på detta mejl')
+    expect(generatePaymentConfirmationEmailHtml(data)).toContain('Svara direkt på detta mejl')
+    expect(generatePaymentConfirmationEmailText(data)).toContain('Svara direkt på detta mejl')
+  })
+
+  it('drops the line when no reply address resolved (replies would hit the noreply sender)', () => {
+    const data = { invoice, customer, company }
+    expect(generateInvoiceEmailHtml(data)).not.toContain('Svara direkt')
+    expect(generateInvoiceEmailText(data)).not.toContain('Svara direkt')
+    expect(generatePaymentConfirmationEmailHtml(data)).not.toContain('Svara direkt')
+    expect(generatePaymentConfirmationEmailText({ ...data, replyTo: null })).not.toContain('Svara direkt')
+    // The sign-off block is still there.
+    expect(generateInvoiceEmailText(data)).toContain('Med vänliga hälsningar,')
+  })
+})
+
+describe('payment values are HTML-escaped in the email body', () => {
+  it('never lets a payment setting inject markup', () => {
+    const customer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', language: 'sv' })
+    const hostile = makeCompanySettings({ ...company, bank_name: '<img src=x onerror=alert(1)>Bank & Co' })
+    const html = generateInvoiceEmailHtml({ invoice, customer, company: hostile })
+    expect(html).not.toContain('<img src=x')
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;Bank &amp; Co')
+    // The plain-text variant is not HTML and stays verbatim.
+    expect(generateInvoiceEmailText({ invoice, customer, company: hostile })).toContain('Bank & Co')
+  })
+})
+
+describe('greeting names are HTML-escaped', () => {
+  const hostileCustomer = makeCustomer({ name: '<b>Evil</b> & Co AB', contact_person: null, language: 'sv' })
+
+  it('escapes the stock greeting in the invoice email', () => {
+    const html = generateInvoiceEmailHtml({ invoice, customer: hostileCustomer, company })
+    expect(html).toContain('Hej &lt;b&gt;Evil&lt;/b&gt; &amp; Co AB,')
+    expect(html).not.toContain('<b>Evil</b>')
+  })
+
+  it('escapes the {förnamn} placeholder inside a custom greeting', () => {
+    const custom = makeCompanySettings({ ...company, invoice_email_texts: { sv: { greeting: 'Hejsan {förnamn}!' } } })
+    const html = generateInvoiceEmailHtml({ invoice, customer: hostileCustomer, company: custom })
+    expect(html).toContain('Hejsan &lt;b&gt;Evil&lt;/b&gt; &amp; Co AB!')
+    expect(html).not.toContain('<b>Evil</b>')
+  })
+
+  it('escapes the greeting in the payment confirmation', () => {
+    const html = generatePaymentConfirmationEmailHtml({ invoice, customer: hostileCustomer, company })
+    expect(html).not.toContain('<b>Evil</b>')
   })
 })

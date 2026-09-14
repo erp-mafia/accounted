@@ -110,6 +110,24 @@ const ORIGINAL_SENT_INVOICE = {
   items: [{ sort_order: 0, description: 'x', quantity: 1, unit: 'st', unit_price: 10000, line_total: 10000, vat_rate: 25, vat_amount: 2500 }],
 }
 
+// Kontantmetoden books the sale at payment, so a PAID original already carries
+// revenue + utgående moms on the ledger (issue #2552).
+const ORIGINAL_PAID_INVOICE = {
+  ...ORIGINAL_SENT_INVOICE,
+  status: 'paid',
+  journal_entry_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+  paid_at: '2026-05-20T10:00:00Z',
+  paid_amount: 12500,
+}
+
+// Never paid, never booked: nothing for the credit note to reverse.
+const ORIGINAL_UNPAID_CASH_INVOICE = {
+  ...ORIGINAL_SENT_INVOICE,
+  journal_entry_id: null,
+  paid_at: null,
+  paid_amount: null,
+}
+
 const CREATED_CREDIT_NOTE = {
   id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
   invoice_number: 'KR-2026-0042',
@@ -347,6 +365,79 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
     expect(body.data.preview.invoice_number).toBe('KR-2026-0042')
     expect(body.data.preview.credited_invoice_id).toBe(INVOICE_ID)
     expect(body.data.preview.would_create_journal_entry).toBe(true)
+    expect(mockCreditEntry).not.toHaveBeenCalled()
+  })
+
+  it('books the reversal under kontantmetoden when the original was paid (#2552)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: ORIGINAL_PAID_INVOICE, error: null },
+          { data: CREATED_CREDIT_NOTE, error: null },
+        ],
+        invoice_items: { data: null, error: null },
+        company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+      }),
+    )
+
+    const res = await creditInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/credit`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data.journal_entry_id).toBe('mmmmmmmm-mmmm-4mmm-8mmm-mmmmmmmmmmmm')
+    expect(mockCreditEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('dry-run flags would_create_journal_entry for a paid kontantmetod original', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: ORIGINAL_PAID_INVOICE, error: null },
+        company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+      }),
+    )
+
+    const res = await creditInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/credit?dry_run=true`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.would_create_journal_entry).toBe(true)
+    expect(body.data.preview.accounting_method).toBe('cash')
+    expect(mockCreditEntry).not.toHaveBeenCalled()
+  })
+
+  it('skips the reversal under kontantmetoden while the original is unpaid and unbooked', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: ORIGINAL_UNPAID_CASH_INVOICE, error: null },
+          { data: CREATED_CREDIT_NOTE, error: null },
+        ],
+        invoice_items: { data: null, error: null },
+        company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+      }),
+    )
+
+    const res = await creditInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/credit`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data.journal_entry_id).toBeNull()
+    // No JOURNAL_ENTRY_NOT_POSTED warning: the deferral is correct, not a failure.
+    expect(body.data.warnings).toBeUndefined()
     expect(mockCreditEntry).not.toHaveBeenCalled()
   })
 

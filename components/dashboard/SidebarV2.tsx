@@ -26,13 +26,13 @@ interface SidebarV2Props {
 }
 
 /**
- * Shell v2 desktop sidebar (dev_docs/ui_v2_build_plan.md, PR 2): 220px,
+ * Desktop sidebar (UI v2 PR 2, the default since PR #2390): 220px,
  * brand on top, Att göra and Assistent, then the BOLAGET sections, and the
  * user block at the bottom. Settings, help and the company switcher are in
  * the user menu, so nothing else sits below the sections (founder call
  * 2026-09-07). The active section shows its sub-items underneath, folding
  * open with a short height transition; the rest stay one line each. Mobile
- * keeps the v1 bottom nav (DashboardNav).
+ * keeps the bottom nav (DashboardNav).
  */
 export function SidebarV2({
   top,

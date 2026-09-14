@@ -122,3 +122,8 @@ describe('GET /api/reports/vat-declaration/pdf', () => {
     expect(calculateVatDeclaration).toHaveBeenCalledOnce()
   })
 })
+
+// The shared route-wrapper tests cover the database read lease.
+vi.mock('@/lib/import/sie-period-read', () => ({
+  withSIEPeriodRead: (_client: unknown, _company: string, _purpose: string, read: () => Promise<unknown>) => read(),
+}))

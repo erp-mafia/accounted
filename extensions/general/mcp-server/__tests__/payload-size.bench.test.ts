@@ -448,6 +448,11 @@ describe('tools/list payload size guard', () => {
     //     note, and both tool descriptions, both default_dimensions notes
     //     and the is_active note lost their filler. Ceiling unchanged, no
     //     read demoted.
+    //   * 2026-09-13, kontantmetod credit notes (#2552): gnubok_credit_invoice
+    //     had to stop claiming "(accrual)" and say when the reversal posts.
+    //     Paid for inside the same tool: both property notes lost their
+    //     filler ('UUID of the invoice to credit' restates the schema).
+    //     Ceiling unchanged, no read demoted.
     expect(approxTokens).toBeLessThan(60_500)
   })
 

@@ -47,7 +47,7 @@ const DEFAULT_OAUTH_BASE_URL = 'https://peroauth2.test.skatteverket.se/oauth2/v1
 //                   without it. Re-added 2026-07-20. Do not "clean up" again.
 //   - `skahmst`   = a DIFFERENT bulk service (Skattekonto Hämta huvudmäns
 //                   saldo och transaktioner, file via E-transport for
-//                   juridiska läsombud; see dev_docs/skatteverket/skahmst).
+//                   juridiska läsombud).
 //                   Not what the sync uses, but harmless to request.
 //   - `skattekonto` is NOT a real SKV scope name: SKV silently drops it
 //                   from every grant. Kept only so a future SKV rename in

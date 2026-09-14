@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 146 endpoints.
+  pagination, scopes), and all 147 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,7 +142,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 146 operations. Paths are shown without
+API version `2026-05-12`, 147 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (5)
@@ -256,7 +256,7 @@ POST /companies/{companyId}/documents/{id}/link : Link a document to a journal e
 POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consumed by a journal entry [scope:documents:write risk:low idempotent]
 ```
 
-### Banking (27)
+### Banking (28)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -265,7 +265,8 @@ GET /companies/{companyId}/bank-connections : List PSD2 bank connections with sy
 POST /companies/{companyId}/bank-connections/{connectionId}/sync : Sync one bank connection now instead of waiting for the nightly run [scope:transactions:write risk:low]
 GET /companies/{companyId}/cash-accounts : List bank/cash accounts with the bank-reported balance [scope:transactions:read risk:low idempotent]
 POST /companies/{companyId}/imports/bank : Import a bank-file (CSV / XML / CAMT053) [scope:transactions:write risk:medium idempotent]
-POST /companies/{companyId}/imports/sie : Import a SIE4 file [scope:bookkeeping:write risk:high idempotent]
+POST /companies/{companyId}/imports/sie : Import a SIE4 file [scope:bookkeeping:write risk:high idempotent reversible]
+POST /companies/{companyId}/imports/sie/upload : Reserve a direct SIE upload [scope:bookkeeping:write risk:low reversible]
 GET /companies/{companyId}/reconciliation/accounts : List the accounts that can be reconciled, with status per account [scope:reconciliation:read risk:low idempotent]
 GET /companies/{companyId}/reconciliation/accounts/{accountKey} : The reconciliation bridge for one account [scope:reconciliation:read risk:low idempotent]
 GET /companies/{companyId}/reconciliation/accounts/{accountKey}/items : List the rows behind one account's bridge, bucketed [scope:reconciliation:read risk:low idempotent]

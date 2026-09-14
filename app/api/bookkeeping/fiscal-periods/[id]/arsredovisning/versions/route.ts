@@ -5,6 +5,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
+import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import { buildCanonicalAnnualReport } from '@/lib/bokslut/arsredovisning/model'
 import {
   createAnnualReportVersion,
@@ -74,16 +75,21 @@ export const POST = withRouteContext(
         return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
       }
       const signer = validation.data.certificate_signer
-      const model = await buildCanonicalAnnualReport(supabase, companyId, id, {
-        stage: validation.data.action === 'finalize' ? 'signing' : 'draft',
-        undertecknare: signer
-          ? {
-              firstName: signer.first_name,
-              lastName: signer.last_name,
-              role: signer.role,
-            }
-          : undefined,
-      })
+      // Verify the complete live read before persisting anything immutable.
+      // A later import cannot change this captured model: version creation
+      // and signature preparation never re-read its financial balances.
+      const model = await withSIEPeriodRead(supabase, companyId, 'report_export', () =>
+        buildCanonicalAnnualReport(supabase, companyId, id, {
+          stage: validation.data.action === 'finalize' ? 'signing' : 'draft',
+          undertecknare: signer
+            ? {
+                firstName: signer.first_name,
+                lastName: signer.last_name,
+                role: signer.role,
+              }
+            : undefined,
+        }),
+      )
       if (hasStatementIntegrityErrors(model)) {
         return errorResponseFromCode('ARSREDOVISNING_INCOMPLETE', log, {
           requestId,

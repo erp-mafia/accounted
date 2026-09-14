@@ -4,6 +4,7 @@ import {
   deriveForvalChips,
   deriveRequiresHousing,
   filterArticleSuggestions,
+  isComposingKey,
   resolveEntryKey,
   type NextStepInput,
   type ForvalChipsInput,
@@ -358,5 +359,47 @@ describe('resolveEntryKey', () => {
     expect(
       resolveEntryKey({ ...base, key: 'Tab', shiftKey: true, open: true, activeIdx: 0, matchCount: 2 }),
     ).toEqual({ kind: 'none' })
+  })
+
+  // Issue #2447: Gboard autocorrecting the free-text description keeps a
+  // composition open, and every keydown inside one is keyCode 229 /
+  // 'Unidentified'. Committing there would materialise the row with whatever
+  // was typed before the correction landed.
+  it('a composing key never commits, whichever key it claims to be', () => {
+    expect(resolveEntryKey({ ...base, key: 'Enter', composing: true })).toEqual({ kind: 'none' })
+    expect(resolveEntryKey({ ...base, key: 'Tab', composing: true })).toEqual({ kind: 'none' })
+    expect(
+      resolveEntryKey({ ...base, key: 'Enter', composing: true, open: true, activeIdx: 0, matchCount: 2 }),
+    ).toEqual({ kind: 'none' })
+  })
+
+  it("the IME's placeholder key 'Unidentified' is not a commit", () => {
+    expect(resolveEntryKey({ ...base, key: 'Unidentified' })).toEqual({ kind: 'none' })
+    expect(
+      resolveEntryKey({ ...base, key: 'Unidentified', open: true, activeIdx: 0, matchCount: 2 }),
+    ).toEqual({ kind: 'none' })
+  })
+
+  it('a finished composition commits again', () => {
+    expect(resolveEntryKey({ ...base, key: 'Enter', composing: false })).toEqual({
+      kind: 'free_text',
+      text: 'Konsulttid',
+    })
+  })
+})
+
+describe('isComposingKey', () => {
+  it('reads all three signals an IME can raise', () => {
+    expect(isComposingKey({ isComposing: true, key: 'Enter', keyCode: 13 })).toBe(true)
+    // Android/Chrome still reports the legacy code, sometimes without
+    // isComposing, and pairs it with an unnamed key.
+    expect(isComposingKey({ keyCode: 229, key: 'Unidentified' })).toBe(true)
+    expect(isComposingKey({ key: 'Unidentified' })).toBe(true)
+  })
+
+  it('lets a plain key press through', () => {
+    expect(isComposingKey({ isComposing: false, key: 'Enter', keyCode: 13 })).toBe(false)
+    expect(isComposingKey({ key: 'Tab', keyCode: 9 })).toBe(false)
+    expect(isComposingKey({})).toBe(false)
   })
 })

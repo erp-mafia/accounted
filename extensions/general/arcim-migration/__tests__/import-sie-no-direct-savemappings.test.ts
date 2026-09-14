@@ -3,10 +3,10 @@
  * wizard's /import-sie handler.
  *
  * The handler used to run `await saveMappings(supabase, user.id, mappings)`
- * before executeSIEImport: user.id in the companyId slot. Once saveMappings
+ * before submitSIEJob: user.id in the companyId slot. Once saveMappings
  * started surfacing upsert failures (and filling user_id), that call threw on
  * RLS/FK on every request, 500ing every provider-migration import before a
- * single voucher was written. The call was also redundant: executeSIEImport
+ * single voucher was written. The call was also redundant: submitSIEJob
  * saves the mappings itself (lib/import/sie-import.ts), with the correct
  * companyId + userId and non-fatal warning handling.
  *
@@ -21,12 +21,12 @@ import { fileURLToPath } from 'node:url'
 const indexSource = readFileSync(fileURLToPath(new URL('../index.ts', import.meta.url)), 'utf8')
 
 describe('arcim-migration /import-sie handler', () => {
-  it('does not call saveMappings directly (executeSIEImport persists mappings itself)', () => {
+  it('does not call saveMappings directly (submitSIEJob persists mappings itself)', () => {
     expect(indexSource).not.toMatch(/\bsaveMappings\s*\(/)
     expect(indexSource).not.toMatch(/import\s*\{[^}]*\bsaveMappings\b[^}]*\}/)
   })
 
-  it('still routes the import through executeSIEImport, which owns mapping persistence', () => {
-    expect(indexSource).toContain('executeSIEImport(supabase, companyId, user.id, parsed, mappings')
+  it('still routes the import through submitSIEJob, which owns mapping persistence', () => {
+    expect(indexSource).toContain('submitSIEJob(supabase,companyId,user.id,rawContent,mappings')
   })
 })

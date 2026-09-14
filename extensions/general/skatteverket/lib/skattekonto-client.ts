@@ -28,8 +28,6 @@ export function getSkattekontoBaseUrl(): string {
 
 /**
  * Map Skatteverket error codes (felkod 1-5) to Swedish user messages.
- *
- * Codes per dev_docs/skattekonto(2.1.0)/examples/felkod_*.json.
  */
 function mapFelkodToMessage(fel: SkatteverketFel): string {
   switch (fel.felkod) {

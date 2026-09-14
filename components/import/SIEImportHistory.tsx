@@ -11,6 +11,7 @@ import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-di
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
+import Link from 'next/link'
 
 /**
  * Subset of the sie_imports row (GET /api/import/sie) actually rendered here.
@@ -25,16 +26,12 @@ interface SIEImportListRow {
   fiscal_year_end: string | null
   transactions_count: number
   status: string
+  job_state?: string | null
+  job_kind?: string | null
+  job_result?: {repairOutcome?:string} | null
   imported_at: string | null
   created_at: string
 }
-
-/**
- * At or above this voucher count the undo confirm adds a warning that undoing
- * can leave gaps in the voucher numbering when other vouchers were booked
- * after the import (gaps need a documented explanation per BFNAR 2013:2).
- */
-const GAP_WARNING_VOUCHER_COUNT = 100
 
 const STATUS_LABEL_KEY: Record<string, string> = {
   completed: 'sie_history_status_completed',
@@ -83,11 +80,11 @@ export default function SIEImportHistory() {
 
   useEffect(() => {
     void fetchImports()
+    const timer = setInterval(() => void fetchImports(),5000)
+    return () => clearInterval(timer)
   }, [fetchImports])
 
-  // Deliberately no client-side timeout: undoing a large import can take
-  // minutes (the route runs with maxDuration 300) and the confirm dialog
-  // stays open with its spinner until this resolves.
+  // The route acknowledges the durable undo job; history polls its progress.
   const handleUndoConfirm = useCallback(async () => {
     if (!pendingUndo) return
     try {
@@ -105,7 +102,7 @@ export default function SIEImportHistory() {
 
       toast({
         title: t('sie_history_undo_success_title'),
-        description: t('sie_history_undo_success', { count: data.deletedEntries ?? 0 }),
+        description: t('sie_job.queued'),
       })
       await fetchImports()
     } catch (err) {
@@ -161,12 +158,7 @@ export default function SIEImportHistory() {
     return <p className="px-1 text-xs leading-5 text-muted-foreground">{t('sie_history_empty')}</p>
   }
 
-  const confirmDescription = pendingUndo
-    ? t('sie_history_undo_confirm_description', { count: pendingUndo.transactions_count }) +
-      (pendingUndo.transactions_count >= GAP_WARNING_VOUCHER_COUNT
-        ? '\n\n' + t('sie_history_undo_gap_warning')
-        : '')
-    : ''
+  const confirmDescription = t('sie_job.undoConfirm')
 
   return (
     <div>
@@ -195,9 +187,12 @@ export default function SIEImportHistory() {
                   {fiscalYearLabel(row)}
                 </td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{row.transactions_count}</td>
-                <td className={TD_CLASS}>{statusCell(row.status)}</td>
+                <td className={TD_CLASS}>{row.job_result?.repairOutcome === 'stopped' ? t('sie_job.repairStopped') : row.job_state ? t(`sie_job.states.${row.job_state}`) : statusCell(row.status)}</td>
                 <td className={cn(TD_CLASS, 'text-right')}>
-                  {row.status === 'completed' && (
+                  {row.job_state && !['completed','undone','failed'].includes(row.job_state) && (
+                    <Link className="text-primary underline underline-offset-4" href={`/import?mode=sie&job=${row.id}`}>{t('sie_job.open')}</Link>
+                  )}
+                  {row.job_state === 'completed' && row.job_kind !== 'duplicate_repair' && (
                     <Button
                       variant="outline"
                       size="sm"

@@ -332,3 +332,92 @@ describe('POST /api/invoices/recurring', () => {
     expect(body.data.id).toBe('s-1')
   })
 })
+
+describe('POST /api/invoices/recurring: text rows and billing period', () => {
+  const CUSTOMER_ID = '550e8400-e29b-41d4-a716-446655440000'
+
+  function captureInserts() {
+    const inserted: Record<string, unknown[]> = {}
+    const originalFrom = mockSupabase.from.getMockImplementation()!
+    mockSupabase.from.mockImplementation((table: string) => {
+      const chain = originalFrom(table) as object
+      return new Proxy(chain, {
+        get(target, prop, receiver) {
+          if (prop === 'insert') {
+            return (rows: unknown) => {
+              ;(inserted[table] ??= []).push(rows)
+              return (Reflect.get(target, prop, receiver) as (r: unknown) => unknown)(rows)
+            }
+          }
+          return Reflect.get(target, prop, receiver)
+        },
+      })
+    })
+    return inserted
+  }
+
+  it('stores a text row as description-only and persists period_start', async () => {
+    const inserted = captureInserts()
+    enqueue({ data: { id: CUSTOMER_ID }, error: null })
+    enqueue({ data: { id: 's-1', name: 'Årsavgift' }, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 's-1', name: 'Årsavgift', items: [] }, error: null })
+
+    const request = createMockRequest('/api/invoices/recurring', {
+      method: 'POST',
+      body: {
+        customer_id: CUSTOMER_ID,
+        name: 'Årsavgift',
+        day_of_month: 1,
+        interval_months: 12,
+        period_start: '2026-10-01',
+        notes: 'Fakturaperioden avser {periodstart} - {periodslut}',
+        items: [
+          { line_type: 'text', description: 'Avser {månad} {år}', quantity: 99, unit: 'st', unit_price: 500 },
+          { description: 'Licens', quantity: 1, unit: 'st', unit_price: 12000 },
+        ],
+      },
+    })
+    const { status } = await parseJsonResponse(await POST(request, { params: Promise.resolve({}) }))
+    expect(status).toBe(201)
+
+    expect(inserted['recurring_invoice_schedules'][0]).toMatchObject({ period_start: '2026-10-01' })
+    const rows = inserted['recurring_invoice_schedule_items'][0] as Array<Record<string, unknown>>
+    expect(rows[0]).toMatchObject({ line_type: 'text', description: 'Avser {månad} {år}', quantity: 0, unit: '', unit_price: 0, vat_rate: null })
+    expect(rows[1]).toMatchObject({ line_type: 'product', description: 'Licens', quantity: 1 })
+  })
+
+  it('rejects a schedule with only text rows', async () => {
+    enqueue({ data: { id: CUSTOMER_ID }, error: null })
+    const request = createMockRequest('/api/invoices/recurring', {
+      method: 'POST',
+      body: {
+        customer_id: CUSTOMER_ID,
+        name: 'Bara text',
+        day_of_month: 1,
+        items: [{ line_type: 'text', description: 'Hej', quantity: 0, unit: '', unit_price: 0 }],
+      },
+    })
+    const { status } = await parseJsonResponse(await POST(request, { params: Promise.resolve({}) }))
+    expect(status).toBe(400)
+  })
+
+  it('rejects period placeholders without a period_start', async () => {
+    enqueue({ data: { id: CUSTOMER_ID }, error: null })
+    const request = createMockRequest('/api/invoices/recurring', {
+      method: 'POST',
+      body: {
+        customer_id: CUSTOMER_ID,
+        name: 'Period utan start',
+        day_of_month: 1,
+        notes: 'Period {periodstart} - {periodslut}',
+        items: [{ description: 'Licens', quantity: 1, unit: 'st', unit_price: 12000 }],
+      },
+    })
+    const { status, body } = await parseJsonResponse<{ errors?: Array<{ field: string; message: string }> }>(
+      await POST(request, { params: Promise.resolve({}) }),
+    )
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('Periodstart')
+  })
+})

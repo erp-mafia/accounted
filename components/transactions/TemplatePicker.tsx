@@ -35,7 +35,7 @@ function categoryAccount(debit: string, credit: string): string {
 }
 
 /**
- * Dense mode (shell v2, the Kick-style picker beside the row): one line per
+ * Dense mode (the Kick-style picker beside the row): one line per
  * template with a colour dot for its family, the name, and the account.
  */
 function DenseRow({
@@ -290,7 +290,7 @@ interface TemplatePickerProps {
   // into the manual booking flow with the account prefilled. Omitting it
   // keeps the picker template-only (and skips the accounts fetch).
   onSelectAccount?: (accountNumber: string) => void
-  /** Shell v2: one line per template, colour dot, no cards (the picker sits beside the row). */
+  /** One line per template, colour dot, no cards (the picker sits beside the row). */
   dense?: boolean
   selectedTemplateId?: string
   /**

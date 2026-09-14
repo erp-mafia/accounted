@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { cancelSchedulesForSource } from '@/lib/bookkeeping/accruals/service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Logger } from '@/lib/logger'
@@ -15,6 +16,12 @@ export interface CreditNoteOriginalInvoice {
   paid_amount?: number | null
   total?: number | null
 }
+
+/**
+ * Lives beside its supplier twin in lib/bookkeeping/booking-mode.ts; re-exported
+ * here because the customer-side call sites import it from this module.
+ */
+export { creditNoteNeedsJournalEntry }
 
 export interface CreditNoteIssueFailure {
   step: 'journal_entry' | 'journal_link' | 'accrual_schedules' | 'original_status'
@@ -49,24 +56,6 @@ export interface IssueCreditNoteResult {
  */
 function failureReason(error: unknown): string {
   return getErrorMessage(error, { context: 'invoice' })
-}
-
-/**
- * Faktureringsmetoden always books the credit on issue. Kontantmetoden only
- * books it when the original sale has already reached the ledger, for example
- * through a completed payment or a year-end receivable entry.
- */
-export function creditNoteNeedsJournalEntry(
-  accountingMethod: AccountingMethod,
-  originalInvoice: CreditNoteOriginalInvoice,
-): boolean {
-  return (
-    accountingMethod === 'accrual' ||
-    !!originalInvoice.journal_entry_id ||
-    originalInvoice.status === 'paid' ||
-    !!originalInvoice.paid_at ||
-    Math.abs(originalInvoice.paid_amount ?? 0) > 0
-  )
 }
 
 async function getOriginalVoucherRef(

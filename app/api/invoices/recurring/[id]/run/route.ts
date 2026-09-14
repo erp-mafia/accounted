@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { executeRecurringSchedule } from '@/lib/invoices/recurring-schedule-service'
+import { advancePeriodStart } from '@/lib/invoices/recurring-placeholders'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type { RecurringInvoiceSchedule, RecurringInvoiceScheduleItem } from '@/types'
 
@@ -68,6 +69,11 @@ export const POST = withRouteContext(
           last_invoice_id: result.invoiceId,
           last_run_warning: result.warning,
           generated_count: typed.generated_count + 1,
+          // Unlike next_run_date, the period DOES advance: the invoice just
+          // created covers it, and the cron must bill the next one.
+          ...(typed.period_start
+            ? { period_start: advancePeriodStart(typed.period_start, typed.interval_months ?? 1) }
+            : {}),
         })
         .eq('id', id)
         .eq('company_id', companyId)

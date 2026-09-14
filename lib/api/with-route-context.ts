@@ -30,6 +30,7 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger, type Logger } from '@/lib/logger'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 
 export interface RouteContext {
   /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id header. */
@@ -65,6 +66,8 @@ interface RouteContextOptions {
    * lines of boilerplate.
    */
   requireWrite?: boolean
+  /** File exports must not escape while a company has an incomplete import. */
+  requireCompleteLedger?: boolean | ((request: Request) => boolean)
 }
 
 // Next.js 16 always passes a `{ params: Promise<...> }` second arg to route
@@ -160,7 +163,11 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       errLog = ctx.log
 
       const handlerStart = Date.now()
-      const response = await handler(request, ctx, params)
+      const requireCompleteLedger = typeof options.requireCompleteLedger === 'function'
+        ? options.requireCompleteLedger(request) : options.requireCompleteLedger
+      const response = requireCompleteLedger
+        ? await withSIEPeriodRead(supabase, companyId, 'report_export', () => handler(request, ctx, params))
+        : await handler(request, ctx, params)
       const handlerMs = Date.now() - handlerStart
 
       if (response instanceof Response && !response.headers.get('X-Request-Id')) {

@@ -828,7 +828,23 @@ export const whatsappInboxExtension: Extension = {
           try {
             const phoneHash = hashPhone(msg.from)
             const link = await lookupActiveLink(supabase, phoneHash)
-            if (link) {
+            if (link === 'transient_error') {
+              // The link read failed, so whether this sender is linked is
+              // unknown. Treating that as "not linked" greeted an already
+              // linked user with the M1 onboarding text and invited a second
+              // link flow (#2365). Claim nothing instead: no trace row, no
+              // quota consumption, no link state change, so the resend is
+              // handled as if this delivery never arrived.
+              log.warn('phone link lookup failed; asking the sender to resend', {
+                wamid: msg.wamid,
+              })
+              await sendText(supabase, {
+                to: msg.from,
+                body: botCopy('sv').m22LookupRetry(),
+                template: TEMPLATE.m22LookupRetry,
+                senderPhoneHash: phoneHash,
+              })
+            } else if (link) {
               await handleLinkedSender(supabase, msg, phoneHash, link, deferredMessageIds)
             } else {
               await handleUnknownSender(supabase, msg, phoneHash)

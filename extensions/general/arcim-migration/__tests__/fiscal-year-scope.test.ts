@@ -32,6 +32,7 @@ vi.mock('../lib/provider-client', () => ({
   deleteConsent: vi.fn(),
   resolveConsent: vi.fn(),
   fetchCompanyInfoDirect: vi.fn(),
+  fetchAccountingAccountsDirect: vi.fn().mockResolvedValue([]),
   ProviderTokenInvalidError: class ProviderTokenInvalidError extends Error {},
   ProviderCompanyMismatchError: class ProviderCompanyMismatchError extends Error {},
   ConsentNotFoundError: class ConsentNotFoundError extends Error {},

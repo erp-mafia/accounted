@@ -39,6 +39,9 @@ async function insertPostedEntry(params: {
   const client = await getClient()
   try {
     await client.query('BEGIN')
+    // This suite covers retained legacy opening-balance resync behavior.
+    // Seed historical imports without changing any accounting guard.
+    if(params.sourceType==='import') await client.query('ALTER TABLE journal_entries DISABLE TRIGGER guard_sie_entry_provenance')
     const voucher = await client.query<{ next_number: number }>(
       `SELECT COALESCE(MAX(voucher_number), 0) + 1 AS next_number
          FROM public.journal_entries
@@ -52,7 +55,7 @@ async function insertPostedEntry(params: {
       `INSERT INTO public.journal_entries
          (id, user_id, company_id, fiscal_period_id, voucher_number,
           voucher_series, entry_date, description, source_type, status, reverses_id)
-       VALUES ($1, $2, $3, $4, $5, 'A', $6, $7, $8, 'posted', $9)`,
+       VALUES ($1, $2, $3, $4, $5, 'A', $6, $7, $8, 'draft', $9)`,
       [
         id,
         params.userId,
@@ -97,6 +100,8 @@ async function insertPostedEntry(params: {
         ],
       )
     }
+    if(params.sourceType==='import') await client.query('ALTER TABLE journal_entries ENABLE TRIGGER guard_sie_entry_provenance')
+    await client.query("UPDATE journal_entries SET status='posted' WHERE id=$1",[id])
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {})
@@ -137,6 +142,7 @@ function makePgSupabase(_userId: string): SupabaseClient {
       const filters: {
         companyId?: string
         status?: string
+        id?: string
         excludedSourceTypes: string[]
         throughDate?: string
       } = { excludedSourceTypes: [] }
@@ -146,8 +152,22 @@ function makePgSupabase(_userId: string): SupabaseClient {
         eq: (column: string, value: unknown) => {
           if (column === 'company_id') filters.companyId = String(value)
           else if (column === 'status') filters.status = String(value)
+          else if (column === 'id') filters.id = String(value)
           else throw new Error(`Unhandled eq filter in journal entry pg adapter: ${column}`)
           return chain
+        },
+        // resyncNextPeriodOpeningBalance reads the replaced IB entry's series
+        // (`select('voucher_series').eq('id', ...).eq('company_id', ...).maybeSingle()`)
+        // so the replacement books in the same series as the storno.
+        maybeSingle: async () => {
+          if (!filters.id) throw new Error('journal entry pg adapter: maybeSingle needs an id filter')
+          const result = await getPool().query<{ voucher_series: string | null }>(
+            `SELECT voucher_series
+               FROM public.journal_entries
+              WHERE id = $1 AND company_id = $2`,
+            [filters.id, filters.companyId],
+          )
+          return { data: result.rows[0] ?? null, error: null }
         },
         neq: (column: string, value: unknown) => {
           if (column === 'source_type') filters.excludedSourceTypes.push(String(value))

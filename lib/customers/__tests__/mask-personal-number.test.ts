@@ -20,6 +20,21 @@ describe('customerListIdentifier', () => {
     ).toBe(UNDECRYPTABLE_PERSONAL_NUMBER_MASK)
   })
 
+  it('masks the org_number of an enskild firma stored as a Swedish business (#2367)', () => {
+    expect(customerListIdentifier({ customer_type: 'swedish_business', org_number: '19900101-1234' })).toBe(
+      '********-1234',
+    )
+    expect(customerListIdentifier({ customer_type: 'swedish_business', org_number: '9001011234' })).toBe(
+      '********-1234',
+    )
+  })
+
+  it('leaves a foreign business org_number alone even at ten digits', () => {
+    expect(customerListIdentifier({ customer_type: 'eu_business', org_number: '19900101-1234' })).toBe(
+      '19900101-1234',
+    )
+  })
+
   it('masks a legacy individual row that still carries its personnummer in org_number', () => {
     expect(customerListIdentifier({ customer_type: 'individual', org_number: '19900101-1234', personal_number: null })).toBe(
       '********-1234',

@@ -2,14 +2,13 @@
  * POST /api/dimensions/import-existing: one-shot scan that backfills the
  * dimension_values registry from codes already present on journal lines.
  *
- * The settings toggle-on flow runs this ("Importera befintliga koder",
- * dev_docs/dimensions_implementation_plan.md §4): every {sie_dim_no: code}
- * entry found in journal_entry_lines.dimensions that lacks a registry row gets
- * one created with is_active = false and name = code: referential validity
- * holds retroactively without polluting pickers. Dimensions missing from the
- * registry entirely (e.g. a custom dim number written via the v1 API) are
- * created too, so no line code is skipped. Idempotent: re-running creates
- * nothing new.
+ * The settings toggle-on flow runs this ("Importera befintliga koder"): every
+ * {sie_dim_no: code} entry found in journal_entry_lines.dimensions that lacks
+ * a registry row gets one created with is_active = false and name = code:
+ * referential validity holds retroactively without polluting pickers.
+ * Dimensions missing from the registry entirely (e.g. a custom dim number
+ * written via the v1 API) are created too, so no line code is skipped.
+ * Idempotent: re-running creates nothing new.
  *
  * Response: 200 { created: number } (count of dimension_values created).
  */

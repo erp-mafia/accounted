@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { UpdateRecurringScheduleSchema } from '@/lib/api/schemas'
+import { periodPlaceholderProblem } from '@/lib/invoices/recurring-placeholders'
 import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
 import {
   computeInitialRunDate,
@@ -205,6 +206,40 @@ export const PATCH = withRouteContext(
       // safety-pause note, or a stale failure from months ago).
       if (reactivating) {
         updateRow.last_run_warning = null
+      }
+    }
+
+    // Period placeholders ({periodstart} ...) need a period_start in effect
+    // after this update. A partial update may only touch notes, so merge
+    // with the stored row before deciding.
+    if (items !== undefined || input.notes !== undefined || input.period_start !== undefined) {
+      const { data: stored } = await supabase
+        .from('recurring_invoice_schedules')
+        .select('notes, period_start, items:recurring_invoice_schedule_items(description)')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (!stored) {
+        return NextResponse.json(
+          { error: 'Schedule not found', type: 'not_found' },
+          { status: 404 },
+        )
+      }
+      const storedItems = (stored.items as Array<{ description: string }> | null) ?? []
+      const problem = periodPlaceholderProblem({
+        notes: input.notes !== undefined ? input.notes : stored.notes,
+        itemDescriptions: (items ?? storedItems).map((item) => item.description),
+        periodStart: input.period_start !== undefined ? input.period_start : stored.period_start,
+      })
+      if (problem) {
+        return NextResponse.json(
+          {
+            error: 'Validation failed',
+            type: 'validation_error',
+            errors: [{ field: 'period_start', message: problem, code: 'custom' }],
+          },
+          { status: 400 },
+        )
       }
     }
 

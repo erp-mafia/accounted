@@ -41,9 +41,6 @@ export interface CloudConnection {
   needs_reauth_at?: string
 }
 
-/** @deprecated Use {@link CloudConnection}. Kept for existing call sites. */
-export type GoogleDriveConnection = CloudConnection
-
 /**
  * State of one file in the company's backup folder: an `Arkiv <år>.zip`
  * per räkenskapsår, `Grunddata.zip`, and the folder LÄSMIG.txt. Files are
@@ -106,9 +103,6 @@ export interface CloudLastSync {
   sha256?: string
 }
 
-/** @deprecated Use {@link CloudLastSync}. Kept for existing call sites. */
-export type GoogleDriveLastSync = CloudLastSync
-
 /**
  * Schedule stored under key `google_drive_schedule` / `dropbox_schedule`.
  * Each provider carries its own schedule: a company can back up to Drive
@@ -143,9 +137,6 @@ export interface CloudSchedule {
   /** ISO timestamp of the last failure-alert email (throttle anchor). */
   last_alert_at?: string | null
 }
-
-/** @deprecated Use {@link CloudSchedule}. Kept for existing call sites. */
-export type GoogleDriveSchedule = CloudSchedule
 
 /** Per-provider status block returned to the UI. */
 export interface CloudProviderStatus {

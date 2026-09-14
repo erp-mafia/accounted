@@ -8,9 +8,32 @@ export interface ResolveInvoiceEmailRecipientsInput {
   configuredBcc?: readonly string[] | null
   customerCc?: readonly string[] | null
   customerBcc?: readonly string[] | null
-  legacyCc?: string | null
   additionalCc?: readonly string[]
   additionalBcc?: readonly string[]
+}
+
+type ReplyToSettings = {
+  invoice_email_reply_to?: string | null
+  email?: string | null
+}
+
+/**
+ * The Reply-To for customer-facing invoice mail (invoice, reminder, payment
+ * confirmation). The configured reply address wins, then the company email,
+ * then the address of the user who triggered the send. Every email ends with
+ * "Svara direkt på detta mejl"; the templates drop that line when this
+ * returns undefined (a cron send for a company with no address at all), so
+ * the customer is never told to reply into the platform noreply sender.
+ */
+export function resolveInvoiceReplyTo(
+  settings: ReplyToSettings,
+  senderEmail?: string | null,
+): string | undefined {
+  for (const candidate of [settings.invoice_email_reply_to, settings.email, senderEmail]) {
+    const address = candidate?.trim()
+    if (address && EMAIL_PATTERN.test(address)) return address
+  }
+  return undefined
 }
 
 export interface ResolvedInvoiceEmailRecipients {
@@ -68,10 +91,10 @@ function uniqueAddresses(
 /**
  * Build the exact recipient lists submitted to the email provider.
  *
- * A null company CC list means the company has never configured the new
- * setting, so the historical automatic-copy address remains in effect. An
- * explicit empty list disables that fallback. Recipients are de-duplicated
- * with To taking precedence over CC and CC taking precedence over BCC.
+ * Only configured addresses are copied: a null or empty company list means
+ * no fixed copies (migration 20260914110000 turned the old company-email
+ * fallback into explicit lists; the login-email fallback is gone). Recipients
+ * are de-duplicated with To taking precedence over CC and CC over BCC.
  */
 export function resolveInvoiceEmailRecipients(
   input: ResolveInvoiceEmailRecipientsInput,
@@ -80,14 +103,8 @@ export function resolveInvoiceEmailRecipients(
   const rawTo = typeof input.to === 'string' ? [input.to] : input.to
   const to = uniqueAddresses(rawTo, used)
 
-  const fixedCc = input.configuredCc === null || input.configuredCc === undefined
-    ? input.legacyCc
-      ? [input.legacyCc]
-      : []
-    : input.configuredCc
-
   const cc = uniqueAddresses(
-    [...fixedCc, ...(input.customerCc ?? []), ...(input.additionalCc ?? [])],
+    [...(input.configuredCc ?? []), ...(input.customerCc ?? []), ...(input.additionalCc ?? [])],
     used,
   )
   const bcc = uniqueAddresses(
@@ -118,12 +135,7 @@ export function findAdditionalInvoiceRecipientCollisions(
     if (key) occupied.set(key, 'to')
   }
 
-  const fixedCc = input.configuredCc === null || input.configuredCc === undefined
-    ? input.legacyCc
-      ? [input.legacyCc]
-      : []
-    : input.configuredCc
-  for (const address of fixedCc) {
+  for (const address of input.configuredCc ?? []) {
     const key = normalizedKey(address)
     if (key && !occupied.has(key)) occupied.set(key, 'configured_cc')
   }

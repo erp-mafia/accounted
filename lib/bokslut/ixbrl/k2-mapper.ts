@@ -464,6 +464,15 @@ function inRanges(account: string, ranges: Range[]): boolean {
   return ranges.some((range) => account >= range.start && account <= range.end)
 }
 
+/**
+ * Årets resultat (BAS 8990-8999). Deliberately mapped to no K2 concept: the
+ * RR ranges stop at 8989 and årets resultat is derived from the RR sum
+ * (computeTotals), so a balance here is never "missing" from the ÅR.
+ */
+function isAretsResultatAccount(account: string): boolean {
+  return account >= '8990' && account <= '8999'
+}
+
 function exactSumForMapping(rows: TrialBalanceRowLike[], mapping: PostMapping): number {
   return sumOre(
     rows
@@ -602,6 +611,7 @@ export function mapTrialBalancesToK2(
   const allMappings = [...K2_RR_MAPPINGS, ...K2_BR_MAPPINGS]
   const unmappedAccounts: K2MappingResult['unmappedAccounts'] = []
   const seenReclass = new Set<string>()
+  const seenAretsResultat = new Set<string>()
   for (const rows of [
     current.full,
     current.preClosing,
@@ -611,6 +621,19 @@ export function mapTrialBalancesToK2(
     for (const row of rows) {
       const balance = Math.round(row.closing_debit - row.closing_credit)
       if (balance === 0) continue
+      // A year imported already closed by another system carries the result
+      // on 8999. The sweep used to report it as "beloppet saknas i
+      // årsredovisningen" although the amount is exactly what the RR sum
+      // derives (feedback seq 345150): say so, and ask for nothing.
+      if (isAretsResultatAccount(row.account_number)) {
+        if (!seenAretsResultat.has(row.account_number)) {
+          seenAretsResultat.add(row.account_number)
+          warnings.push(
+            `Konto ${row.account_number} (${row.account_name}) ingår inte i K2-mappningen: årets resultat beräknas från resultaträkningens summa. Ingen åtgärd behövs.`,
+          )
+        }
+        continue
+      }
       const reclass = RECLASSIFIED_ACCOUNTS[row.account_number]
       if (reclass && !seenReclass.has(row.account_number)) {
         seenReclass.add(row.account_number)

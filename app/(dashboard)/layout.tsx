@@ -2,7 +2,6 @@ import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
-import { ShellProvider } from '@/components/dashboard/ShellProvider'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
 import AnalyticsIdentify from '@/components/AnalyticsIdentify'
 import { computeIdentityHash } from '@/lib/analytics/identity-hash'
@@ -33,7 +32,7 @@ import {
   resolveCockpitHref,
 } from '@/lib/company/home-domain'
 import HomeDomainSignpost from '@/components/dashboard/HomeDomainSignpost'
-import type { AccountingFramework, EntityType, CompanyRole, Team, DashboardShell } from '@/types'
+import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
 import { parseEntityType } from '@/lib/company/entity-type'
 import {
   getDashboardAuthContext,
@@ -54,8 +53,8 @@ const NO_COMPANY_ALLOWED_PATHS = ['/settings/account']
  * Frame layout: on desktop the page is a rounded panel floating on the
  * warm-toned frame (bg-frame on the wrapper div), with its own inner
  * scroll. 10px margin against the frame; height is the remaining
- * viewport. The sidebar (fixed, w-64) sits borderless on the frame, so
- * the panel starts at ml-64. On mobile the panel dissolves: full-width
+ * viewport. The sidebar (fixed, --nav-w wide) sits borderless on the
+ * frame, so the panel starts at ml-[var(--nav-w)]. On mobile the panel dissolves: full-width
  * document flow with the bottom nav, exactly as before.
  */
 const MAIN_PANEL_CLASS =
@@ -112,9 +111,9 @@ export default async function DashboardLayout({
     // popover (full_name + initial) so it's clear which user is logged
     // in, distinct from the active company shown at the top.
     supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
-    // Per-user UI state (nav collapse/fold state), server-rendered so the
-    // sidebar width is right on first paint, plus the hide-assistant-FAB
-    // preference (Inställningar → Assistenten).
+    // Per-user UI state (assistant panel geometry, trial acknowledgement),
+    // server-rendered so both are right on first paint, plus the
+    // hide-assistant-FAB preference (Inställningar → Assistenten).
     supabase.from('user_preferences').select('ui_state, hide_assistant_fab').eq('user_id', user.id).maybeSingle(),
     supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
   ])
@@ -234,9 +233,9 @@ export default async function DashboardLayout({
               className={MAIN_PANEL_CLASS}
               role="main"
             >
-              <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
+              <MainContainer companyId={null}>
                 {children}
-              </div>
+              </MainContainer>
             </main>
             {settingsModal}
             <SettingsHotkey />
@@ -389,9 +388,9 @@ export default async function DashboardLayout({
               extensionNavItems={getExtensionNavItems()}
             />
             <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
-              <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
+              <MainContainer companyId={null}>
                 {children}
-              </div>
+              </MainContainer>
             </main>
             {settingsModal}
             <SettingsHotkey />
@@ -420,6 +419,8 @@ export default async function DashboardLayout({
   const dimensionsEnabled = settings?.dimensions_enabled ?? false
   // Kundorder visibility: same UI-only gate as dimensionsEnabled.
   const salesOrdersEnabled = settings?.sales_orders_enabled ?? false
+  // Offerter row: UI-only gate, default on (a fresh settings row has it true).
+  const quotesEnabled = settings?.quotes_enabled ?? true
   // Körjournal visibility: the settings toggle is the normal way in, existing
   // trips force the row on so already-created data stays reachable.
   const hasMileage = (settings?.mileage_enabled ?? false) || hasMileageTrips
@@ -449,16 +450,10 @@ export default async function DashboardLayout({
       })),
   )
 
-  // Client-driven UI preferences (sidebar collapse + fold state). Read here
-  // so the shell renders at the right width on first paint; the nav toggles
-  // flip the data attribute client-side and persist via /api/user/ui-state.
+  // Client-driven UI preferences (assistant panel geometry, trial
+  // acknowledgement), read here so the first paint matches what the client
+  // persists via /api/user/ui-state.
   const uiState = (userPrefs?.ui_state ?? {}) as import('@/types').UserUiState
-  const navCollapsed = uiState.nav_collapsed === true
-  // Shell v2 is the default (UI v2 PR 9a, cutover step one). Standard (v1)
-  // stays selectable under Inställningar → Konto → Layout until v1 is removed.
-  // Rendered as data-shell on the panel so the CSS in globals.css can restyle
-  // PageHeader without touching page code.
-  const shell: DashboardShell = uiState.shell === 'v1' ? 'v1' : 'v2'
 
   const allCompanyEntries = (allMemberships || [])
     .filter((m) => m.companies)
@@ -548,7 +543,6 @@ export default async function DashboardLayout({
         <div
           id="dash-shell"
           className="min-h-dvh bg-frame md:flex md:flex-col"
-          style={{ '--nav-w': shell === 'v2' ? '220px' : navCollapsed ? '64px' : '248px' } as React.CSSProperties}
         >
           {/* Skip to content link for keyboard/screen reader users */}
           <a
@@ -566,6 +560,7 @@ export default async function DashboardLayout({
             paysSalaries={paysSalaries}
             dimensionsEnabled={dimensionsEnabled}
             salesOrdersEnabled={salesOrdersEnabled}
+            quotesEnabled={quotesEnabled}
             hasWebshop={hasWebshop}
             hasMileage={hasMileage}
             hasExpenseClaims={hasExpenseClaims}
@@ -573,12 +568,9 @@ export default async function DashboardLayout({
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
-            initialUiState={uiState}
-            shell={shell}
           />
-          <main id="main-content" className={MAIN_PANEL_CLASS} role="main" data-shell={shell}>
-            <ShellProvider shell={shell}>
-            <MainContainer companyId={companyId} shell={shell}>
+          <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
+            <MainContainer companyId={companyId}>
               {showSignpost ? (
                 <HomeDomainSignpost
                   activeCompanyName={displayName}
@@ -592,7 +584,6 @@ export default async function DashboardLayout({
                 children
               )}
             </MainContainer>
-            </ShellProvider>
           </main>
           {/* One-time post-trial invitation. Sandbox/anonymous demo users have
               no billing (their companies carry trial grants too), so the gate

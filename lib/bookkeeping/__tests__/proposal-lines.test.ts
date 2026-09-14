@@ -80,16 +80,17 @@ describe('computeProposalLines', () => {
     })
 
     it('balances 12% amounts that break independently-rounded net+VAT (skeptic counterexample)', () => {
-      // 102.06 at 12%: rounding net and VAT separately gives 91.13 + 10.94 =
-      // 102.07 (off by 1 ore). The engine computes VAT once (roundOre) and
-      // derives the net by subtraction: 10.93 + 91.13 = 102.06.
+      // 102.06 at 12%: the VAT is exactly 10.935, an exact half, so roundOre
+      // takes it up to 10.94. Rounding net and VAT independently would give
+      // 91.13 + 10.94 = 102.07 (off by 1 ore); the engine computes VAT once
+      // (roundOre) and derives the net by subtraction: 91.12 + 10.94 = 102.06.
       const lines = computeProposalLines({
         amount: -102.06,
         category: 'expense_representation', // maps to reduced_12 by default
       })
       expect(lines).toEqual([
-        { side: 'debet', account: '6071', amount: 91.13 },
-        { side: 'debet', account: '2641', amount: 10.93 },
+        { side: 'debet', account: '6071', amount: 91.12 },
+        { side: 'debet', account: '2641', amount: 10.94 },
         { side: 'kredit', account: '1930', amount: 102.06, settlement: true },
       ])
       expect(sumSide(lines, 'debet')).toBe(sumSide(lines, 'kredit'))

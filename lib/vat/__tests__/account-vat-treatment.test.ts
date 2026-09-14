@@ -90,6 +90,47 @@ describe('suggestVatTreatment', () => {
     expect(suggestVatTreatment('4010', 'Reumatologiska varor')).toBeNull()
   })
 
+  // "EG" (Europeiska gemenskapen) is the pre-Lisbon name for the union. Charts
+  // predating the 2009 rename kept it, and one chart carries both spellings:
+  // the file this came from (ex-Visma eEkonomi, company created 2021) says
+  // "till annat EU-land" on 3109/3309 and "EG" on 3041-3058 and 4056-4059.
+  // Every row below read as momsfri ruta 42 or fell through to no suggestion.
+  it('reads EG labels as the union, exactly like their EU spelling', () => {
+    expect(suggestVatTreatment('3048', 'Försäljn tjänst EG momsfri')).toEqual({
+      treatment: 'reverse_charge_eu_services', rate: 0,
+    })
+    expect(suggestVatTreatment('3058', 'Försäljn varor EG momsfri')).toEqual({
+      treatment: 'reverse_charge_eu_goods', rate: 0,
+    })
+    expect(suggestVatTreatment('4056', 'Inköp varor 25% EG')).toEqual({
+      treatment: 'reverse_charge_eu_goods', rate: 0.25,
+    })
+    expect(suggestVatTreatment('4058', 'Inköp varor EG 6%')).toEqual({
+      treatment: 'reverse_charge_eu_goods', rate: 0.06,
+    })
+  })
+
+  it('checks outside-EG labels before the generic union matcher', () => {
+    expect(suggestVatTreatment('3045', 'Försäljn tjänst utanför EG momsfri')).toEqual({
+      treatment: 'export_services', rate: 0,
+    })
+    expect(suggestVatTreatment('3055', 'Försäljn varor utanför EG momsfri')).toEqual({
+      treatment: 'export_goods', rate: 0,
+    })
+    // Purchases of goods from outside the union are an import, which has no
+    // supported purchase treatment: the EG spelling must not fall through to
+    // the intra-union goods branch below it.
+    expect(suggestVatTreatment('4545', 'Import varor utanför EG 25%')).toBeNull()
+  })
+
+  it('does not match EG inside an unrelated word or a wider place name', () => {
+    expect(suggestVatTreatment('4010', 'Egna uttag av varor')).toBeNull()
+    expect(suggestVatTreatment('5410', 'Förbrukningsinventarier, regionala')).toBeNull()
+    // "utanför Europa" is not "utanför EU": without the word boundary this
+    // read as an export and zero-rated the row.
+    expect(suggestVatTreatment('3055', 'Försäljning varor utanför Europa')).toBeNull()
+  })
+
   it('keeps VMB without a generic booking rate', () => {
     expect(suggestVatTreatment('3211', 'Försäljning VMB')).toEqual({
       treatment: 'vmb', rate: null,

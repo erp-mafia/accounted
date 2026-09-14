@@ -28,7 +28,6 @@ import {
 } from '@/components/ui/dropdown-menu'
 import {
   AlertTriangle,
-  ArrowLeft,
   ArrowLeftCircle,
   Download,
   Eye,
@@ -43,7 +42,6 @@ import { formatDate } from '@/lib/utils'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { periodLabelOf, type RunDetail } from './types'
-import { useShell } from '@/components/dashboard/ShellProvider'
 
 // Same chip vocabulary as the Löner list (chips mark exceptions): in-flight
 // states wear the quiet beige chip, paid is sage, corrected the outline
@@ -108,7 +106,6 @@ export function RunHeader({
   onCorrect,
   onUpdatePaymentDate,
 }: RunHeaderProps) {
-  const shell = useShell()
   const t = useTranslations('salary_run')
   const tSalary = useTranslations('salary')
   const [correctOpen, setCorrectOpen] = useState(false)
@@ -231,23 +228,10 @@ export function RunHeader({
 
   return (
     <>
-      {/* Back link on its own quiet row, so the title below keeps a stable
-          position across runs. Shell v2: the sidebar says where we are. */}
-      {shell !== 'v2' && (
-      <div>
-        <Link
-          href="/salary"
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t('back_to_salary')}
-        </Link>
-      </div>
-      )}
-
       {/* Header: serif title with one status element, a quiet meta line, and
           the next step on the right. Everything else lives in the ⋯ menu.
-          The page-header hooks turn it into the v2 top bar. */}
+          The page-header hooks turn it into the top bar; the sidebar says
+          where we are, so there is no back link. */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">

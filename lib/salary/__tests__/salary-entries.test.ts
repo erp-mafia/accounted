@@ -13,7 +13,11 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 }))
 
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
-import { createSalaryRunEntries } from '../salary-entries'
+import {
+  buildSalaryRunEntryLines,
+  createSalaryRunEntries,
+  salaryRunDataFromRows,
+} from '../salary-entries'
 
 const mockedCreateEntry = vi.mocked(createJournalEntry)
 
@@ -762,5 +766,112 @@ describe('salary entries: kostnadsersättning (#2331)', () => {
       expect.objectContaining({ account_number: '2820', debit_amount: 800, credit_amount: 0 }),
       expect.objectContaining({ account_number: '1930', debit_amount: 0, credit_amount: 800 }),
     ])
+  })
+})
+
+describe('salary entries: one line builder for booking and preview (feedback seq 384229)', () => {
+  const benefitCar = {
+    item_type: 'benefit_car',
+    amount: 7049,
+    account_number: '7385',
+    is_net_deduction: false,
+    is_gross_deduction: false,
+  }
+
+  it('skips förmånsvärden (no cash flow) and keeps the salary lines balanced', () => {
+    const run = makeRun([
+      makeEmployee({
+        line_items: [
+          { item_type: 'base_salary', amount: 30000, account_number: '7210', is_net_deduction: false, is_gross_deduction: false },
+          benefitCar,
+        ],
+      }),
+    ])
+    const { salaryLines } = buildSalaryRunEntryLines(run, 'Lön 2026-06')
+    // The bilförmån raises the tax base, not the cost: no 7385 line, and no
+    // orphan debit for the preview to be off by.
+    expect(salaryLines.some((l) => l.account_number === '7385')).toBe(false)
+    expect(salaryLines.find((l) => l.account_number === '7210')?.debit_amount).toBe(30000)
+    const debit = salaryLines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = salaryLines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.round((debit - credit) * 100) / 100).toBe(0)
+  })
+
+  it('books exactly the lines the builder returns, so a preview built from it cannot diverge', async () => {
+    const run = makeRun([
+      makeEmployee({ line_items: [benefitCar], vacation_accrual: 1200, vacation_accrual_avgifter: 377.04 }),
+    ])
+    const built = buildSalaryRunEntryLines(run, 'Lön 2026-06')
+    await createSalaryRunEntries(makeSupabase(), 'co-1', 'user-1', run)
+    expect(mockedCreateEntry.mock.calls.map((c) => c[3].lines)).toEqual([
+      built.salaryLines,
+      built.avgifterLines,
+      built.vacationLines,
+    ])
+    expect(built.pensionLines).toEqual([])
+  })
+
+  it('maps roster rows once: tax override moves tax and net, dimensions follow, F-skatt ignores avgifter overrides', () => {
+    const runRow = {
+      id: 'run-1',
+      period_year: 2026,
+      period_month: 6,
+      payment_date: '2026-06-25',
+      voucher_series: 'L',
+      total_gross: 0,
+      total_tax: 0,
+      total_net: 0,
+      total_avgifter: 0,
+      total_vacation_accrual: 0,
+      calculation_params: { slpRate: 0.2426 },
+    }
+    const rosterRow = {
+      employee_id: 'emp-1',
+      gross_salary: 30000,
+      tax_withheld: 7000,
+      tax_withheld_override: 6000,
+      net_salary: 23000,
+      avgifter_amount: 9426,
+      avgifter_amount_override: 9000,
+      avgifter_basis: 30000,
+      avgifter_rate: 0.3142,
+      avgifter_category: 'standard',
+      vacation_accrual: 0,
+      vacation_accrual_avgifter: 0,
+      employee: { employment_type: 'company_owner', default_dimensions: { '1': 'HQ' }, f_skatt_status: null },
+      line_items: [benefitCar],
+    }
+    const run = salaryRunDataFromRows(runRow, [
+      rosterRow,
+      {
+        ...rosterRow,
+        employee_id: 'emp-2',
+        tax_withheld_override: null,
+        avgifter_amount: 100,
+        avgifter_amount_override: 0,
+        employee: { employment_type: 'employee', default_dimensions: null, f_skatt_status: 'f_skatt' },
+        line_items: [],
+      },
+    ])
+    expect(run.calculation_params).toEqual({ slpRate: 0.2426 })
+    expect(run.employees[0]).toMatchObject({
+      employment_type: 'company_owner',
+      tax_withheld: 6000,
+      net_salary: 24000,
+      avgifter_amount: 9000,
+      avgifter_basis: 30000,
+      avgifter_amount_overridden: true,
+      default_dimensions: { '1': 'HQ' },
+    })
+    expect(run.employees[0].line_items).toEqual([benefitCar])
+    expect(run.employees[1]).toMatchObject({
+      employment_type: 'employee',
+      tax_withheld: 7000,
+      net_salary: 23000,
+      avgifter_amount: 100,
+      avgifter_basis: 0,
+      avgifter_amount_overridden: false,
+      default_dimensions: undefined,
+    })
   })
 })

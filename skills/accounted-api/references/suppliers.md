@@ -518,7 +518,7 @@ Example response `200`:
 **Record a payment against a supplier invoice.**
 `scope:suppliers:write · risk:medium · idempotent · dry-run`
 
-Books the payment journal entry (Debit 2440 / Credit 1930 under accrual; or Debit expense + Debit 2641 / Credit 1930 under cash) and flips the SI status to `paid` (full settlement) or `partially_paid`. Strict-mode: a JE failure aborts before any SI mutation. Idempotent. Dry-runnable.
+Books the payment journal entry (Debit 2440 / Credit the payment account under accrual; or Debit expense + Debit 2641 / Credit the payment account under cash) and flips the SI status to `paid` (full settlement) or `partially_paid`. The payment account is `payment_account` when supplied, otherwise 1930 Företagskonto. Strict-mode: a JE failure aborts before any SI mutation. Idempotent. Dry-runnable.
 
 **Use when:** You paid a registered or approved leverantörsfaktura through a channel other than the synced bank flow. For bank-matched payments use POST /transactions/{id}/match-supplier-invoice instead: that path also reconciles the bank line.
 **Do not use for:** Refunding a payment (the public API does not expose unmark-paid; credit the SI instead). Paying a credited or already-paid SI (returns 409 SI_PAID_ALREADY).
@@ -529,6 +529,7 @@ Books the payment journal entry (Debit 2440 / Credit 1930 under accrual; or Debi
 - exchange_rate_difference (SEK delta vs the booked rate at registration) is required for foreign-currency SIs to book the FX gain/loss to 3960 / 7960. Omitting it on a non-SEK SI under accrual mis-books FX.
 - Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner: retry the call.
 - Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.
+- payment_account picks the BAS account credited for the payment (1930 Företagskonto when omitted, on both the accrual and the cash path). It must be active in the chart of accounts: an unknown or deactivated account returns 400 ACCOUNTS_NOT_IN_CHART and books nothing. Beyond that it is credited exactly as given, with no range check: 19xx bank or kassa is the ordinary choice, but 1630 (betald via skattekontot) and 2893 / 2018 / 2820 (someone else paid, utlägg) are equally valid, so choosing an account that does not represent where the money actually came from is the caller's error to avoid. Unlike the dashboard dialog, this endpoint does not read the company's last-used payment account: omitting the field always means 1930.
 - Duplicate-payment guard: on a full settlement, if a business bank transaction of the same amount around payment_date carries the supplier name (first distinctive token, so abbreviated bank text such as "HI3G" for Hi3G Access AB counts), returns 409 SI_PAID_LIKELY_DUPLICATE with candidate transactions. A candidate with match_reason `already_booked` is a bank row that is ALREADY a verifikat: do not pay the invoice, correct the double booking instead. Retry with `force: true` only after the user confirms, and with a fresh Idempotency-Key (the original is body-hash bound). Also evaluated under dry-run.
 
 | Parameter | In | Type | Required | Notes |

@@ -72,7 +72,7 @@ CREATE POLICY "view own-company child" ON public.child_table
 
 ## Expanding source_type CHECK
 
-When adding a new journal entry source type, expand the constraint:
+When adding a new journal entry source type, redefine the constraint with the current list plus the new value. Copy the list from the newest migration that redefines it (`git grep -l journal_entries_source_type_check -- supabase/migrations | sort | tail -1`); never retype it from memory, because a list missing an existing value fails validation against posted rows.
 
 ```sql
 ALTER TABLE public.journal_entries
@@ -80,13 +80,11 @@ ALTER TABLE public.journal_entries
 ALTER TABLE public.journal_entries
   ADD CONSTRAINT journal_entries_source_type_check
   CHECK (source_type IN (
-    'manual','bank_transaction','invoice_created','invoice_paid',
-    'invoice_cash_payment','credit_note','salary_payment',
-    'opening_balance','year_end','storno','correction','import','system',
-    'supplier_invoice_registered','supplier_invoice_paid',
-    'supplier_invoice_cash_payment','supplier_credit_note',
+    -- every value from the newest redefinition, then:
     'NEW_TYPE_HERE'
-  ));
+  )) NOT VALID;
+ALTER TABLE public.journal_entries
+  VALIDATE CONSTRAINT journal_entries_source_type_check;
 ```
 
 ## Protected Triggers: NEVER Modify

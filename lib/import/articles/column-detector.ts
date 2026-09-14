@@ -1,4 +1,4 @@
-import { findColumn } from '../shared/column-utils'
+import { EXTERNAL_NUMBER_KEYWORDS, findColumn } from '../shared/column-utils'
 import type { DetectedArticleColumns } from './types'
 
 // Keyword lists cover the export headers of Fortnox, Visma and Bokio so files
@@ -92,7 +92,9 @@ export function detectArticleColumns(headers: string[]): DetectedArticleColumns 
   const unit_col = findColumn(headers, UNIT_KEYWORDS, taken)
   const housework_type_col = findColumn(headers, HOUSEWORK_KEYWORDS, taken)
   const notes_col = findColumn(headers, NOTES_KEYWORDS, taken)
-  const name_col = findColumn(headers, NAME_KEYWORDS, taken) ?? -1
+  const name_col = findColumn(headers, NAME_KEYWORDS, taken, {
+    reject: EXTERNAL_NUMBER_KEYWORDS,
+  }) ?? -1
 
   // Confidence: name is required; bonus from how many other columns matched.
   let confidence = 0

@@ -60,6 +60,7 @@ export const PUT = withRouteContext(
     const changesInvoiceEmailRecipients =
       body.invoice_email_cc_addresses !== undefined
       || body.invoice_email_bcc_addresses !== undefined
+      || body.invoice_email_reply_to !== undefined
     const changesInvoicePaymentInstructions =
       body.invoice_payment_accounts !== undefined
       || body.bank_name !== undefined

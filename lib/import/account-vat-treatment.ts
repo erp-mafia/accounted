@@ -1,14 +1,86 @@
 import type { BASAccount } from '@/types'
 import {
+  defaultRateForVatTreatment,
   suggestVatTreatment,
+  vatRateFromLabel,
   type AccountVatTreatment,
 } from '@/lib/vat/account-vat-treatment'
 import type { AccountMapping } from './types'
 
 /**
+ * The momssats to suggest next to a provider-translated treatment. A
+ * reverse-charge code names the ruta the basis feeds, never the acquisition
+ * rate, and the label is the only place the 12%/6% purchase accounts say so
+ * (Fortnox 4516 "Inköp varor EU 12%" and 4515 share IVEU). Every other
+ * treatment fixes its own rate.
+ */
+function providerSuggestedRate(
+  treatment: AccountVatTreatment,
+  accountClass: number,
+  sourceName: string,
+): number | null {
+  if (accountClass >= 4 && treatment.startsWith('reverse_charge')) {
+    return vatRateFromLabel(sourceName) ?? defaultRateForVatTreatment(treatment, accountClass)
+  }
+  return defaultRateForVatTreatment(treatment, accountClass)
+}
+
+/**
+ * Attach the momskod the source system has on each account to its identity
+ * mapping. SIE4 carries no VAT code, so this runs server-side after the
+ * provider's chart was fetched next to the SIE export (Fortnox /accounts);
+ * `codesByAccount` is source account number to the provider's verbatim code
+ * and `translate` turns a code into a treatment for that account, or null
+ * when the code has no equivalent there.
+ *
+ * Both are stored as facts about the source account (providerVatCode,
+ * providerVatTreatment); the row's suggestion is derived from them by
+ * enrichAccountMappingsWithVat, which every consumer runs. The translated
+ * code is a SUGGESTION, not a reviewed value: it still needs the row's
+ * confirm (or "Bekräfta alla föreslagna"), because a reviewed row is written
+ * onto an existing chart account by syncMappedAccounts and the mapping step
+ * is skipped when nothing needs review. A code the user never saw must not
+ * overwrite a treatment they cleared in Accounted on a later re-sync.
+ *
+ * Only class 3-6 identity mappings are touched, the same rows the label
+ * suggestion covers: a remapped account gets the target's treatment, and
+ * classes 1-2 and 7-8 carry no treatment.
+ */
+export function applySourceVatCodes(
+  mappings: AccountMapping[],
+  codesByAccount: ReadonlyMap<string, string>,
+  translate: (code: string, accountNumber: string) => AccountVatTreatment | null,
+): AccountMapping[] {
+  return mappings.map((mapping) => {
+    if (!mapping.targetAccount || mapping.sourceAccount !== mapping.targetAccount) return mapping
+    const accountClass = Number(mapping.sourceAccount.charAt(0))
+    if (accountClass < 3 || accountClass > 6) return mapping
+
+    const code = codesByAccount.get(mapping.sourceAccount)?.trim()
+    if (!code) return mapping
+
+    const treatment = translate(code, mapping.sourceAccount)
+    const withFacts = { ...mapping, providerVatCode: code, providerVatTreatment: treatment }
+    if (!treatment) return withFacts
+
+    return {
+      ...withFacts,
+      defaultVatTreatment: treatment,
+      defaultVatRate: providerSuggestedRate(treatment, accountClass, mapping.sourceName),
+      vatTreatmentSuggested: true,
+      vatTreatmentReviewed: false,
+      requiresVatTreatmentReview: true,
+    }
+  })
+}
+
+/**
  * Add reviewable VAT suggestions to identity mappings. SIE itself has no VAT
- * treatment record, so suggestions come only from the account label and are
- * never considered reviewed until the user continues from the mapping step.
+ * treatment record, so a suggestion comes from the source system's momskod
+ * when the provider reported one (applySourceVatCodes), else from the
+ * account label; either way it is not reviewed until the user confirms the
+ * row or continues from the mapping step. A treatment the company already
+ * set on the account in its chart outranks both and needs no review.
  */
 export function enrichAccountMappingsWithVat(
   mappings: AccountMapping[],
@@ -41,6 +113,19 @@ export function enrichAccountMappingsWithVat(
         vatTreatmentReviewed: true,
         vatTreatmentSuggested: false,
         requiresVatTreatmentReview: false,
+      }
+    }
+
+    if (mapping.providerVatTreatment) {
+      return {
+        ...mapping,
+        defaultVatTreatment: mapping.providerVatTreatment,
+        defaultVatRate:
+          existing?.default_vat_rate ??
+          providerSuggestedRate(mapping.providerVatTreatment, accountClass, mapping.sourceName),
+        vatTreatmentSuggested: true,
+        vatTreatmentReviewed: false,
+        requiresVatTreatmentReview: true,
       }
     }
 

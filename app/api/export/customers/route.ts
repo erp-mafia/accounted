@@ -5,6 +5,8 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { textColumn, integerColumn } from '@/lib/reports/xlsx-export'
 import { buildRegisterExport, parseExportFormat, todayIso } from '@/lib/export/register-export'
 import { maskStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
+import { maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
+import { orgNumberIsPersonalIdentifier } from '@/lib/customers/personal-number-shape'
 import type { Customer } from '@/types'
 
 /**
@@ -66,7 +68,14 @@ export const GET = withRouteContext(
               // the full personnummer (GDPR Art. 5(1)(f) data minimization on
               // a file that leaves the system). Decrypt failures fall back to
               // a placeholder mask instead of aborting the export.
-              c.org_number ?? maskStoredCustomerPersonalNumber(c.personal_number),
+              //
+              // org_number gets the same treatment when it IS a personnummer:
+              // an enskild firma has no org number of its own, and a legacy
+              // individual row can still carry one there (#2367). The column
+              // is the identifier either way, so it is masked, not dropped.
+              orgNumberIsPersonalIdentifier(c.customer_type, c.org_number)
+                ? maskCustomerPersonalNumber(c.org_number)
+                : c.org_number ?? maskStoredCustomerPersonalNumber(c.personal_number),
               c.customer_type,
               c.email,
               c.phone,

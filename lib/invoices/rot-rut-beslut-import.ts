@@ -6,7 +6,7 @@ import { decryptPersonnummer } from '@/lib/salary/personnummer'
 /**
  * Import of Skatteverkets beslutsfil for rot/rut (the decision JSON the user
  * downloads from the e-tjänst after SKV has processed a begäran om
- * utbetalning: dev_docs/skatteverket/husavdrag/exempel_beslut.json).
+ * utbetalning).
  *
  * Records godkänt belopp per ärende on the matching payout request so the
  * existing settle flow can book the actual utbetalning (including partial

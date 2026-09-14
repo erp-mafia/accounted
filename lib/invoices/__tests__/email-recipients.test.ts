@@ -5,20 +5,21 @@ import {
   invoiceEmailRecipientCount,
   parseInvoiceRecipientText,
   resolveInvoiceEmailRecipients,
+  resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
 
 describe('resolveInvoiceEmailRecipients', () => {
-  it('uses the legacy copy only while the company list is unconfigured', () => {
+  it('sends no fixed copy when the company list is null or empty', () => {
+    // Migration 20260914110000 turned the old company-email fallback into
+    // explicit rows; nothing is copied implicitly any more.
     expect(resolveInvoiceEmailRecipients({
       to: 'customer@example.test',
       configuredCc: null,
-      legacyCc: 'billing@example.test',
-    }).cc).toEqual(['billing@example.test'])
+    }).cc).toEqual([])
 
     expect(resolveInvoiceEmailRecipients({
       to: 'customer@example.test',
       configuredCc: [],
-      legacyCc: 'billing@example.test',
     }).cc).toEqual([])
   })
 
@@ -128,5 +129,31 @@ describe('resolveInvoiceEmailRecipients', () => {
         conflicts_with: 'customer_cc',
       },
     ])
+  })
+})
+
+describe('resolveInvoiceReplyTo', () => {
+  it('prefers the configured reply address, then the company email, then the sender', () => {
+    expect(resolveInvoiceReplyTo(
+      { invoice_email_reply_to: 'svar@example.test', email: 'info@example.test' },
+      'anna@example.test',
+    )).toBe('svar@example.test')
+    expect(resolveInvoiceReplyTo(
+      { invoice_email_reply_to: null, email: 'info@example.test' },
+      'anna@example.test',
+    )).toBe('info@example.test')
+    expect(resolveInvoiceReplyTo({ invoice_email_reply_to: null, email: null }, 'anna@example.test'))
+      .toBe('anna@example.test')
+  })
+
+  it('returns undefined when nothing resolves, so the templates drop the reply line', () => {
+    expect(resolveInvoiceReplyTo({ invoice_email_reply_to: null, email: null })).toBeUndefined()
+    expect(resolveInvoiceReplyTo({ invoice_email_reply_to: '', email: '   ' }, null)).toBeUndefined()
+  })
+
+  it('skips malformed candidates instead of sending a broken header', () => {
+    expect(resolveInvoiceReplyTo(
+      { invoice_email_reply_to: 'not-an-address', email: ' info@example.test ' },
+    )).toBe('info@example.test')
   })
 })

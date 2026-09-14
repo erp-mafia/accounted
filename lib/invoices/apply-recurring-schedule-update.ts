@@ -1,4 +1,5 @@
 import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js'
+import { toRecurringScheduleItemRow } from '@/lib/invoices/recurring-schedule-items'
 import type { z } from 'zod'
 import type { RecurringScheduleItemSchema } from '@/lib/api/schemas'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -215,16 +216,7 @@ export async function applyRecurringScheduleUpdate(
     }
   }
 
-  const itemRows = items.map((item, idx) => ({
-    schedule_id: scheduleId,
-    sort_order: idx,
-    description: item.description,
-    quantity: item.quantity,
-    unit: item.unit,
-    unit_price: item.unit_price,
-    vat_rate: item.vat_rate ?? null,
-    dimensions: item.dimensions ?? {},
-  }))
+  const itemRows = items.map((item, idx) => toRecurringScheduleItemRow(scheduleId, item, idx))
 
   const { error: insertError } = await supabase
     .from('recurring_invoice_schedule_items')

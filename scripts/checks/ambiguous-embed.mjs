@@ -246,9 +246,10 @@ export function parseEmbeds(select, rootTable) {
 /**
  * The table a `.select()` call reads from, resolved by walking ITS OWN method
  * chain back to `.from()`. Never the nearest preceding `.from()` in the file:
- * `.from('journal_entry_lines').select('... journal_entries!inner(...)')` sits
- * a few lines below an unrelated `.from('journal_entries')` in
- * scripts/seed-demo-account.ts, and pairing by proximity flags it wrongly.
+ * `.from('journal_entry_lines').select('... journal_entries!inner(...)')` can
+ * sit a few lines below an unrelated `.from('journal_entries')` in the same
+ * file (a removed demo seeding script did exactly that), and pairing by
+ * proximity flags it wrongly.
  */
 function fromTableOfChain(selectCall) {
   let node = selectCall.expression.expression

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import {
   SettingsGroup,
+  SettingsInput,
   SettingsRow,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
@@ -34,30 +35,33 @@ export function InvoiceEmailRecipientsSettings({
   const t = useTranslations('settings_invoice_email_recipients')
   const { toast } = useToast()
   const { role } = useCompany()
-  const effectiveCc = settings.invoice_email_cc_addresses ?? (
-    settings.email ? [settings.email] : []
-  )
-  const effectiveBcc = settings.invoice_email_bcc_addresses ?? []
-  const serverCcText = listText(effectiveCc)
-  const serverBccText = listText(effectiveBcc)
+  // What is shown is exactly what is sent: no implicit fallback address.
+  const serverReplyTo = settings.invoice_email_reply_to ?? ''
+  const serverCcText = listText(settings.invoice_email_cc_addresses ?? [])
+  const serverBccText = listText(settings.invoice_email_bcc_addresses ?? [])
+  const [replyTo, setReplyTo] = useState(serverReplyTo)
   const [ccText, setCcText] = useState(serverCcText)
   const [bccText, setBccText] = useState(serverBccText)
   const [isSaving, setIsSaving] = useState(false)
-  const previousServerText = useRef({ cc: serverCcText, bcc: serverBccText })
+  const previousServerText = useRef({ replyTo: serverReplyTo, cc: serverCcText, bcc: serverBccText })
 
   useEffect(() => {
     const previous = previousServerText.current
+    setReplyTo((current) => current === previous.replyTo ? serverReplyTo : current)
     setCcText((current) => current === previous.cc ? serverCcText : current)
     setBccText((current) => current === previous.bcc ? serverBccText : current)
-    previousServerText.current = { cc: serverCcText, bcc: serverBccText }
-  }, [serverBccText, serverCcText])
+    previousServerText.current = { replyTo: serverReplyTo, cc: serverCcText, bcc: serverBccText }
+  }, [serverBccText, serverCcText, serverReplyTo])
 
   if (role !== 'owner' && role !== 'admin') return null
 
   async function save() {
+    const replyToAddress = replyTo.trim()
     const cc = parseInvoiceRecipientText(ccText)
     const bcc = parseInvoiceRecipientText(bccText)
-    const invalid = [...cc, ...bcc].find((address) => !EMAIL_PATTERN.test(address))
+    const invalid = [replyToAddress, ...cc, ...bcc].find(
+      (address) => address !== '' && !EMAIL_PATTERN.test(address),
+    )
 
     if (invalid) {
       toast({
@@ -76,25 +80,26 @@ export function InvoiceEmailRecipientsSettings({
       return
     }
 
+    const updates = {
+      invoice_email_reply_to: replyToAddress || null,
+      invoice_email_cc_addresses: cc,
+      invoice_email_bcc_addresses: bcc,
+    }
+
     setIsSaving(true)
     try {
       const response = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          invoice_email_cc_addresses: cc,
-          invoice_email_bcc_addresses: bcc,
-        }),
+        body: JSON.stringify(updates),
       })
       if (!response.ok) {
         const result = await response.json()
         throw new Error(typeof result.error === 'string' ? result.error : t('save_failed'))
       }
 
-      onUpdate({
-        invoice_email_cc_addresses: cc,
-        invoice_email_bcc_addresses: bcc,
-      })
+      onUpdate(updates)
+      setReplyTo(replyToAddress)
       setCcText(listText(cc))
       setBccText(listText(bcc))
       toast({ title: t('saved_title'), description: t('saved_description') })
@@ -111,6 +116,20 @@ export function InvoiceEmailRecipientsSettings({
 
   return (
     <SettingsGroup label={t('heading')} help={t('description')}>
+      <SettingsRow
+        label={t('reply_to_label')}
+        htmlFor="invoice-email-reply-to"
+        help={t('reply_to_hint')}
+      >
+        <SettingsInput
+          id="invoice-email-reply-to"
+          type="email"
+          autoComplete="off"
+          value={replyTo}
+          onChange={(event) => setReplyTo(event.target.value)}
+          placeholder={t('reply_to_placeholder')}
+        />
+      </SettingsRow>
       <SettingsRow
         label={t('cc_label')}
         htmlFor="invoice-email-cc"

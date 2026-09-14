@@ -7,6 +7,8 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
+const externalReportGuard=vi.hoisted(()=>vi.fn())
+vi.mock('@/lib/import/sie-period-read',()=>({withSIEExternalReport:externalReportGuard}))
 
 beforeAll(() => {
   // The wrapper's public-scope path now fails closed if these env vars are
@@ -114,11 +116,25 @@ function companyParams(companyId: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  externalReportGuard.mockImplementation((_s,_c,_op,read)=>read())
   mockServiceClient.mockReturnValue(makeSupabaseStub(null))
   getMultiUserStateMock.mockResolvedValue({ state: 'entitled', graceEndsAt: null })
 })
 
 describe('withApiV1: auth', () => {
+  it('holds external reports before generating either JSON or a PDF',async()=>{
+    mockValidate.mockResolvedValue({userId:'user-1',companyId:'company-1',scopes:['reports:read'],mode:'live'})
+    const supabase=makeSupabaseStub({company_id:'company-1',role:'owner'})
+    mockServiceClient.mockReturnValue(supabase)
+    externalReportGuard.mockRejectedValue(Object.assign(new Error('SIE_IMPORT_HOLD'),{code:'CONFLICT'}))
+    const generate=vi.fn()
+    const handler=withApiV1<{params:Promise<{companyId:string}>}>('reports.balance-sheet.pdf',generate,{requireScope:'reports:read'})
+    const response=await handler(makeRequest('https://x.test/api/v1/companies/company-1/reports/balance-sheet/pdf',
+      {headers:{Authorization:'Bearer gnubok_sk_x'}}),companyParams('company-1'))
+    expect(response.status).toBe(409)
+    expect(generate).not.toHaveBeenCalled()
+    expect(externalReportGuard).toHaveBeenCalledWith(supabase,'company-1','reports.balance-sheet.pdf',expect.any(Function))
+  })
   it('returns 401 when Authorization header is missing', async () => {
     const handler = withApiV1('companies.list', async (_req, ctx) =>
       ok({ ok: true }, { requestId: ctx.requestId }),

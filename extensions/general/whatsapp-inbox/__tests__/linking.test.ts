@@ -10,6 +10,7 @@ import {
   hashLinkCode,
   mintLinkCode,
   consumeLinkCode,
+  lookupActiveLink,
 } from '@/extensions/general/whatsapp-inbox/lib/linking'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -227,6 +228,34 @@ describe('linking', () => {
       const result = await consumeLinkCode(supabase as unknown as SupabaseClient, 'hej!')
       expect(result).toBeNull()
       expect(calls).toHaveLength(0)
+    })
+  })
+
+  describe('lookupActiveLink', () => {
+    it('returns the active link for a bound phone hash', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'link-1', user_id: 'user-1', phone_hash: 'hash-x', revoked_at: null } })
+
+      const result = await lookupActiveLink(supabase as unknown as SupabaseClient, 'hash-x')
+      expect(result).toMatchObject({ id: 'link-1', user_id: 'user-1' })
+    })
+
+    it('returns null when no active link exists', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: null })
+
+      const result = await lookupActiveLink(supabase as unknown as SupabaseClient, 'hash-x')
+      expect(result).toBeNull()
+    })
+
+    it('reports a failed lookup as transient, not as an unlinked phone (#2365)', async () => {
+      // A verdict of null here sends a LINKED user through the unknown-sender
+      // path: the M1 onboarding greeting and a second link flow.
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ error: { message: 'canceling statement due to statement timeout' } })
+
+      const result = await lookupActiveLink(supabase as unknown as SupabaseClient, 'hash-x')
+      expect(result).toBe('transient_error')
     })
   })
 })

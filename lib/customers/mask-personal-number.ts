@@ -7,7 +7,7 @@
  * half lives in lib/customers/protect-personal-number.ts, which is server-only.
  */
 
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import { orgNumberIsPersonalIdentifier } from '@/lib/customers/personal-number-shape'
 
 /**
  * Placeholder used when a stored personal_number cannot be decrypted
@@ -80,26 +80,30 @@ export function maskCustomerPersonalNumber(value: string | null | undefined): st
 /**
  * The identifier a customer LIST may show for a row, never a raw personnummer.
  *
- * Business rows show org_number (Bolagsverket-public). Individual rows show
- * the masked personal_number; a legacy individual row that still carries its
- * personnummer in org_number (written before the write paths started moving
- * it, see lib/customers/personal-number-shape.ts) shows that value masked the
- * same way instead of raw. Callers pass rows whose personal_number is already
- * the API's masked form or a plaintext value; ciphertext must be masked
- * server-side first (maskStoredCustomerPersonalNumber).
+ * Business rows show org_number (Bolagsverket-public), with one exception: an
+ * enskild firma has no org number of its own, so a Swedish business row whose
+ * org_number has personnummer shape is that owner's personnummer and is masked
+ * like one. Individual rows show the masked personal_number; a legacy
+ * individual row that still carries its personnummer in org_number (written
+ * before the write paths started moving it) is masked the same way. Both cases
+ * are orgNumberIsPersonalIdentifier in lib/customers/personal-number-shape.ts.
+ *
+ * Callers pass rows whose personal_number is already the API's masked form or
+ * a plaintext value; ciphertext must be masked server-side first
+ * (maskStoredCustomerPersonalNumber).
  */
 export function customerListIdentifier(row: {
   customer_type?: string | null
   org_number?: string | null
   personal_number?: string | null
 }): string {
-  if (row.customer_type !== 'individual') {
-    return row.org_number || row.personal_number || ''
+  if (row.customer_type === 'individual' && row.personal_number) {
+    return maskCustomerPersonalNumber(row.personal_number) ?? ''
   }
-  if (row.personal_number) return maskCustomerPersonalNumber(row.personal_number) ?? ''
   const orgNumber = row.org_number || ''
-  if (orgNumber && looksLikeSwedishPersonalNumber(orgNumber)) {
+  if (orgNumberIsPersonalIdentifier(row.customer_type, orgNumber)) {
     return maskCustomerPersonalNumber(orgNumber) ?? ''
   }
+  if (row.customer_type !== 'individual') return orgNumber || row.personal_number || ''
   return orgNumber
 }

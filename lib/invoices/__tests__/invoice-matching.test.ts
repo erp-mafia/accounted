@@ -8,6 +8,7 @@ import {
   findInvoiceMatchCandidates,
   getBestInvoiceMatch,
 } from '../invoice-matching'
+import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import type { Transaction, Invoice, Customer } from '@/types'
 import {
   makeTransaction,
@@ -211,6 +212,115 @@ describe('findMatchingInvoices', () => {
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe(0.99)
     expect(result[0].matchReason).toContain('OCR-referens')
+  })
+
+  it('matches the OCR the invoice printed, check digit and all, at 0.99', async () => {
+    // What the PDF prints, and therefore what the customer types into the bank.
+    const printedOcr = generateOcrReference('F-2024001')
+    expect(printedOcr).toBe('20240016')
+    const tx = makeTransaction({ amount: 12500, reference: printedOcr })
+    mockResult({
+      data: [
+        { ...makeInvoice({ invoice_number: 'F-2024001', total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }) },
+      ],
+      error: null,
+    })
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe(0.99)
+    expect(result[0].matchReason).toContain('OCR-referens')
+  })
+
+  it('matches an OCR reference the bank wrote with separators', async () => {
+    const tx = makeTransaction({ amount: 12500, reference: '2024 0016' })
+    mockResult({
+      data: [
+        { ...makeInvoice({ invoice_number: 'F-2024001', total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }) },
+      ],
+      error: null,
+    })
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe(0.99)
+  })
+
+  it('does not treat a reference with a wrong check digit as an OCR match', async () => {
+    // One digit off the printed OCR: the invoice may still be offered on its
+    // amount, but never on the strength of the reference.
+    const tx = makeTransaction({ amount: 12500, reference: '20240017', merchant_name: null })
+    mockResult({
+      data: [
+        { ...makeInvoice({ invoice_number: 'F-2024001', total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }) },
+      ],
+      error: null,
+    })
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe(0.80)
+    expect(result[0].matchReason).not.toContain('OCR-referens')
+  })
+
+  it('falls back to 0.85 for an OCR buried in the bank text, and still scores every invoice on amount', async () => {
+    const tx = makeTransaction({
+      amount: 9000,
+      description: `Inbetalning ${generateOcrReference('F-2024001')}`,
+      merchant_name: null,
+      reference: null,
+    })
+    mockResult({
+      data: [
+        // Named by the OCR in the text, but the amount is nowhere near.
+        { ...makeInvoice({ id: 'inv-ocr', invoice_number: 'F-2024001', total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }) },
+        // Unrelated reference, exact amount: proves the fallback did not
+        // short-circuit the amount scoring the way an exact reference does.
+        { ...makeInvoice({ id: 'inv-amount', invoice_number: 'F-2024002', total: 9000, status: 'sent', remaining_amount: 9000, currency: 'SEK' }) },
+      ],
+      error: null,
+    })
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    expect(result).toHaveLength(2)
+    expect(result[0].invoice.id).toBe('inv-ocr')
+    expect(result[0].confidence).toBe(0.85)
+    expect(result[0].matchReason).toContain('banktexten')
+    expect(result[1].invoice.id).toBe('inv-amount')
+    expect(result[1].confidence).toBe(0.80)
+  })
+
+  it('does not read a short digit run in the bank text as a reference', async () => {
+    // "701" is below the digit floor; the card suffix must not name the invoice.
+    const tx = makeTransaction({ amount: 9000, description: 'Kortköp 701', merchant_name: null, reference: null })
+    mockResult({
+      data: [
+        { ...makeInvoice({ invoice_number: '701', total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }) },
+      ],
+      error: null,
+    })
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    expect(result).toEqual([])
+  })
+
+  it('never suggests a credit note, even when the printed OCR matches', async () => {
+    const tx = makeTransaction({ amount: 12500, reference: generateOcrReference('KR-F-2024001') })
+    mockResult({
+      data: [
+        makeInvoice({
+          invoice_number: 'KR-F-2024001',
+          status: 'sent',
+          total: -12500,
+          credited_invoice_id: 'original-invoice-1',
+        }),
+      ],
+      error: null,
+    })
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+
+    expect(result).toEqual([])
   })
 
   it('never suggests a credit note, even when its OCR reference matches', async () => {

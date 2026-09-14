@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { booksInvoicesOnIssue, cashPartialBlockReason, supplierCreditNoteNeedsJournalEntry } from '../booking-mode'
+import {
+  booksInvoicesOnIssue,
+  cashPartialBlockReason,
+  creditNoteNeedsJournalEntry,
+  supplierCreditNoteNeedsJournalEntry,
+} from '../booking-mode'
 
 describe('booksInvoicesOnIssue (#967)', () => {
   it('books at issue for accrual companies by default', () => {
@@ -64,6 +69,69 @@ describe('cashPartialBlockReason', () => {
     expect(cashPartialBlockReason({ ...base, priorPaidAmount: 0.004 })).toBeNull()
     expect(cashPartialBlockReason({ ...base, priorPaidAmount: null })).toBeNull()
     expect(cashPartialBlockReason({ ...base, priorPaidAmount: undefined })).toBeNull()
+  })
+})
+
+describe('creditNoteNeedsJournalEntry (customer side, #2552)', () => {
+  const unpaid = {
+    journal_entry_id: null,
+    status: 'sent',
+    paid_at: null,
+    paid_amount: 0,
+  }
+
+  it('always reverses under faktureringsmetoden, even for an unpaid original', () => {
+    expect(creditNoteNeedsJournalEntry('accrual', unpaid)).toBe(true)
+    // Empty/absent accounting_method falls back to accrual, like the rest of
+    // the module.
+    expect(creditNoteNeedsJournalEntry('', unpaid)).toBe(true)
+  })
+
+  it('skips under kontantmetoden while the original is still unpaid', () => {
+    // Nothing reached the ledger: no entry to reverse, recognition waits for
+    // cash.
+    expect(creditNoteNeedsJournalEntry('cash', unpaid)).toBe(false)
+  })
+
+  it('reverses under kontantmetoden once the payment booked the sale', () => {
+    // The payment verifikat already booked revenue + utgående moms; skipping
+    // the reversal would overstate both.
+    expect(
+      creditNoteNeedsJournalEntry('cash', {
+        ...unpaid,
+        status: 'paid',
+        paid_at: '2026-03-12',
+        paid_amount: 12500,
+        journal_entry_id: 'je-1',
+      }),
+    ).toBe(true)
+  })
+
+  it('reverses on any single booked-ness signal in isolation', () => {
+    // Different payment paths set different subsets of these fields, so each
+    // signal must stand alone.
+    expect(creditNoteNeedsJournalEntry('cash', { ...unpaid, journal_entry_id: 'je-1' })).toBe(true)
+    expect(creditNoteNeedsJournalEntry('cash', { ...unpaid, status: 'paid' })).toBe(true)
+    expect(creditNoteNeedsJournalEntry('cash', { ...unpaid, paid_at: '2026-03-12' })).toBe(true)
+    expect(creditNoteNeedsJournalEntry('cash', { ...unpaid, paid_amount: 12500 })).toBe(true)
+  })
+
+  it('catches a part-paid original whose payment already booked the sale', () => {
+    expect(
+      creditNoteNeedsJournalEntry('cash', {
+        ...unpaid,
+        status: 'partially_paid',
+        paid_amount: 5000,
+        journal_entry_id: 'je-2',
+      }),
+    ).toBe(true)
+  })
+
+  it('ignores sub-öre noise and missing rows', () => {
+    expect(creditNoteNeedsJournalEntry('cash', { ...unpaid, paid_amount: 0.004 })).toBe(false)
+    expect(creditNoteNeedsJournalEntry('cash', { ...unpaid, paid_amount: null })).toBe(false)
+    expect(creditNoteNeedsJournalEntry('cash', null)).toBe(false)
+    expect(creditNoteNeedsJournalEntry('cash', undefined)).toBe(false)
   })
 })
 

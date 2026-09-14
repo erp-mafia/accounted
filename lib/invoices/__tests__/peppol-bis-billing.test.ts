@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
+import { roundOre, sumOre } from '@/lib/money'
 import type { InvoiceItem } from '@/types'
 import {
   generatePeppolBisBillingInvoice,
@@ -68,6 +69,44 @@ function makeValidInput() {
     notes: 'Tack <igen>',
   })
   return { invoice, customer, company, items }
+}
+
+/**
+ * Per-line VAT exactly as the creation path stores it: every line is rounded to
+ * öre on its own and the header VAT is the sum of those rounded amounts
+ * (lib/invoices/build-invoice-write.ts). Sweden permits that; EN 16931 has no
+ * way to express it, which is why the difference has to travel in BT-114.
+ */
+function storedLineVat(lineTotal: number, vatRate: number): number {
+  return roundOre((lineTotal * vatRate) / 100)
+}
+
+/** An invoice built from single-unit lines with creation-path per-line VAT. */
+function makePerLineRoundingInput(lines: Array<{ unitPrice: number; vatRate: number }>) {
+  const input = makeValidInput()
+  input.items = lines.map(({ unitPrice, vatRate }, index) => makeItem({
+    id: `item-${index + 1}`,
+    sort_order: index,
+    quantity: 1,
+    unit: 'st',
+    unit_price: unitPrice,
+    line_total: unitPrice,
+    vat_rate: vatRate,
+    vat_amount: storedLineVat(unitPrice, vatRate),
+  }))
+  const subtotal = sumOre(input.items.map((item) => item.line_total))
+  const vatAmount = sumOre(input.items.map((item) => item.vat_amount))
+  const total = roundOre(subtotal + vatAmount)
+  input.invoice = makeInvoice({
+    ...input.invoice,
+    subtotal,
+    vat_amount: vatAmount,
+    total,
+    remaining_amount: total,
+    // Öresavrundning off so the assertions isolate the VAT-split delta.
+    ore_rounding: false,
+  })
+  return input
 }
 
 describe('generatePeppolBisBillingInvoice', () => {
@@ -183,26 +222,109 @@ describe('generatePeppolBisBillingInvoice', () => {
     ]))
   })
 
-  it('rejects VAT rounding that conflicts with EN 16931 category rounding', () => {
+  it('exports per-line VAT rounding as BT-114 instead of rejecting it (#2544)', () => {
+    // 3 × 99,99 at 25%: the creation path stores 25,00 per line (75,00 total),
+    // EN 16931 BR-CO-17 derives 299,97 × 25% = 74,99 for the category. The öre
+    // of difference rides in PayableRoundingAmount so the customer still owes
+    // the 374,97 that was invoiced, booked and printed on the PDF.
+    const input = makePerLineRoundingInput([
+      { unitPrice: 99.99, vatRate: 25 },
+      { unitPrice: 99.99, vatRate: 25 },
+      { unitPrice: 99.99, vatRate: 25 },
+    ])
+    expect(input.invoice.vat_amount).toBe(75)
+    expect(input.invoice.total).toBe(374.97)
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:TaxExclusiveAmount currencyID="SEK">299.97</cbc:TaxExclusiveAmount>')
+    expect(result.xml).toContain('<cbc:TaxAmount currencyID="SEK">74.99</cbc:TaxAmount>')
+    expect(result.xml).toContain('<cbc:TaxInclusiveAmount currencyID="SEK">374.96</cbc:TaxInclusiveAmount>')
+    expect(result.xml).toContain('<cbc:PayableRoundingAmount currencyID="SEK">0.01</cbc:PayableRoundingAmount>')
+    expect(result.xml).toContain('<cbc:PayableAmount currencyID="SEK">374.97</cbc:PayableAmount>')
+  })
+
+  it('nets the per-line rounding delta across several VAT categories', () => {
+    // 3 × 99,99 at 25% (+0,01) and 3 × 99,90 at 12% (+0,01).
+    const input = makePerLineRoundingInput([
+      { unitPrice: 99.99, vatRate: 25 },
+      { unitPrice: 99.99, vatRate: 25 },
+      { unitPrice: 99.99, vatRate: 25 },
+      { unitPrice: 99.9, vatRate: 12 },
+      { unitPrice: 99.9, vatRate: 12 },
+      { unitPrice: 99.9, vatRate: 12 },
+    ])
+    expect(input.invoice.total).toBe(710.64)
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:TaxableAmount currencyID="SEK">299.70</cbc:TaxableAmount>')
+    expect(result.xml).toContain('<cbc:TaxAmount currencyID="SEK">35.96</cbc:TaxAmount>')
+    expect(result.xml).toContain('<cbc:TaxAmount currencyID="SEK">74.99</cbc:TaxAmount>')
+    expect(result.xml).toContain('<cbc:TaxAmount currencyID="SEK">110.95</cbc:TaxAmount>')
+    expect(result.xml).toContain('<cbc:TaxInclusiveAmount currencyID="SEK">710.62</cbc:TaxInclusiveAmount>')
+    expect(result.xml).toContain('<cbc:PayableRoundingAmount currencyID="SEK">0.02</cbc:PayableRoundingAmount>')
+    expect(result.xml).toContain('<cbc:PayableAmount currencyID="SEK">710.64</cbc:PayableAmount>')
+  })
+
+  it('accepts per-line rounding that accumulates over many lines', () => {
+    // The band scales with the line count, so a 10-line invoice whose delta is
+    // 2 öre is still a legitimate export and not a rounding "mismatch".
+    const input = makePerLineRoundingInput(
+      Array.from({ length: 10 }, () => ({ unitPrice: 99.99, vatRate: 25 })),
+    )
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:TaxInclusiveAmount currencyID="SEK">1249.88</cbc:TaxInclusiveAmount>')
+    expect(result.xml).toContain('<cbc:PayableRoundingAmount currencyID="SEK">0.02</cbc:PayableRoundingAmount>')
+    expect(result.xml).toContain('<cbc:PayableAmount currencyID="SEK">1249.90</cbc:PayableAmount>')
+  })
+
+  it('carries a negative per-line rounding delta as a negative BT-114', () => {
+    // Two 0,01 lines: each rounds to 0,00 VAT, the 0,02 category base rounds to
+    // 0,01. This fixture used to be a hard VAT_ROUNDING_MISMATCH reject.
+    const input = makePerLineRoundingInput([
+      { unitPrice: 0.01, vatRate: 25 },
+      { unitPrice: 0.01, vatRate: 25 },
+    ])
+    expect(input.invoice.vat_amount).toBe(0)
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:TaxInclusiveAmount currencyID="SEK">0.03</cbc:TaxInclusiveAmount>')
+    expect(result.xml).toContain('<cbc:PayableRoundingAmount currencyID="SEK">-0.01</cbc:PayableRoundingAmount>')
+    expect(result.xml).toContain('<cbc:PayableAmount currencyID="SEK">0.02</cbc:PayableAmount>')
+  })
+
+  it('rejects VAT amounts that are wrong rather than merely rounded per line', () => {
     const input = makeValidInput()
-    input.items = [
-      makeItem({ id: 'item-1', quantity: 1, unit_price: 0.01, line_total: 0.01, vat_amount: 0 }),
-      makeItem({ id: 'item-2', sort_order: 1, quantity: 1, unit_price: 0.01, line_total: 0.01, vat_amount: 0 }),
-    ]
+    // The 25% line nets 200,00, so its VAT is 50,00. A stored 51,00 is a whole
+    // krona out: far outside anything per-line öre rounding can produce.
+    input.items = [makeItem({ vat_amount: 51 }), input.items[1]]
     input.invoice = makeInvoice({
       ...input.invoice,
-      subtotal: 0.02,
-      vat_amount: 0,
-      total: 0.02,
-      remaining_amount: 0.02,
-      ore_rounding: false,
+      vat_amount: 63,
+      total: 363,
+      remaining_amount: 363,
     })
 
     const result = generatePeppolBisBillingInvoice(input)
 
     expect(result.ok).toBe(false)
     if (result.ok) return
-    expect(result.issues.map(({ code }) => code)).toContain('VAT_ROUNDING_MISMATCH')
+    expect(result.issues.map(({ code }) => code)).toEqual(expect.arrayContaining([
+      'LINE_VAT_MISMATCH',
+      'VAT_ROUNDING_MISMATCH',
+    ]))
   })
 
   it('rejects invoice totals that do not reconcile to the emitted lines', () => {

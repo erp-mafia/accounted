@@ -1058,3 +1058,116 @@ describe('executeRecurringSchedule VAT registration gate (issue #1719)', () => {
     })
   })
 })
+
+describe('executeRecurringSchedule text rows and placeholders', () => {
+  const { supabase, enqueue, reset } = createQueuedMockSupabase()
+  const inserted: Record<string, unknown[]> = {}
+  const baseFrom = supabase.from.getMockImplementation()!
+  supabase.from.mockImplementation((table: string) => {
+    const chain = baseFrom(table) as object
+    return new Proxy(chain, {
+      get(target, prop, receiver) {
+        if (prop === 'insert') {
+          return (rows: unknown) => {
+            ;(inserted[table] ??= []).push(rows)
+            return (Reflect.get(target, prop, receiver) as (r: unknown) => unknown)(rows)
+          }
+        }
+        return Reflect.get(target, prop, receiver)
+      },
+    })
+  })
+  const client = supabase as unknown as SupabaseClient
+  const today = new Date('2026-10-05T06:30:00Z')
+  const customer = makeCustomer({ id: 'cust-1', language: 'sv' })
+
+  function makeSchedule(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'sched-1',
+      company_id: 'company-1',
+      user_id: 'user-1',
+      customer_id: 'cust-1',
+      name: 'Retainer',
+      day_of_month: 5,
+      interval_months: 1,
+      send_hour: 8,
+      payment_terms_days: 30,
+      currency: 'SEK',
+      your_reference: null,
+      our_reference: null,
+      notes: 'Fakturan avser {månad} {år}. Period {periodstart} - {periodslut}.',
+      period_start: '2026-10-01',
+      auto_send: false,
+      status: 'active',
+      next_run_date: '2026-10-05',
+      last_run_at: null,
+      last_invoice_id: null,
+      last_run_warning: null,
+      generated_count: 0,
+      items: [
+        { id: 'si-0', schedule_id: 'sched-1', sort_order: 0, line_type: 'text', description: 'Arbete utfört i {föregående månad}', quantity: 0, unit: '', unit_price: 0, vat_rate: null },
+        { id: 'si-1', schedule_id: 'sched-1', sort_order: 1, line_type: 'product', description: 'Konsulttimmar {månad}', quantity: 10, unit: 'tim', unit_price: 1000, vat_rate: 25 },
+        { id: 'si-2', schedule_id: 'sched-1', sort_order: 2, line_type: 'text', description: '', quantity: 0, unit: '', unit_price: 0, vat_rate: null },
+      ],
+      ...overrides,
+    } as unknown as Parameters<typeof executeRecurringSchedule>[1]
+  }
+
+  function enqueueSpawn() {
+    enqueue({ data: customer, error: null }) // customers select
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+    enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // invoices insert
+    enqueue({ data: null, error: null }) // invoice_items insert
+    enqueue({ data: { id: 'inv-1', invoice_number: 'F-1', customer, items: [] }, error: null }) // re-fetch
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    for (const key of Object.keys(inserted)) delete inserted[key]
+    mockEnsureNumber.mockImplementation(
+      async (_supabase: unknown, _companyId: unknown, inv: { invoice_number: string | null }) => {
+        inv.invoice_number = 'F-1'
+        return 'F-1'
+      },
+    )
+  })
+
+  it('substitutes placeholders in notes and descriptions, copies text rows, and bills only product rows', async () => {
+    enqueueSpawn()
+    const result = await executeRecurringSchedule(client, makeSchedule(), today)
+    expect(result.invoiceId).toBe('inv-1')
+
+    const header = inserted['invoices'][0] as Record<string, unknown>
+    expect(header.notes).toBe('Fakturan avser oktober 2026. Period 2026-10-01 - 2026-10-31.')
+    // Totals come from the single product row only: 10 x 1000 + 25 % VAT.
+    expect(header.subtotal).toBe(10000)
+    expect(header.vat_amount).toBe(2500)
+    expect(header.total).toBe(12500)
+
+    const rows = inserted['invoice_items'][0] as Array<Record<string, unknown>>
+    expect(rows.map((r) => [r.line_type, r.description])).toEqual([
+      ['text', 'Arbete utfört i september'],
+      ['product', 'Konsulttimmar oktober'],
+      ['text', ''],
+    ])
+    expect(rows[0]).toMatchObject({ quantity: 0, unit: '', unit_price: 0, line_total: 0, vat_rate: 0, vat_amount: 0 })
+    expect(rows[1]).toMatchObject({ quantity: 10, unit: 'tim', unit_price: 1000, line_total: 10000, vat_rate: 25, vat_amount: 2500 })
+  })
+
+  it('refuses a schedule whose only rows are text rows', async () => {
+    enqueue({ data: customer, error: null })
+    enqueue({ data: { vat_registered: true }, error: null })
+    await expect(
+      executeRecurringSchedule(
+        client,
+        makeSchedule({
+          items: [{ id: 'si-0', schedule_id: 'sched-1', sort_order: 0, line_type: 'text', description: 'Bara text', quantity: 0, unit: '', unit_price: 0, vat_rate: null }],
+        }),
+        today,
+      ),
+    ).rejects.toThrow(/no billable items/)
+    expect(inserted['invoices']).toBeUndefined()
+  })
+})

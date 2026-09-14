@@ -2,7 +2,6 @@
 
 import { useTranslations } from 'next-intl'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
-import { useShell } from '@/components/dashboard/ShellProvider'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { KPIReport, KPIPreferences } from '@/types'
 import {
@@ -14,32 +13,28 @@ import {
 } from './month-values'
 
 /**
- * Nyckeltal as the founder-picked "Instrumentbrädan" layout: a grid of
- * bordered instrument panes — monthly result bars first, then one pane per
- * visible KPI from the user's preferences — with the cost story as quiet
- * rows below. Pure presentation: everything derives from the existing
- * KPIReport.
+ * Nyckeltal as the founder-picked "Instrumentbrädan" layout: one flat row of
+ * figures, one per visible KPI from the user's preferences, the monthly
+ * result bars at full width underneath, and the cost story as quiet rows
+ * below. Pure presentation: everything derives from the existing KPIReport.
  */
 
 const SAGE = 'hsl(155 25% 40%)'
 
 type TFn = (key: string, values?: Record<string, string | number>) => string
 
-/** Shared pane chrome: hairline border, compact metric padding. */
+/** Shared pane chrome: the label row over the figure, no card around it. */
 function Pane({
   title,
   annotation,
   tooltip,
   className,
-  flat = false,
   children,
 }: {
   title: string
   annotation?: React.ReactNode
   tooltip?: React.ReactNode
   className?: string
-  /** Shell v2: no card around the figure. */
-  flat?: boolean
   children: React.ReactNode
 }) {
   const label = (
@@ -48,7 +43,7 @@ function Pane({
     </p>
   )
   return (
-    <div className={cn(flat ? '' : 'rounded-lg border border-border p-4', className)}>
+    <div className={className}>
       <div className="flex items-center justify-between gap-3">
         {tooltip ? (
           <InfoTooltip content={tooltip} side="top" iconClassName="h-3 w-3">
@@ -70,7 +65,7 @@ function Pane({
  *  (terracotta when negative). Every non-zero bar carries a compact value
  *  label when they fit side by side, otherwise only the latest does; the
  *  exact amounts always follow in a two-column list under the axis. */
-function ResultBarsPane({ report, flat = false }: { report: KPIReport; flat?: boolean }) {
+function ResultBarsPane({ report }: { report: KPIReport }) {
   const t = useTranslations('kpi')
   const months = report.months
   if (months.length === 0) return null
@@ -83,9 +78,8 @@ function ResultBarsPane({ report, flat = false }: { report: KPIReport; flat?: bo
     return months.length - 1
   })()
 
-  // Flat (v2) draws twice as wide at the same height: the bars spread over
-  // the page instead of sitting in a card's half.
-  const W = flat ? 640 : 320
+  // Drawn wide at a short height: the bars spread over the page.
+  const W = 640
   const H = 120
   const hasNegative = months.some((m) => m.net < 0)
   // Fixed headroom above (and below, when negatives exist) keeps the endpoint
@@ -111,7 +105,7 @@ function ResultBarsPane({ report, flat = false }: { report: KPIReport; flat?: bo
     m.income === 0 && m.expenses === 0 && m.net === 0
 
   return (
-    <Pane title={t('bars_title')} annotation={t('bars_unit')} flat={flat} className={flat ? undefined : 'sm:row-span-2'}>
+    <Pane title={t('bars_title')} annotation={t('bars_unit')}>
       <svg
         viewBox={`0 0 ${W} ${H + 8}`}
         className="mt-3 h-auto w-full"
@@ -315,10 +309,9 @@ export function KPIPanes({
     .filter(Boolean) as MetricPane[]
 
   const total = (p: MetricPane) => (p.aging ? p.aging.ok + p.aging.overdue : 0)
-  // Shell v2: no card grid. The figures stand in one flat row and the
-  // result bars take their own width underneath, so nothing has to share
-  // a row height with something of another size.
-  const flat = useShell() === 'v2'
+  // No card grid: the figures stand in one flat row and the result bars take
+  // their own width underneath, so nothing has to share a row height with
+  // something of another size.
 
   const body = (pane: MetricPane) => (
     <>
@@ -357,29 +350,16 @@ export function KPIPanes({
     </>
   )
 
-  if (flat) {
-    return (
-      <div className="space-y-8">
-        <div className="flex flex-wrap gap-x-12 gap-y-5 border-b border-border pb-6">
-          {panes.map((pane) => (
-            <Pane key={pane.id} title={pane.title} tooltip={pane.tooltip} flat className="min-w-[180px]">
-              {body(pane)}
-            </Pane>
-          ))}
-        </div>
-        <ResultBarsPane report={report} flat />
-      </div>
-    )
-  }
-
   return (
-    <div className="grid items-stretch gap-4 sm:grid-cols-2">
+    <div className="space-y-8">
+      <div className="flex flex-wrap gap-x-12 gap-y-5 border-b border-border pb-6">
+        {panes.map((pane) => (
+          <Pane key={pane.id} title={pane.title} tooltip={pane.tooltip} className="min-w-[180px]">
+            {body(pane)}
+          </Pane>
+        ))}
+      </div>
       <ResultBarsPane report={report} />
-      {panes.map((pane) => (
-        <Pane key={pane.id} title={pane.title} tooltip={pane.tooltip}>
-          {body(pane)}
-        </Pane>
-      ))}
     </div>
   )
 }

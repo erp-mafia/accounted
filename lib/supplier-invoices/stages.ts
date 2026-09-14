@@ -1,5 +1,5 @@
 /**
- * Supplier-invoice lifecycle stages (UI v2 PR 6, dev_docs/ui_v2_build_plan.md).
+ * Supplier-invoice lifecycle stages (UI v2 PR 6).
  *
  * Founder decision 2026-09-07: Inköp shows the invoice as a flow, Inkommen →
  * Registrerad → Attesterad → I betalfil → Betald → Avstämd. The stage is

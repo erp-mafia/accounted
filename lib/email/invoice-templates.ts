@@ -2,6 +2,9 @@ import type { Invoice, Customer, CompanySettings, InvoiceDocumentType } from '@/
 import { formatDate, getCompanyDisplayName } from '@/lib/utils'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import { customerGreetingName } from '@/lib/invoices/customer-greeting-name'
+import { invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'
+import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from './user-text'
 
 type EmailLang = 'sv' | 'en'
@@ -37,6 +40,16 @@ const LABELS = {
     account: 'Kontonummer:',
     iban: 'IBAN:',
     bic: 'BIC/SWIFT:',
+    bankgiro: 'Bankgiro:',
+    plusgiro: 'Plusgiro:',
+    swish: 'Swish:',
+    routingNumber: 'Routing number (ABA):',
+    sortCode: 'Sort code:',
+    bankCode: 'Bankkod:',
+    foreignAccount: 'Kontonummer:',
+    // Same label as the PDF payment box. The value is the OCR reference
+    // (invoice number + Luhn check digit), never the bare invoice number.
+    ocr: 'OCR/Referens:',
     message: 'Meddelande:',
     questions: 'Har du frågor om fakturan? Svara direkt på detta mejl så hjälper vi dig.',
     sincerely: 'Med vänliga hälsningar,',
@@ -78,6 +91,14 @@ const LABELS = {
     account: 'Account number:',
     iban: 'IBAN:',
     bic: 'BIC/SWIFT:',
+    bankgiro: 'Bankgiro:',
+    plusgiro: 'Plusgiro:',
+    swish: 'Swish:',
+    routingNumber: 'Routing number (ABA):',
+    sortCode: 'Sort code:',
+    bankCode: 'Bank code:',
+    foreignAccount: 'Account number:',
+    ocr: 'Reference:',
     message: 'Reference:',
     questions: 'Questions about the invoice? Reply directly to this email and we will help you.',
     sincerely: 'Kind regards,',
@@ -175,6 +196,10 @@ export interface InvoiceEmailData {
   invoice: Invoice
   customer: Customer
   company: CompanySettings
+  // The Reply-To the message is sent with (resolveInvoiceReplyTo). Without
+  // one the "Svara direkt på detta mejl" line is left out: a reply would
+  // land in the platform noreply sender.
+  replyTo?: string | null
 }
 
 function buildPlaceholderValues(data: InvoiceEmailData, lang: EmailLang): Record<string, string> {
@@ -183,7 +208,7 @@ function buildPlaceholderValues(data: InvoiceEmailData, lang: EmailLang): Record
   return {
     fakturanummer: invoice.invoice_number ?? '',
     kundnamn: fullName,
-    förnamn: fullName ? fullName.split(' ')[0] : '',
+    förnamn: customerGreetingName(customer),
     företag: getCompanyDisplayName(company),
     förfallodatum: formatDate(invoice.due_date),
     belopp: formatCurrencyForCustomer(getAmountToPay(invoice, company).toPay, invoice.currency, lang),
@@ -226,6 +251,60 @@ function safeBrandingColor(value: string | null | undefined, fallback: string): 
   return /^#[0-9A-Fa-f]{6}$/.test(value) ? value : fallback
 }
 
+export interface InvoiceEmailPaymentRow {
+  label: string
+  value: string
+  emphasis?: boolean
+}
+
+/**
+ * The payment rows, in the same order and under the same conditions as the
+ * PDF payment box (lib/invoices/pdf-template.tsx), so the customer never sees
+ * one instruction in the email and another on the faktura. The last row is
+ * the reference the customer copies into the bank: the OCR reference (with
+ * its Luhn check digit) exactly when the PDF prints one, else the invoice
+ * number as a plain message. Shared with the reminder email.
+ */
+export function invoiceEmailPaymentRows(
+  company: CompanySettings,
+  invoice: Invoice,
+  lang: EmailLang,
+): InvoiceEmailPaymentRow[] {
+  const L = LABELS[lang]
+  const rows: InvoiceEmailPaymentRow[] = []
+  if (company.bank_name) rows.push({ label: L.bank, value: company.bank_name })
+  if (company.clearing_number && company.account_number) {
+    rows.push({ label: L.account, value: `${company.clearing_number}-${company.account_number}` })
+  }
+  if (company.bankgiro && (company.invoice_show_bankgiro ?? true)) {
+    rows.push({ label: L.bankgiro, value: company.bankgiro })
+  }
+  if (company.plusgiro && (company.invoice_show_plusgiro ?? true)) {
+    rows.push({ label: L.plusgiro, value: company.plusgiro })
+  }
+  if (company.swish && (company.invoice_show_swish ?? false)) {
+    rows.push({ label: L.swish, value: company.swish })
+  }
+  if (company.bank_code) {
+    rows.push({
+      label: invoice.currency === 'USD' ? L.routingNumber : invoice.currency === 'GBP' ? L.sortCode : L.bankCode,
+      value: company.bank_code,
+    })
+  }
+  if (company.foreign_account_number) {
+    rows.push({ label: L.foreignAccount, value: company.foreign_account_number })
+  }
+  if (company.iban) rows.push({ label: L.iban, value: company.iban })
+  if (company.bic) rows.push({ label: L.bic, value: company.bic })
+  const invoiceNumber = invoice.invoice_number ?? ''
+  rows.push(
+    invoiceShowsOcrReference(company, lang)
+      ? { label: L.ocr, value: generateOcrReference(invoiceNumber), emphasis: true }
+      : { label: L.message, value: invoiceNumber, emphasis: true },
+  )
+  return rows
+}
+
 /**
  * Generate HTML email for sending an invoice
  */
@@ -244,7 +323,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   // pay-online button; its expiry replaces the due date.
   const isQuote = docType === 'quote'
   const hidePayment = isCreditNote || isDeliveryNote || isProforma || isQuote
-  const firstName = customer.name ? customer.name.split(' ')[0] : ''
+  const firstName = customerGreetingName(customer)
   const custom = resolveCustomTexts(data, lang)
   const stockBody = isCreditNote
     ? L.bodyCreditNote
@@ -282,7 +361,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     <!-- Greeting -->
     <div style="margin-bottom: 30px;">
       <p style="margin: 0 0 15px 0;">
-        ${custom.greeting !== undefined ? userTextToHtml(custom.greeting) : L.greeting(firstName)}
+        ${custom.greeting !== undefined ? userTextToHtml(custom.greeting) : escapeHtml(L.greeting(firstName))}
       </p>
       <p style="margin: 0;">
         ${custom.body !== undefined ? userTextToHtml(custom.body) : stockBody}
@@ -329,50 +408,30 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     </div>
     ` : ''}
 
-    <!-- Payment Details -->
+    <!-- Payment Details: mirrors the PDF payment box row for row. -->
     ${!hidePayment ? `
     <div style="margin-bottom: 30px;">
       <h2 style="margin: 0 0 15px 0; font-size: 16px; font-weight: 600; color: ${primaryColor};">
         ${L.paymentHeading}
       </h2>
       <table style="width: 100%; border-collapse: collapse;">
-        ${company.bank_name ? `
+        ${invoiceEmailPaymentRows(company, invoice, lang).map((row) => `
         <tr>
-          <td style="padding: 6px 0; color: #666; font-size: 14px; width: 140px;">${L.bank}</td>
-          <td style="padding: 6px 0;">${company.bank_name}</td>
+          <td style="padding: 6px 0; color: #666; font-size: 14px; width: 140px;">${row.label}</td>
+          <td style="padding: 6px 0;${row.emphasis ? ' font-weight: 500;' : ''}">${escapeHtml(row.value)}</td>
         </tr>
-        ` : ''}
-        ${company.clearing_number && company.account_number ? `
-        <tr>
-          <td style="padding: 6px 0; color: #666; font-size: 14px;">${L.account}</td>
-          <td style="padding: 6px 0;">${company.clearing_number}-${company.account_number}</td>
-        </tr>
-        ` : ''}
-        ${company.iban ? `
-        <tr>
-          <td style="padding: 6px 0; color: #666; font-size: 14px;">${L.iban}</td>
-          <td style="padding: 6px 0;">${company.iban}</td>
-        </tr>
-        ` : ''}
-        ${company.bic ? `
-        <tr>
-          <td style="padding: 6px 0; color: #666; font-size: 14px;">${L.bic}</td>
-          <td style="padding: 6px 0;">${company.bic}</td>
-        </tr>
-        ` : ''}
-        <tr>
-          <td style="padding: 6px 0; color: #666; font-size: 14px;">${L.message}</td>
-          <td style="padding: 6px 0; font-weight: 500;">${invoice.invoice_number}</td>
-        </tr>
+        `).join('')}
       </table>
     </div>
     ` : ''}
 
     <!-- Footer -->
     <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+      ${data.replyTo ? `
       <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">
         ${isQuote ? L.questionsQuote : L.questions}
       </p>
+      ` : ''}
       <p style="margin: 0; color: #666; font-size: 14px;">
         ${custom.signoff !== undefined ? userTextToHtml(custom.signoff) : L.sincerely}<br>
         <strong style="color: ${primaryColor};">${getCompanyDisplayName(company)}</strong>
@@ -407,7 +466,7 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   const isProforma = docType === 'proforma'
   const isQuote = docType === 'quote'
   const hidePayment = isCreditNote || isDeliveryNote || isProforma || isQuote
-  const firstName = customer.name ? customer.name.split(' ')[0] : ''
+  const firstName = customerGreetingName(customer)
   const custom = resolveCustomTexts(data, lang)
   const stockBody = isCreditNote
     ? L.bodyCreditNote
@@ -435,16 +494,11 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   if (!hidePayment) {
     text += `${L.paymentHeading}:\n`
     if (invoice.payment_link_url) text += `${L.payOnline}: ${invoice.payment_link_url}\n`
-    if (company.bank_name) text += `${L.bank} ${company.bank_name}\n`
-    if (company.clearing_number && company.account_number) {
-      text += `${L.account} ${company.clearing_number}-${company.account_number}\n`
-    }
-    if (company.iban) text += `${L.iban} ${company.iban}\n`
-    if (company.bic) text += `${L.bic} ${company.bic}\n`
-    text += `${L.message} ${invoice.invoice_number}\n\n`
+    for (const row of invoiceEmailPaymentRows(company, invoice, lang)) text += `${row.label} ${row.value}\n`
+    text += `\n`
   }
 
-  text += `${isQuote ? L.questionsQuote : L.questions}\n\n`
+  if (data.replyTo) text += `${isQuote ? L.questionsQuote : L.questions}\n\n`
   text += `${custom.signoff ?? L.sincerely}\n`
   text += `${getCompanyDisplayName(company)}\n`
 
@@ -505,7 +559,7 @@ export function generatePaymentConfirmationEmailHtml(data: InvoiceEmailData): st
   const { invoice, customer, company } = data
   const lang = resolveLang(customer)
   const L = LABELS[lang]
-  const firstName = customer.name ? customer.name.split(' ')[0] : ''
+  const firstName = customerGreetingName(customer)
   const primaryColor = safeBrandingColor(company.invoice_primary_color, '#111111')
   const paidDate = paidDateForCustomer(invoice)
   const paidAmount = formatCurrencyForCustomer(paidAmountForCustomer(invoice, company), invoice.currency, lang)
@@ -564,7 +618,7 @@ export function generatePaymentConfirmationEmailHtml(data: InvoiceEmailData): st
     </div>
 
     <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
-      <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">${L.confirmationQuestions}</p>
+      ${data.replyTo ? `<p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">${L.confirmationQuestions}</p>` : ''}
       <p style="margin: 0; color: #666; font-size: 14px;">
         ${L.sincerely}<br>
         <strong style="color: ${primaryColor};">${escapeHtml(getCompanyDisplayName(company))}</strong>
@@ -587,7 +641,7 @@ export function generatePaymentConfirmationEmailText(data: InvoiceEmailData): st
   const { invoice, customer, company } = data
   const lang = resolveLang(customer)
   const L = LABELS[lang]
-  const firstName = customer.name ? customer.name.split(' ')[0] : ''
+  const firstName = customerGreetingName(customer)
   const paidDate = paidDateForCustomer(invoice)
   const number = invoice.invoice_number ?? ''
 
@@ -601,7 +655,7 @@ export function generatePaymentConfirmationEmailText(data: InvoiceEmailData): st
   if (paidDate) text += `${L.confirmationPaidOn} ${paidDate}\n`
   text += `${L.confirmationPaidAmount} ${formatCurrencyForCustomer(paidAmountForCustomer(invoice, company), invoice.currency, lang)}\n`
   text += `---\n\n`
-  text += `${L.confirmationQuestions}\n\n`
+  if (data.replyTo) text += `${L.confirmationQuestions}\n\n`
   text += `${L.sincerely}\n`
   text += `${getCompanyDisplayName(company)}\n`
 

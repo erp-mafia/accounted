@@ -277,6 +277,51 @@ describe('POST /api/supplier-invoices', () => {
     expect(mockCreateSupplierInvoiceRegistrationEntry).toHaveBeenCalled()
   })
 
+  // Issue #2553: an omitted vat_rate follows the invoice's vat_treatment, so
+  // an exempt purchase stores 0 instead of the old blanket 25 % that booked
+  // input VAT the supplier never charged.
+  it('derives vat_rate 0 from vat_treatment exempt when the line omits it', async () => {
+    const supplier = makeSupplier({ id: VALID_UUID })
+    const createdInvoice = makeSupplierInvoice({ id: 'si-exempt' })
+
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
+    enqueue({ data: supplier, error: null })
+    enqueue({ data: 6 }) // arrival number
+    enqueue({ data: createdInvoice, error: null })
+    enqueue({ data: null, error: null }) // items insert
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-exempt' })
+    enqueue({ data: null, error: null }) // update with JE id
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'LF-EXEMPT',
+        invoice_date: '2024-06-01',
+        due_date: '2024-07-01',
+        vat_treatment: 'exempt',
+        items: [
+          { description: 'Bankavgift', quantity: 1, unit_price: 1000, account_number: '6570' },
+        ],
+      },
+    })
+    // Second argument passed explicitly: the wrapped handler takes
+    // (request, routeParams), and the one-argument calls elsewhere in this
+    // file are pre-existing type errors the ratchet already carries.
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const [invoiceRow] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(invoiceRow.vat_treatment).toBe('exempt')
+    expect(invoiceRow.vat_amount).toBe(0)
+    expect(invoiceRow.total).toBe(1000)
+    const [itemRows] = findCall('supplier_invoice_items', 'insert') as [Array<Record<string, unknown>>]
+    expect(itemRows[0].vat_rate).toBe(0)
+    expect(itemRows[0].vat_amount).toBe(0)
+  })
+
   it('registers WITHOUT booking when defer_invoice_booking is on (#967)', async () => {
     const supplier = makeSupplier({ id: VALID_UUID })
     const createdInvoice = makeSupplierInvoice({ id: 'si-deferred' })

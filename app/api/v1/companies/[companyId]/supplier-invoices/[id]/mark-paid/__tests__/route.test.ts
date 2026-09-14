@@ -9,6 +9,12 @@
  * The duplicate-payment guard (issue #2299): this door had none, so an agent
  * could book a payment the bank feed already carried. Same shared detector
  * as the dashboard route.
+ *
+ * payment_account (issue #2550): the schema accepted the field but the route
+ * never read it, so every API payment credited 1930 regardless. The assertions
+ * below pin the value onto the generator call itself, on both the accrual and
+ * the cash path, because that argument is the only thing that decides which
+ * account the verifikat credits.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -37,6 +43,7 @@ vi.mock('@supabase/supabase-js', async () => {
 
 // Journal-entry helpers are stubbed: the route flow is what we test here.
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
+  DEFAULT_SUPPLIER_PAYMENT_ACCOUNT: '1930',
   createSupplierInvoicePaymentEntry: vi.fn().mockResolvedValue({ id: 'je-si-payment' }),
   createSupplierInvoiceCashEntry: vi.fn().mockResolvedValue({ id: 'je-si-cash' }),
 }))
@@ -61,11 +68,23 @@ vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import {
+  createSupplierInvoiceCashEntry,
+  createSupplierInvoicePaymentEntry,
+} from '@/lib/bookkeeping/supplier-invoice-entries'
+import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { POST as markPaid } from '../route'
 import { eventBus } from '@/lib/events'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
+const mockPaymentEntry = createSupplierInvoicePaymentEntry as ReturnType<typeof vi.fn>
+const mockCashEntry = createSupplierInvoiceCashEntry as ReturnType<typeof vi.fn>
+
+// Positional argument index of `paymentAccount` on both generators. Pinned
+// here so a signature change surfaces as one failing constant rather than as
+// assertions that quietly read the wrong slot.
+const PAYMENT_ACCOUNT_ARG = 8
 
 type MockResult = { data?: unknown; error?: unknown }
 type RecordedCall = { table: string; method: string; args: unknown[] }
@@ -102,9 +121,9 @@ const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const SI_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const USER_ID = 'user-1'
 
-function makeRequest(body?: unknown): Request {
+function makeRequest(body?: unknown, opts: { dryRun?: boolean } = {}): Request {
   return new Request(
-    `https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`,
+    `https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid${opts.dryRun ? '?dry_run=true' : ''}`,
     {
       method: 'POST',
       headers: {
@@ -327,5 +346,135 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
 
     expect(res.status).toBe(200)
     expect(calls.some((c) => c.table === 'transactions')).toBe(false)
+  })
+
+  describe('payment_account (issue #2550)', () => {
+    // Never registered under faktureringsmetoden, so mark-paid takes the
+    // kontantmetoden branch and books expense + ingående moms here.
+    const CASH_SI = {
+      ...APPROVED_SI,
+      registration_journal_entry_id: null,
+      items: [
+        {
+          id: 'item-1',
+          sort_order: 0,
+          description: 'Konsultarvode',
+          quantity: 1,
+          unit: 'st',
+          unit_price: 800,
+          line_total: 1000,
+          account_number: '6530',
+          vat_code: 'SE25',
+          vat_rate: 25,
+          vat_amount: 200,
+        },
+      ],
+    }
+
+    function accrualClient(calls?: RecordedCall[]) {
+      return makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: [
+          { data: APPROVED_SI, error: null },
+          {
+            data: { ...APPROVED_SI, status: 'paid', paid_amount: 1000, remaining_amount: 0 },
+            error: null,
+          },
+        ],
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        supplier_invoice_payments: { data: null, error: null },
+      }, calls)
+    }
+
+    it('credits the requested account on the accrual path', async () => {
+      mockServiceClient.mockReturnValue(accrualClient())
+
+      const res = await markPaid(
+        makeRequest({ payment_date: '2026-05-12', payment_account: '1940' }),
+        detailParams(),
+      )
+
+      expect(res.status).toBe(200)
+      expect(mockPaymentEntry).toHaveBeenCalledTimes(1)
+      expect(mockPaymentEntry.mock.calls[0][PAYMENT_ACCOUNT_ARG]).toBe('1940')
+    })
+
+    it('credits the requested account on the cash path', async () => {
+      mockServiceClient.mockReturnValue(
+        makeFlexibleSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          supplier_invoices: [
+            { data: CASH_SI, error: null },
+            { data: { ...CASH_SI, status: 'paid', paid_amount: 1000, remaining_amount: 0 }, error: null },
+          ],
+          company_settings: { data: { accounting_method: 'cash' }, error: null },
+          supplier_invoice_payments: { data: null, error: null },
+        }),
+      )
+
+      const res = await markPaid(
+        makeRequest({ payment_date: '2026-05-12', payment_account: '1940' }),
+        detailParams(),
+      )
+
+      expect(res.status).toBe(200)
+      expect(mockCashEntry).toHaveBeenCalledTimes(1)
+      expect(mockCashEntry.mock.calls[0][PAYMENT_ACCOUNT_ARG]).toBe('1940')
+      expect(mockPaymentEntry).not.toHaveBeenCalled()
+    })
+
+    it('omitting payment_account leaves the generator default (1930) in charge', async () => {
+      mockServiceClient.mockReturnValue(accrualClient())
+
+      const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }), detailParams())
+
+      expect(res.status).toBe(200)
+      // undefined, not '1930': the fallback lives in one place, the generator.
+      // This door deliberately does NOT read company_settings
+      // .last_supplier_payment_account: that is the dashboard dialog's
+      // pre-fill, and letting it steer the API would change the booking of
+      // existing integrations that never send the field.
+      expect(mockPaymentEntry.mock.calls[0][PAYMENT_ACCOUNT_ARG]).toBeUndefined()
+    })
+
+    it('dry-run reports the account the commit would credit', async () => {
+      mockServiceClient.mockReturnValue(
+        makeFlexibleSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          supplier_invoices: { data: APPROVED_SI, error: null },
+          company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        }),
+      )
+
+      const res = await markPaid(
+        makeRequest({ payment_date: '2026-05-12', payment_account: '1940' }, { dryRun: true }),
+        detailParams(),
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.data.dry_run).toBe(true)
+      expect(body.data.preview.payment_account).toBe('1940')
+      expect(mockPaymentEntry).not.toHaveBeenCalled()
+    })
+
+    it('an account outside the chart returns 400 and books nothing', async () => {
+      const calls: RecordedCall[] = []
+      mockServiceClient.mockReturnValue(accrualClient(calls))
+      mockPaymentEntry.mockRejectedValueOnce(new AccountsNotInChartError(['9999']))
+
+      const res = await markPaid(
+        makeRequest({ payment_date: '2026-05-12', payment_account: '9999' }),
+        detailParams(),
+      )
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+      expect(body.error.details.account_numbers).toEqual(['9999'])
+      // Strict-mode: no status flip, no payment row.
+      expect(calls.some((c) => c.table === 'supplier_invoices' && c.method === 'update')).toBe(false)
+      expect(calls.some((c) => c.table === 'supplier_invoice_payments' && c.method === 'insert')).toBe(false)
+    })
   })
 })

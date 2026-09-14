@@ -1,9 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { validateBalance, getSwedishLocalDate, createDraftEntry, reverseEntry, assertLinesNonNegative } from '../engine'
+import {
+  validateBalance,
+  getSwedishLocalDate,
+  createDraftEntry,
+  createJournalEntry,
+  replaceOpeningBalanceEntry,
+  reverseEntry,
+  assertLinesWellFormed,
+} from '../engine'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotReverseStornoError,
+  JournalLineBothSidesNonZeroError,
   JournalLineNegativeAmountError,
   getUnusedVoucherAllocation,
 } from '../errors'
@@ -100,10 +109,10 @@ describe('validateBalance', () => {
   })
 })
 
-describe('assertLinesNonNegative', () => {
+describe('assertLinesWellFormed', () => {
   it('accepts one non-negative side per line', () => {
     expect(() =>
-      assertLinesNonNegative([
+      assertLinesWellFormed([
         { account_number: '6110', debit_amount: 16000, credit_amount: 0 },
         { account_number: '3740', debit_amount: 0, credit_amount: 0.25 },
         { account_number: '2440', debit_amount: 0, credit_amount: 15999.75 },
@@ -118,9 +127,9 @@ describe('assertLinesNonNegative', () => {
       { account_number: '2440', debit_amount: 0, credit_amount: 15999.75 },
     ]
     expect(validateBalance(lines).valid).toBe(true)
-    expect(() => assertLinesNonNegative(lines)).toThrow(JournalLineNegativeAmountError)
+    expect(() => assertLinesWellFormed(lines)).toThrow(JournalLineNegativeAmountError)
     try {
-      assertLinesNonNegative(lines)
+      assertLinesWellFormed(lines)
     } catch (err) {
       const e = err as JournalLineNegativeAmountError
       expect(e.code).toBe('JOURNAL_LINE_NEGATIVE_AMOUNT')
@@ -131,16 +140,64 @@ describe('assertLinesNonNegative', () => {
 
   it('rejects a negative credit', () => {
     expect(() =>
-      assertLinesNonNegative([
+      assertLinesWellFormed([
         { account_number: '1510', debit_amount: 999.5, credit_amount: 0 },
         { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
         { account_number: '3740', debit_amount: 0, credit_amount: -0.5 },
       ])
     ).toThrow(JournalLineNegativeAmountError)
   })
+
+  // Issue #2551: the totals-only balance math cannot see a self-cancelling
+  // line, so this one has to.
+  it('rejects a line carrying both sides even though the entry balances', () => {
+    const lines: CreateJournalEntryLineInput[] = [
+      { account_number: '1930', debit_amount: 100, credit_amount: 100 },
+      { account_number: '1930', debit_amount: 50, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 50 },
+    ]
+    expect(validateBalance(lines).valid).toBe(true)
+    expect(() => assertLinesWellFormed(lines)).toThrow(JournalLineBothSidesNonZeroError)
+    try {
+      assertLinesWellFormed(lines)
+    } catch (err) {
+      const e = err as JournalLineBothSidesNonZeroError
+      expect(e.code).toBe('JOURNAL_LINE_BOTH_SIDES_NONZERO')
+      expect(e.accountNumber).toBe('1930')
+      expect(e.debitAmount).toBe(100)
+      expect(e.creditAmount).toBe(100)
+    }
+  })
+
+  it('rejects both sides even when they do not cancel', () => {
+    expect(() =>
+      assertLinesWellFormed([
+        { account_number: '1930', debit_amount: 100, credit_amount: 40 },
+        { account_number: '3001', debit_amount: 0, credit_amount: 60 },
+      ])
+    ).toThrow(JournalLineBothSidesNonZeroError)
+  })
+
+  it('reports the negative side first when a line is both negative and two-sided', () => {
+    expect(() =>
+      assertLinesWellFormed([
+        { account_number: '1930', debit_amount: -100, credit_amount: 100 },
+        { account_number: '3001', debit_amount: 0, credit_amount: 100 },
+      ])
+    ).toThrow(JournalLineNegativeAmountError)
+  })
+
+  it('accepts a zero line: the balance check owns the empty entry', () => {
+    expect(() =>
+      assertLinesWellFormed([
+        { account_number: '1930', debit_amount: 0, credit_amount: 0 },
+        { account_number: '3001', debit_amount: 0, credit_amount: 0 },
+      ])
+    ).not.toThrow()
+  })
 })
 
-describe('createDraftEntry: refuses negative-side lines before any write', () => {
+describe('createDraftEntry: refuses malformed lines before any write', () => {
   it('throws JournalLineNegativeAmountError and never touches the database', async () => {
     const from = vi.fn()
     await expect(
@@ -157,6 +214,67 @@ describe('createDraftEntry: refuses negative-side lines before any write', () =>
       })
     ).rejects.toThrow(JournalLineNegativeAmountError)
     expect(from).not.toHaveBeenCalled()
+  })
+
+  it('throws JournalLineBothSidesNonZeroError and never touches the database (#2551)', async () => {
+    const from = vi.fn()
+    await expect(
+      createDraftEntry({ from } as never, 'company-1', 'user-1', {
+        fiscal_period_id: 'period-1',
+        entry_date: '2026-01-01',
+        description: 'Nollverifikat',
+        source_type: 'manual',
+        lines: [
+          { account_number: '1930', debit_amount: 100, credit_amount: 100 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 0 },
+        ],
+      })
+    ).rejects.toThrow(JournalLineBothSidesNonZeroError)
+    expect(from).not.toHaveBeenCalled()
+  })
+})
+
+describe('createJournalEntry: refuses a both-sides line before any write (#2551)', () => {
+  it('throws before the atomic draft+commit ever reaches the database', async () => {
+    const from = vi.fn()
+    const rpc = vi.fn()
+    await expect(
+      createJournalEntry({ from, rpc } as never, 'company-1', 'user-1', {
+        fiscal_period_id: 'period-1',
+        entry_date: '2026-01-01',
+        description: 'Nollverifikat',
+        source_type: 'manual',
+        lines: [
+          { account_number: '1930', debit_amount: 100, credit_amount: 100 },
+          { account_number: '1930', debit_amount: 50, credit_amount: 0 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 50 },
+        ],
+      })
+    ).rejects.toThrow(JournalLineBothSidesNonZeroError)
+    expect(from).not.toHaveBeenCalled()
+    expect(rpc).not.toHaveBeenCalled()
+  })
+})
+
+describe('replaceOpeningBalanceEntry: refuses a both-sides line before any write (#2551)', () => {
+  it('throws before the replacement touches the database', async () => {
+    const from = vi.fn()
+    const rpc = vi.fn()
+    await expect(
+      replaceOpeningBalanceEntry({ from, rpc } as never, 'company-1', 'user-1', 'entry-1', {
+        fiscal_period_id: 'period-1',
+        entry_date: '2026-01-01',
+        description: 'Ingående balanser',
+        source_type: 'opening_balance',
+        lines: [
+          { account_number: '1930', debit_amount: 100, credit_amount: 100 },
+          { account_number: '1930', debit_amount: 50, credit_amount: 0 },
+          { account_number: '2081', debit_amount: 0, credit_amount: 50 },
+        ],
+      })
+    ).rejects.toThrow(JournalLineBothSidesNonZeroError)
+    expect(from).not.toHaveBeenCalled()
+    expect(rpc).not.toHaveBeenCalled()
   })
 })
 

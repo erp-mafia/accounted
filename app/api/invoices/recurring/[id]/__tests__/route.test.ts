@@ -409,3 +409,39 @@ describe('PATCH /api/invoices/recurring/[id] combined edit rollback', () => {
     expect(updatePayloads).toHaveLength(0)
   })
 })
+
+describe('PATCH /api/invoices/recurring/[id]: billing period placeholders', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    updatePayloads.length = 0
+    customerRow = null
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    scheduleRow = { id: 's-1', status: 'active', auto_send: false, customer_id: 'c-1' }
+  })
+
+  it('rejects notes that use a period placeholder when the stored schedule has no period_start', async () => {
+    // The merged-row read goes through maybeSingle on the shared chain.
+    customerRow = { notes: null, period_start: null, items: [{ description: 'Licens' }] }
+    const { status, body } = await parseJsonResponse<{ errors?: Array<{ field: string }> }>(
+      await PATCH(patchReq({ notes: 'Period {periodstart}' }), params),
+    )
+    expect(status).toBe(400)
+    expect(body.errors?.[0]?.field).toBe('period_start')
+    expect(updatePayloads).toHaveLength(0)
+  })
+
+  it('accepts the same notes when period_start is supplied in the same update', async () => {
+    customerRow = { notes: null, period_start: null, items: [{ description: 'Licens' }] }
+    const { status } = await parseJsonResponse(
+      await PATCH(patchReq({ notes: 'Period {periodstart}', period_start: '2026-10-01' }), params),
+    )
+    expect(status).toBe(200)
+    expect(updatePayloads[0]).toMatchObject({ notes: 'Period {periodstart}', period_start: '2026-10-01' })
+  })
+
+  it('rejects clearing period_start while the stored texts still use it', async () => {
+    customerRow = { notes: 'Period {periodslut}', period_start: '2026-10-01', items: [] }
+    const { status } = await parseJsonResponse(await PATCH(patchReq({ period_start: null }), params))
+    expect(status).toBe(400)
+  })
+})

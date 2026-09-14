@@ -49,9 +49,9 @@ function makeClient(storageOverrides: Record<string, unknown> = {}) {
   }
 }
 
-// verifyIntegrity downloads via the service-role client (the storage SELECT
-// policy is per-uploader-folder); tests set this override to control the
-// downloaded bytes.
+// Storage calls run on the service-role client (the storage SELECT policy is
+// per-uploader-folder); tests set this override to control the downloaded
+// bytes.
 let serviceClientOverride: ReturnType<typeof makeClient> | null = null
 
 vi.mock('@/lib/auth/api-keys', () => ({
@@ -62,7 +62,6 @@ import {
   uploadDocument,
   createNewVersion,
   deleteDocument,
-  verifyIntegrity,
   detectFileMagic,
   validateDocumentMagicBytes,
   buildDocumentStoragePath,
@@ -1197,51 +1196,6 @@ describe('deleteDocument', () => {
 
     expect(result).toMatchObject({ ok: false, reason: 'linked_to_entry', status: 409 })
     expect(serviceRemove).not.toHaveBeenCalled()
-  })
-})
-
-describe('verifyIntegrity', () => {
-  it('returns valid when hashes match', async () => {
-    const content = 'test content for integrity check'
-    const buffer = new TextEncoder().encode(content)
-    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
-    const hashArray = Array.from(new Uint8Array(hashBuffer))
-    const expectedHash = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
-
-    results = [
-      { data: { storage_path: 'docs/test.pdf', sha256_hash: expectedHash }, error: null },
-    ]
-
-    // The download runs on the service-role client; give it matching bytes.
-    serviceClientOverride = makeClient({
-      download: vi.fn().mockResolvedValue({
-        data: new Blob([content]),
-        error: null,
-      }),
-    })
-
-    const result = await verifyIntegrity(makeClient() as never, 'user-1', 'doc-1')
-    expect(result.valid).toBe(true)
-    expect(result.storedHash).toBe(expectedHash)
-    expect(result.computedHash).toBe(expectedHash)
-  })
-
-  it('returns invalid when hashes do not match', async () => {
-    results = [
-      { data: { storage_path: 'docs/test.pdf', sha256_hash: 'stored-hash-abc' }, error: null },
-    ]
-
-    serviceClientOverride = makeClient({
-      download: vi.fn().mockResolvedValue({
-        data: new Blob(['different content']),
-        error: null,
-      }),
-    })
-
-    const result = await verifyIntegrity(makeClient() as never, 'user-1', 'doc-1')
-    expect(result.valid).toBe(false)
-    expect(result.storedHash).toBe('stored-hash-abc')
-    expect(result.computedHash).not.toBe('stored-hash-abc')
   })
 })
 

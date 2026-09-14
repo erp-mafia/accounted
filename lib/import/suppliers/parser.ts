@@ -113,12 +113,18 @@ export function parseSuppliersFile(
   const dataRows = rawData.slice(1)
   const columns = columnOverrides || detectSupplierColumns(headers)
 
+  // Detection leaves name_col at -1 when no header looked like a name. Read the
+  // first column so the preview still has rows and the mapping step (confidence
+  // is 0, well under its 0.8 gate) can show them; the user picks the real
+  // column there.
+  const nameCol = columns.name_col >= 0 ? columns.name_col : 0
+
   const rows: ParsedSupplierRow[] = []
   const warnings: string[] = []
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i]
-    const name = cellOrNull(row[columns.name_col])
+    const name = cellOrNull(row[nameCol])
     if (!name) continue
 
     const get = (col: number | null) =>

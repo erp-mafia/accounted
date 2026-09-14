@@ -1,6 +1,6 @@
 ---
 name: loop-issue-triage
-description: Proactive loop that keeps GitHub Issues in erp-mafia/accounted tidy (label, dedupe, close stale/already-fixed, reconcile with merged PRs) and auto-implements small, well-scoped fixes as PRs. Use on a schedule (cloud routine) or on-demand via /loop-issue-triage. Follows dev_docs/loops.md (propose-don't-merge).
+description: Proactive loop that keeps GitHub Issues in erp-mafia/accounted tidy (label, dedupe, close stale/already-fixed, reconcile with merged PRs) and auto-implements small, well-scoped fixes as PRs. Use on a session-local schedule (/loop) or on-demand via /loop-issue-triage. Follows .claude/loops.md (propose-don't-merge).
 ---
 
 # loop-issue-triage

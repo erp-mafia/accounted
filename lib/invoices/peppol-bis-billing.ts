@@ -9,7 +9,7 @@ import { resolveInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { computeLineAmounts, hasLineDiscount } from '@/lib/invoices/line-amounts'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { toSingleLine } from '@/lib/invoices/display'
-import { equalOre, roundOre } from '@/lib/money'
+import { equalOre, ORE_TOLERANCE, roundOre } from '@/lib/money'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
 export const PEPPOL_BIS_BILLING_CUSTOMIZATION_ID =
@@ -76,7 +76,16 @@ interface PreparedInvoice {
   }
   productItems: InvoiceItem[]
   taxBreakdown: Array<{ rate: number; taxableAmount: number; taxAmount: number }>
+  /** BT-112, derived as BT-109 + BT-110 so BR-CO-15 holds by construction. */
+  taxInclusiveAmount: number
+  /** BT-115. Derived as BT-112 + BT-114, so BR-CO-16 holds by construction. */
   payableAmount: number
+  /**
+   * BT-114. Carries the two deltas EN 16931 gives no other slot for: the
+   * öresavrundning the customer is actually billed, and the difference between
+   * the per-line VAT Sweden allows us to round (and store, and book) and the
+   * per-category VAT that BR-CO-17 requires in the XML.
+   */
   roundingAmount: number
 }
 
@@ -371,7 +380,7 @@ function prepareInvoice(input: PeppolInvoiceInput):
     ))
   }
 
-  const taxGroups = new Map<number, { taxableAmount: number; lineTaxAmount: number }>()
+  const taxGroups = new Map<number, { taxableAmount: number }>()
   productItems.forEach((item, index) => {
     const lineField = `invoice.items.${index}`
     if (!hasText(item.description) || !Number.isFinite(item.quantity) || item.quantity <= 0 ||
@@ -421,9 +430,8 @@ function prepareInvoice(input: PeppolInvoiceInput):
         `The VAT amount on invoice line ${index + 1} is inconsistent.`,
       ))
     }
-    const group = taxGroups.get(item.vat_rate) ?? { taxableAmount: 0, lineTaxAmount: 0 }
+    const group = taxGroups.get(item.vat_rate) ?? { taxableAmount: 0 }
     group.taxableAmount = roundMoney(group.taxableAmount + item.line_total)
-    group.lineTaxAmount = roundMoney(group.lineTaxAmount + item.vat_amount)
     taxGroups.set(item.vat_rate, group)
   })
 
@@ -434,21 +442,36 @@ function prepareInvoice(input: PeppolInvoiceInput):
       taxableAmount: group.taxableAmount,
       taxAmount: roundMoney(group.taxableAmount * rate / 100),
     }))
-  taxBreakdown.forEach((group) => {
-    if (!equalMoney(group.taxAmount, taxGroups.get(group.rate)?.lineTaxAmount ?? 0)) {
-      issues.push(validationIssue(
-        'VAT_ROUNDING_MISMATCH', 'invoice.items',
-        `Momsavrundningen för ${group.rate} procent kan inte uttryckas enligt EN 16931. Justera fakturaraderna.`,
-        `VAT rounding for the ${group.rate} percent category cannot be represented under EN 16931. Adjust the invoice lines.`,
-      ))
-    }
-  })
+  // Sweden permits rounding VAT per invoice line; EN 16931 does not represent
+  // it, so the two stages legitimately disagree by öre. BR-CO-17 stays
+  // authoritative in the XML (category VAT = taxable base x rate) and the
+  // difference is carried in BT-114 below, instead of rejecting the invoice.
+  //
+  // The band is what per-line rounding can provably produce: every line VAT and
+  // every category VAT is a single roundOre(), each off the exact value by at
+  // most half an öre, so |delta| <= ORE_TOLERANCE * (lines + categories), plus
+  // one ORE_TOLERANCE of float slack. Anything larger is a wrong rate or a
+  // tampered amount, which is orders of magnitude bigger than this. A wrong
+  // amount on an individual line is caught exactly by LINE_VAT_MISMATCH above,
+  // so widening this aggregate band never hides a per-line error.
+  const lineVatTotal = roundMoney(productItems.reduce((sum, item) => sum + item.vat_amount, 0))
+  const categoryVatTotal = roundMoney(taxBreakdown.reduce((sum, group) => sum + group.taxAmount, 0))
+  const vatDelta = roundMoney(lineVatTotal - categoryVatTotal)
+  const vatDeltaBand = ORE_TOLERANCE * (productItems.length + taxBreakdown.length + 1)
+  if (Math.abs(vatDelta) > vatDeltaBand) {
+    issues.push(validationIssue(
+      'VAT_ROUNDING_MISMATCH', 'invoice.items',
+      'Momsbeloppen på fakturaraderna stämmer inte med momsen per momssats. Justera fakturaraderna.',
+      'The VAT amounts on the invoice lines do not reconcile with the VAT per rate category. Adjust the invoice lines.',
+    ))
+  }
 
+  // Reconcile the header against what was invoiced and booked, which is the
+  // per-line VAT sum, not the EN 16931 category recomputation.
   const calculatedSubtotal = roundMoney(productItems.reduce((sum, item) => sum + item.line_total, 0))
-  const calculatedVat = roundMoney(taxBreakdown.reduce((sum, group) => sum + group.taxAmount, 0))
-  const calculatedTotal = roundMoney(calculatedSubtotal + calculatedVat)
+  const calculatedTotal = roundMoney(calculatedSubtotal + lineVatTotal)
   if (!equalMoney(invoice.subtotal, calculatedSubtotal) ||
-      !equalMoney(invoice.vat_amount, calculatedVat) || !equalMoney(invoice.total, calculatedTotal)) {
+      !equalMoney(invoice.vat_amount, lineVatTotal) || !equalMoney(invoice.total, calculatedTotal)) {
     issues.push(validationIssue(
       'INVOICE_TOTALS_MISMATCH', 'invoice.total',
       'Fakturans delsumma, moms eller total stämmer inte med fakturaraderna.',
@@ -466,6 +489,12 @@ function prepareInvoice(input: PeppolInvoiceInput):
   }
 
   if (issues.length > 0 || !supplier || !buyer || !payment) return { prepared: null, issues }
+  // BT-112 from the amounts the XML actually prints (BR-CO-15), BT-114 as the
+  // öresavrundning delta plus the per-line/per-category VAT delta, BT-115 as
+  // their sum (BR-CO-16). The totals checks above make this equal
+  // rounding.displayed, so the customer-facing amount to pay is unchanged.
+  const taxInclusiveAmount = roundMoney(invoice.subtotal + categoryVatTotal)
+  const roundingAmount = roundMoney(rounding.roundingDelta + vatDelta)
   return {
     prepared: {
       supplier,
@@ -473,8 +502,9 @@ function prepareInvoice(input: PeppolInvoiceInput):
       payment,
       productItems,
       taxBreakdown,
-      payableAmount: rounding.displayed,
-      roundingAmount: rounding.roundingDelta,
+      taxInclusiveAmount,
+      payableAmount: roundMoney(taxInclusiveAmount + roundingAmount),
+      roundingAmount,
     },
     issues: [],
   }
@@ -639,7 +669,7 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     '  <cac:LegalMonetaryTotal>',
     `    <cbc:LineExtensionAmount currencyID="SEK">${formatMoney(invoice.subtotal)}</cbc:LineExtensionAmount>`,
     `    <cbc:TaxExclusiveAmount currencyID="SEK">${formatMoney(invoice.subtotal)}</cbc:TaxExclusiveAmount>`,
-    `    <cbc:TaxInclusiveAmount currencyID="SEK">${formatMoney(invoice.total)}</cbc:TaxInclusiveAmount>`,
+    `    <cbc:TaxInclusiveAmount currencyID="SEK">${formatMoney(prepared.taxInclusiveAmount)}</cbc:TaxInclusiveAmount>`,
     prepared.roundingAmount !== 0
       ? `    <cbc:PayableRoundingAmount currencyID="SEK">${formatMoney(prepared.roundingAmount)}</cbc:PayableRoundingAmount>`
       : null,

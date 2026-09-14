@@ -43,7 +43,6 @@ interface UserMenuProps {
   userName: string | null
   userEmail: string | null
   isSandbox: boolean
-  collapsed: boolean
   // Byrå cockpit (lean sidebar): the cockpit is above the companies, so the
   // widget shows no active company and no company-switcher flyout; entering
   // a client happens through the Klienter list instead.
@@ -79,13 +78,11 @@ function CompanyMark({ name }: { name: string }) {
  * Sticky bottom-of-sidebar user block: avatar initials, name, active company,
  * chevron. Opens an upward popover aligned with the nav column holding
  * identity, the company-switcher flyout, account links and logout.
- * Concept reference: ui_migration_plan.md PR 2.
  */
 export default function UserMenu({
   userName,
   userEmail,
   isSandbox,
-  collapsed,
   cockpitMode = false,
   onLogout,
 }: UserMenuProps) {
@@ -218,27 +215,23 @@ export default function UserMenu({
         aria-haspopup="menu"
         className={cn(
           'group flex w-full items-center rounded-lg text-left transition-colors duration-150 hover:bg-secondary/60',
-          collapsed ? 'justify-center p-2' : 'gap-2.5 px-3 py-2',
+          'gap-2.5 px-3 py-2',
         )}
       >
         <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-[11px] font-semibold uppercase text-foreground">
           {accountInitial(userName, userEmail)}
         </span>
-        {!collapsed && (
-          <>
-            <span className="flex-1 min-w-0">
-              <span className="block truncate text-[13px] font-medium text-foreground leading-tight">
-                {userName?.trim() || userEmail || tNav('mitt_konto')}
-              </span>
-              {company && !cockpitMode && (
-                <span className="block truncate text-[11px] text-muted-foreground leading-tight">
-                  {company.name}
-                </span>
-              )}
+        <span className="flex-1 min-w-0">
+          <span className="block truncate text-[13px] font-medium text-foreground leading-tight">
+            {userName?.trim() || userEmail || tNav('mitt_konto')}
+          </span>
+          {company && !cockpitMode && (
+            <span className="block truncate text-[11px] text-muted-foreground leading-tight">
+              {company.name}
             </span>
-            <ChevronsUpDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground opacity-50 group-hover:opacity-100" />
-          </>
-        )}
+          )}
+        </span>
+        <ChevronsUpDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground opacity-50 group-hover:opacity-100" />
       </button>
 
       {open &&

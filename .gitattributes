@@ -19,6 +19,12 @@ lib/bokslut/ixbrl/taxonomy/generated/*.json text eol=lf linguist-generated=true
 lib/extensions/_generated/** text eol=lf linguist-generated=true
 *.snap text eol=lf linguist-generated=true
 
+# CP437 SIE4 fixture. The bytes ARE the test: it is #FORMAT PC8, deliberately
+# not valid UTF-8, so the import test exercises detectEncoding/decodeBuffer and
+# the account-label matching together. Git must not convert its line endings
+# or try to diff it as text.
+lib/import/__tests__/fixtures/*.se binary
+
 # DECISIONS.md is an append-only log that every concurrent PR writes to, so
 # two PRs touching it always conflict at EOF. That is worse than it sounds:
 # GitHub runs ZERO Actions on a conflicting PR, so `gh pr checks` returns a
@@ -26,3 +32,27 @@ lib/extensions/_generated/** text eol=lf linguist-generated=true
 # merge keeps both sides' lines (the file has no ordering contract beyond
 # the date prefix), which is exactly the right semantics for an append log.
 DECISIONS.md merge=union
+
+# Preserve the exact SQL bytes recorded for the staged SIE backbone migrations.
+supabase/migrations/20260911140515_sie_import_job_backbone.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911140523_sie_import_chunk_writer.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911140525_sie_import_job_metadata_and_recovery.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911140528_sie_import_atomic_batch_storno.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911140531_sie_import_period_holds.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911140532_sie_import_replacement_handoff.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911140534_sie_import_invariant_monitor.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911141611_sie_job_trust_boundaries.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911143237_sie_import_audit_candidate.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911143555_sie_import_commit_timestamp.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911143839_sie_report_export_reads.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911145105_sie_duplicate_repair_jobs.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911145748_sie_repair_hold_and_stop.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911150200_sie_repair_action_boundaries.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911165003_sie_manual_balance_review_and_retained_reset.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911165308_sie_review_conflict_response.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260911171453_sie_period_hold_insert_guard.sql -text whitespace=blank-at-eol,space-before-tab,-blank-at-eof,cr-at-eol
+supabase/migrations/20260913162552_sie_repair_browser_lockdown.sql text eol=lf
+supabase/migrations/20260913162620_sie_observer_shared_period_locks.sql text eol=lf
+supabase/migrations/20260913200625_sie_verified_sandbox_cleanup.sql text eol=lf
+supabase/migrations/20260913200705_sie_report_shared_observation.sql text eol=lf
+supabase/migrations/20260913200922_sie_sandbox_operation_receipts.sql text eol=lf

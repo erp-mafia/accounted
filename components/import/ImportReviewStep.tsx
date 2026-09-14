@@ -50,6 +50,10 @@ interface ImportReviewStepProps {
   /** Client-parsed graph model for the import theater; null falls back to
    *  the plain spinner takeover (parse failed, oversized file, or pending). */
   theaterModel?: TheaterModel | null
+  /** Why the execute request was refused (closed admission, validation).
+   *  Rendered beside the action row: the wizard stays on this step after a
+   *  rejection, so a message anywhere else is never seen. */
+  error?: string | null
 }
 
 export interface ImportExecuteOptions {
@@ -71,6 +75,7 @@ export default function ImportReviewStep({
   onBack,
   isLoading,
   theaterModel = null,
+  error = null,
 }: ImportReviewStepProps) {
   const { canWrite } = useCanWrite()
   const { company } = useCompany()
@@ -554,6 +559,16 @@ export default function ImportReviewStep({
           </p>
         </CardContent>
       </Card>
+
+      {error && (
+        <div role="alert" className="p-4 rounded-lg flex gap-3 bg-destructive/10 border border-destructive/20">
+          <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
+          <div className="space-y-1.5 min-w-0">
+            <p className="font-medium text-destructive">{t('execute_rejected_title')}</p>
+            <p className="text-sm text-muted-foreground">{error}</p>
+          </div>
+        </div>
+      )}
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">

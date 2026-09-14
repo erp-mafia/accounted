@@ -11,6 +11,7 @@ import {
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
+import { invoiceShowsOcrReference } from '@/lib/invoices/ocr-reference'
 import {
   BUNDLED_INVOICE_FONT_FAMILIES,
   INVOICE_LOGO_MAX_HEIGHT_PT,
@@ -1521,7 +1522,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number}</Text>
               </View>
             )}
-            {(company.invoice_show_ocr ?? true) && (company.bankgiro || company.plusgiro) && lang === 'sv' && (
+            {invoiceShowsOcrReference(company, lang) && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.ocr}</Text>
                 <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number ? generateOcrReference(invoice.invoice_number) : '-'}</Text>

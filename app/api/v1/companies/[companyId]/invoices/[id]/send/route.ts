@@ -75,6 +75,7 @@ import {
   findAdditionalInvoiceRecipientCollisions,
   invoiceEmailRecipientCount,
   resolveInvoiceEmailRecipients,
+  resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
 import {
   hasRequiredInvoicePaymentAccount,
@@ -398,9 +399,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       configuredBcc: settings.invoice_email_bcc_addresses,
       customerCc: customer.invoice_email_cc_addresses,
       customerBcc: customer.invoice_email_bcc_addresses,
-      // The company email is fixed routing, not an arbitrary
-      // request-controlled recipient.
-      legacyCc: settings.email,
       additionalCc: bodyResult.data.additional_cc,
       additionalBcc: bodyResult.data.additional_bcc,
     }
@@ -612,7 +610,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       documentType: typed.document_type,
     })
 
-    const emailData = { invoice: renderableInvoice, customer, company: settings }
+    // API-key context: no signed-in user to fall back to for Reply-To.
+    const replyTo = resolveInvoiceReplyTo(settings)
+    const emailData = { invoice: renderableInvoice, customer, company: settings, replyTo }
     const subject = generateInvoiceEmailSubject(emailData)
     const html = generateInvoiceEmailHtml(emailData)
     const text = generateInvoiceEmailText(emailData)
@@ -631,7 +631,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         subject,
         html,
         text,
-        replyTo: settings.email ?? undefined,
+        replyTo,
         fromName: settings.company_name ?? undefined,
         from: await resolveInvoiceSender(ctx.supabase, ctx.companyId!, settings.company_name),
         filename,

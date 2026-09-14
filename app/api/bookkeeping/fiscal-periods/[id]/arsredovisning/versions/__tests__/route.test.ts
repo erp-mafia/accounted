@@ -49,6 +49,9 @@ const version = {
 
 function setup() {
   const mock = createQueuedMockSupabase()
+  mock.supabase.rpc.mockImplementation(async (name: string) => ({
+    data: name === 'acquire_sie_period_read' ? 'lease-1' : null, error: null,
+  }))
   requireAuthMock.mockResolvedValue({
     user: { id: 'user-1' },
     supabase: mock.supabase,

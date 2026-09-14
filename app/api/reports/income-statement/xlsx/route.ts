@@ -176,4 +176,4 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

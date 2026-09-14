@@ -111,3 +111,40 @@ describe('POST /api/invoices/recurring/[id]/run', () => {
     expect(updatePayloads[0]).toHaveProperty('generated_count', 1)
   })
 })
+
+describe('POST /api/invoices/recurring/[id]/run: billing period', () => {
+  it('advances period_start (the invoice just created covers it) while leaving next_run_date alone', async () => {
+    const updatePayloads: Record<string, unknown>[] = []
+    const scheduleRow = {
+      id: 's-1',
+      company_id: 'company-1',
+      generated_count: 0,
+      interval_months: 12,
+      next_run_date: '2026-10-01',
+      period_start: '2026-10-01',
+      items: [],
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chain: any = {
+      select: () => chain,
+      update: (payload: Record<string, unknown>) => {
+        updatePayloads.push(payload)
+        return chain
+      },
+      eq: () => chain,
+      single: () => Promise.resolve({ data: scheduleRow, error: null }),
+      then: (resolve: (v: unknown) => void) => resolve({ error: null }),
+    }
+    activeSupabase = {
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
+      from: vi.fn(() => chain),
+    }
+    executeRecurringSchedule.mockResolvedValue({ invoiceId: 'inv-1', invoiceNumber: 'F-1', autoSent: false, warning: null })
+
+    const { status } = await parseJsonResponse(await POST(req(), params))
+    expect(status).toBe(200)
+    expect(updatePayloads).toHaveLength(1)
+    expect(updatePayloads[0].period_start).toBe('2027-10-01')
+    expect(updatePayloads[0]).not.toHaveProperty('next_run_date')
+  })
+})

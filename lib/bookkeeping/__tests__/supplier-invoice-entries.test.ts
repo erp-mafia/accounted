@@ -2525,3 +2525,132 @@ describe('SLP pair injection (apply_slp)', () => {
     assertBalanced(input)
   })
 })
+
+// ============================================================
+// vat_treatment as a booking contract (issue #2553)
+//
+// An `exempt` purchase is undantagen (ML 10 kap) and an `export` purchase
+// carries no Swedish moms either, so neither has debiterad ingående moms to
+// deduct: no 2641 line at all, and the gross the supplier billed is the cost.
+// The stored line rate cannot answer this on its own: supplier_invoice_items
+// .vat_rate carries a NOT NULL DEFAULT 0.25 and every create path used to
+// fill an omitted rate with 25 %, so the fixtures below deliberately keep a
+// stale 25 % on the lines.
+// ============================================================
+
+describe('vat_treatment exempt/export books no input VAT', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  for (const treatment of ['exempt', 'export'] as const) {
+    it(`registration (${treatment}): no 2641, gross on the expense account`, async () => {
+      const invoice = makeSupplierInvoice({
+        vat_treatment: treatment,
+        subtotal: 8000,
+        vat_amount: 0,
+        total: 8000,
+      })
+      // Stale stored 25 %: exactly what the DB default and the old route
+      // fallback leave behind on an exempt invoice.
+      const items = [makeItem({ line_total: 8000, account_number: '6310', vat_rate: 0.25, vat_amount: 2000 })]
+
+      await createSupplierInvoiceRegistrationEntry(
+        null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+      )
+
+      const input = mockedCreateEntry.mock.calls[0][3]
+      expect(findByAccount(input.lines, '2641')).toHaveLength(0)
+      expect(findByAccount(input.lines, '6310')[0].debit_amount).toBe(8000)
+      expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(8000)
+      assertBalanced(input)
+    })
+
+    it(`kontantmetod (${treatment}): no 2641`, async () => {
+      const invoice = makeSupplierInvoice({
+        vat_treatment: treatment,
+        subtotal: 8000,
+        vat_amount: 0,
+        total: 8000,
+      })
+      const items = [makeItem({ line_total: 8000, account_number: '6310', vat_rate: 0.25, vat_amount: 2000 })]
+
+      await createSupplierInvoiceCashEntry(
+        null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'swedish_business'
+      )
+
+      const input = mockedCreateEntry.mock.calls[0][3]
+      expect(findByAccount(input.lines, '2641')).toHaveLength(0)
+      expect(findByAccount(input.lines, '6310')[0].debit_amount).toBe(8000)
+      assertBalanced(input)
+    })
+
+    it(`credit note (${treatment}): no 2641 reversal`, async () => {
+      const creditNote = makeSupplierInvoice({
+        vat_treatment: treatment,
+        is_credit_note: true,
+        subtotal: 8000,
+        vat_amount: 0,
+        total: 8000,
+      })
+      const items = [makeItem({ line_total: 8000, account_number: '6310', vat_rate: 0.25, vat_amount: 2000 })]
+
+      await createSupplierCreditNoteEntry(
+        null as never, 'company-1', 'user-1', creditNote, items, 'swedish_business'
+      )
+
+      const input = mockedCreateEntry.mock.calls[0][3]
+      expect(findByAccount(input.lines, '2641')).toHaveLength(0)
+      expect(findByAccount(input.lines, '6310')[0].credit_amount).toBe(8000)
+      expect(findByAccount(input.lines, '2440')[0].debit_amount).toBe(8000)
+      assertBalanced(input)
+    })
+
+    it(`utlägg (${treatment}): no 2641, the person is owed the gross`, () => {
+      const invoice = makeSupplierInvoice({ vat_treatment: treatment, subtotal: 400, vat_amount: 0, total: 400 })
+      const items = [makeItem({ line_total: 400, account_number: '6310', vat_rate: 0.25, vat_amount: 100 })]
+
+      const lines = buildSupplierInvoicePrivatelyPaidLines(invoice, items, '2893', DESC)
+
+      expect(lines.filter((l) => l.account_number === '2641')).toHaveLength(0)
+      expect(lines.find((l) => l.account_number === '6310')?.debit_amount).toBe(400)
+      expect(lines.find((l) => l.account_number === '2893')?.credit_amount).toBe(400)
+    })
+  }
+
+  it('standard_25 is untouched: 2641 still books', async () => {
+    const invoice = makeSupplierInvoice({ vat_treatment: 'standard_25', subtotal: 8000, vat_amount: 2000, total: 10000 })
+    const items = [makeItem({ line_total: 8000, account_number: '6310', vat_rate: 0.25 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2641')[0].debit_amount).toBe(2000)
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(10000)
+    assertBalanced(input)
+  })
+
+  it('reverse charge is untouched: fiktiv 2645/2614 pair still books', async () => {
+    const invoice = makeSupplierInvoice({
+      vat_treatment: 'reverse_charge',
+      reverse_charge: true,
+      subtotal: 8000,
+      vat_amount: 0,
+      total: 8000,
+    })
+    const items = [makeItem({ line_total: 8000, account_number: '6540', vat_rate: 0, vat_amount: 0 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(2000)
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBe(2000)
+    expect(findByAccount(input.lines, '2641')).toHaveLength(0)
+    assertBalanced(input)
+  })
+})

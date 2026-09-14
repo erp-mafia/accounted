@@ -85,4 +85,6 @@ export const GET = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
+  // Frozen versions remain readable during recovery; live balances do not.
+  { requireCompleteLedger: request => !new URL(request.url).searchParams.get('version') },
 )

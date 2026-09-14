@@ -1250,9 +1250,10 @@ describe('importVouchers: per-voucher series preservation', () => {
     expect(importCalls).toHaveLength(1)
     const entries = importCalls[0].args.p_entries as Array<Record<string, unknown>>
 
-    // The plain voucher carries no history keys at all.
+    // Every voucher has batch provenance, even when it carries no history.
     expect(entries[0]).not.toHaveProperty('corrections')
-    expect(entries[0]).not.toHaveProperty('sieImportId')
+    expect(entries[0]).toHaveProperty('sieImportId', 'import-42')
+    expect(entries[0]).toHaveProperty('sourceOrdinal', 0)
 
     // The corrected voucher: lines are the #TRANS rows only ...
     expect(entries[1].lines).toHaveLength(2)
@@ -1314,6 +1315,105 @@ describe('importVouchers: per-voucher series preservation', () => {
     expect(result.created).toBe(2)
     expect(result.seriesUsed).toEqual(['V'])
     expect(journalEntryInserts.every((r) => r.voucher_series === 'V')).toBe(true)
+  })
+
+  it('keeps SIE4I vouchers without series AND without number apart (#2546)', async () => {
+    const { supabase, journalEntryInserts } = buildCapturingSupabase()
+    // `#VER "" ""`: per SIE 4B the receiving system assigns both, so the parser
+    // marks the number omitted and leaves a placeholder 0. Both vouchers used
+    // to collapse onto the single sourceId "0", so all but the last one
+    // vanished from voucherNumberMapping and from the per-account movements the
+    // migration adjustment entry is computed from.
+    const parsed = makeParsedFile({
+      vouchers: [
+        {
+          series: '',
+          number: 0,
+          numberOmitted: true,
+          date: new Date(2024, 0, 15),
+          description: 'Dagsrapport 1',
+          lines: [
+            { account: '1510', amount: 1000 },
+            { account: '3001', amount: -1000 },
+          ],
+        },
+        {
+          series: '',
+          number: 0,
+          numberOmitted: true,
+          date: new Date(2024, 0, 16),
+          description: 'Dagsrapport 2',
+          lines: [
+            { account: '1510', amount: 2500 },
+            { account: '3001', amount: -2500 },
+          ],
+        },
+      ],
+    })
+
+    const result = await importVouchers(
+      supabase,
+      'company-1',
+      'user-1',
+      'period-1',
+      parsed,
+      baseMap,
+      'V',
+    )
+
+    expect(result.created).toBe(2)
+    expect(result.seriesUsed).toEqual(['V'])
+    expect(journalEntryInserts.map((r) => r.voucher_series)).toEqual(['V', 'V'])
+    // Ordinal-based ids: distinct, and they point back at the file's order.
+    expect(result.voucherNumberMapping).toEqual([
+      { sourceId: '#1', series: 'V', targetNumber: 1 },
+      { sourceId: '#2', series: 'V', targetNumber: 2 },
+    ])
+    // The file named neither, so nothing is invented for the source columns.
+    expect(journalEntryInserts.map((r) => r.source_voucher_series)).toEqual([null, null])
+    expect(journalEntryInserts.map((r) => r.source_voucher_number)).toEqual([null, null])
+    // Both vouchers count towards the movements, not just the last one.
+    expect(result.movementsByAccount.get('1510')).toBe(3500)
+    expect(result.movementsByAccount.get('3001')).toBe(-3500)
+  })
+
+  it('numbers SIE4I sourceIds by position in the FILE, not in the chunk (#2546)', async () => {
+    // A chunked import (#2532) calls importVouchers once per voucher group with
+    // only that group's vouchers, so the loop index restarts at 0 every group.
+    // The ordinal has to come from startOrdinal + index, or group 2 would reuse
+    // "#1" and the writer would see a duplicate of group 1's first voucher.
+    const { supabase } = buildCapturingSupabase()
+    const secondGroup = makeParsedFile({
+      vouchers: [
+        {
+          series: '',
+          number: 0,
+          numberOmitted: true,
+          date: new Date(2024, 0, 17),
+          description: 'Dagsrapport 3',
+          lines: [
+            { account: '1510', amount: 700 },
+            { account: '3001', amount: -700 },
+          ],
+        },
+      ],
+    })
+
+    const result = await importVouchers(
+      supabase,
+      'company-1',
+      'user-1',
+      'period-1',
+      secondGroup,
+      baseMap,
+      'V',
+      'import-99',
+      { startOrdinal: 2, only: true },
+    )
+
+    const prepared = result.preparedEntries ?? []
+    expect(prepared.map((e) => e.sourceId)).toEqual(['#3'])
+    expect(prepared.map((e) => e.sourceOrdinal)).toEqual([2])
   })
 
   it('records source series in voucherNumberMapping for audit trail', async () => {

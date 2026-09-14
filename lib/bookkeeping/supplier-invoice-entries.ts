@@ -9,6 +9,7 @@ import {
   resolveReverseChargeRate,
 } from './vat-entries'
 import { generateSlpLines, isSlpPensionAccount } from './slp-lines'
+import { treatmentDeductsInputVat } from '@/lib/vat/supplier-invoice-line-checks'
 import {
   coerceDimensionsBag,
   dimensionsBagKey,
@@ -36,6 +37,17 @@ const log = createLogger('supplier-invoice-entries')
  * MCP server and getErrorMessage() all translate it the same way.
  */
 export const SI_FX_RATE_MISSING = 'SI_FX_RATE_MISSING' as const
+
+/**
+ * BAS account credited for a supplier payment when the caller names none.
+ * 1930 Företagskonto is the default business bank account in the BAS chart.
+ *
+ * Every surface that books or previews a supplier payment resolves the credit
+ * account the same way: an explicit account wins, otherwise this. Named here
+ * so no route re-spells '1930' and quietly drifts from the generators, which
+ * are the only place that fallback may be decided. Issue #2550.
+ */
+export const DEFAULT_SUPPLIER_PAYMENT_ACCOUNT = '1930' as const
 
 /**
  * Raised when a booking path is asked to translate a foreign-currency supplier
@@ -131,6 +143,10 @@ function groupExpenseBuckets(
  *   Credit 26x4 Utgående moms omvänd (per rate)     [fiktiv VAT per rate]
  *   Credit 2440 Leverantörsskulder                  [total]
  *
+ * Exempt / export (vat_treatment says the invoice carries no Swedish moms):
+ *   Debit  5xxx/6xxx (per item's account_number)    [gross, no 2641 at all]
+ *   Credit 2440 Leverantörsskulder                  [same gross]
+ *
  * Note: Goods imports via Tullverket (customs) use a different accounting path
  * (2615/2645) and are not handled here: only services use reverse charge.
  */
@@ -220,9 +236,9 @@ export async function createSupplierInvoiceRegistrationEntry(
         }
       }
     }
-  } else if (itemsHaveVat(items)) {
+  } else if (itemsHaveVat(items, invoice.vat_treatment)) {
     // Domestic standard: Debit ingående moms per rate group
-    const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
+    const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate, invoice.vat_treatment)
     for (const [rate, amount] of vatByRate) {
       if (amount > 0) {
         lines.push({
@@ -296,7 +312,7 @@ export async function createSupplierInvoicePaymentEntry(
   supplierName?: string,
   paymentAccount?: string
 ): Promise<JournalEntry | null> {
-  const creditAccount = paymentAccount || '1930'
+  const creditAccount = paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for payment date:', paymentDate)
@@ -407,7 +423,7 @@ export async function createSupplierInvoiceCashEntry(
   // behaviour is byte-identical to before.
   settledBankSek?: number
 ): Promise<JournalEntry | null> {
-  const creditAccount = paymentAccount || '1930'
+  const creditAccount = paymentAccount || DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for payment date:', paymentDate)
@@ -491,10 +507,10 @@ export async function createSupplierInvoiceCashEntry(
         }
       }
     }
-  } else if (itemsHaveVat(items)) {
+  } else if (itemsHaveVat(items, invoice.vat_treatment)) {
     // Domestic standard: Debit ingående moms per rate group (at the payment-
     // date rate when settling a foreign invoice, see effectiveRate above).
-    const vatByRate = groupVatByRate(items, invoice.currency, effectiveRate)
+    const vatByRate = groupVatByRate(items, invoice.currency, effectiveRate, invoice.vat_treatment)
     for (const [rate, amount] of vatByRate) {
       if (amount > 0) {
         lines.push({
@@ -582,7 +598,7 @@ export async function createSupplierInvoiceCashEntry(
  * guards against this combo before calling us.
  */
 export function buildSupplierInvoicePrivatelyPaidLines(
-  invoice: Pick<SupplierInvoice, 'default_dimensions'>,
+  invoice: Pick<SupplierInvoice, 'default_dimensions' | 'vat_treatment'>,
   items: SupplierInvoiceItem[],
   liabilityAccount: string,
   description: string
@@ -614,8 +630,10 @@ export function buildSupplierInvoicePrivatelyPaidLines(
 
   // Debit: Ingående moms per rate group (mixed-rate kvitto support). Same
   // per-item rule as groupVatByRate, without the SEK conversion: a stored
-  // override wins over the computed line_total x rate.
-  if (itemsHaveVat(items)) {
+  // override wins over the computed line_total x rate. Gated on the same
+  // vat_treatment contract as the AP paths: an exempt or export kvitto has
+  // no moms to lift off, so its gross belongs on the cost account.
+  if (itemsHaveVat(items, invoice.vat_treatment)) {
     const vatByRate = new Map<number, number>()
     for (const item of items) {
       const rate = item.vat_rate ?? 0.25
@@ -804,7 +822,7 @@ export async function createSupplierCreditNoteEntry(
     }
   } else {
     // Domestic: Credit ingående moms per rate group (reverse)
-    const vatByRate = groupVatByRate(items, creditNote.currency, creditNote.exchange_rate, true)
+    const vatByRate = groupVatByRate(items, creditNote.currency, creditNote.exchange_rate, creditNote.vat_treatment, true)
     for (const [rate, amount] of vatByRate) {
       if (amount > 0) {
         creditLines.push({
@@ -892,8 +910,19 @@ export async function createSupplierCreditNoteEntry(
  * MCP inbox-conversion tool's OCR-extracted totals) that is never
  * reconciled against the items, so a stale or zero header would otherwise
  * silently suppress a correct per-line VAT posting.
+ *
+ * The invoice's vat_treatment is a required argument, not an optional one:
+ * under `exempt` or `export` the supplier charged no Swedish moms at all, so
+ * no 2641 line may be emitted whatever the stored rates say (issue #2553).
+ * The rate cannot answer that on its own, because supplier_invoice_items
+ * .vat_rate defaults to 0.25 in the database and every create path used to
+ * fill an omitted rate with 25 %.
  */
-function itemsHaveVat(items: SupplierInvoiceItem[]): boolean {
+function itemsHaveVat(
+  items: SupplierInvoiceItem[],
+  vatTreatment: string | null | undefined
+): boolean {
+  if (!treatmentDeductsInputVat(vatTreatment)) return false
   return items.some((item) => {
     if ((item.vat_amount ?? 0) > 0) return true
     const rate = item.vat_rate ?? 0.25
@@ -905,9 +934,14 @@ function groupVatByRate(
   items: SupplierInvoiceItem[],
   currency: string,
   exchangeRate: number | null,
+  vatTreatment: string | null | undefined,
   useAbsoluteValues = false
 ): Map<number, number> {
   const vatByRate = new Map<number, number>()
+  // Second gate on the same contract as itemsHaveVat: the credit-note path
+  // reaches this without the itemsHaveVat pre-check, and a stale stored
+  // 0.25 must not resurrect 2641 there either.
+  if (!treatmentDeductsInputVat(vatTreatment)) return vatByRate
   for (const item of items) {
     const rate = item.vat_rate ?? 0.25
     const storedVat = item.vat_amount ?? 0

@@ -22,6 +22,7 @@ import {
   exceedsInvoiceEmailRecipientLimit,
   invoiceEmailRecipientCount,
   resolveInvoiceEmailRecipients,
+  resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
 import {
   hasRequiredInvoicePaymentAccount,
@@ -124,7 +125,6 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       configuredBcc: company.invoice_email_bcc_addresses,
       customerCc: customer.invoice_email_cc_addresses,
       customerBcc: customer.invoice_email_bcc_addresses,
-      legacyCc: company.email || user.email,
     })
     if (recipients.to.length === 0) {
       return errorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', opLog, {
@@ -166,10 +166,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponseFromCode('INVOICE_PDF_RENDER_FAILED', opLog, { requestId })
     }
 
+    const replyTo = resolveInvoiceReplyTo(company as CompanySettings, user.email)
     const emailData = {
       invoice: invoice as Invoice,
       customer,
       company: company as CompanySettings,
+      replyTo,
     }
     const filename = paymentConfirmationPdfFilename(invoice.invoice_number)
 
@@ -180,7 +182,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       subject: generatePaymentConfirmationEmailSubject(emailData),
       html: generatePaymentConfirmationEmailHtml(emailData),
       text: generatePaymentConfirmationEmailText(emailData),
-      replyTo: company.email || undefined,
+      replyTo,
       fromName: company.company_name,
       from: await resolveInvoiceSender(supabase, companyId, company.company_name),
       attachments: [

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { tools } from '../server'
 
 /**
- * Identifier discipline (mcp_optimization_plan P1-2): agents grabbed the
+ * Identifier discipline: agents grabbed the
  * wrong id when list rows exposed a bare `id` next to qualified ids like
  * `journal_entry_id` with no type distinction, got NOT_FOUND, and had to
  * re-derive. Every identifier in a tool OUTPUT schema must be fully

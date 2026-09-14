@@ -9,7 +9,11 @@
  *
  * Per CLAUDE.md accounting guard rail #9: never use `.toFixed()` for money, and
  * never hand-roll `Math.round(x * 100) / 100`: that naive form is subtly wrong
- * (see `roundOre` below). Import these helpers instead.
+ * (see `roundOre` below). Nudging it with `Number.EPSILON` is not a fix either:
+ * EPSILON is a fixed absolute quantity (the gap above 1.0), while the
+ * representation error it is meant to bridge grows with the magnitude of the
+ * value, so from 2 SEK upward the nudge vanishes into the value it is added to.
+ * Import these helpers instead.
  *
  * This module is the single source of truth. `lib/bokslut/rounding.ts`
  * re-exports `roundOre`/`ORE_TOLERANCE` from here for back-compat; new code
@@ -17,21 +21,55 @@
  */
 
 /**
- * Round a SEK amount to the nearest öre (two decimal places).
+ * Shift a double by `exp` decimal places without re-entering binary
+ * arithmetic.
+ *
+ * The exponent is edited in the number's own shortest round-trip decimal
+ * string, so 10.075 becomes exactly 1007.5. Multiplying by 100 instead would
+ * reintroduce the representation error we are trying to step around: the
+ * double nearest 10.075 times 100 is 1007.4999999999999.
+ *
+ * Only finite numbers may reach this: `String(NaN)` yields 'NaN', and
+ * `Number('NaNe2')` is NaN, so callers guard first.
+ */
+function shiftDecimal(n: number, exp: number): number {
+  const [mantissa, e] = String(n).split('e')
+  return Number(`${mantissa}e${e ? Number(e) + exp : exp}`)
+}
+
+/**
+ * Round a SEK amount to the nearest öre (two decimal places), half away from
+ * zero for positive amounts and half toward positive infinity for negative
+ * ones (see the negative rule below).
  *
  * Naive `Math.round(x * 100) / 100` fails on exact-half values like 1.005
  * because IEEE-754 stores 1.005 as 1.00499999…, so multiplying by 100 yields
  * 100.49999… and Math.round drops it to 100 instead of 101.
  *
- * The Number.EPSILON nudge bridges the IEEE gap for double-precision values
- * near unit magnitude: large enough to push 100.49999… across the half-integer
- * boundary, small enough to leave well-formed decimals (1.234, 1.235, etc.)
- * untouched. Zero is special-cased so negative-zero inputs preserve their sign
- * through the round trip.
+ * The historical `Number.EPSILON` nudge only papered over that near unit
+ * magnitude. EPSILON is the gap above 1.0, a fixed absolute quantity, but the
+ * gap between neighbouring doubles doubles with every power of two. From 2 SEK
+ * upward `n + Number.EPSILON === n` for almost every exact half, so the nudge
+ * did not merely fall short, it did not survive the addition, and the helper
+ * degenerated into the naive form above: 10.075 came back as 10.07 and 8.575
+ * as 8.57. Instead of guessing at an additive correction, the shift is done in
+ * the decimal domain (`shiftDecimal`), where an exact half is exactly a half
+ * and `Math.round` decides it on the first try.
+ *
+ * Negative exact halves round toward positive infinity: `roundOre(-1.005)` is
+ * -1.00, not -1.01. That is `Math.round`'s own asymmetry and it is deliberate,
+ * pinned by a test. Symmetric away-from-zero rounding on negatives would move
+ * credit notes and reversals by one öre relative to the invoices they cancel,
+ * so changing it is a founder decision, not a refactor.
+ *
+ * Zero is special-cased so negative-zero inputs preserve their sign through the
+ * round trip; non-finite inputs pass through untouched because the decimal
+ * shift cannot represent them. A negative smaller than half an öre collapses to
+ * a plain 0, not -0, so it can never surface as "-0,00 kr" in a report.
  */
 export function roundOre(n: number): number {
-  if (n === 0) return n
-  return Math.round((n + Number.EPSILON) * 100) / 100
+  if (n === 0 || !Number.isFinite(n)) return n
+  return shiftDecimal(Math.round(shiftDecimal(n, 2)), -2)
 }
 
 /**

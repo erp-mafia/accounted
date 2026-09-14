@@ -5,6 +5,7 @@ import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { createSession, extractBban, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
+import { isMirrorCardAccount } from '@/extensions/general/enable-banking/lib/mirror-card-account'
 import { eventBus } from '@/lib/events/bus'
 import {
   upsertFromPsd2,
@@ -635,6 +636,31 @@ async function finalizeConnection(
           claimedCount += 1
         }
       }
+      // Same re-stamp for a mirror card account the user has left off: the
+      // note must survive a renewal. An ENABLED one is the user's deliberate
+      // choice and is never touched. Only a same-uid account is kept out of
+      // the mirror pass (it was never mirrored, or its row already carries
+      // this uid); a PAIRED one (uid change, see pairedPriorUidByNewUid) must
+      // reach the mirror pass so its existing cash_accounts row is re-keyed
+      // to the new uid instead of going stale under the retired one.
+      if (account.enabled === false && isMirrorCardAccount(account)) {
+        account.mirror_card_account = true
+        if (!pairedPriorUidByNewUid.has(account.uid)) guardDisabledUids.add(account.uid)
+      }
+      continue
+    }
+
+    if (isMirrorCardAccount(account)) {
+      // Known card sub-account that only mirrors the main account (Svea's
+      // BOKIO_Debit_Business, issue #2565): every purchase already arrives on
+      // the main account, and this one adds an opposite-sign, description-
+      // less twin per purchase that can be neither booked nor deleted. Off by
+      // default, flagged so the picker says why; the user can still turn it
+      // on. Checked before the IBAN-keyed guards below, which a no-IBAN
+      // account would fall through anyway.
+      account.enabled = false
+      account.mirror_card_account = true
+      guardDisabledUids.add(account.uid)
       continue
     }
 

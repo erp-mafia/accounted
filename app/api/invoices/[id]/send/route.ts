@@ -38,6 +38,7 @@ import {
   findAdditionalInvoiceRecipientCollisions,
   invoiceEmailRecipientCount,
   resolveInvoiceEmailRecipients,
+  resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
 import {
   hasRequiredInvoicePaymentAccount,
@@ -242,9 +243,6 @@ export const POST = withRouteContext(
       configuredBcc: company.invoice_email_bcc_addresses,
       customerCc: customer.invoice_email_cc_addresses,
       customerBcc: customer.invoice_email_bcc_addresses,
-      // This value comes from company settings or the authenticated sender. It
-      // is fixed routing, not an arbitrary request-controlled recipient.
-      legacyCc: company.email || user.email,
       additionalCc: bodyResult.data.additional_cc,
       additionalBcc: bodyResult.data.additional_bcc,
     }
@@ -385,10 +383,12 @@ export const POST = withRouteContext(
       }),
     )
 
+    const replyTo = resolveInvoiceReplyTo(company as CompanySettings, user.email)
     const emailData = {
       invoice: renderableInvoice,
       customer,
       company: company as CompanySettings,
+      replyTo,
     }
 
     const filename = invoicePdfFilename({
@@ -498,7 +498,7 @@ export const POST = withRouteContext(
         subject,
         html,
         text,
-        replyTo: company.email || undefined,
+        replyTo,
         fromName: company.company_name,
         from: await resolveInvoiceSender(supabase, companyId!, company.company_name),
         filename,

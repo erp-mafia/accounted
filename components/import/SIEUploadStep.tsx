@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { Upload, AlertCircle, CheckCircle, Loader2, XCircle, RefreshCw } from 'lucide-react'
+import { hasSIEFileExtension, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-file-extensions'
 
 const LOADING_PHASES = [
   { message: 'Läser fil...', progress: 10 },
@@ -59,20 +60,20 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
 
   // No `accept` attribute on the input and no silent rejection here: Safari
   // maps accept extensions to system file types, and unregistered extensions
-  // like .sie/.se grey out perfectly valid files in the picker. All filtering
-  // happens after selection, with a visible error instead of a dead drop.
+  // like .sie/.se/.si grey out perfectly valid files in the picker. All
+  // filtering happens after selection, with a visible error instead of a dead
+  // drop.
   const trySelectFile = useCallback((file: File) => {
-    const name = file.name.toLowerCase()
-    if (name.endsWith('.sie') || name.endsWith('.se')) {
+    if (hasSIEFileExtension(file.name)) {
       setFileTypeError(null)
       setSelectedFile(file)
       onFileSelect(file)
       return
     }
-    if (name.endsWith('.zip')) {
-      setFileTypeError(`Filen "${file.name}" är en zip-fil. Packa upp den först och välj SIE-filen inuti (slutar på .sie eller .se).`)
+    if (file.name.toLowerCase().endsWith('.zip')) {
+      setFileTypeError(`Filen "${file.name}" är en zip-fil. Packa upp den först och välj SIE-filen inuti (slutar på ${SIE_FILE_EXTENSIONS_SV}).`)
     } else {
-      setFileTypeError(`Filen "${file.name}" stöds inte. Välj en SIE-fil som slutar på .sie eller .se.`)
+      setFileTypeError(`Filen "${file.name}" stöds inte. Välj en SIE-fil som slutar på ${SIE_FILE_EXTENSIONS_SV}.`)
     }
   }, [onFileSelect])
 
@@ -173,7 +174,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                   <p className="font-medium hidden sm:block">Dra och släpp SIE-fil här</p>
                   <p className="font-medium sm:hidden">Tryck för att välja SIE-fil</p>
                   <p className="text-sm text-muted-foreground hidden sm:block">eller klicka för att välja fil</p>
-                  <p className="text-sm text-muted-foreground sm:hidden">.sie eller .se-filer</p>
+                  <p className="text-sm text-muted-foreground sm:hidden">{SIE_FILE_EXTENSIONS_SV}-filer</p>
                 </div>
               </div>
             )}

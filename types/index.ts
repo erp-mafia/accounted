@@ -127,6 +127,8 @@ export type FiscalYearResetBlockerCode =
   | 'agi_declared'
   | 'rot_rut_state'
   | 'cross_year_reference'
+  | 'retained_import_history'
+  | 'unfinished_import'
 
 export interface FiscalYearResetBlocker {
   code: FiscalYearResetBlockerCode
@@ -171,13 +173,10 @@ export interface FiscalYearResetRpcResult {
 }
 
 // Shape of user_preferences.ui_state. All fields optional: the bag grows
-// as UI surfaces add preferences (UI migration plan PR 2/3).
+// as UI surfaces add preferences (UI migration plan PR 2/3). Stored bags may
+// still carry retired keys (shell, nav_collapsed, nav_folds) from the old
+// Standard layout; nothing reads them.
 export interface UserUiState {
-  nav_collapsed?: boolean
-  nav_folds?: {
-    register?: boolean
-    bokslut?: boolean
-  }
   // Split-button last-used create modes, keyed per surface (plan PR 3/4),
   // e.g. create_mode.bookkeeping = 'mall'.
   create_mode?: Record<string, string>
@@ -190,15 +189,9 @@ export interface UserUiState {
   // (companyId -> ISO timestamp of the ack). Lives on the user so each
   // member of a company sees the notice once.
   trial_expired_ack?: Record<string, string>
-  // Dashboard shell. 'v2' is the full-bleed frame with the page title in a
-  // top bar (founder decision 2026-09-07, dev_docs/ui_v2_build_plan.md).
-  // Absent or 'v1' keeps the centered max-w-5xl panel until v2 is default.
-  shell?: DashboardShell
-  // Transaktioner column visibility in shell v2 (lib/transactions/columns-v2).
+  // Transaktioner column visibility (lib/transactions/columns-v2).
   tx_columns?: { hidden?: string[] }
 }
-
-export type DashboardShell = 'v1' | 'v2'
 
 export type AgentPanelMode = 'docked' | 'floating'
 
@@ -543,11 +536,13 @@ export interface CompanySettings {
 
   // Editable invoice email texts. null = all defaults.
   invoice_email_texts: InvoiceEmailTexts | null
-  // Fixed invoice-email recipients. null means the company has not configured
-  // the setting yet and keeps the historical automatic CC fallback. [] is an
-  // explicit choice to send no copies.
+  // Fixed invoice-email recipients. null and [] both mean no fixed copies
+  // (the company-email fallback ended with migration 20260914110000).
   invoice_email_cc_addresses?: string[] | null
   invoice_email_bcc_addresses?: string[] | null
+  // Reply-To for customer-facing invoice mail. null falls back to the company
+  // email, then to the sending user (resolveInvoiceReplyTo).
+  invoice_email_reply_to?: string | null
 
   // Automation
   send_invoice_reminders: boolean
@@ -586,6 +581,15 @@ export interface CompanySettings {
   // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
   // for correctness (the /sales-orders pages and APIs work regardless).
   sales_orders_enabled: boolean
+
+  // Invoice document type toggles (migration 20260912190000): hide the
+  // optional invoice kinds from the UI for companies that never use them.
+  // Default true. UI-visibility only, never load-bearing for correctness:
+  // existing documents stay listed and the API/MCP work regardless.
+  quotes_enabled: boolean
+  proforma_enabled: boolean
+  recurring_invoices_enabled: boolean
+  self_billing_enabled: boolean
   // Per-company counter behind generate_sales_order_number (OR-<n>).
   next_sales_order_number?: number
 
@@ -1680,7 +1684,12 @@ export interface RecurringInvoiceSchedule {
   currency: Currency
   your_reference: string | null
   our_reference: string | null
+  // May use {månad}, {år}, {periodstart} ... (lib/invoices/recurring-placeholders.ts),
+  // substituted when the invoice is spawned.
   notes: string | null
+  // First day of the billing period the next generated invoice covers;
+  // advanced by interval_months after every run. null = no period.
+  period_start?: string | null
 
   // Dimension bag {sie_dim_no: code} copied onto every generated invoice's
   // default_dimensions at spawn time.
@@ -1707,6 +1716,10 @@ export interface RecurringInvoiceScheduleItem {
   id: string
   schedule_id: string
   sort_order: number
+  // 'text' = free-text/blank row copied onto the invoice as a text row
+  // (description only, no amounts). Rows from before the column default to
+  // 'product'.
+  line_type?: 'product' | 'text'
   description: string
   quantity: number
   unit: string
@@ -1914,6 +1927,10 @@ export interface FiscalPeriod {
   opening_balances_set: boolean
   closing_entry_id: string | null
   opening_balance_entry_id: string | null
+  opening_balance_review_import_id?: string | null
+  opening_balance_review_token?: string | null
+  opening_balance_review_entry_id?: string | null
+  opening_balance_review_reason?: 'import' | 'undo' | null
   previous_period_id: string | null
   tax_depreciation_method?: 'rakenskapsenlig' | 'restvarde' | null
   tax_depreciation_rule?: 'huvudregel_30' | 'kompletteringsregel_20' | null

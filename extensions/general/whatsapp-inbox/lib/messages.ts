@@ -59,6 +59,7 @@ export const TEMPLATE = {
   m19NoCompany: 'm19_no_company',
   m20ReceiptsExpired: 'm20_receipts_expired',
   m21CodeRetry: 'm21_code_retry',
+  m22LookupRetry: 'm22_lookup_retry',
 } as const
 
 export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
@@ -219,6 +220,13 @@ const SV = {
   // the panel for a new one. Neutral, and the code stays valid for a retry.
   m21CodeRetry: () =>
     'Jag kunde inte kontrollera koden just nu. Skicka samma kod igen om en liten stund.',
+
+  // The phone lookup itself failed, so we do not know whether this sender is
+  // linked. M21 is the wrong answer here: it talks about a CODE, and most
+  // senders hitting this are linked users sending a receipt. Neutral, says
+  // nothing about linking, and asks for the same message again.
+  m22LookupRetry: () =>
+    'Jag kunde inte ta emot ditt meddelande just nu. Skicka det igen om en liten stund.',
 }
 
 const EN: typeof SV = {
@@ -354,6 +362,9 @@ const EN: typeof SV = {
 
   m21CodeRetry: () =>
     'I could not check the code just now. Send the same code again in a moment.',
+
+  m22LookupRetry: () =>
+    'I could not receive your message just now. Please send it again in a moment.',
 }
 
 const COPY: Record<BotLocale, typeof SV> = { sv: SV, en: EN }

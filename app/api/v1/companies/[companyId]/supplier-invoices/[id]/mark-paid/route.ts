@@ -7,6 +7,12 @@
  * then flips status to `paid` or `partially_paid` with an optimistic-lock
  * UPDATE that prevents double-booking under concurrent calls.
  *
+ * The credited payment account is `payment_account` when the body names one,
+ * otherwise DEFAULT_SUPPLIER_PAYMENT_ACCOUNT (1930): the same resolution the
+ * dashboard route uses, and the same one the generators own. Issue #2550: this
+ * door accepted the field in its schema but dropped it on the floor, so every
+ * API payment landed on 1930 no matter what the caller asked for.
+ *
  * Strict-mode v1 (per Phase 3 lessons): if JE creation fails, the route
  * ABORTS before any SI state mutation: no payment row is written, status
  * is unchanged. The caller can retry cleanly.
@@ -23,6 +29,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
 import {
+  DEFAULT_SUPPLIER_PAYMENT_ACCOUNT,
   createSupplierInvoiceCashEntry,
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
@@ -58,7 +65,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices/:id/mark-paid',
   summary: 'Record a payment against a supplier invoice.',
   description:
-    'Books the payment journal entry (Debit 2440 / Credit 1930 under accrual; or Debit expense + Debit 2641 / Credit 1930 under cash) and flips the SI status to `paid` (full settlement) or `partially_paid`. Strict-mode: a JE failure aborts before any SI mutation. Idempotent. Dry-runnable.',
+    'Books the payment journal entry (Debit 2440 / Credit the payment account under accrual; or Debit expense + Debit 2641 / Credit the payment account under cash) and flips the SI status to `paid` (full settlement) or `partially_paid`. The payment account is `payment_account` when supplied, otherwise 1930 Företagskonto. Strict-mode: a JE failure aborts before any SI mutation. Idempotent. Dry-runnable.',
   useWhen:
     'You paid a registered or approved leverantörsfaktura through a channel other than the synced bank flow. For bank-matched payments use POST /transactions/{id}/match-supplier-invoice instead: that path also reconciles the bank line.',
   doNotUseFor:
@@ -69,6 +76,7 @@ registerEndpoint({
     'exchange_rate_difference (SEK delta vs the booked rate at registration) is required for foreign-currency SIs to book the FX gain/loss to 3960 / 7960. Omitting it on a non-SEK SI under accrual mis-books FX.',
     'Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner: retry the call.',
     'Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.',
+    'payment_account picks the BAS account credited for the payment (1930 Företagskonto when omitted, on both the accrual and the cash path). It must be active in the chart of accounts: an unknown or deactivated account returns 400 ACCOUNTS_NOT_IN_CHART and books nothing. Beyond that it is credited exactly as given, with no range check: 19xx bank or kassa is the ordinary choice, but 1630 (betald via skattekontot) and 2893 / 2018 / 2820 (someone else paid, utlägg) are equally valid, so choosing an account that does not represent where the money actually came from is the caller\'s error to avoid. Unlike the dashboard dialog, this endpoint does not read the company\'s last-used payment account: omitting the field always means 1930.',
     'Duplicate-payment guard: on a full settlement, if a business bank transaction of the same amount around payment_date carries the supplier name (first distinctive token, so abbreviated bank text such as "HI3G" for Hi3G Access AB counts), returns 409 SI_PAID_LIKELY_DUPLICATE with candidate transactions. A candidate with match_reason `already_booked` is a bank row that is ALREADY a verifikat: do not pay the invoice, correct the double booking instead. Retry with `force: true` only after the user confirms, and with a fresh Idempotency-Key (the original is body-hash bound). Also evaluated under dry-run.',
   ],
   example: {
@@ -124,6 +132,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     let bodyPaymentDate: string | undefined
     let exchangeRateDifference: number | undefined
     let bodyNotes: string | undefined
+    let bodyPaymentAccount: string | undefined
     let force = false
     let customLines:
       | Array<{ account_number: string; debit_amount: number; credit_amount: number; line_description?: string }>
@@ -135,6 +144,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       bodyPaymentDate = parsed.data.payment_date
       exchangeRateDifference = parsed.data.exchange_rate_difference
       bodyNotes = parsed.data.notes
+      bodyPaymentAccount = parsed.data.payment_account
       customLines = parsed.data.lines
       force = parsed.data.force === true
     }
@@ -383,6 +393,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           paid_at: newStatus === 'paid' ? paidAt : null,
           payment_date: paymentDate,
           payment_amount: paymentAmount,
+          // The account the committed entry will credit, already resolved, so
+          // a caller can verify the routing before committing.
+          payment_account: bodyPaymentAccount ?? DEFAULT_SUPPLIER_PAYMENT_ACCOUNT,
           would_create_payment_journal_entry: true,
         },
         { requestId: ctx.requestId, log: ctx.log },
@@ -431,6 +444,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           paymentDate,
           supplierRow?.supplier_type ?? 'swedish_business',
           supplierRow?.name,
+          bodyPaymentAccount,
         )
         journalEntryId = entry?.id ?? null
       } else {
@@ -443,6 +457,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           paymentDate,
           exchangeRateDifference,
           supplierRow?.name,
+          bodyPaymentAccount,
         )
         journalEntryId = entry?.id ?? null
       }

@@ -23,7 +23,7 @@ vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: vi.fn() }))
 
 vi.mock('@/lib/extensions/context-factory', () => ({
   createExtensionContext: () => ({
-    supabase: {},
+    supabase: {rpc:vi.fn().mockResolvedValue({data:'read-lease-token',error:null})},
     companyId: 'company-1',
     userId: 'user-1',
     settings: { set: vi.fn().mockResolvedValue(undefined) },

@@ -499,3 +499,150 @@ describe('personnummer submitted as org_number on an individual', () => {
     expect(captured.update).toHaveLength(0)
   })
 })
+
+// #2367: a Swedish enskild firma has no organisationsnummer of its own; the
+// owner's personnummer IS the firm's org number (SFS 1974:174 2 §). It is
+// therefore a valid swedish_business org_number, and the list surfaces mask it
+// rather than the write paths refusing it. A foreign business still cannot
+// have one.
+describe('enskild firma: a personnummer-shaped org_number on a business customer', () => {
+  const routeParams = { params: Promise.resolve({ id: 'customer-1' }) }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    captured.insert.length = 0
+    captured.update.length = 0
+    queryResult = { data: null, error: null }
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('POST accepts it on swedish_business and keeps it in org_number', async () => {
+    queryResult = {
+      data: {
+        id: 'customer-1',
+        name: 'Bertil Bengtsson Bygg',
+        customer_type: 'swedish_business',
+        org_number: PERSONAL_NUMBER,
+        personal_number: null,
+      },
+      error: null,
+    }
+
+    const response = await POST(
+      createMockRequest('/api/customers', {
+        method: 'POST',
+        body: {
+          name: 'Bertil Bengtsson Bygg',
+          customer_type: 'swedish_business',
+          org_number: PERSONAL_NUMBER,
+        },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(200)
+    const inserted = captured.insert[0] as { org_number?: string | null; personal_number?: string | null }
+    expect(inserted.org_number).toBe(PERSONAL_NUMBER)
+    expect(inserted.personal_number ?? null).toBeNull()
+  })
+
+  it('POST still refuses it on eu_business, which cannot have one', async () => {
+    const response = await POST(
+      createMockRequest('/api/customers', {
+        method: 'POST',
+        body: {
+          name: 'Auslandsfirma GmbH',
+          customer_type: 'eu_business',
+          country: 'DE',
+          org_number: PERSONAL_NUMBER,
+        },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(400)
+    expect(captured.insert).toHaveLength(0)
+  })
+
+  it('PATCH accepts it on a stored swedish_business row', async () => {
+    queryResult = {
+      data: { id: 'customer-1', customer_type: 'swedish_business', org_number: PERSONAL_NUMBER },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { org_number: PERSONAL_NUMBER },
+      }),
+      routeParams,
+    )
+
+    expect(response.status).toBe(200)
+    const updated = captured.update[0] as { org_number?: string | null }
+    expect(updated.org_number).toBe(PERSONAL_NUMBER)
+  })
+
+  // The guard judges the row as it will END UP, like the country rule: a type
+  // change alone carries no org_number, so checking only the body would move a
+  // stored personnummer onto a foreign type, the one place lists do not mask.
+  it('PATCH refuses a type change that would move a stored personnummer to a foreign type', async () => {
+    queryResult = {
+      data: { id: 'customer-1', customer_type: 'swedish_business', org_number: PERSONAL_NUMBER },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { customer_type: 'eu_business' },
+      }),
+      routeParams,
+    )
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('CUSTOMER_ORG_NUMBER_IS_PERSONAL')
+    expect(captured.update).toHaveLength(0)
+  })
+
+  it('PATCH allows that type change when the same body clears org_number', async () => {
+    queryResult = {
+      data: { id: 'customer-1', customer_type: 'swedish_business', org_number: PERSONAL_NUMBER },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { customer_type: 'eu_business', country: 'DE', org_number: '' },
+      }),
+      routeParams,
+    )
+
+    expect(response.status).toBe(200)
+    expect((captured.update[0] as { org_number?: string | null }).org_number).toBe('')
+  })
+
+  it('PATCH still refuses it on a stored non_eu_business row', async () => {
+    queryResult = {
+      data: { id: 'customer-1', customer_type: 'non_eu_business' },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { org_number: PERSONAL_NUMBER },
+      }),
+      routeParams,
+    )
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('CUSTOMER_ORG_NUMBER_IS_PERSONAL')
+    expect(captured.update).toHaveLength(0)
+  })
+})

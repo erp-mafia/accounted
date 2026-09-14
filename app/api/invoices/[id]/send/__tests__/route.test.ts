@@ -555,6 +555,9 @@ describe('POST /api/invoices/[id]/send', () => {
         invoiceId: 'inv-1',
         cc: ['fixed-copy@test.se', 'case-owner@test.se'],
         bcc: ['fixed-archive@test.se', 'extra-archive@test.se'],
+        // No company email and no configured reply address: the sender is
+        // the Reply-To, so "Svara direkt på detta mejl" actually works.
+        replyTo: 'test@test.se',
       }),
     )
     expect(mockSendEmail).toHaveBeenCalledWith(

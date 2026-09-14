@@ -19,6 +19,7 @@ export { DimensionValidationError, MandatoryDimensionMissingError } from './dime
 export const ACCOUNTS_NOT_IN_CHART = 'ACCOUNTS_NOT_IN_CHART' as const
 export const JOURNAL_ENTRY_NOT_BALANCED = 'JOURNAL_ENTRY_NOT_BALANCED' as const
 export const JOURNAL_LINE_NEGATIVE_AMOUNT = 'JOURNAL_LINE_NEGATIVE_AMOUNT' as const
+export const JOURNAL_LINE_BOTH_SIDES_NONZERO = 'JOURNAL_LINE_BOTH_SIDES_NONZERO' as const
 export const FISCAL_PERIOD_NOT_FOUND = 'FISCAL_PERIOD_NOT_FOUND' as const
 export const ENTRY_DATE_OUTSIDE_FISCAL_PERIOD = 'ENTRY_DATE_OUTSIDE_FISCAL_PERIOD' as const
 export const JOURNAL_ENTRY_NOT_FOUND = 'JOURNAL_ENTRY_NOT_FOUND' as const
@@ -113,6 +114,29 @@ export class JournalLineNegativeAmountError extends Error {
       `Journal line on ${accountNumber} has a negative amount (debit ${debitAmount}, credit ${creditAmount}); book it on the opposite side instead`
     )
     this.name = 'JournalLineNegativeAmountError'
+  }
+}
+
+/**
+ * A line arrived with BOTH debit_amount and credit_amount above zero. The
+ * line cancels itself, and totals-only balance math cannot see it: the entry
+ * "balances" and posts as a nollverifikat. A later storno then nets the line
+ * to {0, 0} and dies on the voucher trigger's "has zero total" (issue #2551).
+ * A journal line carries one side; a producer holding both amounts must net
+ * them onto the larger side (lib/bookkeeping/line-side.ts) or split them into
+ * two lines.
+ */
+export class JournalLineBothSidesNonZeroError extends Error {
+  readonly code = JOURNAL_LINE_BOTH_SIDES_NONZERO
+  constructor(
+    public readonly accountNumber: string,
+    public readonly debitAmount: number,
+    public readonly creditAmount: number
+  ) {
+    super(
+      `Journal line on ${accountNumber} carries both sides (debit ${debitAmount}, credit ${creditAmount}); a line carries one side only`
+    )
+    this.name = 'JournalLineBothSidesNonZeroError'
   }
 }
 
@@ -320,6 +344,9 @@ export class InvalidMappingResultError extends Error {
 // ============================================================================
 
 export type BookkeepingOperation =
+  | 'import_sie_chunk'
+  | 'undo_sie_import_chunk'
+  | 'undo_sie_duplicate_repair_chunk'
   | 'get_next_voucher_number'
   | 'resolve_account_ids'
   | 'create_draft_entry'
@@ -397,6 +424,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof AccountsNotInChartError ||
     err instanceof JournalEntryNotBalancedError ||
     err instanceof JournalLineNegativeAmountError ||
+    err instanceof JournalLineBothSidesNonZeroError ||
     err instanceof FiscalPeriodNotFoundError ||
     err instanceof EntryDateOutsideFiscalPeriodError ||
     err instanceof JournalEntryNotFoundError ||
@@ -477,6 +505,23 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
   }
 
   if (err instanceof JournalLineNegativeAmountError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: {
+            accountNumber: err.accountNumber,
+            debitAmount: err.debitAmount,
+            creditAmount: err.creditAmount,
+          },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof JournalLineBothSidesNonZeroError) {
     return NextResponse.json(
       {
         error: {

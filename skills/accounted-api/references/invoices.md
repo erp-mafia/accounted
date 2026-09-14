@@ -456,7 +456,7 @@ Example response `200`:
 **Issue a credit note (kreditfaktura) against an invoice.**
 `scope:invoices:write · risk:high · idempotent · dry-run`
 
-Creates a credit note referencing the original invoice. The credit note carries reversed-sign amounts (matching the original line for line) and gets invoice_number=KR-<original>. The original invoice transitions to status=credited. Under faktureringsmetoden, posts a reversing journal entry (Credit AR 1510 / Debit revenue + Debit output VAT). Under kontantmetoden the credit note still creates the row but defers the reversal entry until refund. The credit note is dated today (Europe/Stockholm); a locked or closed period returns 400 INVOICE_CREDIT_PERIOD_LOCKED. Idempotent and dry-runnable. Emits credit_note.created.
+Creates a credit note referencing the original invoice. The credit note carries reversed-sign amounts (matching the original line for line) and gets invoice_number=KR-<original>. The original invoice transitions to status=credited. Posts a reversing journal entry (Debit revenue + Debit output VAT / Credit AR 1510) whenever the original sale reached the ledger: always under faktureringsmetoden, and under kontantmetoden once the original was paid or otherwise booked (status paid, a linked verifikat, a payment date, or a non-zero paid amount). Only a kontantmetod invoice carrying none of those signals is credited without an entry, because nothing has been recognised yet. The credit note is dated today (Europe/Stockholm); a locked or closed period returns 400 INVOICE_CREDIT_PERIOD_LOCKED. Idempotent and dry-runnable. Emits credit_note.created.
 
 **Use when:** You need to legally cancel an issued invoice (ML 17 kap 22-23§). The original invoice cannot be edited once issued: credit it and reissue corrected.
 **Do not use for:** Cancelling a draft (DELETE the draft instead). Refunding a partial payment without invalidating the whole invoice (book the refund manually via the journal-entries API in a future PR).
@@ -465,7 +465,7 @@ Creates a credit note referencing the original invoice. The credit note carries 
 - Idempotency-Key is mandatory. Retried credits with the same key replay the cached response: no duplicate credit note is created.
 - The original invoice must be in sent / paid / overdue status. Drafts, cancelled invoices, and already-credited invoices are rejected with specific error codes.
 - Credit-note items mirror the original's lines with negated values. To credit only part of an invoice (line-level), credit the full invoice first then reissue with the corrected lines.
-- Under kontantmetoden no journal entry is created here: refund booking is deferred. A `JOURNAL_ENTRY_NOT_POSTED` warning is NOT emitted in this case (the deferral is correct, not a failure).
+- Under kontantmetoden a journal entry is posted only when the original carries a booking signal (status paid, a linked verifikat, a payment date, or a non-zero paid amount): crediting an invoice with none of those creates the row without an entry, and no `JOURNAL_ENTRY_NOT_POSTED` warning is emitted (the deferral is correct, not a failure). Use the dry run to read `would_create_journal_entry` before committing.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

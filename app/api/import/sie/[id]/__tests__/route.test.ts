@@ -4,7 +4,7 @@
  * Exercises the route through the real withRouteContext wrapper, mocking only
  * its auth/company/write dependencies and injecting a queued Supabase mock via
  * requireAuth. Covers: 401, 403 viewer, the completed-import guard, and the
- * happy-path delete of a failed import.
+ * retention of failed imports after unknown outcomes.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -83,22 +83,21 @@ describe('GET/DELETE /api/import/sie/[id]', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(403)
-    expect(body.error).toContain('BFL 7 kap')
+    expect(body.error).toContain('Importhistoriken bevaras')
   })
 
-  it('DELETE removes a failed import', async () => {
-    // 1st DB hit: status lookup. 2nd DB hit: the delete itself.
+  it('DELETE retains failed imports whose outcomes may be unknown', async () => {
+    // A failed status never establishes that its transaction rolled back.
     enqueue({ data: { status: 'failed' } })
-    enqueue({ data: null })
 
     const response = await DELETE(
       createMockRequest('/api/import/sie/import-1', { method: 'DELETE' }),
       routeParams(),
     )
-    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
+    expect(status).toBe(403)
+    expect(body.error).toContain('Importhistoriken bevaras')
   })
 
   it('GET returns the import record', async () => {

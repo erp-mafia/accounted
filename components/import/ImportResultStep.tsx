@@ -62,9 +62,9 @@ export default function ImportResultStep({
   const handleUndoClick = async () => {
     if (!result.importId || !onUndo) return
     const ok = await confirm({
-      title: 'Ångra hela importen?',
-      description: `Detta raderar ${result.journalEntriesCreated} verifikation${result.journalEntriesCreated === 1 ? '' : 'er'} och rensar ingående balanser från den här importen. Bifogade dokument blir okopplade men finns kvar.`,
-      confirmLabel: 'Ångra import',
+      title: t('sie_history_undo_confirm_title'),
+      description: t('sie_job.undoConfirm'),
+      confirmLabel: t('sie_history_undo_confirm_label'),
     })
     if (!ok) return
     await onUndo(result.importId)
@@ -181,6 +181,13 @@ export default function ImportResultStep({
 
       {/* A year missing between the imported ones: say so here, where the next file is one click away. */}
       {result.success && <FiscalYearGapNotice />}
+
+      {result.success && result.nextPeriodOpeningBalanceReview && (
+        <p className="text-sm text-warning" role="status">
+          {t('next_year_review', { name: result.nextPeriodOpeningBalanceReview.nextPeriodName })}{' '}
+          <Link href="/settings/bookkeeping" className="underline underline-offset-2">{t('next_year_review_action')}</Link>
+        </p>
+      )}
 
       {/* IB resync notice (prior-year backfill) */}
       {result.success && result.nextPeriodIBResync && (

@@ -20,7 +20,7 @@ async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
 }
 
 /**
- * Shell v2 transaction drawer (concept .drawer): a fixed panel on the right
+ * Transaction drawer (concept .drawer): a fixed panel on the right
  * that opens when a row is clicked, instead of the row folding out in the
  * table. The category chip, the row's actions and the details the foldout
  * used to hold, in one place that does not move the list.

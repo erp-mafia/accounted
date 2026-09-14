@@ -7,6 +7,8 @@ import {
   findIllegalVatRateRow,
   findReverseChargeAccountWarningRows,
   findUnflaggedForeignZeroVatRows,
+  treatmentDeductsInputVat,
+  defaultVatRateForTreatment,
 } from '@/lib/vat/supplier-invoice-line-checks'
 
 describe('LEGAL_VAT_RATES', () => {
@@ -192,5 +194,54 @@ describe('findUnflaggedForeignZeroVatRows', () => {
 
   it('ignores an unknown supplier type rather than guessing it is foreign', () => {
     expect(findUnflaggedForeignZeroVatRows(zero, false, 'private_person')).toEqual([])
+  })
+})
+
+// Issue #2553: a supplier invoice's vat_treatment decides whether any
+// ingående moms exists to deduct, and what rate an omitted line rate means.
+describe('treatmentDeductsInputVat', () => {
+  it('is false for the treatments that carry no Swedish moms on a purchase', () => {
+    expect(treatmentDeductsInputVat('exempt')).toBe(false)
+    expect(treatmentDeductsInputVat('export')).toBe(false)
+  })
+
+  it('is true for the treatments whose invoices carry debiterad moms', () => {
+    expect(treatmentDeductsInputVat('standard_25')).toBe(true)
+    expect(treatmentDeductsInputVat('reduced_12')).toBe(true)
+    expect(treatmentDeductsInputVat('reduced_6')).toBe(true)
+  })
+
+  it('leaves reverse charge to the reverse_charge flag: the fiktiv pair is a separate route', () => {
+    expect(treatmentDeductsInputVat('reverse_charge')).toBe(true)
+  })
+
+  it('treats a missing treatment as the historical default (deducting)', () => {
+    expect(treatmentDeductsInputVat(null)).toBe(true)
+    expect(treatmentDeductsInputVat(undefined)).toBe(true)
+  })
+})
+
+describe('defaultVatRateForTreatment', () => {
+  it('derives the statutory rate per treatment', () => {
+    expect(defaultVatRateForTreatment('standard_25')).toBe(0.25)
+    expect(defaultVatRateForTreatment('reduced_12')).toBe(0.12)
+    expect(defaultVatRateForTreatment('reduced_6')).toBe(0.06)
+  })
+
+  it('derives 0 wherever the supplier charges no Swedish moms', () => {
+    expect(defaultVatRateForTreatment('exempt')).toBe(0)
+    expect(defaultVatRateForTreatment('export')).toBe(0)
+    expect(defaultVatRateForTreatment('reverse_charge')).toBe(0)
+  })
+
+  it('keeps 25 % for an unset treatment', () => {
+    expect(defaultVatRateForTreatment(null)).toBe(0.25)
+    expect(defaultVatRateForTreatment(undefined)).toBe(0.25)
+  })
+
+  it('only ever returns a legal Swedish rate', () => {
+    for (const treatment of ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt', 'nonsense']) {
+      expect(isLegalVatRate(defaultVatRateForTreatment(treatment))).toBe(true)
+    }
   })
 })

@@ -105,4 +105,4 @@ export const GET = withRouteContext('report.journal_register.xlsx', async (reque
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

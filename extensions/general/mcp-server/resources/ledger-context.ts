@@ -8,8 +8,7 @@ import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
  * Sibling of company-current (state now vs patterns over time); zero field
  * overlap.
  *
- * Read-only and per-request; caching is deferred until measured slow
- * (dev_docs/ledger_context_resource.md).
+ * Read-only and per-request; caching is deferred until measured slow.
  */
 export const ledgerContextResource: McpResource = {
   uri: 'Accounted://ledger/context',

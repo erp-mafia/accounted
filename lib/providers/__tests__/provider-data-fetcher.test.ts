@@ -14,9 +14,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
  * "there is nothing to fetch here".
  */
 
-const { vismaGet, bokioGetCompany } = vi.hoisted(() => ({
+const { vismaGet, bokioGetCompany, fortnoxGetPaginated } = vi.hoisted(() => ({
   vismaGet: vi.fn(),
   bokioGetCompany: vi.fn(),
+  fortnoxGetPaginated: vi.fn(),
+}))
+
+vi.mock('../fortnox/client', () => ({
+  FortnoxClient: class {
+    getPaginated = fortnoxGetPaginated
+  },
+  FortnoxApiError: class FortnoxApiError extends Error {},
 }))
 
 vi.mock('../visma/client', () => ({
@@ -32,7 +40,7 @@ vi.mock('../bokio/client', () => ({
   BokioApiError: class BokioApiError extends Error {},
 }))
 
-import { fetchCompanyInfoDirect } from '../provider-data-fetcher'
+import { fetchAccountingAccountsDirect, fetchCompanyInfoDirect } from '../provider-data-fetcher'
 
 const VISMA_MODULE_BODY =
   '{"ErrorCode":4002,"DeveloperErrorMessage":"ForbiddenRequestException - No access to module: api_standard","ErrorId":"x","Errors":[]}'
@@ -71,5 +79,41 @@ describe('fetchCompanyInfoDirect', () => {
     // Bokio needs the provider company id to address the company endpoint.
     await expect(fetchCompanyInfoDirect('bokio', 'tok')).resolves.toBeNull()
     expect(bokioGetCompany).not.toHaveBeenCalled()
+  })
+})
+
+describe('fetchAccountingAccountsDirect (#2585)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('maps every Fortnox account with its VATCode', async () => {
+    fortnoxGetPaginated.mockResolvedValue([
+      { Number: 3041, Description: 'Försäljn tjänst 25% sv', VATCode: 'MP1', Active: true },
+      { Number: 4056, Description: 'Inköp varor EU', VATCode: 'IVEU', Active: true },
+      { Number: 1930, Description: 'Bank', Active: true },
+    ])
+
+    const accounts = await fetchAccountingAccountsDirect('fortnox', 'tok')
+
+    expect(fortnoxGetPaginated).toHaveBeenCalledWith('tok', '/accounts', 'Accounts', { pageSize: 500 })
+    expect(accounts.map((a) => [a.accountNumber, a.vatCode])).toEqual([
+      ['3041', 'MP1'],
+      ['4056', 'IVEU'],
+      ['1930', undefined],
+    ])
+  })
+
+  it('propagates a Fortnox failure: the caller decides whether the codes are optional', async () => {
+    fortnoxGetPaginated.mockRejectedValue(new Error('Fortnox API error: 500'))
+    await expect(fetchAccountingAccountsDirect('fortnox', 'tok')).rejects.toThrow('500')
+  })
+
+  it('answers [] for providers whose codes are not translated yet, without a request', async () => {
+    for (const provider of ['visma', 'briox', 'bokio', 'bjornlunden', 'wint'] as const) {
+      await expect(fetchAccountingAccountsDirect(provider, 'tok')).resolves.toEqual([])
+    }
+    expect(vismaGet).not.toHaveBeenCalled()
+    expect(fortnoxGetPaginated).not.toHaveBeenCalled()
   })
 })

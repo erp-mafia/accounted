@@ -23,6 +23,8 @@
 # through SCHEDULE_OVERRIDES in scripts/generate-crontabs.ts, never by
 # editing this file.
 
+15 4 * * 1          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/import/sie/invariants/cron
+* * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/import/sie/worker/cron
 0 6 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/deadlines/status/cron
 0 * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/invoices/recurring/cron
 30 4 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/settings/booking-templates/sync/cron

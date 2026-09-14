@@ -10,7 +10,7 @@ This file is the entry point for Codex and other agents that do not read `CLAUDE
 
 - **Hard Rules**: the seven accounting invariants (the two sanctioned correction paths, storno and inline rättelse; engine-only journal writes; balanced entries; period locks; document retention; money math; account numbers as strings) and the general prohibitions (migrations, extension imports, dependencies, the gnubok → Accounted rename, `.env.local`, diff scope, no em or en dashes).
 - **When Uncertain**: stop and ask; Swedish domain questions go through the `swedish-*` skills, never training data.
-- **Definition of Done**: all nine items, including the last one: the last mile is verified in-session (migration applied, PR merged, routine observed firing), or the final output states exactly what is not live yet.
+- **Definition of Done**: every item, including last-mile verification in-session (migration applied, PR merged, routine observed firing, or the final output states exactly what is not live yet) and the three answers from **Fix From First Principles** in the PR body.
 - **Commands**, **Architecture** (tenancy resolution, application-side MFA plus server-enforced session limits, event bus, Supabase clients, extensions, the 150+ MCP tools), **Repository Map**, **Testing**, and the **Decision Log** (`DECISIONS.md`).
 
 Do not copy sections from `CLAUDE.md` into this file; link to them instead.

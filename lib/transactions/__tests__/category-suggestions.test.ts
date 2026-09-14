@@ -11,7 +11,7 @@ import { makeTransaction } from '@/tests/helpers'
 import type { Transaction } from '@/types'
 
 /**
- * P2-1 (mcp_optimization_plan): suggestions must carry signal tied to THIS
+ * Suggestions must carry signal tied to THIS
  * transaction. The old company-wide frequency fallback emitted an identical
  * ~0.5 four-way spread on every transaction: noise agents correctly
  * distrusted. History is now counterparty-keyed with provenance; when no

@@ -129,5 +129,4 @@ export const GET = withRouteContext(
         details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
-  },
-)
+  }, { requireCompleteLedger: true })

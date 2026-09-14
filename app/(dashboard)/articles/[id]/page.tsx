@@ -7,7 +7,6 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { DetailColumns } from '@/components/ui/detail-columns'
-import { useShell } from '@/components/dashboard/ShellProvider'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -21,7 +20,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { ArrowLeft, Loader2, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn, formatCurrency } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
 import { parseArticleHouseworkType, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
@@ -41,7 +40,6 @@ export default function ArticleDetailPage({
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('article_detail')
-  const shell = useShell()
   const errorLocale = useLocale() as ErrorLocale
   const [article, setArticle] = useState<Article | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -217,7 +215,7 @@ export default function ArticleDetailPage({
   })()
 
   return (
-    <div className={cn(shell !== 'v2' && 'max-w-2xl', 'space-y-8 stagger-enter')}>
+    <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type/status kicker, quiet actions right */}
       <div>
         <Link

@@ -25,7 +25,7 @@ import {
   UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
   isMaskedPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import { isPersonalNumberOrgNumberDisallowed } from '@/lib/customers/personal-number-shape'
 import { registryFormFill, type RegistryFormField } from '@/lib/parties/registry-form-fill'
 import { useRegistryAutofill } from '@/components/parties/use-registry-autofill'
 import { RegistryAutofillNote } from '@/components/parties/RegistryAutofillNote'
@@ -124,13 +124,10 @@ export default function CustomerForm({
         message: COUNTRY_CONSISTENCY_MESSAGES[countryIssue][locale],
       })
     }
-    // A personnummer entered as a business org number would be shown
-    // unmasked in every list (only individual customers are masked).
-    if (
-      customer.org_number &&
-      customer.customer_type !== 'individual' &&
-      looksLikeSwedishPersonalNumber(customer.org_number)
-    ) {
+    // A Swedish enskild firma's org number IS the owner's personnummer, so it
+    // is accepted here and masked in the lists. Only a foreign business, which
+    // cannot have one at all, still refuses it (same predicate as the API).
+    if (isPersonalNumberOrgNumberDisallowed(customer.customer_type, customer.org_number)) {
       ctx.addIssue({
         code: 'custom',
         path: ['org_number'],

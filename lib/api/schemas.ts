@@ -1,7 +1,12 @@
 import { z } from 'zod'
+
 import { ENTITY_TYPES } from '@/lib/company/entity-type'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
+import {
+  defaultVatRateForTreatment,
+  treatmentDeductsInputVat,
+} from '@/lib/vat/supplier-invoice-line-checks'
 import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
 import {
   accountNumberSchema,
@@ -34,13 +39,55 @@ import {
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
 import {
-  looksLikeSwedishPersonalNumber,
+  isPersonalNumberOrgNumberDisallowed,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
   personalNumberDigits,
 } from '@/lib/customers/personal-number-shape'
 import type { AuditAction, Currency, InvoiceDocumentType } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
+import {
+  mentionsPeriodPlaceholder,
+  PERIOD_PLACEHOLDER_REQUIRES_START_MESSAGE,
+} from '@/lib/invoices/recurring-placeholders'
+
+export const SIEJobOptionsSchema = z.object({
+  createFiscalPeriod: z.boolean().default(true),
+  importOpeningBalances: z.boolean().default(true),
+  importTransactions: z.boolean().default(true),
+  voucherSeries: z.string().trim().min(1).max(16).optional(),
+  openingBalanceSeries: z.string().trim().min(1).max(16).optional(),
+  updateAccountNames: z.boolean().default(true),
+  markImportedNoDocRequired: z.boolean().default(false),
+  onExistingPeriod: z.enum(['block','replace']).default('block'),
+  supersedesImportId: z.string().uuid().optional(),
+})
+export const SIEJobMappingsSchema = z.array(z.object({
+  sourceAccount: z.string().min(1).max(40), sourceName: z.string().max(500),
+  targetAccount: z.string().regex(/^(?:[1-8]\d{3})?$/), targetName: z.string().max(500),
+  confidence: z.number().min(0).max(1), matchType: z.enum(['exact','name','class','manual','bas_range']),
+  isOverride: z.boolean().default(false),
+  defaultVatTreatment: z.enum(ACCOUNT_VAT_TREATMENTS).nullable().optional(),
+  defaultVatRate: z.number().min(0).max(100).nullable().optional(),
+  vatTreatmentSuggested: z.boolean().optional(), vatTreatmentReviewed: z.boolean().optional(),
+  requiresVatTreatmentReview: z.boolean().optional(),
+})).max(10_000).superRefine((mappings, ctx) => {
+  const sources = new Map<string, string>()
+  for (const [index, mapping] of mappings.entries()) {
+    const serialized = JSON.stringify(mapping)
+    const previous = sources.get(mapping.sourceAccount)
+    if (previous !== undefined && previous !== serialized) {
+      ctx.addIssue({ code: 'custom', path: [index, 'sourceAccount'],
+        message: `Konto ${mapping.sourceAccount} har motstridiga kontomappningar.` })
+    }
+    sources.set(mapping.sourceAccount, serialized)
+  }
+}).transform(mappings => {
+  // Repeated #KONTO definitions must not target the same metadata upsert row
+  // twice. Conflicting definitions are rejected before any import is queued.
+  return [...new Map(mappings.map(mapping => [mapping.sourceAccount, mapping])).values()]
+})
+export const SIEJobActionSchema = z.object({action:z.enum(['resume','undo'])})
 
 // ============================================================
 // Shared primitives
@@ -70,6 +117,31 @@ const accountNumber = accountNumberSchema
 
 /** Non-negative monetary amount (>= 0) */
 const nonNegativeAmount = z.number().nonnegative()
+
+/**
+ * A journal line carries exactly one side (issue #2551).
+ *
+ * A line with both debit_amount and credit_amount above zero cancels itself,
+ * and the balance check sums the two columns, so it cannot see that: the
+ * entry "balances" and posts as a nollverifikat. Storno then reverses the
+ * line on its net, lands on {0, 0} and dies on the voucher trigger's "has
+ * zero total", which leaves the entry uncorrectable.
+ *
+ * The same rule is enforced by the engine (`assertLinesWellFormed`) and by
+ * the DB CHECK `journal_entry_lines_single_side`; this refinement is the
+ * layer that turns it into a 400 naming the offending line, identically for
+ * the dashboard, /api/v1 and the MCP tools that post through v1. Apply it to
+ * every line schema whose rows reach the engine:
+ *
+ *   .refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)
+ */
+function isSingleSidedLine(line: { debit_amount?: number; credit_amount?: number }): boolean {
+  return !((line.debit_amount ?? 0) > 0 && (line.credit_amount ?? 0) > 0)
+}
+
+const SINGLE_SIDED_LINE_ISSUE = {
+  message: 'En verifikationsrad kan inte ha både debet och kredit nollskilda.',
+}
 
 /**
  * SEK per one unit of a foreign currency.
@@ -727,8 +799,7 @@ export const RotRutReclaimSchema = z.object({
   booking_date: isoDate,
 })
 
-// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst
-// (dev_docs/skatteverket/husavdrag/exempel_beslut.json + ht.raml).
+// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst.
 export const RotRutBeslutFileSchema = z.object({
   version: z.string(),
   // Utförarens orgnr, 12 digits with 16-prefix in SKV's file.
@@ -859,21 +930,54 @@ export const CreateSelfBillingInvoiceSchema = z.object({
 // executeRecurringSchedule gates on getPermittedVatRates, not on the default.
 // A rate outside 0/6/12/25 is rejected here: there is no such Swedish rate, and
 // the buyer could not deduct ingående moms on it.
-export const RecurringScheduleItemSchema = z.object({
-  description: z.string().min(1, 'Item description is required'),
-  quantity: z.number().positive('Quantity must be positive'),
-  unit: z.string().min(1, 'Unit is required').default('st'),
-  unit_price: z.number(),
-  vat_rate: z
-    .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
-    .nullable()
-    .optional(),
-  // Copied onto the generated invoice_items.dimensions; merges over the
-  // schedule's default_dimensions on that item's revenue line.
-  dimensions: DimensionsBagSchema.optional(),
-})
+export const RecurringScheduleItemSchema = z
+  .object({
+    // 'text' = free-text or blank spacer row copied onto every generated
+    // invoice as a text row: description only (may be empty), amounts
+    // ignored. Defaults to 'product'.
+    line_type: z.enum(['product', 'text']).optional(),
+    description: z.string().max(2000),
+    quantity: z.number(),
+    unit: z.string().default('st'),
+    unit_price: z.number(),
+    vat_rate: z
+      .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+      .nullable()
+      .optional(),
+    // Copied onto the generated invoice_items.dimensions; merges over the
+    // schedule's default_dimensions on that item's revenue line.
+    dimensions: DimensionsBagSchema.optional(),
+  })
+  .superRefine((item, ctx) => {
+    if (item.line_type === 'text') return
+    if (item.description.trim().length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: 'Item description is required' })
+    }
+    if (item.quantity <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: 'Quantity must be positive' })
+    }
+    if (item.unit.trim().length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: 'Unit is required' })
+    }
+  })
 
-export const CreateRecurringScheduleSchema = z.object({
+// A schedule needs something to bill: text rows alone make an empty invoice.
+function requireBillableRecurringLine(
+  items: ReadonlyArray<{ line_type?: string }> | undefined,
+  ctx: z.RefinementCtx,
+): void {
+  if (items && !items.some((item) => item.line_type !== 'text')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['items'],
+      message: 'At least one billable (non-text) line is required',
+    })
+  }
+}
+
+// Object form kept separate so callers that need .strict() (the MCP staged
+// params) can add it before the refinement; the refined form is the API's.
+export const CreateRecurringScheduleObjectSchema = z.object({
   customer_id: uuid,
   name: z.string().min(1, 'Schedule name is required').max(200),
   day_of_month: z.number().int().min(1).max(31),
@@ -895,10 +999,34 @@ export const CreateRecurringScheduleSchema = z.object({
   // phase of a quarterly/yearly schedule ("bill in February"); must be on the
   // schedule grid (day = day_of_month clamped) and not in the past.
   start_date: isoDate.optional(),
+  // First day of the billing period the first generated invoice covers.
+  // Unlocks {periodstart}/{periodslut}/{nästa periodstart} in notes and line
+  // descriptions; advanced by interval_months after every run.
+  period_start: isoDate.nullable().optional(),
   items: z.array(RecurringScheduleItemSchema).min(1, 'At least one item is required'),
 })
 
-export const UpdateRecurringScheduleSchema = z.object({
+export function refineCreateRecurringSchedule(
+  data: z.infer<typeof CreateRecurringScheduleObjectSchema>,
+  ctx: z.RefinementCtx,
+): void {
+  requireBillableRecurringLine(data.items, ctx)
+  if (
+    !data.period_start
+    && mentionsPeriodPlaceholder([data.notes, ...data.items.map((item) => item.description)])
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['period_start'],
+      message: PERIOD_PLACEHOLDER_REQUIRES_START_MESSAGE,
+    })
+  }
+}
+
+export const CreateRecurringScheduleSchema =
+  CreateRecurringScheduleObjectSchema.superRefine(refineCreateRecurringSchedule)
+
+export const UpdateRecurringScheduleObjectSchema = z.object({
   customer_id: uuid.optional(),
   name: z.string().min(1).max(200).optional(),
   day_of_month: z.number().int().min(1).max(31).optional(),
@@ -920,9 +1048,24 @@ export const UpdateRecurringScheduleSchema = z.object({
   next_run_date: isoDate.optional(),
   // Replaces the whole bag if provided ({} clears all tags). Omit to keep.
   default_dimensions: DimensionsBagSchema.optional(),
+  // null clears the period (the period placeholders then must not be used).
+  period_start: isoDate.nullable().optional(),
   // Replace all items if provided. Omit to keep existing items unchanged.
   items: z.array(RecurringScheduleItemSchema).min(1).optional(),
 })
+
+export function refineUpdateRecurringSchedule(
+  data: z.infer<typeof UpdateRecurringScheduleObjectSchema>,
+  ctx: z.RefinementCtx,
+): void {
+  requireBillableRecurringLine(data.items, ctx)
+}
+
+// The period-placeholder rule for updates needs the stored row (a partial
+// update may only touch notes); the routes and the MCP executor check it
+// with assertPeriodPlaceholdersResolvable after merging with the row.
+export const UpdateRecurringScheduleSchema =
+  UpdateRecurringScheduleObjectSchema.superRefine(refineUpdateRecurringSchedule)
 
 export const MarkInvoicePaidSchema = z.object({
   payment_date: isoDate.optional(),
@@ -936,7 +1079,7 @@ export const MarkInvoicePaidSchema = z.object({
     // Dimensions PR7: user-edited payment lines keep their tags (the
     // no-override path re-propagates the invoice's default_dimensions).
     dimensions: DimensionsBagSchema.optional(),
-  })).min(2).optional(),
+  }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)).min(2).optional(),
   // Bypass the duplicate-payment guard. Set after the user reviews the
   // candidate list returned by INVOICE_PAID_LIKELY_DUPLICATE and confirms
   // none of them are this payment. v1 callers must use a fresh
@@ -951,6 +1094,14 @@ export const MarkInvoiceSentSchema = z.object({
   // are NOT created (what the user reviewed is what books). Only honored on
   // the accrual book-at-issue path; ignored for credit notes, cash-method
   // and deferred-booking companies, which don't book at mark-sent.
+  //
+  // The single-side rule (#2551) is the one place it is NOT declared as a
+  // refinement here: both consumers of this schema (mark-sent and send) run
+  // every line through parseCustomIssuanceLines, whose own both-sides check
+  // predates it and returns the targeted INVOICE_MARK_SENT_LINES_INVALID
+  // instead of a generic "Ogiltig förfrågan". A refinement here would fire
+  // first and downgrade that message. The rule still holds on this path:
+  // parseCustomIssuanceLines, then the engine, then the DB CHECK.
   lines: z.array(z.object({
     account_number: accountNumber,
     debit_amount: nonNegativeAmount.default(0),
@@ -1079,21 +1230,18 @@ export const CreateCustomerSchema = z.object({
       })
     }
   }
-  // GDPR art. 5.1 c: a personnummer stored as a business org_number is shown
-  // unmasked everywhere (only customer_type='individual' rows are masked), so
-  // refuse to accept one silently.
-  if (
-    customer.org_number &&
-    customer.customer_type !== 'individual' &&
-    looksLikeSwedishPersonalNumber(customer.org_number)
-  ) {
+  // A Swedish enskild firma's org number IS its owner's personnummer, so
+  // swedish_business accepts one and the list surfaces mask it
+  // (orgNumberIsPersonalIdentifier). Only the foreign business types, where
+  // the value cannot be an org number at all, still refuse it.
+  if (isPersonalNumberOrgNumberDisallowed(customer.customer_type, customer.org_number)) {
     ctx.addIssue({
       code: 'custom',
       path: ['org_number'],
       message:
-        'org_number looks like a Swedish personal identity number (personnummer). '
-        + 'Create the customer with customer_type "individual" and pass the number as personal_number '
-        + 'instead, so it is stored encrypted and masked in list responses.',
+        'org_number looks like a Swedish personal identity number (personnummer), which a foreign '
+        + 'business cannot have. Use customer_type "swedish_business" for a Swedish enskild firma, or '
+        + '"individual" with the number passed as personal_number for a private person.',
     })
   }
   // An individual's personnummer submitted as org_number is moved into
@@ -1387,6 +1535,56 @@ export const CreateSupplierInvoiceSchema = z.object({
   // items[].dimensions merge over it per expense line.
   default_dimensions: DimensionsBagSchema.optional(),
   items: z.array(CreateSupplierInvoiceItemSchema).min(1, 'At least one item is required'),
+}).superRefine((invoice, ctx) => {
+  // The per-item vat_amount ceiling can only assume 25 % when a line omits
+  // vat_rate: the invoice's vat_treatment, which actually decides the rate,
+  // is visible one level up (issue #2553). Two rules follow from it.
+  const treatment = invoice.vat_treatment
+  const deducts = treatmentDeductsInputVat(treatment)
+  const treatmentRate = defaultVatRateForTreatment(treatment)
+  invoice.items.forEach((item, index) => {
+    const lineTotal = item.amount != null
+      ? item.amount
+      : (item.quantity ?? 1) * (item.unit_price ?? 0)
+
+    // 1. exempt / export: the supplier charges no Swedish moms (an exempt
+    //    supply is undantagen, ML 10 kap; an export purchase carries none
+    //    either), so no line may claim a rate or an amount. Without this the
+    //    line passed validation and the 0.25 column default booked input VAT
+    //    on 2641 that was never invoiced.
+    if (!deducts) {
+      if ((item.vat_rate ?? 0) !== 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['items', index, 'vat_rate'],
+          message: `vat_treatment '${treatment}' carries no Swedish VAT: vat_rate must be 0 or omitted`,
+        })
+      }
+      if ((item.vat_amount ?? 0) !== 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['items', index, 'vat_amount'],
+          message: `vat_treatment '${treatment}' carries no Swedish VAT: vat_amount must be 0 or omitted`,
+        })
+      }
+      return
+    }
+
+    // 2. A line that omits vat_rate is booked at the treatment's rate, so
+    //    that is the ceiling its manual vat_amount override has to respect:
+    //    on a reduced_12 invoice the item-level check would otherwise wave
+    //    through a 25 % override.
+    if (item.vat_amount == null || item.vat_rate != null) return
+    const maxVat = Math.round(lineTotal * treatmentRate * 100) / 100
+    // Same 1-öre POS tolerance as the item-level refine.
+    if (item.vat_amount > maxVat + 0.01) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['items', index, 'vat_amount'],
+        message: `vat_amount cannot exceed line_total × the vat_treatment rate (${treatmentRate})`,
+      })
+    }
+  })
 })
 
 // Pre-submit duplicate lookup for the supplier-invoice editor. Mirrors the
@@ -1420,7 +1618,7 @@ export const MarkSupplierInvoicePaidSchema = z.object({
     // Dimensions PR7: user-edited payment lines keep their tags (the
     // no-override path re-propagates the invoice's default_dimensions).
     dimensions: DimensionsBagSchema.optional(),
-  })).min(2).optional(),
+  }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)).min(2).optional(),
 })
 
 /**
@@ -1507,7 +1705,7 @@ export const CreateJournalEntryLineSchema = z.object({
   // for API/MCP compatibility.
   cost_center: z.string().optional(),
   project: z.string().optional(),
-})
+}).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)
 
 export const CreateJournalEntrySchema = z.object({
   fiscal_period_id: uuid,
@@ -1560,7 +1758,7 @@ export const InlineRattelseLineSchema = z.object({
   credit_amount: nonNegativeAmount.default(0),
   line_description: z.string().max(500).optional(),
   dimensions: DimensionsBagSchema.optional(),
-})
+}).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)
 
 /** POST /api/bookkeeping/journal-entries/[id]/strike-lines */
 export const StrikeLinesSchema = z
@@ -1575,8 +1773,8 @@ export const StrikeLinesSchema = z
 // ============================================================
 // Dimension registry schemas (kostnadsställe/projekt)
 // ============================================================
-// dev_docs/dimensions_implementation_plan.md §6. The registry tables
-// (dimensions/dimension_values) shipped in 20260702084500_dimensions_substrate.
+// The registry tables (dimensions/dimension_values) shipped in
+// 20260702084500_dimensions_substrate.
 
 /**
  * Object code for USER-CREATED dimension values: strict Fortnox format.
@@ -1999,7 +2197,7 @@ export const MatchInvoiceSchema = z
       debit_amount: nonNegativeAmount.default(0),
       credit_amount: nonNegativeAmount.default(0),
       line_description: z.string().optional(),
-    })).min(2).optional(),
+    }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)).min(2).optional(),
     // Optional caller-supplied SEK-per-invoice-currency rate for cross-currency
     // settlement. Used when the Riksbanken lookup returns nothing (rate not
     // published for that date): the dialog surfaces an input so the user can
@@ -2082,7 +2280,7 @@ export const BulkBookSchema = z
           line_description: z.string().max(200).optional(),
           // Dimensions PR7: per-line bag, wins over default_dimensions.
           dimensions: DimensionsBagSchema.optional(),
-        })
+        }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)
       )
       .min(2, 'A verifikat needs at least two lines')
       .max(200)
@@ -2209,13 +2407,6 @@ export const LinkTransactionJournalEntrySchema = z.object({
   // as the match-invoice route. Omit to only link the bank transaction
   // (e.g. when the JE doesn't relate to a customer invoice).
   invoice_id: uuid.optional(),
-})
-
-export const CreateTransactionFromDocumentSchema = z.object({
-  inbox_item_id: uuid,
-  amount: z.number().refine((n) => n !== 0, 'Amount must be non-zero'),
-  transaction_date: isoDate,
-  description: z.string().min(1).max(500),
 })
 
 /**
@@ -2509,6 +2700,9 @@ export const UpdateSettingsSchema = z.object({
   invoice_email_texts: InvoiceEmailTextsSchema.nullable().optional(),
   invoice_email_cc_addresses: invoiceEmailAddressList.nullable().optional(),
   invoice_email_bcc_addresses: invoiceEmailAddressList.nullable().optional(),
+  // Reply-To for invoice mail; null falls back to the company email, then the
+  // sending user. Owner/admin only, like the copy lists (settings route).
+  invoice_email_reply_to: invoiceEmailAddress.nullable().optional(),
   // Invoice branding: colors enforced as #RRGGBB at the DB level too
   // (see migration 20260526120200_invoice_branding.sql). The dedicated
   // /api/settings/invoicing/branding route is the primary path; these
@@ -2551,7 +2745,7 @@ export const UpdateSettingsSchema = z.object({
   // AI agent flow
   ai_flow_enabled: z.boolean().optional(),
   // Dimensions (kostnadsställe/projekt): UI-visibility toggle only, never
-  // load-bearing for correctness (dev_docs/dimensions_implementation_plan.md §2).
+  // load-bearing for correctness.
   dimensions_enabled: z.boolean().optional(),
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
   // for correctness (trips created via API/MCP work regardless).
@@ -2559,6 +2753,12 @@ export const UpdateSettingsSchema = z.object({
   // Kundorder (sales orders): UI-visibility toggle only, never load-bearing
   // for correctness (the pages and APIs work regardless).
   sales_orders_enabled: z.boolean().optional(),
+  // Invoice document type toggles (offert, proforma, återkommande,
+  // självfaktura): UI-visibility only, never load-bearing for correctness.
+  quotes_enabled: z.boolean().optional(),
+  proforma_enabled: z.boolean().optional(),
+  recurring_invoices_enabled: z.boolean().optional(),
+  self_billing_enabled: z.boolean().optional(),
   // Data analysis consent (#1346): gates cross-company analysis of this
   // company's bookkeeping outcomes. Flipped by a human in the settings UI
   // only; deliberately absent from the v1 REST / MCP settings pick lists.
@@ -2619,36 +2819,6 @@ export const CreateFiscalPeriodSchema = z.object({
     path: ['period_end'],
   }
 )
-
-// ============================================================
-// Mapping rule schemas
-// ============================================================
-
-export const CreateMappingRuleSchema = z.object({
-  rule_name: z.string().min(1, 'Rule name is required'),
-  rule_type: MappingRuleTypeSchema,
-  priority: z.number().int().min(0).optional(),
-  mcc_codes: z.array(z.string()).optional(),
-  merchant_pattern: z.string().optional(),
-  description_pattern: z.string().optional(),
-  amount_min: z.number().optional(),
-  amount_max: z.number().optional(),
-  debit_account: accountNumber,
-  credit_account: accountNumber,
-  vat_treatment: z.string().optional(),
-  risk_level: RiskLevelSchema.optional(),
-  default_private: z.boolean().optional(),
-  requires_review: z.boolean().optional(),
-  confidence_score: z.number().min(0).max(1).optional(),
-})
-
-export const EvaluateMappingRulesSchema = z.union([
-  z.object({ transaction_id: uuid }),
-  z.object({
-    description: z.string().optional(),
-    amount: z.number(),
-  }).passthrough(),
-])
 
 // ============================================================
 // Deadline schemas
@@ -2748,10 +2918,6 @@ export const BankLinkSchema = z
     message: 'Ange journal_entry_id eller allocations, inte båda.',
     path: ['journal_entry_id'],
   })
-
-export const BankUnlinkSchema = z.object({
-  transaction_id: uuid,
-})
 
 /**
  * Re-tag a mis-typed bank-account opening balance (a manual/import voucher that
@@ -2955,7 +3121,7 @@ export const OpeningBalanceExecuteSchema = z.object({
     account_number: accountNumber,
     debit_amount: nonNegativeAmount,
     credit_amount: nonNegativeAmount,
-  })).min(2, 'At least two lines are required for double-entry'),
+  }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE)).min(2, 'At least two lines are required for double-entry'),
 })
 
 export const OpeningBalanceCorrectSchema = OpeningBalanceExecuteSchema.extend({
@@ -3923,7 +4089,7 @@ export const CreateExpenseClaimSchema = z
           debit_amount: z.number().nonnegative().default(0),
           credit_amount: z.number().nonnegative().default(0),
           line_description: z.string().trim().max(300).optional().nullable(),
-        }),
+        }).refine(isSingleSidedLine, SINGLE_SIDED_LINE_ISSUE),
       )
       .min(2)
       .max(20)

@@ -5,7 +5,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { BridgeLine, ReconciliationAccount, ReconciliationStatus } from '@/lib/reconciliation/schemas'
 
 /**
- * Shell v2 summary of one account's reconciliation (concept reconflow, step
+ * Summary of one account's reconciliation (concept reconflow, step
  * 2): the outside against the ledger on one line with the difference beside
  * them, then the rows that explain the difference, ending with what is still
  * unexplained. One table in place of four tiles and a list that carried the

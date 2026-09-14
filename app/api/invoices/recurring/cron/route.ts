@@ -8,6 +8,7 @@ import {
   rollNextRunDateForward,
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
+import { advancePeriodStart } from '@/lib/invoices/recurring-placeholders'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type {
   RecurringInvoiceSchedule,
@@ -232,6 +233,13 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
         last_invoice_id: result.invoiceId,
         last_run_warning: result.warning,
         generated_count: schedule.generated_count + 1,
+        // The invoice just billed this period: point the schedule at the
+        // next one. A stale roll-forward above deliberately leaves it alone
+        // (nothing was billed), so "Skapa faktura nu" still bills the missed
+        // period and advances it then.
+        ...(schedule.period_start
+          ? { period_start: advancePeriodStart(schedule.period_start, schedule.interval_months ?? 1) }
+          : {}),
       })
       .eq('id', schedule.id)
       .eq('company_id', schedule.company_id)

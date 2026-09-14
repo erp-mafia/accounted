@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { JournalEntrySourceTypeSchema } from '@/lib/api/schemas'
 import { getPool } from '@/tests/pg/setup'
-import { seedCompany } from '@/tests/pg/fixtures'
+import { insertDraftJournalEntry, seedCompany } from '@/tests/pg/fixtures'
 
 // Guards against drift between the TS/Zod source_type allowlist and the DB
 // CHECK constraint `journal_entries_source_type_check`. Originally added
@@ -16,13 +16,8 @@ describe('journal_entries.source_type CHECK constraint', () => {
       const { userId, companyId, fiscalPeriodId } = await seedCompany()
 
       await expect(
-        getPool().query(
-          `INSERT INTO public.journal_entries
-             (id, user_id, company_id, fiscal_period_id, voucher_number,
-              voucher_series, entry_date, description, source_type, status)
-           VALUES ($1, $2, $3, $4, 0, 'A', '2026-06-01', $5, $6, 'draft')`,
-          [randomUUID(), userId, companyId, fiscalPeriodId, `src=${sourceType}`, sourceType],
-        ),
+        insertDraftJournalEntry({ userId, companyId, fiscalPeriodId,
+          description: `src=${sourceType}`, sourceType }),
       ).resolves.toBeDefined()
     },
   )

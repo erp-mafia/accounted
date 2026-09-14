@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { SALARY_ACCOUNTS, getLineItemAccount } from '@/lib/salary/account-mapping'
-import { splitAvgifterLiability } from '@/lib/salary/salary-entries'
-import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
+import {
+  buildSalaryRunEntryLines,
+  salaryRunDataFromRows,
+  salaryRunDescription,
+  type SalaryRosterRow,
+  type SalaryRunRow,
+} from '@/lib/salary/salary-entries'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput } from '@/types'
 
@@ -98,238 +102,64 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
 
-    // Load employees with line items
+    // Load employees with line items: the columns the booking reads
+    // (book-run.ts ROSTER_SELECT), so preview and voucher are built from
+    // one input.
     const { data: employees } = await supabase
       .from('salary_run_employees')
-      .select('*, employee:employees(employment_type, f_skatt_status), line_items:salary_line_items(*)')
+      .select(
+        '*, employee:employees(employment_type, default_dimensions, f_skatt_status), line_items:salary_line_items(*)',
+      )
       .eq('salary_run_id', id)
 
     if (!employees || employees.length === 0) {
       return NextResponse.json({ error: 'Inga beräknade resultat: kör beräkning först' }, { status: 400 })
     }
 
-    const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
-    const desc = `Lön ${periodLabel}`
-
-    // Build salary entry preview
-    const salaryLines: CreateJournalEntryLineInput[] = []
-    const expenseByAccount = new Map<string, number>()
-    // Net deductions book as settlement lines on their mapped liability or
-    // receivable account, mirroring createSalaryEntry; they must not merge
-    // into the 7xxx expense buckets.
-    const netDeductionByAccount = new Map<string, number>()
-
-    for (const sre of employees) {
-      for (const li of sre.line_items || []) {
-        if (li.is_net_deduction) {
-          const account = li.account_number || getLineItemAccount(li.item_type, sre.employee?.employment_type || 'employee')
-          netDeductionByAccount.set(account, (netDeductionByAccount.get(account) || 0) + li.amount)
-          continue
-        }
-        if (li.is_gross_deduction) continue
-        const account = li.account_number || getLineItemAccount(li.item_type, sre.employee?.employment_type || 'employee')
-        expenseByAccount.set(account, (expenseByAccount.get(account) || 0) + li.amount)
-      }
-    }
-
-    for (const [account, amount] of expenseByAccount) {
-      if (amount === 0) continue
-      salaryLines.push({
-        account_number: account,
-        debit_amount: amount > 0 ? Math.round(amount * 100) / 100 : 0,
-        credit_amount: amount < 0 ? Math.round(Math.abs(amount) * 100) / 100 : 0,
-        line_description: `${desc}`,
-      })
-    }
-
-    for (const [account, amount] of netDeductionByAccount) {
-      const rounded = roundOre(Math.abs(amount))
-      if (rounded === 0) continue
-      salaryLines.push({
-        account_number: account,
-        debit_amount: amount > 0 ? rounded : 0,
-        credit_amount: amount < 0 ? rounded : 0,
-        line_description: `${desc}`,
-      })
-    }
-
-    const totalTax = employees.reduce((sum, e) => sum + e.tax_withheld, 0)
-    if (totalTax > 0) {
-      salaryLines.push({
-        account_number: SALARY_ACCOUNTS.TAX_WITHHELD,
-        debit_amount: 0,
-        credit_amount: Math.round(totalTax * 100) / 100,
-        line_description: `${desc}: Personalskatt`,
-      })
-    }
-
-    const totalNet = employees.reduce((sum, e) => sum + e.net_salary, 0)
-    if (totalNet > 0) {
-      salaryLines.push({
-        account_number: SALARY_ACCOUNTS.BANK,
-        debit_amount: 0,
-        credit_amount: Math.round(totalNet * 100) / 100,
-        line_description: `${desc}: Nettolön`,
-      })
-    }
-
-    // Build avgifter entry preview: skipped for a nollkörning (0 avgifter),
-    // mirroring the vacation/pension guards below. The bookkeeping engine never
-    // posts an all-zero 7510/2731 voucher (see book/route.ts nollkörning path),
-    // so previewing one would falsely imply a verifikat that is never created.
-    // Override-coalesced, like the booking (book-run.ts): the preview must
-    // project the voucher that would actually post. F-skatt rows ignore
-    // avgifter overrides and carry no underlag, matching book-run and the
-    // AGI's isFSkattRow invariant.
-    const isFSkattRow = (e: { employee?: { f_skatt_status?: string | null } | null }) =>
-      isFSkattStatus(e.employee?.f_skatt_status)
-    const totalAvgifter = employees.reduce(
-      (sum, e) =>
-        sum +
-        ((isFSkattRow(e) ? e.avgifter_amount : e.avgifter_amount_override ?? e.avgifter_amount) ||
-          0),
-      0,
+    // The preview IS the booking's line builder (buildSalaryRunEntryLines):
+    // this route used to carry its own copy of the salary loop and drifted
+    // (it debited 7385 for a bilförmån with no counter line, so the previewed
+    // voucher was off by exactly the benefit, feedback seq 384229). A rule
+    // now lives in one place or nowhere.
+    const runRow = run as SalaryRunRow
+    const desc = salaryRunDescription(runRow)
+    const built = buildSalaryRunEntryLines(
+      salaryRunDataFromRows(runRow, employees as SalaryRosterRow[]),
+      desc,
     )
-    const roundedAvgifter = roundOre(totalAvgifter)
-    // Identical split to createAvgifterEntry (shared function): 2731 gets the
-    // whole-krona amount Skatteverket computes from the underlag, the
-    // remainder goes to 3740; the 7510 cost side stays exact.
-    const { liabilityAvgifter, oresutjamning } = splitAvgifterLiability(
-      {
-        employees: (employees as Array<Record<string, unknown>>).map((sre) => {
-          const fSkatt = isFSkattRow(sre as never)
-          return {
-            avgifter_amount:
-              ((fSkatt
-                ? (sre.avgifter_amount as number)
-                : (sre.avgifter_amount_override as number | null) ??
-                  (sre.avgifter_amount as number)) || 0),
-            avgifter_basis: fSkatt ? 0 : (sre.avgifter_basis as number | undefined),
-            avgifter_rate: sre.avgifter_rate as number,
-            avgifter_category: (sre.avgifter_category as string | null) ?? null,
-            avgifter_amount_overridden:
-              !fSkatt && (sre.avgifter_amount_override as number | null) != null,
-          }
-        }),
-        calculation_params: run.calculation_params as Record<string, unknown> | null,
-      },
-      roundedAvgifter,
-    )
-    const avgifterLines: CreateJournalEntryLineInput[] = roundedAvgifter !== 0
-      ? [
-          {
-            account_number: SALARY_ACCOUNTS.AVGIFTER_EXPENSE,
-            debit_amount: roundedAvgifter,
-            credit_amount: 0,
-            line_description: `${desc}: Arbetsgivaravgifter`,
-          },
-          ...(liabilityAvgifter !== 0 || oresutjamning === 0
-            ? [
-                {
-                  account_number: SALARY_ACCOUNTS.AVGIFTER_LIABILITY,
-                  debit_amount: 0,
-                  credit_amount: liabilityAvgifter,
-                  line_description: `${desc}: Arbetsgivaravgifter`,
-                } satisfies CreateJournalEntryLineInput,
-              ]
-            : []),
-          ...(oresutjamning > 0
-            ? [
-                {
-                  account_number: SALARY_ACCOUNTS.ORESUTJAMNING,
-                  debit_amount: 0,
-                  credit_amount: oresutjamning,
-                  line_description: `${desc}: Öres- och kronutjämning`,
-                } satisfies CreateJournalEntryLineInput,
-              ]
-            : []),
-        ]
-      : []
 
-    // Build vacation entry preview
-    const totalVacation = employees.reduce((sum, e) => sum + e.vacation_accrual, 0)
-    const totalVacationAvgifter = employees.reduce((sum, e) => sum + e.vacation_accrual_avgifter, 0)
-    const vacationLines: CreateJournalEntryLineInput[] = []
-    if (totalVacation > 0) {
-      vacationLines.push(
-        {
-          account_number: SALARY_ACCOUNTS.VACATION_ACCRUAL_EXPENSE,
-          debit_amount: Math.round(totalVacation * 100) / 100,
-          credit_amount: 0,
-          line_description: `${desc}: Semesteravsättning`,
-        },
-        {
-          account_number: SALARY_ACCOUNTS.VACATION_ACCRUAL_LIABILITY,
-          debit_amount: 0,
-          credit_amount: Math.round(totalVacation * 100) / 100,
-          line_description: `${desc}: Semesteravsättning`,
-        }
-      )
-    }
-    if (totalVacationAvgifter > 0) {
-      vacationLines.push(
-        {
-          account_number: SALARY_ACCOUNTS.VACATION_AVGIFTER_EXPENSE,
-          debit_amount: Math.round(totalVacationAvgifter * 100) / 100,
-          credit_amount: 0,
-          line_description: `${desc}: Sociala avgifter semester`,
-        },
-        {
-          account_number: SALARY_ACCOUNTS.VACATION_AVGIFTER_LIABILITY,
-          debit_amount: 0,
-          credit_amount: Math.round(totalVacationAvgifter * 100) / 100,
-          line_description: `${desc}: Sociala avgifter semester`,
-        }
-      )
+    // Each entry is null when it has nothing to post: a nollkörning posts
+    // nothing (book-run.ts), so the salary and avgifter entries fall away
+    // just like vacation/pension do, and the UI simply skips the null ones.
+    // The avgifter builder keeps its zero-shaped legacy lines for a run with
+    // no avgifter; those never post, so previewing them would imply a
+    // verifikat that is never created.
+    //
+    // balanced/difference is the assertion that makes a future preview vs
+    // booking divergence visible instead of silent: the DB trigger refuses
+    // an unbalanced voucher at booking time, the preview never had a check.
+    const toEntry = (description: string, lines: CreateJournalEntryLineInput[]) => {
+      if (lines.every((l) => l.debit_amount === 0 && l.credit_amount === 0)) return null
+      const totalDebit = roundOre(lines.reduce((sum, l) => sum + l.debit_amount, 0))
+      const totalCredit = roundOre(lines.reduce((sum, l) => sum + l.credit_amount, 0))
+      const difference = roundOre(totalDebit - totalCredit)
+      return { description, lines, balanced: difference === 0, difference }
     }
 
-    // Build pension entry preview (löneväxling, per deductions-lonevaxling.md)
-    // This would be populated from salary_line_items with type 'gross_deduction_pension'
-    // For now, pension preview is shown when pension line items exist
-    const pensionLineItems = employees.flatMap(e =>
-      ((e.line_items || []) as Array<Record<string, unknown>>)
-        .filter(li => li.item_type === 'gross_deduction_pension')
-    )
-    const pensionLines: CreateJournalEntryLineInput[] = []
-    if (pensionLineItems.length > 0) {
-      const totalPensionDeduction = Math.abs(pensionLineItems.reduce((s, li) => s + ((li.amount as number) || 0), 0))
-      const pensionContribution = Math.round(totalPensionDeduction * 1.058 * 100) / 100
-      const slp = Math.round(pensionContribution * 0.2426 * 100) / 100
-      if (pensionContribution > 0) {
-        pensionLines.push(
-          { account_number: '7410', debit_amount: pensionContribution, credit_amount: 0, line_description: `${desc}: Pensionsförsäkringspremier` },
-          { account_number: '2740', debit_amount: 0, credit_amount: pensionContribution, line_description: `${desc}: Pensionsförsäkringspremier` },
-        )
-        if (slp > 0) {
-          pensionLines.push(
-            { account_number: '7533', debit_amount: slp, credit_amount: 0, line_description: `${desc}: Särskild löneskatt 24,26%` },
-            { account_number: '2514', debit_amount: 0, credit_amount: slp, line_description: `${desc}: Särskild löneskatt 24,26%` },
-          )
-        }
-      }
-    }
+    const salaryEntry = toEntry(desc, built.salaryLines)
+    const avgifterEntry = toEntry(`${desc}: Arbetsgivaravgifter`, built.avgifterLines)
+    const vacationEntry = toEntry(`${desc}: Semesteravsättning`, built.vacationLines)
+    const pensionEntry = toEntry(`${desc}: Pensionsavsättning`, built.pensionLines)
 
     return NextResponse.json({
       data: {
-        // Each entry is null when it has no lines: a nollkörning posts nothing,
-        // so the salary and avgifter entries fall away just like vacation/pension
-        // already do, and the UI can simply skip the null ones.
-        salaryEntry: salaryLines.length > 0 ? {
-          description: desc,
-          lines: salaryLines,
-        } : null,
-        avgifterEntry: avgifterLines.length > 0 ? {
-          description: `${desc}: Arbetsgivaravgifter`,
-          lines: avgifterLines,
-        } : null,
-        vacationEntry: vacationLines.length > 0 ? {
-          description: `${desc}: Semesteravsättning`,
-          lines: vacationLines,
-        } : null,
-        pensionEntry: pensionLines.length > 0 ? {
-          description: `${desc}: Pensionsavsättning`,
-          lines: pensionLines,
-        } : null,
+        balanced: [salaryEntry, avgifterEntry, vacationEntry, pensionEntry].every(
+          (entry) => entry === null || entry.balanced,
+        ),
+        salaryEntry,
+        avgifterEntry,
+        vacationEntry,
+        pensionEntry,
       },
     })
   },

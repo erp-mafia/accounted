@@ -173,18 +173,46 @@ describe('gnubok_create_customer: personal_number', () => {
     expect(JSON.stringify(inserted)).not.toContain(PERSONAL_NUMBER)
   })
 
-  it('refuses a personnummer-shaped org_number on a business customer before staging', async () => {
+  it('refuses a personnummer-shaped org_number on a foreign business before staging', async () => {
     const { supabase } = createQueuedMockSupabase()
 
     await expect(
       tool().execute(
-        { name: 'Enskild Firma X', customer_type: 'swedish_business', org_number: PERSONAL_NUMBER },
+        {
+          name: 'Auslandsfirma GmbH',
+          customer_type: 'eu_business',
+          country: 'DE',
+          org_number: PERSONAL_NUMBER,
+        },
         'company-1',
         'user-1',
         supabase as never,
       ),
     ).rejects.toThrow(/personnummer/)
     expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  // #2367: a Swedish enskild firma has no org number of its own, so its
+  // owner's personnummer is the firm's identifier and stages as org_number.
+  it('stages a personnummer-shaped org_number on swedish_business as the org number', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: null }) // company_settings read (payment-terms default)
+    enqueue({ data: { id: 'op-ef-1' } }) // pending_operations insert
+
+    const result = (await tool().execute(
+      { name: 'Enskild Firma X', customer_type: 'swedish_business', org_number: PERSONAL_NUMBER },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.org_number).toBe(PERSONAL_NUMBER)
+    expect(result.preview.personal_number_masked).toBeNull()
+
+    const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
+    expect(inserted.params.org_number).toBe(PERSONAL_NUMBER)
+    expect(inserted.params.personal_number_encrypted ?? null).toBeNull()
   })
 
   it('refuses personal_number on a business customer', async () => {

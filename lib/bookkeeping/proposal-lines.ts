@@ -22,11 +22,11 @@
  * That is why VAT is single-rounded and the net leg is ALWAYS gross minus the
  * rounded VAT (never independently rounded: at 12% both halves round up for
  * gross = 14 mod 28 ore and the entry goes off by 1 ore), why the fiktiv-moms
- * pair uses the engine's plain rounding (roundOre's EPSILON nudge diverges at
- * exact-half floats like 8.62 * 0.25), and why sign-mismatched counterparty
- * matches are mirrored exactly as the server mirrors them. The 3740 rounding
- * leg follows the engine's sign rule too: business side when the ratios
- * under-allocate, opposite side when they over-allocate (#1898).
+ * pair uses the engine's plain rounding (roundOre takes exact-half floats like
+ * 8.62 * 0.25 up where plain rounding takes them down), and why sign-mismatched
+ * counterparty matches are mirrored exactly as the server mirrors them. The
+ * 3740 rounding leg follows the engine's sign rule too: business side when the
+ * ratios under-allocate, opposite side when they over-allocate (#1898).
  *
  * The resulting booking still goes through JournalEntryForm's normal manual
  * validation and the bookkeeping engine: nothing here writes to the ledger.
@@ -49,10 +49,10 @@ import type { TransactionCategory, VatTreatment, EntityType, LinePatternEntry } 
 
 /**
  * The engine's ore rounding, byte-identical to the Math.round(x*100)/100 the
- * booking paths above use. Deliberately NOT roundOre(): its Number.EPSILON
- * nudge rounds exact-half floats (8.62 * 0.25 = 2.155) up where the engine
- * rounds down, and a prefill that differs from the engine by 1 ore is a
- * refuted bug, not an improvement. Do not "fix" this to roundOre.
+ * booking paths above use. Deliberately NOT roundOre(): roundOre rounds
+ * exact-half floats (8.62 * 0.25 = 2.155) up where this plain form rounds them
+ * down, and a prefill that differs from the engine by 1 ore is a refuted bug,
+ * not an improvement. Do not "fix" this to roundOre.
  */
 function engineRound(n: number): number {
   return Math.round(n * 100) / 100

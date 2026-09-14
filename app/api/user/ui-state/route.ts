@@ -7,6 +7,12 @@ import type { UserUiState } from '@/types'
 // so typos fail loudly instead of accumulating junk in the jsonb bag.
 const BodySchema = z
   .object({
+    // Retired with the Standard layout: the layout picker wrote `shell`, the
+    // old sidebar's collapse rail and folds wrote `nav_collapsed` and
+    // `nav_folds`. Still accepted in their old shapes so a tab opened before
+    // the removal never gets a 400, and dropped before the merge below, so
+    // nothing new is stored.
+    shell: z.enum(['v1', 'v2']).optional(),
     nav_collapsed: z.boolean().optional(),
     nav_folds: z
       .object({
@@ -41,9 +47,7 @@ const BodySchema = z
     trial_expired_ack: z
       .record(z.string().uuid(), z.string().datetime())
       .optional(),
-    // Dashboard shell opt-in (Inställningar → Konto → Layout).
-    shell: z.enum(['v1', 'v2']).optional(),
-    // Transaktioner column visibility (shell v2). Replaced whole, never merged:
+    // Transaktioner column visibility. Replaced whole, never merged:
     // the list IS the preference.
     tx_columns: z
       .object({ hidden: z.array(z.string().max(32)).max(16).optional() })
@@ -80,13 +84,11 @@ export async function POST(request: Request) {
     .maybeSingle()
 
   const current: UserUiState = (existing?.ui_state as UserUiState) ?? {}
-  const patch = parsed.data
+  // The retired keys are validated above and never written.
+  const { shell: _shell, nav_collapsed: _navCollapsed, nav_folds: _navFolds, ...patch } = parsed.data
   const next: UserUiState = {
     ...current,
     ...patch,
-    ...(patch.nav_folds
-      ? { nav_folds: { ...current.nav_folds, ...patch.nav_folds } }
-      : {}),
     ...(patch.create_mode
       ? { create_mode: { ...current.create_mode, ...patch.create_mode } }
       : {}),

@@ -9,8 +9,8 @@ const tool = () => tools.find((candidate) => candidate.name === 'gnubok_list_cus
 const PERSONAL_NUMBER = '19900101-1234'
 const MASKED = '********-1234'
 
-describe('gnubok_list_customers: individual identifiers', () => {
-  it('never lists a personnummer raw: ciphertext is masked, a legacy org_number personnummer is masked and nulled', async () => {
+describe('gnubok_list_customers: personal identifiers', () => {
+  it('never lists a personnummer raw: ciphertext is masked, an org_number personnummer is masked and nulled', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
@@ -20,6 +20,9 @@ describe('gnubok_list_customers: individual identifiers', () => {
         // out of org_number (the 2026-08-21 fix); the repair script moves it.
         { id: 'c-3', name: 'Bertil', customer_type: 'individual', org_number: PERSONAL_NUMBER, personal_number: null },
         { id: 'c-4', name: 'Cecilia', customer_type: 'individual', org_number: null, personal_number: null },
+        // #2367: an enskild firma's org number IS the owner's personnummer,
+        // so it lives on a swedish_business row and is masked here too.
+        { id: 'c-5', name: 'Bertil Bygg', customer_type: 'swedish_business', org_number: PERSONAL_NUMBER, personal_number: null },
       ],
     })
 
@@ -28,7 +31,7 @@ describe('gnubok_list_customers: individual identifiers', () => {
       count: number
     }
 
-    expect(result.count).toBe(4)
+    expect(result.count).toBe(5)
     const byName = Object.fromEntries(result.customers.map((c) => [c.name as string, c]))
     expect(byName['Acme AB']).toMatchObject({ org_number: '556677-8899' })
     expect(byName['Acme AB']).not.toHaveProperty('personal_number')
@@ -36,6 +39,7 @@ describe('gnubok_list_customers: individual identifiers', () => {
     expect(byName['Anna']).toMatchObject({ org_number: null, personal_number_masked: MASKED })
     expect(byName['Bertil']).toMatchObject({ org_number: null, personal_number_masked: MASKED })
     expect(byName['Cecilia']).toMatchObject({ org_number: null, personal_number_masked: null })
+    expect(byName['Bertil Bygg']).toMatchObject({ org_number: null, personal_number_masked: MASKED })
     // Neither the plaintext nor the ciphertext leaves the tool.
     const serialized = JSON.stringify(result)
     expect(serialized).not.toContain(PERSONAL_NUMBER)

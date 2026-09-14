@@ -2,7 +2,7 @@
  * First-fiscal-year defaults derived from TIC lookup data.
  *
  * Extracted from WelcomeOnboarding so both the wizard and the journey
- * onboarding can share them (dev_docs/onboarding_migration_plan.md, PR A).
+ * onboarding can share them.
  */
 
 /**

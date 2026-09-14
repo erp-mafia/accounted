@@ -1,6 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { useCompany } from '@/contexts/CompanyContext'
 import { useTranslations } from 'next-intl'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -55,6 +57,7 @@ export function FiscalYearResetDialog({
   onReset,
 }: FiscalYearResetDialogProps) {
   const t = useTranslations('settings_bookkeeping')
+  const { role } = useCompany()
   const { toast } = useToast()
   const loadFailedMessage = t('fy_reset_load_failed')
   const [eligibility, setEligibility] = useState<FiscalYearResetEligibility | null>(null)
@@ -132,12 +135,17 @@ export function FiscalYearResetDialog({
         return t('fy_reset_blocker_rot_rut')
       case 'cross_year_reference':
         return t('fy_reset_blocker_cross_year')
+      case 'retained_import_history':
+        return t('fy_reset_blocker_retained_import')
+      case 'unfinished_import':
+        return t('fy_reset_blocker_unfinished_import')
       default:
         return t('fy_reset_blocker_other')
     }
   }
 
   const confirmationName = eligibility?.period.name ?? periodName
+  const retainedHistory = eligibility?.blockers.some(blocker => blocker.code === 'retained_import_history')
   const canReset =
     eligibility?.eligible === true &&
     confirmName.trim() === confirmationName.trim() &&
@@ -187,7 +195,7 @@ export function FiscalYearResetDialog({
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{t('fy_reset_dialog_title', { name: periodName })}</DialogTitle>
-          <DialogDescription>{t('fy_reset_dialog_description')}</DialogDescription>
+          <DialogDescription>{t(retainedHistory ? 'fy_reset_retained_description' : 'fy_reset_dialog_description')}</DialogDescription>
         </DialogHeader>
 
         {isLoading ? (
@@ -215,7 +223,7 @@ export function FiscalYearResetDialog({
               </div>
             ) : null}
 
-            <div>
+            {!retainedHistory && <div>
               <h3 className="mb-2 text-sm font-medium">{t('fy_reset_summary_heading')}</h3>
               <dl className="divide-y divide-border border-y border-border">
                 <div className="flex items-center justify-between py-2 text-sm">
@@ -247,7 +255,7 @@ export function FiscalYearResetDialog({
                   {t('fy_reset_next_year_ib_note', { name: eligibility.next_period.name })}
                 </p>
               ) : null}
-            </div>
+            </div>}
 
             {eligibility.eligible ? (
               <div className="space-y-2">
@@ -270,6 +278,13 @@ export function FiscalYearResetDialog({
         ) : null}
 
         <DialogFooter>
+          {retainedHistory && role === 'owner' && (
+            <Button asChild variant="outline">
+              <Link href="/settings/company#archive-start-fresh" onClick={() => handleOpenChange(false)}>
+                {t('fy_reset_archive_action')}
+              </Link>
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => handleOpenChange(false)}

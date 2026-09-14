@@ -3,7 +3,7 @@ import { roundOre } from '@/lib/money'
 
 // Ledger context: derived booking patterns for the Accounted://ledger/context
 // MCP resource. Everything here is computed by code from ledger data; the LLM
-// never derives these numbers (design: dev_docs/ledger_context_resource.md).
+// never derives these numbers.
 
 /**
  * Patterns below this dominant share are noise, not signal: an agent should

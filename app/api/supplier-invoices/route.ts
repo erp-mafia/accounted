@@ -23,6 +23,7 @@ import {
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
+import { defaultVatRateForTreatment } from '@/lib/vat/supplier-invoice-line-checks'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { parseEntityType } from '@/lib/company/entity-type'
@@ -223,8 +224,9 @@ export const POST = withRouteContext(
     // (avdragsrätt, 13 kap. ML 2023:200): a line carrying moms would book
     // 2641 the company can never reclaim. The form hides the moms controls;
     // this guard covers THIS route only. The v1 REST route, the inbox convert
-    // route and the MCP staged executor still default 25 % and need the same
-    // treatment in a follow-up sweep. Reverse charge stays allowed:
+    // route and the MCP staged executor derive an omitted rate from the
+    // invoice's vat_treatment (#2553) but still do not read vat_registered,
+    // so that half needs the same sweep. Reverse charge stays allowed:
     // self-assessment is a separate obligation from deduction.
     const { data: vatSettings } = await supabase
       .from('company_settings')
@@ -232,6 +234,10 @@ export const POST = withRouteContext(
       .eq('company_id', companyId)
       .single()
     const vatRegistered = vatSettings?.vat_registered !== false
+    // The stored treatment, resolved once: it decides both what a line that
+    // omits vat_rate falls back to and whether the engine may book any
+    // ingående moms at all (#2553).
+    const vatTreatment = body.vat_treatment || 'standard_25'
     if (
       !vatRegistered &&
       !body.reverse_charge &&
@@ -327,9 +333,12 @@ export const POST = withRouteContext(
     }
 
     const items = body.items.map((item, index) => {
-      // An omitted rate defaults to 25 % only for VAT-registered companies;
-      // icke momsregistrerade book the gross amount with no moms line.
-      const vatRate = item.vat_rate ?? (vatRegistered ? 0.25 : 0)
+      // An omitted rate follows the invoice's vat_treatment, and only for
+      // VAT-registered companies; icke momsregistrerade book the gross amount
+      // with no moms line. exempt / export / reverse_charge derive 0 and
+      // reduced_12 / reduced_6 derive their own rate, instead of the blanket
+      // 25 % that used to book input VAT the supplier never charged (#2553).
+      const vatRate = item.vat_rate ?? (vatRegistered ? defaultVatRateForTreatment(vatTreatment) : 0)
       const lineTotal = item.amount != null
         ? Math.round(item.amount * 100) / 100
         : Math.round((item.quantity ?? 1) * (item.unit_price ?? 0) * 100) / 100
@@ -433,7 +442,7 @@ export const POST = withRouteContext(
         // Which day's kurs the SEK amounts were translated at: the audit trail
         // that makes them verifiable (BFL 5 kap).
         exchange_rate_date: fx.rate.exchangeRateDate,
-        vat_treatment: body.vat_treatment || 'standard_25',
+        vat_treatment: vatTreatment,
         reverse_charge: body.reverse_charge || false,
         payment_reference: body.payment_reference || null,
         paid_with_private_funds: paidPrivately,

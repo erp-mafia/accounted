@@ -178,6 +178,32 @@ describe('POST /api/invoices/[id]/send-payment-confirmation', () => {
     expect(body.error.code).toBe('INVOICE_SEND_COMPANY_SETTINGS_MISSING')
   })
 
+  it('uses the configured reply address over the company email', async () => {
+    enqueue({ data: paidInvoice, error: null })
+    enqueue({ data: { ...company, invoice_email_reply_to: 'svar@acme.se' }, error: null })
+
+    expect((await parseJsonResponse(await post())).status).toBe(200)
+    const sent = mockSendEmail.mock.calls[0][0] as { replyTo?: string }
+    expect(sent.replyTo).toBe('svar@acme.se')
+  })
+
+  it('falls back to the sender for Reply-To and never copies the login email', async () => {
+    // No company email, no configured lists: the old code CC:d the sending
+    // user's login address and set no Reply-To at all.
+    enqueue({ data: paidInvoice, error: null })
+    enqueue({
+      data: { ...company, email: null, invoice_email_cc_addresses: null, invoice_email_bcc_addresses: null },
+      error: null,
+    })
+
+    expect((await parseJsonResponse(await post())).status).toBe(200)
+    const sent = mockSendEmail.mock.calls[0][0] as { replyTo?: string; cc: string[]; bcc: string[]; html: string }
+    expect(sent.replyTo).toBe('owner@test.se')
+    expect(sent.cc).toEqual([])
+    expect(sent.bcc).toEqual([])
+    expect(sent.html).toContain('Svara direkt på detta mejl')
+  })
+
   it('emails the paid re-render as a betalningsbekräftelse without touching the invoice', async () => {
     enqueue({ data: paidInvoice, error: null })
     enqueue({ data: company, error: null })

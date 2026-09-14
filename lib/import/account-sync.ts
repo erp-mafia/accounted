@@ -112,6 +112,51 @@ function buildInsertRow(
   }
 }
 
+export function buildSIEVatDefaults(mappings:AccountMapping[]) {
+  const vatDefaults = new Map<string, { treatment: AccountVatTreatment | null; rate: number | null }>()
+  for (const mapping of mappings) {
+    if (
+      !mapping.vatTreatmentReviewed ||
+      !mapping.targetAccount ||
+      mapping.sourceAccount !== mapping.targetAccount
+    ) continue
+    if (
+      mapping.defaultVatTreatment !== null &&
+      mapping.defaultVatTreatment !== undefined &&
+      !isAccountVatTreatment(mapping.defaultVatTreatment)
+    ) {
+      throw new Error(`Invalid VAT treatment for account ${mapping.sourceAccount}`)
+    }
+    const accountClass = Number(mapping.targetAccount.charAt(0))
+    if (
+      mapping.defaultVatTreatment &&
+      !isVatTreatmentAllowedForAccountClass(mapping.defaultVatTreatment, accountClass)
+    ) {
+      throw new Error(`VAT treatment is not valid for account ${mapping.sourceAccount}`)
+    }
+    vatDefaults.set(mapping.targetAccount, {
+      treatment: mapping.defaultVatTreatment ?? null,
+      rate: mapping.defaultVatTreatment && mapping.defaultVatRate == null
+        ? defaultRateForVatTreatment(mapping.defaultVatTreatment, accountClass)
+        : mapping.defaultVatRate ?? null,
+    })
+  }
+
+  return vatDefaults
+}
+
+/** The job engine persists these bounded plans under its database lease. */
+export function buildSIEAccountRows(companyId: string, userId: string, mappings: AccountMapping[]) {
+  const defaults = buildSIEVatDefaults(mappings)
+  const byNumber = new Map<string, AccountMapping>()
+  for (const mapping of mappings) if (mapping.targetAccount) byNumber.set(mapping.targetAccount, mapping)
+  return [...byNumber].map(([number, mapping]) => {
+    const reference = getBASReference(number)
+    return buildInsertRow(number, reference?.account_name || mapping.targetName || mapping.sourceName || `Konto ${number}`,
+      reference, companyId, userId, defaults.get(number))
+  })
+}
+
 /**
  * Ensure every mapped target account exists in chart_of_accounts and,
  * when `updateAccountNames` is true, carry the SIE file's #KONTO names into
@@ -168,35 +213,10 @@ export async function syncMappedAccounts(
     if (m.targetAccount && fallback) fallbackNames.set(m.targetAccount, fallback)
   }
 
-  const vatDefaults = new Map<string, { treatment: AccountVatTreatment | null; rate: number | null }>()
-  for (const mapping of mappings) {
-    if (
-      !mapping.vatTreatmentReviewed ||
-      !mapping.targetAccount ||
-      mapping.sourceAccount !== mapping.targetAccount
-    ) continue
-    if (
-      mapping.defaultVatTreatment !== null &&
-      mapping.defaultVatTreatment !== undefined &&
-      !isAccountVatTreatment(mapping.defaultVatTreatment)
-    ) {
-      result.error = `Invalid VAT treatment for account ${mapping.sourceAccount}`
-      return result
-    }
-    const accountClass = Number(mapping.targetAccount.charAt(0))
-    if (
-      mapping.defaultVatTreatment &&
-      !isVatTreatmentAllowedForAccountClass(mapping.defaultVatTreatment, accountClass)
-    ) {
-      result.error = `VAT treatment is not valid for account ${mapping.sourceAccount}`
-      return result
-    }
-    vatDefaults.set(mapping.targetAccount, {
-      treatment: mapping.defaultVatTreatment ?? null,
-      rate: mapping.defaultVatTreatment && mapping.defaultVatRate == null
-        ? defaultRateForVatTreatment(mapping.defaultVatTreatment, accountClass)
-        : mapping.defaultVatRate ?? null,
-    })
+  let vatDefaults: ReturnType<typeof buildSIEVatDefaults>
+  try {vatDefaults = buildSIEVatDefaults(mappings)} catch (error) {
+    result.error = error instanceof Error ? error.message : 'Invalid VAT defaults'
+    return result
   }
 
   // Fetch the company's chart once (paged) and filter in JS: avoids a huge

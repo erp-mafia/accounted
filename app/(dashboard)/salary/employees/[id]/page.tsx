@@ -3,7 +3,6 @@
 import { useState, useEffect, use } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from '@/components/ui/button'
@@ -13,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { AttnLine } from '@/components/ui/attn-line'
-import { ArrowLeft, Save } from 'lucide-react'
+import { Save } from 'lucide-react'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -38,8 +37,6 @@ import { OpeningBalancesPanel } from '@/components/salary/OpeningBalancesPanel'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 import { jamkningPatch } from '@/lib/salary/jamkning-patch'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
-import { useShell } from '@/components/dashboard/ShellProvider'
-import { cn } from '@/lib/utils'
 
 const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
   employee: 'form_employment_type_employee',
@@ -72,7 +69,6 @@ function RequiredMark() {
 
 export default function EmployeeDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
-  const shell = useShell()
   const t = useTranslations('salary_employee')
   const router = useRouter()
   const { toast } = useToast()
@@ -300,18 +296,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     : null
 
   return (
-    <div className={cn(shell !== 'v2' && 'max-w-2xl', 'space-y-8 stagger-enter')}>
+    <div className="space-y-8 stagger-enter">
       {/* Header: serif name over a quiet personnummer/type kicker, quiet actions right */}
       <div>
-        {shell !== 'v2' && (
-        <Link
-          href="/salary/employees"
-          className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t('form_back_to_employees')}
-        </Link>
-        )}
         <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="page-header-lead min-w-0">
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">

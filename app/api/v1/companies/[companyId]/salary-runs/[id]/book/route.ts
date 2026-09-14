@@ -33,13 +33,17 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
-import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
+import {
+  createSalaryRunEntries,
+  salaryRunDataFromRows,
+  type SalaryRosterRow,
+  type SalaryRunRow,
+} from '@/lib/salary/salary-entries'
 import {
   assertLinkedExpenseClaimsOpen,
   rosterHasLinkedExpenseClaims,
   settleExpenseClaimsForBookedRun,
 } from '@/lib/salary/expense-claim-lines'
-import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
@@ -229,88 +233,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // 4. Engine call. Strict-mode: any throw aborts before status flip.
-    type EmpRow = {
-      employee_id: string
-      employee: {
-        employment_type: string
-        default_dimensions?: Record<string, string>
-        f_skatt_status?: string | null
-      } | null
-      gross_salary: number
-      tax_withheld: number
-      tax_withheld_override: number | null
-      net_salary: number
-      avgifter_amount: number
-      avgifter_amount_override: number | null
-      avgifter_rate: number
-      avgifter_basis: number
-      avgifter_category: string | null
-      vacation_accrual: number
-      vacation_accrual_avgifter: number
-      line_items: Array<{
-        item_type: string
-        amount: number
-        account_number: string | null
-        is_net_deduction: boolean
-        is_gross_deduction: boolean
-      }> | null
-    }
+    // Rows -> engine input through the one mapper every booking surface and
+    // the journal preview share (salaryRunDataFromRows): review overrides,
+    // the F-skatt avgifter rules and employee dimensions reach the ledger
+    // identically no matter which surface books the run.
     let salaryEntry: { id: string; voucher_number: string }
     let avgifterEntry: { id: string }
     let vacationEntry: { id: string } | null
     let pensionEntry: { id: string } | null
     try {
-      const result = await createSalaryRunEntries(ctx.supabase, ctx.companyId!, ctx.userId, {
-        id: (run as { id: string }).id,
-        period_year: (run as { period_year: number }).period_year,
-        period_month: (run as { period_month: number }).period_month,
-        payment_date: paymentDate,
-        voucher_series: (run as { voucher_series: string }).voucher_series,
-        total_gross: (run as { total_gross: number }).total_gross,
-        total_tax: (run as { total_tax: number }).total_tax,
-        total_net: (run as { total_net: number }).total_net,
-        total_avgifter: (run as { total_avgifter: number }).total_avgifter,
-        total_vacation_accrual: (run as { total_vacation_accrual: number }).total_vacation_accrual,
-        calculation_params: (run as { calculation_params: Record<string, unknown> | null }).calculation_params,
-        employees: (employees as EmpRow[]).map((sre) => ({
-          employee_id: sre.employee_id,
-          employment_type: sre.employee?.employment_type || 'employee',
-          gross_salary: sre.gross_salary,
-          // Override parity with book-run.ts: review overrides must reach
-          // the ledger identically no matter which surface books the run,
-          // or the booked 2731/2710 diverge from the AGI totals by the full
-          // override delta. F-skatt rows ignore avgifter overrides (the AGI
-          // hard-excludes them via isFSkattRow).
-          tax_withheld: sre.tax_withheld_override ?? sre.tax_withheld,
-          net_salary:
-            sre.net_salary + (sre.tax_withheld - (sre.tax_withheld_override ?? sre.tax_withheld)),
-          avgifter_amount:
-            isFSkattStatus(sre.employee?.f_skatt_status)
-              ? sre.avgifter_amount
-              : sre.avgifter_amount_override ?? sre.avgifter_amount,
-          avgifter_rate: sre.avgifter_rate,
-          // Declared-avgifter inputs: 2731 books the whole-krona amount
-          // Skatteverket computes from the underlag (declared-avgifter.ts).
-          // Zeroed for F-skatt rows, matching book-run and the AGI's
-          // isFSkattRow invariant.
-          avgifter_basis:
-            isFSkattStatus(sre.employee?.f_skatt_status) ? 0 : sre.avgifter_basis,
-          avgifter_category: sre.avgifter_category ?? null,
-          avgifter_amount_overridden:
-            !isFSkattStatus(sre.employee?.f_skatt_status) && sre.avgifter_amount_override != null,
-          vacation_accrual: sre.vacation_accrual,
-          vacation_accrual_avgifter: sre.vacation_accrual_avgifter,
-          // Dimensions PR8: read-at-book from the employee row.
-          default_dimensions: sre.employee?.default_dimensions ?? undefined,
-          line_items: (sre.line_items || []).map((li) => ({
-            item_type: li.item_type,
-            amount: li.amount,
-            account_number: li.account_number,
-            is_net_deduction: li.is_net_deduction,
-            is_gross_deduction: li.is_gross_deduction,
-          })),
-        })),
-      })
+      const result = await createSalaryRunEntries(
+        ctx.supabase,
+        ctx.companyId!,
+        ctx.userId,
+        salaryRunDataFromRows(run as SalaryRunRow, employees as SalaryRosterRow[]),
+      )
       // Narrow to just the fields the route consumes: id + voucher_number
       // for the primary salary entry, id for the others. The full
       // JournalEntry shape is broader than what the audit block needs.

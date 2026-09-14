@@ -8,6 +8,7 @@ import {
   counterpartySweepLogic,
   normalizeOcrReference,
 } from './duplicate-payment-guard'
+import { MIN_REFERENCE_KEY_DIGITS, distinctiveReferenceKeys } from './ocr-keys'
 import {
   invoiceAmountSek,
   magnitudesWithinTolerance,
@@ -77,9 +78,10 @@ const MATCH_REASON_CONFIDENCE: Record<DuplicatePaymentMatchReason, number> = {
 /**
  * Fewer digits than this is not an OCR / invoice number, it is a coincidence:
  * a supplier invoice numbered "7" must not read every bank reference with a 7
- * in it as an exact match.
+ * in it as an exact match. One definition, shared with the customer-side key
+ * set in ocr-keys.ts, so the two sides cannot drift apart.
  */
-const MIN_OCR_DIGITS = 4
+const MIN_OCR_DIGITS = MIN_REFERENCE_KEY_DIGITS
 
 /** ± days around the payment date an aggregate row is looked for: a Bankgirot
  *  aggregate lands on the payment day, so the wide name-sweep window would only
@@ -206,7 +208,10 @@ export async function findDuplicatePaymentCandidatesForInvoice(
   if (rows.length === 0) return aggregate()
 
   return rankCandidates(rows, {
-    invoiceOcrs: ocrKeys([invoice.invoice_number]),
+    // Both forms the payer could have quoted: the bare invoice number and the
+    // OCR the invoice printed. Same floor as ocrKeys(), so this is the same
+    // key set plus the one it was missing.
+    invoiceOcrs: distinctiveReferenceKeys(invoice.invoice_number),
     searchTerms: counterpartySearchTerms(invoice.customer_name),
   })
 }

@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 /**
  * Resume list ("Fortsätt") for the homepage: in-progress work derived purely
- * from draft/mid-lifecycle state (dev_docs/last_session_resume.md §6).
+ * from draft/mid-lifecycle state.
  * No event log, no presence table: a completed flow can never render here
  * because only draft-state rows are ever fetched (the reliability invariant).
  *

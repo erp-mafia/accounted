@@ -293,6 +293,41 @@ describe('POST /webhook', () => {
     expect(sendReactionMock).not.toHaveBeenCalled()
   })
 
+  it('answers a link lookup it could not RUN with M22, and claims nothing (#2365)', async () => {
+    // The whatsapp_phone_links read failed, so whether this sender is linked
+    // is unknown. Reading that as "not linked" greeted an already linked user
+    // with M1 and invited a second link flow.
+    const { enqueue, calls, findCalls } = mockSupabase()
+    enqueue({ error: { message: 'canceling statement due to statement timeout' } })
+
+    const response = await route.handler(
+      signedRequest(envelope({ messages: [imageMessage()] })),
+    )
+    expect(response.status).toBe(200)
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m22LookupRetry)
+    // Nothing was claimed: no trace row, no quota consumption, no link write,
+    // so the resend is handled as if this delivery never arrived.
+    expect([...new Set(calls.map((c) => c.table))]).toEqual(['whatsapp_phone_links'])
+    expect(findCalls('whatsapp_messages', 'insert')).toHaveLength(0)
+    expect(findCalls('whatsapp_phone_links', 'insert')).toHaveLength(0)
+    expect(vi.mocked(downloadMedia)).not.toHaveBeenCalled()
+    expect(sendReactionMock).not.toHaveBeenCalled()
+    expect(kickMock).toHaveBeenCalledWith([])
+  })
+
+  it('never runs the link-code path when the link lookup failed (#2365)', async () => {
+    // A code-shaped text must not earn M2 or M21 either: the same unknown
+    // verdict applies, and whatsapp_link_codes is never touched.
+    const { enqueue, calls } = mockSupabase()
+    enqueue({ error: { message: 'connection reset by peer' } })
+
+    await route.handler(signedRequest(envelope({ messages: [textMessage('AC-7KP4QF')] })))
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m22LookupRetry)
+    expect(calls.some((c) => c.table === 'whatsapp_link_codes')).toBe(false)
+  })
+
   describe('unknown senders', () => {
     it('greets once with M1: no media download, no CONTENT persistence', async () => {
       const { enqueue, findCalls } = mockSupabase()

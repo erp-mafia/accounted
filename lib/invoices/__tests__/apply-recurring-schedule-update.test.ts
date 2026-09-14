@@ -227,6 +227,7 @@ describe('applyRecurringScheduleUpdate', () => {
       {
         schedule_id: SCHEDULE_ID,
         sort_order: 0,
+        line_type: 'product',
         description: 'Rad A',
         quantity: 1,
         unit: 'st',
@@ -237,6 +238,7 @@ describe('applyRecurringScheduleUpdate', () => {
       {
         schedule_id: SCHEDULE_ID,
         sort_order: 1,
+        line_type: 'product',
         description: 'Rad B',
         quantity: 1,
         unit: 'st',

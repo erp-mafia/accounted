@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
  */
 const SOURCES: ReadonlyArray<{ key: string; href: string; logo: string | null }> = [
   { key: 'bank', href: '/settings/banking', logo: null },
-  { key: 'skattekonto', href: '/settings/skatteverket', logo: '/logos/skatteverket_color.svg' },
+  { key: 'skattekonto', href: '/settings/tax', logo: '/logos/skatteverket_color.svg' },
   { key: 'stripe', href: '/import?mode=stripe', logo: '/logos/banks/stripe.png' },
   { key: 'shopify', href: '/import?mode=shopify', logo: '/logos/shopify.svg' },
   { key: 'woocommerce', href: '/import?mode=woocommerce', logo: '/logos/woocommerce.svg' },

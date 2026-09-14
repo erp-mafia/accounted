@@ -13,7 +13,7 @@ import { makeCustomer, makeInvoice, makeCompanySettings } from '@/tests/helpers'
 import type { CompanySettings } from '@/types'
 
 const company = makeCompanySettings({ company_name: 'Acme AB' })
-const customer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se' })
+const customer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se' })
 const invoice = makeInvoice({
   invoice_number: 'F2026010',
   invoice_date: '2026-04-15',
@@ -464,5 +464,44 @@ describe('reminder email texts: per-company overrides', () => {
     expect(level1).toContain('Vi vill påminna dig')
     expect(level2).toContain('Egen text för nivå två.')
     expect(level2).not.toContain('Trots vår tidigare påminnelse')
+  })
+})
+
+describe('reminder payment reference matches the PDF', () => {
+  it('prints the OCR reference (with check digit) when the invoice is paid to a bankgiro', () => {
+    const bgCompany = makeCompanySettings({ ...company, bankgiro: '123-4567' })
+    const data = {
+      ...baseData,
+      company: bgCompany,
+      interestAmount: 0,
+      interestRate: 0,
+      interestFromDate: '2026-05-01',
+      interestDays: 0,
+      reminderFee: 0,
+    }
+    const html = generateReminderEmailHtml(data)
+    const text = generateReminderEmailText(data)
+    expect(html).toContain('Bankgiro:')
+    expect(html).toContain('OCR/Referens:')
+    expect(html).not.toContain('Meddelande:')
+    expect(text).toContain('Bankgiro: 123-4567')
+    expect(text).toMatch(/OCR\/Referens: \d+/)
+  })
+})
+
+describe('reminder greeting is HTML-escaped', () => {
+  it('never lets a customer name inject markup', () => {
+    const hostile = makeCustomer({ name: '<img src=x onerror=alert(1)> AB', contact_person: null })
+    const html = generateReminderEmailHtml({
+      ...baseData,
+      customer: hostile,
+      interestAmount: 0,
+      interestRate: 0,
+      interestFromDate: '2026-05-01',
+      interestDays: 0,
+      reminderFee: 0,
+    })
+    expect(html).not.toContain('<img src=x')
+    expect(html).toContain('Hej &lt;img src=x onerror=alert(1)&gt; AB,')
   })
 })

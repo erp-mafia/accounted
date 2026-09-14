@@ -196,6 +196,40 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
     expect(businessRow.vat_number).toBe('SETEST00000001')
   })
 
+  // #2367: an enskild firma's org_number IS its owner's personnummer, so the
+  // list masks it on the same GDPR art. 5.1 c grounds as an individual's,
+  // even though the row is customer_type='swedish_business'.
+  it('masks org_number and vat_number for a sole trader stored as swedish_business', async () => {
+    const soleTrader = {
+      ...SAMPLE_CUSTOMER,
+      id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      name: 'Bertil Bengtsson Bygg',
+      customer_type: 'swedish_business',
+      org_number: '195512319876', // synthetic personnummer-shaped org number
+      vat_number: 'SE195512319601',
+    }
+    const business = { ...SAMPLE_CUSTOMER, customer_type: 'swedish_business' }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: [soleTrader, business], error: null },
+      }),
+    )
+
+    const res = await listCustomers(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const soleTraderRow = body.data.find((c: { id: string }) => c.id === soleTrader.id)
+    expect(soleTraderRow.org_number).toBeNull()
+    expect(soleTraderRow.vat_number).toBeNull()
+    const legalEntityRow = body.data.find((c: { id: string }) => c.id === SAMPLE_CUSTOMER.id)
+    expect(legalEntityRow.org_number).toBe('TEST-0000-0001')
+  })
+
   it('accepts include_archived=true', async () => {
     const archived = { ...SAMPLE_CUSTOMER, archived_at: '2026-01-01T00:00:00Z' }
     mockServiceClient.mockReturnValue(
@@ -960,10 +994,42 @@ const MASKED_PERSONAL_NUMBER = '********-1234'
 const CIPHERTEXT_SHAPE = /^[0-9a-f]{76,255}$/
 
 describe('personal_number on the v1 customer surface', () => {
-  it('POST rejects a personnummer-shaped org_number on a business customer', async () => {
+  it('POST rejects a personnummer-shaped org_number on a foreign business customer', async () => {
     withWriteScope()
     const supabaseMock = makeFlexibleSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Auslandsfirma GmbH',
+        customer_type: 'eu_business',
+        country: 'DE',
+        org_number: TEST_PERSONAL_NUMBER,
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(JSON.stringify(body.error.details)).toContain('org_number')
+    // The customers table was never touched (idempotency bookkeeping may be).
+    expect(supabaseMock.from.mock.calls.some((c) => c[0] === 'customers')).toBe(false)
+  })
+
+  // #2367: a Swedish enskild firma has no org number of its own, so its
+  // owner's personnummer is the firm's identifier. It is stored as given and
+  // masked by the list endpoint, not refused.
+  it('POST accepts a personnummer-shaped org_number on swedish_business', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: {
+        data: { ...SAMPLE_CUSTOMER, name: 'Enskild Firma X', org_number: TEST_PERSONAL_NUMBER },
+        error: null,
+      },
     })
     mockServiceClient.mockReturnValue(supabaseMock)
 
@@ -976,12 +1042,10 @@ describe('personal_number on the v1 customer surface', () => {
       companyParams(COMPANY_ID),
     )
 
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(JSON.stringify(body.error.details)).toContain('org_number')
-    // The customers table was never touched (idempotency bookkeeping may be).
-    expect(supabaseMock.from.mock.calls.some((c) => c[0] === 'customers')).toBe(false)
+    expect(res.status).toBe(201)
+    const inserted = supabaseMock.captured.insert[0] as Record<string, unknown>
+    expect(inserted.org_number).toBe(TEST_PERSONAL_NUMBER)
+    expect(inserted.personal_number ?? null).toBeNull()
   })
 
   it('POST stores personal_number encrypted and returns it masked', async () => {
@@ -1089,11 +1153,39 @@ describe('personal_number on the v1 customer surface', () => {
     expect(updated.notes).toBe('still here')
   })
 
-  it('PATCH rejects a personnummer-shaped org_number on a stored business customer', async () => {
+  // Judged on the row as it will END UP: a type change alone carries no
+  // org_number, so checking only the body would move a stored personnummer
+  // onto a foreign type, the one place the list surfaces do not mask it.
+  it('PATCH refuses a type change that would move a stored personnummer to a foreign type', async () => {
     withWriteScope()
     const supabaseMock = makeFlexibleSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      customers: { data: SAMPLE_CUSTOMER, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, org_number: TEST_PERSONAL_NUMBER }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    // country moves with the type so the earlier country-vs-type rule passes
+    // and the org-number guard is the one that answers.
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        customer_type: 'eu_business',
+        country: 'DE',
+        vat_number: 'DE811234567',
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('CUSTOMER_ORG_NUMBER_IS_PERSONAL')
+    expect(supabaseMock.captured.update).toHaveLength(0)
+  })
+
+  it('PATCH rejects a personnummer-shaped org_number on a stored foreign business customer', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, customer_type: 'eu_business' }, error: null },
     })
     mockServiceClient.mockReturnValue(supabaseMock)
 
@@ -1108,6 +1200,26 @@ describe('personal_number on the v1 customer surface', () => {
     const body = await res.json()
     expect(body.error.code).toBe('CUSTOMER_ORG_NUMBER_IS_PERSONAL')
     expect(supabaseMock.captured.update).toHaveLength(0)
+  })
+
+  it('PATCH accepts a personnummer-shaped org_number on a stored swedish_business row (#2367)', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: { ...SAMPLE_CUSTOMER, org_number: TEST_PERSONAL_NUMBER }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        org_number: TEST_PERSONAL_NUMBER,
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const updated = supabaseMock.captured.update[0] as Record<string, unknown>
+    expect(updated.org_number).toBe(TEST_PERSONAL_NUMBER)
   })
 })
 

@@ -56,6 +56,48 @@ export function cashPartialBlockReason(opts: {
   return null
 }
 
+/** The booked-ness signals on a customer invoice being credited. */
+export interface CustomerCreditNoteOriginal {
+  /** Set once the sale reached the ledger, at issue or at payment. */
+  journal_entry_id?: string | null
+  status?: string | null
+  paid_at?: string | null
+  paid_amount?: number | null
+}
+
+/**
+ * Whether a customer credit note must post a reversing verifikat.
+ *
+ * The test is "did the original reach the ledger", not "which accounting
+ * method is configured". Under faktureringsmetoden the sale was booked at
+ * issue, so the reversal always applies. Under kontantmetoden nothing is
+ * booked at issue, and skipping the credit note is correct while the invoice
+ * is still unpaid: there is no entry to reverse and recognition waits for
+ * cash. Once the invoice has been PAID, the payment verifikat already booked
+ * the revenue and the utgående moms (26xx, rutorna 10-12). Leaving that
+ * un-reversed overstates both for as long as the credit stands, and the
+ * original is marked 'credited' with no accounting trace at all, so nothing
+ * links a later refund back to it. ML 17 kap: the seller reduces utgående
+ * moms in the credit note's period.
+ *
+ * createCreditNoteJournalEntry's shape works for both cases: the 1510 credit
+ * leaves the refund owed to the customer on kundfordringar, which the outgoing
+ * refund payment clears, exactly as the supplier side leaves a 2440 debit.
+ */
+export function creditNoteNeedsJournalEntry(
+  accountingMethod: string,
+  original: CustomerCreditNoteOriginal | null | undefined,
+): boolean {
+  if ((accountingMethod || 'accrual') === 'accrual') return true
+  if (!original) return false
+  return (
+    !!original.journal_entry_id ||
+    original.status === 'paid' ||
+    !!original.paid_at ||
+    Math.round(Math.abs(original.paid_amount ?? 0) * 100) !== 0
+  )
+}
+
 /** The booked-ness signals on a supplier invoice being credited. */
 export interface SupplierCreditNoteOriginal {
   /** Set when the invoice was booked at registration (faktureringsmetoden). */

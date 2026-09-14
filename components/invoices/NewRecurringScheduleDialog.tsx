@@ -28,7 +28,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, Type } from 'lucide-react'
 import type { Customer, Currency, RecurringInvoiceSchedule } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -42,6 +42,10 @@ import {
   projectRunDates,
   runDateMatchesDayOfMonth,
 } from '@/lib/invoices/recurring-run-date'
+import {
+  RECURRING_PLACEHOLDER_KEYS,
+  mentionsPeriodPlaceholder,
+} from '@/lib/invoices/recurring-placeholders'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
@@ -134,16 +138,31 @@ function NewRecurringScheduleForm({
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const schema = useMemo(() => {
-    const itemSchema = z.object({
-      description: z.string().min(1, t('validation_description_required')),
-      quantity: z.number().min(0.01, t('validation_quantity_min')),
-      unit: z.string().min(1, t('validation_unit_required')),
-      unit_price: z.number(),
-      vat_rate: z
-        .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
-        .nullable()
-        .optional(),
-    })
+    const itemSchema = z
+      .object({
+        line_type: z.enum(['product', 'text']),
+        description: z.string(),
+        quantity: z.number(),
+        unit: z.string(),
+        unit_price: z.number(),
+        vat_rate: z
+          .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+          .nullable()
+          .optional(),
+      })
+      .superRefine((item, ctx) => {
+        // A text row is description-only (may be blank for a spacer).
+        if (item.line_type === 'text') return
+        if (item.description.trim().length === 0) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: t('validation_description_required') })
+        }
+        if (!(item.quantity >= 0.01)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: t('validation_quantity_min') })
+        }
+        if (item.unit.trim().length === 0) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: t('validation_unit_required') })
+        }
+      })
     return z
       .object({
         customer_id: z.string().uuid(t('validation_customer_required')),
@@ -161,9 +180,28 @@ function NewRecurringScheduleForm({
         your_reference: z.string().optional(),
         our_reference: z.string().optional(),
         notes: z.string().optional(),
+        // '' = no period (the date input's empty value).
+        period_start: z.union([z.literal(''), z.string().regex(ISO_DATE_RE)]),
         items: z.array(itemSchema).min(1, t('validation_min_one_row')),
       })
       .superRefine((data, ctx) => {
+        if (!data.items.some((item) => item.line_type !== 'text')) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['items'],
+            message: t('validation_min_one_product_row'),
+          })
+        }
+        if (
+          !data.period_start
+          && mentionsPeriodPlaceholder([data.notes, ...data.items.map((item) => item.description)])
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['period_start'],
+            message: t('validation_period_placeholder_needs_start'),
+          })
+        }
         if (!ISO_DATE_RE.test(data.run_date)) return
         // Mirrors the API: the date must sit on the schedule grid for the
         // chosen day (the field syncs with day_of_month, so this only fires
@@ -226,18 +264,20 @@ function NewRecurringScheduleForm({
           your_reference: schedule.your_reference ?? undefined,
           our_reference: schedule.our_reference ?? undefined,
           notes: schedule.notes ?? undefined,
+          period_start: schedule.period_start ?? '',
           items:
             schedule.items && schedule.items.length > 0
               ? [...schedule.items]
                   .sort((a, b) => a.sort_order - b.sort_order)
                   .map((it) => ({
+                    line_type: (it.line_type ?? 'product') as 'product' | 'text',
                     description: it.description,
                     quantity: it.quantity,
                     unit: it.unit,
                     unit_price: it.unit_price,
                     vat_rate: (it.vat_rate as 0 | 6 | 12 | 25 | null) ?? null,
                   }))
-              : [{ description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 }],
+              : [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 }],
         }
       : {
           customer_id: '',
@@ -249,7 +289,8 @@ function NewRecurringScheduleForm({
           payment_terms_days: 30,
           currency: 'SEK',
           auto_send: false,
-          items: [{ description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 }],
+          period_start: '',
+          items: [{ line_type: 'product' as const, description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 }],
         },
   })
 
@@ -269,7 +310,8 @@ function NewRecurringScheduleForm({
   async function onSubmit(data: FormData) {
     setIsSubmitting(true)
     try {
-      const { run_date, ...rest } = data
+      const { run_date, period_start, ...restFields } = data
+      const rest = { ...restFields, period_start: period_start || null }
       // Create: the chosen date is the first run. Edit: only send it when the
       // user re-phased the schedule (a different month/year than the stored
       // date aligned to the chosen day), so an unrelated edit, a day-only
@@ -363,7 +405,7 @@ function NewRecurringScheduleForm({
     if (autoSendBlocked) setValue('auto_send', false)
   }, [autoSendBlocked, setValue])
   const subtotalRaw = items.reduce(
-    (sum, it) => sum + (it.quantity || 0) * (it.unit_price || 0),
+    (sum, it) => sum + (it.line_type === 'text' ? 0 : (it.quantity || 0) * (it.unit_price || 0)),
     0,
   )
   // Round to öre using the project monetary rule, then format.
@@ -611,7 +653,32 @@ function NewRecurringScheduleForm({
           <CardTitle className="text-base">{t('items_card_title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {fields.map((field, index) => (
+          {fields.map((field, index) => items[index]?.line_type === 'text' ? (
+            <div
+              key={field.id}
+              className="grid grid-cols-12 gap-2 items-start"
+            >
+              <div className="col-span-10 sm:col-span-11 flex items-center gap-2">
+                <Type className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
+                <Input
+                  placeholder={t('text_row_placeholder')}
+                  aria-label={t('text_row_label')}
+                  {...register(`items.${index}.description`)}
+                />
+              </div>
+              <div className="col-span-2 sm:col-span-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => remove(index)}
+                  aria-label={t('remove_row')}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ) : (
             <div
               key={field.id}
               className="grid grid-cols-12 gap-2 items-start"
@@ -688,20 +755,46 @@ function NewRecurringScheduleForm({
               </div>
             </div>
           ))}
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() =>
-              append({ description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 })
-            }
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            {t('add_row')}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                append({ line_type: 'product', description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 })
+              }
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              {t('add_row')}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                append({ line_type: 'text', description: '', quantity: 0, unit: '', unit_price: 0, vat_rate: null })
+              }
+            >
+              <Type className="mr-2 h-4 w-4" />
+              {t('add_text_row')}
+            </Button>
+          </div>
+          {/* Array-level issues (no billable row): the resolver puts them on
+              .root for field arrays, older resolver versions on the node. */}
+          {(errors.items?.root?.message ?? (errors.items as { message?: string } | undefined)?.message) && (
+            <p className="text-sm text-destructive">
+              {errors.items?.root?.message ?? (errors.items as { message?: string } | undefined)?.message}
+            </p>
+          )}
           <div className="pt-2 text-sm text-muted-foreground tabular-nums">
             {t('subtotal_ex_vat', { amount: formatCurrency(subtotal, watchCurrency) })}
           </div>
+          <p className="text-xs text-muted-foreground">
+            {t('placeholders_hint')}{' '}
+            <span className="font-mono">
+              {RECURRING_PLACEHOLDER_KEYS.map((key) => `{${key}}`).join(' ')}
+            </span>
+          </p>
         </CardContent>
       </Card>
 
@@ -723,6 +816,28 @@ function NewRecurringScheduleForm({
           <div>
             <Label htmlFor="notes">{t('notes_label')}</Label>
             <Textarea id="notes" rows={3} {...register('notes')} />
+            <p className="text-xs text-muted-foreground mt-1">
+              {t('placeholders_hint')}{' '}
+              <span className="font-mono">
+                {RECURRING_PLACEHOLDER_KEYS.map((key) => `{${key}}`).join(' ')}
+              </span>
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="period_start">{t('period_start_label')}</Label>
+              <Input
+                id="period_start"
+                type="date"
+                className="tabular-nums"
+                {...register('period_start')}
+              />
+              {errors.period_start ? (
+                <p className="text-sm text-destructive mt-1">{errors.period_start.message}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground mt-1">{t('period_start_hint')}</p>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>

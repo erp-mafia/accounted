@@ -120,7 +120,7 @@ function useMinWidthMd() {
   return md
 }
 
-/** Current sidebar column width (--nav-w, set inline on #dash-shell). */
+/** Current sidebar column width (--nav-w, read from #dash-shell). */
 function readNavWidth(): number {
   if (typeof document === 'undefined') return 248
   const shell = document.getElementById('dash-shell')
@@ -129,9 +129,9 @@ function readNavWidth(): number {
 }
 
 /**
- * Reactive sidebar width: the nav toggle rewrites #dash-shell's inline
- * --nav-w, which fires no resize event, so observe the style attribute
- * instead of forcing a computed-style read on every render.
+ * Reactive sidebar width: a change to #dash-shell's inline --nav-w fires
+ * no resize event, so observe the style attribute instead of forcing a
+ * computed-style read on every render.
  */
 function useNavWidth(): number {
   const [w, setW] = useState(readNavWidth)

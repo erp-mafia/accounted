@@ -16,6 +16,11 @@
  * lib/reports/supplier-ledger.ts), so a caller can name them and point at the
  * repair: POST /api/invoices/{id}/refresh-exchange-rate.
  *
+ * Which references identify an invoice is NOT decided here: lib/invoices/ocr-keys.ts
+ * owns that, and derives them from the same generator the PDF prints, so the
+ * value the customer types into the bank (invoice number digits + Luhn check
+ * digit) is always one of the values this matcher looks for.
+ *
  * The supplier-side twin is lib/invoices/supplier-invoice-matching.ts. Keep the
  * two guards in step.
  */
@@ -23,6 +28,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { normalizeCurrencyCode, invoiceAmountSek } from './duplicate-guard-currency'
+import { normalizeOcrReference } from './duplicate-payment-guard'
+import { matchesNormalizedReference, distinctiveReferenceKeys } from './ocr-keys'
 import type { Invoice, Transaction, Customer } from '@/types'
 
 export interface InvoiceMatch {
@@ -71,6 +78,13 @@ export interface InvoiceMatchResult {
  */
 export const CONFIDENCE = {
   OCR_REFERENCE_MATCH: 0.99,
+  /**
+   * A reference key found inside the free bank text (description / merchant
+   * name) rather than in the reference field. Weaker than an exact reference
+   * hit, because free text can coincide, but stronger than an amount that
+   * happens to line up: it still names the invoice.
+   */
+  OCR_REFERENCE_IN_TEXT: 0.85,
   EXACT_AMOUNT_CUSTOMER: 0.95,
   EXACT_AMOUNT_ONLY: 0.80,
   FUZZY_AMOUNT_CUSTOMER: 0.70,
@@ -338,14 +352,15 @@ export async function findInvoiceMatchCandidates(
   const unconvertedFxInvoices: InvoiceMatchExclusion[] = []
 
   // OCR/Bankgiro reference matching: highest confidence
-  // Swedish standard: match transaction reference to invoice OCR number
+  // Swedish standard: match transaction reference to invoice OCR number. Both
+  // forms count, the bare invoice number and the OCR the invoice printed
+  // (same digits plus a Luhn check digit), because both are things a customer
+  // can legitimately have typed into the bank.
   const txReference = (transaction as Transaction & { reference?: string | null }).reference
-  if (txReference) {
-    const normalizedRef = txReference.replace(/\s+/g, '')
+  const normalizedRef = normalizeOcrReference(txReference)
+  if (normalizedRef) {
     for (const invoice of filteredInvoices) {
-      // Match against invoice_number (used as OCR reference in Swedish payments)
-      const invoiceRef = invoice.invoice_number?.replace(/\s+/g, '')
-      if (invoiceRef && normalizedRef === invoiceRef) {
+      if (matchesNormalizedReference(invoice.invoice_number, normalizedRef)) {
         matches.push({
           invoice: invoice as Invoice & { customer?: Customer },
           confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
@@ -360,7 +375,34 @@ export async function findInvoiceMatchCandidates(
     }
   }
 
+  // Fallback: plenty of banks drop the OCR into the free text instead of the
+  // reference field ("Faktura 202600425", "BG inbet 2026 0042 5"). Comparing
+  // digit runs is weaker than an exact reference, so it scores lower and,
+  // unlike the exact branch above, it does NOT short-circuit: every invoice is
+  // still scored on amount below and the stronger of the two reasons wins.
+  // Each field is normalised on its own: concatenating first would let the
+  // last digits of the description and the first of the merchant name form a
+  // run that exists in neither.
+  const referenceHaystacks = [transaction.description, transaction.merchant_name]
+    .map((value) => normalizeOcrReference(value))
+    .filter((digits) => digits.length > 0)
+  const referenceInTextIds = new Set<string>()
+  if (referenceHaystacks.length > 0) {
+    for (const invoice of filteredInvoices) {
+      const keys = distinctiveReferenceKeys(invoice.invoice_number)
+      if (keys.some((key) => referenceHaystacks.some((digits) => digits.includes(key)))) {
+        referenceInTextIds.add(invoice.id as string)
+      }
+    }
+  }
+  const inTextMatch = (invoice: Invoice): InvoiceMatch => ({
+    invoice: invoice as Invoice & { customer?: Customer },
+    confidence: CONFIDENCE.OCR_REFERENCE_IN_TEXT,
+    matchReason: `OCR-referens för faktura ${invoice.invoice_number} förekommer i banktexten`,
+  })
+
   for (const invoice of filteredInvoices) {
+    const referenceInText = referenceInTextIds.has(invoice.id as string)
     // Use remaining_amount for partially paid invoices, otherwise total
     const invoiceAmount = invoice.remaining_amount ?? invoice.total
 
@@ -370,6 +412,13 @@ export async function findInvoiceMatchCandidates(
     // up with a kronor bank row.
     const compareAmount = comparableAmount(invoice, transaction, invoiceAmount)
     if (compareAmount === null) {
+      // A reference names the invoice on its own, so it survives the missing
+      // conversion the same way the exact branch above does: no amount is
+      // involved in the claim.
+      if (referenceInText) {
+        matches.push(inTextMatch(invoice))
+        continue
+      }
       // Record the ones a missing exchange rate is holding back, so the caller
       // can say so instead of leaving the user to wonder.
       if (isUnconvertedForeignInvoice(invoice, transaction)) {
@@ -389,6 +438,9 @@ export async function findInvoiceMatchCandidates(
     const amountDiff = Math.abs(transactionAmount - compareAmount)
     const tolerance = compareAmount * FUZZY_TOLERANCE
     if (amountDiff > tolerance && transactionAmount !== compareAmount) {
+      // Amount off, reference present: still the invoice the payer named, e.g.
+      // a part payment or a rounded transfer quoting the OCR.
+      if (referenceInText) matches.push(inTextMatch(invoice))
       continue
     }
 
@@ -403,7 +455,11 @@ export async function findInvoiceMatchCandidates(
       invoiceWithAdjustedTotal as Invoice & { customer?: Customer }
     )
 
-    if (confidence >= CONFIDENCE.MIN_THRESHOLD) {
+    // The reference reason and the amount reason are two readings of the same
+    // invoice, so the invoice is offered once, under the stronger of the two.
+    if (referenceInText && CONFIDENCE.OCR_REFERENCE_IN_TEXT > confidence) {
+      matches.push(inTextMatch(invoice))
+    } else if (confidence >= CONFIDENCE.MIN_THRESHOLD) {
       matches.push({
         invoice: invoice as Invoice & { customer?: Customer },
         confidence,

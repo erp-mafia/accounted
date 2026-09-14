@@ -1,4 +1,5 @@
 import type {
+  AccountingAccountDto,
   CompanyInformationDto,
   CustomerDto,
   SupplierDto,
@@ -145,6 +146,33 @@ export async function fetchCompanyInfoDirect(
  * orchestrator's ProviderRunState.grantProven, which counts rows instead).
  * A failed request still throws; only genuinely absent resources return [].
  */
+/**
+ * The provider's chart of accounts, with the per-account momskod the SIE
+ * export leaves out (SIE4 #KONTO carries no VAT code). Fortnox only so far:
+ * its VATCode is a named code whose meaning is documented
+ * (lib/providers/fortnox/vat-codes.ts). Visma's VatCodeId is an opaque id
+ * that needs a second lookup, and the Björn Lundén and Briox code sets are
+ * unverified, so those answer [] until their semantics are pinned down.
+ *
+ * Fortnox lists the chart of the CURRENT financial year when no
+ * financialyear filter is given; that is the chart the user sees in Fortnox
+ * today, which is what the mapping step should agree with.
+ */
+export async function fetchAccountingAccountsDirect(
+  provider: ProviderName,
+  accessToken: string,
+): Promise<AccountingAccountDto[]> {
+  if (provider === 'fortnox') {
+    const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.AccountingAccounts]!;
+    const items = await fortnoxClient.getPaginated<Record<string, unknown>>(
+      accessToken, config.listEndpoint, config.listKey, { pageSize: 500 },
+    );
+    return items.map((item) => config.mapper(item) as AccountingAccountDto);
+  }
+
+  return [];
+}
+
 export async function fetchCustomersDirect(
   provider: ProviderName,
   accessToken: string,

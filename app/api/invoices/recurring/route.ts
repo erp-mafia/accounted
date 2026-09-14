@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { CreateRecurringScheduleSchema } from '@/lib/api/schemas'
+import { toRecurringScheduleItemRow } from '@/lib/invoices/recurring-schedule-items'
 import {
   computeInitialRunDate,
   getStockholmDateHour,
@@ -138,6 +139,7 @@ export const POST = withRouteContext(
         your_reference: input.your_reference ?? null,
         our_reference: input.our_reference ?? null,
         notes: input.notes ?? null,
+        period_start: input.period_start ?? null,
         auto_send: input.auto_send,
         default_dimensions: input.default_dimensions ?? {},
         next_run_date: nextRunDate,
@@ -151,16 +153,7 @@ export const POST = withRouteContext(
       return errorResponse(insertError ?? new Error('insert failed'), log, { requestId })
     }
 
-    const itemRows = input.items.map((item, idx) => ({
-      schedule_id: schedule.id,
-      sort_order: idx,
-      description: item.description,
-      quantity: item.quantity,
-      unit: item.unit,
-      unit_price: item.unit_price,
-      vat_rate: item.vat_rate ?? null,
-      dimensions: item.dimensions ?? {},
-    }))
+    const itemRows = input.items.map((item, idx) => toRecurringScheduleItemRow(schedule.id, item, idx))
 
     const { error: itemsError } = await supabase
       .from('recurring_invoice_schedule_items')

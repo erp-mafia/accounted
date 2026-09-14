@@ -150,4 +150,4 @@ export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { s
       { status: 500 }
     )
   }
-})
+}, { requireCompleteLedger: true })

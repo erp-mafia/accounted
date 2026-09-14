@@ -35,3 +35,19 @@ describe('m3Linked, multi-company sender', () => {
     expect(msg).toMatch(/AI-assistent/)
   })
 })
+
+describe('m22LookupRetry, link lookup unavailable (#2365)', () => {
+  for (const locale of ['sv', 'en'] as const) {
+    it(`${locale}: asks for a resend without mentioning a code or linking`, () => {
+      const msg = botCopy(locale).m22LookupRetry()
+
+      // Most senders on this path are already linked and just sent a receipt:
+      // M21 wording ("could not check the code") would be nonsense to them,
+      // and anything about linking invites a second link flow.
+      expect(msg).not.toMatch(locale === 'sv' ? /kod/i : /code/i)
+      expect(msg).not.toMatch(locale === 'sv' ? /koppla|Inställningar/i : /link|Settings/i)
+      // The promise the message makes: send the same thing again shortly.
+      expect(msg).toMatch(locale === 'sv' ? /igen/i : /again/i)
+    })
+  }
+})

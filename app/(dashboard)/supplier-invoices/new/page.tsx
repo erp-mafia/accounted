@@ -5,7 +5,7 @@ type SearchParams = Record<string, string | string[] | undefined>
 // Supplier invoice registration now happens in a modal on the list page
 // (matching the verifikat pattern): the form itself lives in
 // components/supplier-invoices/NewSupplierInvoiceForm.tsx. This route
-// survives as a redirect so old links, bookmarks, the /expenses/new alias,
+// survives as a redirect so old links, bookmarks,
 // and inbox deep links (?inbox_item_id=…) keep working.
 export default async function NewSupplierInvoicePage({
   searchParams,

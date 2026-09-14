@@ -12,6 +12,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { DEFAULT_SUPPLIER_PAYMENT_ACCOUNT } from '@/lib/bookkeeping/supplier-invoice-entries'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 type PreviewLine = {
@@ -62,7 +63,7 @@ export const GET = withRouteContext(
     const creditAccount =
       payment_account ||
       (settings as { last_supplier_payment_account?: string } | null)?.last_supplier_payment_account ||
-      '1930'
+      DEFAULT_SUPPLIER_PAYMENT_ACCOUNT
 
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'

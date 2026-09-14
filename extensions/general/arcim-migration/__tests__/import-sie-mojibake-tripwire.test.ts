@@ -19,11 +19,15 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 vi.mock('@/lib/import/sie-import', () => ({
   loadMappings: vi.fn(),
   generateImportPreview: vi.fn(),
-  executeSIEImport: vi.fn(),
+
 }))
 
+vi.mock('@/lib/import/sie-jobs', () => ({submitSIEJob: vi.fn()}))
+vi.mock('next/server', async (load) => ({...await load<typeof import('next/server')>(), after:vi.fn()}))
+vi.mock('@/lib/import/sie-job-worker', () => ({runSIEWorker:vi.fn()}))
+
 import { arcimMigrationExtension } from '../index'
-import { executeSIEImport } from '@/lib/import/sie-import'
+import { submitSIEJob } from '@/lib/import/sie-jobs'
 
 const importSieRoute = (arcimMigrationExtension.apiRoutes ?? []).find(
   (r) => r.method === 'POST' && r.path === '/import-sie',
@@ -78,8 +82,8 @@ describe('POST /import-sie: mojibake tripwire', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Fresh result object per call: the handler pushes onto result.warnings.
-    ;(executeSIEImport as Mock).mockImplementation(async () => ({
-      success: true,
+    ;(submitSIEJob as Mock).mockImplementation(async () => ({
+      success: true, id:'imp-1', job_state:'queued',
       journalEntriesCreated: 1,
       errors: [],
       warnings: [],
@@ -93,14 +97,14 @@ describe('POST /import-sie: mojibake tripwire', () => {
       ctx,
     )
     expect(response.status).toBe(401)
-    expect(executeSIEImport).not.toHaveBeenCalled()
+    expect(submitSIEJob).not.toHaveBeenCalled()
   })
 
   it('returns 400 when rawContent is missing', async () => {
     const { ctx } = buildCtx('user-1')
     const response = await handler(importRequest({ mappings: MAPPINGS, options: {} }), ctx)
     expect(response.status).toBe(400)
-    expect(executeSIEImport).not.toHaveBeenCalled()
+    expect(submitSIEJob).not.toHaveBeenCalled()
   })
 
   it('surfaces a Swedish warning on mojibaked content WITHOUT blocking the import', async () => {
@@ -111,9 +115,9 @@ describe('POST /import-sie: mojibake tripwire', () => {
     )
     const { status, body } = await parseJsonResponse<{ warnings: string[] }>(response)
 
-    expect(status).toBe(200)
+    expect(status).toBe(202)
     // Warn, never block: the import ran despite the flagged content.
-    expect(executeSIEImport).toHaveBeenCalledTimes(1)
+    expect(submitSIEJob).toHaveBeenCalledTimes(1)
 
     const tripwire = body.warnings.find((w) => w.includes('felaktigt teckenkodad'))
     expect(tripwire).toBeDefined()
@@ -138,8 +142,8 @@ describe('POST /import-sie: mojibake tripwire', () => {
     )
     const { status, body } = await parseJsonResponse<{ warnings: string[] }>(response)
 
-    expect(status).toBe(200)
-    expect(executeSIEImport).toHaveBeenCalledTimes(1)
+    expect(status).toBe(202)
+    expect(submitSIEJob).toHaveBeenCalledTimes(1)
     expect(body.warnings.some((w) => w.includes('felaktigt teckenkodad'))).toBe(false)
     expect(log.warn).not.toHaveBeenCalled()
   })

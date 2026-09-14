@@ -487,6 +487,222 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     expect(items[0].vat_amount).toBe(0)
   })
 
+  it('registers the net as payable under reverse charge even when the staged header carries the gross (feedback 366701)', async () => {
+    // Anthropic invoice ZC8NEUGS-0001: subtotal 919.20 / vat 229.80 / total
+    // 1149.00 staged verbatim with vat_treatment reverse_charge. The
+    // registration entry credits 2440 with the line nets (919.20), so an
+    // executor that wrote total 1149 / remaining 1149 left the reskontra
+    // 229.80 above the GL and the payment match could never settle. An op
+    // staged before the staging-side fix, or a tampered one, still looks
+    // like this: the executor must derive the payable from the items.
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-rc-net', voucher_number: 11 })
+    )
+
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'supplier-1', name: 'Anthropic, PBC', supplier_type: 'non_eu_business' },
+      error: null,
+    })
+    enqueue({ data: 51, error: null }) // arrival number
+    enqueue({
+      data: makeSupplierInvoice({
+        id: 'inv-rc-net',
+        supplier_invoice_number: 'ZC8NEUGS-0001',
+        vat_treatment: 'reverse_charge',
+        reverse_charge: true,
+        subtotal: 919.2,
+        vat_amount: 0,
+        total: 919.2,
+      }),
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // supplier_invoice_items insert
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        params: {
+          inbox_item_id: 'inbox-1',
+          supplier_id: 'supplier-1',
+          document_id: null,
+          supplier_invoice_number: 'ZC8NEUGS-0001',
+          invoice_date: '2026-08-01',
+          due_date: '2026-08-31',
+          currency: 'SEK',
+          exchange_rate: null,
+          vat_treatment: 'reverse_charge',
+          // Stale/tampered header: the document's gross, not the net.
+          subtotal: 1149,
+          vat_amount: 229.8,
+          total: 1149,
+          notes: null,
+          items: [
+            {
+              line_number: 1,
+              description: 'Claude API usage',
+              quantity: 1,
+              unit: 'st',
+              unit_price: 919.2,
+              line_total: 919.2,
+              account_number: '6540',
+              vat_rate: 0.25,
+              vat_amount: 229.8,
+            },
+          ],
+        },
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(row.reverse_charge).toBe(true)
+    expect(row.subtotal).toBe(919.2)
+    expect(row.vat_amount).toBe(0)
+    expect(row.total).toBe(919.2)
+    expect(row.remaining_amount).toBe(919.2)
+    // SEK invoice: the SEK columns follow the same net to the öre.
+    expect(row.subtotal_sek).toBe(919.2)
+    expect(row.vat_amount_sek).toBe(0)
+    expect(row.total_sek).toBe(919.2)
+  })
+
+  // Issue #2553: exempt and export carry no Swedish moms, so a staged op
+  // that still shows a rate (OCR, a stale op, the column default) must not
+  // write it: the engine books no 2641 for these treatments, and a header
+  // carrying VAT would leave the reskontra above what 2440 is credited.
+  for (const treatment of ['exempt', 'export'] as const) {
+    it(`zeroes per-line VAT and registers the net under vat_treatment ${treatment}`, async () => {
+      vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(
+        makeJournalEntry({ id: `je-${treatment}`, voucher_number: 13 })
+      )
+
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({
+        data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+        error: null,
+      })
+      enqueue({
+        data: { id: 'supplier-1', name: 'Handelsbanken', supplier_type: 'swedish_business' },
+        error: null,
+      })
+      enqueue({ data: 53, error: null }) // arrival number
+      enqueue({
+        data: makeSupplierInvoice({
+          id: `inv-${treatment}`,
+          supplier_invoice_number: 'BANK-1',
+          vat_treatment: treatment,
+          subtotal: 1000,
+          vat_amount: 0,
+          total: 1000,
+        }),
+        error: null,
+      })
+      enqueue({ data: null, error: null }) // supplier_invoice_items insert
+      enqueue({ data: { accounting_method: 'accrual' }, error: null })
+      enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+      enqueue({ data: null, error: null }) // invoice_inbox_items update
+      enqueue({ data: null, error: null }) // dispatcher's commit update
+
+      const result = await commitPendingOperation(
+        supabase as never,
+        'user-1',
+        'company-1',
+        makePendingOp({
+          params: {
+            inbox_item_id: 'inbox-1',
+            supplier_id: 'supplier-1',
+            document_id: null,
+            supplier_invoice_number: 'BANK-1',
+            invoice_date: '2026-08-01',
+            due_date: '2026-08-31',
+            currency: 'SEK',
+            exchange_rate: null,
+            vat_treatment: treatment,
+            // Stale/tampered header + line: 25 % on a supply that carries none.
+            subtotal: 1000,
+            vat_amount: 250,
+            total: 1250,
+            notes: null,
+            items: [
+              {
+                line_number: 1,
+                description: 'Bankavgift',
+                quantity: 1,
+                unit: 'st',
+                unit_price: 1000,
+                line_total: 1000,
+                account_number: '6570',
+                vat_rate: 0.25,
+                vat_amount: 250,
+              },
+            ],
+          },
+        }),
+      )
+
+      expect(result.status).toBe('committed')
+      const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+      expect(row.vat_treatment).toBe(treatment)
+      expect(row.subtotal).toBe(1000)
+      expect(row.vat_amount).toBe(0)
+      expect(row.total).toBe(1000)
+      expect(row.remaining_amount).toBe(1000)
+      const [itemRows] = findCall('supplier_invoice_items', 'insert') as [Array<Record<string, unknown>>]
+      expect(itemRows[0].vat_rate).toBe(0)
+      expect(itemRows[0].vat_amount).toBe(0)
+    })
+  }
+
+  it('leaves a domestic invoice header untouched (the gross stays the payable)', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-dom', voucher_number: 12 })
+    )
+
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
+      error: null,
+    })
+    enqueue({ data: 52, error: null }) // arrival number
+    enqueue({
+      data: makeSupplierInvoice({ id: 'inv-dom', supplier_invoice_number: 'INV-100' }),
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // supplier_invoice_items insert
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makePendingOp())
+
+    expect(result.status).toBe('committed')
+    const [row] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(row.reverse_charge).toBe(false)
+    expect(row.subtotal).toBe(1000)
+    expect(row.vat_amount).toBe(250)
+    expect(row.total).toBe(1250)
+    expect(row.remaining_amount).toBe(1250)
+  })
+
   it('normalizes percent-shaped staged vat_rate (25) to the decimal convention on insert (issue #310)', async () => {
     let capturedItems: unknown = null
     const { supabase, enqueue } = createQueuedMockSupabase()

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isPersonalNumberOrgNumberDisallowed,
   looksLikeSwedishPersonalNumber,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
+  orgNumberIsPersonalIdentifier,
   personalNumberDigits,
 } from '@/lib/customers/personal-number-shape'
 
@@ -43,6 +45,56 @@ describe('looksLikeSwedishPersonalNumber', () => {
     expect(looksLikeSwedishPersonalNumber('19900199-1234')).toBe(false)
     expect(looksLikeSwedishPersonalNumber('179001011234')).toBe(false)
     expect(looksLikeSwedishPersonalNumber('************')).toBe(false)
+  })
+})
+
+describe('isPersonalNumberOrgNumberDisallowed', () => {
+  it('refuses a personnummer-shaped org_number only on the foreign business types', () => {
+    expect(isPersonalNumberOrgNumberDisallowed('eu_business', '19900101-1234')).toBe(true)
+    expect(isPersonalNumberOrgNumberDisallowed('non_eu_business', '9001011234')).toBe(true)
+  })
+
+  it('accepts one on a Swedish business: an enskild firma has no other org number (#2367)', () => {
+    expect(isPersonalNumberOrgNumberDisallowed('swedish_business', '19900101-1234')).toBe(false)
+    expect(isPersonalNumberOrgNumberDisallowed('swedish_business', '900101-1234')).toBe(false)
+    expect(isPersonalNumberOrgNumberDisallowed('swedish_business', '19900161-1234')).toBe(false)
+  })
+
+  it('never fires on an individual: that value is rerouted, not refused', () => {
+    expect(isPersonalNumberOrgNumberDisallowed('individual', '19900101-1234')).toBe(false)
+  })
+
+  it('ignores legal-entity org numbers, empty values and unknown types', () => {
+    expect(isPersonalNumberOrgNumberDisallowed('eu_business', '556677-8899')).toBe(false)
+    expect(isPersonalNumberOrgNumberDisallowed('eu_business', '')).toBe(false)
+    expect(isPersonalNumberOrgNumberDisallowed('eu_business', '   ')).toBe(false)
+    expect(isPersonalNumberOrgNumberDisallowed('eu_business', null)).toBe(false)
+    expect(isPersonalNumberOrgNumberDisallowed('eu_business', undefined)).toBe(false)
+    expect(isPersonalNumberOrgNumberDisallowed(null, '19900101-1234')).toBe(false)
+    expect(isPersonalNumberOrgNumberDisallowed(undefined, '19900101-1234')).toBe(false)
+  })
+})
+
+describe('orgNumberIsPersonalIdentifier', () => {
+  it('is true for an enskild firma stored as a Swedish business', () => {
+    expect(orgNumberIsPersonalIdentifier('swedish_business', '19900101-1234')).toBe(true)
+    expect(orgNumberIsPersonalIdentifier('swedish_business', '9001011234')).toBe(true)
+  })
+
+  it('is true for a legacy individual row carrying its personnummer in org_number', () => {
+    expect(orgNumberIsPersonalIdentifier('individual', '19900101-1234')).toBe(true)
+  })
+
+  it('is false for a legal-entity org number and for empty values', () => {
+    expect(orgNumberIsPersonalIdentifier('swedish_business', '556677-8899')).toBe(false)
+    expect(orgNumberIsPersonalIdentifier('swedish_business', '')).toBe(false)
+    expect(orgNumberIsPersonalIdentifier('swedish_business', null)).toBe(false)
+    expect(orgNumberIsPersonalIdentifier('individual', undefined)).toBe(false)
+  })
+
+  it('is false for foreign business types, which cannot hold one anyway', () => {
+    expect(orgNumberIsPersonalIdentifier('eu_business', '19900101-1234')).toBe(false)
+    expect(orgNumberIsPersonalIdentifier('non_eu_business', '19900101-1234')).toBe(false)
   })
 })
 

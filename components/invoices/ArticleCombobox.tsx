@@ -184,7 +184,11 @@ export default function ArticleCombobox({
     }
   }
 
-  const handleBlur = () => {
+  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+    // Focus landing on an option inside the list is not a dismissal: closing
+    // there would unmount the option mid-tap (issue #2447).
+    const next = e.relatedTarget as Node | null
+    if (next && containerRef.current?.contains(next)) return
     setIsOpen(false)
     // Delay so a dropdown mousedown wins, then snap the field back to the
     // committed selection: a half-typed search must not linger as a label.
@@ -255,7 +259,11 @@ export default function ArticleCombobox({
               className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer ${
                 index === highlightedIndex ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
               } ${option.muted ? 'text-muted-foreground' : ''}`}
-              onMouseDown={(e) => {
+              onPointerDown={(e) => {
+                // pointerdown, not mousedown: touch fires it natively, while
+                // the synthesized mouse event arrives after handleBlur has
+                // already closed this list (issue #2447).
+                if (e.pointerType === 'mouse' && e.button !== 0) return
                 e.preventDefault()
                 select(option)
               }}
