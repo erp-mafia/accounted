@@ -5,6 +5,10 @@ import {
   enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
   applyVatTreatmentReviewAll,
+  isInVatReviewList,
+  releaseAllConfirmed,
+  releaseConfirmedRow,
+  needsVatTreatmentReview,
 } from '../account-vat-treatment'
 import type { AccountMapping } from '../types'
 
@@ -205,6 +209,105 @@ describe('applyVatTreatmentReviewAll', () => {
     expect(result.filter((m: { requiresVatTreatmentReview?: boolean; vatTreatmentReviewed?: boolean }) =>
       m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
     )).toHaveLength(0)
+  })
+})
+
+describe('vat review list visibility', () => {
+  const NONE: ReadonlySet<string> = new Set()
+
+  /**
+   * An EU purchase account whose label names no percentage, which is the
+   * ordinary BAS spelling (4515 "Inköp varor EU", 4535 "Inköp tjänster EU").
+   *
+   * vatRateFromLabel (#2596) reads the sats out of labels that state one, so a
+   * label like "Inköp varor 12% EU" now defaults correctly; these do not, and
+   * fall back to 25 %. A 12 % or 6 % acquisition booked here still has to reach
+   * the sats select, which is what makes the row's visibility matter.
+   */
+  function row() {
+    return enrichAccountMappingsWithVat([mapping('4515', 'Inköp varor EU')], [])
+  }
+
+  it('counts a row as outstanding until it is reviewed', () => {
+    const [before] = row()
+    expect(needsVatTreatmentReview(before)).toBe(true)
+    const [after] = applyVatTreatmentReview(row(), '4515', 'reverse_charge_eu_goods', 0.25)
+    expect(needsVatTreatmentReview(after)).toBe(false)
+  })
+
+  it('keeps a row in the list between setting its momskod and its sats', () => {
+    // The bug: picking the treatment marks the row reviewed, and a list keyed
+    // on needsVatTreatmentReview drops it before the 25 % default can be
+    // corrected. It drops the row whether or not the default happened to be
+    // right, so the fix does not depend on the rate being wrong.
+    const [afterTreatment] = applyVatTreatmentReview(
+      row(), '4515', 'reverse_charge_eu_goods', 0.25,
+    )
+    expect(isInVatReviewList(afterTreatment, NONE)).toBe(false)
+    expect(isInVatReviewList(afterTreatment, new Set(['4515']))).toBe(true)
+
+    // And the rate is still correctable while it is visible.
+    const [afterRate] = applyVatTreatmentReview(
+      [afterTreatment], '4515', 'reverse_charge_eu_goods', 0.12,
+    )
+    expect(afterRate.defaultVatRate).toBe(0.12)
+    expect(isInVatReviewList(afterRate, new Set(['4515']))).toBe(true)
+  })
+
+  it('shows an outstanding row whether or not it has been edited', () => {
+    const [outstanding] = row()
+    expect(isInVatReviewList(outstanding, NONE)).toBe(true)
+    expect(isInVatReviewList(outstanding, new Set(['4515']))).toBe(true)
+  })
+
+  it('never pulls in a row that was not up for review', () => {
+    // Class 5 with no label suggestion: requiresVatTreatmentReview is false, so
+    // a stale entry in the edited set must not put it in the list.
+    const [untouched] = enrichAccountMappingsWithVat([mapping('5410', 'Förbrukningsinventarier')], [])
+    expect(untouched.requiresVatTreatmentReview).toBe(false)
+    expect(isInVatReviewList(untouched, new Set(['5410']))).toBe(false)
+  })
+
+  it('lets the bulk confirm clear the list, since it feeds no edited set', () => {
+    const confirmed = applyVatTreatmentReviewAll(row())
+    expect(confirmed.every((m) => !needsVatTreatmentReview(m))).toBe(true)
+    expect(confirmed.every((m) => !isInVatReviewList(m, NONE))).toBe(true)
+  })
+
+  it('holds a reviewed row until the set releases it, which is the confirm\'s job', () => {
+    // Marking a row reviewed is NOT enough to take it out of the list: the
+    // sticky set outranks it by design. Both confirm paths therefore have to
+    // release, and this is the assertion that says so.
+    const [edited] = applyVatTreatmentReview(row(), '4515', 'reverse_charge_eu_goods', 0.25)
+    const [confirmed] = applyVatTreatmentReviewAll([edited])
+    expect(needsVatTreatmentReview(confirmed)).toBe(false)
+    expect(isInVatReviewList(confirmed, new Set(['4515']))).toBe(true)
+    expect(isInVatReviewList(confirmed, releaseAllConfirmed(new Set(['4515'])))).toBe(false)
+  })
+})
+
+describe('releaseConfirmedRow / releaseAllConfirmed', () => {
+  it('drops just the confirmed row', () => {
+    expect([...releaseConfirmedRow(new Set(['4515', '4535']), '4515')]).toEqual(['4535'])
+  })
+
+  it('clears every row for the bulk confirm', () => {
+    expect(releaseAllConfirmed(new Set(['4515', '4535'])).size).toBe(0)
+  })
+
+  it('returns the same set when there is nothing to release', () => {
+    const held = new Set(['4515'])
+    expect(releaseConfirmedRow(held, '9999')).toBe(held)
+    const empty: ReadonlySet<string> = new Set()
+    expect(releaseAllConfirmed(empty)).toBe(empty)
+  })
+
+  it('leaves the other rows alone when one is confirmed', () => {
+    // The per-row confirm must not behave like the bulk one. They were a single
+    // function with an optional account until review pointed out that one stray
+    // undefined would silently clear everything.
+    const held = new Set(['4515', '4535', '4531'])
+    expect([...releaseConfirmedRow(held, '4535')].sort()).toEqual(['4515', '4531'])
   })
 })
 
