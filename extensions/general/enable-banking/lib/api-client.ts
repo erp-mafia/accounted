@@ -681,11 +681,37 @@ export async function startAuthorization(
   const authHeaders =
     companyId && bankConnectorMode() ? { [CONNECTOR_COMPANY_HEADER]: companyId } : undefined
 
-  const response = await authenticatedFetch('/auth', {
-    method: 'POST',
-    body: JSON.stringify(requestBody),
-    ...(authHeaders ? { headers: authHeaders } : {}),
-  })
+  const send = (body: typeof requestBody) =>
+    authenticatedFetch('/auth', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      ...(authHeaders ? { headers: authHeaders } : {}),
+    })
+
+  let sentBody = requestBody
+  let response = await send(sentBody)
+
+  // Prefilled credentials are a convenience, never a requirement: if the
+  // upstream rejects the request with them (a 4xx: the shape or the value
+  // is not what this ASPSP takes), start the authorization once more the
+  // way it always worked, and let Enable Banking's page ask for the value.
+  // A 5xx is upstream trouble either way and is not retried here.
+  if (!response.ok && sentBody.credentials && response.status >= 400 && response.status < 500) {
+    const rejected = await response.text()
+    console.warn('[enable-banking] startAuthorization rejected prefilled credentials; retrying without', {
+      status: response.status,
+      body: rejected,
+      aspspName,
+      aspspCountry,
+      psuType,
+      credentialKeys: Object.keys(sentBody.credentials),
+    })
+    const { credentials: _credentials, credentials_autosubmit: _autosubmit, ...bare } = sentBody
+    void _credentials
+    void _autosubmit
+    sentBody = bare
+    response = await send(sentBody)
+  }
 
   if (!response.ok) {
     const body = await response.text()
@@ -698,7 +724,11 @@ export async function startAuthorization(
       psuType,
       redirectUrl,
       apiUrl: ENABLE_BANKING_API_URL,
-      requestBody: JSON.stringify(requestBody),
+      // A sole trader's companyId is their personnummer: never in a log line.
+      requestBody: JSON.stringify({
+        ...sentBody,
+        ...(sentBody.credentials ? { credentials: '[redacted]' } : {}),
+      }),
     })
     throw new Error(`Failed to start bank connection (${response.status}): ${body}`)
   }
