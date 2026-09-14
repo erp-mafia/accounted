@@ -62,6 +62,20 @@ describe('applySourceChartCsv', () => {
     expect(mappings[0].defaultVatRate).toBe(0.12)
   })
 
+  it('does not give a rate to a treatment that deliberately has none', () => {
+    // vinstmarginalbeskattning has no single sats, so defaultRateForVatTreatment
+    // answers null on purpose. A chart still codes the account 07-25%, and an
+    // override that fired on every treatment would write 25 % over that null.
+    // The chart only outranks the label where the label was consulted at all,
+    // which is a reverse charge on a purchase account.
+    const { mappings } = applySourceChartCsv(
+      [mapping('3110', 'Försäljning vinstmarginalbeskattning')],
+      csv('True;3110;Försäljning vinstmarginalbeskattning;07-25%'),
+    )
+    expect(mappings[0].providerVatTreatment).toBe('vmb')
+    expect(mappings[0].defaultVatRate).toBeNull()
+  })
+
   it('leaves the rate alone when the code states none', () => {
     // The bare form names a box but no sats, so there is nothing to prefer and
     // the treatment's own default stands.

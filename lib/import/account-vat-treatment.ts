@@ -14,12 +14,30 @@ import type { AccountMapping } from './types'
  * (Fortnox 4516 "Inköp varor EU 12%" and 4515 share IVEU). Every other
  * treatment fixes its own rate.
  */
+/**
+ * Whether the suggested rate is read off the account label rather than fixed by
+ * the treatment.
+ *
+ * Only true for a reverse charge on a purchase account, where the acquisition
+ * rate is a real number the treatment does not determine. Everywhere else
+ * defaultRateForVatTreatment is authoritative, including where it deliberately
+ * answers null: vmb has no single sats and oss carries a destination country's
+ * rate that never drives ruta 05 arithmetic. Exported so a caller holding a
+ * better source than the label knows exactly where it is allowed to win.
+ */
+export function vatRateComesFromLabel(
+  treatment: AccountVatTreatment,
+  accountClass: number,
+): boolean {
+  return accountClass >= 4 && treatment.startsWith('reverse_charge')
+}
+
 function providerSuggestedRate(
   treatment: AccountVatTreatment,
   accountClass: number,
   sourceName: string,
 ): number | null {
-  if (accountClass >= 4 && treatment.startsWith('reverse_charge')) {
+  if (vatRateComesFromLabel(treatment, accountClass)) {
     return vatRateFromLabel(sourceName) ?? defaultRateForVatTreatment(treatment, accountClass)
   }
   return defaultRateForVatTreatment(treatment, accountClass)

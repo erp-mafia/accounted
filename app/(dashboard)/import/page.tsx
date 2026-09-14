@@ -923,25 +923,38 @@ function SIEImportWizard({
   // otherwise be computed against the pre-edit snapshot and silently reverted.
   // The work stays outside the setMappings updater, which must remain pure
   // because React runs it twice in StrictMode.
+  //
+  // Written in an effect, not in the render body: a render React starts and
+  // then abandons must not leave this pointing at state the app never had.
+  // Costs nothing here, since the ref is only read from an event handler and
+  // those run after commit.
   const mappingsRef = useRef(mappings)
-  mappingsRef.current = mappings
+  useEffect(() => {
+    mappingsRef.current = mappings
+  }, [mappings])
 
+  // One try around the whole body, so this can never reject: the caller is an
+  // onChange that discards the promise, and an unhandled rejection would leave
+  // the step looking exactly as if no file had been chosen. Reading the file is
+  // not the only step that can fail; a format's translate is called in here too.
   const handleSourceChartSelected = useCallback(async (file: File) => {
-    let csvText: string
     try {
-      csvText = await file.text()
-    } catch {
-      // Every other failure in this path reports itself through `warnings`;
-      // without this one the step looks exactly as if no file had been chosen.
+      const csvText = await file.text()
+      const result = applySourceChartCsv(mappingsRef.current, csvText)
+      setMappings(result.mappings)
+      setSourceChart({ summary: result.summary, warnings: result.warnings })
+    } catch (err) {
+      // Through getErrorMessage like every other catch in this file, so a real
+      // cause reaches the user instead of being flattened into one sentence.
       setSourceChart({
         summary: emptySourceChartSummary(),
-        warnings: ['Filen kunde inte läsas. Kontrollera att den finns kvar och försök igen.'],
+        warnings: [
+          err instanceof Error
+            ? getErrorMessage(err)
+            : 'Kontoplanen kunde inte läsas in. Kontrollera att filen finns kvar och försök igen.',
+        ],
       })
-      return
     }
-    const result = applySourceChartCsv(mappingsRef.current, csvText)
-    setMappings(result.mappings)
-    setSourceChart({ summary: result.summary, warnings: result.warnings })
   }, [])
 
   const confirmVatReview = useCallback(() => {

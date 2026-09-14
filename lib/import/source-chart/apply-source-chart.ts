@@ -1,4 +1,7 @@
-import { applySourceVatCodes } from '@/lib/import/account-vat-treatment'
+import {
+  applySourceVatCodes,
+  vatRateComesFromLabel,
+} from '@/lib/import/account-vat-treatment'
 import type { AccountMapping } from '@/lib/import/types'
 import { parseSourceChartCsv } from './parse-chart-csv'
 
@@ -95,12 +98,18 @@ export function applySourceChartCsv(
   // an entry in SOURCE_CHART_FORMATS rather than a branch here.
   const translated = applySourceVatCodes(mappings, codesByAccount, format.translate)
 
-  // applySourceVatCodes derives the rate from the account label, which is the
-  // weaker source: the chart may state 20-12% on an account whose name carries
-  // no percentage, and the label fallback then files 25 %. Where the code names
-  // a rate it wins, which is the whole reason for reading the chart.
+  // Where applySourceVatCodes reads the rate off the account label, the chart
+  // outranks it: a chart may state 20-12% on an account whose name carries no
+  // percentage, and the label fallback then files 25 %.
+  //
+  // Only there. Everywhere else the treatment fixes its own rate, and
+  // overriding that would replace a deliberate null with a sats the trade does
+  // not have: a vmb account coded 07-25% would take 25 % although
+  // vinstmarginalbeskattning has no single sats.
   const applied = translated.map((mapping) => {
-    if (!mapping.providerVatCode || !mapping.providerVatTreatment) return mapping
+    const treatment = mapping.providerVatTreatment
+    if (!mapping.providerVatCode || !treatment) return mapping
+    if (!vatRateComesFromLabel(treatment, Number(mapping.sourceAccount.charAt(0)))) return mapping
     const stated = format.rateFromCode(mapping.providerVatCode)
     if (stated === null || stated === mapping.defaultVatRate) return mapping
     return { ...mapping, defaultVatRate: stated }
