@@ -11,6 +11,12 @@
 -- so the sender saw a fixed CC they could not find. Companies that were
 -- receiving the company-email copy keep it as an explicit configured list;
 -- from here on NULL and '{}' both mean no fixed copies. Re-running is a no-op.
+--
+-- Archived migration-reset source companies are skipped: their rows are
+-- write-closed by block_migration_reset_source_mutation (any UPDATE raises),
+-- and a reset source never sends an invoice. The first production run of this
+-- file rolled back at the UPDATE for exactly that reason; the file was edited
+-- before it was ever recorded in schema_migrations, so nothing shipped twice.
 
 ALTER TABLE public.company_settings
   ADD COLUMN invoice_email_reply_to text,
@@ -35,7 +41,10 @@ UPDATE public.company_settings
 SET invoice_email_cc_addresses = ARRAY[btrim(email)]
 WHERE invoice_email_cc_addresses IS NULL
   AND email IS NOT NULL
-  AND btrim(email) ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$';
+  AND btrim(email) ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
+  AND company_id NOT IN (
+    SELECT source_company_id FROM public.company_migration_resets
+  );
 
 COMMIT;
 
