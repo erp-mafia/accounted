@@ -32,6 +32,7 @@ import {
 } from 'lucide-react'
 import type { AccountMapping } from '@/lib/import/types'
 import { isValidBASRange } from '@/lib/import/account-mapper'
+import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
 import type { SourceChartSummary } from '@/lib/import/source-chart/apply-source-chart'
 import { AttnLine } from '@/components/ui/attn-line'
 import type { BASAccount } from '@/types'
@@ -75,6 +76,15 @@ interface AccountMappingStepProps {
 type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'low_confidence' | 'manual'
 
 const PAGE_SIZE = 50
+
+/**
+ * The momsdeklaration box the built-in BAS mapping already routes this account
+ * to, or undefined when it has none. Kept in sync with ACCOUNT_RUTA by the
+ * drift test in lib/vat/__tests__/moms-box-mapping.test.ts.
+ */
+function basBoxFor(mapping: AccountMapping): string | undefined {
+  return ACCOUNT_TO_BOX[mapping.targetAccount ?? mapping.sourceAccount]
+}
 
 export default function AccountMappingStep({
   mappings,
@@ -501,17 +511,27 @@ export default function AccountMappingStep({
                             </SelectContent>
                           </Select>
                         </div>
-                        {/* A code we could not translate keeps its label
-                            suggestion by decision, but the line must say so.
-                            Printing the code alone next to a treatment it does
-                            not mean reads as confirmation: ruta 38 is
-                            trepartshandel and the label lands on EU-varor,
-                            which is ruta 35. */}
+                        {/* Three things the code line can mean, and saying the
+                            wrong one costs trust either way.
+
+                            Translated: print it. Untranslated on an account the
+                            BAS map already routes (4545 import to ruta 50):
+                            nothing is missing, so claiming the code could not
+                            be used would send the user hunting for a problem
+                            that is not there. Untranslated with no BAS mapping:
+                            the row really does rest on the account name, and
+                            printing the code alone would read as confirmation
+                            of a box the source system never named. */}
                         {mapping.providerVatCode ? (
                           <p className="mt-1 text-xs text-muted-foreground">
                             {mapping.providerVatTreatment
                               ? t('vat_treatment_source_code', { code: mapping.providerVatCode })
-                              : t('vat_treatment_source_code_unreadable', { code: mapping.providerVatCode })}
+                              : basBoxFor(mapping)
+                                ? t('vat_treatment_source_code_bas', {
+                                    code: mapping.providerVatCode,
+                                    box: basBoxFor(mapping)!,
+                                  })
+                                : t('vat_treatment_source_code_unreadable', { code: mapping.providerVatCode })}
                           </p>
                         ) : null}
                         </>
