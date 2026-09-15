@@ -589,8 +589,19 @@ export default function AccountMappingStep({
                             rule either. Pointing at a suggestion that is not
                             there is bad enough on its own; here it also hides
                             that the amount reaches NO ruta until the user picks
-                            one. An import basis on a number outside 4545-4547
-                            lands exactly here. */}
+                            one.
+
+                            Four ways in, measured, not only the import one:
+                            ruta 50 or 06 on a number ACCOUNT_TO_BOX does not
+                            know; a code naming no sats ("05") beside a label
+                            naming none either; a code on the wrong account
+                            class (ruta 20 on a revenue account), refused so an
+                            acquisition cannot land in a sales box; and a code
+                            the parser does not recognise, whether another
+                            vendor's spelling or an impossible rate. In every
+                            one the label is the last line of defence, which is
+                            why a descriptive account name lands in the third
+                            state instead. */}
                         {mapping.providerVatCode ? (
                           <p className="mt-1 text-xs text-muted-foreground">
                             {mapping.providerVatTreatment
