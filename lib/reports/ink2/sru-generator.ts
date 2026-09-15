@@ -179,6 +179,7 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
     '7651',
     '7653',
     '7754',
+    '7763',
     '8020',
     '8021',
   ]

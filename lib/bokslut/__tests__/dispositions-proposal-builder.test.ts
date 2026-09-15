@@ -112,6 +112,7 @@ beforeEach(() => {
     items: [],
     nonDeductibleExpenses: 0,
     nonTaxableIncome: 0,
+    deficitCarryforward: 0,
   })
   vi.mocked(getBookedBolagsskatt).mockResolvedValue(0)
   vi.mocked(listExistingPeriodiseringsfonder).mockResolvedValue([])

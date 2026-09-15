@@ -36,6 +36,8 @@ interface UiState {
 interface TaxAdjustmentDraft {
   nonDeductibleExpenses: string
   nonTaxableIncome: string
+  /** INK2S 4.14 a: outnyttjat underskott från föregående beskattningsår. */
+  deficitCarryforward: string
   detectedAccounts: { '6992': boolean; '8423': boolean }
 }
 
@@ -111,6 +113,9 @@ export function DispositionsStep({
                 taxAdjustmentDraft.nonDeductibleExpenses,
               ),
               nonTaxableIncome: parseNonNegativeAmount(taxAdjustmentDraft.nonTaxableIncome),
+              deficitCarryforward: parseNonNegativeAmount(
+                taxAdjustmentDraft.deficitCarryforward,
+              ),
             },
             detectedAccounts: taxAdjustmentDraft.detectedAccounts,
           }),
@@ -505,6 +510,28 @@ function TaxAdjustmentsCard({
               onChange={(event) => onChange({ ...draft, nonTaxableIncome: event.target.value })}
             />
           </div>
+          {/* INK2S 4.14 a. The only way in for a company whose earlier years
+              live in another system: the deficit is not in these books. */}
+          <div className="space-y-2">
+            <Label htmlFor="manual-deficit-carryforward">
+              Outnyttjat underskott från föregående beskattningsår
+            </Label>
+            <Input
+              id="manual-deficit-carryforward"
+              type="number"
+              min="0"
+              step="0.01"
+              value={draft.deficitCarryforward}
+              onChange={(event) =>
+                onChange({ ...draft, deficitCarryforward: event.target.value })
+              }
+            />
+            <p className="text-xs text-muted-foreground">
+              Underskott från tidigare år som inte redan finns i bokföringen här, till exempel
+              efter en flytt från ett annat system. Dras av från årets skattemässiga resultat
+              (INK2S punkt 4.14 a).
+            </p>
+          </div>
         </div>
 
         {computation && (
@@ -512,6 +539,9 @@ function TaxAdjustmentsCard({
             <CalculationRow label="Resultat efter dispositioner" amount={numberValue(computation.resultBeforeTax)} />
             <CalculationRow label="Ej avdragsgilla kostnader" amount={numberValue(computation.nonDeductibleExpenses)} prefix="+" />
             <CalculationRow label="Ej skattepliktiga intäkter" amount={numberValue(computation.nonTaxableIncome)} prefix="-" />
+            {numberValue(computation.deficitCarryforward) > 0 && (
+              <CalculationRow label="Underskott från tidigare år" amount={numberValue(computation.deficitCarryforward)} prefix="-" />
+            )}
             <CalculationRow label="Skattemässigt resultat" amount={numberValue(computation.taxableResultClamped)} strong />
             <CalculationRow label="Bolagsskatt 20,6 %" amount={numberValue(computation.taxAmount)} strong />
           </div>
@@ -705,6 +735,7 @@ function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[]
 const emptyTaxDraft: TaxAdjustmentDraft = {
   nonDeductibleExpenses: '0',
   nonTaxableIncome: '0',
+  deficitCarryforward: '0',
   detectedAccounts: { '6992': false, '8423': false },
 }
 
@@ -731,11 +762,15 @@ function createTaxAdjustmentDraft(
   const manualNonTaxable = snapshot.items.find(
     (item) => item.sourceKey === 'manual:non_taxable_income',
   )
+  const manualDeficit = snapshot.items.find(
+    (item) => item.sourceKey === 'manual:deficit_carryforward',
+  )
   const account6992 = snapshot.items.find((item) => item.sourceKey === 'account:6992')
   const account8423 = snapshot.items.find((item) => item.sourceKey === 'account:8423')
   return {
     nonDeductibleExpenses: String(manualNonDeductible?.amount ?? 0),
     nonTaxableIncome: String(manualNonTaxable?.amount ?? 0),
+    deficitCarryforward: String(manualDeficit?.amount ?? 0),
     detectedAccounts: {
       '6992': Boolean(account6992?.included),
       '8423': Boolean(account8423?.included),
