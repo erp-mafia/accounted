@@ -548,11 +548,16 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                   ) : null}
                 </p>
               ))}
-              {/* Why you would want to, once and only while it is still an
-                  open question. Six rows each explaining themselves was the
-                  same noise as six rows each reporting themselves. */}
+              {/* Why, and where to get one. Once, in the small sub-line the
+                  surface already uses, and only while it is still an open
+                  question: a reader who has picked their charts does not need
+                  to be told what they are for. The menu path is the half that
+                  decides whether the invitation can be acted on at all, and
+                  the mapping step's own help carries the same sentence. */}
               {ready.length > 0 && ready.every((f) => !f.chart) ? (
-                <p className="bks-f" style={{ marginTop: 6, color: 'hsl(var(--muted-foreground))' }}>{t('sie_chart_why')}</p>
+                <p className="s" style={{ marginTop: 8 }}>
+                  {t('sie_chart_why')}<br />{t('sie_chart_where')}
+                </p>
               ) : null}
               {facts.length ? <Facts facts={facts} /> : null}
             </div>
