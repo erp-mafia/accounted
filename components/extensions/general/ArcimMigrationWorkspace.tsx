@@ -2734,24 +2734,6 @@ export default function ArcimMigrationWorkspace({
     await loadPreview(existingConsentId)
   }, [loadPreview])
 
-  // Run the underlag import on its own against an active Fortnox consent.
-  // Same discovery, import and scope-reconnect path as the tail of a
-  // migration; only the surrounding page differs (no migration verdict).
-  const handleFetchDocuments = useCallback(async (existingConsentId: string) => {
-    setSelectedProvider('fortnox')
-    setConsentId(existingConsentId)
-    setError(null)
-    setMigrationResults(null)
-    setSieImportResults([])
-    setSieData(null)
-    setTheaterModel(null)
-    clearDocumentReconnectFailureCleanup()
-    documentReconnectActionRef.current = null
-    setDocumentsOnly(true)
-    setStep('result')
-    await runDocumentDiscovery(existingConsentId, 'fortnox', true)
-  }, [clearDocumentReconnectFailureCleanup, runDocumentDiscovery])
-
   const clearOAuthPopupWatch = useCallback(() => {
     stopOAuthPopupWatchRef.current?.()
     stopOAuthPopupWatchRef.current = null
@@ -2908,6 +2890,24 @@ export default function ArcimMigrationWorkspace({
       })
     }
   }, [])
+
+  // Run the underlag import on its own against an active Fortnox consent.
+  // Same discovery, import and scope-reconnect path as the tail of a
+  // migration; only the surrounding page differs (no migration verdict).
+  const handleFetchDocuments = useCallback(async (existingConsentId: string) => {
+    setSelectedProvider('fortnox')
+    setConsentId(existingConsentId)
+    setError(null)
+    setMigrationResults(null)
+    setSieImportResults([])
+    setSieData(null)
+    setTheaterModel(null)
+    clearDocumentReconnectFailureCleanup()
+    documentReconnectActionRef.current = null
+    setDocumentsOnly(true)
+    setStep('result')
+    await runDocumentDiscovery(existingConsentId, 'fortnox', true)
+  }, [clearDocumentReconnectFailureCleanup, runDocumentDiscovery])
 
   const handleDocumentReconnect = useCallback(() => {
     if (!consentId) return
