@@ -18,13 +18,30 @@ export type ArcimDocumentOAuthResumeAction = 'discover' | 'import'
 
 export interface ArcimDocumentOAuthResume {
   action: ArcimDocumentOAuthResumeAction
+  /**
+   * The underlag run was started on its own from an active connection, not
+   * as the tail of a migration. Carried across the full-page OAuth fallback so
+   * the result page comes back without a migration verdict.
+   */
+  standalone: boolean
+}
+
+const STANDALONE_SUFFIX = ':standalone'
+
+export function serializeArcimDocumentOAuthResume(
+  resume: ArcimDocumentOAuthResume,
+): string {
+  return resume.standalone ? `${resume.action}${STANDALONE_SUFFIX}` : resume.action
 }
 
 export function parseArcimDocumentOAuthResume(
   value: string | null,
 ): ArcimDocumentOAuthResume | null {
-  if (value !== 'discover' && value !== 'import') return null
-  return { action: value }
+  if (value === null) return null
+  const standalone = value.endsWith(STANDALONE_SUFFIX)
+  const action = standalone ? value.slice(0, -STANDALONE_SUFFIX.length) : value
+  if (action !== 'discover' && action !== 'import') return null
+  return { action, standalone }
 }
 
 /** Poll a provider popup so closing it cannot leave the UI reconnecting forever. */

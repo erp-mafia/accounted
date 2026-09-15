@@ -13,6 +13,7 @@ import {
   requestArcimDocumentImport,
   resolveArcimDocumentFollowUpProvider,
   runArcimDocumentImportToCompletion,
+  serializeArcimDocumentOAuthResume,
   watchArcimOAuthPopup,
   type ArcimDocumentImportResult,
 } from '../arcim-document-import-flow'
@@ -255,8 +256,22 @@ describe('document scope OAuth recovery', () => {
     expect(ARCIM_DOCUMENT_OAUTH_RESUME_KEY).toBe('arcim-document-oauth-resume')
     expect(parseArcimDocumentOAuthResume('import')).toEqual({
       action: 'import',
+      standalone: false,
     })
     expect(parseArcimDocumentOAuthResume('unknown')).toBeNull()
+    expect(parseArcimDocumentOAuthResume(null)).toBeNull()
+  })
+
+  it('carries the standalone flag through the resume value so an underlag run from the connections list comes back without a migration verdict', () => {
+    for (const action of ['discover', 'import'] as const) {
+      for (const standalone of [true, false]) {
+        const stored = serializeArcimDocumentOAuthResume({ action, standalone })
+        expect(parseArcimDocumentOAuthResume(stored)).toEqual({ action, standalone })
+      }
+    }
+    expect(serializeArcimDocumentOAuthResume({ action: 'discover', standalone: false })).toBe('discover')
+    expect(parseArcimDocumentOAuthResume('unknown:standalone')).toBeNull()
+    expect(parseArcimDocumentOAuthResume(':standalone')).toBeNull()
   })
 
   it('only treats scope and consent failures as reconnectable', () => {
