@@ -15,8 +15,9 @@ import {
   MatchVerifikationPicker,
   type UnlinkedGLLine,
 } from '@/components/reconciliation/MatchVerifikationPicker'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { buildSplitSelection } from '@/lib/reconciliation/split-selection'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useToast } from '@/components/ui/use-toast'
 import { ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react'
@@ -27,7 +28,9 @@ interface MatchVoucherDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   transaction: TransactionWithInvoice | null
-  /** Called after a successful link. voucherLabel is the picked verifikat's label (e.g. "A-42"). */
+  /** Called after a successful link. journalEntryId is the (first) picked
+   *  verifikat; voucherLabel names every picked one, e.g. "A-42" or, for a
+   *  split, "A-42, A-43". */
   onLinked: (transactionId: string, journalEntryId: string, voucherLabel: string) => void
 }
 
@@ -51,7 +54,12 @@ export function MatchVoucherDialog({
 }: MatchVoucherDialogProps) {
   const { toast } = useToast()
   const [glLines, setGlLines] = useState<UnlinkedGLLine[]>([])
-  const [selected, setSelected] = useState('')
+  // Picked verifikat, in pick order. One = the plain link (1:1, or N:1 behind
+  // "visa matchade"); several = the split (1:N, #1553): one bank row that
+  // Bankgirot or a card acquirer aggregated over several händelser, each
+  // booked as its own verifikat. The row stays whole and is linked to all of
+  // them; nothing is "split" in the bookkeeping.
+  const [selected, setSelected] = useState<string[]>([])
   const [accountNumber, setAccountNumber] = useState('1930')
   const [accountFallback, setAccountFallback] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -102,11 +110,11 @@ export function MatchVoucherDialog({
         // deliberate choice, not the default when "visa matchade" is on.
         const top = lines[0]
         setSelected((prev) =>
-          prev
+          prev.length > 0
             ? prev
             : top && (top.confidence ?? 0) >= 0.85 && !(top.linked_transaction_count ?? 0)
-              ? top.journal_entry_id
-              : '',
+              ? [top.journal_entry_id]
+              : [],
         )
       } finally {
         if (!signal.cancelled) setLoading(false)
@@ -128,19 +136,51 @@ export function MatchVoucherDialog({
   useEffect(() => {
     if (open) return
     setGlLines([])
-    setSelected('')
+    setSelected([])
     setWideRange(false)
     setIncludeMatched(false)
     setAccountFallback(false)
   }, [open])
 
+  const isMatched = (id: string) =>
+    (glLines.find((l) => l.journal_entry_id === id)?.linked_transaction_count ?? 0) > 0
+
+  function toggleVoucher(id: string) {
+    setSelected((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id)
+      // An already-matched verifikat joins no split (N:M has no engine shape,
+      // the same rule as the reconciliation worksheet): picking one replaces
+      // the selection, and picking anything else drops it.
+      if (isMatched(id) || prev.some(isMatched)) return [id]
+      return [...prev, id]
+    })
+  }
+
   if (!transaction) return null
 
   const isIncome = transaction.amount > 0
-  const selectedLine = glLines.find((l) => l.journal_entry_id === selected) ?? null
+  const selectedLines = selected.flatMap((id) => {
+    const line = glLines.find((l) => l.journal_entry_id === id)
+    return line ? [line] : []
+  })
+  const selectedLine = selected.length === 1 ? (selectedLines[0] ?? null) : null
+  const isSplit = selected.length > 1
+  const split = buildSplitSelection(glLines, selected, transaction.amount)
+  // A split explains the whole row, so every picked verifikat must be in the
+  // candidate list (not hidden by "dölj matchade") and the slices must sum to
+  // the row; the engine refuses anything else.
+  const splitReady = split.balanced && split.allocations.length === selected.length
+  const canSubmit = selected.length > 0 && !submitting && (!isSplit || splitReady)
+  // The nudge toward the split: one unmatched verifikat picked whose amount is
+  // not the row's. A bankgiro day-sum against one of its inbetalningar lands
+  // exactly here. Not shown for a matched pick (N:1), where a difference is
+  // the expected shape.
+  const singleDiffers =
+    selectedLine !== null && !isMatched(selectedLine.journal_entry_id) && !split.balanced
 
   async function handleConfirm() {
-    if (!transaction || !selected) return
+    if (!transaction || selected.length === 0) return
+    if (isSplit && !splitReady) return
     setSubmitting(true)
     try {
       const res = await fetch('/api/reconciliation/bank/link', {
@@ -148,8 +188,8 @@ export function MatchVoucherDialog({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           transaction_id: transaction.id,
-          journal_entry_id: selected,
           account_number: accountNumber,
+          ...(isSplit ? { allocations: split.allocations } : { journal_entry_id: selected[0] }),
         }),
       })
       const result = await res.json()
@@ -161,8 +201,8 @@ export function MatchVoucherDialog({
         })
         return
       }
-      const label = selectedLine ? formatVoucher(selectedLine) : ''
-      onLinked(transaction.id, selected, label)
+      const label = selectedLines.map((l) => formatVoucher(l)).join(', ')
+      onLinked(transaction.id, selected[0], label)
     } catch {
       toast({
         title: 'Kunde inte koppla',
@@ -187,6 +227,12 @@ export function MatchVoucherDialog({
                 Kopplar bankhändelsen till en verifikation som redan är bokförd,
                 t.ex. en lön eller en post importerad från Fortnox. Ingen ny
                 bokföring skapas.
+              </p>
+              <p className="mt-2">
+                Täcker bankhändelsen flera verifikationer, t.ex. en bankgirorad
+                som klumpar ihop dagens inbetalningar? Välj alla som ingår.
+                Beloppen måste tillsammans bli bankhändelsens belopp; raden
+                delas inte, den kopplas till flera.
               </p>
               <p className="mt-2">
                 Med &quot;Visa även matchade&quot; kan flera bankhändelser kopplas
@@ -239,7 +285,12 @@ export function MatchVoucherDialog({
             </div>
           ) : (
             <>
-              <MatchVerifikationPicker glLines={glLines} value={selected} onChange={setSelected} inline />
+              <MatchVerifikationPicker
+                glLines={glLines}
+                selectedIds={selected}
+                onToggle={toggleVoucher}
+                inline
+              />
               {(selectedLine?.linked_transaction_count ?? 0) > 0 && (
                 <p className="text-xs text-muted-foreground">
                   Redan matchad mot {selectedLine?.linked_transaction_count}{' '}
@@ -247,15 +298,38 @@ export function MatchVoucherDialog({
                   den här läggs till.
                 </p>
               )}
+              {singleDiffers && (
+                <p className="text-xs text-muted-foreground">
+                  Verifikatet skiljer sig{' '}
+                  {formatCurrency(Math.abs(split.difference), transaction.currency)} från
+                  bankhändelsen. Täcker raden flera verifikationer, t.ex. dagens
+                  bankgiroinbetalningar? Välj dem också i listan.
+                </p>
+              )}
+              {/* The arithmetic of a split, the same footer the worksheet
+                  shows: what the picks sum to and what is left unexplained. */}
+              {isSplit && (
+                <div
+                  className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs tabular-nums"
+                  data-ph-mask
+                >
+                  <span>
+                    {selected.length} verifikationer valda:{' '}
+                    {formatCurrency(split.sum, transaction.currency)}
+                  </span>
+                  <span className={cn(split.balanced ? 'text-muted-foreground' : 'text-warning')}>
+                    Differens {formatCurrency(split.difference, transaction.currency)}
+                  </span>
+                </div>
+              )}
+              {isSplit && !split.balanced && (
+                <p className="text-xs text-muted-foreground">
+                  Verifikationerna måste tillsammans motsvara bankhändelsens belopp.
+                  Lägg till eller ta bort tills differensen är 0.
+                </p>
+              )}
             </>
           )}
-
-          {/* One verifikat per dialog, by design: the 1:N split (one bank
-              row over several verifikat) needs the sum arithmetic of the
-              worksheet, so this stays a single pick and points there. */}
-          <p className="text-xs text-muted-foreground">
-            Ska händelsen delas på flera verifikat? Använd Bankavstämning → Matcha manuellt.
-          </p>
 
           {/* Discovery affordances: widen the date window, and surface vouchers
               already matched so another transaction can be attached (N:1).
@@ -285,12 +359,14 @@ export function MatchVoucherDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             Avbryt
           </Button>
-          <Button onClick={handleConfirm} disabled={!selected || submitting}>
+          <Button onClick={handleConfirm} disabled={!canSubmit}>
             {submitting ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Matchar…
               </>
+            ) : isSplit ? (
+              `Matcha ${selected.length} verifikationer`
             ) : (
               'Matcha'
             )}
