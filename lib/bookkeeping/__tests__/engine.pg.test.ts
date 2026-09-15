@@ -148,6 +148,78 @@ describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
     ).rejects.toThrow(/Cannot modify a posted journal entry/i)
   })
 
+  it('allows a status-only cancel of a posted entry (today\'s intended behaviour)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+
+    const entryId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      status: 'posted',
+      voucherNumber: 1,
+    })
+
+    await getPool().query(`UPDATE public.journal_entries SET status = 'cancelled' WHERE id = $1`, [
+      entryId,
+    ])
+    const persisted = await getPool().query<{ status: string }>(
+      `SELECT status FROM public.journal_entries WHERE id = $1`,
+      [entryId],
+    )
+    expect(persisted.rows[0]!.status).toBe('cancelled')
+  })
+
+  it('rejects changing another field while cancelling a posted entry (field-lock bypass)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+
+    const entryId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      status: 'posted',
+      voucherNumber: 1,
+    })
+
+    await expect(
+      getPool().query(
+        `UPDATE public.journal_entries SET status = 'cancelled', description = 'tampered' WHERE id = $1`,
+        [entryId],
+      ),
+    ).rejects.toThrow(/Cannot modify fields of a posted entry during cancellation/i)
+  })
+
+  it('still allows the storno path to set reversed_by_id while reversing', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+
+    const originalId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      status: 'posted',
+      voucherNumber: 1,
+    })
+    const stornoId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      status: 'posted',
+      voucherNumber: 2,
+    })
+
+    // The cancelled branch is field-locked with a full-row comparison; the
+    // reversed branch must NOT be, because this is the real storno shape.
+    await getPool().query(
+      `UPDATE public.journal_entries SET status = 'reversed', reversed_by_id = $1 WHERE id = $2`,
+      [stornoId, originalId],
+    )
+    const persisted = await getPool().query<{ status: string; reversed_by_id: string }>(
+      `SELECT status, reversed_by_id FROM public.journal_entries WHERE id = $1`,
+      [originalId],
+    )
+    expect(persisted.rows[0]!.status).toBe('reversed')
+    expect(persisted.rows[0]!.reversed_by_id).toBe(stornoId)
+  })
+
   it('next_voucher_number falls back to the company owner when auth.uid() is NULL', async () => {
     // The superuser pg connection has no Supabase JWT, so auth.uid() IS NULL:
     // exactly the service-role shape (repair scripts, cron) that used to fail

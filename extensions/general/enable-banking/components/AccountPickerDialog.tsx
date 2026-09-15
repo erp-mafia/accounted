@@ -1041,6 +1041,14 @@ export function AccountPickerDialog({
                 {sortedClaimed.map(renderAccountRow)}
               </div>
             )}
+            {/* Ticking one is allowed and stays allowed: the app cannot know
+                which company is the account's right home. It only says what
+                follows, once, when the tick has happened (issue #2647). */}
+            {selectedClaimedCount > 0 && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Ett konto som redan bokförs i ett annat bolag hamnar i båda bolagens böcker om du hämtar det här också.
+              </p>
+            )}
           </div>
         )}
 
