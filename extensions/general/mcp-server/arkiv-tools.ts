@@ -101,11 +101,12 @@ interface DocumentRow {
   admission_state: string
   page_count: number | null
   journal_entry_id: string | null
+  extracted_data: Record<string, unknown> | null
 }
 
 async function documentRecord(supabase: SupabaseClient, companyId: string, documentId: string) {
   const [doc, extraction, links, agreement] = await Promise.all([
-    supabase.from('document_attachments').select('id, file_name, created_at, doc_type, admission_state, page_count, journal_entry_id').eq('id', documentId).eq('company_id', companyId).maybeSingle(),
+    supabase.from('document_attachments').select('id, file_name, created_at, doc_type, admission_state, page_count, journal_entry_id, extracted_data').eq('id', documentId).eq('company_id', companyId).maybeSingle(),
     supabase.from('document_extractions').select('id, schema_type, schema_version, pass, payload, review_fields, created_at').eq('document_id', documentId).eq('is_current', true).maybeSingle(),
     supabase.from('document_links').select('id, target_kind, target_id, basis, method, confidence').eq('document_id', documentId).is('retired_at', null),
     supabase.from('agreements').select('id, kind, title').eq('source_document_id', documentId).maybeSingle(),
@@ -134,6 +135,8 @@ async function documentRecord(supabase: SupabaseClient, companyId: string, docum
       : null,
     links: ((links.data ?? []) as Array<{ id: string; target_kind: RecordKind; target_id: string; basis: string; method: string; confidence: number }>).map((l) => ({ link_id: l.id, record_ref: recordRef(l.target_kind, l.target_id), basis: l.basis, method: l.method, confidence: Number(l.confidence) })),
     agreement_ref: agreement.data ? recordRef('agreement', (agreement.data as { id: string }).id) : null,
+    // The Underlag reader's structured read of a receipt or invoice (line items, VAT breakdown, totals), when it ran.
+    underlag_extraction: d.extracted_data ?? null,
   }
 }
 

@@ -7,14 +7,20 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
-import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { DocumentRecordView } from '@/app/api/arkiv/documents/[id]/route'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
-import { formatDateLong } from '@/lib/utils'
-import { DefList, DefRow, Section, SourceLink, inlineHref, shortFileName } from './DefList'
+import { formatCurrency, formatDateLong } from '@/lib/utils'
+import { DefList, DefRow, Section, SourceLink, inlineHref } from './DefList'
 import { useFieldLabel } from './useFieldLabel'
 
-/** A registration, a decision or any other document as a record (canvas artboard Avtal, applied to a document): what it is, what was read, the facts it established, what it is tied to. */
+/**
+ * A registration, a decision or any other document as a record (canvas
+ * artboard Avtal, applied to a document): what it is, what was read from it
+ * with its page, the rows of a receipt or invoice, and what it is tied to.
+ * A field that became a fact about the company says so on its row instead
+ * of being listed twice.
+ */
 export function DocumentRecord({ documentId }: { documentId: string }) {
   const t = useTranslations('arkiv')
   const locale = useLocale()
@@ -43,8 +49,17 @@ export function DocumentRecord({ documentId }: { documentId: string }) {
 
   const typeLabel = view.doc_type && (DOC_TYPES as readonly string[]).includes(view.doc_type) ? t(`types.${view.doc_type}` as never) : t('type_unknown')
   const meta = [typeLabel, formatDateLong(view.created_at, locale), view.page_count ? t('decision_pages', { count: view.page_count }) : null].filter(Boolean).join(' · ')
-  const file = shortFileName(view.file_name)
   const signals = view.classification?.signals ?? []
+  const multiPage = (view.page_count ?? 0) > 1
+  const fields = (view.record?.fields ?? []).filter((f) => f.value != null)
+  // A fact whose value is a field's value is that field, established: it shows on the row.
+  const factOfField = new Map<string, DocumentRecordView['facts'][number]>()
+  const loose: DocumentRecordView['facts'] = []
+  for (const fact of view.facts) {
+    const field = fields.find((f) => String(f.value) === fact.value_text && !factOfField.has(f.field))
+    if (field) factOfField.set(field.field, fact)
+    else loose.push(fact)
+  }
 
   return (
     <div className="space-y-8">
@@ -73,34 +88,20 @@ export function DocumentRecord({ documentId }: { documentId: string }) {
           )}
         </Section>
       )}
-      <div className="grid gap-x-10 gap-y-8 lg:grid-cols-2">
-        <Section title={t('record_facts')} help={t('facts_help')}>
-          {view.facts.length === 0 ? (
-            <p className="text-[13px] text-muted-foreground">{view.record ? t('facts_empty_title') : t('record_no_record')}</p>
-          ) : (
-            <DefList className="text-[13px]">
-              {view.facts.map((f) => (
-                <DefRow key={f.fact_id} label={f.label} muted={f.superseded_by}>
-                  {f.value_text}
-                  {f.valid_from ? <span className="ml-2 text-xs text-muted-foreground">{t('agreement_valid_from', { date: f.valid_from })}</span> : null}
-                  {f.superseded_by ? <span className="ml-2 text-xs">{t('record_replaced')}</span> : null}
-                </DefRow>
-              ))}
-            </DefList>
-          )}
-        </Section>
+
+      <div className="grid gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Section title={t('record_fields')} help={t('record_fields_help')}>
           {!view.record ? (
             <p className="text-[13px] text-muted-foreground">{t('record_no_record')}</p>
           ) : (
             <DefList className="text-[13px]">
-              {view.record.fields
-                .filter((f) => f.value != null)
-                .map((f) => (
+              {fields.map((f) => {
+                const fact = factOfField.get(f.field)
+                return (
                   <DefRow
                     key={f.field}
                     label={fieldLabel(f.field)}
-                    source={f.page ? <SourceLink href={inlineHref(view.document_id, f.page)} label={t('source_ref', { file, page: f.page })} /> : undefined}
+                    source={multiPage && f.page ? <SourceLink href={inlineHref(view.document_id, f.page)} label={t('source_page_short_only', { page: f.page })} /> : undefined}
                   >
                     {String(f.value)}
                     {f.under_review ? (
@@ -108,45 +109,91 @@ export function DocumentRecord({ documentId }: { documentId: string }) {
                         {t('record_under_review')}
                       </Badge>
                     ) : null}
+                    {fact ? (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {t('record_fact_chip')}
+                        {fact.valid_from ? ` ${t('agreement_valid_from', { date: fact.valid_from })}` : ''}
+                        {fact.superseded_by ? `, ${t('record_replaced')}` : ''}
+                      </span>
+                    ) : null}
                   </DefRow>
-                ))}
+                )
+              })}
             </DefList>
           )}
+          {view.line_items.length > 0 && (
+            <table className="mt-4 w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <th className={`${TH_CLASS} pl-0`}>{t('record_line_items')}</th>
+                  <th className={`${TH_CLASS} text-right`}>{t('col_quantity')}</th>
+                  <th className={`${TH_CLASS} text-right`}>{t('col_vat_rate')}</th>
+                  <th className={`${TH_CLASS} pr-0 text-right`}>{t('col_amount')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {view.line_items.map((li, i) => (
+                  <tr key={i}>
+                    <td className={`${TD_CLASS} whitespace-normal pl-0`}>{li.description}</td>
+                    <td className={`${TD_CLASS} text-right tabular-nums`}>{li.quantity ?? ''}</td>
+                    <td className={`${TD_CLASS} text-right tabular-nums`}>{li.vat_rate != null ? `${li.vat_rate} %` : ''}</td>
+                    <td className={`${TD_CLASS} pr-0 text-right tabular-nums`}>{li.line_total != null ? formatCurrency(li.line_total, 'SEK') : ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </Section>
-      </div>
-      <Section title={t('record_links')}>
-        <DefList className="text-[13px]">
-          {view.journal_entry && (
-            <DefRow label={t('linked_verifikat')}>
-              <Link href={`/bookkeeping?entry=${view.journal_entry.id}`} className={QUIET_LINK_CLASS}>
-                {t('record_verifikat', { voucher: view.journal_entry.voucher })}
-              </Link>
-            </DefRow>
+
+        <div className="space-y-8">
+          {loose.length > 0 && (
+            <Section title={t('record_facts')} help={t('facts_help')}>
+              <DefList className="text-[13px]">
+                {loose.map((f) => (
+                  <DefRow key={f.fact_id} label={f.label} muted={f.superseded_by}>
+                    {f.value_text}
+                    {f.valid_from ? <span className="ml-2 text-xs text-muted-foreground">{t('agreement_valid_from', { date: f.valid_from })}</span> : null}
+                    {f.superseded_by ? <span className="ml-2 text-xs">{t('record_replaced')}</span> : null}
+                  </DefRow>
+                ))}
+              </DefList>
+            </Section>
           )}
-          {view.agreement && (
-            <DefRow label={t('linked_agreement')}>
-              <Link href={`/arkiv/avtal/${view.agreement.id}`} className={QUIET_LINK_CLASS}>
-                {view.agreement.title}
-              </Link>
-            </DefRow>
-          )}
-          {view.links
-            .filter((l) => l.target_kind !== 'agreement')
-            .map((l) => (
-              <DefRow key={l.link_id} label={l.target_kind === 'party' ? t('col_counterparty') : t('cluster_tillgangar')}>
-                {l.href ? (
-                  <Link href={l.href} className={QUIET_LINK_CLASS}>
-                    {l.label ?? l.target_id}
+          <Section title={t('record_links')}>
+            <DefList className="text-[13px]">
+              {view.journal_entry && (
+                <DefRow label={t('linked_verifikat')}>
+                  <Link href={`/bookkeeping?entry=${view.journal_entry.id}`} className={QUIET_LINK_CLASS}>
+                    {t('record_verifikat', { voucher: view.journal_entry.voucher })}
                   </Link>
-                ) : (
-                  (l.label ?? l.target_id)
-                )}
-                {l.basis !== 'proven' ? <span className="ml-2 text-xs text-muted-foreground">{t('link_guessed')}</span> : null}
-              </DefRow>
-            ))}
-          {!view.journal_entry && !view.agreement && view.links.length === 0 ? <p className="m-0 py-2 text-[13px] text-muted-foreground">{t('record_no_links')}</p> : null}
-        </DefList>
-      </Section>
+                </DefRow>
+              )}
+              {view.agreement && (
+                <DefRow label={t('linked_agreement')}>
+                  <Link href={`/arkiv/avtal/${view.agreement.id}`} className={QUIET_LINK_CLASS}>
+                    {view.agreement.title}
+                  </Link>
+                </DefRow>
+              )}
+              {view.links
+                .filter((l) => l.target_kind !== 'agreement')
+                .map((l) => (
+                  <DefRow key={l.link_id} label={l.target_kind === 'party' ? t('col_counterparty') : t('cluster_tillgangar')}>
+                    {l.href ? (
+                      <Link href={l.href} className={QUIET_LINK_CLASS}>
+                        {l.label ?? l.target_id}
+                      </Link>
+                    ) : (
+                      (l.label ?? l.target_id)
+                    )}
+                    {l.basis !== 'proven' ? <span className="ml-2 text-xs text-muted-foreground">{t('link_guessed')}</span> : null}
+                  </DefRow>
+                ))}
+              {!view.journal_entry && !view.agreement && view.links.length === 0 ? <p className="m-0 py-2 text-[13px] text-muted-foreground">{t('record_no_links')}</p> : null}
+            </DefList>
+          </Section>
+        </div>
+      </div>
     </div>
   )
 }

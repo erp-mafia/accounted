@@ -55,17 +55,13 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
           : null
   const meta = [view.counterparty.name, validity].filter(Boolean).join(' · ')
   const sourceFile = shortFileName(view.source.file_name)
-  const sourceOf = (f: AgreementFactView) =>
-    f.source.document_id ? (
-      <SourceLink
-        href={inlineHref(f.source.document_id, f.source.page)}
-        label={
-          f.source.page
-            ? t('source_ref', { file: shortFileName(view.documents.find((d) => d.document_id === f.source.document_id)?.file_name ?? view.source.file_name), page: f.source.page })
-            : shortFileName(view.documents.find((d) => d.document_id === f.source.document_id)?.file_name ?? view.source.file_name)
-        }
-      />
-    ) : null
+  const sourceOf = (f: AgreementFactView) => {
+    if (!f.source.document_id) return null
+    const own = f.source.document_id === view.source.document_id
+    const file = shortFileName(view.documents.find((d) => d.document_id === f.source.document_id)?.file_name ?? view.source.file_name)
+    const label = f.source.page ? (own ? t('source_page_short_only', { page: f.source.page }) : t('source_ref', { file, page: f.source.page })) : own ? t('graph_open') : file
+    return <SourceLink href={inlineHref(f.source.document_id, f.source.page)} label={label} />
+  }
   const amountLabel =
     view.amount != null ? `${formatCurrency(view.amount, view.currency)}${view.period && view.period !== 'one_time' ? t(`period_short_${view.period}` as never) : ''}` : null
 
@@ -207,7 +203,7 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
                 <DefRow
                   key={d.id}
                   label={<span className="tabular-nums">{d.due_date}</span>}
-                  source={d.page ? <SourceLink href={inlineHref(view.source.document_id, d.page)} label={t('source_ref', { file: sourceFile, page: d.page })} /> : undefined}
+                  source={d.page ? <SourceLink href={inlineHref(view.source.document_id, d.page)} label={t('source_page_short_only', { page: d.page })} /> : undefined}
                 >
                   <Link href="/deadlines" className={QUIET_LINK_CLASS}>
                     {d.title}

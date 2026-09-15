@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -34,6 +35,7 @@ const PICKER_CLASS = 'h-8 w-auto gap-1.5 rounded-full px-3.5 text-[13px]'
  */
 export function ArkivDocuments({ fixedType }: { fixedType?: string }) {
   const t = useTranslations('arkiv')
+  const router = useRouter()
   const [type, setType] = useState(fixedType ?? 'all')
   const [query, setQuery] = useState('')
   const [year, setYear] = useState('all')
@@ -155,7 +157,7 @@ export function ArkivDocuments({ fixedType }: { fixedType?: string }) {
             </thead>
             <tbody>
               {rows.map((row) => (
-                <tr key={row.document_id} className="hover:bg-secondary/35">
+                <tr key={row.document_id} className="cursor-pointer hover:bg-secondary/35" onClick={() => router.push(row.href)}>
                   <td className={`${TD_CLASS} pl-1 tabular-nums text-muted-foreground`}>{formatDate(row.created_at)}</td>
                   <td className={`${TD_CLASS} truncate`}>
                     <Link href={row.href} className={`${QUIET_LINK_CLASS} text-[13px] text-foreground`} title={row.file_name}>

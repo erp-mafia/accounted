@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { EmptyState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -23,6 +24,7 @@ const KINDS: AgreementKind[] = ['rental', 'lease', 'loan', 'subscription']
 export function ArkivAgreements() {
   const t = useTranslations('arkiv')
   const locale = useLocale()
+  const router = useRouter()
   const [items, setItems] = useState<AgreementListItem[] | null>(null)
   const [failed, setFailed] = useState(false)
   const [kind, setKind] = useState<'all' | AgreementKind>('all')
@@ -95,7 +97,7 @@ export function ArkivAgreements() {
           </thead>
           <tbody>
             {visible.map((a) => (
-              <tr key={a.id} className="hover:bg-secondary/35">
+              <tr key={a.id} className="cursor-pointer hover:bg-secondary/35" onClick={() => router.push(`/arkiv/avtal/${a.id}`)}>
                 <td className={`${TD_CLASS} pl-0`}>
                   <div className="truncate" title={a.title}>
                     {a.title}

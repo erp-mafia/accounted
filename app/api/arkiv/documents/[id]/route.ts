@@ -22,6 +22,8 @@ export interface DocumentRecordView {
   admission_state: string
   journal_entry: { id: string; voucher: string } | null
   classification: { summary: string | null; confidence: number | null; decided_by: string; signals: string[] } | null
+  /** The rows of a receipt or invoice as the Underlag reader saw them; empty for anything else. */
+  line_items: Array<{ description: string; quantity: number | null; unit_price: number | null; line_total: number | null; vat_rate: number | null }>
   record: { extraction_id: string; schema_type: string; pass: string; review_fields: string[]; fields: Array<{ field: string; label: string; value: unknown; page: number | null; quote: string | null; confidence: number; under_review: boolean }> } | null
   facts: Array<{ fact_id: string; predicate: string; label: string; value_text: string; valid_from: string | null; sys_from: string; source_kind: string; superseded_by: boolean }>
   links: Array<{ link_id: string; target_kind: string; target_id: string; basis: string; method: string; label: string | null; href: string | null }>
@@ -31,10 +33,10 @@ export interface DocumentRecordView {
 export const GET = withRouteContext('arkiv.document', async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
   if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
-  const { data: doc, error } = await ctx.supabase.from('document_attachments').select('id, file_name, created_at, page_count, doc_type, admission_state, journal_entry_id').eq('id', id).eq('company_id', ctx.companyId).maybeSingle()
+  const { data: doc, error } = await ctx.supabase.from('document_attachments').select('id, file_name, created_at, page_count, doc_type, admission_state, journal_entry_id, extracted_data').eq('id', id).eq('company_id', ctx.companyId).maybeSingle()
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
   if (!doc) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  const d = doc as { id: string; file_name: string; created_at: string; page_count: number | null; doc_type: string | null; admission_state: string; journal_entry_id: string | null }
+  const d = doc as { id: string; file_name: string; created_at: string; page_count: number | null; doc_type: string | null; admission_state: string; journal_entry_id: string | null; extracted_data: { lineItems?: Array<{ description?: string | null; quantity?: number | null; unitPrice?: number | null; lineTotal?: number | null; vatRate?: number | null }> } | null }
 
   const [classification, extraction, facts, links, agreement, entry] = await Promise.all([
     ctx.supabase.from('document_classifications').select('summary, confidence, decided_by, signals').eq('document_id', id).eq('is_current', true).maybeSingle(),
@@ -65,6 +67,9 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
     admission_state: d.admission_state,
     journal_entry: e ? { id: e.id, voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}` } : null,
     classification: classification.data ? (classification.data as DocumentRecordView['classification']) : null,
+    line_items: (d.extracted_data?.lineItems ?? [])
+      .filter((li) => li && typeof li === 'object')
+      .map((li) => ({ description: li.description ?? '', quantity: li.quantity ?? null, unit_price: li.unitPrice ?? null, line_total: li.lineTotal ?? null, vat_rate: li.vatRate ?? null })),
     record: ext
       ? {
           extraction_id: ext.id,
