@@ -225,6 +225,10 @@
   transition: background-color 150ms var(--ease-out);
 }
 .jny-btn:hover { background: hsl(var(--primary) / 0.85); }
+/* Three steps already pass disabled to this button and it kept looking
+   clickable. Matches .jny-btn-quiet:disabled. */
+.jny-btn:disabled { opacity: 0.5; cursor: default; }
+.jny-btn:disabled:hover { background: hsl(var(--primary)); }
 .jny-btn-quiet { border: 0; background: none; cursor: pointer; font-family: inherit; color: hsl(var(--muted-foreground)); font-size: 12.5px; }
 .jny-btn-quiet:hover { color: hsl(var(--foreground)); }
 

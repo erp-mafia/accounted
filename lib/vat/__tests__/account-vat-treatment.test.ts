@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   defaultRateForVatTreatment,
+  isVatTreatmentAllowedForAccountClass,
   resolveVatTreatmentRuta,
   suggestVatTreatment,
   vatTreatmentsForAccountClass,
@@ -38,6 +39,122 @@ describe('resolveVatTreatmentRuta', () => {
     expect(vatTreatmentsForAccountClass(3)).not.toContain('reverse_charge_non_eu_services')
     expect(vatTreatmentsForAccountClass(4)).not.toContain('oss')
     expect(defaultRateForVatTreatment('oss', 3)).toBeNull()
+  })
+})
+
+describe('momsfria EU-inköp', () => {
+  it('declines a momsfri EU purchase rather than inventing a reverse charge', () => {
+    // BAS 4518 exists beside 4515 to 4517 and is deliberately absent from
+    // ACCOUNT_RUTA: an exempt acquisition is not self-assessed, so there is
+    // nothing to declare. Visma eEkonomi says the same by leaving the code
+    // blank on its equivalent account. Without the rule the label reads EU
+    // and varor, answers reverse charge, and defaults to 25 % because the
+    // name states no percentage.
+    expect(suggestVatTreatment('4059', 'Inköp varor EG momsfri')).toBeNull()
+    expect(suggestVatTreatment('4518', 'Inköp av råvaror och material från annat EU-land momsfri')).toBeNull()
+  })
+
+  it('still reads the taxable EU purchases beside it', () => {
+    expect(suggestVatTreatment('4056', 'Inköp varor 25% EG'))
+      .toEqual({ treatment: 'reverse_charge_eu_goods', rate: 0.25 })
+    expect(suggestVatTreatment('4057', 'Inköp varor 12% EG'))
+      .toEqual({ treatment: 'reverse_charge_eu_goods', rate: 0.12 })
+  })
+
+  it('leaves the sales side alone, where momsfri EU goods ARE ruta 35', () => {
+    // The asymmetry is in the tax, not the code: a momsfri supply is a
+    // zero-rated intra-EU supply and belongs in ruta 35, while a momsfri
+    // acquisition belongs nowhere.
+    expect(suggestVatTreatment('3058', 'Försäljn varor EG momsfri'))
+      .toEqual({ treatment: 'reverse_charge_eu_goods', rate: 0 })
+  })
+})
+
+describe('trepartshandel', () => {
+  it('files the middleman on both sides of the trade', () => {
+    expect(resolveVatTreatmentRuta('triangulation_eu_goods', 3)).toEqual({ box: 'ruta38', side: 'credit' })
+    expect(resolveVatTreatmentRuta('triangulation_eu_goods', 4)).toEqual({ box: 'ruta37', side: 'debit' })
+  })
+
+  it('carries no rate on either side, purchases included', () => {
+    // The purchase side is the one that can go wrong: the fall-through for
+    // reverse charge answers 0.25 on classes 4 to 6, and a middleman does not
+    // self-assess acquisition VAT at all. The scheme exists precisely so the
+    // tax is accounted for by the final buyer in the destination country.
+    expect(defaultRateForVatTreatment('triangulation_eu_goods', 3)).toBe(0)
+    expect(defaultRateForVatTreatment('triangulation_eu_goods', 4)).toBe(0)
+    expect(defaultRateForVatTreatment('triangulation_eu_goods', 5)).toBe(0)
+  })
+
+  it('reads a Treparts label without taking the rate the name states', () => {
+    // "Treparts försäljn varor till EG 25%" names 25 %, and the purchase-side
+    // twin in the same chart names none. The percentage is a goods category in
+    // that naming scheme, not a sats, and the trade carries neither.
+    expect(suggestVatTreatment('3057', 'Treparts försäljn varor till EG 25%'))
+      .toEqual({ treatment: 'triangulation_eu_goods', rate: 0 })
+    expect(suggestVatTreatment('4055', 'Trepartsförv varor fr EG'))
+      .toEqual({ treatment: 'triangulation_eu_goods', rate: 0 })
+  })
+})
+
+describe('momspliktiga uttag och importunderlag', () => {
+  it('files each on its own box, by account class', () => {
+    expect(resolveVatTreatmentRuta('own_use', 3)).toEqual({ box: 'ruta06', side: 'credit' })
+    expect(resolveVatTreatmentRuta('import_goods', 4)).toEqual({ box: 'ruta50', side: 'debit' })
+  })
+
+  it('refuses each on the other side of the ledger', () => {
+    // ruta 06 is revenue and ruta 50 a cost-side basis; neither box can be
+    // filled from the wrong class, which is what the dropdown reads too.
+    expect(resolveVatTreatmentRuta('own_use', 4)).toBeNull()
+    expect(isVatTreatmentAllowedForAccountClass('import_goods', 3)).toBe(false)
+    expect(isVatTreatmentAllowedForAccountClass('own_use', 3)).toBe(true)
+    expect(isVatTreatmentAllowedForAccountClass('import_goods', 4)).toBe(true)
+  })
+
+  it('starts at 25 %, because the box covers three rates', () => {
+    // Unlike ruta 05, which spends a treatment per sats, one box here carries
+    // 25, 12 and 6 %. The label or a source chart code moves it.
+    expect(defaultRateForVatTreatment('own_use', 3)).toBe(0.25)
+    expect(defaultRateForVatTreatment('import_goods', 4)).toBe(0.25)
+  })
+
+  it('reads an uttag label, and the rate it names', () => {
+    expect(suggestVatTreatment('3401', 'Försäljning/uttag av varor 25 %'))
+      .toEqual({ treatment: 'own_use', rate: 0.25 })
+    expect(suggestVatTreatment('3910', 'Egna uttag av tjänster 12 %'))
+      .toEqual({ treatment: 'own_use', rate: 0.12 })
+  })
+
+  it('keeps momsfria uttag in ruta 42, where BAS 3404 puts them', () => {
+    // The uttag rule sits after the momsfri rule on purpose: an exempt
+    // withdrawal is not a taxable one and does not belong in ruta 06.
+    expect(suggestVatTreatment('3404', 'Momsfria uttag'))
+      .toEqual({ treatment: 'exempt', rate: 0 })
+  })
+
+  it('never reads a motkonto as the basis it counters', () => {
+    // Found in a real migration: "Motkonto beskattningsunderlag import" took
+    // import_goods from the rule meant for 4545, so the counter-account would
+    // have joined ruta 50 on the debit side and subtracted its own credit from
+    // the box the basis was filling. BAS says the same about its own
+    // equivalent, 4598, which nets the basis out of the income statement while
+    // the 45xx accounts carry it to ruta 20-24.
+    expect(suggestVatTreatment('4549', 'Motkonto beskattningsunderlag import')).toBeNull()
+    expect(suggestVatTreatment('4598', 'Motkonto beräknad omvänd moms')).toBeNull()
+    // The account it counters still reads as the basis.
+    expect(suggestVatTreatment('4545', 'Beskattningsunderlag vid import 25 %'))
+      .toEqual({ treatment: 'import_goods', rate: 0.25 })
+  })
+
+  it('reads an import BASIS label but still declines a plain import cost account', () => {
+    // The distinction the box turns on: ruta 50 is tullvärde plus tullar plus
+    // bikostnader, booked on its own account. An account that merely buys
+    // imported goods holds what the supplier invoiced, and routing that to
+    // ruta 50 would overstate the basis.
+    expect(suggestVatTreatment('4540', 'Beskattningsunderlag vid import 25 %'))
+      .toEqual({ treatment: 'import_goods', rate: 0.25 })
+    expect(suggestVatTreatment('4049', 'Inköp varor import')).toBeNull()
   })
 })
 
