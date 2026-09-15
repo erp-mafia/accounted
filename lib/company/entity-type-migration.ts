@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { CreateJournalEntryLineInput } from '@/types'
-import { isEntityType, type EntityType } from '@/lib/company/entity-type'
+import type { CreateJournalEntryLineInput, EntityType } from '@/types'
+import { isEntityType } from '@/lib/company/entity-type'
 import {
   createJournalEntry,
   findFiscalPeriod,
