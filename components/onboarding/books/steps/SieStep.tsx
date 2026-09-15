@@ -6,6 +6,7 @@ import {
   acceptSourceChartWithoutReview,
   applySourceChartCsv,
 } from '@/lib/import/source-chart/apply-source-chart'
+import { sourceChartFormatForProvider } from '@/lib/import/source-chart/formats'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { waitForSIEJob } from '@/lib/import/sie-job-client'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
@@ -126,6 +127,13 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
 
   const provName = useMemo(() => BRANCH_PROVIDERS.find((p) => p.id === regProvider)?.name ?? null, [regProvider])
   const sieFirst = SIE_FIRST_PROVIDERS.has(state.provider ?? '')
+  /**
+   * Whether this provider's chart of accounts can be read at all. Both
+   * SIE-first providers need a file for the ledger, but only one of them
+   * exports a chart this project has a translator for, and offering the
+   * picker to the other is a promise the parser cannot keep.
+   */
+  const chartFormat = sourceChartFormatForProvider(state.provider)
 
   /* ── parse ───────────────────────────────────────────────────────── */
   const parseOne = useCallback(async (file: File, id: string) => {
@@ -524,7 +532,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                       recur in every chart, so a total of 267 would describe
                       roughly 47 accounts counted six times. A per-year count
                       is a fact; their sum is a number with no referent. */}
-                  {f.status === 'ready' ? (
+                  {f.status === 'ready' && chartFormat ? (
                     <>
                       <span style={{ whiteSpace: 'nowrap' }}>
                         <button
@@ -554,7 +562,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                   to be told what they are for. The menu path is the half that
                   decides whether the invitation can be acted on at all, and
                   the mapping step's own help carries the same sentence. */}
-              {ready.length > 0 && ready.every((f) => !f.chart) ? (
+              {chartFormat && ready.length > 0 && ready.every((f) => !f.chart) ? (
                 <p className="s" style={{ marginTop: 8 }}>
                   {t('sie_chart_why')}<br />{t('sie_chart_where')}
                 </p>
