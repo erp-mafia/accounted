@@ -6,9 +6,12 @@ import type {
   AnnualReportDisclosureState,
   AnnualReportEligibilityResult,
   AnnualReportProfile,
+  AnnualReportSizeMetrics,
   AnnualReportValidationResult,
   AnnualReportValidationStage,
+  AssociationAuditorSummary,
 } from './compliance-types'
+import { evaluateAuditDependency } from './audit-dependency'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { isEntityType, requiresAuditorRegardlessOfSize } from '@/lib/company/entity-type'
 
@@ -164,6 +167,10 @@ export interface ValidateAnnualReportInput {
   eligibility: AnnualReportEligibilityResult
   stage: AnnualReportValidationStage
   todayIso?: string
+  /** Revisor roster of an ekonomisk förening (EFL 8 kap.); ignored for other forms. */
+  auditors?: readonly AssociationAuditorSummary[]
+  /** Size metrics for the EFL 8 kap. 14 § qualification rule. */
+  metrics?: AnnualReportSizeMetrics | null
 }
 
 export function validateAnnualReportCompleteness(
@@ -485,6 +492,20 @@ export function validateAnnualReportCompleteness(
         'error',
         'filing',
         'Revisionsberättelse krävs men är inte markerad som inkluderad i inlämningspaketet.',
+      )
+    }
+    // EFL 8 kap.: the revisor roster and the archived, signed report. The
+    // roster is only known when the caller loaded it (model.ts does for the
+    // form); without it the roster checks are skipped, never faked.
+    if (report.company.entity_type === 'ekonomisk_forening' && input.auditors) {
+      issues.push(
+        ...evaluateAuditDependency({
+          profile,
+          auditors: input.auditors,
+          metrics: input.metrics ?? null,
+          periodEndIso: report.fiscal_period.period_end,
+          stage,
+        }),
       )
     }
   }

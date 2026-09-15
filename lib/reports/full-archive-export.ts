@@ -1045,6 +1045,8 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     file: 'company_entity_type_migrations.json',
     orderBy: 'created_at',
   },
+  // Revisor roster of an ekonomisk förening (EFL 8 kap.), ended terms included.
+  { name: 'association_auditors', file: 'association_auditors.json', orderBy: 'created_at' },
   // Customer invoicing
   { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
   {

@@ -387,6 +387,57 @@ describe('validateAnnualReportCompleteness: ekonomisk förening', () => {
     expect(none.issues.map((issue) => issue.code)).not.toContain('AR-EF-FORLAGSINSATSER-DIVIDEND')
   })
 
+  it('checks the revisor roster only when the caller loaded it, and blocks filing on an empty roster', () => {
+    const base = input('filing')
+    const report = foreningReport('Oförändrat medlemsantal.')
+    const withoutRoster = validateAnnualReportCompleteness({ ...base, report })
+    expect(withoutRoster.issues.map((issue) => issue.code)).not.toContain('AR-EF-AUDITOR-NONE')
+    const emptyRoster = validateAnnualReportCompleteness({ ...base, report, auditors: [] })
+    expect(emptyRoster.issues.map((issue) => issue.code)).toContain('AR-EF-AUDITOR-NONE')
+    const served = validateAnnualReportCompleteness({
+      ...base,
+      report,
+      auditors: [
+        { id: 'a1', name: 'Revisor', kind: 'lekmannarevisor', appointed_on: '2024-05-20', term_ends_on: null, ended_on: null },
+      ],
+    })
+    expect(served.issues.map((issue) => issue.code)).not.toContain('AR-EF-AUDITOR-NONE')
+    // An aktiebolag never gets the roster checks, roster or not.
+    const ab = validateAnnualReportCompleteness({ ...base, auditors: [] })
+    expect(ab.issues.map((issue) => issue.code)).not.toContain('AR-EF-AUDITOR-NONE')
+  })
+
+  it('requires the claimed revisionsberättelse to be archived with date, opinion and document before filing', () => {
+    const base = input('filing')
+    const report = foreningReport('Oförändrat medlemsantal.')
+    const roster = [
+      { id: 'a1', name: 'Revisor', kind: 'lekmannarevisor' as const, appointed_on: '2024-05-20', term_ends_on: null, ended_on: null },
+    ]
+    const claimed = validateAnnualReportCompleteness({
+      ...base,
+      report,
+      auditors: roster,
+      profile: { ...base.profile, auditor_report_required: true, auditor_report_included: true },
+    })
+    expect(claimed.issues.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(['AR-EF-AUDITOR-REPORT-UNSIGNED', 'AR-EF-AUDITOR-REPORT-OPINION', 'AR-EF-AUDITOR-REPORT-DOCUMENT']),
+    )
+    const archived = validateAnnualReportCompleteness({
+      ...base,
+      report,
+      auditors: roster,
+      profile: {
+        ...base.profile,
+        auditor_report_required: true,
+        auditor_report_included: true,
+        auditor_report_signed_on: '2026-03-10',
+        auditor_report_opinion: 'unmodified',
+        auditor_report_document_id: 'doc-1',
+      },
+    })
+    expect(archived.issues.some((issue) => issue.code.startsWith('AR-EF-AUDITOR-'))).toBe(false)
+  })
+
   it('demands the revisionsberättelse even when the profile says none is required (EFL 8 kap. 1 §)', () => {
     const base = input('filing')
     const profile: AnnualReportProfile = {

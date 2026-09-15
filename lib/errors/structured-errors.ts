@@ -245,6 +245,22 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Omföringsverifikatet måste återföras innan företagsformen kan återställas.',
     message_en: 'The reclassification voucher must be reversed before the legal form can be restored.',
   },
+  // Revisor roster and archived revisionsberättelse (EFL 8 kap.).
+  ASSOCIATION_AUDITOR_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Revisorn kunde inte hittas.',
+    message_en: 'Auditor not found.',
+  },
+  ASSOCIATION_AUDITOR_ALREADY_ENDED: {
+    httpStatus: 409,
+    message_sv: 'Revisorns uppdrag har redan avslutats.',
+    message_en: 'The auditor assignment has already ended.',
+  },
+  ASSOCIATION_AUDIT_DOCUMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Dokumentet med revisionsberättelsen kunde inte hittas i företagets arkiv.',
+    message_en: 'The auditor report document was not found in the company archive.',
+  },
   RATE_LIMITED: {
     httpStatus: 429,
     message_sv: 'För många förfrågningar. Vänta en stund och försök igen.',

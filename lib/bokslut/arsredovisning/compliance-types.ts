@@ -10,6 +10,28 @@ export type AnnualReportValidationStage = 'draft' | 'signing' | 'filing'
 export type ParentGroupSize = 'none' | 'small' | 'large'
 
 /**
+ * Opinion in an archived revisionsberättelse (ISA 700/705 wording as the
+ * Swedish standard uses it): unmodified, or one of the three modifications.
+ */
+export type AuditorReportOpinion = 'unmodified' | 'qualified' | 'adverse' | 'disclaimer'
+
+export type AssociationAuditorKind =
+  | 'lekmannarevisor'
+  | 'godkand_revisor'
+  | 'auktoriserad_revisor'
+  | 'revisionsbolag'
+
+/** What the audit dependency needs to know about each revisor on the roster. */
+export interface AssociationAuditorSummary {
+  id: string
+  name: string
+  kind: AssociationAuditorKind
+  appointed_on: string
+  term_ends_on: string | null
+  ended_on: string | null
+}
+
+/**
  * Facts that determine whether the selected framework may be used. Nullable
  * booleans are intentional: an unanswered eligibility question must never be
  * interpreted as a legal assertion that the condition does not apply.
@@ -33,6 +55,12 @@ export interface AnnualReportProfile {
   reporting_currency: 'SEK' | 'EUR'
   auditor_report_required: boolean | null
   auditor_report_included: boolean
+  /** Signed date, opinion, deviations and WORM document of the archived
+   * revisionsberättelse (EFL 8 kap. 33 §); null until archived. */
+  auditor_report_signed_on: string | null
+  auditor_report_opinion: AuditorReportOpinion | null
+  auditor_report_deviations: string | null
+  auditor_report_document_id: string | null
   dividend_prudence_confirmed: boolean | null
   narrative_confirmed_at: string | null
   k2_assessment_confirmed_at: string | null
@@ -158,6 +186,10 @@ export function emptyAnnualReportProfile(
     reporting_currency: 'SEK',
     auditor_report_required: null,
     auditor_report_included: false,
+    auditor_report_signed_on: null,
+    auditor_report_opinion: null,
+    auditor_report_deviations: null,
+    auditor_report_document_id: null,
     dividend_prudence_confirmed: null,
     narrative_confirmed_at: null,
     k2_assessment_confirmed_at: null,

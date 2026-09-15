@@ -20,6 +20,9 @@ export type AssociationRegisterErrorCode =
   | 'ASSOCIATION_DISTRIBUTION_NOT_BOOKED'
   | 'ASSOCIATION_DISTRIBUTION_ALREADY_PAID'
   | 'ASSOCIATION_DISTRIBUTION_NO_OPEN_PERIOD'
+  | 'ASSOCIATION_AUDITOR_NOT_FOUND'
+  | 'ASSOCIATION_AUDITOR_ALREADY_ENDED'
+  | 'ASSOCIATION_AUDIT_DOCUMENT_NOT_FOUND'
 
 export class AssociationRegisterError extends Error {
   readonly code: AssociationRegisterErrorCode

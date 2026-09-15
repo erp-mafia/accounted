@@ -7,6 +7,10 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { buildCanonicalAnnualReport } from '@/lib/bokslut/arsredovisning/model'
 import { getAnnualReportCapabilities } from '@/lib/bokslut/arsredovisning/capabilities'
 import { upsertAnnualReportProfile } from '@/lib/bokslut/arsredovisning/profile-service'
+import { AuditorReportOpinionSchema } from '@/lib/api/schemas'
+import { saneIsoDateSchema } from '@/lib/invariants/zod'
+import { requireCompanyDocument } from '@/lib/associations/auditors'
+import { AssociationRegisterError } from '@/lib/associations/errors'
 
 const NullableBoolean = z.boolean().nullable()
 
@@ -27,6 +31,11 @@ const PatchSchema = z
     reporting_currency: z.enum(['SEK', 'EUR']).optional(),
     auditor_report_required: NullableBoolean.optional(),
     auditor_report_included: z.boolean().optional(),
+    // The archived, signed revisionsberättelse (EFL 8 kap. 33-34 §§).
+    auditor_report_signed_on: saneIsoDateSchema.nullable().optional(),
+    auditor_report_opinion: AuditorReportOpinionSchema.nullable().optional(),
+    auditor_report_deviations: z.string().trim().max(4000).nullable().optional(),
+    auditor_report_document_id: z.string().uuid().nullable().optional(),
     dividend_prudence_confirmed: NullableBoolean.optional(),
     narrative_confirmed: z.boolean().optional(),
     k2_assessment_confirmed: z.boolean().optional(),
@@ -112,6 +121,10 @@ export const PATCH = withRouteContext(
         signer_roster_confirmed,
         ...profileFields
       } = validation.data
+      // The FK only proves the document exists; it must be this company's.
+      if (profileFields.auditor_report_document_id) {
+        await requireCompanyDocument(supabase, companyId, profileFields.auditor_report_document_id)
+      }
       const now = new Date().toISOString()
       await upsertAnnualReportProfile(supabase, companyId, user.id, id, {
         ...profileFields,
@@ -131,6 +144,9 @@ export const PATCH = withRouteContext(
       })
       return NextResponse.json({ data: responseData(model) })
     } catch (err) {
+      if (err instanceof AssociationRegisterError) {
+        return errorResponseFromCode(err.code, log, { requestId })
+      }
       return errorResponse(err, log, { requestId })
     }
   },

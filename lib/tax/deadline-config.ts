@@ -903,7 +903,51 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     linkedReportType: null,
     generateDates: annualMeetingDates,
   },
+
+  // Revisionsberättelse to the board: at least three weeks before the
+  // årsstämma (EFL 8 kap. 32 §). The stämma date is not known to the
+  // settings, so the deadline is derived from the latest lawful stämma date
+  // (six months after the year end, EFL 6 kap. 9 §): a stämma held earlier
+  // moves the hand-over earlier, never later.
+  {
+    type: 'revisionsberattelse_ekonomisk_forening',
+    titleTemplate: 'Revisionsberättelse till styrelsen räkenskapsår {periodLabel}',
+    description:
+      'Ekonomisk förening: revisorn ska lämna revisionsberättelsen till styrelsen senast tre veckor före årsstämman (EFL 8 kap. 32 §); datumet utgår från den senaste tillåtna stämmodagen sex månader efter räkenskapsårets utgång (EFL 6 kap. 9 §)',
+    condition: (s) => s.entity_type === 'ekonomisk_forening',
+    priority: 'important',
+    linkedReportType: null,
+    generateDates: auditorReportHandoverDates,
+  },
 ]
+
+/**
+ * EFL 8 kap. 32 §: three weeks (21 days) before the latest lawful
+ * föreningsstämma date. Walking back 21 days from the last day of the
+ * sixth month can cross a month or year boundary, so the date is rebuilt
+ * from a Date and the instance year is the hand-over year, which is what
+ * the generator filters on.
+ */
+function auditorReportHandoverDates(
+  year: number,
+  settings: CompanySettingsForDeadlines,
+): DeadlineInstance[] {
+  const results: DeadlineInstance[] = []
+  for (const meetingYear of [year, year + 1]) {
+    for (const meeting of annualMeetingDates(meetingYear, settings)) {
+      const handover = new Date(meeting.year, meeting.month, meeting.day - 21)
+      if (handover.getFullYear() !== year) continue
+      results.push({
+        day: handover.getDate(),
+        month: handover.getMonth(),
+        year: handover.getFullYear(),
+        period: meeting.period,
+        periodLabel: meeting.periodLabel,
+      })
+    }
+  }
+  return results
+}
 
 /**
  * The general filing duty for an ekonomisk förening applies to financial

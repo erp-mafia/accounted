@@ -74,6 +74,9 @@ const RETAINED = new Set([
   // Member register of an ekonomisk förening (EFL 5 kap.): kept seven years.
   'association_distribution_allocations.user_id',
   'association_distributions.user_id',
+  // Revisor roster of an ekonomisk förening (EFL 8 kap.): elected by the
+  // stämma, kept with the årsredovisningar it signed.
+  'association_auditors.user_id',
   'association_member_contributions.user_id',
   'association_member_events.user_id',
   'association_members.user_id',

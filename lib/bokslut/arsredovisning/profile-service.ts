@@ -20,7 +20,7 @@ import {
 } from './compliance-types'
 
 const PROFILE_COLUMNS =
-  'id, company_id, fiscal_period_id, is_public_limited_company, is_in_liquidation, securities_traded_on_regulated_market, is_parent_company, parent_group_size, prepares_consolidated_accounts, has_foreign_branch, has_crypto_assets, has_share_based_payments, has_convertible_debt, building_revenue_share_pct, has_material_deferred_tax, reporting_currency, auditor_report_required, auditor_report_included, dividend_prudence_confirmed, narrative_confirmed_at, k2_assessment_confirmed_at, signer_roster_confirmed_at, updated_at'
+  'id, company_id, fiscal_period_id, is_public_limited_company, is_in_liquidation, securities_traded_on_regulated_market, is_parent_company, parent_group_size, prepares_consolidated_accounts, has_foreign_branch, has_crypto_assets, has_share_based_payments, has_convertible_debt, building_revenue_share_pct, has_material_deferred_tax, reporting_currency, auditor_report_required, auditor_report_included, auditor_report_signed_on, auditor_report_opinion, auditor_report_deviations, auditor_report_document_id, dividend_prudence_confirmed, narrative_confirmed_at, k2_assessment_confirmed_at, signer_roster_confirmed_at, updated_at'
 
 export type AnnualReportProfileUpdate = Partial<
   Omit<AnnualReportProfile, 'id' | 'company_id' | 'fiscal_period_id' | 'updated_at'>

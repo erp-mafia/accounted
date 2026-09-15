@@ -17,6 +17,7 @@ import {
 import { buildIxbrlInput, type BuildIxbrlOptions } from '@/lib/bokslut/ixbrl/build-input'
 import { resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
 import { getMedelantalOverride } from './narrative-service'
+import { listAuditorSummaries } from '@/lib/associations/auditors'
 
 export interface BuildCanonicalAnnualReportOptions extends BuildIxbrlOptions {
   stage?: AnnualReportValidationStage
@@ -137,6 +138,12 @@ export async function buildCanonicalAnnualReport(
     metrics,
   })
   const disclosures = disclosureState(report)
+  // The revisor roster only exists for an ekonomisk förening (EFL 8 kap.);
+  // other forms get no extra query and no roster checks.
+  const auditors =
+    report.company.entity_type === 'ekonomisk_forening'
+      ? await listAuditorSummaries(supabase, companyId)
+      : undefined
   let validation = validateAnnualReportCompleteness({
     report,
     profile,
@@ -144,6 +151,8 @@ export async function buildCanonicalAnnualReport(
     eligibility,
     stage: options.stage ?? 'draft',
     todayIso: options.todayIso,
+    auditors,
+    metrics,
   })
 
   let ixbrl = null

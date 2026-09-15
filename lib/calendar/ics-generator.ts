@@ -191,6 +191,7 @@ function getSwedishTaxTypeLabel(type: string): string {
     arsredovisning_ekonomisk_forening: 'Årsredovisning och revisionsberättelse',
     arsstamma: 'Årsstämma',
     foreningsstamma: 'Föreningsstämma',
+    revisionsberattelse_ekonomisk_forening: 'Revisionsberättelse till styrelsen',
     periodisk_sammanstallning: 'Periodisk sammanställning',
   }
   return labels[type] || type

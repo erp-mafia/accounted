@@ -392,6 +392,43 @@ export const RollbackEntityTypeMigrationSchema = z
   })
   .strict()
 
+// Revisor roster of an ekonomisk förening (EFL 8 kap.).
+export const AssociationAuditorKindSchema = z.enum([
+  'lekmannarevisor',
+  'godkand_revisor',
+  'auktoriserad_revisor',
+  'revisionsbolag',
+])
+
+export const AppointAssociationAuditorSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    kind: AssociationAuditorKindSchema,
+    registration_reference: z.string().trim().max(60).nullable().optional(),
+    appointed_on: saneIsoDate,
+    term_ends_on: saneIsoDate.nullable().optional(),
+    appointment_reference: z.string().trim().max(200).nullable().optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+  .refine((value) => !value.term_ends_on || value.term_ends_on >= value.appointed_on, {
+    message: 'term_ends_on must not precede appointed_on',
+    path: ['term_ends_on'],
+  })
+
+export const UpdateAssociationAuditorSchema = z
+  .object({
+    ended_on: saneIsoDate.optional(),
+    term_ends_on: saneIsoDate.nullable().optional(),
+    registration_reference: z.string().trim().max(60).nullable().optional(),
+    appointment_reference: z.string().trim().max(200).nullable().optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, { message: 'At least one field is required' })
+
+export const AuditorReportOpinionSchema = z.enum(['unmodified', 'qualified', 'adverse', 'disclaimer'])
+
 export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
 
 /**
@@ -542,6 +579,7 @@ export const TaxDeadlineTypeSchema = z.enum([
   'arsredovisning_ekonomisk_forening',
   'arsstamma',
   'foreningsstamma',
+  'revisionsberattelse_ekonomisk_forening',
   'periodisk_sammanstallning',
   'kvarskatt',
 ])

@@ -628,6 +628,24 @@ describe('ekonomisk förening: juridisk person deadlines with the association wo
     expect(forening.description).toContain('EFL 6 kap. 9 §')
   })
 
+  it('puts the revisionsberättelse hand-over three weeks before the latest stämma date (EFL 8 kap. 32 §)', () => {
+    const handover = getConfig('revisionsberattelse_ekonomisk_forening')
+    expect(handover.condition(ekf())).toBe(true)
+    expect(handover.condition(makeSettings({ entity_type: 'aktiebolag' }))).toBe(false)
+    // Calendar year 2026: stämma by 30 June 2027, report to the board by 9 June 2027.
+    expect(handover.generateDates(2027, ekf())).toEqual([
+      { day: 9, month: 5, year: 2027, period: '2026', periodLabel: '2026' },
+    ])
+    // Brutet räkenskapsår ending 30 June: stämma by 31 December, hand-over 10 December.
+    expect(handover.generateDates(2026, ekf({ fiscal_year_start_month: 7 }))).toEqual([
+      { day: 10, month: 11, year: 2026, period: '2025/2026', periodLabel: '2025/2026' },
+    ])
+    // Year end 31 July: stämma by 31 January next year, hand-over crosses back into the earlier year (10 January).
+    const crossing = handover.generateDates(2027, ekf({ fiscal_year_start_month: 8 }))
+    expect(crossing).toEqual([{ day: 10, month: 0, year: 2027, period: '2025/2026', periodLabel: '2025/2026' }])
+    expect(handover.description).toContain('EFL 8 kap. 32 §')
+  })
+
   it('never offers the enskild firma or ideell förening rules to an ekonomisk förening', () => {
     expect(getConfig('inkomstdeklaration_ef').condition(ekf())).toBe(false)
     // Helårsmoms follows the juridisk person schedule (SFL 26 kap. 33 §).

@@ -2705,6 +2705,7 @@ export type TaxDeadlineType =
   | 'arsredovisning_ekonomisk_forening'
   | 'arsstamma'
   | 'foreningsstamma'
+  | 'revisionsberattelse_ekonomisk_forening'
   | 'periodisk_sammanstallning'
   | 'kontrolluppgifter'
   | 'rot_rut_begaran'
