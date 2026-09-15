@@ -193,11 +193,32 @@ export async function createDocumentSignedUrl(
 }
 
 export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024 // 10 MB
+/**
+ * Office, OpenDocument, RTF and CSV documents (agreements, minutes, statements
+ * arriving as files rather than PDFs). Read by the Arkiv reading layer
+ * (lib/documents/read). Kept here, not imported from there, so this module
+ * stays free of the reader's dependencies.
+ */
+export const OFFICE_DOCUMENT_TYPES = [
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/msword',
+  'application/vnd.ms-excel',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+  'application/rtf',
+  'text/rtf',
+  'text/csv',
+]
 export const ALLOWED_DOCUMENT_TYPES = [
   'application/pdf',
   'image/jpeg',
   'image/png',
   'image/webp',
+  ...OFFICE_DOCUMENT_TYPES,
 ]
 
 /**
@@ -212,7 +233,7 @@ export function validateDocumentFile(file: { size: number; type?: string }): str
     return `Filen är för stor (max ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB)`
   }
   if (!file.type || !ALLOWED_DOCUMENT_TYPES.includes(file.type)) {
-    return 'Otillåten filtyp. Tillåtna: PDF, JPG, PNG, WebP.'
+    return 'Otillåten filtyp. Tillåtna: PDF, JPG, PNG, WebP, Word, Excel, PowerPoint, OpenDocument, RTF, CSV.'
   }
   return null
 }
@@ -243,6 +264,13 @@ export function detectFileMagic(bytes: Uint8Array): string | null {
   }
   // PNG: 89 50 4E 47
   if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png'
+  // ZIP container: OOXML (docx/xlsx/pptx) and OpenDocument both live here; the
+  // declared type is held against the container's own manifest below.
+  if (bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04) return 'application/zip'
+  // OLE compound file: the legacy .doc/.xls/.ppt container.
+  if (bytes[0] === 0xD0 && bytes[1] === 0xCF && bytes[2] === 0x11 && bytes[3] === 0xE0) return 'application/x-ole-storage'
+  // RTF is plain text with a fixed header.
+  if (bytes[0] === 0x7B && bytes[1] === 0x5C && bytes[2] === 0x72 && bytes[3] === 0x74 && bytes[4] === 0x66) return 'application/rtf'
   // JPEG: FF D8 FF
   if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg'
   // WebP: RIFF<4-byte size>WEBP
@@ -273,6 +301,42 @@ export function detectFileMagic(bytes: Uint8Array): string | null {
 const HEIC_BRANDS = new Set(['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs'])
 const HEIF_BRANDS = new Set(['mif1', 'msf1'])
 const HEIC_FAMILY = new Set(['image/heic', 'image/heif'])
+
+const OOXML_TYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+])
+const ODF_TYPES = new Set([
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+])
+const OLE_TYPES = new Set(['application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint'])
+const RTF_TYPES = new Set(['application/rtf', 'text/rtf'])
+
+/**
+ * A ZIP that is really the declared Office document. OOXML archives carry
+ * "[Content_Types].xml" and a top-level word/, xl/ or ppt/ folder; ODF
+ * archives start with an uncompressed "mimetype" entry naming the type.
+ * Only the first 64 KB is inspected: the manifest entries sit at the front.
+ */
+function zipMatchesDeclaredType(bytes: Uint8Array, declaredMimeType: string): boolean {
+  const head = Buffer.from(bytes.subarray(0, 65536)).toString('latin1')
+  if (ODF_TYPES.has(declaredMimeType)) return head.includes('mimetype' + declaredMimeType)
+  if (!OOXML_TYPES.has(declaredMimeType) || !head.includes('[Content_Types].xml')) return false
+  if (declaredMimeType.includes('wordprocessingml')) return head.includes('word/')
+  if (declaredMimeType.includes('spreadsheetml')) return head.includes('xl/')
+  return head.includes('ppt/')
+}
+
+/** CSV has no signature: text without NUL bytes, with at least one separator on the first line. */
+function looksLikeCsv(bytes: Uint8Array): boolean {
+  const head = Buffer.from(bytes.subarray(0, 4096)).toString('utf8')
+  if (head.includes('\u0000')) return false
+  const firstLine = head.split(/\r?\n/, 1)[0] ?? ''
+  return /[,;\t]/.test(firstLine)
+}
 
 /**
  * XHTML/XML has no binary magic number. For the declared type
@@ -348,7 +412,23 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
     if (looksLikeJson(new Uint8Array(buffer))) return null
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett giltigt JSON-dokument.`
   }
+  if (declaredMimeType === 'text/csv') {
+    if (looksLikeCsv(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara en CSV-fil.`
+  }
   const detected = detectFileMagic(new Uint8Array(buffer))
+  if (detected === 'application/zip') {
+    if (zipMatchesDeclaredType(new Uint8Array(buffer), declaredMimeType)) return null
+    return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ett ZIP-arkiv utan det formatets innehåll).`
+  }
+  if (detected === 'application/x-ole-storage') {
+    if (OLE_TYPES.has(declaredMimeType)) return null
+    return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ett äldre Office-dokument).`
+  }
+  if (detected === 'application/rtf') {
+    if (RTF_TYPES.has(declaredMimeType)) return null
+    return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade RTF).`
+  }
   if (!detected) {
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar vara skadad eller inte en riktig binärfil: vid uppladdning via API, kontrollera att file_content_base64 är base64-kodade råbytes, inte en textrepresentation.`
   }
@@ -392,6 +472,9 @@ export function resolveStoredMimeType(
   declaredMimeType: string | undefined,
 ): string | null {
   if (declaredMimeType && SHAPE_CHECKED_TYPES.has(declaredMimeType)) return declaredMimeType
+  // Container formats resolve to the declared Office type the validator held
+  // the container against; the container's own type says nothing useful.
+  if (declaredMimeType && (OOXML_TYPES.has(declaredMimeType) || ODF_TYPES.has(declaredMimeType) || OLE_TYPES.has(declaredMimeType) || RTF_TYPES.has(declaredMimeType) || declaredMimeType === 'text/csv')) return declaredMimeType
   return detectFileMagic(new Uint8Array(buffer))
 }
 

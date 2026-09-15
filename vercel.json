@@ -145,6 +145,10 @@
     {
       "path": "/api/parties/resolver/cron",
       "schedule": "45 5 * * *"
+    },
+    {
+      "path": "/api/documents/read/cron",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

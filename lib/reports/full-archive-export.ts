@@ -1260,6 +1260,10 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   company_subscriptions: 'billing state',
   deadlines: 'regenerable operational calendar state',
   dimension_retag_log: 'operation log',
+  // Page text Arkiv reads out of each archived document (text layer or model
+  // transcription). Derived from the originals that ship under dokument/ and
+  // re-readable from them, so it is not räkenskapsinformation of its own.
+  document_pages: 'page text derived from the originals in dokument/; re-readable',
   // Verification metadata ABOUT räkenskapsinformation, not räkenskapsinformation
   // itself: one row per nightly SHA-256 recompute of an archived document
   // (migration 20260901130000). The documents ship under dokument/ with their

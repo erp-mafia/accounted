@@ -38,7 +38,7 @@ interface DocumentUploadZoneProps {
 let uploadCounter = 0
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 const ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
-const ACCEPTED_EXTENSIONS = '.pdf,.jpg,.jpeg,.png,.webp'
+const ACCEPTED_EXTENSIONS = '.pdf,.jpg,.jpeg,.png,.webp,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.odt,.ods,.odp,.rtf,.csv'
 const FILE_NAME_TAIL_LENGTH = 16
 
 function TruncatedFileName({ fileName }: { fileName: string }) {

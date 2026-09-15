@@ -1433,7 +1433,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             ref={fileInputRef}
             type="file"
             multiple
-            accept="application/pdf,image/jpeg,image/png,image/webp"
+            accept=".pdf,.jpg,.jpeg,.png,.webp,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.odt,.ods,.odp,.rtf,.csv"
             className="hidden"
             onChange={handleFileInputChange}
           />
@@ -1944,7 +1944,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   ref={purchaseFileInputRef}
                   type="file"
                   className="hidden"
-                  accept="application/pdf,image/jpeg,image/png,image/webp"
+                  accept=".pdf,.jpg,.jpeg,.png,.webp,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.odt,.ods,.odp,.rtf,.csv"
                   onChange={async (e) => {
                     const files = Array.from(e.target.files ?? [])
                     if (files.length > 0) await uploadForPurchase(files, selectedPurchase.id)

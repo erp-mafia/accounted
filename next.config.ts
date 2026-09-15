@@ -123,6 +123,9 @@ const nextConfig: NextConfig = {
   // PostHog sends trailing-slash API requests; without this Next 308s them
   // and the events are lost. Required by the reverse proxy below.
   skipTrailingSlashRedirect: true,
+  // Native napi readers for the Arkiv reading layer (lib/documents/read):
+  // prebuilt .node binaries must be required at runtime, never bundled.
+  serverExternalPackages: ['@firecrawl/pdf-inspector', '@firecrawl/anydoc'],
   experimental: {
     optimizePackageImports: ['recharts', 'date-fns', 'framer-motion'],
     // Client router cache for dynamic routes: a page visited in the last
