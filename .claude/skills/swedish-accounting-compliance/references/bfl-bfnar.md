@@ -120,7 +120,7 @@ BFL allows multiple verification series (e.g., "A" for supplier invoices, "B" fo
 ### Form
 - Must be in varaktigt läsbart skick (durable, readable form)
 - Digital storage: must ensure data integrity (immutability)
-- Since 1 July 2024 (SFS 2024:494): no requirement to keep paper originals after proper digitization
+- Since 1 July 2024 (SFS 2024:342, Lag om ändring i bokföringslagen, prop. 2023/24:78; BFNAR 2013:2 amended by BFNAR 2024:1 on 2024-09-16): no requirement to keep paper originals after proper digitization
 - The digitized version must be a faithful reproduction
 - Metadata and structure must be preserved
 
