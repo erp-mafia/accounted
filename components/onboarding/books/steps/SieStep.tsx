@@ -49,7 +49,7 @@ interface FileEntry {
    * years, and last year's chart on this year's ledger is the quiet way to a
    * wrong ruta.
    */
-  chart?: { applied: boolean; treatments: number; format: string | null; complaint: string | null }
+  chart?: { name: string; applied: boolean; treatments: number; format: string | null }
 }
 
 type Phase = 'drop' | 'importing' | 'imported'
@@ -156,16 +156,16 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
           ...f,
           parsed: { ...f.parsed, mappings: acceptSourceChartWithoutReview(result.mappings) },
           chart: {
+            name: file.name,
             applied: result.applied,
             treatments: result.summary.treatmentsApplied,
             format: result.summary.formatLabel,
-            complaint: result.applied ? null : (result.notices[0]?.code ?? null),
           },
         }
       }))
     } catch {
       setFiles((prev) => prev.map((f) => (
-        f.id === fileId ? { ...f, chart: { applied: false, treatments: 0, format: null, complaint: 'source_chart_unreadable' } } : f
+        f.id === fileId ? { ...f, chart: { name: file.name, applied: false, treatments: 0, format: null } } : f
       )))
     }
   }
@@ -512,13 +512,12 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                     </span>
                   ) : null}
                   {f.status === 'error' ? <span className="bks-f is-warn" style={{ marginLeft: 8 }}>{f.error}</span> : null}
-                  {/* One element per row, never a sentence: the row either
-                      carries a count or an invitation, and the count is itself
-                      the way to replace it. Six files repeating "N konton fick
-                      momskod från kontoplanen (Spiris Bokföring). Byt kontoplan"
-                      was ninety per cent the same words six times over, and the
-                      only part that differed was the number. What the numbers
-                      mean is said once, in the facts line below. */}
+                  {/* The row names the chart it is holding, not the count.
+                      With one file a count merely repeated the facts line's
+                      own total, and "42 momskoder" alone says neither where
+                      from nor what to do about it. The filename says the one
+                      thing that can actually go wrong: a chart from the wrong
+                      fiscal year looks identical until its codes land. */}
                   {f.status === 'ready' ? (
                     <button
                       type="button"
@@ -526,11 +525,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                       style={{ marginLeft: 8 }}
                       onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
                     >
-                      {f.chart?.applied
-                        ? t('sie_chart_count', { count: f.chart.treatments })
-                        : f.chart
-                          ? t('sie_chart_unread')
-                          : t('sie_chart_pick')}
+                      {f.chart?.applied ? f.chart.name : f.chart ? t('sie_chart_unread') : t('sie_chart_pick')}
                     </button>
                   ) : null}
                 </p>

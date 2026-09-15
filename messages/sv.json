@@ -9644,7 +9644,6 @@
     "sie_drop_sub": "SIE 4 från vilket program som helst, ett eller flera år. Eller klicka.",
     "sie_reading": "läser …",
     "sie_replace": "Ersätt",
-    "sie_chart_count": "{count, plural, one {# momskod} other {# momskoder}}",
     "fact_chart": "{count, plural, one {# momskod} other {# momskoder}} från kontoplanen ({format})",
     "sie_chart_pick": "Välj kontoplan",
     "sie_chart_why": "Har du kontoplanerna från bokföringsprogrammet? Välj en per år, så fylls momskoderna i.",
