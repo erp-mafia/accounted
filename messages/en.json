@@ -2105,7 +2105,7 @@
   "settings_banking": {
     "connect_failed_title": "Connection failed",
     "bank_server_error": "The bank rejected the connection.",
-    "hb_business_poa_hint": "Handelsbanken requires a power of attorney before business accounts can be connected: log in to the corporate online bank, go to Powers of attorney → Self-service services and enable \"Internet Företag – tilläggstjänst API Företag\". Then link the power of attorney to the person who will approve the connection and try again.",
+    "hb_business_poa_hint": "Handelsbanken requires a power of attorney before business accounts can be connected: log in to the corporate online bank, go to Powers of attorney → Self-service services and enable \"Internet Företag – tilläggstjänst API Företag\". Then link the power of attorney to the person who will approve the connection (Powers of attorney → Koppla samman) and try again.",
     "hb_business_poa_link": "See the step-by-step guide",
     "access_denied_hint": "{bankName} denied access. If you're using a personal account you can try connecting with the account type \"Privatkonto\" in the bank picker below.",
     "import_fallback_text": "You can also ",

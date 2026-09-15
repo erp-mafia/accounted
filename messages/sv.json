@@ -2105,7 +2105,7 @@
   "settings_banking": {
     "connect_failed_title": "Anslutning misslyckades",
     "bank_server_error": "Banken avvisade anslutningen.",
-    "hb_business_poa_hint": "Handelsbanken kräver en fullmakt innan företagskonton kan kopplas: logga in i internetbanken för företag, gå till Fullmakter → Självbetjäningstjänster och aktivera \"Internet Företag – tilläggstjänst API Företag\". Koppla sedan fullmakten till den person som ska godkänna anslutningen och försök igen.",
+    "hb_business_poa_hint": "Handelsbanken kräver en fullmakt innan företagskonton kan kopplas: logga in i internetbanken för företag, gå till Fullmakter → Självbetjäningstjänster och aktivera \"Internet Företag – tilläggstjänst API Företag\". Koppla sedan fullmakten till den person som ska godkänna anslutningen (Fullmakter → Koppla samman) och försök igen.",
     "hb_business_poa_link": "Se steg-för-steg-guiden",
     "access_denied_hint": "{bankName} nekade åtkomst. Om du använder ett privatkonto kan du prova att ansluta med kontotypen \"Privatkonto\" i bankväljaren nedan.",
     "import_fallback_text": "Du kan också ",

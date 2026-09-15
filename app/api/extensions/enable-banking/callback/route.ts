@@ -18,7 +18,7 @@ import {
   fetchCrossCompanyAccountContext,
 } from '@/extensions/general/enable-banking/lib/session-sharing'
 import { supersedeSiblingConnections } from '@/extensions/general/enable-banking/lib/supersede'
-import { getBankConnectionErrorMessage } from '@/lib/errors/get-error-message'
+import { classifyBankConnectionDenial, getBankConnectionErrorMessage } from '@/lib/errors/get-error-message'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
 import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
 import { getCanonicalAppOrigin, resolveTrustedAppOrigin } from '@/lib/domains/trusted-app-origin'
@@ -127,10 +127,12 @@ export async function GET(request: Request) {
     // Previously the raw provider text was passed through verbatim, which
     // gave a stuck user nothing to act on (issue #1716).
     const userMessage = getBankConnectionErrorMessage(error, errorDescription)
-    // access_denied is the user cancelling at the bank — an expected outcome,
-    // not a runtime error. Only bank-side failures stay at error level.
-    const isUserCancel =
-      error === 'access_denied' || /cancelled by user/i.test(errorDescription ?? '')
+    // A cancel at the bank is an expected outcome, not a runtime error. The
+    // same classifier decides the user message, so "Invalid credentials"
+    // (a missing fullmakt) and "cannot retrieve account information" stay
+    // at error level instead of hiding among the cancels.
+    const denialReason = classifyBankConnectionDenial(error, errorDescription)
+    const isUserCancel = denialReason === 'cancelled'
     const logDenied = isUserCancel ? console.warn : console.error
     logDenied('[enable-banking] Bank authorization denied', {
       error,
@@ -215,14 +217,16 @@ export async function GET(request: Request) {
             })
           }
 
-          // Include bank name, error code, and psu_type in the redirect so the
-          // UI can render targeted guidance (e.g. PSU-type retry on
-          // access_denied, or the Handelsbanken corporate fullmakt steps on
-          // server_error for a business connect).
+          // Include bank name, error code, psu_type and the denial reason in
+          // the redirect so the UI can render targeted guidance (the
+          // Handelsbanken corporate fullmakt steps on server_error or an
+          // invalid-credentials denial for a business connect, the PSU-type
+          // retry only on a real cancel).
           const params = new URLSearchParams({
             bank_error: userMessage,
             ...(pendingConn.bank_name ? { bank_name: pendingConn.bank_name } : {}),
             bank_error_code: error,
+            ...(denialReason ? { bank_error_reason: denialReason } : {}),
             ...(pendingConn.psu_type ? { psu_type: pendingConn.psu_type } : {}),
           })
           // Back to the host the user started on: the denial banner is only

@@ -41,6 +41,7 @@ export function BankingSettingsContent() {
     try { errorMsg = decodeURIComponent(bankError) } catch { errorMsg = bankError }
     const bankName = searchParams.get('bank_name')
     const errorCode = searchParams.get('bank_error_code')
+    const errorReason = searchParams.get('bank_error_reason')
     const psuType = searchParams.get('psu_type')
     // The bank often returns a bare "server_error" with no description: show a
     // human message instead of the raw OAuth error code.
@@ -64,11 +65,26 @@ export function BankingSettingsContent() {
       })
       setBankConnectionError(errorMsg)
       if (bankName) setFailedBankName(bankName)
-      if (errorCode === 'access_denied') setIsAccessDenied(true)
-      // Handelsbanken rejects business connects with server_error when the
-      // company hasn't registered the open banking fullmakt ("Internet
-      // Företag – tilläggstjänst API Företag"): surface the fix steps.
-      if (bankName === 'Handelsbanken' && psuType === 'business' && errorCode === 'server_error') {
+      // The "try Privatkonto" hint only makes sense when the person stopped
+      // at the bank or the bank gave no usable reason. A refused login or a
+      // closed account-information door is not fixed by switching account
+      // type, so those denials get their own guidance instead.
+      if (
+        psuType === 'business' &&
+        errorCode === 'access_denied' &&
+        (errorReason === 'cancelled' || errorReason === 'other')
+      ) {
+        setIsAccessDenied(true)
+      }
+      // Handelsbanken refuses business connects when the company hasn't
+      // registered and linked the open banking fullmakt ("Internet Företag –
+      // tilläggstjänst API Företag"): as server_error, or since 2026-09-14
+      // as access_denied "Invalid credentials". Surface the fix steps for both.
+      if (
+        bankName === 'Handelsbanken' &&
+        psuType === 'business' &&
+        (errorCode === 'server_error' || errorReason === 'invalid_credentials')
+      ) {
         setShowHbPoaHint(true)
       }
       router.replace('/settings/banking')
