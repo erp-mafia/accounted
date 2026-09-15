@@ -30,8 +30,17 @@ import {
 } from './anlaggningstillgangar-note'
 import { computeAssetNoteFigures, loadPostedSchedules } from './asset-note-figures'
 import { hasMedelantalOverride, resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
+import { getPropertyFacts, getTaxProfile, type BrfPropertyFactsRow } from '@/lib/company/brf-tax-profile'
+import {
+  buildingCarryingAmount,
+  computeBrfNettoomsattningSplit,
+  computeBrfNyckeltal,
+  missingBrfFacts,
+  type BrfNyckeltalRow,
+} from './brf-nyckeltal'
 import type {
   ArsredovisningData,
+  BrfDisclosures,
   EgenKapitalRow,
   FlerarsoversiktRow,
   NoteEntry,
@@ -229,6 +238,24 @@ export async function buildArsredovisningData(
 
   const egen_kapital_changes = buildEquityChanges(mapping)
   const memberDisclosures = isForening ? memberDisclosuresFrom(narrative) : null
+  // Bostadsrättsförening: the ÅRL 6 kap. 3 a § / K3 kapitel 38 block. Facts,
+  // the year's privatbostadsföretag assessment and the asset register are
+  // read only for the form; a failed read renders as "uppgift saknas" and
+  // is caught by completeness rather than blocking the document.
+  const isBrf = entityType === 'bostadsrattsforening'
+  const brfDisclosures = isBrf
+    ? await buildBrfDisclosures({
+        supabase,
+        companyId,
+        periodEnd: period.period_end,
+        overviewSlice,
+        currentPeriodId: fiscalPeriodId,
+        currentPair: { full: tbFull.rows, preClosing: tbPreClosing.rows },
+        currentMapping: mapping,
+        tbPairs,
+        narrative,
+      })
+    : null
   const proposedDividend = narrative?.proposed_dividend ?? 0
   const retainedEarnings = mapping.br['BalanseratResultat']?.current ?? 0
   const sharePremiumReserve = mapping.br['Overkursfond']?.current ?? 0
@@ -317,7 +344,10 @@ export async function buildArsredovisningData(
     // Equity-changes statement: derived from the post-level mapping. We
     // reuse buildEquityChangesNote's roll-forward to keep one source of
     // truth for the closing total.
-    equity_changes_statement = buildK3EquityChangesStatement(mapping)
+    equity_changes_statement = buildK3EquityChangesStatement(
+      mapping,
+      isBrf ? fondYttreUnderhallMovement(tbFull.rows) : null,
+    )
   } else {
     const k2Noter = await buildK2Noter(
       supabase,
@@ -332,6 +362,55 @@ export async function buildArsredovisningData(
     )
     noter = k2Noter.notes
     noterWarnings = k2Noter.warnings
+    // ÅRL 2 kap. 1 § andra stycket: a bostadsrättsförening includes a
+    // kassaflödesanalys whatever its size, so the K2 document of a BRF year
+    // before 2026 carries one too (the K2 template renders it for the form).
+    if (isBrf) {
+      try {
+        const cashFlow = await generateKassaflodesanalys(supabase, companyId, fiscalPeriodId)
+        kassaflodesanalys = {
+          period_start: cashFlow.period_start,
+          period_end: cashFlow.period_end,
+          lopande: cashFlow.lopande,
+          investerings: cashFlow.investerings,
+          finansierings: cashFlow.finansierings,
+          total_cash_flow: cashFlow.total_cash_flow,
+          reconciliation: cashFlow.reconciliation,
+        }
+      } catch {
+        noterWarnings.push(
+          'Kassaflödesanalysen kunde inte genereras automatiskt. En bostadsrättsförening ska alltid ta med en kassaflödesanalys (ÅRL 2 kap. 1 §): kontrollera att ingående och utgående saldo på 19xx finns och kör om bokslutet.',
+        )
+      }
+    }
+  }
+  // K3 38.13: a bostadsrättsförening specifies what the post Nettoomsättning
+  // consists of in a note, under both frameworks (the requirement sits in
+  // ÅRL's primary-income definition, the K3 point makes it a note).
+  if (isBrf && brfDisclosures) {
+    const split = brfDisclosures.nettoomsattning_split
+    // Plain spaces as thousands separators: the note is text, and the
+    // sv-SE locale would insert narrow no-break spaces.
+    const fmtKr = (value: number) => {
+      const whole = Math.round(value)
+      const digits = Math.abs(whole).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+      return `${whole < 0 ? '-' : ''}${digits} kr`
+    }
+    noter.push({
+      number: noter.length + 1,
+      title: 'Nettoomsättningens fördelning',
+      body: [
+        `Årsavgifter bostäder: ${fmtKr(split.arsavgifter_bostader)}`,
+        `Årsavgifter lokaler: ${fmtKr(split.arsavgifter_lokaler)}`,
+        `Hyresintäkter bostäder: ${fmtKr(split.hyror_bostader)}`,
+        `Hyresintäkter lokaler: ${fmtKr(split.hyror_lokaler)}`,
+        `Hyresintäkter garage och parkering: ${fmtKr(split.hyror_garage_parkering)}`,
+        `Överlåtelse-, pantsättnings- och andra avgifter: ${fmtKr(split.ovriga_avgifter)}`,
+        `Övriga intäkter i nettoomsättningen: ${fmtKr(split.ovrigt)}`,
+        `Summa nettoomsättning: ${fmtKr(split.total)}`,
+        'Årsavgifter och hyresintäkter är föreningens primära intäkter och ingår i nettoomsättningen (BFNAR 2012:1 punkt 38.13).',
+      ].join('\n'),
+    })
   }
 
   const resultatrakning = buildRrRows(mapping)
@@ -454,6 +533,8 @@ export async function buildArsredovisningData(
       // Only present for an ekonomisk förening: an absent key keeps the
       // content hash of every existing aktiebolag report unchanged.
       ...(memberDisclosures ? { member_disclosures: memberDisclosures } : {}),
+      // Only present for a bostadsrättsförening, for the same hash reason.
+      ...(brfDisclosures ? { brf_disclosures: brfDisclosures } : {}),
       agm_disposition_outcome: narrative?.agm_disposition_outcome ?? null,
       agm_disposition_decision: narrative?.agm_disposition_decision ?? null,
     },
@@ -478,6 +559,14 @@ export async function buildArsredovisningData(
             insatser_repayable_next_year: memberDisclosures.insatser_repayable_next_year,
             forlagsinsatser_dividend_right: memberDisclosures.forlagsinsatser_dividend_right,
             forlagsinsatser_redeemable_two_years: memberDisclosures.forlagsinsatser_redeemable_two_years,
+          }
+        : {}),
+      ...(brfDisclosures
+        ? {
+            loss_financing_explanation: narrative?.loss_financing_explanation ?? null,
+            planerat_underhall_override: narrative?.planerat_underhall_override ?? null,
+            sparande_adjustment: narrative?.sparande_adjustment ?? null,
+            energikostnad_vidaredebiterad: narrative?.energikostnad_vidaredebiterad ?? null,
           }
         : {}),
       confirmations: {
@@ -598,6 +687,112 @@ function buildFlerarsoversikt(
     }
   }
   return rows
+}
+
+/**
+ * The 2088 movement of the year (BFNAR 2012:1 punkt 38.12): credits are
+ * reserveringar to the fond för yttre underhåll, debits are ianspråktaganden,
+ * both omföringar against fritt eget kapital. Read from the full trial
+ * balance because the omföring is booked as an ordinary verifikat.
+ */
+export function fondYttreUnderhallMovement(
+  fullRows: ReadonlyArray<Pick<TrialBalanceRow, 'account_number' | 'period_debit' | 'period_credit'>>,
+): { reservering: number; ianspraktagande: number } {
+  let reservering = 0
+  let ianspraktagande = 0
+  for (const row of fullRows) {
+    if (row.account_number >= '2088' && row.account_number <= '2088') {
+      reservering += row.period_credit
+      ianspraktagande += row.period_debit
+    }
+  }
+  return { reservering: roundOre(reservering), ianspraktagande: roundOre(ianspraktagande) }
+}
+
+/**
+ * ÅRL 6 kap. 3 a § and BFNAR 2012:1 kapitel 38 for a bostadsrättsförening.
+ * The nyckeltal are computed per year from the same trial-balance pairs
+ * the flerårsöversikt uses (38.4: the year and the three prior years); the
+ * property facts are one current snapshot applied to every year, and the
+ * narrative overrides (planerat underhåll, sparandejustering) apply to the
+ * current year only.
+ */
+async function buildBrfDisclosures(args: {
+  supabase: SupabaseClient
+  companyId: string
+  periodEnd: string
+  overviewSlice: PeriodRow[]
+  currentPeriodId: string
+  currentPair: TrialBalancePair
+  currentMapping: K2MappingResult
+  tbPairs: Map<string, TrialBalancePair | null>
+  narrative: NarrativeRow | null
+}): Promise<BrfDisclosures> {
+  const taxYear = Number(args.periodEnd.slice(0, 4))
+  const [facts, profile, assets] = await Promise.all([
+    getPropertyFacts(args.supabase, args.companyId).catch((): BrfPropertyFactsRow | null => null),
+    getTaxProfile(args.supabase, args.companyId, taxYear).catch(() => null),
+    listAssets(args.supabase, args.companyId, { activeOnly: true }).catch((): Asset[] => []),
+  ])
+  const num = (value: number | string | null | undefined): number | null => {
+    if (value === null || value === undefined) return null
+    const n = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+  const factsForNyckeltal = facts
+    ? {
+        kvm_bostadsratt: num(facts.kvm_bostadsratt),
+        kvm_hyresratt: num(facts.kvm_hyresratt),
+        kvm_lokaler: num(facts.kvm_lokaler),
+        kvm_lokaler_bostadsratt: num(facts.kvm_lokaler_bostadsratt),
+      }
+    : null
+  const nyckeltal: BrfNyckeltalRow[] = []
+  for (const p of args.overviewSlice) {
+    const isCurrent = p.id === args.currentPeriodId
+    const pair = isCurrent ? args.currentPair : args.tbPairs.get(p.id) ?? null
+    if (!pair) continue
+    const yearMapping = isCurrent
+      ? args.currentMapping
+      : mapTrialBalancesToK2(pair, null, { legalForm: 'bostadsrattsforening' })
+    nyckeltal.push(
+      computeBrfNyckeltal({
+        year: p.name,
+        preClosingRows: pair.preClosing,
+        fullRows: pair.full,
+        resultat_efter_finansiella_poster: yearMapping.totals.resultatEfterFinansiellaPoster.current,
+        soliditet_pct: calculateSoliditet(yearMapping),
+        arets_resultat: yearMapping.totals.aretsResultat.current,
+        facts: factsForNyckeltal,
+        overrides: isCurrent
+          ? {
+              planerat_underhall_override: args.narrative?.planerat_underhall_override ?? null,
+              sparande_adjustment: args.narrative?.sparande_adjustment ?? null,
+            }
+          : undefined,
+      }),
+    )
+  }
+  const factsMissing = missingBrfFacts(factsForNyckeltal)
+  if (!facts || facts.tomtratt === null || facts.tomtratt === undefined) factsMissing.push('tomtratt')
+  if (!facts || facts.underhallsplan === null || facts.underhallsplan === undefined) {
+    factsMissing.push('underhallsplan')
+  }
+  return {
+    privatbostadsforetag: profile ? profile.privatbostadsforetag : null,
+    tomtratt: facts?.tomtratt ?? null,
+    tomtratt_expires_on: facts?.tomtratt_expires_on ?? null,
+    tomtratt_avgald_until: facts?.tomtratt_avgald_until ?? null,
+    samfallighet: facts?.samfallighet ?? null,
+    underhallsplan: facts?.underhallsplan ?? null,
+    loss_financing_explanation: args.narrative?.loss_financing_explanation ?? null,
+    energikostnad_vidaredebiterad: args.narrative?.energikostnad_vidaredebiterad ?? null,
+    nyckeltal,
+    nettoomsattning_split: computeBrfNettoomsattningSplit(args.currentPair.preClosing),
+    facts_missing: factsMissing,
+    building_without_components:
+      buildingCarryingAmount(args.currentPair.full) > 0 && !anyAssetHasComponents(assets),
+  }
 }
 
 /** ÅRL 6 kap. 3 § inputs for an ekonomisk förening, read from the narrative row. */
@@ -1379,9 +1574,16 @@ async function buildK3Noter(
  */
 export function buildK3EquityChangesStatement(
   mapping: K2MappingResult,
+  /** Bostadsrättsförening: the year's 2088 omföringar (K3 38.12). */
+  fondMovement: { reservering: number; ianspraktagande: number } | null = null,
 ): { rows: EgenKapitalRow[]; closing_total: number } {
   const cur = (concept: string): number => mapping.br[concept]?.current ?? 0
   const prev = (concept: string): number => mapping.br[concept]?.previous ?? 0
+  // The fond för yttre underhåll is shown as its own column (38.11), so it
+  // leaves "övriga bundna reserver"; its movements are omföringar against
+  // fritt eget kapital and must not read as utdelning or nyemission.
+  const fondClosing = fondMovement ? cur('FondYttreUnderhall') : 0
+  const fondNet = fondMovement ? fondMovement.reservering - fondMovement.ianspraktagande : 0
   // The "capital" column of the roll-forward: aktiekapital for an AB, the
   // member and subordinated contributions for an ekonomisk förening (ÅRL 3
   // kap. 10 b §); the remaining bundet posts are "övriga bundna reserver".
@@ -1400,7 +1602,7 @@ export function buildK3EquityChangesStatement(
 
   const aretsResultat = cur('AretsResultatEgetKapital')
   const aktiekapitalClosing = capitalConcepts.reduce((sum, concept) => sum + cur(concept), 0)
-  const bundnaClosing = mapping.totals.bundetEgetKapital.current - aktiekapitalClosing
+  const bundnaClosing = mapping.totals.bundetEgetKapital.current - aktiekapitalClosing - fondClosing
   const frittClosing = mapping.totals.frittEgetKapital.current
 
   const hasPrevious = mapping.totals.egetKapital.previous !== null
@@ -1410,7 +1612,9 @@ export function buildK3EquityChangesStatement(
   if (hasPrevious) {
     const aktiekapitalOpening = capitalConcepts.reduce((sum, concept) => sum + prev(concept), 0)
     const bundnaOpening =
-      (mapping.totals.bundetEgetKapital.previous ?? 0) - aktiekapitalOpening
+      (mapping.totals.bundetEgetKapital.previous ?? 0) -
+      aktiekapitalOpening -
+      (fondMovement ? prev('FondYttreUnderhall') : 0)
     const frittOpening = mapping.totals.frittEgetKapital.previous ?? 0
     opening = {
       aktiekapital: aktiekapitalOpening,
@@ -1419,20 +1623,31 @@ export function buildK3EquityChangesStatement(
     }
     nyemission =
       aktiekapitalClosing - aktiekapitalOpening + (bundnaClosing - bundnaOpening)
-    const frittResidual = frittClosing - frittOpening - aretsResultat
+    // The fund omföring moved fondNet out of fritt eget kapital without
+    // any transaction with the members: add it back before classifying.
+    const frittResidual = frittClosing - frittOpening - aretsResultat + fondNet
     if (frittResidual < 0) utdelning = frittResidual
     else nyemission += frittResidual
   } else {
     opening = {
       aktiekapital: aktiekapitalClosing,
       bundna_reserver: bundnaClosing,
-      balanserade_vinstmedel: frittClosing - aretsResultat,
+      balanserade_vinstmedel: frittClosing - aretsResultat + fondNet,
     }
   }
   return buildEquityChangesNote(
     {
       opening,
       changes: { nyemission, utdelning, arets_resultat: aretsResultat },
+      ...(fondMovement
+        ? {
+            fond_yttre_underhall: {
+              opening: hasPrevious ? prev('FondYttreUnderhall') : fondClosing - fondNet,
+              reservering: fondMovement.reservering,
+              ianspraktagande: fondMovement.ianspraktagande,
+            },
+          }
+        : {}),
     },
     labels,
   )

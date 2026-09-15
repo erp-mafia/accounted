@@ -355,11 +355,15 @@ export const BrfPropertyFactsSchema = z
     kvm_bostadsratt: nonNegativeAmount.max(10_000_000).nullable().optional(),
     kvm_hyresratt: nonNegativeAmount.max(10_000_000).nullable().optional(),
     kvm_lokaler: nonNegativeAmount.max(10_000_000).nullable().optional(),
+    // K3 38.3 c: lokaler upplåtna med bostadsrätt, a share of kvm_bostadsratt.
+    kvm_lokaler_bostadsratt: nonNegativeAmount.max(10_000_000).nullable().optional(),
     antal_bostadslagenheter: z.number().int().min(0).max(100_000).nullable().optional(),
     antal_lokaler: z.number().int().min(0).max(100_000).nullable().optional(),
     taxeringsvarde: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
     tomtratt: z.boolean().nullable().optional(),
     tomtratt_avgald_until: saneIsoDate.nullable().optional(),
+    // K3 38.2: how long the tomträtt runs, next to the avgäld period.
+    tomtratt_expires_on: saneIsoDate.nullable().optional(),
     samfallighet: z.string().trim().max(500).nullable().optional(),
     underhallsplan: z.boolean().nullable().optional(),
     notes: z.string().trim().max(2000).nullable().optional(),

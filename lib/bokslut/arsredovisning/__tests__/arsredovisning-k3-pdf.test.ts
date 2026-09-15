@@ -311,3 +311,95 @@ describe('ArsredovisningPDF (K2): byte-equivalence guard', () => {
     expect(buffer.length).toBeGreaterThan(0)
   })
 })
+
+describe('bostadsrättsförening blocks (ÅRL 6 kap. 3 a §, K3 kapitel 38)', () => {
+  function brfData(framework: 'k2' | 'k3'): ArsredovisningData {
+    const base = makeMinimalK3Data()
+    const brf = {
+      privatbostadsforetag: true,
+      tomtratt: true,
+      tomtratt_expires_on: '2050-12-31',
+      tomtratt_avgald_until: '2031-12-31',
+      samfallighet: 'Samfälligheten Kvarteret Eken (garage och gård)',
+      underhallsplan: true,
+      loss_financing_explanation: null,
+      energikostnad_vidaredebiterad: 20_000,
+      nyckeltal: [
+        {
+          year: '2025',
+          nettoomsattning: 1_150_000,
+          resultat_efter_finansiella_poster: -30_000,
+          soliditet_pct: 61.2,
+          arsavgift_per_kvm_bostadsratt: 190,
+          arsavgift_per_kvm_bostader: 190,
+          arsavgift_per_kvm_lokaler: null,
+          skuldsattning_per_kvm: 1_852,
+          skuldsattning_per_kvm_bostadsratt: 2_000,
+          sparande_per_kvm: 40,
+          rantekanslighet_pct: 10.5,
+          energikostnad_per_kvm: 18,
+          arsavgifternas_andel_pct: 82.6,
+          underlag: {
+            arsavgifter: 950_000, arsavgifter_bostader: 950_000, arsavgifter_lokaler: 0, rantebarande_skulder: 10_000_000,
+            arets_resultat: -30_000, avskrivningar: 300_000, utrangeringar: 0, planerat_underhall: 0, sparande_adjustment: 0,
+            justerat_resultat: 270_000, energikostnad: 97_000, totala_intakter: 1_150_000, kvm_bostadsratt: 5_000, kvm_upplaten_total: 5_400,
+          },
+        },
+        {
+          year: '2026',
+          nettoomsattning: 1_200_000,
+          resultat_efter_finansiella_poster: 150_000,
+          soliditet_pct: 62.1,
+          arsavgift_per_kvm_bostadsratt: 200,
+          arsavgift_per_kvm_bostader: 200,
+          arsavgift_per_kvm_lokaler: null,
+          skuldsattning_per_kvm: 1_852,
+          skuldsattning_per_kvm_bostadsratt: 2_000,
+          sparande_per_kvm: 83,
+          rantekanslighet_pct: 10,
+          energikostnad_per_kvm: 19,
+          arsavgifternas_andel_pct: 83.3,
+          underlag: {
+            arsavgifter: 1_000_000, arsavgifter_bostader: 1_000_000, arsavgifter_lokaler: 0, rantebarande_skulder: 10_000_000,
+            arets_resultat: 150_000, avskrivningar: 300_000, utrangeringar: 0, planerat_underhall: 0, sparande_adjustment: 0,
+            justerat_resultat: 450_000, energikostnad: 100_000, totala_intakter: 1_200_000, kvm_bostadsratt: 5_000, kvm_upplaten_total: 5_400,
+          },
+        },
+      ],
+      nettoomsattning_split: {
+        arsavgifter_bostader: 1_000_000, arsavgifter_lokaler: 0, hyror_bostader: 0, hyror_lokaler: 200_000,
+        hyror_garage_parkering: 0, ovriga_avgifter: 0, ovrigt: 0, total: 1_200_000,
+      },
+      facts_missing: [],
+      building_without_components: true,
+    }
+    return {
+      ...base,
+      company: { ...base.company, name: 'Brf Testhuset', entity_type: 'bostadsrattsforening' },
+      accounting_framework: framework,
+      forvaltningsberattelse: {
+        ...base.forvaltningsberattelse,
+        member_disclosures: {
+          member_count_change: 'Oförändrat.',
+          insatser_repayable_next_year: null,
+          forlagsinsatser_dividend_right: null,
+          forlagsinsatser_redeemable_two_years: null,
+        },
+        brf_disclosures: brf,
+        resultatdisposition_amounts: { ...base.forvaltningsberattelse.resultatdisposition_amounts, current_year_result: -30_000 },
+      },
+    }
+  }
+
+  it('K3: renders the 38.2 statements, the nyckeltal table and the loss disclosure', async () => {
+    const buffer = await renderToBuffer(ArsredovisningK3PDF({ data: brfData('k3') }))
+    expect(buffer.length).toBeGreaterThan(1000)
+  })
+
+  it('K2 (a year before 2026): renders the same block plus the kassaflödesanalys page', async () => {
+    const data = brfData('k2')
+    expect(data.kassaflodesanalys).toBeDefined()
+    const buffer = await renderToBuffer(ArsredovisningPDF({ data }))
+    expect(buffer.length).toBeGreaterThan(1000)
+  })
+})

@@ -196,6 +196,17 @@ export interface EquityChangesSummary {
      *  its own line in the change statement. */
     arets_resultat: number
   }
+  /** Bostadsrättsförening only (BFNAR 2012:1 punkt 38.11-38.12): the fond
+   *  för yttre underhåll is its own bundet post, moved by omföring between
+   *  fritt and bundet eget kapital when the reservation or the use is
+   *  executed, never through the income statement. `opening` is excluded
+   *  from `opening.bundna_reserver`; the two movements net to zero in
+   *  total equity. */
+  fond_yttre_underhall?: {
+    opening: number
+    reservering: number
+    ianspraktagande: number
+  }
 }
 
 export interface EquityChangesStatement {
@@ -253,8 +264,12 @@ export function buildEquityChangesNote(
   const { opening, changes } = summary
   const rows: EgenKapitalRow[] = []
 
+  const fond = summary.fond_yttre_underhall
   // Opening balances
   rows.push({ label: labels.openingCapital, amount: opening.aktiekapital })
+  if (fond) {
+    rows.push({ label: 'Ingående fond för yttre underhåll', amount: fond.opening })
+  }
   rows.push({
     label: 'Ingående övriga bundna reserver',
     amount: opening.bundna_reserver,
@@ -264,7 +279,7 @@ export function buildEquityChangesNote(
     amount: opening.balanserade_vinstmedel,
   })
   const openingTotal =
-    opening.aktiekapital + opening.bundna_reserver + opening.balanserade_vinstmedel
+    opening.aktiekapital + opening.bundna_reserver + opening.balanserade_vinstmedel + (fond?.opening ?? 0)
   rows.push({ label: 'Summa ingående eget kapital', amount: openingTotal })
 
   // Year movements
@@ -275,6 +290,21 @@ export function buildEquityChangesNote(
     // Utdelning typically posted as a negative (reduction). The caller is
     // free to pass either sign; we just render what we got.
     rows.push({ label: labels.distribution, amount: changes.utdelning })
+  }
+  if (fond && (fond.reservering !== 0 || fond.ianspraktagande !== 0)) {
+    // K3 38.12: omföringar inside eget kapital. The fund rows and the
+    // matching balanserat resultat row cancel, so the closing total is
+    // unaffected and the reader sees both sides of each transfer.
+    if (fond.reservering !== 0) {
+      rows.push({ label: 'Reservering till fond för yttre underhåll', amount: fond.reservering })
+    }
+    if (fond.ianspraktagande !== 0) {
+      rows.push({ label: 'Ianspråktagande av fond för yttre underhåll', amount: -fond.ianspraktagande })
+    }
+    rows.push({
+      label: 'Omföring till/från balanserat resultat',
+      amount: -(fond.reservering - fond.ianspraktagande),
+    })
   }
   rows.push({ label: 'Årets resultat', amount: changes.arets_resultat })
 

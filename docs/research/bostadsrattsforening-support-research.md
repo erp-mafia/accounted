@@ -139,3 +139,14 @@ Sizes: S (days), M (weeks), L (a quarter of one engineer). Order follows legal w
 - FAR Online, "Medlemsinsatser och andra avgifter, bostadsrättförening": https://www.faronline.se/dokument/rattserien/redovisa-ratt/m/rr_medlemsinsatserochandraavgifterbostadsrattforening/
 - Bostadsrätterna, "Avgifter till föreningen": https://www.bostadsratterna.se/kunskapsbanken/a/avgifter-till-foreningen
 - Hittabrf.se, aktiva bostadsrättsföreningar: https://www.hittabrf.se/faktaaktiva.asp
+
+## Implementation status (2026-09-15, annual report package of the bostadsrättsförening PR)
+
+Shipped, stacked on the BRF foundation commit:
+
+- Förvaltningsberättelse per ÅRL 6 kap. 3 a § and BFNAR 2012:1 kapitel 38 for both templates: the 38.2 statements (privatbostadsföretag from the year's `brf_tax_profiles` row, tomträtt with giltighetstid and avgäldsperiod, samfällighet, underhållsplan from `brf_property_facts`), the nyckeltal table for the year and up to three prior years (38.3-38.9, `lib/bokslut/arsredovisning/brf-nyckeltal.ts`, definitions and account ranges documented there and printed under the table), the loss disclosure of 6 kap. 3 a § andra stycket, and the 38.13 note splitting nettoomsättning.
+- Migration `20260915172000`: `loss_financing_explanation`, `planerat_underhall_override`, `sparande_adjustment`, `energikostnad_vidaredebiterad` on `arsredovisning_narratives`; `tomtratt_expires_on`, `kvm_lokaler_bostadsratt` on `brf_property_facts`. Editable in the årsredovisning narrative page (BRF block) and through the property-facts route.
+- Kassaflödesanalys under K2 for the form (ÅRL 2 kap. 1 § andra stycket) and the fond för yttre underhåll as its own post with omföringar in the K3 equity statement (38.11-38.12).
+- Completeness: AR-BRF-FACTS-MISSING, AR-BRF-TAX-PROFILE-MISSING, AR-BRF-LOSS-EXPLANATION, AR-BRF-KASSAFLODE (errors) and AR-BRF-COMPONENTS (warning).
+
+Deliberately not in this package: a UI page for the property facts (API only), the K3 transition ingångsbalansräkning with component allocation for BRFs leaving K2 in 2026 (section 6, third bullet), narrative overrides for prior years (the current year's figures only), and the K3 document's general "granskningsutkast" status (AR-K3-DRAFT-ONLY still applies to every K3 report).

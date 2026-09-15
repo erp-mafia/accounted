@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  BOSTADSRATTSFORENING_EQUITY_LABELS,
   anyAssetHasComponents,
   buildEquityChangesNote,
   buildK3RedovisningsPrinciper,
@@ -530,5 +531,33 @@ describe('anyAssetHasComponents', () => {
         },
       ]),
     ).toBe(false)
+  })
+})
+
+describe('buildEquityChangesNote: fond för yttre underhåll (BFNAR 2012:1 punkt 38.11-38.12)', () => {
+  it('shows the fund as its own opening row and the omföringar net to zero', () => {
+    const result = buildEquityChangesNote(
+      {
+        opening: { aktiekapital: 21_000_000, bundna_reserver: 0, balanserade_vinstmedel: 400_000 },
+        changes: { nyemission: 0, utdelning: 0, arets_resultat: 150_000 },
+        fond_yttre_underhall: { opening: 500_000, reservering: 150_000, ianspraktagande: 50_000 },
+      },
+      BOSTADSRATTSFORENING_EQUITY_LABELS,
+    )
+    const byLabel = Object.fromEntries(result.rows.map((r) => [r.label, r.amount]))
+    expect(byLabel['Ingående fond för yttre underhåll']).toBe(500_000)
+    expect(byLabel['Summa ingående eget kapital']).toBe(21_900_000)
+    expect(byLabel['Reservering till fond för yttre underhåll']).toBe(150_000)
+    expect(byLabel['Ianspråktagande av fond för yttre underhåll']).toBe(-50_000)
+    expect(byLabel['Omföring till/från balanserat resultat']).toBe(-100_000)
+    expect(result.closing_total).toBe(21_900_000 + 150_000)
+  })
+
+  it('omits every fund row when no movement is given (aktiebolag unchanged)', () => {
+    const result = buildEquityChangesNote({
+      opening: { aktiekapital: 50_000, bundna_reserver: 0, balanserade_vinstmedel: 100_000 },
+      changes: { nyemission: 0, utdelning: 0, arets_resultat: 80_000 },
+    })
+    expect(result.rows.map((r) => r.label).some((l) => l.includes('fond för yttre underhåll'))).toBe(false)
   })
 })

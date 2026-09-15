@@ -1,3 +1,5 @@
+import type { BrfNettoomsattningSplit, BrfNyckeltalRow } from './brf-nyckeltal'
+
 /**
  * Structured data for a K2 årsredovisning. Generated server-side from
  * income statement + balance sheet + asset register + salary data; passed
@@ -73,6 +75,38 @@ export interface MemberDisclosures {
   forlagsinsatser_redeemable_two_years: number | null
 }
 
+/**
+ * Bostadsrättsförening förvaltningsberättelse (ÅRL 6 kap. 3 a §, BFNAR
+ * 2012:1 kapitel 38): the 38.2 statements, the nyckeltal for the year and
+ * up to three prior years (38.4), the loss disclosure and the 38.13 split
+ * of nettoomsättning. Present only for the form; an absent key keeps the
+ * content hash of every other legal form's report unchanged.
+ */
+export interface BrfDisclosures {
+  /** K3 38.2 a: privatbostadsföretag (IL 2 kap. 17 §) per the year's brf_tax_profiles row; null = not assessed. */
+  privatbostadsforetag: boolean | null
+  /** K3 38.2 b: marken innehas med tomträtt (true) eller äganderätt (false); null = unknown. */
+  tomtratt: boolean | null
+  tomtratt_expires_on: string | null
+  tomtratt_avgald_until: string | null
+  /** K3 38.2 c: del i samfällighet, free text; null = none stated. */
+  samfallighet: string | null
+  /** K3 38.2 d: aktuell underhållsplan finns; null = unknown. */
+  underhallsplan: boolean | null
+  /** ÅRL 6 kap. 3 a § andra stycket; required when årets resultat < 0. */
+  loss_financing_explanation: string | null
+  /** K3 38.9 second paragraph, kr; null = nothing re-invoiced. */
+  energikostnad_vidaredebiterad: number | null
+  /** Oldest first, current year last (38.4: the year and three prior). */
+  nyckeltal: BrfNyckeltalRow[]
+  /** K3 38.13. */
+  nettoomsattning_split: BrfNettoomsattningSplit
+  /** Property facts the ratios need and do not have; empty when computable. */
+  facts_missing: string[]
+  /** The building is carried on 1110-1118 but no asset in the register has a K3 component split (17.4 with 38.10). */
+  building_without_components: boolean
+}
+
 export interface ArsredovisningData {
   company: {
     name: string
@@ -131,6 +165,8 @@ export interface ArsredovisningData {
     /** ÅRL 6 kap. 3 §: the four disclosures an ekonomisk förening must make
      *  in förvaltningsberättelsen. Null for every other legal form. */
     member_disclosures?: MemberDisclosures | null
+    /** ÅRL 6 kap. 3 a § and K3 kapitel 38: bostadsrättsförening only. */
+    brf_disclosures?: BrfDisclosures | null
     /** What the AGM actually decided, distinct from the board's proposal. */
     agm_disposition_outcome: 'proposal_approved' | 'alternative_decision' | null
     agm_disposition_decision: string | null
@@ -188,6 +224,11 @@ export interface ArsredovisningData {
     insatser_repayable_next_year?: number | null
     forlagsinsatser_dividend_right?: string | null
     forlagsinsatser_redeemable_two_years?: number | null
+    /** Bostadsrättsförening inputs (absent for other forms). */
+    loss_financing_explanation?: string | null
+    planerat_underhall_override?: number | null
+    sparande_adjustment?: number | null
+    energikostnad_vidaredebiterad?: number | null
     confirmations: {
       long_term_debt_over_five_years: boolean
       securities_pledged: boolean

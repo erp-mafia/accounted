@@ -2,6 +2,7 @@ import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
 import { isEkonomiskForeningFamily, isEntityType } from '@/lib/company/entity-type'
+import { BrfForvaltningsberattelseSection, KassaflodesanalysPage } from './brf-pdf-sections'
 
 const styles = StyleSheet.create({
   page: {
@@ -74,6 +75,21 @@ const styles = StyleSheet.create({
     borderTopWidth: 0.5,
     borderTopColor: '#888',
     fontFamily: 'Helvetica-Bold',
+  },
+  // Used only by the bostadsrättsförening kassaflödesanalys page.
+  tableRowSubtotal: {
+    flexDirection: 'row',
+    paddingVertical: 3,
+    marginTop: 4,
+    borderTopWidth: 0.5,
+    borderTopColor: '#888',
+    fontFamily: 'Helvetica-Bold',
+  },
+  reconciliationBlock: {
+    marginTop: 12,
+    padding: 10,
+    borderWidth: 0.5,
+    borderColor: '#888',
   },
   colLabel: {
     flex: 1,
@@ -183,6 +199,9 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
   const meetingNoun = isForening ? 'föreningsstämma' : 'årsstämma'
   const entityNoun = isForening ? 'föreningens' : 'bolagets'
   const member = data.forvaltningsberattelse.member_disclosures
+  // ÅRL 6 kap. 3 a § and K3 kapitel 38: only a bostadsrättsförening carries the block.
+  const brf = data.forvaltningsberattelse.brf_disclosures ?? null
+  const resultIsLoss = data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result < 0
   const reportSignatureDate = data.signatures
     .map((signature) => signature.signed_at?.slice(0, 10) ?? null)
     .filter((date): date is string => date !== null)
@@ -249,6 +268,10 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
             </Text>
           </View>
         ))}
+
+        {brf && (
+          <BrfForvaltningsberattelseSection brf={brf} styles={styles} fmt={fmt} resultIsLoss={resultIsLoss} />
+        )}
 
         {isForening && member && (
           <>
@@ -337,6 +360,17 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
           hasPrevious={data.previous_period !== null}
         />
       </Page>
+
+      {/* Kassaflödesanalys: ÅRL 2 kap. 1 § andra stycket, a bostadsrättsförening
+          includes one under K2 as well; build-data sets it only for the form. */}
+      {brf && data.kassaflodesanalys && (
+        <KassaflodesanalysPage
+          data={data}
+          styles={styles}
+          fmt={fmt}
+          chrome={<PageChrome data={data} pageLabel="Kassaflödesanalys" />}
+        />
+      )}
 
       {/* Noter */}
       <Page size="A4" style={styles.page}>

@@ -92,6 +92,15 @@ export default function ArsredovisningPage() {
   const [savedForlagsDividendRight, setSavedForlagsDividendRight] = useState('')
   const [forlagsRedeemable, setForlagsRedeemable] = useState('')
   const [savedForlagsRedeemable, setSavedForlagsRedeemable] = useState('')
+  // ÅRL 6 kap. 3 a § and K3 kapitel 38: bostadsrättsförening disclosures.
+  const [lossFinancing, setLossFinancing] = useState('')
+  const [savedLossFinancing, setSavedLossFinancing] = useState('')
+  const [planeratUnderhall, setPlaneratUnderhall] = useState('')
+  const [savedPlaneratUnderhall, setSavedPlaneratUnderhall] = useState('')
+  const [sparandeAdjustment, setSparandeAdjustment] = useState('')
+  const [savedSparandeAdjustment, setSavedSparandeAdjustment] = useState('')
+  const [energiVidaredebiterad, setEnergiVidaredebiterad] = useState('')
+  const [savedEnergiVidaredebiterad, setSavedEnergiVidaredebiterad] = useState('')
   const [longTermDebtConfirmed, setLongTermDebtConfirmed] = useState(false)
   const [savedLongTermDebtConfirmed, setSavedLongTermDebtConfirmed] = useState(false)
   const [securitiesPledgedConfirmed, setSecuritiesPledgedConfirmed] = useState(false)
@@ -196,6 +205,15 @@ export default function ArsredovisningPage() {
         const redeemableStr = redeemable != null ? String(redeemable) : ''
         setForlagsRedeemable(redeemableStr)
         setSavedForlagsRedeemable(redeemableStr)
+        setLossFinancing(d.disclosures.loss_financing_explanation ?? '')
+        setSavedLossFinancing(d.disclosures.loss_financing_explanation ?? '')
+        const numStr = (value: number | null | undefined) => (value != null ? String(value) : '')
+        setPlaneratUnderhall(numStr(d.disclosures.planerat_underhall_override))
+        setSavedPlaneratUnderhall(numStr(d.disclosures.planerat_underhall_override))
+        setSparandeAdjustment(numStr(d.disclosures.sparande_adjustment))
+        setSavedSparandeAdjustment(numStr(d.disclosures.sparande_adjustment))
+        setEnergiVidaredebiterad(numStr(d.disclosures.energikostnad_vidaredebiterad))
+        setSavedEnergiVidaredebiterad(numStr(d.disclosures.energikostnad_vidaredebiterad))
         setLongTermDebtConfirmed(d.disclosures.confirmations.long_term_debt_over_five_years)
         setSavedLongTermDebtConfirmed(d.disclosures.confirmations.long_term_debt_over_five_years)
         setSecuritiesPledgedConfirmed(d.disclosures.confirmations.securities_pledged)
@@ -236,6 +254,10 @@ export default function ArsredovisningPage() {
     insatserRepayable !== savedInsatserRepayable ||
     forlagsDividendRight !== savedForlagsDividendRight ||
     forlagsRedeemable !== savedForlagsRedeemable ||
+    lossFinancing !== savedLossFinancing ||
+    planeratUnderhall !== savedPlaneratUnderhall ||
+    sparandeAdjustment !== savedSparandeAdjustment ||
+    energiVidaredebiterad !== savedEnergiVidaredebiterad ||
     longTermDebtConfirmed !== savedLongTermDebtConfirmed ||
     securitiesPledgedConfirmed !== savedSecuritiesPledgedConfirmed ||
     contingentLiabilitiesConfirmed !== savedContingentLiabilitiesConfirmed ||
@@ -313,6 +335,28 @@ export default function ArsredovisningPage() {
       'Förlagsinsatser som ska lösas in inom två år',
     )
     if (forlagsRedeemableParsed === false) return
+    // Bostadsrättsförening amounts (K3 38.7 and 38.9); the sparande
+    // adjustment is signed, the two others are non-negative.
+    const planeratUnderhallParsed = parseMemberAmount(planeratUnderhall, 'Kostnadsfört planerat underhåll')
+    if (planeratUnderhallParsed === false) return
+    const energiVidaredebiteradParsed = parseMemberAmount(
+      energiVidaredebiterad,
+      'Vidaredebiterad energikostnad',
+    )
+    if (energiVidaredebiteradParsed === false) return
+    let sparandeAdjustmentParsed: number | null = null
+    if (sparandeAdjustment.trim()) {
+      const parsed = Number(sparandeAdjustment.replace(/\s/g, '').replace(',', '.'))
+      if (!Number.isFinite(parsed)) {
+        toast({
+          title: 'Ogiltigt belopp',
+          description: 'Justering av sparande måste vara ett belopp (negativt för avdrag) eller lämnas tomt.',
+          variant: 'destructive',
+        })
+        return
+      }
+      sparandeAdjustmentParsed = Math.round(parsed * 100) / 100
+    }
     setSavingNarrative(true)
     try {
       const res = await fetch(
@@ -342,6 +386,10 @@ export default function ArsredovisningPage() {
             insatser_repayable_next_year: insatserRepayableParsed,
             forlagsinsatser_dividend_right: forlagsDividendRight.trim() || null,
             forlagsinsatser_redeemable_two_years: forlagsRedeemableParsed,
+            loss_financing_explanation: lossFinancing.trim() || null,
+            planerat_underhall_override: planeratUnderhallParsed,
+            sparande_adjustment: sparandeAdjustmentParsed,
+            energikostnad_vidaredebiterad: energiVidaredebiteradParsed,
             long_term_debt_over_five_years_confirmed: longTermDebtConfirmed,
             securities_pledged_confirmed: securitiesPledgedConfirmed,
             contingent_liabilities_confirmed: contingentLiabilitiesConfirmed,
@@ -376,6 +424,10 @@ export default function ArsredovisningPage() {
       setSavedInsatserRepayable(insatserRepayable)
       setSavedForlagsDividendRight(forlagsDividendRight)
       setSavedForlagsRedeemable(forlagsRedeemable)
+      setSavedLossFinancing(lossFinancing)
+      setSavedPlaneratUnderhall(planeratUnderhall)
+      setSavedSparandeAdjustment(sparandeAdjustment)
+      setSavedEnergiVidaredebiterad(energiVidaredebiterad)
       setSavedLongTermDebtConfirmed(longTermDebtConfirmed)
       setSavedSecuritiesPledgedConfirmed(securitiesPledgedConfirmed)
       setSavedContingentLiabilitiesConfirmed(contingentLiabilitiesConfirmed)
@@ -412,6 +464,10 @@ export default function ArsredovisningPage() {
     insatserRepayable,
     forlagsDividendRight,
     forlagsRedeemable,
+    lossFinancing,
+    planeratUnderhall,
+    sparandeAdjustment,
+    energiVidaredebiterad,
     longTermDebtConfirmed,
     securitiesPledgedConfirmed,
     contingentLiabilitiesConfirmed,
@@ -867,6 +923,75 @@ export default function ArsredovisningPage() {
                     className="max-w-[220px] tabular-nums"
                   />
                   <p className="text-xs text-muted-foreground">EFL 11 kap. 7 §.</p>
+                </div>
+              </div>
+            )}
+            {data && data.company.entity_type === 'bostadsrattsforening' && (
+              <div className="space-y-4 pb-4 border-b border-border">
+                <div>
+                  <h4 className="text-sm font-medium">Bostadsrättsförening (ÅRL 6 kap. 3 a §, K3 kapitel 38)</h4>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Nyckeltalen beräknas från bokföringen och föreningens fastighetsuppgifter. Vid
+                    förlust ska förvaltningsberättelsen ange hur framtida åtaganden finansieras.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-brf-loss">Upplysning om förlust</Label>
+                  <Textarea
+                    id="ar-brf-loss"
+                    value={lossFinancing}
+                    onChange={(e) => setLossFinancing(e.target.value)}
+                    placeholder="T.ex. Förlusten beror på engångskostnader och påverkar inte föreningens möjlighet att finansiera sina framtida åtaganden; årsavgiften höjs med 5 % från 1 januari."
+                    rows={3}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Krävs när årets resultat är negativt (ÅRL 6 kap. 3 a § andra stycket).
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-brf-underhall">Kostnadsfört planerat underhåll (kr)</Label>
+                  <Input
+                    id="ar-brf-underhall"
+                    type="text"
+                    inputMode="decimal"
+                    value={planeratUnderhall}
+                    onChange={(e) => setPlaneratUnderhall(e.target.value)}
+                    placeholder="Lämna tomt för saldot på 5170-5179"
+                    className="max-w-[260px] tabular-nums"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    K3 punkt 38.7: underhåll enligt underhållsplanen som kostnadsförts; ingår i sparande per kvm.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-brf-sparande">Justering av sparande (kr, negativt för avdrag)</Label>
+                  <Input
+                    id="ar-brf-sparande"
+                    type="text"
+                    inputMode="decimal"
+                    value={sparandeAdjustment}
+                    onChange={(e) => setSparandeAdjustment(e.target.value)}
+                    placeholder="0"
+                    className="max-w-[260px] tabular-nums"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    K3 punkt 38.7: väsentliga poster utanför den normala verksamheten (nedskrivningar, låneeftergifter).
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-brf-energi">Vidaredebiterad energikostnad (kr)</Label>
+                  <Input
+                    id="ar-brf-energi"
+                    type="text"
+                    inputMode="decimal"
+                    value={energiVidaredebiterad}
+                    onChange={(e) => setEnergiVidaredebiterad(e.target.value)}
+                    placeholder="0"
+                    className="max-w-[260px] tabular-nums"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    K3 punkt 38.9: uppvärmning, el och vatten som debiterats medlemmarna efter individuell mätning.
+                  </p>
                 </div>
               </div>
             )}

@@ -123,6 +123,13 @@ const PostSchema = z.object({
     .enum(['proposal_approved', 'alternative_decision'])
     .nullable()
     .optional(),
+  // ÅRL 6 kap. 3 a § and K3 kapitel 38: bostadsrättsförening disclosures.
+  // Stored for every form; rendered and required only for the form
+  // (completeness AR-BRF-LOSS-EXPLANATION).
+  loss_financing_explanation: sanitizedText(4000).nullable().optional(),
+  planerat_underhall_override: z.number().min(0).max(1_000_000_000_000).nullable().optional(),
+  sparande_adjustment: z.number().min(-1_000_000_000_000).max(1_000_000_000_000).nullable().optional(),
+  energikostnad_vidaredebiterad: z.number().min(0).max(1_000_000_000_000).nullable().optional(),
   agm_disposition_decision: sanitizedText(2000).nullable().optional(),
 }).strict().superRefine((value, ctx) => {
   if (

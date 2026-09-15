@@ -57,6 +57,16 @@ export interface NarrativeOverrides {
   /** ÅRL 6 kap. 3 § p. 4: förlagsinsatser given notice, redeemable within
    *  the next two fiscal years (EFL 11 kap. 7 §). Null renders "inga". */
   forlagsinsatser_redeemable_two_years: number | null
+  /** ÅRL 6 kap. 3 a § andra stycket (bostadsrättsförening): how a loss
+   *  affects the ability to finance future commitments. Required by
+   *  completeness when årets resultat is negative. */
+  loss_financing_explanation: string | null
+  /** K3 38.7: kostnadsfört planerat underhåll replacing the 5170-5179 default. */
+  planerat_underhall_override: number | null
+  /** K3 38.7 third paragraph: signed adjustment to justerat resultat. */
+  sparande_adjustment: number | null
+  /** K3 38.9 second paragraph: energy cost re-invoiced after individual metering. */
+  energikostnad_vidaredebiterad: number | null
   long_term_debt_over_five_years_confirmed: boolean
   securities_pledged_confirmed: boolean
   contingent_liabilities_confirmed: boolean
@@ -97,6 +107,16 @@ export interface NarrativeRow {
   /** ÅRL 6 kap. 3 § p. 4: förlagsinsatser given notice, redeemable within
    *  the next two fiscal years (EFL 11 kap. 7 §). Null renders "inga". */
   forlagsinsatser_redeemable_two_years: number | null
+  /** ÅRL 6 kap. 3 a § andra stycket (bostadsrättsförening): how a loss
+   *  affects the ability to finance future commitments. Required by
+   *  completeness when årets resultat is negative. */
+  loss_financing_explanation: string | null
+  /** K3 38.7: kostnadsfört planerat underhåll replacing the 5170-5179 default. */
+  planerat_underhall_override: number | null
+  /** K3 38.7 third paragraph: signed adjustment to justerat resultat. */
+  sparande_adjustment: number | null
+  /** K3 38.9 second paragraph: energy cost re-invoiced after individual metering. */
+  energikostnad_vidaredebiterad: number | null
   long_term_debt_over_five_years_confirmed: boolean
   securities_pledged_confirmed: boolean
   contingent_liabilities_confirmed: boolean
@@ -112,7 +132,7 @@ const TABLE = 'arsredovisning_narratives'
 // of API responses. GDPR Art.25.2 / ISO A.8.3 data-minimization: callers
 // only need the narrative content + last-updated timestamp.
 const NARRATIVE_API_COLUMNS =
-  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, medelantal_anstallda_override, member_count_change, insatser_repayable_next_year, forlagsinsatser_dividend_right, forlagsinsatser_redeemable_two_years, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, updated_at'
+  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, medelantal_anstallda_override, member_count_change, insatser_repayable_next_year, forlagsinsatser_dividend_right, forlagsinsatser_redeemable_two_years, loss_financing_explanation, planerat_underhall_override, sparande_adjustment, energikostnad_vidaredebiterad, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, updated_at'
 
 /**
  * The medelantal anställda override alone, for a period other than the one

@@ -453,3 +453,136 @@ describe('validateAnnualReportCompleteness: ekonomisk förening', () => {
     expect(result.issues.map((issue) => issue.code)).toContain('AR-AUDITOR-REPORT-MISSING')
   })
 })
+
+describe('validateAnnualReportCompleteness: bostadsrättsförening (ÅRL 6 kap. 3 a §, K3 kapitel 38)', () => {
+  function brfDisclosures(over: Partial<NonNullable<ArsredovisningData['forvaltningsberattelse']['brf_disclosures']>> = {}) {
+    return {
+      privatbostadsforetag: true,
+      tomtratt: false,
+      tomtratt_expires_on: null,
+      tomtratt_avgald_until: null,
+      samfallighet: null,
+      underhallsplan: true,
+      loss_financing_explanation: null,
+      energikostnad_vidaredebiterad: null,
+      nyckeltal: [],
+      nettoomsattning_split: {
+        arsavgifter_bostader: 0,
+        arsavgifter_lokaler: 0,
+        hyror_bostader: 0,
+        hyror_lokaler: 0,
+        hyror_garage_parkering: 0,
+        ovriga_avgifter: 0,
+        ovrigt: 0,
+        total: 0,
+      },
+      facts_missing: [],
+      building_without_components: false,
+      ...over,
+    }
+  }
+  function brfReport(
+    over: Partial<NonNullable<ArsredovisningData['forvaltningsberattelse']['brf_disclosures']>> = {},
+    extra: Partial<ArsredovisningData> = {},
+  ): ArsredovisningData {
+    const base = report()
+    return {
+      ...base,
+      company: { ...base.company, name: 'Brf Testhuset', entity_type: 'bostadsrattsforening' },
+      forvaltningsberattelse: {
+        ...base.forvaltningsberattelse,
+        member_disclosures: {
+          member_count_change: 'Oförändrat.',
+          insatser_repayable_next_year: null,
+          forlagsinsatser_dividend_right: null,
+          forlagsinsatser_redeemable_two_years: null,
+        },
+        brf_disclosures: brfDisclosures(over),
+      },
+      kassaflodesanalys: {
+        reconciliation: { is_reconciled: true },
+      },
+      ...extra,
+    } as unknown as ArsredovisningData
+  }
+  const codes = (value: ReturnType<typeof validateAnnualReportCompleteness>) => value.issues.map((i) => i.code)
+
+  it('accepts a complete BRF draft', () => {
+    const result = validateAnnualReportCompleteness({ ...input('draft'), report: brfReport() })
+    expect(codes(result).filter((c) => c.startsWith('AR-BRF-'))).toEqual([])
+  })
+
+  it('blocks when the property facts behind the nyckeltal are missing', () => {
+    const result = validateAnnualReportCompleteness({
+      ...input('draft'),
+      report: brfReport({ facts_missing: ['kvm_bostadsratt', 'tomtratt'] }),
+    })
+    const issue = result.issues.find((i) => i.code === 'AR-BRF-FACTS-MISSING')
+    expect(issue?.severity).toBe('error')
+    expect(issue?.message).toContain('kvm_bostadsratt, tomtratt')
+  })
+
+  it('blocks when the privatbostadsföretag assessment is missing for the year (38.2 a)', () => {
+    const result = validateAnnualReportCompleteness({
+      ...input('draft'),
+      report: brfReport({ privatbostadsforetag: null }),
+    })
+    expect(codes(result)).toContain('AR-BRF-TAX-PROFILE-MISSING')
+  })
+
+  it('requires the loss disclosure only when årets resultat is negative', () => {
+    const loss = brfReport()
+    loss.forvaltningsberattelse.resultatdisposition_amounts.current_year_result = -20
+    expect(codes(validateAnnualReportCompleteness({ ...input('draft'), report: loss }))).toContain(
+      'AR-BRF-LOSS-EXPLANATION',
+    )
+    const explained = brfReport({ loss_financing_explanation: 'Avgifterna höjs med 5 % från 1 januari.' })
+    explained.forvaltningsberattelse.resultatdisposition_amounts.current_year_result = -20
+    expect(codes(validateAnnualReportCompleteness({ ...input('draft'), report: explained }))).not.toContain(
+      'AR-BRF-LOSS-EXPLANATION',
+    )
+    expect(codes(validateAnnualReportCompleteness({ ...input('draft'), report: brfReport() }))).not.toContain(
+      'AR-BRF-LOSS-EXPLANATION',
+    )
+  })
+
+  it('requires a reconciled kassaflödesanalys for every BRF (ÅRL 2 kap. 1 §)', () => {
+    const missing = brfReport({}, { kassaflodesanalys: undefined })
+    expect(codes(validateAnnualReportCompleteness({ ...input('draft'), report: missing }))).toContain('AR-BRF-KASSAFLODE')
+    const unreconciled = brfReport({}, {
+      kassaflodesanalys: { reconciliation: { is_reconciled: false } } as unknown as ArsredovisningData['kassaflodesanalys'],
+    })
+    expect(codes(validateAnnualReportCompleteness({ ...input('draft'), report: unreconciled }))).toContain(
+      'AR-BRF-KASSAFLODE',
+    )
+  })
+
+  it('warns, never blocks, when the building has no component split (K3 17.4 with 38.10)', () => {
+    const result = validateAnnualReportCompleteness({
+      ...input('draft'),
+      report: brfReport({ building_without_components: true }),
+    })
+    const issue = result.issues.find((i) => i.code === 'AR-BRF-COMPONENTS')
+    expect(issue?.severity).toBe('warning')
+    expect(result.error_count).toBe(0)
+  })
+
+  it('does not run the BRF checks for an ekonomisk förening', () => {
+    const base = report()
+    const ekf = {
+      ...base,
+      company: { ...base.company, entity_type: 'ekonomisk_forening' },
+      forvaltningsberattelse: {
+        ...base.forvaltningsberattelse,
+        member_disclosures: {
+          member_count_change: 'Oförändrat.',
+          insatser_repayable_next_year: null,
+          forlagsinsatser_dividend_right: null,
+          forlagsinsatser_redeemable_two_years: null,
+        },
+      },
+    } as unknown as ArsredovisningData
+    const result = validateAnnualReportCompleteness({ ...input('draft'), report: ekf })
+    expect(codes(result).some((c) => c.startsWith('AR-BRF-'))).toBe(false)
+  })
+})

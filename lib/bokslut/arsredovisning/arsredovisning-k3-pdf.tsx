@@ -2,6 +2,7 @@ import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
 import { isEkonomiskForeningFamily, isEntityType } from '@/lib/company/entity-type'
+import { BrfForvaltningsberattelseSection } from './brf-pdf-sections'
 
 /**
  * K3 årsredovisning PDF template (BFNAR 2012:1).
@@ -245,6 +246,9 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
   const meetingNoun = isForening ? 'föreningsstämma' : 'årsstämma'
   const entityNoun = isForening ? 'föreningens' : 'bolagets'
   const member = data.forvaltningsberattelse.member_disclosures ?? null
+  // ÅRL 6 kap. 3 a § and K3 kapitel 38: only a bostadsrättsförening carries the block.
+  const brf = data.forvaltningsberattelse.brf_disclosures ?? null
+  const resultIsLoss = data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result < 0
   const reportSignatureDate = data.signatures
     .map((signature) => signature.signed_at?.slice(0, 10) ?? null)
     .filter((date): date is string => date !== null)
@@ -312,6 +316,10 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
             </Text>
           </View>
         ))}
+
+        {brf && (
+          <BrfForvaltningsberattelseSection brf={brf} styles={styles} fmt={fmt} resultIsLoss={resultIsLoss} />
+        )}
 
         {isForening && member && (
           <>

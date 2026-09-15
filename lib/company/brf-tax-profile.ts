@@ -44,11 +44,15 @@ export interface BrfPropertyFactsRow {
   kvm_bostadsratt: number | string | null
   kvm_hyresratt: number | string | null
   kvm_lokaler: number | string | null
+  /** K3 38.3 c: lokaler upplåtna med bostadsrätt, part of kvm_bostadsratt. */
+  kvm_lokaler_bostadsratt: number | string | null
   antal_bostadslagenheter: number | null
   antal_lokaler: number | null
   taxeringsvarde: number | string | null
   tomtratt: boolean | null
   tomtratt_avgald_until: string | null
+  /** K3 38.2: the day the tomträtt runs to. */
+  tomtratt_expires_on: string | null
   samfallighet: string | null
   underhallsplan: boolean | null
   notes: string | null
@@ -67,11 +71,6 @@ export interface BrfTaxProfileRow {
   created_at: string
   updated_at: string
 }
-
-export const PROPERTY_FACTS_COLUMNS =
-  'id, company_id, kvm_bostadsratt, kvm_hyresratt, kvm_lokaler, antal_bostadslagenheter, antal_lokaler, taxeringsvarde, tomtratt, tomtratt_avgald_until, samfallighet, underhallsplan, notes, created_at, updated_at'
-export const TAX_PROFILE_COLUMNS =
-  'id, company_id, fiscal_year, privatbostadsforetag, qualified_share, assessed_on, notes, created_at, updated_at'
 
 /** Throws BRF_FORM_REQUIRED unless the company is a bostadsrättsförening. */
 export async function requireBrfForm(supabase: SupabaseClient, companyId: string): Promise<void> {
@@ -109,7 +108,7 @@ export async function getPropertyFacts(
 ): Promise<BrfPropertyFactsRow | null> {
   const { data, error } = await supabase
     .from('brf_property_facts')
-    .select(PROPERTY_FACTS_COLUMNS)
+    .select('id, company_id, kvm_bostadsratt, kvm_hyresratt, kvm_lokaler, kvm_lokaler_bostadsratt, antal_bostadslagenheter, antal_lokaler, taxeringsvarde, tomtratt, tomtratt_avgald_until, tomtratt_expires_on, samfallighet, underhallsplan, notes, created_at, updated_at')
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) throw error
@@ -131,18 +130,20 @@ export async function upsertPropertyFacts(
         kvm_bostadsratt: input.kvm_bostadsratt ?? null,
         kvm_hyresratt: input.kvm_hyresratt ?? null,
         kvm_lokaler: input.kvm_lokaler ?? null,
+        kvm_lokaler_bostadsratt: input.kvm_lokaler_bostadsratt ?? null,
         antal_bostadslagenheter: input.antal_bostadslagenheter ?? null,
         antal_lokaler: input.antal_lokaler ?? null,
         taxeringsvarde: input.taxeringsvarde ?? null,
         tomtratt: input.tomtratt ?? null,
         tomtratt_avgald_until: input.tomtratt_avgald_until ?? null,
+        tomtratt_expires_on: input.tomtratt_expires_on ?? null,
         samfallighet: input.samfallighet ?? null,
         underhallsplan: input.underhallsplan ?? null,
         notes: input.notes ?? null,
       },
       { onConflict: 'company_id' },
     )
-    .select(PROPERTY_FACTS_COLUMNS)
+    .select('id, company_id, kvm_bostadsratt, kvm_hyresratt, kvm_lokaler, kvm_lokaler_bostadsratt, antal_bostadslagenheter, antal_lokaler, taxeringsvarde, tomtratt, tomtratt_avgald_until, tomtratt_expires_on, samfallighet, underhallsplan, notes, created_at, updated_at')
     .single()
   if (error) throw error
   return data as BrfPropertyFactsRow
@@ -155,7 +156,7 @@ export async function getTaxProfile(
 ): Promise<BrfTaxProfileRow | null> {
   const { data, error } = await supabase
     .from('brf_tax_profiles')
-    .select(TAX_PROFILE_COLUMNS)
+    .select('id, company_id, fiscal_year, privatbostadsforetag, qualified_share, assessed_on, notes, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('fiscal_year', fiscalYear)
     .maybeSingle()
@@ -169,7 +170,7 @@ export async function listTaxProfiles(
 ): Promise<BrfTaxProfileRow[]> {
   const { data, error } = await supabase
     .from('brf_tax_profiles')
-    .select(TAX_PROFILE_COLUMNS)
+    .select('id, company_id, fiscal_year, privatbostadsforetag, qualified_share, assessed_on, notes, created_at, updated_at')
     .eq('company_id', companyId)
     .order('fiscal_year', { ascending: false })
   if (error) throw error
@@ -196,7 +197,7 @@ export async function upsertTaxProfile(
       },
       { onConflict: 'company_id,fiscal_year' },
     )
-    .select(TAX_PROFILE_COLUMNS)
+    .select('id, company_id, fiscal_year, privatbostadsforetag, qualified_share, assessed_on, notes, created_at, updated_at')
     .single()
   if (error) throw error
   return data as BrfTaxProfileRow

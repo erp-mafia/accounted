@@ -101,6 +101,27 @@ describe('annualReportContentHash: form-only fields', () => {
       },
     } as typeof base
     expect(annualReportContentHash(forening)).not.toBe(annualReportContentHash(base))
+    // The bostadsrättsförening block follows the same rule: absent for
+    // every other form, hash-relevant when present.
+    const brfUndefined = {
+      ...base,
+      report: {
+        ...base.report,
+        forvaltningsberattelse: { ...base.report.forvaltningsberattelse, brf_disclosures: undefined },
+      },
+    } as typeof base
+    expect(annualReportContentHash(brfUndefined)).toBe(annualReportContentHash(base))
+    const brf = {
+      ...base,
+      report: {
+        ...base.report,
+        forvaltningsberattelse: {
+          ...base.report.forvaltningsberattelse,
+          brf_disclosures: { privatbostadsforetag: true, nyckeltal: [], facts_missing: [] },
+        },
+      },
+    } as unknown as typeof base
+    expect(annualReportContentHash(brf)).not.toBe(annualReportContentHash(base))
   })
 })
 

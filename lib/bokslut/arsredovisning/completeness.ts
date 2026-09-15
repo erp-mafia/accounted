@@ -513,6 +513,76 @@ export function validateAnnualReportCompleteness(
     }
   }
 
+  // Bostadsrättsförening (ÅRL 6 kap. 3 a §, BFNAR 2012:1 kapitel 38): the
+  // förvaltningsberättelse additions are statutory whatever the stage, so
+  // the checks run at draft as well; build-data only attaches the block
+  // for the form, so other legal forms never reach this.
+  const brf = report.forvaltningsberattelse.brf_disclosures ?? null
+  if (report.company.entity_type === 'bostadsrattsforening' && brf) {
+    if (brf.facts_missing.length > 0) {
+      push(
+        issues,
+        'AR-BRF-FACTS-MISSING',
+        'error',
+        'management_report',
+        `Nyckeltalen enligt ÅRL 6 kap. 3 a § och upplysningarna enligt BFNAR 2012:1 punkt 38.2 kan inte lämnas: fastighetsuppgifter saknas (${brf.facts_missing.join(', ')}).`,
+        'Fyll i föreningens fastighetsuppgifter (kvm upplåtna med bostadsrätt och hyresrätt, lokaler, tomträtt, underhållsplan) under föreningens uppgifter.',
+      )
+    }
+    if (brf.privatbostadsforetag === null) {
+      push(
+        issues,
+        'AR-BRF-TAX-PROFILE-MISSING',
+        'error',
+        'management_report',
+        'Förvaltningsberättelsen ska ange om föreningen är ett privatbostadsföretag (BFNAR 2012:1 punkt 38.2 a), men ingen bedömning finns för året.',
+        'Registrera årets bedömning enligt IL 2 kap. 17 § under föreningens skatteprofil.',
+      )
+    }
+    const currentYearResult = report.forvaltningsberattelse.resultatdisposition_amounts.current_year_result
+    if (currentYearResult < 0 && !brf.loss_financing_explanation?.trim()) {
+      push(
+        issues,
+        'AR-BRF-LOSS-EXPLANATION',
+        'error',
+        'management_report',
+        'Årets resultat är en förlust men förvaltningsberättelsen saknar upplysning om vad förlusten innebär för föreningens möjlighet att finansiera sina framtida ekonomiska åtaganden (ÅRL 6 kap. 3 a § andra stycket).',
+        'Ange hur räntor, tomträttsavgälder och underhåll ska finansieras (avgiftshöjning, upplåtelse av hyresrätter med bostadsrätt, nya lån) i förvaltningsberättelsen.',
+      )
+    }
+    // ÅRL 2 kap. 1 § andra stycket: a bostadsrättsförening always includes a
+    // kassaflödesanalys, under K2 as well as K3.
+    if (!report.kassaflodesanalys) {
+      push(
+        issues,
+        'AR-BRF-KASSAFLODE',
+        'error',
+        'statements',
+        'En bostadsrättsförening ska alltid ta med en kassaflödesanalys i årsredovisningen (ÅRL 2 kap. 1 § andra stycket), men ingen kunde upprättas.',
+        'Kontrollera att ingående och utgående saldo på 19xx finns och skapa om årsredovisningen.',
+      )
+    } else if (!report.kassaflodesanalys.reconciliation.is_reconciled) {
+      push(
+        issues,
+        'AR-BRF-KASSAFLODE',
+        'error',
+        'statements',
+        'Kassaflödesanalysen stämmer inte mot förändringen av likvida medel (ÅRL 2 kap. 1 § andra stycket).',
+        'Kontrollera bokföringen på 19xx och skapa om årsredovisningen.',
+      )
+    }
+    if (brf.building_without_components) {
+      push(
+        issues,
+        'AR-BRF-COMPONENTS',
+        'warning',
+        'notes',
+        'Byggnaden redovisas på 1110-1118 men ingen tillgång i anläggningsregistret är uppdelad på komponenter. Under K3 ska byggnader med betydande komponenter delas upp (BFNAR 2012:1 punkt 17.4 och 38.10).',
+        'Registrera byggnaden med komponenter (stomme, fasad, tak, stammar, installationer) i anläggningsregistret; delar utanför föreningens underhållsansvar hänförs till stommen.',
+      )
+    }
+  }
+
   for (const warning of report.warnings) {
     push(issues, 'AR-SOURCE-WARNING', 'warning', 'statements', warning)
   }
