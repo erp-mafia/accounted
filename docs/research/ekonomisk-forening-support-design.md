@@ -276,9 +276,14 @@ Shipped, behind `NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED`:
 - Deadlines: `inkomstdeklaration_ekonomisk_forening`, `arsredovisning_ekonomisk_forening`, `foreningsstamma`.
 - Booking templates: payroll, pension and placement templates apply to both juridiska personer; new `member_contribution_received` (2083), `debenture_contribution_received` (2084) and `membership_fee_received` (3900, INK2S 4.5c/4.3c note).
 
-Deliberately not in the foundation (fails closed or manual):
+Also shipped on the same branch (second iteration):
 
-- Annual report: `evaluateAnnualReportEligibility` blocks the form with the association reason (section 8).
-- Member register, insatsemission, exit repayment ceiling, förlagsinsats redemption, cooperative distributions and gottgörelse (sections 5 and 4): manual bookkeeping against an external register until the member-capital module ships.
-- INK2S association adjustments (4.5c/4.3c) are entered through the existing manual adjustment fields; automated tagging is section 7.
-- Audit workflow (section 10) and misclassified-company migration (section 11).
+- INK2S (section 7): membership fees on the seeded 3901 account are detected as a 4.5c deduction (`detectedTaxAdjustmentAccounts`), and the INK2 engine warns until the 4.3c administration cost has been entered manually.
+- K2 annual report (section 8): the K2 mapper has a legal-form option (2083 Medlemsinsatser, 2084 Förlagsinsatser as own posts; share capital flagged), the balance sheet, the equity-change table, the resultatdisposition table and the fastställelseintyg use association wording, förvaltningsberättelsen carries the four ÅRL 6 kap. 3 § member disclosures (new narrative columns, migration `20260915120000`), the revisionsberättelse is mandatory (EFL 8 kap. 1 §) and the ÅRL 6 kap. 3 § member statement blocks filing. iXBRL preview and direct filing stay disabled for the form; K3 fails closed.
+- Misclassified company (section 11, empty-books class): `correct_company_entity_type()` (migration `20260915121000`, owner-only, re-seeds the chart, audit-logged) exposed through `PATCH /api/company/current { entity_type }`.
+
+Deliberately not in this branch (fails closed or manual):
+
+- Member register, insatsemission, exit repayment ceiling, förlagsinsats redemption, cooperative distributions and gottgörelse (sections 5 and 4): manual bookkeeping against an external register until the member-capital module ships; the templates say so.
+- K3 annual report for the form (the K3 equity statement is AB-shaped), digital filing (no Bolagsverket taxonomy for ekonomiska föreningar in the bundle).
+- Audit workflow beyond the mandatory revisionsberättelse dependency (section 10), and migration of a company with posted history (section 11).

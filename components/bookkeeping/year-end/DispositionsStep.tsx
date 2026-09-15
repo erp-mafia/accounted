@@ -37,7 +37,8 @@ interface UiState {
 interface TaxAdjustmentDraft {
   nonDeductibleExpenses: string
   nonTaxableIncome: string
-  detectedAccounts: { '6992': boolean; '8423': boolean }
+  /** Keyed by account number; the detected list depends on the legal form. */
+  detectedAccounts: Record<string, boolean>
 }
 
 /**
@@ -454,13 +455,13 @@ function TaxAdjustmentsCard({
           <div className="space-y-3">
             <Label>Upptäckt i bokföringen</Label>
             {detected.map((item) => {
-              const account = item.accountNumber as '6992' | '8423'
+              const account = item.accountNumber as string
               return (
                 <div key={item.sourceKey} className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <Checkbox
                       id={`tax-adjustment-${account}`}
-                      checked={draft.detectedAccounts[account]}
+                      checked={draft.detectedAccounts[account] ?? false}
                       onCheckedChange={(checked) =>
                         onChange({
                           ...draft,
@@ -707,7 +708,7 @@ function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[]
 const emptyTaxDraft: TaxAdjustmentDraft = {
   nonDeductibleExpenses: '0',
   nonTaxableIncome: '0',
-  detectedAccounts: { '6992': false, '8423': false },
+  detectedAccounts: {},
 }
 
 function createUiState(proposal: DispositionsProposal): UiState {
@@ -733,15 +734,16 @@ function createTaxAdjustmentDraft(
   const manualNonTaxable = snapshot.items.find(
     (item) => item.sourceKey === 'manual:non_taxable_income',
   )
-  const account6992 = snapshot.items.find((item) => item.sourceKey === 'account:6992')
-  const account8423 = snapshot.items.find((item) => item.sourceKey === 'account:8423')
+  const detectedAccounts: Record<string, boolean> = {}
+  for (const item of snapshot.items) {
+    if (item.source === 'detected' && item.accountNumber) {
+      detectedAccounts[item.accountNumber] = Boolean(item.included)
+    }
+  }
   return {
     nonDeductibleExpenses: String(manualNonDeductible?.amount ?? 0),
     nonTaxableIncome: String(manualNonTaxable?.amount ?? 0),
-    detectedAccounts: {
-      '6992': Boolean(account6992?.included),
-      '8423': Boolean(account8423?.included),
-    },
+    detectedAccounts,
   }
 }
 

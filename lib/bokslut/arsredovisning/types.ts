@@ -54,6 +54,22 @@ export interface StatementRow {
   indent?: number
 }
 
+/**
+ * ÅRL 6 kap. 3 §: an ekonomisk förening's förvaltningsberättelse must state
+ * (1) material changes in the number of members, (2) the sum of insatser to
+ * be repaid during the next fiscal year under EFL 10 kap. 11 and 16 §§,
+ * (3) the right to distribution that förlagsinsatser carry, and (4) the sum
+ * of förlagsinsatser given notice for redemption in the next two fiscal
+ * years. Null amounts render the statutory "inga" statement; a missing
+ * member text blocks filing (completeness AR-EF-MEMBER-INFO).
+ */
+export interface MemberDisclosures {
+  member_count_change: string | null
+  insatser_repayable_next_year: number | null
+  forlagsinsatser_dividend_right: string | null
+  forlagsinsatser_redeemable_two_years: number | null
+}
+
 export interface ArsredovisningData {
   company: {
     name: string
@@ -105,10 +121,13 @@ export interface ArsredovisningData {
       proposed_dividend: number
       carried_forward: number
     }
-    /** ISO date of the årsstämma where the årsredovisning was adopted.
-     *  Populates the fastställelseintyg date blank. Null means "not yet
-     *  recorded": PDF then leaves the blank. */
+    /** ISO date of the årsstämma (or föreningsstämma) where the
+     *  årsredovisning was adopted. Populates the fastställelseintyg date
+     *  blank. Null means "not yet recorded": PDF then leaves the blank. */
     agm_date: string | null
+    /** ÅRL 6 kap. 3 §: the four disclosures an ekonomisk förening must make
+     *  in förvaltningsberättelsen. Null for every other legal form. */
+    member_disclosures: MemberDisclosures | null
     /** What the AGM actually decided, distinct from the board's proposal. */
     agm_disposition_outcome: 'proposal_approved' | 'alternative_decision' | null
     agm_disposition_decision: string | null
@@ -160,6 +179,11 @@ export interface ArsredovisningData {
      *  the employees table"; the note and the iXBRL fact already reflect
      *  whichever won. */
     medelantal_anstallda_override: number | null
+    /** ÅRL 6 kap. 3 § inputs (ekonomisk förening only, otherwise null). */
+    member_count_change: string | null
+    insatser_repayable_next_year: number | null
+    forlagsinsatser_dividend_right: string | null
+    forlagsinsatser_redeemable_two_years: number | null
     confirmations: {
       long_term_debt_over_five_years: boolean
       securities_pledged: boolean

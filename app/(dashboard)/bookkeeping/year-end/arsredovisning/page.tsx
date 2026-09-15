@@ -82,6 +82,15 @@ export default function ArsredovisningPage() {
   // ÅRL 5:20 §: manual medelantal anställda. Empty = computed from Löner.
   const [medelantalOverride, setMedelantalOverride] = useState('')
   const [savedMedelantalOverride, setSavedMedelantalOverride] = useState('')
+  // ÅRL 6 kap. 3 §: ekonomisk förening member disclosures.
+  const [memberCountChange, setMemberCountChange] = useState('')
+  const [savedMemberCountChange, setSavedMemberCountChange] = useState('')
+  const [insatserRepayable, setInsatserRepayable] = useState('')
+  const [savedInsatserRepayable, setSavedInsatserRepayable] = useState('')
+  const [forlagsDividendRight, setForlagsDividendRight] = useState('')
+  const [savedForlagsDividendRight, setSavedForlagsDividendRight] = useState('')
+  const [forlagsRedeemable, setForlagsRedeemable] = useState('')
+  const [savedForlagsRedeemable, setSavedForlagsRedeemable] = useState('')
   const [longTermDebtConfirmed, setLongTermDebtConfirmed] = useState(false)
   const [savedLongTermDebtConfirmed, setSavedLongTermDebtConfirmed] = useState(false)
   const [securitiesPledgedConfirmed, setSecuritiesPledgedConfirmed] = useState(false)
@@ -174,6 +183,18 @@ export default function ArsredovisningPage() {
         const medelStr = medel != null ? String(medel) : ''
         setMedelantalOverride(medelStr)
         setSavedMedelantalOverride(medelStr)
+        setMemberCountChange(d.disclosures.member_count_change ?? '')
+        setSavedMemberCountChange(d.disclosures.member_count_change ?? '')
+        const repayable = d.disclosures.insatser_repayable_next_year
+        const repayableStr = repayable != null ? String(repayable) : ''
+        setInsatserRepayable(repayableStr)
+        setSavedInsatserRepayable(repayableStr)
+        setForlagsDividendRight(d.disclosures.forlagsinsatser_dividend_right ?? '')
+        setSavedForlagsDividendRight(d.disclosures.forlagsinsatser_dividend_right ?? '')
+        const redeemable = d.disclosures.forlagsinsatser_redeemable_two_years
+        const redeemableStr = redeemable != null ? String(redeemable) : ''
+        setForlagsRedeemable(redeemableStr)
+        setSavedForlagsRedeemable(redeemableStr)
         setLongTermDebtConfirmed(d.disclosures.confirmations.long_term_debt_over_five_years)
         setSavedLongTermDebtConfirmed(d.disclosures.confirmations.long_term_debt_over_five_years)
         setSecuritiesPledgedConfirmed(d.disclosures.confirmations.securities_pledged)
@@ -210,6 +231,10 @@ export default function ArsredovisningPage() {
     parentOrgNr !== savedParentOrgNr ||
     parentCity !== savedParentCity ||
     medelantalOverride !== savedMedelantalOverride ||
+    memberCountChange !== savedMemberCountChange ||
+    insatserRepayable !== savedInsatserRepayable ||
+    forlagsDividendRight !== savedForlagsDividendRight ||
+    forlagsRedeemable !== savedForlagsRedeemable ||
     longTermDebtConfirmed !== savedLongTermDebtConfirmed ||
     securitiesPledgedConfirmed !== savedSecuritiesPledgedConfirmed ||
     contingentLiabilitiesConfirmed !== savedContingentLiabilitiesConfirmed ||
@@ -262,6 +287,31 @@ export default function ArsredovisningPage() {
       }
       proposedDividendParsed = Math.round(parsed * 100) / 100
     }
+    // ÅRL 6 kap. 3 § amounts: empty means "inga"; otherwise a non-negative
+    // amount in kronor.
+    const parseMemberAmount = (raw: string, label: string): number | null | false => {
+      if (!raw.trim()) return null
+      const parsed = Number(raw.replace(/\s/g, '').replace(',', '.'))
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        toast({
+          title: 'Ogiltigt belopp',
+          description: `${label} måste vara noll eller ett positivt belopp (eller lämnas tomt).`,
+          variant: 'destructive',
+        })
+        return false
+      }
+      return Math.round(parsed * 100) / 100
+    }
+    const insatserRepayableParsed = parseMemberAmount(
+      insatserRepayable,
+      'Insatser som ska återbetalas nästa räkenskapsår',
+    )
+    if (insatserRepayableParsed === false) return
+    const forlagsRedeemableParsed = parseMemberAmount(
+      forlagsRedeemable,
+      'Förlagsinsatser som ska lösas in inom två år',
+    )
+    if (forlagsRedeemableParsed === false) return
     setSavingNarrative(true)
     try {
       const res = await fetch(
@@ -287,6 +337,10 @@ export default function ArsredovisningPage() {
             parent_company_org_number: parentOrgNr.trim() || null,
             parent_company_city: parentCity.trim() || null,
             medelantal_anstallda_override: medelantalParsed,
+            member_count_change: memberCountChange.trim() || null,
+            insatser_repayable_next_year: insatserRepayableParsed,
+            forlagsinsatser_dividend_right: forlagsDividendRight.trim() || null,
+            forlagsinsatser_redeemable_two_years: forlagsRedeemableParsed,
             long_term_debt_over_five_years_confirmed: longTermDebtConfirmed,
             securities_pledged_confirmed: securitiesPledgedConfirmed,
             contingent_liabilities_confirmed: contingentLiabilitiesConfirmed,
@@ -317,6 +371,10 @@ export default function ArsredovisningPage() {
       setSavedParentOrgNr(parentOrgNr)
       setSavedParentCity(parentCity)
       setSavedMedelantalOverride(medelantalOverride)
+      setSavedMemberCountChange(memberCountChange)
+      setSavedInsatserRepayable(insatserRepayable)
+      setSavedForlagsDividendRight(forlagsDividendRight)
+      setSavedForlagsRedeemable(forlagsRedeemable)
       setSavedLongTermDebtConfirmed(longTermDebtConfirmed)
       setSavedSecuritiesPledgedConfirmed(securitiesPledgedConfirmed)
       setSavedContingentLiabilitiesConfirmed(contingentLiabilitiesConfirmed)
@@ -745,6 +803,68 @@ export default function ArsredovisningPage() {
                 fält visas som &quot;Inga.&quot; i PDF:en.
               </p>
             </div>
+            {data?.company.entity_type === 'ekonomisk_forening' && (
+              <div className="space-y-4 pb-4 border-b border-border">
+                <div>
+                  <h4 className="text-sm font-medium">Medlemmar och insatser (ÅRL 6 kap. 3 §)</h4>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Förvaltningsberättelsen i en ekonomisk förening ska ange väsentliga
+                    förändringar i medlemsantalet, insatser som ska återbetalas och
+                    förlagsinsatsernas villkor. Tomma belopp visas som &quot;inga&quot;.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-member-count">Väsentliga förändringar i medlemsantalet</Label>
+                  <Textarea
+                    id="ar-member-count"
+                    value={memberCountChange}
+                    onChange={(e) => setMemberCountChange(e.target.value)}
+                    placeholder="T.ex. Antalet medlemmar ökade från 42 till 55 under året."
+                    rows={2}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-insatser-repayable">
+                    Insatser som ska återbetalas under nästa räkenskapsår (kr)
+                  </Label>
+                  <Input
+                    id="ar-insatser-repayable"
+                    type="text"
+                    inputMode="decimal"
+                    value={insatserRepayable}
+                    onChange={(e) => setInsatserRepayable(e.target.value)}
+                    placeholder="0"
+                    className="max-w-[220px] tabular-nums"
+                  />
+                  <p className="text-xs text-muted-foreground">EFL 10 kap. 11 och 16 §§.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-forlags-right">Rätt till utdelning som förlagsinsatser medför</Label>
+                  <Textarea
+                    id="ar-forlags-right"
+                    value={forlagsDividendRight}
+                    onChange={(e) => setForlagsDividendRight(e.target.value)}
+                    placeholder="Lämna tomt om föreningen saknar förlagsinsatser."
+                    rows={2}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ar-forlags-redeemable">
+                    Uppsagda förlagsinsatser som ska lösas in inom två räkenskapsår (kr)
+                  </Label>
+                  <Input
+                    id="ar-forlags-redeemable"
+                    type="text"
+                    inputMode="decimal"
+                    value={forlagsRedeemable}
+                    onChange={(e) => setForlagsRedeemable(e.target.value)}
+                    placeholder="0"
+                    className="max-w-[220px] tabular-nums"
+                  />
+                  <p className="text-xs text-muted-foreground">EFL 11 kap. 7 §.</p>
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="ar-medelantal">Medelantal anställda</Label>
               <Input

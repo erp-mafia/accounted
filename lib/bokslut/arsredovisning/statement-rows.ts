@@ -21,7 +21,7 @@ import type { K2MappingResult } from '@/lib/bokslut/ixbrl/k2-mapper'
 import type { StatementRow } from './types'
 
 const ZERO: ConceptAmount = { current: 0, previous: null }
-type StatementMapping = Pick<K2MappingResult, 'rr' | 'br' | 'totals'>
+type StatementMapping = Pick<K2MappingResult, 'rr' | 'br' | 'totals'> & Partial<Pick<K2MappingResult, 'legalForm'>>
 
 function hasValue(amount: ConceptAmount): boolean {
   return amount.current !== 0 || (amount.previous ?? 0) !== 0
@@ -352,14 +352,26 @@ export function buildBrRows(mapping: StatementMapping): {
   const e = new RowBuilder(hasPrevious)
   e.heading('Eget kapital')
   e.heading('Bundet eget kapital', 1)
-  e.post('Aktiekapital', br['Aktiekapital'], { indent: 2, alwaysShow: true })
-  e.post('Ej registrerat aktiekapital', br['EjRegistreratAktiekapital'], { indent: 2 })
-  e.post('Bunden överkursfond', br['OverkursfondBunden'], { indent: 2 })
-  e.post('Uppskrivningsfond', br['Uppskrivningsfond'], { indent: 2 })
-  e.post('Reservfond', br['Reservfond'], { indent: 2 })
+  if (mapping.legalForm === 'ekonomisk_forening') {
+    // ÅRL 3 kap. 10 b §: medlemsinsatser and förlagsinsatser are shown each
+    // on their own under bundet eget kapital; a förening has no share
+    // capital and no överkursfond.
+    e.post('Medlemsinsatser', br['Medlemsinsatser'], { indent: 2, alwaysShow: true })
+    e.post('Förlagsinsatser', br['Forlagsinsatser'], { indent: 2 })
+    e.post('Uppskrivningsfond', br['Uppskrivningsfond'], { indent: 2 })
+    e.post('Reservfond', br['Reservfond'], { indent: 2 })
+  } else {
+    e.post('Aktiekapital', br['Aktiekapital'], { indent: 2, alwaysShow: true })
+    e.post('Ej registrerat aktiekapital', br['EjRegistreratAktiekapital'], { indent: 2 })
+    e.post('Bunden överkursfond', br['OverkursfondBunden'], { indent: 2 })
+    e.post('Uppskrivningsfond', br['Uppskrivningsfond'], { indent: 2 })
+    e.post('Reservfond', br['Reservfond'], { indent: 2 })
+  }
   e.total('Summa bundet eget kapital', totals.bundetEgetKapital, { indent: 1 })
   e.heading('Fritt eget kapital', 1)
-  e.post('Överkursfond', br['Overkursfond'], { indent: 2 })
+  if (mapping.legalForm !== 'ekonomisk_forening') {
+    e.post('Överkursfond', br['Overkursfond'], { indent: 2 })
+  }
   e.post('Balanserat resultat', br['BalanseratResultat'], { indent: 2, alwaysShow: true })
   e.post('Årets resultat', br['AretsResultatEgetKapital'], {
     indent: 2,

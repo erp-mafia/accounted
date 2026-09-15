@@ -1,5 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
+import {
+  loadTaxAdjustmentSnapshot,
+  MEMBERSHIP_FEE_ACCOUNT,
+} from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
@@ -270,7 +273,7 @@ export async function generateINK2Declaration(
   // pre-closing books. See the module docblock for why the two differ.
   const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, resultClosedIntoEquity] =
     await Promise.all([
-      loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
+      loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, entityType),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, {
         closingEntry: 'exclude-final',
@@ -461,6 +464,22 @@ export async function generateINK2Declaration(
     '7754': nonTaxableIncome,
     '8020': taxableResult >= 0 ? taxableResult : 0,
     '8021': taxableResult < 0 ? Math.abs(taxableResult) : 0,
+  }
+
+  // An ekonomisk förening that deducts its membership fees (4.5c) must also
+  // add back the administration cost those fees cover (4.3c); the ledger
+  // cannot split that cost out, so it stays a manual figure.
+  const adjustmentItems = taxAdjustments.items ?? []
+  const membershipFees = adjustmentItems.find(
+    (item) => item.sourceKey === `account:${MEMBERSHIP_FEE_ACCOUNT}` && item.included && item.amount > 0,
+  )
+  const manualNonDeductible = adjustmentItems.find(
+    (item) => item.sourceKey === 'manual:non_deductible_expenses',
+  )
+  if (membershipFees && !(manualNonDeductible && manualNonDeductible.amount > 0)) {
+    warnings.push(
+      `Medlemsavgifter ${Math.trunc(membershipFees.amount)} kr har tagits upp som ej skattepliktiga (INK2S 4.5c). De administrationskostnader som avgifterna täcker är inte avdragsgilla och ska anges som ytterligare ej avdragsgilla kostnader (INK2S 4.3c) i bokslutets skattemässiga justeringar.`,
+    )
   }
 
   // Add warnings

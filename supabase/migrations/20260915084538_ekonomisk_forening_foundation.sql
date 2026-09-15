@@ -15,8 +15,10 @@
 --      Reservfond; the result closes to 2099 and carries to 2098 like an AB
 --      because the association files INK2 (SRU 7301 bundet / 7302 fritt eget
 --      kapital, as fixed in 20260911120000). Member settlement is a plain
---      short-term liability on 2890 (no owner, no aktieägare). Personnel
---      accounts are seeded as for an AB: a förening's workers are employees.
+--      short-term liability on 2890 (no owner, no aktieägare). 3901
+--      Medlemsavgifter (BAS group 39, SRU 7413) isolates the tax-exempt
+--      membership fees for the INK2S 4.5c adjustment. Personnel accounts
+--      are seeded as for an AB: a förening's workers are employees.
 --      Everything else in seed_chart_of_accounts is byte-identical to
 --      20260911120000.
 --
@@ -160,6 +162,16 @@ BEGIN
     INSERT INTO public.chart_of_accounts (user_id, company_id, account_number, account_name, account_class, account_group, account_type, normal_balance, plan_type, is_system_account, sru_code)
     VALUES
       (v_user_id, p_company_id, '2890', 'Övriga kortfristiga skulder', 2, '28', 'liability', 'credit', 'k1', true, '7369');
+  END IF;
+
+  -- Membership fees (medlemsavgifter) are övriga rörelseintäkter that are
+  -- tax-exempt for the association and outside VAT; a dedicated sub-account
+  -- under BAS group 39 lets the INK2S 4.5c adjustment be detected from the
+  -- ledger (lib/bokslut/tax-provision/tax-adjustment-service.ts).
+  IF p_entity_type = 'ekonomisk_forening' THEN
+    INSERT INTO public.chart_of_accounts (user_id, company_id, account_number, account_name, account_class, account_group, account_type, normal_balance, plan_type, is_system_account, sru_code)
+    VALUES
+      (v_user_id, p_company_id, '3901', 'Medlemsavgifter', 3, '39', 'revenue', 'credit', 'k1', true, '7413');
   END IF;
 
   -- Revenue (3xxx). 3001/3002 carry the official BAS 2026 names: 3001 takes

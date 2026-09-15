@@ -120,6 +120,7 @@ describe('ekonomisk_forening foundation: chart seed', () => {
         '2091',
         '2099',
         '2890',
+        '3901',
         '7010',
         '7210',
         '7510',
@@ -145,11 +146,16 @@ describe('ekonomisk_forening foundation: chart seed', () => {
     })
     expect(byNumber.get('2099')?.sru_code).toBe('7302')
     expect(byNumber.get('2890')?.sru_code).toBe('7369')
+    expect(byNumber.get('3901')).toEqual({
+      account_number: '3901',
+      account_name: 'Medlemsavgifter',
+      sru_code: '7413',
+    })
   })
 
   it.each([
     ['enskild_firma', ['2010', '2013', '2018'], ['2081', '2083', '2890', '2893']],
-    ['aktiebolag', ['2081', '2091', '2099', '2893'], ['2013', '2083', '2890']],
+    ['aktiebolag', ['2081', '2091', '2099', '2893'], ['2013', '2083', '2890', '3901']],
     ['ideell_forening', ['2067', '2068', '2069', '2890'], ['2081', '2083', '2099', '2893']],
   ] as const)('does not change the %s seed', async (entityType, present, absent) => {
     const userId = await insertAuthUser()

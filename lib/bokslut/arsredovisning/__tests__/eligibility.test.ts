@@ -39,19 +39,51 @@ describe('evaluateAnnualReportEligibility', () => {
     expect(result.issues).toEqual([])
   })
 
-  it('fails closed for an ekonomisk förening with the association-specific reason', () => {
+  it('accepts an ekonomisk förening under K2 but keeps it off the digital AB taxonomy', () => {
+    const profile = completeProfile()
+    profile.auditor_report_required = true
     const result = evaluateAnnualReportEligibility({
       entityType: 'ekonomisk_forening',
       framework: 'k2',
       periodStart: '2026-01-01',
       periodEnd: '2026-12-31',
-      profile: completeProfile(),
+      profile,
       metrics,
     })
-    const scope = result.issues.find((issue) => issue.code === 'AR-SCOPE-ENTITY')
-    expect(scope?.message).toContain('ekonomisk förening')
-    expect(scope?.message).toContain('ÅRL 3 kap. 10 b §')
+    expect(result.issues.map((issue) => issue.code)).not.toContain('AR-SCOPE-ENTITY')
+    expect(result.k2_eligible).toBe(true)
+    expect(result.digital_filing_eligible).toBe(false)
+    expect(result.digital_issues.map((issue) => issue.code)).toContain('AR-DIGITAL-ENTITY')
+  })
+
+  it('requires the revisionsberättelse for an ekonomisk förening (EFL 8 kap. 1 §)', () => {
+    const profile = completeProfile()
+    profile.auditor_report_required = false
+    const result = evaluateAnnualReportEligibility({
+      entityType: 'ekonomisk_forening',
+      framework: 'k2',
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+      profile,
+      metrics,
+    })
+    const issue = result.issues.find((item) => item.code === 'AR-AUDITOR-REQUIRED-FORENING')
+    expect(issue?.message).toContain('EFL 8 kap. 1 §')
     expect(result.k2_eligible).toBe(false)
+  })
+
+  it('fails closed for an ekonomisk förening under K3 until its equity statement ships', () => {
+    const profile = completeProfile()
+    profile.auditor_report_required = true
+    const result = evaluateAnnualReportEligibility({
+      entityType: 'ekonomisk_forening',
+      framework: 'k3',
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+      profile,
+      metrics,
+    })
+    expect(result.issues.map((issue) => issue.code)).toContain('AR-SCOPE-ENTITY-FRAMEWORK')
   })
 
   it('keeps the generic scope message for forms that never prepare an årsredovisning here', () => {

@@ -85,7 +85,7 @@ export async function buildDispositionsProposal(
     fiscalPeriodId,
   )
   const [taxAdjustments, bookedTax] = await Promise.all([
-    loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
+    loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, form),
     getBookedBolagsskatt(supabase, companyId, fiscalPeriodId),
   ])
   // Income statement excludes tax posted by this year-end flow, but includes

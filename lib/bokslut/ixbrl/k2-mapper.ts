@@ -418,7 +418,48 @@ const SIGN_RECLASSIFICATION_POSTS: Record<
   },
 }
 
+/**
+ * Legal forms with their own K2 equity presentation. An aktiebolag shows
+ * share capital; an ekonomisk förening shows medlemsinsatser and
+ * förlagsinsatser as separate posts under bundet eget kapital (ÅRL 3 kap.
+ * 10 b §). Every other form renders with the aktiebolag layout and the
+ * reclassification warnings.
+ */
+export type K2LegalForm = 'aktiebolag' | 'ekonomisk_forening'
+
+export interface K2MappingOptions {
+  legalForm?: K2LegalForm
+}
+
+/**
+ * The aktiebolag table folds 2083/2084 into Reservfond (with a warning); an
+ * ekonomisk förening carries them as their own posts and warns about share
+ * capital instead, which it cannot have (EFL 1 kap.).
+ */
+export const K2_BR_MAPPINGS_EKONOMISK_FORENING: PostMapping[] = K2_BR_MAPPINGS.flatMap(
+  (mapping) => {
+    if (mapping.concept !== 'Reservfond') return [mapping]
+    return [
+      { concept: 'Medlemsinsatser', balance: 'credit', ranges: [r('2083', '2083')] },
+      { concept: 'Forlagsinsatser', balance: 'credit', ranges: [r('2084', '2084')] },
+      { ...mapping, ranges: [r('2086', '2086'), r('2088', '2089')] },
+    ]
+  },
+)
+
+function brMappingsFor(legalForm: K2LegalForm): PostMapping[] {
+  return legalForm === 'ekonomisk_forening' ? K2_BR_MAPPINGS_EKONOMISK_FORENING : K2_BR_MAPPINGS
+}
+
+const RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING: Record<string, string> = {
+  '2081': 'Aktiekapital (2081) förekommer i en ekonomisk förening, som saknar aktiekapital (EFL 1 kap.): granska klassificeringen, insatser hör till 2083/2084.',
+  '2088': RECLASSIFIED_ACCOUNTS['2088'],
+  '2089': RECLASSIFIED_ACCOUNTS['2089'],
+}
+
 export interface K2MappingResult {
+  /** The equity layout the mapping was built for (defaults to aktiebolag). */
+  legalForm: K2LegalForm
   rr: ConceptAmounts
   br: ConceptAmounts
   /** Computed RR subtotals + BR totals, same orientation rules. */
@@ -574,7 +615,12 @@ function sumConcepts(amounts: ConceptAmounts, concepts: string[], signs?: number
 export function mapTrialBalancesToK2(
   current: TrialBalancePair,
   previous: TrialBalancePair | null,
+  options: K2MappingOptions = {},
 ): K2MappingResult {
+  const legalForm: K2LegalForm = options.legalForm ?? 'aktiebolag'
+  const brMappings = brMappingsFor(legalForm)
+  const reclassifiedAccounts =
+    legalForm === 'ekonomisk_forening' ? RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING : RECLASSIFIED_ACCOUNTS
   const warnings: string[] = []
   const rr: ConceptAmounts = {}
   const rrExact: ConceptAmounts = {}
@@ -593,11 +639,11 @@ export function mapTrialBalancesToK2(
       previous: exact.previous === null ? null : roundWhole(exact.previous),
     }
   }
-  for (const mapping of K2_BR_MAPPINGS) {
+  for (const mapping of brMappings) {
     brExact[mapping.concept] = exactAmount(mapping, current.full, previous?.full ?? null)
   }
   applySignReclassifications(brExact, current.full, previous?.full ?? null, warnings)
-  for (const mapping of K2_BR_MAPPINGS) {
+  for (const mapping of brMappings) {
     const exact = brExact[mapping.concept]
     br[mapping.concept] = {
       current: roundWhole(exact.current),
@@ -608,7 +654,7 @@ export function mapTrialBalancesToK2(
   // Reclassification + unmapped sweep over balance-carrying accounts. Both TB
   // variants are swept: the full TB exposes unmapped BR accounts, the
   // pre-closing TB exposes unmapped RR accounts (zeroed in the full TB).
-  const allMappings = [...K2_RR_MAPPINGS, ...K2_BR_MAPPINGS]
+  const allMappings = [...K2_RR_MAPPINGS, ...brMappings]
   const unmappedAccounts: K2MappingResult['unmappedAccounts'] = []
   const seenReclass = new Set<string>()
   const seenAretsResultat = new Set<string>()
@@ -634,7 +680,7 @@ export function mapTrialBalancesToK2(
         }
         continue
       }
-      const reclass = RECLASSIFIED_ACCOUNTS[row.account_number]
+      const reclass = reclassifiedAccounts[row.account_number]
       if (reclass && !seenReclass.has(row.account_number)) {
         seenReclass.add(row.account_number)
         warnings.push(reclass)
@@ -694,7 +740,7 @@ export function mapTrialBalancesToK2(
     )
   }
 
-  return { rr, br, totals, warnings, unmappedAccounts }
+  return { legalForm, rr, br, totals, warnings, unmappedAccounts }
 }
 
 function adjustConcept(
@@ -918,6 +964,8 @@ function computeTotals(rr: ConceptAmounts, br: ConceptAmounts): K2MappingResult[
   const bundetEgetKapital = sumConcepts(br, [
     'Aktiekapital',
     'EjRegistreratAktiekapital',
+    'Medlemsinsatser',
+    'Forlagsinsatser',
     'OverkursfondBunden',
     'Uppskrivningsfond',
     'Reservfond',

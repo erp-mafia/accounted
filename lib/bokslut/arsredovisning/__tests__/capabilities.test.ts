@@ -32,6 +32,26 @@ describe('getAnnualReportCapabilities', () => {
     expect(result.connected_filing.enabled).toBe(true)
   })
 
+  it('keeps an ekonomisk förening on the paper package: no iXBRL, no direct filing', () => {
+    vi.stubEnv('NEXT_PUBLIC_BOLAGSVERKET_FILING_ENABLED', 'true')
+    const result = getAnnualReportCapabilities(
+      'k2',
+      {
+        k2_eligible: true,
+        digital_filing_eligible: false,
+        digital_issues: [],
+        size_classification: 'smaller',
+        k2_relief_rule: 'eligible',
+        issues: [],
+      },
+      'ekonomisk_forening',
+    )
+    expect(result.paper.enabled).toBe(true)
+    expect(result.ixbrl_preview.enabled).toBe(false)
+    expect(result.ixbrl_preview.reason).toMatch(/aktiebolag/)
+    expect(result.connected_filing.enabled).toBe(false)
+  })
+
   it('does not present the current K3 draft as paper-filing ready', () => {
     const result = getAnnualReportCapabilities('k3')
     expect(result.paper.enabled).toBe(false)

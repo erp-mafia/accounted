@@ -94,6 +94,48 @@ describe('PATCH /api/company/current', () => {
     expect(body.data.accounting_framework).toBe('k3')
   })
 
+  it('corrects the legal form through the owner-only RPC when the books are empty', async () => {
+    enqueue({ data: { ok: true, changed: true, entity_type: 'ekonomisk_forening', previous_entity_type: 'aktiebolag' } }) // rpc
+    enqueue({ data: { id: 'company-1', accounting_framework: 'k2', entity_type: 'ekonomisk_forening' } }) // read-back
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { entity_type: 'ekonomisk_forening' },
+    })
+    const { status, body } = await parseJsonResponse<{ data: { entity_type: string } }>(
+      await PATCH(req, routeParams),
+    )
+    expect(status).toBe(200)
+    expect(body.data.entity_type).toBe('ekonomisk_forening')
+    expect(supabase.rpc).toHaveBeenCalledWith('correct_company_entity_type', {
+      p_company_id: 'company-1',
+      p_entity_type: 'ekonomisk_forening',
+    })
+  })
+
+  it('maps a refused legal-form change to a conflict with the Swedish reason', async () => {
+    enqueue({ data: { ok: false, code: 'ENTITY_TYPE_CHANGE_BOOKS_NOT_EMPTY', journal_entries: 3 } })
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { entity_type: 'ekonomisk_forening' },
+    })
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(
+      await PATCH(req, routeParams),
+    )
+    expect(status).toBe(409)
+    expect(body.code).toBe('ENTITY_TYPE_CHANGE_BOOKS_NOT_EMPTY')
+    expect(body.error).toContain('verifikat')
+  })
+
+  it('rejects an unknown legal form with 400 before touching the database', async () => {
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { entity_type: 'handelsbolag' },
+    })
+    const { status } = await parseJsonResponse<{ error: string }>(await PATCH(req, routeParams))
+    expect(status).toBe(400)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('updates the framework for an aktiebolag', async () => {
     enqueue({ data: { entity_type: 'aktiebolag' } }) // entity check
     enqueue({ data: { id: 'company-1', accounting_framework: 'k3', entity_type: 'aktiebolag' } }) // update

@@ -323,3 +323,48 @@ describe('validateAnnualReportCompleteness', () => {
     expect(result.issues.some((issue) => issue.code.startsWith('AR-DIVIDEND-'))).toBe(false)
   })
 })
+
+describe('validateAnnualReportCompleteness: ekonomisk förening', () => {
+  function foreningReport(memberCountChange: string | null): ArsredovisningData {
+    const base = report()
+    return {
+      ...base,
+      company: { ...base.company, name: 'Testkooperativet ek. för.', entity_type: 'ekonomisk_forening' },
+      forvaltningsberattelse: {
+        ...base.forvaltningsberattelse,
+        member_disclosures: {
+          member_count_change: memberCountChange,
+          insatser_repayable_next_year: null,
+          forlagsinsatser_dividend_right: null,
+          forlagsinsatser_redeemable_two_years: null,
+        },
+      },
+    } as unknown as ArsredovisningData
+  }
+
+  it('requires the ÅRL 6 kap. 3 § member statement before filing', () => {
+    const base = input('filing')
+    const missing = validateAnnualReportCompleteness({ ...base, report: foreningReport(null) })
+    expect(missing.issues.map((issue) => issue.code)).toContain('AR-EF-MEMBER-INFO')
+    const present = validateAnnualReportCompleteness({
+      ...base,
+      report: foreningReport('Medlemsantalet ökade från 40 till 52.'),
+    })
+    expect(present.issues.map((issue) => issue.code)).not.toContain('AR-EF-MEMBER-INFO')
+  })
+
+  it('demands the revisionsberättelse even when the profile says none is required (EFL 8 kap. 1 §)', () => {
+    const base = input('filing')
+    const profile: AnnualReportProfile = {
+      ...base.profile,
+      auditor_report_required: false,
+      auditor_report_included: false,
+    }
+    const result = validateAnnualReportCompleteness({
+      ...base,
+      profile,
+      report: foreningReport('Oförändrat medlemsantal.'),
+    })
+    expect(result.issues.map((issue) => issue.code)).toContain('AR-AUDITOR-REPORT-MISSING')
+  })
+})

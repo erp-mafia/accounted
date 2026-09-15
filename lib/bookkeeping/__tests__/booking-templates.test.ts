@@ -63,7 +63,7 @@ describe('BOOKING_TEMPLATES data integrity', () => {
       vat_treatment: null,
     })
     expect(getTemplateById('membership_fee_received')).toMatchObject({
-      credit_account: '3900',
+      credit_account: '3901',
       vat_treatment: 'exempt',
       requires_review: true,
     })

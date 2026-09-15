@@ -28,7 +28,7 @@ function inputs(entityType: string): ComposerInputs {
     activeEmployees: null,
     sieSummary: null,
     bankingSummary: null,
-    atomIndex: ATOMS.map((id) => ({ id, tier: id.split('/')[0], sni_prefixes: [] })) as ComposerInputs['atomIndex'],
+    atomIndex: ATOMS.map((id) => ({ id, tier: id.split('/')[0], sni_prefixes: [] })) as unknown as ComposerInputs['atomIndex'],
     userIsConfirmedDirector: false,
   }
 }

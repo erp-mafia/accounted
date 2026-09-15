@@ -55,7 +55,11 @@ function responseData(model: Awaited<ReturnType<typeof buildCanonicalAnnualRepor
     disclosures: model.disclosures,
     eligibility: model.eligibility,
     validation: model.validation,
-    capabilities: getAnnualReportCapabilities(model.report.accounting_framework, model.eligibility),
+    capabilities: getAnnualReportCapabilities(
+      model.report.accounting_framework,
+      model.eligibility,
+      model.report.company?.entity_type ?? null,
+    ),
     report_summary: {
       proposed_dividend: model.report.forvaltningsberattelse.proposed_dividend,
       distributable_equity:

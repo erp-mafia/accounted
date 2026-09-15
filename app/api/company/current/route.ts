@@ -2,7 +2,7 @@ import { getActiveCompanyId } from '@/lib/company/context'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
-import { AccountingFrameworkSchema } from '@/lib/api/schemas'
+import { AccountingFrameworkSchema, EntityTypeSchema } from '@/lib/api/schemas'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -47,7 +47,28 @@ export async function GET() {
  */
 const PatchBodySchema = z.object({
   accounting_framework: AccountingFrameworkSchema.optional(),
+  /**
+   * Legal-form correction for a company whose books are still empty (no
+   * verifikat, invoices or supplier invoices, only seeded accounts). Runs
+   * through correct_company_entity_type(), which is owner-only and re-seeds
+   * the chart for the new form; a company with any bookkeeping is refused.
+   */
+  entity_type: EntityTypeSchema.optional(),
 })
+
+const ENTITY_TYPE_CHANGE_ERRORS: Record<string, { status: number; message: string }> = {
+  ENTITY_TYPE_CHANGE_FORBIDDEN: { status: 403, message: 'Endast företagets ägare kan ändra företagsform.' },
+  ENTITY_TYPE_CHANGE_NOT_FOUND: { status: 404, message: 'Företaget kunde inte hittas' },
+  ENTITY_TYPE_CHANGE_UNSUPPORTED: { status: 400, message: 'Företagsformen stöds inte.' },
+  ENTITY_TYPE_CHANGE_BOOKS_NOT_EMPTY: {
+    status: 409,
+    message: 'Företagsformen kan bara ändras innan bokföringen har börjat: det finns redan verifikat eller fakturor. Kontakta support för en granskad ändring.',
+  },
+  ENTITY_TYPE_CHANGE_CUSTOM_ACCOUNTS: {
+    status: 409,
+    message: 'Företagsformen kan bara ändras när kontoplanen bara innehåller de förvalda kontona: ta bort egna konton först.',
+  },
+}
 
 /**
  * PATCH /api/company/current
@@ -96,6 +117,24 @@ export const PATCH = withRouteContext(
       )
     }
     updates.accounting_framework = validation.data.accounting_framework
+  }
+
+  if (validation.data.entity_type !== undefined) {
+    const { data, error } = await supabase.rpc('correct_company_entity_type', {
+      p_company_id: companyId,
+      p_entity_type: validation.data.entity_type,
+    })
+    if (error) {
+      return NextResponse.json({ error: 'Företagsformen kunde inte ändras' }, { status: 500 })
+    }
+    const result = (data ?? {}) as { ok?: boolean; code?: string; changed?: boolean }
+    if (!result.ok) {
+      const mapped = ENTITY_TYPE_CHANGE_ERRORS[result.code ?? ''] ?? {
+        status: 400,
+        message: 'Företagsformen kunde inte ändras',
+      }
+      return NextResponse.json({ error: mapped.message, code: result.code }, { status: mapped.status })
+    }
   }
 
   if (Object.keys(updates).length === 0) {
