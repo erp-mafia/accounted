@@ -316,18 +316,16 @@ export function supportsMemberCapital(entityType: EntityType): boolean {
 
 /**
  * K2 (BFNAR 2016:10) is open to every mindre företag that prepares an
- * årsredovisning, K3 (BFNAR 2012:1) to all of them; by law an ekonomisk
- * förening chooses between the two exactly like an aktiebolag (BFN, "Vad
- * gäller för ekonomiska föreningar"). In Accounted the förening is K2-only
- * for now: the K3 equity roll-forward is still shaped for aktiekapital and
- * opens with the member-capital work (design doc, phase 2). Forms that close
- * with an årsbokslut (enskild firma, ideell förening) never pick a framework.
+ * årsredovisning, K3 (BFNAR 2012:1) to all of them; an ekonomisk förening
+ * chooses between the two exactly like an aktiebolag (BFN, "Vad gäller för
+ * ekonomiska föreningar"). The K3 equity roll-forward carries member capital
+ * for the form since the member-register work. Forms that close with an
+ * årsbokslut (enskild firma, ideell förening) never pick a framework.
  */
 export function supportsAccountingFramework(
   entityType: EntityType,
   framework: 'k2' | 'k3',
 ): boolean {
   if (!preparesArsredovisning(entityType)) return false
-  if (entityType === 'ekonomisk_forening') return framework === 'k2'
   return framework === 'k2' || framework === 'k3'
 }

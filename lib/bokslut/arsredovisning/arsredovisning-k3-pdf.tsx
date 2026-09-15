@@ -235,6 +235,14 @@ function PageChrome({
 }
 
 export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
+  // An ekonomisk förening adopts the statements at its ordinarie
+  // föreningsstämma (EFL 6 kap. 9-10 §§), owns no share capital and adds the
+  // ÅRL 6 kap. 3 § member disclosures to förvaltningsberättelsen.
+  const isForening = data.company.entity_type === 'ekonomisk_forening'
+  const meeting = isForening ? 'föreningsstämman' : 'årsstämman'
+  const meetingNoun = isForening ? 'föreningsstämma' : 'årsstämma'
+  const entityNoun = isForening ? 'föreningens' : 'bolagets'
+  const member = data.forvaltningsberattelse.member_disclosures ?? null
   const reportSignatureDate = data.signatures
     .map((signature) => signature.signed_at?.slice(0, 10) ?? null)
     .filter((date): date is string => date !== null)
@@ -242,7 +250,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
     .at(-1)
   const agmDispositionDecision =
     data.forvaltningsberattelse.agm_disposition_outcome === 'proposal_approved'
-      ? `Årsstämman beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`
+      ? `${isForening ? 'Föreningsstämman' : 'Årsstämman'} beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`
       : data.forvaltningsberattelse.agm_disposition_outcome === 'alternative_decision'
         ? data.forvaltningsberattelse.agm_disposition_decision
         : null
@@ -303,24 +311,51 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
           </View>
         ))}
 
+        {isForening && member && (
+          <>
+            <Text style={styles.sectionTitle}>Medlemmar och insatser</Text>
+            <Text style={styles.paragraph}>
+              Väsentliga förändringar i medlemsantalet: {member.member_count_change?.trim() || 'uppgift saknas'}
+            </Text>
+            <Text style={styles.paragraph}>
+              Insatsbelopp som ska återbetalas under nästa räkenskapsår (EFL 10 kap. 11 och 16 §§):{' '}
+              {member.insatser_repayable_next_year ? `${fmt(member.insatser_repayable_next_year)} kr` : 'inga'}
+            </Text>
+            <Text style={styles.paragraph}>
+              Rätt till utdelning som gjorda förlagsinsatser medför: {member.forlagsinsatser_dividend_right?.trim() || 'inga förlagsinsatser'}
+            </Text>
+            <Text style={styles.paragraph}>
+              Förlagsinsatser som har sagts upp och ska lösas in under de nästkommande två räkenskapsåren:{' '}
+              {member.forlagsinsatser_redeemable_two_years ? `${fmt(member.forlagsinsatser_redeemable_two_years)} kr` : 'inga'}
+            </Text>
+          </>
+        )}
+
         <Text style={styles.sectionTitle}>Förslag till resultatdisposition</Text>
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.resultatdisposition}</Text>
-        {[
-          ['Balanserat resultat', data.forvaltningsberattelse.resultatdisposition_amounts.retained_earnings],
-          ['Fri överkursfond', data.forvaltningsberattelse.resultatdisposition_amounts.share_premium_reserve],
-          ['Årets resultat', data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result],
-          ['Summa till årsstämmans förfogande', data.forvaltningsberattelse.resultatdisposition_amounts.total],
-          ['Föreslagen utdelning', -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend],
-          ['Balanseras i ny räkning', data.forvaltningsberattelse.resultatdisposition_amounts.carried_forward],
-        ].map(([label, amount], index) => (
+        {(() => {
+          const rows: Array<[string, number]> = [
+            ['Balanserat resultat', data.forvaltningsberattelse.resultatdisposition_amounts.retained_earnings],
+            ...(isForening
+              ? []
+              : [['Fri överkursfond', data.forvaltningsberattelse.resultatdisposition_amounts.share_premium_reserve] as [string, number]]),
+            ['Årets resultat', data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result],
+            [`Summa till ${meeting}s förfogande`, data.forvaltningsberattelse.resultatdisposition_amounts.total],
+            [isForening ? 'Föreslagen vinstutdelning till medlemmarna' : 'Föreslagen utdelning', -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend],
+            ['Balanseras i ny räkning', data.forvaltningsberattelse.resultatdisposition_amounts.carried_forward],
+          ]
+          const totalIndex = rows.length - 3
+          const carriedIndex = rows.length - 1
+          return rows.map(([label, amount], index) => (
           <View
             key={String(label)}
-            style={index === 3 || index === 5 ? styles.tableRowTotal : styles.tableRow}
+            style={index === totalIndex || index === carriedIndex ? styles.tableRowTotal : styles.tableRow}
           >
             <Text style={styles.colLabel}>{label}</Text>
             <Text style={styles.colAmount}>{fmt(Number(amount))}</Text>
           </View>
-        ))}
+          ))
+        })()}
       </Page>
 
       {/* Resultaträkning — ÅRL post level, no account numbers. */}
@@ -578,10 +613,10 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         <PageChrome data={data} pageLabel="Fastställelseintyg" />
         <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
         <Text style={styles.paragraph}>
-          Undertecknad styrelseledamot, närvarande vid årsstämman, intygar härmed
-          att resultaträkningen och balansräkningen har fastställts på årsstämma
+          Undertecknad styrelseledamot, närvarande vid {meeting}, intygar härmed
+          att resultaträkningen och balansräkningen har fastställts på {meetingNoun}
           den {data.forvaltningsberattelse.agm_date ?? '____________________'} och
-          att årsstämman beslutade om disposition av bolagets resultat i enlighet
+          att {meeting} beslutade om disposition av {entityNoun} resultat i enlighet
           med vad som anges nedan.
         </Text>
         <Text style={styles.paragraph}>
@@ -592,7 +627,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         </Text>
         <Text style={styles.sectionTitle}>Stämmans beslut om resultatdisposition</Text>
         <Text style={styles.paragraph}>
-          {agmDispositionDecision ?? 'Årsstämmans beslut har ännu inte registrerats.'}
+          {agmDispositionDecision ?? `${isForening ? 'Föreningsstämmans' : 'Årsstämmans'} beslut har ännu inte registrerats.`}
         </Text>
         <View style={styles.signatureLine}>
           <View style={styles.signatureSlot}>

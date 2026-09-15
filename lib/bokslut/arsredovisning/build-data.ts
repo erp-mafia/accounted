@@ -13,6 +13,8 @@ import {
 import { buildBrRows, buildRrRows } from './statement-rows'
 import { getNarrative, type NarrativeRow } from './narrative-service'
 import {
+  AKTIEBOLAG_EQUITY_LABELS,
+  EKONOMISK_FORENING_EQUITY_LABELS,
   anyAssetHasComponents,
   buildEquityChangesNote,
   buildK3RedovisningsPrinciper,
@@ -347,11 +349,6 @@ export async function buildArsredovisningData(
   if (entityType !== 'aktiebolag' && entityType !== 'ekonomisk_forening' && entityType !== 'unknown') {
     warnings.push(
       'Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.',
-    )
-  }
-  if (isForening && accountingFramework === 'k3') {
-    warnings.push(
-      'K3-dokumentet för ekonomisk förening använder aktiebolagets uppställning för förändringar i eget kapital: granska insatsposterna manuellt innan inlämning.',
     )
   }
   if (entityType === 'aktiebolag' && accountingFramework === 'k3') {
@@ -1363,14 +1360,22 @@ async function buildK3Noter(
  * rather than invent an unbookable row). First fiscal year falls back to
  * opening = closing - årets resultat.
  */
-function buildK3EquityChangesStatement(
+export function buildK3EquityChangesStatement(
   mapping: K2MappingResult,
 ): { rows: EgenKapitalRow[]; closing_total: number } {
   const cur = (concept: string): number => mapping.br[concept]?.current ?? 0
   const prev = (concept: string): number => mapping.br[concept]?.previous ?? 0
+  // The "capital" column of the roll-forward: aktiekapital for an AB, the
+  // member and subordinated contributions for an ekonomisk förening (ÅRL 3
+  // kap. 10 b §); the remaining bundet posts are "övriga bundna reserver".
+  const isForening = mapping.legalForm === 'ekonomisk_forening'
+  const capitalConcepts = isForening
+    ? ['Medlemsinsatser', 'Forlagsinsatser']
+    : ['Aktiekapital', 'EjRegistreratAktiekapital']
+  const labels = isForening ? EKONOMISK_FORENING_EQUITY_LABELS : AKTIEBOLAG_EQUITY_LABELS
 
   const aretsResultat = cur('AretsResultatEgetKapital')
-  const aktiekapitalClosing = cur('Aktiekapital') + cur('EjRegistreratAktiekapital')
+  const aktiekapitalClosing = capitalConcepts.reduce((sum, concept) => sum + cur(concept), 0)
   const bundnaClosing = mapping.totals.bundetEgetKapital.current - aktiekapitalClosing
   const frittClosing = mapping.totals.frittEgetKapital.current
 
@@ -1379,7 +1384,7 @@ function buildK3EquityChangesStatement(
   let nyemission = 0
   let utdelning = 0
   if (hasPrevious) {
-    const aktiekapitalOpening = prev('Aktiekapital') + prev('EjRegistreratAktiekapital')
+    const aktiekapitalOpening = capitalConcepts.reduce((sum, concept) => sum + prev(concept), 0)
     const bundnaOpening =
       (mapping.totals.bundetEgetKapital.previous ?? 0) - aktiekapitalOpening
     const frittOpening = mapping.totals.frittEgetKapital.previous ?? 0
@@ -1400,9 +1405,12 @@ function buildK3EquityChangesStatement(
       balanserade_vinstmedel: frittClosing - aretsResultat,
     }
   }
-  return buildEquityChangesNote({
-    opening,
-    changes: { nyemission, utdelning, arets_resultat: aretsResultat },
-  })
+  return buildEquityChangesNote(
+    {
+      opening,
+      changes: { nyemission, utdelning, arets_resultat: aretsResultat },
+    },
+    labels,
+  )
 }
 

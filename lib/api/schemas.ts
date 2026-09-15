@@ -272,6 +272,52 @@ function validateAccrualPeriod(
 
 export const EntityTypeSchema = z.enum(ENTITY_TYPES)
 
+// Member register of an ekonomisk förening (EFL 5 kap., 10-11 kap.).
+export const AssociationContributionKindSchema = z.enum(['obligatory', 'over', 'emission', 'forlags'])
+
+export const CreateAssociationMemberSchema = z
+  .object({
+    member_number: z.string().trim().min(1).max(40),
+    name: z.string().trim().min(1).max(200),
+    postal_address: z.string().trim().max(500).nullable().optional(),
+    email: z.string().trim().email().max(254).nullable().optional(),
+    party_id: uuid.nullable().optional(),
+    member_class: z.string().trim().max(60).nullable().optional(),
+    admitted_on: saneIsoDate,
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+
+export const ExitAssociationMemberSchema = z
+  .object({
+    exited_on: saneIsoDate,
+    reason: z.enum(['exit', 'expulsion']).default('exit'),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+
+export const CreateAssociationContributionSchema = z
+  .object({
+    member_id: uuid,
+    kind: AssociationContributionKindSchema,
+    units: z.number().int().min(0).max(1_000_000).default(1),
+    amount: nonNegativeAmount.max(1_000_000_000_000),
+    paid_on: saneIsoDate,
+    journal_entry_id: uuid.nullable().optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+
+export const SettleAssociationContributionSchema = z
+  .object({
+    status: z.enum(['repaid', 'forfeited']),
+    settled_on: saneIsoDate,
+    amount: nonNegativeAmount.max(1_000_000_000_000).optional(),
+    settlement_journal_entry_id: uuid.nullable().optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+
 export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
 
 /**

@@ -25,8 +25,8 @@ import { getCategoryAccountMapping } from '../category-mapping'
 // ============================================================
 
 describe('BOOKING_TEMPLATES data integrity', () => {
-  it('has exactly 86 templates', () => {
-    expect(BOOKING_TEMPLATES).toHaveLength(86)
+  it('has exactly 91 templates', () => {
+    expect(BOOKING_TEMPLATES).toHaveLength(91)
   })
 
   it('scopes templates to legal forms through templateAppliesToForm', () => {
@@ -45,7 +45,16 @@ describe('BOOKING_TEMPLATES data integrity', () => {
       expect(forForm('ekonomisk_forening'), id).not.toContain(id)
     }
     // Member capital (EFL 10-11 kap.) exists only for the ekonomisk förening.
-    for (const id of ['member_contribution_received', 'debenture_contribution_received', 'membership_fee_received']) {
+    for (const id of [
+      'member_contribution_received',
+      'debenture_contribution_received',
+      'membership_fee_received',
+      'member_contribution_emission',
+      'member_contribution_repaid',
+      'debenture_contribution_redeemed',
+      'member_dividend_decided',
+      'member_dividend_paid',
+    ]) {
       expect(forForm('ekonomisk_forening'), id).toContain(id)
       expect(forForm('aktiebolag'), id).not.toContain(id)
       expect(forForm('ideell_forening'), id).not.toContain(id)
@@ -69,6 +78,11 @@ describe('BOOKING_TEMPLATES data integrity', () => {
       requires_review: true,
     })
     expect(getTemplateById('membership_fee_received')?.special_rules_sv).toContain('4.5c')
+    // Equity movements never pass through the income statement (K2/K3).
+    expect(getTemplateById('member_contribution_emission')).toMatchObject({ debit_account: '2091', credit_account: '2087' })
+    expect(getTemplateById('member_dividend_decided')).toMatchObject({ debit_account: '2091', credit_account: '2898' })
+    expect(getTemplateById('member_contribution_repaid')).toMatchObject({ debit_account: '2083', requires_review: true })
+    expect(getTemplateById('debenture_contribution_redeemed')).toMatchObject({ debit_account: '2084', requires_review: true })
   })
 
   it('validateTemplateForEntity names every form a multi-form template accepts', () => {
@@ -199,7 +213,7 @@ describe('getTemplateGroups', () => {
   it('every template is in exactly one group', () => {
     const groups = getTemplateGroups()
     const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(86)
+    expect(allTemplates).toHaveLength(91)
   })
 })
 

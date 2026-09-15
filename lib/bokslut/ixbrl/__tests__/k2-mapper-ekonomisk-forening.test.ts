@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mapTrialBalancesToK2, type TrialBalanceRowLike } from '../k2-mapper'
 import { buildBrRows } from '@/lib/bokslut/arsredovisning/statement-rows'
+import { buildK3EquityChangesStatement } from '@/lib/bokslut/arsredovisning/build-data'
 
 const row = (account: string, name: string, debit: number, credit: number): TrialBalanceRowLike => ({
   account_number: account,
@@ -107,5 +108,21 @@ describe('mapTrialBalancesToK2: ekonomisk förening equity (ÅRL 3 kap. 10 b §)
     expect(res.totals.egetKapitalSkulder.current).toBe(101)
     expect((res.br['Medlemsinsatser']?.current ?? 0) + (res.br['Forlagsinsatser']?.current ?? 0)).toBe(101)
     expect(res.warnings).toEqual([])
+  })
+})
+
+describe('K3 equity roll-forward for an ekonomisk förening', () => {
+  it('uses member capital as the capital column with association labels', () => {
+    const forening = mapTrialBalancesToK2({ full: FULL, preClosing: PRE_CLOSING }, null, {
+      legalForm: 'ekonomisk_forening',
+    })
+    const statement = buildK3EquityChangesStatement(forening)
+    const labels = statement.rows.map((r) => r.label)
+    expect(labels[0]).toBe('Ingående medlemsinsatser och förlagsinsatser')
+    expect(statement.rows[0].amount).toBe(250_000)
+    expect(labels).not.toContain('Ingående aktiekapital')
+    expect(statement.closing_total).toBe(300_000)
+    const ab = buildK3EquityChangesStatement(mapTrialBalancesToK2({ full: FULL, preClosing: PRE_CLOSING }, null))
+    expect(ab.rows[0].label).toBe('Ingående aktiekapital')
   })
 })

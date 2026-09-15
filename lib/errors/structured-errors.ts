@@ -107,6 +107,42 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'En konflikt uppstod. Ladda om sidan och försök igen.',
     message_en: 'Conflict.',
   },
+  // Member register of an ekonomisk förening (EFL 5 kap., 10-11 kap.).
+  ASSOCIATION_FORM_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Medlemsförteckningen finns bara för en ekonomisk förening.',
+    message_en: 'The member register exists only for an ekonomisk förening.',
+  },
+  ASSOCIATION_MEMBER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Medlemmen kunde inte hittas.',
+    message_en: 'Member not found.',
+  },
+  ASSOCIATION_MEMBER_ALREADY_EXITED: {
+    httpStatus: 409,
+    message_sv: 'Medlemmen har redan ett utträdesdatum.',
+    message_en: 'The member already has an exit date.',
+  },
+  ASSOCIATION_CONTRIBUTION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Insatsen kunde inte hittas.',
+    message_en: 'Contribution not found.',
+  },
+  ASSOCIATION_CONTRIBUTION_ALREADY_SETTLED: {
+    httpStatus: 409,
+    message_sv: 'Insatsen är redan återbetald eller förverkad.',
+    message_en: 'The contribution is already repaid or forfeited.',
+  },
+  ASSOCIATION_REPAYMENT_BEFORE_EXIT: {
+    httpStatus: 409,
+    message_sv: 'En insats kan bara återbetalas till en medlem som har utträtt (EFL 10 kap. 11 §). Registrera utträdet först.',
+    message_en: 'A contribution can only be repaid to a member who has left the association (EFL 10 kap. 11 §). Record the exit first.',
+  },
+  ASSOCIATION_REPAYMENT_EXCEEDS_CONTRIBUTION: {
+    httpStatus: 409,
+    message_sv: 'Återbetalningen får inte överstiga den inbetalda insatsen (EFL 10 kap. 11 §).',
+    message_en: 'The repayment may not exceed the paid contribution (EFL 10 kap. 11 §).',
+  },
   RATE_LIMITED: {
     httpStatus: 429,
     message_sv: 'För många förfrågningar. Vänta en stund och försök igen.',

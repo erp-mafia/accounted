@@ -71,6 +71,10 @@ const RETAINED = new Set([
   'accrual_schedule_installments.user_id',
   'accrual_schedules.user_id',
   'assets.user_id',
+  // Member register of an ekonomisk förening (EFL 5 kap.): kept seven years.
+  'association_member_contributions.user_id',
+  'association_member_events.user_id',
+  'association_members.user_id',
   'bank_file_imports.user_id',
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',

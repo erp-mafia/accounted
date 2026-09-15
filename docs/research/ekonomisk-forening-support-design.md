@@ -1,6 +1,6 @@
 # Ekonomisk förening support - research and implementation design
 
-Status: design proposal, 2026-09-15; Phase 1 (legal-form spine behind a flag) implemented on `feat/ekonomisk-forening-foundation`, see "Implementation status" at the end. This is not legal advice. Regulatory facts should be rechecked against the cited primary sources when implementation ships.
+Status: design proposal, 2026-09-15; Phase 1 (legal-form spine behind a flag) implemented on `feat/ekonomisk-forening-foundation` and the member register, K3 and the history preview on `feat/ekonomisk-forening-members`, see "Implementation status" at the end. This is not legal advice. Regulatory facts should be rechecked against the cited primary sources when implementation ships.
 
 ## Executive decision
 
@@ -287,3 +287,18 @@ Deliberately not in this branch (fails closed or manual):
 - Member register, insatsemission, exit repayment ceiling, förlagsinsats redemption, cooperative distributions and gottgörelse (sections 5 and 4): manual bookkeeping against an external register until the member-capital module ships; the templates say so.
 - K3 annual report for the form (the K3 equity statement is AB-shaped), digital filing (no Bolagsverket taxonomy for ekonomiska föreningar in the bundle).
 - Audit workflow beyond the mandatory revisionsberättelse dependency (section 10), and migration of a company with posted history (section 11).
+
+## Implementation status (2026-09-15, member register PR, stacked on the foundation PR)
+
+Shipped:
+
+- Member register (section 5, EFL 5 kap.): `association_members`, `association_member_contributions` (obligatory, över, emission, förlags; paid, repaid, forfeited) and the append-only `association_member_events` in migration `20260915160000`, RLS through `user_company_ids()`, writers stamp their own `user_id`, no DELETE on members or contributions and no UPDATE or DELETE on events (BFL 7 kap. retention applies to the register as räkenskapsinformation). Covered by `association-member-register.pg.test.ts` and classified in the erasure test as retained (the register belongs to the association, EFL 5 kap. 1 §).
+- Service and routes under `/api/associations/*`: members (list, admit, exit or expulsion), contributions (list, record, settle), `reconciliation?fiscal_period_id=` (register sums per kind against 2083, 2087 and 2084 in the trial balance) and `register?format=csv` (the medlemsförteckning extract). Repayment guards: an insats is repaid only after an exit date is recorded (EFL 10 kap. 11 §) and never above what was paid; a förlagsinsats is redeemed without an exit (EFL 11 kap.). The six-month timing, the insatsemission decision and the stadgar-based ceiling stay reviewer decisions.
+- Booking templates for the remaining member-capital events: insatsemission (2091 to 2087), repayment of an insats (2083 to 1930), redemption of a förlagsinsats (2084 to 1930), decided and paid vinstutdelning to members (2091 to 2898, 2898 to 1930). Every template says which register entry or stämma decision it needs.
+- K3 for the form (section 8): the equity roll-forward takes its capital column from `Medlemsinsatser` and `Forlagsinsatser` with association labels; the K3 PDF uses föreningsstämma wording, drops the AB-only "Fri överkursfond" row and prints the ÅRL 6 kap. 3 § member disclosures. `AR-SCOPE-ENTITY-FRAMEWORK` is removed; paper filing stays disabled for K3 as for every form and iXBRL stays off for the form.
+- Company with posted history (section 11): `preview_company_entity_type_change()` (read-only, SECURITY DEFINER, members of the company) and `GET /api/company/entity-type-preview?target=` list the blockers (verifikat, invoices, supplier invoices, mapping rules) and the posted balances on the decision accounts. The remap itself stays a reviewed, per-company migration.
+
+Deliberately not in this PR:
+
+- Register UI, member self-service, KU-reporting of gottgörelse and utdelning, and the automatic INK2S tagging of cooperative distributions (section 4). Bostadsrättsförening follows in its own PR (`docs/research/bostadsrattsforening-support-research.md`).
+

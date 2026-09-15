@@ -215,14 +215,39 @@ export interface EquityChangesStatement {
  * Keeping the shape compatible with the existing EgenKapitalRow type avoids
  * touching the PDF template for additional row variants.
  */
+/**
+ * Row labels per legal form. An aktiebolag's bound capital is aktiekapital
+ * raised by nyemission and reduced by utdelning; an ekonomisk förening's is
+ * medlemsinsatser (with förlagsinsatser) raised by insatser and
+ * insatsemission and reduced by vinstutdelning to members (EFL 10-13 kap.).
+ */
+export interface EquityChangesLabels {
+  openingCapital: string
+  capitalIncrease: string
+  distribution: string
+}
+
+export const AKTIEBOLAG_EQUITY_LABELS: EquityChangesLabels = {
+  openingCapital: 'Ingående aktiekapital',
+  capitalIncrease: 'Nyemission',
+  distribution: 'Utdelning',
+}
+
+export const EKONOMISK_FORENING_EQUITY_LABELS: EquityChangesLabels = {
+  openingCapital: 'Ingående medlemsinsatser och förlagsinsatser',
+  capitalIncrease: 'Inbetalda insatser och insatsemission',
+  distribution: 'Vinstutdelning till medlemmar',
+}
+
 export function buildEquityChangesNote(
   summary: EquityChangesSummary,
+  labels: EquityChangesLabels = AKTIEBOLAG_EQUITY_LABELS,
 ): EquityChangesStatement {
   const { opening, changes } = summary
   const rows: EgenKapitalRow[] = []
 
   // Opening balances
-  rows.push({ label: 'Ingående aktiekapital', amount: opening.aktiekapital })
+  rows.push({ label: labels.openingCapital, amount: opening.aktiekapital })
   rows.push({
     label: 'Ingående övriga bundna reserver',
     amount: opening.bundna_reserver,
@@ -237,12 +262,12 @@ export function buildEquityChangesNote(
 
   // Year movements
   if (changes.nyemission !== 0) {
-    rows.push({ label: 'Nyemission', amount: changes.nyemission })
+    rows.push({ label: labels.capitalIncrease, amount: changes.nyemission })
   }
   if (changes.utdelning !== 0) {
     // Utdelning typically posted as a negative (reduction). The caller is
     // free to pass either sign; we just render what we got.
-    rows.push({ label: 'Utdelning', amount: changes.utdelning })
+    rows.push({ label: labels.distribution, amount: changes.utdelning })
   }
   rows.push({ label: 'Årets resultat', amount: changes.arets_resultat })
 

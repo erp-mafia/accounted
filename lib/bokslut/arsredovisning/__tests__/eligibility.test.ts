@@ -72,7 +72,7 @@ describe('evaluateAnnualReportEligibility', () => {
     expect(result.k2_eligible).toBe(false)
   })
 
-  it('fails closed for an ekonomisk förening under K3 until its equity statement ships', () => {
+  it('accepts an ekonomisk förening under K3 as well (member-capital equity roll-forward)', () => {
     const profile = completeProfile()
     profile.auditor_report_required = true
     const result = evaluateAnnualReportEligibility({
@@ -83,7 +83,8 @@ describe('evaluateAnnualReportEligibility', () => {
       profile,
       metrics,
     })
-    expect(result.issues.map((issue) => issue.code)).toContain('AR-SCOPE-ENTITY-FRAMEWORK')
+    expect(result.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+    expect(result.digital_filing_eligible).toBe(false)
   })
 
   it('keeps the generic scope message for forms that never prepare an årsredovisning here', () => {

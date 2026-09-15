@@ -1022,6 +1022,15 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'counterparty_aliases', file: 'counterparty_aliases.json', orderBy: 'created_at' },
   { name: 'party_decisions', file: 'party_decisions.json', orderBy: 'created_at' },
   { name: 'articles', file: 'articles.json', orderBy: 'created_at' },
+  // Member register of an ekonomisk förening (EFL 5 kap.): the roster, the
+  // insatser per member and the append-only history.
+  { name: 'association_members', file: 'association_members.json', orderBy: 'created_at' },
+  {
+    name: 'association_member_contributions',
+    file: 'association_member_contributions.json',
+    orderBy: 'created_at',
+  },
+  { name: 'association_member_events', file: 'association_member_events.json', orderBy: 'created_at' },
   // Customer invoicing
   { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
   {
