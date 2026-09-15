@@ -50,7 +50,19 @@ interface FileEntry {
    * years, and last year's chart on this year's ledger is the quiet way to a
    * wrong ruta.
    */
-  chart?: { name: string; applied: boolean; treatments: number; format: string | null }
+  chart?: {
+    name: string
+    applied: boolean
+    treatments: number
+    format: string | null
+    /**
+     * Why it could not be used, as an import_notices code. The parser knows
+     * whether the header matched no format, the file carried no codes, or it
+     * held no accounts at all, and a single "kunde inte läsas" throws away the
+     * half that says what to do next.
+     */
+    why: string | null
+  }
 }
 
 type Phase = 'drop' | 'importing' | 'imported'
@@ -87,6 +99,8 @@ function yearsOf(files: FileEntry[]): string[] {
  */
 export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const t = useTranslations('books')
+  // The parser's own complaints live in the import-wide notice namespace.
+  const tn = useTranslations('import_notices')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
   const { state, dispatch, flags, loadFindings } = ctx
   const { settings } = useCompanySettings()
@@ -94,6 +108,13 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const [files, setFiles] = useState<FileEntry[]>([])
   const chartInputRef = useRef<HTMLInputElement | null>(null)
   const chartForFile = useRef<string | null>(null)
+  /**
+   * Which pick is current, per file. file.text() is a promise, so choosing a
+   * second chart for the same year before the first has been read would
+   * otherwise let whichever resolves last decide, and that is not necessarily
+   * the file on screen.
+   */
+  const chartPick = useRef<Record<string, number>>({})
   const [over, setOver] = useState(false)
   const [optsOpen, setOptsOpen] = useState(false)
   const [ibOn, setIbOn] = useState<boolean | null>(null)
@@ -170,8 +191,10 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
    * by the very import being prepared, so there is nothing to restore against.
    */
   async function applyChart(fileId: string, file: File) {
+    const pick = (chartPick.current[fileId] = (chartPick.current[fileId] ?? 0) + 1)
     try {
       const csv = await file.text()
+      if (pick !== chartPick.current[fileId]) return
       setFiles((prev) => prev.map((f) => {
         if (f.id !== fileId || !f.parsed) return f
         const result = applySourceChartCsv(f.parsed.mappings, csv, [])
@@ -183,12 +206,14 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
             applied: result.applied,
             treatments: result.summary.treatmentsApplied,
             format: result.summary.formatLabel,
+            why: result.applied ? null : (result.notices[0]?.code ?? null),
           },
         }
       }))
     } catch {
+      if (pick !== chartPick.current[fileId]) return
       setFiles((prev) => prev.map((f) => (
-        f.id === fileId ? { ...f, chart: { name: file.name, applied: false, treatments: 0, format: null } } : f
+        f.id === fileId ? { ...f, chart: { name: file.name, applied: false, treatments: 0, format: null, why: null } } : f
       )))
     }
   }
@@ -245,7 +270,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     list.push({ text: t('fact_vouchers', { count: totalVouchers }) })
     list.push(unmapped.length === 0 ? { text: t('fact_accounts_known', { count: totalAccounts }) } : { text: t('fact_accounts_new', { count: totalAccounts, created: unmapped.length }) })
     return list
-  }, [ready, company, nYears, totalVouchers, totalAccounts, unmapped.length, t])
+  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, t])
 
   /* ── import ──────────────────────────────────────────────────────── */
   const lines: TheaterLine[] = [
@@ -533,26 +558,26 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                       roughly 47 accounts counted six times. A per-year count
                       is a fact; their sum is a number with no referent. */}
                   {f.status === 'ready' && chartFormat ? (
-                    <>
-                      <span style={{ whiteSpace: 'nowrap' }}>
-                        <button
-                          type="button"
-                          className="imp-change"
-                          style={{ marginLeft: 8 }}
-                          title={f.chart?.applied ? f.chart.name : undefined}
-                          onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
-                        >
-                          {f.chart?.applied
-                            ? shortChartName(f.chart.name)
-                            : f.chart ? t('sie_chart_unread') : t('sie_chart_pick')}
-                        </button>
-                        {f.chart?.applied ? (
-                          <span className="bks-f" style={{ marginLeft: 6, color: 'hsl(var(--muted-foreground))' }}>
-                            {t('sie_chart_count', { count: f.chart.treatments })}
-                          </span>
-                        ) : null}
-                      </span>
-                    </>
+                    <span style={{ whiteSpace: 'nowrap' }}>
+                      <button
+                        type="button"
+                        className="imp-change"
+                        style={{ marginLeft: 8 }}
+                        title={f.chart ? f.chart.name : undefined}
+                        onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
+                      >
+                        {f.chart?.applied
+                          ? shortChartName(f.chart.name)
+                          : f.chart
+                            ? (f.chart.why && tn.has(f.chart.why) ? tn(f.chart.why, { formats: chartFormat.label, format: chartFormat.label, count: 0 }) : t('sie_chart_unread'))
+                            : t('sie_chart_pick')}
+                      </button>
+                      {f.chart?.applied ? (
+                        <span className="bks-f" style={{ marginLeft: 6, color: 'hsl(var(--muted-foreground))' }}>
+                          {t('sie_chart_count', { count: f.chart.treatments })}
+                        </span>
+                      ) : null}
+                    </span>
                   ) : null}
                 </p>
               ))}

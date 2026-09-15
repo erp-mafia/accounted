@@ -432,6 +432,48 @@ describe('applySourceChartCsv', () => {
     expect(accepted[1].vatTreatmentReviewed ?? false).toBe(false)
   })
 
+  it('lets a corrected chart still correct an accepted row', () => {
+    // Reviewed AND required is what applySourceVatCodes reads as "a human
+    // answered this", which it never overwrites. An accept that left the flag
+    // up gave every row that signature, so picking the wrong year's chart and
+    // then fixing it changed nothing: the second file reported zero applied
+    // while the first one's treatments stayed. The real pair again: 3541 is
+    // export in the 2022 chart and EU in the 2023 one.
+    const wrongYear = acceptSourceChartWithoutReview(
+      applySourceChartCsv(
+        [mapping('3541', 'Faktureringsavgifter, EU-land')],
+        csv('True;3541;Faktureringsavgifter, export;36-0%'),
+      ).mappings,
+    )
+    expect(wrongYear[0].defaultVatTreatment).toBe('export_goods')
+
+    const corrected = applySourceChartCsv(
+      wrongYear,
+      csv('True;3541;Faktureringsavgifter, EU-land;35-0%'),
+    )
+    expect(corrected.summary.treatmentsApplied).toBe(1)
+    expect(corrected.mappings[0].defaultVatTreatment).toBe('reverse_charge_eu_goods')
+    expect(corrected.mappings[0].providerVatCode).toBe('35-0%')
+  })
+
+  it('still refuses to touch a row the user answered', () => {
+    // The flag the accept clears is not the one that protects a human answer:
+    // applyVatTreatmentReview leaves requiresVatTreatmentReview as it found it.
+    const answered = applyVatTreatmentReview(
+      acceptSourceChartWithoutReview(
+        applySourceChartCsv(
+          [mapping('3058', 'Försäljn varor EG momsfri')],
+          csv('True;3058;Försäljn varor EG momsfri;35-0%'),
+        ).mappings,
+      ),
+      '3058',
+      'oss',
+      null,
+    )
+    const { mappings } = applySourceChartCsv(answered, csv('True;3058;Försäljn varor EG momsfri;42-0%'))
+    expect(mappings[0].defaultVatTreatment).toBe('oss')
+  })
+
   it('does not touch a remapped row, only identity mappings', () => {
     // 3056 redirected to 3051 takes the target's treatment, not the source
     // account's code: applySourceVatCodes guards this and the guard matters,
