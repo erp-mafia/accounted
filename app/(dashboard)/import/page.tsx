@@ -941,24 +941,39 @@ function SIEImportWizard({
     basAccountsRef.current = basAccounts
   }, [basAccounts])
 
+  // Which pick is the current one. file.text() is a promise, so choosing a
+  // second chart before the first has been read would otherwise let whichever
+  // resolves last win, and that is not necessarily the file on screen.
+  const sourceChartPick = useRef(0)
+
   // One try around the whole body, so this can never reject: the caller is an
   // onChange that discards the promise, and an unhandled rejection would leave
   // the step looking exactly as if no file had been chosen. Reading the file is
   // not the only step that can fail; a format's translate is called in here too.
   const handleSourceChartSelected = useCallback(async (file: File) => {
+    const pick = ++sourceChartPick.current
     try {
       const csvText = await file.text()
+      if (pick !== sourceChartPick.current) return
       const result = applySourceChartCsv(mappingsRef.current, csvText, basAccountsRef.current)
       setMappings(result.mappings)
-      setSourceChart({ summary: result.summary, notices: result.notices })
+      // A file that could not be read leaves the mappings as they were, so the
+      // line above the table has to keep describing the chart still in effect
+      // rather than reverting to the invitation. Only its complaint changes.
+      setSourceChart((prev) =>
+        result.applied || !prev
+          ? { summary: result.summary, notices: result.notices }
+          : { summary: prev.summary, notices: result.notices },
+      )
     } catch (err) {
+      if (pick !== sourceChartPick.current) return
       // Through getErrorMessage like every other catch in this file, so a real
       // cause reaches the user instead of being flattened into one sentence.
       // legacyNotices is the sanctioned bridge for a string that has no
       // structured twin: the message is already mapped, and inventing a code
       // per failure mode of file.text() would name nothing useful.
-      setSourceChart({
-        summary: emptySourceChartSummary(),
+      setSourceChart((prev) => ({
+        summary: prev?.summary ?? emptySourceChartSummary(),
         notices: legacyNotices(
           [
             err instanceof Error
@@ -967,7 +982,7 @@ function SIEImportWizard({
           ],
           'action',
         ),
-      })
+      }))
     }
   }, [])
 

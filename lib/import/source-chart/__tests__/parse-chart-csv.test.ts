@@ -118,6 +118,29 @@ describe('parseSourceChartCsv', () => {
     ])
   })
 
+  it('keeps a line break that lives inside a quoted field', () => {
+    // The parser honours a quoted delimiter, so it has to honour a quoted line
+    // break too: the same field that may hold a semicolon may hold a CR or an
+    // LF, and handling one while tearing the other apart is the harder half to
+    // diagnose. Splitting on newlines before parsing quotes did exactly that.
+    const { accounts, notices } = parseSourceChartCsv(
+      spirisCsv('True;3051;"Försäljning\r\nvaror 25%";05-25%', 'True;3052;Nästa konto;05-12%'),
+    )
+    expect(accounts).toEqual([
+      { accountNumber: '3051', accountName: 'Försäljning\r\nvaror 25%', vatCode: '05-25%', isActive: true },
+      { accountNumber: '3052', accountName: 'Nästa konto', vatCode: '05-12%', isActive: true },
+    ])
+    expect(notices).toEqual([])
+  })
+
+  it('accepts a file with no trailing newline', () => {
+    const { accounts } = parseSourceChartCsv(
+      '\ufeffIsActive;AccountNumber;AccountName;VatCodeAndPercent\r\nTrue;3051;Sista raden;05-25%',
+    )
+    expect(accounts).toHaveLength(1)
+    expect(accounts[0].accountName).toBe('Sista raden')
+  })
+
   it('reports an empty file instead of throwing', () => {
     const empty = { code: 'source_chart_empty_file', severity: 'action' }
     expect(parseSourceChartCsv('')).toEqual({ accounts: [], format: null, notices: [empty] })

@@ -386,6 +386,26 @@ describe('applySourceChartCsv', () => {
     expect(mappings[0].requiresVatTreatmentReview).toBe(true)
   })
 
+  it('says whether the file took effect, so the caller can keep describing the old one', () => {
+    // An unusable file leaves the mappings carrying the previous chart's work.
+    // Without this flag the step reset its summary to nothing and invited a
+    // chart while the table still showed the codes from one.
+    const first = applySourceChartCsv(
+      [mapping('3058', 'Försäljn varor EG momsfri')],
+      csv('True;3058;Försäljn varor EG momsfri;35-0%'),
+    )
+    expect(first.applied).toBe(true)
+
+    const unreadable = applySourceChartCsv(first.mappings, 'Konto;Benämning\r\n3058;Något\r\n')
+    expect(unreadable.applied).toBe(false)
+    expect(unreadable.mappings[0].providerVatCode).toBe('35-0%')
+
+    // A recognised file that carries no codes at all is the same case.
+    const noCodes = applySourceChartCsv(first.mappings, csv('True;3058;Försäljn varor EG momsfri;'))
+    expect(noCodes.applied).toBe(false)
+    expect(noCodes.mappings[0].providerVatCode).toBe('35-0%')
+  })
+
   it('does not touch a remapped row, only identity mappings', () => {
     // 3056 redirected to 3051 takes the target's treatment, not the source
     // account's code: applySourceVatCodes guards this and the guard matters,

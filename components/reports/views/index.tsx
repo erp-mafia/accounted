@@ -2060,7 +2060,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                   </h3>
                   <Table>
                     <TableBody>
-                      {data.rutor.ruta05 > 0 && (
+                      {data.rutor.ruta05 !== 0 && (
                         <VatRutaRow
                           ruta="05"
                           label="Momspliktig försäljning"
@@ -2077,7 +2077,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                           Rutor 07 and 08 have no entry in ACCOUNT_RUTA at all,
                           so they can only arrive through the vmb and
                           rental_voluntary treatments. */}
-                      {data.rutor.ruta06 > 0 && (
+                      {data.rutor.ruta06 !== 0 && (
                         <VatRutaRow
                           ruta="06"
                           label="Momspliktiga uttag"
@@ -2088,7 +2088,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                           period={period}
                         />
                       )}
-                      {data.rutor.ruta07 > 0 && (
+                      {data.rutor.ruta07 !== 0 && (
                         <VatRutaRow
                           ruta="07"
                           label="Vinstmarginalbeskattning"
@@ -2099,7 +2099,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                           period={period}
                         />
                       )}
-                      {data.rutor.ruta08 > 0 && (
+                      {data.rutor.ruta08 !== 0 && (
                         <VatRutaRow
                           ruta="08"
                           label="Hyresinkomster (frivillig skattskyldighet)"
@@ -2182,9 +2182,13 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                       eSKD file, and the screen simply did not say so. Rutor 37
                       and 38 became reachable with triangulation_eu_goods and
                       would have landed in the same silence. */}
-                  {(data.rutor.ruta35 > 0 || data.rutor.ruta36 > 0 || data.rutor.ruta37 > 0 ||
-                    data.rutor.ruta38 > 0 || data.rutor.ruta39 > 0 || data.rutor.ruta40 > 0 ||
-                    data.rutor.ruta41 > 0 || data.rutor.ruta42 > 0) && (
+                  {/* Non-zero, not positive: VatRutaRow hides itself only at exactly
+                      zero, and a base box legitimately goes negative in a period
+                      dominated by credit notes. A section testing > 0 would
+                      swallow the row the box most needs to show. */}
+                  {(data.rutor.ruta35 !== 0 || data.rutor.ruta36 !== 0 || data.rutor.ruta37 !== 0 ||
+                    data.rutor.ruta38 !== 0 || data.rutor.ruta39 !== 0 || data.rutor.ruta40 !== 0 ||
+                    data.rutor.ruta41 !== 0 || data.rutor.ruta42 !== 0) && (
                     <>
                       <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         Försäljning undantagen från moms

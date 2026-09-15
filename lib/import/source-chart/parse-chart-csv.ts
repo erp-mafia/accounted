@@ -57,36 +57,55 @@ export interface ParsedSourceChart {
  * split on that format's delimiter. Column sets are fingerprints, so the first
  * match is the only match in practice.
  */
-function detectFormat(firstLine: string): { format: SourceChartFormat; header: string[] } | null {
+function detectFormat(text: string): { format: SourceChartFormat; header: string[]; rows: string[][] } | null {
   for (const format of SOURCE_CHART_FORMATS) {
-    const header = splitCsvLine(firstLine, format.delimiter).map((h) => h.trim())
+    const records = splitCsvRecords(text, format.delimiter)
+    if (records.length === 0) continue
+    const header = records[0].map((h) => h.trim())
     const { accountNumber, accountName } = format.columns
     if (header.includes(accountNumber) && header.includes(accountName)) {
-      return { format, header }
+      return { format, header, rows: records.slice(1) }
     }
   }
   return null
 }
 
 /**
- * Split one CSV line on semicolons, honouring double-quoted fields.
+ * Split the whole file into records, honouring double-quoted fields.
  *
  * Deliberately small rather than a dependency: the only quoting this format
  * uses is a field wrapped in double quotes, with a doubled quote for a literal
  * one. Account names carrying a semicolon are the case that makes a plain
  * split wrong.
+ *
+ * Records, not lines. Splitting the text on newlines first and parsing quotes
+ * afterwards honours a quoted delimiter but not a quoted line break, which is
+ * half a guarantee: the same field that may hold a semicolon may hold a CR or
+ * LF, and a parser that handles one and silently tears the other apart is
+ * harder to diagnose than one that handles neither. CR, LF and CRLF all end a
+ * record outside quotes and are all kept verbatim inside them.
  */
-function splitCsvLine(line: string, delimiter: string): string[] {
-  const fields: string[] = []
+function splitCsvRecords(text: string, delimiter: string): string[][] {
+  const records: string[][] = []
+  let fields: string[] = []
   let field = ''
   let inQuotes = false
 
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i]
+  const endField = () => { fields.push(field); field = '' }
+  const endRecord = () => {
+    endField()
+    // A trailing newline must not manufacture an empty record, and neither
+    // must a blank line between rows.
+    if (fields.some((f) => f.trim() !== '')) records.push(fields)
+    fields = []
+  }
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
     if (inQuotes) {
       if (char !== '"') {
         field += char
-      } else if (line[i + 1] === '"') {
+      } else if (text[i + 1] === '"') {
         field += '"'
         i++
       } else {
@@ -99,14 +118,18 @@ function splitCsvLine(line: string, delimiter: string): string[] {
       continue
     }
     if (char === delimiter) {
-      fields.push(field)
-      field = ''
+      endField()
+      continue
+    }
+    if (char === '\r' || char === '\n') {
+      if (char === '\r' && text[i + 1] === '\n') i++
+      endRecord()
       continue
     }
     field += char
   }
-  fields.push(field)
-  return fields
+  if (field !== '' || fields.length > 0) endRecord()
+  return records
 }
 
 /** True for the spellings Spiris writes into a boolean column. */
@@ -120,8 +143,7 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
   // Strip the BOM before anything reads the first header, or the first column
   // is named "﻿IsActive" and never matches.
   const text = content.replace(/^﻿/, '')
-  const lines = text.split(/\r\n|\n|\r/).filter((line) => line.trim() !== '')
-  if (lines.length === 0) {
+  if (text.trim() === '') {
     return {
       accounts: [],
       format: null,
@@ -129,7 +151,7 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
     }
   }
 
-  const detected = detectFormat(lines[0])
+  const detected = detectFormat(text)
   if (!detected) {
     // Name what is supported, not what the file lacks. A file that fails here
     // is far more likely to be a correct chart from a system this does not
@@ -143,7 +165,7 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
     return { accounts: [], format: null, notices }
   }
 
-  const { format, header } = detected
+  const { format, header, rows } = detected
   const columnOf = (name: string | undefined) => (name === undefined ? -1 : header.indexOf(name))
 
   const numberAt = columnOf(format.columns.accountNumber)
@@ -161,8 +183,7 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
   const seen = new Set<string>()
   let malformed = 0
 
-  for (let i = 1; i < lines.length; i++) {
-    const fields = splitCsvLine(lines[i], format.delimiter)
+  for (const fields of rows) {
     const accountNumber = (fields[numberAt] ?? '').trim()
     // The shared BAS rule, not a local regex: lib/invariants/account-number.ts
     // exists because this one was written out at twenty sites. A chart row that

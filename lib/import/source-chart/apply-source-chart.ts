@@ -71,6 +71,14 @@ export function emptySourceChartSummary(): SourceChartSummary {
 export interface SourceChartResult {
   mappings: AccountMapping[]
   /**
+   * Whether this file took effect. False when it could not be read at all, in
+   * which case the mappings still carry whatever an earlier chart did and the
+   * caller must keep describing THAT one: a summary reset to nothing would
+   * have the line above the table invite a chart while the table still shows
+   * the codes from one.
+   */
+  applied: boolean
+  /**
    * Everything this file wants to say, in the shape ImportNotices renders:
    * one ochre sentence, the rest folded, the statistics behind the info
    * tooltip. The import already had that system; a second one beside it is
@@ -153,6 +161,7 @@ export function applySourceChartCsv(
   if (!format || codesByAccount.size === 0) {
     return {
       mappings,
+      applied: false,
       notices: accounts.length > 0
         ? [...notices, makeNotice('source_chart_no_codes', 'action')]
         : notices,
@@ -229,6 +238,7 @@ export function applySourceChartCsv(
   // beside it. Two sentences of one thought, both on screen.
   return {
     mappings: applied,
+    applied: true,
     notices,
     summary: {
       ...summaryBase,
