@@ -221,15 +221,6 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     list.push({ text: t('fact_years', { count: nYears }) })
     list.push({ text: t('fact_vouchers', { count: totalVouchers }) })
     list.push(unmapped.length === 0 ? { text: t('fact_accounts_known', { count: totalAccounts }) } : { text: t('fact_accounts_new', { count: totalAccounts, created: unmapped.length }) })
-    // What the per-file numbers mean, said once. The rows carry the counts;
-    // this names the system they came from and spares six repetitions of it.
-    const charted = ready.filter((f) => f.chart?.applied)
-    if (charted.length) {
-      list.push({ text: t('fact_chart', {
-        count: charted.reduce((sum, f) => sum + (f.chart?.treatments ?? 0), 0),
-        format: charted[0].chart?.format ?? '',
-      }) })
-    }
     return list
   }, [ready, company, nYears, totalVouchers, totalAccounts, unmapped.length, t])
 
@@ -512,21 +503,28 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                     </span>
                   ) : null}
                   {f.status === 'error' ? <span className="bks-f is-warn" style={{ marginLeft: 8 }}>{f.error}</span> : null}
-                  {/* The row names the chart it is holding, not the count.
-                      With one file a count merely repeated the facts line's
-                      own total, and "42 momskoder" alone says neither where
-                      from nor what to do about it. The filename says the one
-                      thing that can actually go wrong: a chart from the wrong
-                      fiscal year looks identical until its codes land. */}
+                  {/* Chart first, then what it did to this year. Both belong
+                      on the row and neither belongs in the facts line: the
+                      counts do not add up across years. The same 47 accounts
+                      recur in every chart, so a total of 267 would describe
+                      roughly 47 accounts counted six times. A per-year count
+                      is a fact; their sum is a number with no referent. */}
                   {f.status === 'ready' ? (
-                    <button
-                      type="button"
-                      className="imp-change"
-                      style={{ marginLeft: 8 }}
-                      onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
-                    >
-                      {f.chart?.applied ? f.chart.name : f.chart ? t('sie_chart_unread') : t('sie_chart_pick')}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="imp-change"
+                        style={{ marginLeft: 8 }}
+                        onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
+                      >
+                        {f.chart?.applied ? f.chart.name : f.chart ? t('sie_chart_unread') : t('sie_chart_pick')}
+                      </button>
+                      {f.chart?.applied ? (
+                        <span className="bks-f" style={{ marginLeft: 6, color: 'hsl(var(--muted-foreground))' }}>
+                          {t('sie_chart_count', { count: f.chart.treatments })}
+                        </span>
+                      ) : null}
+                    </>
                   ) : null}
                 </p>
               ))}

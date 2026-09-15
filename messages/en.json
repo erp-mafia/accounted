@@ -9644,7 +9644,7 @@
     "sie_drop_sub": "SIE 4 from any program, one or several years. Or click.",
     "sie_reading": "reading …",
     "sie_replace": "Replace",
-    "fact_chart": "{count, plural, one {# VAT code} other {# VAT codes}} from the chart ({format})",
+    "sie_chart_count": "{count, plural, one {# VAT code} other {# VAT codes}}",
     "sie_chart_pick": "Pick chart",
     "sie_chart_why": "Do you have the charts of accounts from your bookkeeping system? Pick one per year to fill in the VAT codes.",
     "sie_chart_unread": "The chart could not be read; VAT codes are set in the review as usual.",
