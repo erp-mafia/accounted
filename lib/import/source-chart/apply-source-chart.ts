@@ -183,13 +183,30 @@ export function applySourceChartCsv(
   // overriding that would replace a deliberate null with a sats the trade does
   // not have: a vmb account coded 07-25% would take 25 % although
   // vinstmarginalbeskattning has no single sats.
-  const applied = translated.map((mapping) => {
+  const applied = translated.map((mapping, i) => {
+    // Only rows THIS file named. A providerVatCode left behind by an earlier
+    // file outlives that file on a row the user has since answered, and acting
+    // on it let a second chart that does not even mention the account reset a
+    // rate the user had deliberately changed.
+    if (mapping === base[i]) return mapping
     const treatment = mapping.providerVatTreatment
     if (!mapping.providerVatCode || !treatment) return mapping
     if (!vatRateComesFromLabel(treatment, Number(mapping.sourceAccount.charAt(0)))) return mapping
     const stated = format.rateFromCode(mapping.providerVatCode)
     if (stated === null || stated === mapping.defaultVatRate) return mapping
-    return { ...mapping, defaultVatRate: stated }
+    // Same ownership rule as the treatment above: a rate change on a row the
+    // company chart had settled is news the user has to see, not something to
+    // apply in silence. defaultVatRate is what buckets a reverse-charge row in
+    // the rc-basis check, so a quiet change moves the FK004 reconciliation.
+    return mapping.vatTreatmentReviewed
+      ? {
+          ...mapping,
+          defaultVatRate: stated,
+          vatTreatmentSuggested: true,
+          vatTreatmentReviewed: false,
+          requiresVatTreatmentReview: true,
+        }
+      : { ...mapping, defaultVatRate: stated }
   })
 
   // Counted over the rows THIS file changed, not over everything carrying a

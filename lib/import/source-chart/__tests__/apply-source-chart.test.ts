@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { applySourceChartCsv } from '../apply-source-chart'
-import { enrichAccountMappingsWithVat } from '@/lib/import/account-vat-treatment'
+import {
+  applyVatTreatmentReview,
+  enrichAccountMappingsWithVat,
+} from '@/lib/import/account-vat-treatment'
 import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
 import { suggestVatTreatment } from '@/lib/vat/account-vat-treatment'
 import type { AccountMapping } from '@/lib/import/types'
@@ -353,6 +356,34 @@ describe('applySourceChartCsv', () => {
       // The box covers 25, 12 and 6 %, so the code's rate beats the default.
       expect(mappings[0].defaultVatRate).toBe(0.12)
     }
+  })
+
+  it('will not let a stale code from an earlier file reset a rate the user chose', () => {
+    // The rate override keys off providerVatCode, which outlives the file that
+    // set it. Without the identity guard a second chart that does not even
+    // mention the account put 25 % back over the 6 % the user had picked, on a
+    // row still marked reviewed, so nothing showed it.
+    const first = applySourceChartCsv([mapping('4515', 'Inköp varor EU')], csv('True;4515;Inköp varor EU;20-25%'))
+    const confirmed = applyVatTreatmentReview(first.mappings, '4515', 'reverse_charge_eu_goods', 0.06)
+
+    const { mappings } = applySourceChartCsv(confirmed, csv('True;9999;Annat konto;05-25%'))
+    expect(mappings[0].defaultVatRate).toBe(0.06)
+    expect(mappings[0].vatTreatmentReviewed).toBe(true)
+  })
+
+  it('re-opens a settled row when the file changes only its rate', () => {
+    // Same news as a changed treatment, and the same rule applies: seen, not
+    // silent. defaultVatRate is what buckets a reverse-charge row per sats in
+    // the rc-basis check, so a quiet change moves the FK004 reconciliation.
+    const chart = [{ account_number: '4515', default_vat_treatment: 'reverse_charge_eu_goods', default_vat_rate: 0.25 }] as never
+    const settled = enrichAccountMappingsWithVat([mapping('4515', 'Inköp varor EU')], chart)
+    expect(settled[0].vatTreatmentReviewed).toBe(true)
+
+    const { mappings } = applySourceChartCsv(settled, csv('True;4515;Inköp varor EU;20-12%'), chart)
+    expect(mappings[0].defaultVatTreatment).toBe('reverse_charge_eu_goods')
+    expect(mappings[0].defaultVatRate).toBe(0.12)
+    expect(mappings[0].vatTreatmentReviewed).toBe(false)
+    expect(mappings[0].requiresVatTreatmentReview).toBe(true)
   })
 
   it('does not touch a remapped row, only identity mappings', () => {
