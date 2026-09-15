@@ -7,11 +7,13 @@ vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn(() => ({ tag: 'service' })) }))
 vi.mock('@/lib/documents/classify/classify', () => ({ recordHumanClassification: vi.fn() }))
+vi.mock('@/lib/documents/jobs/queue', () => ({ enqueueDocumentJob: vi.fn() }))
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { recordHumanClassification } from '@/lib/documents/classify/classify'
+import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 
 const DOC = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const call = (body: unknown) =>
@@ -39,11 +41,13 @@ describe('POST /api/documents/[id]/classification', () => {
     expect(status).toBe(200)
     expect((body as { data: Record<string, unknown> }).data).toEqual({ document_id: DOC, doc_type: 'agreement.loan' })
     expect(recordHumanClassification).toHaveBeenCalledWith({ tag: 'service' }, DOC, 'user-1', { docType: 'agreement.loan', relevance: 'relevant' })
+    expect(enqueueDocumentJob).toHaveBeenCalledWith({ tag: 'service' }, 'company-1', DOC, 'extract')
   })
 
   it('returns 404 for a document that is not the company\'s', async () => {
     enqueue({ data: null, error: null })
     expect((await parseJsonResponse(await call({ doc_type: 'receipt' }))).status).toBe(404)
     expect(recordHumanClassification).not.toHaveBeenCalled()
+    expect(enqueueDocumentJob).not.toHaveBeenCalled()
   })
 })

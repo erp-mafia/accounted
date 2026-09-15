@@ -1100,6 +1100,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Arkiv: what each archived document is and whether it belongs to the
   // company, the model's reading and every person's decision, oldest first.
   { name: 'document_classifications', file: 'document_classifications.json', orderBy: 'created_at' },
+  // Arkiv: the typed record of each document, every version including a
+  // person's corrections, and the extraction runs and reviews behind them.
+  { name: 'document_extractions', file: 'document_extractions.json', orderBy: 'created_at' },
+  { name: 'activities', file: 'activities.json', orderBy: 'started_at' },
   // Receipts
   { name: 'receipts', file: 'receipts.json', orderBy: 'receipt_date' },
   // `receipts` has no exchange_rate column, so only the currency is copied:
@@ -1267,6 +1271,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   // transcription). Derived from the originals that ship under dokument/ and
   // re-readable from them, so it is not räkenskapsinformation of its own.
   document_pages: 'page text derived from the originals in dokument/; re-readable',
+  document_jobs: 'pipeline queue state (read, classify and extract jobs); no bookkeeping content',
   // Verification metadata ABOUT räkenskapsinformation, not räkenskapsinformation
   // itself: one row per nightly SHA-256 recompute of an archived document
   // (migration 20260901130000). The documents ship under dokument/ with their

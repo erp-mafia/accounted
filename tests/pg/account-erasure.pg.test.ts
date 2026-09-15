@@ -79,6 +79,7 @@ const RETAINED = new Set([
   'document_attachments.uploaded_by',
   'document_attachments.user_id',
   'document_classifications.decided_by_user_id', // Who settled a document's type or relevance.
+  'agents.user_id', // The person behind a review of an Arkiv record.
   'event_log.user_id',
   'fiscal_period_tax_adjustments.user_id',
   'fiscal_periods.user_id',

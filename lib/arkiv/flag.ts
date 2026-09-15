@@ -6,13 +6,18 @@
  * means nobody, so a deploy never starts transcribing every archive at once.
  * Same shape as RECEIPT_HUNT_COMPANY_IDS.
  */
-export function isArkivEnabled(companyId: string | null | undefined): boolean {
+export function arkivRollout(): 'all' | string[] {
   const raw = process.env.ARKIV_COMPANY_IDS?.trim()
-  if (!raw || !companyId) return false
-  if (raw === '*') return true
+  if (!raw) return []
+  if (raw === '*') return 'all'
   return raw
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-    .includes(companyId)
+}
+
+export function isArkivEnabled(companyId: string | null | undefined): boolean {
+  if (!companyId) return false
+  const rollout = arkivRollout()
+  return rollout === 'all' || rollout.includes(companyId)
 }

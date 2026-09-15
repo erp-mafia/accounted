@@ -260,7 +260,8 @@ export default function AttGoraSection({
     counts.verifikat_missing_document > 0 ||
     counts.pending_operations > 0 ||
     counts.document_relevance > 0 ||
-    counts.document_unclassified > 0
+    counts.document_unclassified > 0 ||
+    counts.document_field_review > 0
   const bevakaRows =
     counts.overdue_invoice > 0 ||
     counts.deadline_action > 0 ||
@@ -523,6 +524,15 @@ export default function AttGoraSection({
                         icon={FileQuestion}
                         label={t('row_document_unclassified')}
                         count={counts.document_unclassified}
+                      />
+                    )}
+                    {counts.document_field_review > 0 && (
+                      <WorklistRow
+                        href="/arkiv/granska#falt"
+                        icon={FileQuestion}
+                        label={t('row_document_field_review')}
+                        detail={t('row_document_field_review_detail')}
+                        count={counts.document_field_review}
                       />
                     )}
                   </div>

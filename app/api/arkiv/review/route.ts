@@ -5,9 +5,10 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/arkiv/review
- * The two review queues of Arkiv phase 2 for the active company: documents
- * held at the door ("rör det här bolaget?") and admitted documents whose
- * type the model could not settle. 404 outside the rollout.
+ * The review queues of Arkiv for the active company: documents held at the
+ * door ("rör det här bolaget?"), admitted documents whose type the model
+ * could not settle, and records with fields a person must confirm (phase 3:
+ * the two readings disagreed or a check failed). 404 outside the rollout.
  */
 export interface ReviewDocument {
   document_id: string
@@ -21,6 +22,15 @@ export interface ReviewDocument {
   addressed_to: string | null
   summary: string | null
   suggested_type: string | null
+}
+
+export interface FieldReviewDocument {
+  document_id: string
+  file_name: string
+  created_at: string
+  doc_type: string | null
+  schema_type: string
+  review_fields: string[]
 }
 
 export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
@@ -65,7 +75,35 @@ export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
       .map((d) => toReview(d, byDoc.get(d.id as string)))
       .filter((r) => r.relevance === 'relevant')
   }
-  return NextResponse.json({ data: { held: heldRows, unclassified: unclassifiedRows } })
+  const { data: pending, error: pendingError } = await ctx.supabase
+    .from('document_extractions')
+    .select('document_id, schema_type, review_fields')
+    .eq('company_id', ctx.companyId)
+    .eq('is_current', true)
+    .not('review_fields', 'eq', '{}')
+    .limit(200)
+  if (pendingError) return NextResponse.json({ error: getErrorMessage(pendingError) }, { status: 500 })
+  let fieldRows: FieldReviewDocument[] = []
+  const pendingList = (pending ?? []) as Array<{ document_id: string; schema_type: string; review_fields: string[] }>
+  if (pendingList.length) {
+    const { data: docs, error: docsError } = await ctx.supabase
+      .from('document_attachments')
+      .select('id, file_name, created_at, doc_type')
+      .eq('company_id', ctx.companyId)
+      .in('id', pendingList.map((p) => p.document_id))
+      .order('created_at', { ascending: false })
+    if (docsError) return NextResponse.json({ error: getErrorMessage(docsError) }, { status: 500 })
+    const byId = new Map(pendingList.map((p) => [p.document_id, p]))
+    fieldRows = ((docs ?? []) as Array<{ id: string; file_name: string; created_at: string; doc_type: string | null }>).map((d) => ({
+      document_id: d.id,
+      file_name: d.file_name,
+      created_at: d.created_at,
+      doc_type: d.doc_type,
+      schema_type: byId.get(d.id)?.schema_type ?? 'generic',
+      review_fields: byId.get(d.id)?.review_fields ?? [],
+    }))
+  }
+  return NextResponse.json({ data: { held: heldRows, unclassified: unclassifiedRows, fields: fieldRows } })
 })
 
 function toReview(d: Record<string, unknown>, c: Record<string, unknown> | undefined): ReviewDocument {

@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
 import { deleteDocument } from '@/lib/core/documents/document-service'
 import { recordHumanClassification } from '@/lib/documents/classify/classify'
+import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { isDocType } from '@/lib/documents/classify/taxonomy'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -12,8 +13,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 /**
  * POST /api/documents/[id]/admission  { decision: 'admit' | 'discard', reason? }
  * The answer to "Är du säker på att det här rör bolaget?". Admit records a
- * human classification (relevance relevant, keeping the model's type) and
- * starts retention; discard removes the held file, which never became
+ * human classification (relevance relevant, keeping the model's type),
+ * starts retention and queues the extraction; discard removes the held file, which never became
  * räkenskapsinformation. Only held documents can be discarded here.
  */
 const bodySchema = z.object({
@@ -48,6 +49,7 @@ export const POST = withRouteContext('document.admission', async (request, ctx, 
   const docType = isDocType(row.doc_type) ? row.doc_type : 'other'
   const out = await recordHumanClassification(service, id, ctx.user.id, { docType, relevance: 'relevant', reason: parsed.data.reason })
   if (out.status !== 'classified') return NextResponse.json({ error: 'reason' in out ? out.reason : 'Kunde inte spara.' }, { status: 500 })
+  await enqueueDocumentJob(service, ctx.companyId, id, 'extract')
   ctx.log.info('held document admitted', { doc: id, type: docType })
   return NextResponse.json({ data: { document_id: id, decision: 'admit', doc_type: docType } })
 })
