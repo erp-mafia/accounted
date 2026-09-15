@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
@@ -17,6 +18,11 @@ export interface EntryPreviewLine {
 export interface EntryPreview {
   description: string
   lines: EntryPreviewLine[]
+  // Booked runs only: the posted verifikat this entry IS, so its voucher label
+  // can be a link to it. The label used to be concatenated into `description`,
+  // which named a verifikat the reader had no way to open.
+  journal_entry_id?: string | null
+  voucher?: string | null
   // The preview route's balance assertion (absent on booked runs, whose
   // vouchers the DB trigger already proved balanced). False means the
   // projection and the booking rules have diverged: surfaced, never hidden.
@@ -75,7 +81,18 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating }: Run
         <div className="space-y-6">
           {entries.map((entry, idx) => (
             <div key={idx}>
-              <h4 className="text-sm font-medium">{entry.description}</h4>
+              <div className="flex items-baseline justify-between gap-3">
+                <h4 className="text-sm font-medium">{entry.description}</h4>
+                {entry.journal_entry_id && entry.voucher && (
+                  <Link
+                    href={`/bookkeeping/${entry.journal_entry_id}`}
+                    aria-label={t('journal_open_voucher', { voucher: entry.voucher })}
+                    className="shrink-0 text-[13px] tabular-nums text-muted-foreground transition-colors duration-150 hover:text-foreground hover:underline"
+                  >
+                    {entry.voucher}
+                  </Link>
+                )}
+              </div>
               {entry.balanced === false && (
                 <p className="text-sm text-destructive" role="alert">
                   {t('journal_preview_unbalanced', { amount: formatCurrency(entry.difference ?? 0) })}

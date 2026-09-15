@@ -28,7 +28,22 @@ export const POST = withRouteContext('sie_import.execute', async (request,ctx) =
     const buffer = await file.arrayBuffer()
     const content = decodeBuffer(buffer,detectEncoding(buffer))
     let mappings
-    if (form.get('mappings')) mappings = SIEJobMappingsSchema.parse(JSON.parse(String(form.get('mappings'))))
+    if (form.get('mappings')) {
+      const supplied: unknown = JSON.parse(String(form.get('mappings')))
+      const checked = SIEJobMappingsSchema.safeParse(supplied)
+      if (!checked.success) {
+        return errorResponse(checked.error, log, { requestId, details: {
+          issues: checked.error.issues.map(issue => ({
+            field: issue.path.join('.'), message: issue.message, code: issue.code,
+            ...(Array.isArray(supplied) && typeof issue.path[0] === 'number' &&
+              typeof supplied[issue.path[0]]?.sourceAccount === 'string' &&
+              /^\d{1,40}$/.test(supplied[issue.path[0]].sourceAccount)
+              ? { sourceAccount: supplied[issue.path[0]].sourceAccount } : {}),
+          })),
+        } })
+      }
+      mappings = checked.data
+    }
     else {
       const stored = await fetchAllRows<SIEAccountMappingRecord>(({from,to}) => supabase.from('sie_account_mappings')
         .select('*').eq('company_id',companyId).order('source_account').range(from,to))

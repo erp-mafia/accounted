@@ -431,12 +431,69 @@ export interface DownloadedMedia {
   fileSize: number
 }
 
+export type MediaLookupResult =
+  | { ok: true; url: string; mimeType: string | null; fileSize: number | null }
+  | { ok: false; status: number; message: string }
+
+/**
+ * Resolve a media id to a fresh short-lived download URL: the lookup half of
+ * downloadMedia, exported so a caller can ASK whether Meta still serves a file
+ * instead of assuming it from the file's age. Meta answered 400 for an 11-day
+ * old media id in #2363, so no retention constant can decide this.
+ *
+ * A non-2xx answer comes back as a VALUE, not a throw, because the two cases
+ * are different decisions: a 400/404 means the file is gone for good
+ * (isMediaGone), while a 429/5xx means Meta is unwell and the same id may
+ * resolve on the next pass. Transport failures (timeout, reset) and missing
+ * config still throw: they say nothing about the file.
+ */
+export async function lookupMedia(mediaId: string): Promise<MediaLookupResult> {
+  const response = await fetchWithTimeout(
+    `${GRAPH_BASE}/${encodeURIComponent(mediaId)}?phone_number_id=${encodeURIComponent(getPhoneNumberId())}`,
+    { method: 'GET', headers: { Authorization: `Bearer ${getAccessToken()}` } },
+    { timeoutMs: MEDIA_LOOKUP_TIMEOUT_MS, description: 'WhatsApp media lookup' },
+  )
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      message: `Media lookup failed (${response.status})`,
+    }
+  }
+  const body = (await response.json().catch(() => null)) as {
+    url?: string
+    mime_type?: string
+    file_size?: number
+  } | null
+  if (!body?.url) {
+    return { ok: false, status: response.status, message: 'Media lookup returned no download URL' }
+  }
+  return {
+    ok: true,
+    url: body.url,
+    mimeType: body.mime_type ?? null,
+    fileSize: typeof body.file_size === 'number' ? body.file_size : null,
+  }
+}
+
+/**
+ * Does this lookup status mean the FILE is gone, rather than that Meta could
+ * not answer? Meta returns 400 for a media id it no longer serves (observed on
+ * prod for every parked file in #2363, the youngest 11 days old) and 404 for
+ * one it never had. Everything else, 403 and 401 included, is about our
+ * credentials or Meta's health: retryable, never a reason to discard a
+ * receipt the sender believes is safe with us.
+ */
+export function isMediaGone(status: number): boolean {
+  return status === 400 || status === 404
+}
+
 /**
  * Download a media item: resolve the media id to a fresh short-lived URL
- * (TTL ~5 min, re-resolvable for days, so retries work), then fetch the bytes
- * with the same Bearer token. Enforces MAX_MEDIA_BYTES twice: via the
- * content-length header before reading, and while streaming the body (a
- * missing or lying header must not let an oversized file through).
+ * (TTL ~5 min, re-resolvable while Meta still serves the id, so retries work),
+ * then fetch the bytes with the same Bearer token. Enforces MAX_MEDIA_BYTES
+ * twice: via the content-length header before reading, and while streaming the
+ * body (a missing or lying header must not let an oversized file through).
  *
  * Throws GraphApiError / TimeoutError: the caller owns error handling here,
  * unlike sends, because a failed download IS a failed intake.
@@ -444,23 +501,11 @@ export interface DownloadedMedia {
 export async function downloadMedia(mediaId: string): Promise<DownloadedMedia> {
   const token = getAccessToken()
 
-  const lookupResponse = await fetchWithTimeout(
-    `${GRAPH_BASE}/${encodeURIComponent(mediaId)}?phone_number_id=${encodeURIComponent(getPhoneNumberId())}`,
-    { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
-    { timeoutMs: MEDIA_LOOKUP_TIMEOUT_MS, description: 'WhatsApp media lookup' },
-  )
-  if (!lookupResponse.ok) {
-    throw new GraphApiError(`Media lookup failed (${lookupResponse.status})`, lookupResponse.status)
+  const lookup = await lookupMedia(mediaId)
+  if (!lookup.ok) {
+    throw new GraphApiError(lookup.message, lookup.status)
   }
-  const lookup = (await lookupResponse.json().catch(() => null)) as {
-    url?: string
-    mime_type?: string
-    file_size?: number
-  } | null
-  if (!lookup?.url) {
-    throw new GraphApiError('Media lookup returned no download URL')
-  }
-  if (typeof lookup.file_size === 'number' && lookup.file_size > MAX_MEDIA_BYTES) {
+  if (lookup.fileSize !== null && lookup.fileSize > MAX_MEDIA_BYTES) {
     throw new GraphApiError('Media exceeds the size limit')
   }
 
@@ -508,7 +553,7 @@ export async function downloadMedia(mediaId: string): Promise<DownloadedMedia> {
 
   return {
     buffer,
-    mime: lookup.mime_type ?? download.headers.get('content-type'),
+    mime: lookup.mimeType ?? download.headers.get('content-type'),
     fileSize: total,
   }
 }

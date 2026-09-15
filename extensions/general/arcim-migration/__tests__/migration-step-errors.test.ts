@@ -36,12 +36,14 @@ vi.mock('@/lib/providers/provider-data-fetcher', () => ({
   fetchCompanyInfoDirect: vi.fn(),
   fetchCustomersDirect: vi.fn(),
   fetchSuppliersDirect: vi.fn(),
-  // The orchestrator consumes the HYDRATED variants: mocking only the
-  // Direct ones left the invoice steps calling undefined, which the step's
-  // own try/catch swallowed into a recorded error, so the tests stayed green
-  // while exercising nothing.
-  fetchSalesInvoicesHydrated: vi.fn(),
-  fetchSupplierInvoicesHydrated: vi.fn(),
+  // The invoice steps list with the Direct variants and then hydrate the
+  // subset they can insert: both halves must be mocked, or the step calls
+  // undefined and its own try/catch swallows that into a recorded error, so
+  // the tests stay green while exercising nothing.
+  fetchSalesInvoicesDirect: vi.fn(),
+  fetchSupplierInvoicesDirect: vi.fn(),
+  hydrateSalesInvoices: vi.fn(),
+  hydrateSupplierInvoices: vi.fn(),
 }))
 
 vi.mock('@/lib/invoices/bulk-reconcile-supplier-vouchers', () => ({
@@ -57,7 +59,8 @@ import {
   fetchCompanyInfoDirect,
   fetchCustomersDirect,
   fetchSuppliersDirect,
-  fetchSalesInvoicesHydrated,
+  fetchSalesInvoicesDirect,
+  hydrateSalesInvoices,
 } from '@/lib/providers/provider-data-fetcher'
 import { FortnoxApiError } from '@/lib/providers/fortnox/client'
 
@@ -152,9 +155,10 @@ describe('executeMigration: step error surfacing', () => {
     ;(fetchSuppliersDirect as Mock).mockRejectedValue(
       new FortnoxApiError('Fortnox API error: 403', 403, FORTNOX_SUPPLIER_BODY),
     )
-    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({
+    ;(fetchSalesInvoicesDirect as Mock).mockResolvedValue([])
+    ;(hydrateSalesInvoices as Mock).mockResolvedValue({
       invoices: [],
-      hydration: undefined,
+      hydration: { needed: 0, hydrated: 0, failed: 0, skippedForBudget: 0 },
       unhydratedIds: new Set<string>(),
     })
 
@@ -169,7 +173,7 @@ describe('executeMigration: step error surfacing', () => {
     expect(results.stepErrors![0].message).toContain('Saknar behörighet för leverantörsregister.')
     expect(results.stepErrors![0].message).not.toContain('Återanslut')
     // The steps after the closed register still ran.
-    expect(fetchSalesInvoicesHydrated).toHaveBeenCalledTimes(1)
+    expect(fetchSalesInvoicesDirect).toHaveBeenCalledTimes(1)
     expect(results.salesInvoices).toBeDefined()
   })
 

@@ -10,12 +10,24 @@ import { resolveOAuthOrigin } from '@/lib/auth/oauth-flows'
 import { isZettleConfigured } from './lib/credentials'
 import { buildAuthorizeUrl, disconnectApplication, refreshAccessToken } from './lib/oauth'
 import { refreshTokenOf } from './lib/credentials'
-import { syncZettlePurchases } from './lib/order-sync'
+import { parseBackfillFrom, syncZettlePurchases } from './lib/order-sync'
+import type { BackfillDateError } from './lib/order-sync'
+import { MAX_BACKFILL_YEARS } from './types'
 import type { ZettleConnection, ZettleStatusResponse } from './types'
 
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
+const RATE_LIMIT_BACKFILL = { maxRequests: 5, windowMs: 60_000 }
+
+/** Wall clock a single manual run may spend before it stops and resumes later. */
+const MANUAL_SYNC_BUDGET_MS = 240_000
+
+const BACKFILL_DATE_ERRORS: Record<BackfillDateError, string> = {
+  invalid: 'Ange ett giltigt startdatum (ÅÅÅÅ-MM-DD).',
+  future: 'Startdatumet kan inte ligga i framtiden.',
+  too_old: `Startdatumet kan vara högst ${MAX_BACKFILL_YEARS} år tillbaka.`,
+}
 
 const NOT_CONFIGURED_MESSAGE =
   'Zettle-integrationen är inte konfigurerad på den här installationen.'
@@ -198,7 +210,7 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
           serviceClient,
           connection as ZettleConnection,
           undefined,
-          Date.now() + 240_000,
+          Date.now() + MANUAL_SYNC_BUDGET_MS,
         )
         if (summary.locked) {
           return NextResponse.json(
@@ -209,6 +221,108 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
         return NextResponse.json({ success: true, transactions: summary })
       } catch (error) {
         log.error('[zettle] Manual sync failed', {
+          message: error instanceof Error ? error.message : String(error),
+          connection_id: connection.id,
+        })
+        return NextResponse.json(
+          { error: 'Synkroniseringen misslyckades. Försök igen.' },
+          { status: 502 },
+        )
+      }
+    },
+  },
+  {
+    method: 'POST',
+    path: '/backfill',
+    handler: async (request: Request, ctx?: ExtensionContext) => {
+      const log = ctx?.log ?? console
+      const auth = await requireUserAndCompany(ctx)
+      if (auth instanceof NextResponse) return auth
+
+      const capabilityBlocked = await requireCapability(
+        auth.supabase,
+        auth.companyId,
+        CAPABILITY.zettle_sync,
+      )
+      if (capabilityBlocked) return capabilityBlocked
+
+      const rl = await checkRateLimit({
+        prefix: 'zettle:backfill',
+        identifier: auth.userId,
+        ...RATE_LIMIT_BACKFILL,
+      })
+      if (!rl.ok) return rl.response!
+
+      const body = (await request.json().catch(() => ({}))) as { from?: unknown }
+      const parsed = parseBackfillFrom(body.from)
+      if ('error' in parsed) {
+        return NextResponse.json(
+          { error: BACKFILL_DATE_ERRORS[parsed.error] },
+          { status: 400 },
+        )
+      }
+
+      const { data: connection } = await auth.supabase
+        .from('zettle_connections')
+        .select('*')
+        .eq('company_id', auth.companyId)
+        .eq('status', 'active')
+        .maybeSingle()
+
+      if (!connection) {
+        return NextResponse.json({ error: 'Inget anslutet Zettle-konto.' }, { status: 404 })
+      }
+
+      // The cursor is the start date, so a backfill is just the cursor moved
+      // back: no second column that could disagree with it. The run pushes it
+      // forward to now again once the window is exhausted, and the ingest
+      // upserts by external_id, so re-reading an already imported range
+      // changes nothing.
+      const previousCursor = (connection as ZettleConnection).last_order_synced_at
+      const { error: cursorError } = await auth.supabase
+        .from('zettle_connections')
+        .update({ last_order_synced_at: parsed.iso, error_message: null })
+        .eq('id', connection.id)
+        .eq('company_id', auth.companyId)
+        .eq('status', 'active')
+      if (cursorError) {
+        log.error('[zettle] Failed to move purchase cursor for backfill', {
+          message: cursorError.message,
+          connection_id: connection.id,
+        })
+        return NextResponse.json(
+          { error: 'Kunde inte spara startdatumet. Försök igen.' },
+          { status: 500 },
+        )
+      }
+
+      try {
+        const serviceClient = createServiceClientNoCookies()
+        const summary = await syncZettlePurchases(
+          serviceClient,
+          { ...(connection as ZettleConnection), last_order_synced_at: parsed.iso },
+          undefined,
+          Date.now() + MANUAL_SYNC_BUDGET_MS,
+        )
+        if (summary.locked) {
+          // Nothing ran, and the concurrent run holds its own cursor in
+          // memory: leaving the date in place would let it overwrite the
+          // backfill silently. Put the cursor back and let the user retry.
+          await auth.supabase
+            .from('zettle_connections')
+            .update({ last_order_synced_at: previousCursor })
+            .eq('id', connection.id)
+            .eq('company_id', auth.companyId)
+          return NextResponse.json(
+            { error: 'En synkronisering pågår redan. Försök igen om en stund.' },
+            { status: 409 },
+          )
+        }
+        return NextResponse.json({ success: true, from: parsed.iso, transactions: summary })
+      } catch (error) {
+        // The cursor stays at the chosen date on purpose: the next run
+        // resumes the backfill from where this one failed.
+        log.error('[zettle] Backfill sync failed', {
           message: error instanceof Error ? error.message : String(error),
           connection_id: connection.id,
         })

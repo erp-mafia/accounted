@@ -254,7 +254,7 @@ registerEndpoint({
     'entry_date must fall within fiscal_period_id\'s [period_start, period_end]; otherwise ENTRY_DATE_OUTSIDE_FISCAL_PERIOD.',
     'Every account_number must resolve in the company\'s chart of accounts: a standard BAS 2026 account that is not in the chart yet is added automatically, but a deactivated account, or a non-BAS number the chart does not contain, fails with ACCOUNTS_NOT_IN_CHART.',
     'voucher_series defaults to "A" if omitted. Must be a single uppercase letter.',
-    'This creates a DRAFT only: call POST /{id}/commit to assign the voucher_number and post atomically.',
+    'This creates a DRAFT only: call POST /{id}/commit to assign the voucher_number and post atomically, or DELETE /{id} to discard it. A draft left uncommitted blocks the year-end close (DRAFT_ENTRIES).',
   ],
   example: {
     request: {

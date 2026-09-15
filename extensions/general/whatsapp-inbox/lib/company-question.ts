@@ -8,7 +8,8 @@
  * error_message='staged_awaiting_company' (no upload happens: a document
  * cannot enter the company-scoped WORM archive before a company exists).
  * The rows themselves are the staged refs; media stays re-downloadable from
- * Meta for days, so no bytes are stored anywhere else.
+ * Meta for as long as Meta chooses to serve the id, so no bytes are stored
+ * anywhere else. How long that is cannot be assumed, only asked (#2363).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -18,6 +19,8 @@ import {
   sendReplyButtons,
   sendList,
   sendText,
+  isMediaGone,
+  lookupMedia,
   MAX_REPLY_BUTTONS,
   MAX_LIST_ROWS,
   type SendMessageBase,
@@ -44,6 +47,16 @@ const MAX_NUMBERED_OPTIONS = 30
  *  conversation: every parked row of a burst walks through the no-options
  *  branch, and five photos must not earn five identical replies. */
 const NO_OPTIONS_NOTICE_WINDOW_MS = 10 * 60 * 1000
+
+/** Parked rows probed per drain. A burst is a handful of receipts, so this is
+ *  a ceiling on the Graph round trips ONE drain can spend, not a working
+ *  limit: what it leaves parked the next drain or the sweep's orphan pass
+ *  picks up, oldest first. The single-company drain runs INSIDE a media
+ *  worker's step budget (markRead, download, extraction, under a 300s
+ *  maxDuration and the sweep's 5 min stuck threshold), and a lookup can take
+ *  up to MEDIA_LOOKUP_TIMEOUT_MS, so ten is the most that fits with room to
+ *  spare. */
+const MAX_PROBED_ROWS = 10
 
 export type CompanyChoiceVia = 'button' | 'list' | 'numbered'
 
@@ -271,27 +284,71 @@ export async function askCompanyQuestion(
 export interface DrainedParkedRows {
   /** Parked rows re-opened for processing (run through the kick). */
   reopenedIds: string[]
-  /** Parked rows older than Meta's media retention, stamped expired instead. */
+  /** Parked rows Meta no longer serves the media for, stamped expired
+   *  instead of released. */
   expiredCount: number
-  /** One of the two updates errored. The rows it should have touched are
+  /** One of the writes errored. The rows it should have touched are
    *  still parked; the sweep's orphan pass re-opens them once the company
    *  question is closed, so callers log and carry on rather than undoing
    *  the answer that was already applied. */
   failed: boolean
 }
 
+/** What Meta says about one parked row's media right now. 'unknown' is the
+ *  answer to every failure that is not about the file (429, 5xx, timeout,
+ *  missing config): the row keeps waiting rather than being destroyed by our
+ *  own outage. */
+type MediaVerdict = 'live' | 'gone' | 'unknown'
+
+async function probeStagedMedia(
+  mediaId: string,
+  context: { conversationId: string; messageId: string },
+): Promise<MediaVerdict> {
+  try {
+    const lookup = await lookupMedia(mediaId)
+    if (lookup.ok) return 'live'
+    if (isMediaGone(lookup.status)) {
+      log.info('drain: Meta no longer serves this parked receipt', {
+        ...context,
+        status: lookup.status,
+      })
+      return 'gone'
+    }
+    log.warn('drain: media lookup inconclusive; the row stays parked', {
+      ...context,
+      status: lookup.status,
+    })
+    return 'unknown'
+  } catch (err) {
+    log.warn('drain: media lookup errored; the row stays parked', {
+      ...context,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return 'unknown'
+  }
+}
+
 /**
  * Re-open the receipts parked behind a company question, in the ONE shape
- * both drains share (the answer path and the single-live-company path).
+ * every drain shares (the answer path, the single-live-company path, and the
+ * sweep's orphan pass).
  *
- * Rows older than STAGED_MEDIA_MAX_AGE_MS are stamped company_choice_expired
- * rather than re-opened: Meta no longer serves their media, so re-opening
- * them only ran each one through the MAX_ATTEMPTS error path and an M18
- * about a receipt sent a month ago (#2062). The sweep stamps the same cutoff
- * for conversations still in awaiting_company; this covers the idle ones
- * (question TTL passed, options kept) that only a drain ever touches again.
- * The stamp is guarded on the staged marker, so a second drain finds nothing
- * new to expire and the notice goes out once.
+ * A parked row is released only when Meta says it can still serve the file.
+ * The old cutoff decided that from the row's AGE against a 30-day constant,
+ * and the constant was wrong: on 2026-09-06 Meta answered 400 for every
+ * parked file in one conversation, the youngest 11 days old, so all seven
+ * were released into the download path, burned their attempts and produced a
+ * failed M18 each (#2363). No constant can be right here, so this asks:
+ *
+ *  - past STAGED_MEDIA_MAX_AGE_MS: stamped expired without a round trip (the
+ *    outer bound is a ceiling on what is worth keeping, not a promise);
+ *  - 400/404 on the probe: stamped company_choice_expired, not released, and
+ *    counted for the one notice the caller sends;
+ *  - 2xx: released exactly as before;
+ *  - anything else (429, 5xx, timeout): left parked for the next pass.
+ *
+ * Every write is guarded on the staged marker, so a second drain finds
+ * nothing new to expire and the notice goes out once.
  */
 export async function drainParkedRows(
   supabase: SupabaseClient,
@@ -311,33 +368,90 @@ export async function drainParkedRows(
       conversationId,
     })
   }
-  // Independent of the stamp: a failed stamp must not also withhold the rows
-  // that ARE recoverable.
-  const { data: reopened, error: reopenError } = await supabase
+
+  // Everything inside the outer bound: ask Meta per row, oldest first.
+  const { data: candidates, error: candidatesError } = await supabase
     .from('whatsapp_messages')
-    .update({ processing_status: 'received', error_message: null })
+    .select('id, media_id')
     .eq('conversation_id', conversationId)
     .eq('processing_status', 'skipped')
     .eq('error_message', STAGED_AWAITING_COMPANY)
     .gte('created_at', staleCutoff)
-    .select('id')
-  if (reopenError) {
-    log.error('drain: re-open failed; the sweep orphan pass retries it', reopenError, {
+    .order('created_at', { ascending: true })
+    .limit(MAX_PROBED_ROWS)
+  if (candidatesError) {
+    log.error('drain: parked row scan failed; the sweep orphan pass retries it', candidatesError, {
       conversationId,
     })
   }
+
+  const live: string[] = []
+  const gone: string[] = []
+  for (const row of (candidates ?? []) as { id: string; media_id: string | null }[]) {
+    // A parked row with no media id is nothing Meta can withhold (a caption
+    // row): releasing it is the old behavior and the right one.
+    if (!row.media_id) {
+      live.push(row.id)
+      continue
+    }
+    const verdict = await probeStagedMedia(row.media_id, { conversationId, messageId: row.id })
+    if (verdict === 'gone') gone.push(row.id)
+    else if (verdict === 'live') live.push(row.id)
+  }
+
+  let goneStamped = 0
+  let goneError: { message: string } | null = null
+  if (gone.length > 0) {
+    const { data, error } = await supabase
+      .from('whatsapp_messages')
+      .update({ error_message: COMPANY_CHOICE_EXPIRED })
+      .in('id', gone)
+      .eq('processing_status', 'skipped')
+      .eq('error_message', STAGED_AWAITING_COMPANY)
+      .select('id')
+    if (error) {
+      goneError = error
+      log.error('drain: probe expiry stamp failed; rows stay parked for the next drain', error, {
+        conversationId,
+      })
+    }
+    goneStamped = Array.isArray(data) ? data.length : 0
+  }
+
+  // Independent of the stamps: a failed stamp must not also withhold the rows
+  // that ARE recoverable.
+  let reopenedIds: string[] = []
+  let reopenError: { message: string } | null = null
+  if (live.length > 0) {
+    const { data, error } = await supabase
+      .from('whatsapp_messages')
+      .update({ processing_status: 'received', error_message: null })
+      .in('id', live)
+      .eq('processing_status', 'skipped')
+      .eq('error_message', STAGED_AWAITING_COMPANY)
+      .select('id')
+    if (error) {
+      reopenError = error
+      log.error('drain: re-open failed; the sweep orphan pass retries it', error, {
+        conversationId,
+      })
+    }
+    reopenedIds = ((data ?? []) as { id: string }[]).map((r) => r.id)
+  }
+
   return {
-    reopenedIds: ((reopened ?? []) as { id: string }[]).map((r) => r.id),
-    expiredCount: Array.isArray(expired) ? expired.length : 0,
-    failed: Boolean(expireError || reopenError),
+    reopenedIds,
+    expiredCount: (Array.isArray(expired) ? expired.length : 0) + goneStamped,
+    failed: Boolean(expireError || candidatesError || goneError || reopenError),
   }
 }
 
 /**
  * Tell the sender which parked receipts could not be recovered. Sent at the
- * drain, never from the sweep: the drain runs on an inbound message, so the
- * 24h service window is open; thirty days after the last receipt it is not,
- * and a free-form send would fail. No-op for a count of zero.
+ * drain, never from the sweep's own passes: the drain runs on an inbound
+ * message, so the 24h service window is open; days after the last receipt it
+ * is not, and a free-form send would simply fail (131047, the failure mode in
+ * #2363). No-op for a count of zero.
  *
  * Best-effort like every other notice in this channel (M17, M18, M19): a
  * failed send is recorded as a failed outbound row by sendText and logged

@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 147 endpoints.
+  pagination, scopes), and all 148 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,7 +142,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 147 operations. Paths are shown without
+API version `2026-05-12`, 148 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (5)
@@ -157,7 +157,7 @@ GET /health : Health check [risk:low idempotent]
 GET /operations/{id} : Poll a long-running operation by id [scope:operations:read risk:low idempotent]
 ```
 
-### Journal entries (8)
+### Journal entries (9)
 
 Full detail: [references/journal-entries.md](references/journal-entries.md)
 
@@ -165,6 +165,7 @@ Full detail: [references/journal-entries.md](references/journal-entries.md)
 GET /companies/{companyId}/journal-entries : List journal entries (verifikationer) [scope:reports:read risk:low idempotent]
 POST /companies/{companyId}/journal-entries : Create a draft journal entry (verifikation) [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 GET /companies/{companyId}/journal-entries/{id} : Retrieve a single verifikation by id [scope:reports:read risk:low idempotent]
+DELETE /companies/{companyId}/journal-entries/{id} : Cancel an uncommitted draft verifikation [scope:bookkeeping:write risk:low idempotent dry-run]
 POST /companies/{companyId}/journal-entries/{id}/commit : Commit a draft journal entry [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/journal-entries/{id}/correct : Correct a posted journal entry (BFL 5:5 storno-then-replace) [scope:bookkeeping:write risk:high idempotent dry-run]
 POST /companies/{companyId}/journal-entries/{id}/reverse : Storno a posted journal entry [scope:bookkeeping:write risk:high idempotent dry-run]

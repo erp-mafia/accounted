@@ -310,16 +310,26 @@ describe('buildCutoffNote (BFL 5 kap 6-7 §: traceability)', () => {
 })
 
 describe('cut-off snapshot and posting inspection', () => {
-  const makeJournalSupabase = (rows: unknown[], error: { message: string } | null = null) => ({
+  // The finder reads marker rows from kontantmetod_cutoff_entries with the
+  // journal entry embedded, so fixtures declare a `kind` and never a
+  // description: the grundbok text is display only.
+  const makeMarkerSupabase = (
+    rows: Array<Record<string, unknown>>,
+    error: { message: string } | null = null,
+  ) => ({
     from: () => {
       const query: Record<string, unknown> = {}
       query.select = () => query
       query.eq = () => query
       query.in = () => query
       query.then = (resolve: (value: unknown) => unknown) => resolve({
-        data: (rows as Array<Record<string, unknown>>).map((row) => ({
-          entry_date: row.fiscal_period_id === 'fp-2' ? '2027-01-01' : '2026-12-31',
-          ...row,
+        data: rows.map(({ kind, ...entry }) => ({
+          kind,
+          entry: {
+            status: 'posted',
+            entry_date: entry.fiscal_period_id === 'fp-2' ? '2027-01-01' : '2026-12-31',
+            ...entry,
+          },
         })),
         error,
       })
@@ -386,28 +396,28 @@ describe('cut-off snapshot and posting inspection', () => {
     const rows = [
       {
         id: 'ar', fiscal_period_id: 'fp-1',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        kind: 'receivable',
         lines: lines.receivableLines,
       },
       {
         id: 'ar-rev', fiscal_period_id: 'fp-2',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+        kind: 'receivable_reversal',
         lines: reverseLines(lines.receivableLines),
       },
       {
         id: 'ap', fiscal_period_id: 'fp-1',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable,
+        kind: 'payable',
         lines: lines.payableLines,
       },
       {
         id: 'ap-rev', fiscal_period_id: 'fp-2',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal,
+        kind: 'payable_reversal',
         lines: reverseLines(lines.payableLines),
       },
     ]
 
     const status = await inspectKontantmetodCutoffPostings(
-      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
+      makeMarkerSupabase(rows), 'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
     )
     expect(status).toMatchObject({
       complete: true,
@@ -428,18 +438,18 @@ describe('cut-off snapshot and posting inspection', () => {
     const rows = [
       {
         id: 'ar', fiscal_period_id: 'fp-1',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        kind: 'receivable',
         lines: stale,
       },
       {
         id: 'ar-rev', fiscal_period_id: 'fp-2',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+        kind: 'receivable_reversal',
         lines: reverseLines(lines.receivableLines),
       },
     ]
 
     const status = await inspectKontantmetodCutoffPostings(
-      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
+      makeMarkerSupabase(rows), 'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
     )
     expect(status.complete).toBe(false)
     expect(status.missing).toContain('receivable')
@@ -449,11 +459,11 @@ describe('cut-off snapshot and posting inspection', () => {
   it('treats an otherwise exact marker on the wrong date as a conflict', async () => {
     const lines = buildCutoffLines([receivable()], [], 'aktiebolag')
     const status = await inspectKontantmetodCutoffPostings(
-      makeJournalSupabase([{
+      makeMarkerSupabase([{
         id: 'ar',
         fiscal_period_id: 'fp-1',
         entry_date: '2026-12-30',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        kind: 'receivable',
         lines: lines.receivableLines,
       }]),
       'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
@@ -468,33 +478,77 @@ describe('cut-off snapshot and posting inspection', () => {
     const rows = [
       {
         id: 'ar', fiscal_period_id: 'fp-1',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        kind: 'receivable',
         lines: lines.receivableLines,
       },
       {
         id: 'ar-duplicate', fiscal_period_id: 'fp-1',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        kind: 'receivable',
         lines: lines.receivableLines,
       },
       {
         id: 'ar-rev', fiscal_period_id: 'fp-2',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+        kind: 'receivable_reversal',
         lines: reverseLines(lines.receivableLines),
       },
     ]
 
     const status = await inspectKontantmetodCutoffPostings(
-      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
+      makeMarkerSupabase(rows), 'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
     )
     expect(status.complete).toBe(false)
     expect(status.missing).toContain('receivable')
     expect(status.duplicates).toContain(KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable)
   })
 
-  it('fails closed when the immutable journal cannot be inspected', async () => {
+  it('finds the pair through its markers whatever the grundbok text says', async () => {
+    // The point of the marker table: identity is recorded, not spelled out.
+    // These entries carry a description no filter would ever match, and the
+    // finder is unmoved.
+    const lines = buildCutoffLines([receivable()], [], 'aktiebolag')
+    const status = await inspectKontantmetodCutoffPostings(
+      makeMarkerSupabase([
+        {
+          id: 'ar', fiscal_period_id: 'fp-1', description: 'Omformulerad text 2027',
+          kind: 'receivable', lines: lines.receivableLines,
+        },
+        {
+          id: 'ar-rev', fiscal_period_id: 'fp-2', description: 'Helt annan text',
+          kind: 'receivable_reversal', lines: reverseLines(lines.receivableLines),
+        },
+      ]),
+      'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
+    )
+    expect(status).toMatchObject({
+      complete: true,
+      receivableEntryId: 'ar',
+      receivableReversalId: 'ar-rev',
+      missing: [],
+      duplicates: [],
+    })
+  })
+
+  it('reads a stornoed cut-off as absent so a replacement pair can be posted', async () => {
+    // Posted rows are never edited, so a stornoed cut-off keeps its marker.
+    // Treating it as live would block the year permanently.
+    const lines = buildCutoffLines([receivable()], [], 'aktiebolag')
+    const status = await inspectKontantmetodCutoffPostings(
+      makeMarkerSupabase([{
+        id: 'ar', fiscal_period_id: 'fp-1', status: 'reversed',
+        kind: 'receivable', lines: lines.receivableLines,
+      }]),
+      'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
+    )
+    expect(status.hasAny).toBe(false)
+    expect(status.receivableEntryId).toBeNull()
+    expect(status.duplicates).toEqual([])
+    expect(status.missing).toEqual(['receivable', 'receivable_reversal'])
+  })
+
+  it('fails closed when the marked cut-off cannot be inspected', async () => {
     await expect(
       inspectKontantmetodCutoffPostings(
-        makeJournalSupabase([], { message: 'connection lost' }),
+        makeMarkerSupabase([], { message: 'connection lost' }),
         'co-1', 'fp-1', 'fp-2', '2026-12-31', buildCutoffLines([], [], 'aktiebolag'),
       ),
     ).rejects.toThrow(/kunde inte kontrolleras/i)
@@ -822,26 +876,40 @@ describe('postKontantmetodCutoff', () => {
     locked_at: null,
   }
 
-  const makeSupabase = (next: Record<string, unknown> | null, journalRows: unknown[] = []) => ({
+  /** Every marker row the writer tried to record, in order. */
+  let markerInserts: Array<Record<string, unknown>> = []
+  /** Queued outcomes for those inserts: null means the marker was recorded. */
+  let markerInsertResults: Array<{ message: string } | null> = []
+
+  const makeSupabase = (next: Record<string, unknown> | null, markerRows: unknown[] = []) => ({
     from: (table: string) => {
       const query: Record<string, unknown> = {}
       query.select = () => query
       query.eq = () => query
       query.in = () => query
+      query.insert = async (row: Record<string, unknown>) => {
+        if (table !== 'kontantmetod_cutoff_entries') return { error: null }
+        markerInserts.push(row)
+        return { error: markerInsertResults.shift() ?? null }
+      }
       query.maybeSingle = async () => ({
         data: table === 'fiscal_periods' ? next : null,
         error: table === 'fiscal_periods' && !next ? { message: 'x' } : null,
       })
       query.then = (resolve: (value: unknown) => unknown) =>
         resolve({
-          data: table === 'journal_entries'
-            ? journalRows.map((row) => {
-                const entry = row as Record<string, unknown>
+          data: table === 'kontantmetod_cutoff_entries'
+            ? markerRows.map((row) => {
+                const { kind, ...entry } = row as Record<string, unknown>
                 return {
-                  ...entry,
-                  entry_date: entry.entry_date ?? (
-                    entry.fiscal_period_id === 'fp-next' ? '2027-01-01' : '2026-12-31'
-                  ),
+                  kind,
+                  entry: {
+                    status: 'posted',
+                    ...entry,
+                    entry_date: entry.entry_date ?? (
+                      entry.fiscal_period_id === 'fp-next' ? '2027-01-01' : '2026-12-31'
+                    ),
+                  },
                 }
               })
             : null,
@@ -863,6 +931,8 @@ describe('postKontantmetodCutoff', () => {
   beforeEach(() => {
     vi.mocked(createJournalEntry).mockReset()
     vi.mocked(reverseEntry).mockReset()
+    markerInserts = []
+    markerInsertResults = []
   })
 
   it('posts the cut-off and its vändning, carrying invoice refs into notes', async () => {
@@ -874,6 +944,24 @@ describe('postKontantmetodCutoff', () => {
 
     expect(result.receivableEntry?.id).toBe('je-cutoff')
     expect(result.receivableReversal?.id).toBe('je-reversal')
+
+    // Both verifikat are recorded as what they are, anchored to the CLOSED
+    // period even though the vändning is dated in the next one. Nothing
+    // downstream may have to read the Swedish description to learn this.
+    expect(markerInserts).toEqual([
+      {
+        company_id: 'co-1',
+        fiscal_period_id: 'fp-1',
+        kind: 'receivable',
+        journal_entry_id: 'je-cutoff',
+      },
+      {
+        company_id: 'co-1',
+        fiscal_period_id: 'fp-1',
+        kind: 'receivable_reversal',
+        journal_entry_id: 'je-reversal',
+      },
+    ])
 
     const cutoffCall = vi.mocked(createJournalEntry).mock.calls[0][3]
     expect(cutoffCall.entry_date).toBe('2026-12-31')
@@ -941,7 +1029,7 @@ describe('postKontantmetodCutoff', () => {
         makeSupabase(OPEN_NEXT, [{
           id: 'existing',
           fiscal_period_id: 'fp-1',
-          description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+          kind: 'receivable',
           lines: buildCutoffLines([receivable()], [], 'aktiebolag').receivableLines,
         }]),
         'co-1',
@@ -957,12 +1045,12 @@ describe('postKontantmetodCutoff', () => {
     const existingRows = [
       {
         id: 'ar', fiscal_period_id: 'fp-1',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        kind: 'receivable',
         lines: receivableLines,
       },
       {
         id: 'ar-rev', fiscal_period_id: 'fp-next',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+        kind: 'receivable_reversal',
         lines: reverseLines(receivableLines),
       },
     ]
@@ -1025,6 +1113,56 @@ describe('postKontantmetodCutoff', () => {
       postedIds: { receivable_entry_id: 'je-cutoff' },
       cause: expect.objectContaining({ message: 'period locked' }),
     })
+  })
+
+  it('stornoes both verifikat when the vändning cannot be recorded as one', async () => {
+    // An unmarked vändning is an unexcluded vändning: the VAT functions would
+    // count it as new activity and undo the final-period reporting. Both
+    // verifikat come back out, so the two periods net to zero.
+    vi.mocked(createJournalEntry)
+      .mockResolvedValueOnce({ id: 'je-cutoff' } as never)
+      .mockResolvedValueOnce({ id: 'je-reversal' } as never)
+    vi.mocked(reverseEntry)
+      .mockResolvedValueOnce({ id: 'storno-reversal' } as never)
+      .mockResolvedValueOnce({ id: 'storno-cutoff' } as never)
+    markerInsertResults = [null, { message: 'insert or update violates row-level security' }]
+
+    await expect(
+      postKontantmetodCutoff(makeSupabase(OPEN_NEXT), 'co-1', 'user-1', baseOpts),
+    ).rejects.toMatchObject({
+      name: 'KontantmetodCutoffPartialError',
+      postedIds: {
+        receivable_entry_id: 'je-cutoff',
+        receivable_storno_entry_id: 'storno-cutoff',
+      },
+      cause: expect.objectContaining({ name: 'KontantmetodCutoffMarkerError' }),
+    })
+
+    expect(vi.mocked(reverseEntry).mock.calls.map((call) => [call[3], call[4]])).toEqual([
+      ['je-reversal', '2027-01-01'],
+      ['je-cutoff', '2026-12-31'],
+    ])
+  })
+
+  it('stornoes the cut-off when the cut-off itself cannot be recorded', async () => {
+    // Same rule one step earlier: a cut-off the finder cannot see would let a
+    // second one be staged on top of an immutable entry.
+    vi.mocked(createJournalEntry).mockResolvedValueOnce({ id: 'je-cutoff' } as never)
+    vi.mocked(reverseEntry).mockResolvedValue({ id: 'je-storno' } as never)
+    markerInsertResults = [{ message: 'connection lost' }]
+
+    await expect(
+      postKontantmetodCutoff(makeSupabase(OPEN_NEXT), 'co-1', 'user-1', baseOpts),
+    ).rejects.toMatchObject({
+      name: 'KontantmetodCutoffPartialError',
+      postedIds: {
+        receivable_entry_id: 'je-cutoff',
+        receivable_storno_entry_id: 'je-storno',
+      },
+      cause: expect.objectContaining({ name: 'KontantmetodCutoffMarkerError' }),
+    })
+    // No vändning was ever attempted: the marker gates it.
+    expect(createJournalEntry).toHaveBeenCalledTimes(1)
   })
 
   it('reports the completed receivable pair when the payable phase fails', async () => {

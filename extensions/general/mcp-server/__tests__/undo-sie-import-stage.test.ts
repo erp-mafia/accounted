@@ -72,7 +72,7 @@ describe('gnubok_undo_sie_import: stage-time validation', () => {
     ).rejects.toThrow(/hittades inte/i)
   })
 
-  it('rejects when the import is not in completed status', async () => {
+  it('directs a legacy import to outcome review', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: {
@@ -97,7 +97,7 @@ describe('gnubok_undo_sie_import: stage-time validation', () => {
         supabase as never,
         { type: 'api_key' },
       ),
-    ).rejects.toThrow(/slutförda importer kan ångras/i)
+    ).rejects.toMatchObject({ code: 'SIE_IMPORT_LEGACY_REVIEW_REQUIRED' })
   })
 
   it('rejects when the linked fiscal period is locked', async () => {

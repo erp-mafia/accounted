@@ -7,6 +7,7 @@ import type { WebshopOrderLineItem, WebshopVatBreakdownLine } from '@/types'
 import { isRevokedCredentialsError, listPurchasesPage } from './api-client'
 import { encryptCredential, refreshTokenOf } from './credentials'
 import { isRevokedOAuthError, refreshAccessToken } from './oauth'
+import { MAX_BACKFILL_YEARS } from '../types'
 import type { ZettleConnection, ZettlePayment, ZettlePurchase } from '../types'
 
 const defaultLog = createLogger('zettle/order-sync')
@@ -27,7 +28,6 @@ const defaultLog = createLogger('zettle/order-sync')
  */
 
 export const ZETTLE_IMPORT_SOURCE = 'zettle'
-export const BACKFILL_DAYS = 90
 const CURSOR_OVERLAP_MS = 24 * 60 * 60 * 1000
 const MAX_PURCHASES_PER_RUN = 10_000
 const VAT_REMAINDER_TOLERANCE = 0.5
@@ -409,12 +409,62 @@ export function mapPurchaseToWebshopRows(
   return []
 }
 
-function resolveWindowStartIso(connection: ZettleConnection): string {
-  if (connection.last_order_synced_at) {
-    const cursorMs = Date.parse(connection.last_order_synced_at)
-    return new Date(Math.max(0, cursorMs - CURSOR_OVERLAP_MS)).toISOString()
+/** The moment this connection became responsible for the merchant's purchases. */
+function connectionStartMs(connection: ZettleConnection): number {
+  const raw = connection.connected_at ?? connection.created_at
+  const ms = raw ? Date.parse(raw) : Number.NaN
+  return Number.isFinite(ms) ? ms : Date.now()
+}
+
+/**
+ * Start of the next fetch window. The cursor IS the start date: everything
+ * before it was either already imported or settled before the merchant
+ * connected, in which case it is already booked from the bank side. The OAuth
+ * callback writes the connection moment into the cursor, so a first sync
+ * starts there instead of importing history the user already handled.
+ *
+ * The 24 h overlap only exists to re-read purchases that landed slightly out
+ * of order behind the cursor, so it must never reach past the point this
+ * connection is responsible for: the connection moment, or an explicitly
+ * chosen backfill date when that is earlier. Clamping on
+ * min(cursor, connection start) covers both without a second column.
+ *
+ * A connection with no cursor (connected before the cursor was seeded) falls
+ * back to its own connection moment, never to a fixed number of days.
+ */
+export function resolveWindowStartIso(connection: ZettleConnection): string {
+  const startMs = connectionStartMs(connection)
+  if (!connection.last_order_synced_at) return new Date(startMs).toISOString()
+  const cursorMs = Date.parse(connection.last_order_synced_at)
+  if (!Number.isFinite(cursorMs)) return new Date(startMs).toISOString()
+  const floorMs = Math.max(0, Math.min(cursorMs, startMs))
+  return new Date(Math.max(cursorMs - CURSOR_OVERLAP_MS, floorMs)).toISOString()
+}
+
+/** Why a user-chosen backfill start date was refused. */
+export type BackfillDateError = 'invalid' | 'future' | 'too_old'
+
+/**
+ * Validate a user-chosen backfill start ('YYYY-MM-DD') into a cursor value.
+ * Note that Date.parse rolls a nonexistent day over ('2026-02-31' becomes
+ * 3 March), so the parsed value is compared back against the input.
+ */
+export function parseBackfillFrom(
+  from: unknown,
+  now: Date = new Date(),
+): { iso: string } | { error: BackfillDateError } {
+  if (typeof from !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+    return { error: 'invalid' }
   }
-  return new Date(Date.now() - BACKFILL_DAYS * 86_400_000).toISOString()
+  const ms = Date.parse(`${from}T00:00:00.000Z`)
+  if (!Number.isFinite(ms)) return { error: 'invalid' }
+  const parsed = new Date(ms)
+  if (parsed.toISOString().slice(0, 10) !== from) return { error: 'invalid' }
+  if (ms > now.getTime()) return { error: 'future' }
+  const floor = new Date(now.getTime())
+  floor.setUTCFullYear(floor.getUTCFullYear() - MAX_BACKFILL_YEARS)
+  if (ms < floor.getTime()) return { error: 'too_old' }
+  return { iso: parsed.toISOString() }
 }
 
 export async function syncZettlePurchases(

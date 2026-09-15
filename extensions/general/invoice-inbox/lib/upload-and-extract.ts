@@ -308,7 +308,9 @@ export async function processArchivedDocument(
     // fall through and file an item for the EXISTING document (no copy).
     const { data: existingItem, error: itemLookupError } = await supabase
       .from('invoice_inbox_items')
-      .select('id, status, extracted_data, matched_supplier_id, matched_transaction_id')
+      .select(
+        'id, status, extracted_data, matched_supplier_id, matched_transaction_id, kind_hint, created_supplier_invoice_id, created_journal_entry_id',
+      )
       .eq('company_id', companyId)
       .eq('document_id', doc.id)
       .order('created_at', { ascending: true })
@@ -324,8 +326,67 @@ export async function processArchivedDocument(
       extracted_data: unknown
       matched_supplier_id: string | null
       matched_transaction_id: string | null
+      kind_hint: InboxKindHint | null
+      created_supplier_invoice_id: string | null
+      created_journal_entry_id: string | null
     }> | null)?.[0]
     if (adopted) {
+      // Dedupe keeps ONE archived copy of the bytes (7-year retention, and a
+      // second copy would double-match against transactions). It must not
+      // also discard what the second delivery *said*: the +lev / +ver
+      // plus-tag is the sender's explicit classification, so mailing the same
+      // PDF to the leverantörsfaktura address after the underlag address is a
+      // deliberate reclassification, not noise (#2569). The newer explicit
+      // intent wins over an older hint or over no hint at all.
+      // Applied only while the item is still unconsumed, the repo's "underlag
+      // att hantera" predicate (lib/worklist/categories.ts): once it has
+      // become a supplier invoice, a journal entry or a transaction match the
+      // routing decision is already made, and re-badging it would contradict
+      // what was booked.
+      //
+      // That predicate lives on the UPDATE itself, not only in the branch
+      // below. The row was read a statement ago; a concurrent request can
+      // book or match it in between, and a WHERE on id alone would re-badge
+      // an item that is no longer open and then log the new value as
+      // kind_hint_after. `stillOpen` is kept as a cheap short-circuit that
+      // saves a pointless write; the UPDATE's own guard is what decides, and
+      // hintAfter moves only when a row actually came back changed.
+      const hintBefore = adopted.kind_hint ?? null
+      let hintAfter = hintBefore
+      let hintSkipped: 'consumed' | 'write_failed' | null = null
+      const incomingHint = emailMeta?.kindHint ?? null
+      const stillOpen =
+        adopted.created_supplier_invoice_id == null &&
+        adopted.created_journal_entry_id == null &&
+        adopted.matched_transaction_id == null
+      if (incomingHint !== null && incomingHint !== hintBefore) {
+        if (!stillOpen) {
+          hintSkipped = 'consumed'
+        } else {
+          const { data: updatedRows, error: hintError } = await supabase
+            .from('invoice_inbox_items')
+            .update({ kind_hint: incomingHint })
+            .eq('id', adopted.id)
+            .eq('company_id', companyId)
+            .is('created_supplier_invoice_id', null)
+            .is('created_journal_entry_id', null)
+            .is('matched_transaction_id', null)
+            .select('id')
+          const changed = ((updatedRows as Array<{ id: string }> | null) ?? []).length > 0
+          if (hintError) {
+            // Non-fatal: the document is already archived and visible. Losing
+            // the hint is exactly the old behavior, not a new failure mode.
+            console.error('[invoice-inbox] Failed to adopt kind hint on duplicate:', hintError)
+            hintSkipped = 'write_failed'
+          } else if (!changed) {
+            // The guard rejected the write: the item was booked or matched
+            // between the lookup and here. The booking wins, the hint stands.
+            hintSkipped = 'consumed'
+          } else {
+            hintAfter = incomingHint
+          }
+        }
+      }
       try {
         await appendProcessingHistory({
           companyId,
@@ -338,6 +399,14 @@ export async function processArchivedDocument(
             document_id: doc.id,
             inbox_item_id: adopted.id,
             reason: 'duplicate_content',
+            // What the second delivery declared and what the item ended up
+            // with, so the audit trail shows the reclassification, or shows
+            // why it was refused. kind_hint_after is the value that was
+            // actually persisted, never the one that was merely attempted.
+            kind_hint_incoming: incomingHint,
+            kind_hint_before: hintBefore,
+            kind_hint_after: hintAfter,
+            kind_hint_skipped: hintSkipped,
           },
           actor: opts.actorId
             ? { type: 'system', id: opts.actorId }

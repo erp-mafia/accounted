@@ -42,7 +42,7 @@ registerEndpoint({
   description:
     'Atomically advances the voucher series and flips the draft to posted. The voucher_number is the smallest integer not yet used in (fiscal_period_id, voucher_series); a failed commit does NOT burn the number.',
   useWhen:
-    'You created a draft via POST /journal-entries and now want to post it to the books. After commit the entry is immutable per BFL 5 kap 2 §; corrections require /reverse or /correct.',
+    'You created a draft via POST /journal-entries and now want to post it to the books. After commit the entry can only be changed through a rättelse that keeps the original visible and records who corrected it and when (BFL 5 kap 5 §): corrections require /reverse or /correct.',
   doNotUseFor:
     'Re-committing an already-posted entry (returns 409). Committing across companies: the URL companyId must match the draft\'s company.',
   pitfalls: [

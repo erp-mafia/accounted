@@ -156,6 +156,120 @@ describe('zettle extension routes', () => {
     expect([402, 403]).toContain(res.status)
   })
 
+  it('POST /backfill refuses without a session', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
+    const res = await findRoute('POST', '/backfill').handler(
+      makeRequest('POST', { from: '2026-01-01' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(401)
+    expect(syncZettlePurchases).not.toHaveBeenCalled()
+  })
+
+  it('POST /backfill rejects a date it cannot honour', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    const route = findRoute('POST', '/backfill')
+    for (const from of [undefined, 'igar', '2026-02-31', '3000-01-01', '1990-01-01']) {
+      const res = await route.handler(makeRequest('POST', { from }), makeContext(supabase))
+      expect(res.status, `from=${String(from)}`).toBe(400)
+    }
+    expect(syncZettlePurchases).not.toHaveBeenCalled()
+  })
+
+  it('POST /backfill is 404 without an active connection', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    enqueue({ data: null })
+    const res = await findRoute('POST', '/backfill').handler(
+      makeRequest('POST', { from: '2026-01-01' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(404)
+    expect(syncZettlePurchases).not.toHaveBeenCalled()
+  })
+
+  it('POST /backfill moves the cursor to the chosen date and syncs from there', async () => {
+    vi.mocked(syncZettlePurchases).mockResolvedValue({
+      fetched: 4,
+      refundsFetched: 0,
+      inserted: 4,
+      updated: 0,
+      unchanged: 0,
+      frozenFlagged: 0,
+      crossMarked: 0,
+      errors: 0,
+      needsReview: 0,
+      skippedUnsupported: 0,
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    enqueue({
+      data: {
+        id: 'c1',
+        status: 'active',
+        company_id: 'company-1',
+        user_id: 'user-1',
+        organization_uuid: 'org-1',
+        refresh_token_encrypted: 'enc',
+        last_order_synced_at: '2026-09-14T00:00:00.000Z',
+      },
+    })
+    enqueue({ data: [] }) // cursor update
+    const res = await findRoute('POST', '/backfill').handler(
+      makeRequest('POST', { from: '2026-01-01' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.from).toBe('2026-01-01T00:00:00.000Z')
+    expect(body.transactions.inserted).toBe(4)
+    const updates = findCalls('zettle_connections', 'update')
+    expect(updates[0][0]).toMatchObject({ last_order_synced_at: '2026-01-01T00:00:00.000Z' })
+    // The sync must see the moved cursor, not the stored one.
+    const connectionArg = vi.mocked(syncZettlePurchases).mock.calls[0][1]
+    expect(connectionArg.last_order_synced_at).toBe('2026-01-01T00:00:00.000Z')
+  })
+
+  it('POST /backfill restores the cursor when another run holds the claim', async () => {
+    vi.mocked(syncZettlePurchases).mockResolvedValue({
+      fetched: 0,
+      refundsFetched: 0,
+      inserted: 0,
+      updated: 0,
+      unchanged: 0,
+      frozenFlagged: 0,
+      crossMarked: 0,
+      errors: 0,
+      needsReview: 0,
+      skippedUnsupported: 0,
+      locked: true,
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    enqueue({
+      data: {
+        id: 'c1',
+        status: 'active',
+        company_id: 'company-1',
+        user_id: 'user-1',
+        organization_uuid: 'org-1',
+        refresh_token_encrypted: 'enc',
+        last_order_synced_at: '2026-09-14T00:00:00.000Z',
+      },
+    })
+    enqueue({ data: [] }) // cursor update
+    enqueue({ data: [] }) // cursor restore
+    const res = await findRoute('POST', '/backfill').handler(
+      makeRequest('POST', { from: '2026-01-01' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(409)
+    const updates = findCalls('zettle_connections', 'update')
+    expect(updates[1][0]).toEqual({ last_order_synced_at: '2026-09-14T00:00:00.000Z' })
+  })
+
   it('POST /sync calls syncZettlePurchases', async () => {
     vi.mocked(syncZettlePurchases).mockResolvedValue({
       fetched: 1,

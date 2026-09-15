@@ -40,6 +40,8 @@
    collapses first when a tall step needs the room */
 .jny-balance { flex: 0 20 180px; min-height: 0; }
 .jny-backrow { flex: none; margin: 8px 0 12px; min-height: 20px; }
+.jny-backrow button { min-height: 44px; }
+.jny-backrow button:disabled { opacity: 0.5; cursor: wait; }
 
 /* ── journey band ────────────────────────────────────────────────── */
 .jny-journey { flex: none; position: relative; width: min(680px, 94vw); margin: 6px auto 0; height: 112px; }
@@ -85,6 +87,8 @@
   padding: 10px 0;
 }
 .jny-qstep { max-height: 100%; overflow-y: auto; overscroll-behavior: contain; animation: jnyQIn 380ms var(--ease-out); }
+/* A step slot that is laid out before it shows: same box, invisible, so its arrival shifts nothing. */
+.jny-reveal-wait { visibility: hidden; }
 @keyframes jnyQIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .jny-qtitle {
   font-family: var(--font-display);
@@ -143,6 +147,9 @@
 .jny-suggest li.is-inactive .jny-sug-name { color: hsl(var(--muted-foreground)); }
 .jny-sug-name { font-weight: 400; }
 .jny-sug-sub { font-size: 11.5px; color: hsl(var(--muted-foreground)); font-variant-numeric: tabular-nums; }
+/* the company the number resolved to, inked under the field before Enter */
+.jny-found { margin: 14px 0 0; font-family: var(--font-display); font-size: 19px; line-height: 1.3; animation: jnyQIn 320ms var(--ease-out); }
+.jny-found-sub { display: block; margin-top: 3px; font-family: var(--font-body); font-size: 12px; color: hsl(var(--muted-foreground)); }
 .jny-enterhint { font-size: 11.5px; color: hsl(var(--muted-foreground)); margin-top: 10px; }
 .jny-enterhint b { border: 1px solid hsl(var(--border)); border-radius: 5px; padding: 1px 6px; font-weight: 400; }
 
@@ -317,3 +324,39 @@
 @media (max-height: 780px) {
   .jny-srcpick { min-height: 46px; padding: 8px 14px; }
 }
+
+/* ── books act (issue #2438): rail on top, scrolling content below ── */
+/* Unlike the first act, the wizards it hosts (SIE import, migration,
+   bank panel) are tall: the page scrolls, the rail stays at the top. */
+.bks { position: relative; min-height: 100dvh; text-align: center; padding-bottom: 48px; }
+.bks-center { width: 100%; max-width: 880px; margin: 0 auto; padding: 8px 24px 0; }
+.bks .jny-journey { width: min(640px, 94vw); }
+.bks-qarea { padding: 18px 0 0; }
+.bks-qarea .jny-qstep { max-height: none; overflow: visible; }
+.bks-host { text-align: left; }
+.bks-host .jny-qstep { text-align: center; margin-bottom: 18px; }
+.bks-host .jny-qactions { margin-top: 26px; }
+.bks-verdicts {
+  list-style: none; margin: 4px auto 0; padding: 0; max-width: 520px;
+  text-align: left; font-size: 13.5px; line-height: 1.5;
+  display: flex; flex-direction: column; gap: 10px; min-height: 24px;
+}
+.bks-v { display: flex; align-items: flex-start; gap: 10px; opacity: 0; transform: translateY(4px); transition: opacity 500ms var(--ease-out), transform 500ms var(--ease-out); }
+.bks-v.is-on { opacity: 1; transform: none; }
+.bks-vmark { flex: none; width: 16px; height: 20px; display: inline-flex; align-items: center; justify-content: center; }
+.bks-v.is-ok .bks-vmark { color: hsl(var(--success)); }
+.bks-v.is-ok .bks-vmark path { stroke-dasharray: 30; stroke-dashoffset: 30; }
+.bks-v.is-ok.is-on .bks-vmark path { animation: bks-check 380ms var(--ease-out) 120ms forwards; }
+@keyframes bks-check { to { stroke-dashoffset: 0; } }
+.bks-vdot { display: block; width: 7px; height: 7px; border-radius: 99px; background: hsl(var(--muted-foreground)); }
+.bks-v.is-warn .bks-vdot { background: hsl(var(--warning)); }
+.bks-vlink { color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+.bks-vlink:hover { text-decoration-style: solid; }
+.jny-bankid {
+  display: inline-flex; align-items: center; gap: 10px;
+  border: 1px solid hsl(var(--border)); border-radius: 8px; padding: 11px 18px;
+  background: hsl(var(--background)); color: inherit; text-decoration: none; font-size: 13.5px;
+  transition: background-color 150ms var(--ease-out);
+}
+.jny-bankid:hover { background: hsl(var(--secondary) / 0.6); }
+.jny-bankid-mark { width: 26px; height: 26px; border-radius: 4px; background: #193e4f; color: #fff; font-size: 9px; display: inline-flex; align-items: center; justify-content: center; font-weight: 500; }

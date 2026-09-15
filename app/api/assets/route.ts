@@ -5,7 +5,9 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { K3ComponentSchema } from '@/lib/api/schemas'
 import {
+  BAS_RANGES_BY_CATEGORY,
   createAsset,
+  inBasRange,
   listAssets,
   defaultAccountsForCategory,
 } from '@/lib/bokslut/assets/asset-service'
@@ -98,7 +100,7 @@ function validateBasOverrides(
   ctx: z.RefinementCtx,
 ): void {
   const ranges = BAS_RANGES_BY_CATEGORY[value.category]
-  if (value.bas_asset_account && !inRange(value.bas_asset_account, ranges.asset)) {
+  if (value.bas_asset_account && !inBasRange(value.bas_asset_account, ranges.asset)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['bas_asset_account'],
@@ -107,7 +109,7 @@ function validateBasOverrides(
   }
   if (
     value.bas_accumulated_account &&
-    !inRange(value.bas_accumulated_account, ranges.accumulated)
+    !inBasRange(value.bas_accumulated_account, ranges.accumulated)
   ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -115,7 +117,7 @@ function validateBasOverrides(
       message: `Account must be in range ${ranges.accumulated[0]}-${ranges.accumulated[1]} for ${value.category}`,
     })
   }
-  if (value.bas_expense_account && !inRange(value.bas_expense_account, ranges.expense)) {
+  if (value.bas_expense_account && !inBasRange(value.bas_expense_account, ranges.expense)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['bas_expense_account'],
@@ -139,24 +141,6 @@ function validateBasOverrides(
         'Anskaffningskonto och ackumulerade-avskrivningar-konto måste vara olika konton.',
     })
   }
-}
-
-const BAS_RANGES_BY_CATEGORY: Record<
-  AssetCategory,
-  { asset: [string, string]; accumulated: [string, string]; expense: [string, string] }
-> = {
-  immaterial:      { asset: ['1010', '1099'], accumulated: ['1010', '1099'], expense: ['7810', '7819'] },
-  building:        { asset: ['1100', '1199'], accumulated: ['1100', '1199'], expense: ['7820', '7829'] },
-  land_improvement:{ asset: ['1150', '1159'], accumulated: ['1150', '1159'], expense: ['7820', '7829'] },
-  machinery:       { asset: ['1210', '1219'], accumulated: ['1210', '1219'], expense: ['7830', '7839'] },
-  equipment:       { asset: ['1220', '1229'], accumulated: ['1220', '1229'], expense: ['7830', '7839'] },
-  vehicle:         { asset: ['1240', '1249'], accumulated: ['1240', '1249'], expense: ['7830', '7839'] },
-  computer:        { asset: ['1250', '1259'], accumulated: ['1250', '1259'], expense: ['7830', '7839'] },
-  other_tangible:  { asset: ['1280', '1299'], accumulated: ['1280', '1299'], expense: ['7830', '7839'] },
-}
-
-function inRange(account: string, range: [string, string]): boolean {
-  return account >= range[0] && account <= range[1]
 }
 
 export const GET = withRouteContext('assets.list', async (request, ctx) => {

@@ -38,8 +38,9 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // recomputed preview: a preview built by today's booking rules would
     // contradict an immutable voucher booked under earlier rules (e.g. the
     // 2731/3740 whole-krona split) exactly where users reconcile. Same
-    // response shape, entries keyed by the run's entry ids, voucher labels
-    // folded into the description.
+    // response shape, entries keyed by the run's entry ids, with the voucher
+    // label and the entry id carried as their own fields so the UI can link
+    // to the verifikat instead of printing a dead label.
     if (run.status === 'booked' || run.status === 'corrected') {
       const { data: posted, error: postedError } = await supabase
         .from('journal_entries')
@@ -78,10 +79,15 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         if (!entry) return null
         const voucher =
           entry.voucher_number != null
-            ? ` (${entry.voucher_series ?? ''}${entry.voucher_series ? '-' : ''}${entry.voucher_number})`
-            : ''
+            ? `${entry.voucher_series ?? ''}${entry.voucher_series ? '-' : ''}${entry.voucher_number}`
+            : null
         return {
-          description: `${entry.description}${voucher}`,
+          description: entry.description,
+          // The link target the salary run page turns the voucher label into.
+          // The label used to be concatenated into the description here, which
+          // named a verifikat the reader could not open.
+          journal_entry_id: entryId as string,
+          voucher,
           lines: entry.lines.map((l) => ({
             account_number: l.account_number,
             line_description: l.line_description ?? '',

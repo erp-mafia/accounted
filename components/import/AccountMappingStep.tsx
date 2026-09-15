@@ -36,6 +36,7 @@ import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
 import type { SourceChartSummary } from '@/lib/import/source-chart/apply-source-chart'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import type { ImportNotice } from '@/lib/import/notices'
+import { isAccountNumber } from '@/lib/invariants/account-number'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
@@ -227,6 +228,7 @@ export default function AccountMappingStep({
   const accountsByClass = useMemo(() => {
     const groups: { [key: string]: BASAccount[] } = {}
     for (const account of basAccounts) {
+      if (!isAccountNumber(account.account_number)) continue
       const className = getAccountClassName(account.account_class)
       if (!groups[className]) {
         groups[className] = []

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // The route is exercised through the extension registration; the connector
 // seam, the paywall gate and the flow store are mocked so the test pins ONLY
@@ -51,6 +51,13 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import { skatteverketExtension } from '../index'
 import { buildAuthorizeUrl } from '../lib/oauth'
+import { storeTokens } from '../lib/token-store'
+
+vi.mock('../lib/token-store', () => ({
+  storeTokens: vi.fn(), getTokens: vi.fn(), deleteTokens: vi.fn(), getTokenHealth: vi.fn(),
+}))
+
+afterEach(() => vi.unstubAllEnvs())
 
 function authorizeRoute() {
   const route = skatteverketExtension.apiRoutes?.find(
@@ -150,6 +157,19 @@ describe('skatteverket /authorize: connector mode', () => {
 describe('skatteverket /authorize: direct mode', () => {
   beforeEach(() => {
     mockConnectorMode.mockReturnValue(null)
+  })
+
+  it('requires provider consent even when the removed development bypass flag is set', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    vi.stubEnv('SKATTEVERKET_DEV_AUTOAPPROVE', 'true')
+    const res = await authorizeRoute().handler(
+      new Request('https://instans.example.se/api/extensions/ext/skatteverket/authorize'),
+      ctx,
+    )
+    expect(res.status).toBe(307)
+    expect(res.headers.get('location')).toBe('https://skv.test/authorize?direct=1')
+    expect(mockCreateFlow).toHaveBeenCalledTimes(1)
+    expect(storeTokens).not.toHaveBeenCalled()
   })
 
   it('builds the authorize URL locally and records the validated origin, return path and PKCE verifier', async () => {

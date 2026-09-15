@@ -11,10 +11,28 @@ vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue('event-1'),
 }))
 
+vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
+  const actual = await vi.importActual<
+    typeof import('@/extensions/general/whatsapp-inbox/lib/graph-api')
+  >('@/extensions/general/whatsapp-inbox/lib/graph-api')
+  return {
+    ...actual,
+    // The orphan pass drains through the same probe as the answer path: it
+    // must never issue a real Graph round trip from a test.
+    lookupMedia: vi.fn().mockResolvedValue({
+      ok: true,
+      url: 'https://lookaside.example/m1',
+      mimeType: 'image/jpeg',
+      fileSize: 1024,
+    }),
+  }
+})
+
 import {
   processInboundMessage,
   finalizeBurst,
 } from '@/extensions/general/whatsapp-inbox/lib/process-inbound'
+import { lookupMedia } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
 import { runSweep } from '@/extensions/general/whatsapp-inbox/lib/sweep'
 import {
   COMPANY_CHOICE_EXPIRED,
@@ -23,6 +41,7 @@ import {
 
 const processMock = vi.mocked(processInboundMessage)
 const finalizeMock = vi.mocked(finalizeBurst)
+const lookupMediaMock = vi.mocked(lookupMedia)
 
 const HOURS = 60 * 60 * 1000
 
@@ -274,7 +293,13 @@ describe('runSweep: orphaned parked rows (#2062)', () => {
         }, // question still open: leave it
       ],
     }) // orphan scan
-    enqueue({ data: [] }) // drain conv-orphan: expiry stamp
+    enqueue({ data: [] }) // drain conv-orphan: outer-bound stamp
+    enqueue({
+      data: [
+        { id: 'stg-1', media_id: 'media-1' },
+        { id: 'stg-2', media_id: 'media-2' },
+      ],
+    }) // drain conv-orphan: probe candidates
     enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // drain conv-orphan: reopen
 
     const summary = await runSweep(supabase as unknown as SupabaseClient)
@@ -298,6 +323,40 @@ describe('runSweep: orphaned parked rows (#2062)', () => {
       ),
     ).toBe(true)
     expect(calls.some((c) => c.method === 'lt' && c.args[0] === 'created_at')).toBe(true)
+  })
+
+  it('stamps a refused file expired instead of re-opening it, and stays silent (#2363)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePassesOneToFive(enqueue)
+    enqueue({
+      data: [{ conversation_id: 'conv-orphan', conversation: { context: {} } }],
+    }) // orphan scan
+    enqueue({ data: [] }) // drain: outer-bound stamp
+    enqueue({
+      data: [
+        { id: 'stg-1', media_id: 'media-1' },
+        { id: 'stg-2', media_id: 'media-2' },
+      ],
+    }) // drain: probe candidates
+    enqueue({ data: [{ id: 'stg-1' }] }) // drain: the refused row is stamped
+
+    lookupMediaMock
+      .mockResolvedValueOnce({ ok: false, status: 400, message: 'Media lookup failed (400)' })
+      .mockResolvedValueOnce({ ok: false, status: 500, message: 'Media lookup failed (500)' })
+
+    const summary = await runSweep(supabase as unknown as SupabaseClient)
+
+    // Nothing was released: the 400 row is terminal, the 500 row waits.
+    expect(summary.reopenedOrphans).toBe(0)
+    expect(processMock).not.toHaveBeenCalled()
+    const patches = findCalls('whatsapp_messages', 'update').map(
+      (args) => args[0] as Record<string, unknown>,
+    )
+    expect(patches).toContainEqual({ error_message: COMPANY_CHOICE_EXPIRED })
+    expect(patches.some((p) => p.processing_status === 'received')).toBe(false)
+    // Only the 400 row is named in the id-targeted stamp.
+    const ins = findCalls('whatsapp_messages', 'in').filter((args) => args[0] === 'id')
+    expect(ins).toEqual([['id', ['stg-1']]])
   })
 
   it('is a no-op when every parked row still has its question open', async () => {

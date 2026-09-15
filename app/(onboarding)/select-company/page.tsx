@@ -1,21 +1,29 @@
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { createClient, createServiceClient } from '@/lib/supabase/server'
-import { setActiveCompany } from '@/lib/company/context'
+import { createClient } from '@/lib/supabase/server'
 import {
   acceptPendingInviteByToken,
   hasPendingInviteForEmail,
 } from '@/lib/company/pending-invites'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
-import BankIdCompanyPicker, {
-  type MemberCompany,
-  type TicPickerCompany,
-} from '@/components/onboarding/BankIdCompanyPicker'
+import BankIdCompanyPicker from '@/components/onboarding/BankIdCompanyPicker'
 
 export const dynamic = 'force-dynamic'
 
 const ENRICHMENT_TTL_DAYS = 7
 
+/**
+ * /select-company: the door to adding a company.
+ *
+ * Reached from "Lägg till företag" in the app (?choose=1) and as the landing
+ * after a BankID login. It renders only when there is something to choose:
+ * companies the user's BankID says they run (CompanyRoles) that are not in
+ * Accounted yet. Everything else goes straight through (founder direction
+ * 2026-09-14): no new engagements means the onboarding journey, and a
+ * BankID login that finds nothing new opens the company the user already
+ * has. Companies the user already belongs to are never listed here; opening
+ * one is the in-app switcher's job.
+ */
 export default async function SelectCompanyPage({
   searchParams,
 }: {
@@ -30,7 +38,7 @@ export default async function SelectCompanyPage({
 
   // Invite recovery, same as /onboarding: BankID users land here, so a missed
   // invite acceptance (e.g. a register flow that dropped the cookie handling)
-  // gets retried before the picker funnels the invitee into creating a company.
+  // gets retried before the user is funnelled into creating a company.
   const inviteToken = (await cookies()).get('gnubok-invite-token')?.value
   if (inviteToken && (await acceptPendingInviteByToken(user, inviteToken))) {
     redirect('/')
@@ -39,7 +47,8 @@ export default async function SelectCompanyPage({
   // All lookups key only on user.id/email, one parallel batch instead of
   // serial round-trips on the post-BankID-login landing page.
   const [
-    // Existing Accounted memberships.
+    // Existing memberships: only to keep already-added companies out of the
+    // engagement list and to know where "nothing to choose" leads.
     { data: memberships },
     { data: teamMembership },
     // Greeting name.
@@ -55,17 +64,13 @@ export default async function SelectCompanyPage({
     supabase
       .from('company_members')
       .select(`
-        role,
         company:company_id (
           id,
-          name,
           org_number,
-          entity_type,
           archived_at
         )
       `)
-      .eq('user_id', user.id)
-      .order('joined_at', { ascending: true }),
+      .eq('user_id', user.id),
     supabase
       .from('team_members')
       .select('team_id')
@@ -83,34 +88,21 @@ export default async function SelectCompanyPage({
 
   type CompanyRow = {
     id: string
-    name: string
     org_number: string | null
-    entity_type: string | null
     archived_at: string | null
   }
 
-  const memberCompanies: MemberCompany[] = ((memberships ?? []) as unknown as Array<{
-    role: string
+  const memberCompanies = ((memberships ?? []) as unknown as Array<{
     // Supabase's generated types can express this as either a single object
     // or an array depending on the relationship graph; handle both shapes.
     company: CompanyRow | CompanyRow[] | null
   }>)
-    .map((m) => ({
-      role: m.role,
-      company: Array.isArray(m.company) ? m.company[0] ?? null : m.company,
-    }))
-    .filter((m): m is { role: string; company: CompanyRow } => !!m.company && !m.company.archived_at)
-    .map((m) => ({
-      id: m.company.id,
-      name: m.company.name,
-      orgNumber: m.company.org_number,
-      entityType: m.company.entity_type,
-      role: m.role,
-    }))
+    .map((m) => (Array.isArray(m.company) ? m.company[0] ?? null : m.company))
+    .filter((c): c is CompanyRow => !!c && !c.archived_at)
 
   const memberOrgNumbers = new Set(
     memberCompanies
-      .map((c) => (c.orgNumber ? c.orgNumber.replace(/[\s-]/g, '') : null))
+      .map((c) => (c.org_number ? c.org_number.replace(/[\s-]/g, '') : null))
       .filter((n): n is string => !!n),
   )
 
@@ -148,75 +140,34 @@ export default async function SelectCompanyPage({
     (r) => r.positionEnd == null,
   )
 
-  // Drop TIC roles that already appear in the user's Accounted memberships:
-  // those render via the "Your Accounted companies" section above instead.
+  // Drop roles for companies the user already belongs to: those are added.
   const rolesNotAlreadyMine = activeRoles.filter(
     (r) => !memberOrgNumbers.has(r.companyRegistrationNumber.replace(/[\s-]/g, '')),
   )
 
-  // Cross-reference remaining TIC org numbers against the global companies
-  // table to detect "exists in Accounted, user not a member" cases. Use the
-  // service client: RLS filters out companies the user isn't a member of,
-  // which is exactly the data we need. Scoped to the specific org numbers.
-  let externallyOwnedOrgs = new Set<string>()
-  if (rolesNotAlreadyMine.length > 0) {
-    const service = createServiceClient()
-    const orgNumbers = rolesNotAlreadyMine.map((r) =>
-      r.companyRegistrationNumber.replace(/[\s-]/g, ''),
-    )
-    const { data: rows } = await service
-      .from('companies')
-      .select('org_number')
-      .in('org_number', orgNumbers)
-      .is('archived_at', null)
-    externallyOwnedOrgs = new Set(
-      (rows ?? []).map((r: { org_number: string | null }) => r.org_number ?? '').filter(Boolean),
-    )
-  }
-
-  const ticCompanies: TicPickerCompany[] = rolesNotAlreadyMine.map((role) => {
-    const cleaned = role.companyRegistrationNumber.replace(/[\s-]/g, '')
-    return {
-      role,
-      status: externallyOwnedOrgs.has(cleaned) ? 'exists' : 'new',
-    }
-  })
+  // Other accounts can independently use the same organisation number.
+  const candidates = rolesNotAlreadyMine
 
   const enrichmentTimestamp = enrichmentRow?.updated_at ?? enrichmentRow?.created_at ?? null
   const enrichmentStale = enrichmentTimestamp
     ? Date.now() - new Date(enrichmentTimestamp).getTime() > ENRICHMENT_TTL_DAYS * 24 * 60 * 60 * 1000
     : false
 
-  // A member of exactly one company with nothing else to decide (no new TIC
-  // engagements, no pending invite, enrichment not stale enough to hide one)
-  // gets sent straight in instead of clicking the only row on every login.
-  // `?choose=1` (the in-app switcher links) always renders the picker, and
-  // multi-company/byra users are untouched.
+  // Nothing to choose from: "Lägg till företag" (?choose=1) and a user with
+  // no company go straight into the journey; a BankID login that found no
+  // new engagement opens the company the user already has (the middleware
+  // resolves which). The stale-enrichment hint and the pending-invite hint
+  // both have a home on the journey's first step, so nothing is lost.
   const { choose } = await searchParams
-  if (
-    !choose &&
-    memberCompanies.length === 1 &&
-    ticCompanies.length === 0 &&
-    !hasPendingInvite &&
-    !enrichmentStale
-  ) {
-    // redirect() throws NEXT_REDIRECT, so it must stay outside the try.
-    let switched = false
-    try {
-      await setActiveCompany(supabase, user.id, memberCompanies[0].id)
-      switched = true
-    } catch {
-      // Fall through to the picker: rendering it is always safe.
-    }
-    if (switched) redirect('/')
+  if (candidates.length === 0) {
+    redirect(choose || memberCompanies.length === 0 ? '/onboarding' : '/')
   }
 
   return (
     <BankIdCompanyPicker
       firstName={firstName}
       teamId={teamId}
-      memberCompanies={memberCompanies}
-      ticCompanies={ticCompanies}
+      roles={candidates}
       enrichmentStale={enrichmentStale}
       hasPendingInvite={hasPendingInvite}
     />

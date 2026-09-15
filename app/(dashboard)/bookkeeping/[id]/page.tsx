@@ -22,6 +22,7 @@ import {
   Bot,
   MoreHorizontal,
   Trash2,
+  Users,
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -987,26 +988,36 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         </div>
       </DetailSection>
 
-      {/* Underlag: linked invoices as rows, then the document list. */}
+      {/* Underlag: linked invoices and lönekörningar as rows, then the
+          document list. Each row is the followable half of a link the app
+          already stores (BFL 5 kap 7 §, hänvisning till underlag). */}
       <DetailSection kicker={t('attachments_title')} aside={underlagAside}>
         {references.length > 0 && (
           <DefRow label={t('references_title')} className="items-baseline">
             <ul className="divide-y divide-border">
-              {references.map((ref) => (
-                <li key={`${ref.type}-${ref.id}`} className="py-1 first:pt-0 last:pb-0">
-                  <Link
-                    href={ref.type === 'invoice' ? `/invoices/${ref.id}` : `/supplier-invoices/${ref.id}`}
-                    className="inline-flex items-center gap-2 hover:underline"
-                  >
-                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="truncate">
-                      {ref.type === 'invoice'
-                        ? t('reference_invoice', { number: ref.number })
-                        : t('reference_supplier_invoice', { number: ref.number })}
-                    </span>
-                  </Link>
-                </li>
-              ))}
+              {references.map((ref) => {
+                const href =
+                  ref.type === 'invoice'
+                    ? `/invoices/${ref.id}`
+                    : ref.type === 'supplier_invoice'
+                      ? `/supplier-invoices/${ref.id}`
+                      : `/salary/runs/${ref.id}`
+                const label =
+                  ref.type === 'invoice'
+                    ? t('reference_invoice', { number: ref.number })
+                    : ref.type === 'supplier_invoice'
+                      ? t('reference_supplier_invoice', { number: ref.number })
+                      : t('reference_salary_run', { number: ref.number })
+                const Icon = ref.type === 'salary_run' ? Users : FileText
+                return (
+                  <li key={`${ref.type}-${ref.id}`} className="py-1 first:pt-0 last:pb-0">
+                    <Link href={href} className="inline-flex items-center gap-2 hover:underline">
+                      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{label}</span>
+                    </Link>
+                  </li>
+                )
+              })}
             </ul>
           </DefRow>
         )}

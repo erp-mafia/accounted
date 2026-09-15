@@ -541,8 +541,8 @@ async function processMediaMessage(
       // so that question will not be asked again, and the sole live company
       // is unambiguous by construction. Re-open them so they file here
       // instead of expiring at Meta. Same drain as applyCompanyChoice (one
-      // definition, including the media-age cutoff); the re-run resolves
-      // them as 'single' on its own. default/pin resolution deliberately
+      // definition, including the release-time media probe); the re-run
+      // resolves them as 'single' on its own. default/pin resolution deliberately
       // does not drain: those choices the user can still change, so the
       // open question there is not dead.
       const drained = await drainParkedRows(supabase, conversation.id)

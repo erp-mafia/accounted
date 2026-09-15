@@ -28,16 +28,16 @@
     "version": 4
   },
   "horizontal/swedish-asset-accounting/accounts-and-registry": {
-    "hash": "b33d044b36d290aebb3677ae82020e0890aff3664070f2d1ec510f38b63793f4",
-    "version": 1
+    "hash": "42e22c05c74093b618055098e8d302531c614ae8f3f36b18aa81c8cfb486e5fc",
+    "version": 2
   },
   "horizontal/swedish-asset-accounting/depreciation": {
     "hash": "f764c19f11c8613ba5014ca2767ddb1ae2926928e04c3abb43444ba27c286aec",
     "version": 1
   },
   "horizontal/swedish-asset-accounting/leasing-and-disposal": {
-    "hash": "cefd92341d2946c97ae10f456634a7cf569b7d0eab65d9ca9f8ca7017675f66e",
-    "version": 2
+    "hash": "dcd375a79d7f4ee3d035d52f14ac4edfeb26127464be53153a1e95086aaa2175",
+    "version": 3
   },
   "horizontal/swedish-e-invoicing": {
     "hash": "59fb8f4ab9de7c907cf054f37ae6b651504987375f440831e199710b2a938223",

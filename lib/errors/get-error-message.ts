@@ -25,6 +25,7 @@ import {
   isInvoicePaymentAccountCurrency,
 } from '@/lib/invoices/payment-accounts'
 import { getErrorEntry, hasErrorEntry } from './structured-errors'
+import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'
 
 type ErrorContext =
   | 'invoice'
@@ -449,6 +450,43 @@ export function getErrorMessage(
         message_en?: unknown
         account_numbers?: unknown
         details?: unknown
+      }
+
+      // The canonical envelope keeps Zod issues under error.details. Read
+      // them before the generic VALIDATION_ERROR registry message in either locale.
+      if (structured.code === 'VALIDATION_ERROR') {
+        const details = structured.details as { issues?: unknown } | undefined
+        if (Array.isArray(details?.issues)) {
+          const messages = details.issues.flatMap((issue: unknown) => {
+            if (!issue || typeof issue !== 'object') return []
+            const item = issue as { field?: unknown; message?: unknown; sourceAccount?: unknown }
+            if (typeof item.message !== 'string' || !item.message.trim()) return []
+            const field = typeof item.field === 'string' ? item.field.slice(0, 120) : ''
+            const source = typeof item.sourceAccount === 'string' && /^\d{1,40}$/.test(item.sourceAccount)
+              ? item.sourceAccount : null
+            if (item.message === ACCOUNT_NUMBER_MESSAGE) {
+              const label = source ? (locale === 'en' ? `Source account ${source}` : `Källkonto ${source}`) : field
+              const message = /^accounts\.\d+\.number$/.test(field)
+                ? locale === 'en'
+                  ? 'The account could not be created. Select a target account with exactly four digits in the account mapping step.'
+                  : 'Kontot kunde inte skapas. Välj ett målkonto med exakt fyra siffror i kontomappningen.'
+                : field.endsWith('targetAccount')
+                ? locale === 'en'
+                  ? 'The target account must have exactly four digits. Select an account in the account mapping step.'
+                  : 'Målkontot måste ha exakt fyra siffror. Välj ett konto i kontomappningen.'
+                : locale === 'en' ? 'The account number must contain four digits.' : ACCOUNT_NUMBER_MESSAGE
+              return [label ? `${label}: ${message}` : message]
+            }
+            if (TECHNICAL_LEAK_PATTERNS.some(pattern => pattern.test(item.message as string))) return []
+            const message = item.message.slice(0, 500)
+            return [field ? `${field}: ${message}` : message]
+          })
+          if (messages.length) {
+            const remaining = messages.length - 3
+            return messages.slice(0, 3).join(' ') + (remaining > 0
+              ? ` (+${remaining} ${locale === 'en' ? 'more' : 'till'})` : '')
+          }
+        }
       }
 
       // Say what is missing for THIS invoice's currency: on a SEK invoice the

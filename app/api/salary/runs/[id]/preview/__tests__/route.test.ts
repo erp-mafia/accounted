@@ -123,7 +123,7 @@ describe('GET /api/salary/runs/[id]/preview', () => {
     expect(lines.find((l) => l.account_number === '3740')?.credit_amount).toBe(0.84)
   })
 
-  it('returns the ACTUAL posted verifikat for a booked run, voucher labels included', async () => {
+  it('returns the ACTUAL posted verifikat for a booked run, voucher label and entry id as own fields', async () => {
     enqueue({
       data: {
         ...CALCULATED_RUN,
@@ -170,13 +170,47 @@ describe('GET /api/salary/runs/[id]/preview', () => {
     const { data } = await response.json()
 
     expect(data.booked).toBe(true)
-    expect(data.salaryEntry.description).toBe('Lön 2026-07 (A-214)')
-    expect(data.avgifterEntry.description).toBe('Lön 2026-07: Arbetsgivaravgifter (A-215)')
+    // The voucher label rides beside the description, not inside it: the page
+    // turns it into a link to /bookkeeping/<entry id>.
+    expect(data.salaryEntry.description).toBe('Lön 2026-07')
+    expect(data.salaryEntry.voucher).toBe('A-214')
+    expect(data.salaryEntry.journal_entry_id).toBe('je-1')
+    expect(data.avgifterEntry.description).toBe('Lön 2026-07: Arbetsgivaravgifter')
+    expect(data.avgifterEntry.voucher).toBe('A-215')
+    expect(data.avgifterEntry.journal_entry_id).toBe('je-2')
     const avgifterLines = data.avgifterEntry.lines as Array<{ account_number: string; credit_amount: number }>
     expect(avgifterLines.find((l) => l.account_number === '2731')?.credit_amount).toBe(16073.84)
     expect(avgifterLines.some((l) => l.account_number === '3740')).toBe(false)
     expect(data.vacationEntry).toBeNull()
     expect(data.pensionEntry).toBeNull()
+  })
+
+  it('keeps the link target for an entry that has no voucher number yet', async () => {
+    enqueue({
+      data: { ...CALCULATED_RUN, status: 'booked', salary_entry_id: 'je-1' },
+    }) // salary_runs
+    enqueue({
+      data: [
+        {
+          id: 'je-1',
+          description: 'Lön 2026-07',
+          voucher_series: 'A',
+          voucher_number: null,
+          lines: [],
+        },
+      ],
+    }) // journal_entries
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/preview'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    const { data } = await response.json()
+
+    // No label to print, but the verifikat is still reachable: the page simply
+    // renders no link rather than a label that goes nowhere.
+    expect(data.salaryEntry.voucher).toBeNull()
+    expect(data.salaryEntry.journal_entry_id).toBe('je-1')
   })
 })
 

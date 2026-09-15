@@ -206,14 +206,16 @@ const SV = {
   m19NoCompany: () =>
     'Jag kunde inte koppla kvittot till något företag. Öppna Accounted och kontrollera WhatsApp-kopplingen under *Inställningar -> WhatsApp*, och skicka sedan kvittot igen.',
 
-  // Receipts parked behind the company question for longer than Meta keeps
-  // the media. Sent once, at the moment the rest of the parked rows are
-  // re-opened (the service window is open then, and only then), so the user
-  // learns which files never made it instead of finding out by absence.
+  // Receipts parked behind the company question whose media WhatsApp no
+  // longer serves (asked per file, not assumed from an age: #2363 saw a file
+  // refused after 11 days). Sent once, at the moment the rest of the parked
+  // rows are re-opened (the service window is open then, and only then), so
+  // the user learns which files never made it instead of finding out by
+  // absence. No retention figure is promised, because we do not know one.
   m20ReceiptsExpired: ({ count }: { count: number }) =>
     count > 1
-      ? `${count} äldre kvitton gick inte längre att hämta, WhatsApp sparar filer i cirka 30 dagar. Skicka gärna dem igen.`
-      : 'Ett äldre kvitto gick inte längre att hämta, WhatsApp sparar filer i cirka 30 dagar. Skicka gärna det igen.',
+      ? `${count} äldre kvitton går inte längre att hämta från WhatsApp. Skicka gärna dem igen.`
+      : 'Ett äldre kvitto går inte längre att hämta från WhatsApp. Skicka gärna det igen.',
 
   // The code could not be CHECKED (a database blip), which is not the same
   // as a wrong code: the M2 wording sends a user with a valid code back to
@@ -357,8 +359,8 @@ const EN: typeof SV = {
 
   m20ReceiptsExpired: ({ count }: { count: number }) =>
     count > 1
-      ? `${count} older receipts could no longer be fetched, WhatsApp keeps files for about 30 days. Please send them again.`
-      : 'One older receipt could no longer be fetched, WhatsApp keeps files for about 30 days. Please send it again.',
+      ? `${count} older receipts can no longer be fetched from WhatsApp. Please send them again.`
+      : 'One older receipt can no longer be fetched from WhatsApp. Please send it again.',
 
   m21CodeRetry: () =>
     'I could not check the code just now. Send the same code again in a moment.',

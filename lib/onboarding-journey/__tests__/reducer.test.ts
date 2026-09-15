@@ -112,26 +112,36 @@ describe('journeyReducer: EF found via lookup', () => {
     registration: { fTax: true, vat: false },
   })
 
-  it('still asks the verksamhetsnamn question (name is a choice for EF)', () => {
+  it('takes the name from the lookup and goes straight to the fiscal year: Enter is the whole step', () => {
     const s = run(
       initJourney(),
       { type: 'ORG_SUBMITTED', orgNumber: '19850420-1234' },
       { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: efLookup } },
     )
-    expect(s.step).toBe('name')
+    expect(s.step).toBe('fy')
     expect(s.settings.entity_type).toBe('enskild_firma')
     expect(s.settings.company_name).toBe('Alice Nordin')
   })
 
-  it('skips address and F-skatt after the name (lookup facts), then asks moms: never defaults a negative VAT', () => {
+  it('still names the verksamhet when no lookup answered', () => {
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '19850420-1234' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+      { type: 'NOTFOUND_CONTINUE' },
+      { type: 'ENTITY_PICKED', entityType: 'enskild_firma' },
+    )
+    expect(s.step).toBe('name')
+  })
+
+  it('skips address and F-skatt (lookup facts), then asks moms: never defaults a negative VAT', () => {
     const s = run(
       initJourney(),
       { type: 'ORG_SUBMITTED', orgNumber: '19850420-1234' },
       { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: efLookup } },
-      { type: 'NAME_SUBMITTED', name: 'Alice Nordin Design' },
       { type: 'FY_CALENDAR_CONFIRMED' },
     )
-    expect(s.settings.company_name).toBe('Alice Nordin Design')
+    expect(s.settings.company_name).toBe('Alice Nordin')
     expect(s.settings.f_skatt).toBe(true)
     expect(s.step).toBe('momsyn')
     expect(s.settings.vat_registered).toBeUndefined()
@@ -142,7 +152,6 @@ describe('journeyReducer: EF found via lookup', () => {
       initJourney(),
       { type: 'ORG_SUBMITTED', orgNumber: '19850420-1234' },
       { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: efLookup } },
-      { type: 'NAME_SUBMITTED', name: 'Alice Nordin' },
       { type: 'FY_CALENDAR_CONFIRMED' },
       { type: 'VAT_ANSWERED', registered: false },
     )
@@ -227,6 +236,15 @@ describe('journeyReducer: ceased company', () => {
 })
 
 describe('journeyReducer: BankID prefill', () => {
+  it.each(['disabled', 'error'] as const)('keeps a sole trader BankID name when lookup is %s', (status) => {
+    const s = run(
+      initJourney({ initialOrgNumber: '900101-0017', initialEntityType: 'enskild_firma', initialLegalName: 'Jane Doe' }),
+      { type: 'ORG_SUBMITTED', orgNumber: '900101-0017' },
+      { type: 'LOOKUP_RESULT', outcome: { status } },
+    )
+    expect(s.step).toBe('address')
+    expect(s.settings.company_name).toBe('Jane Doe')
+  })
   const init = () =>
     initJourney({
       initialOrgNumber: '556677-8899',
@@ -324,6 +342,20 @@ describe('journeyReducer: fiscal-year branches', () => {
 })
 
 describe('journeyReducer: Back and station jumps', () => {
+  it('restores draft answers without repeating company creation or lookup requests', () => {
+    const saved = { ...initJourney(), step: 'name' as const, settings: { company_name: 'Acme AB' }, submitting: true, lookupPending: true }
+    const restored = journeyReducer(initJourney(), { type: 'RESTORE', state: saved })
+    expect(restored).toMatchObject({ step: 'name', settings: { company_name: 'Acme AB' }, submitting: false, lookupPending: false })
+    expect(journeyReducer(restored, { type: 'DRAFT_SETTINGS', settings: { company_name: 'Acme Holdings AB' } }).settings.company_name).toBe('Acme Holdings AB')
+  })
+
+  it('keeps later answers when reviewing an earlier question for the same company', () => {
+    const earlier = { ...initJourney(), step: 'name' as const, settings: { org_number: '556677-8899', company_name: 'Acme AB' } }
+    const current = { ...earlier, step: 'fskatt' as const, settings: { ...earlier.settings, address_line1: 'Example Street 1', city: 'Stockholm' } }
+    const restored = journeyReducer(current, { type: 'RESTORE', state: earlier })
+    expect(restored.settings.address_line1).toBe('Example Street 1')
+    expect(restored.step).toBe('name')
+  })
   it('Back restores each step to its ENTRY state (answers roll back)', () => {
     const atFy = manualAbAtFy()
     let s = journeyReducer(atFy, { type: 'BACK' })
@@ -461,10 +493,10 @@ describe('journeyReducer: server errors', () => {
   })
 })
 
-describe('journeyReducer: branch question step (source)', () => {
-  function atDone(mode: 'first' | 'add' = 'first'): JourneyState {
-    return run(
-      initJourney({ mode }),
+describe('journeyReducer: done screen', () => {
+  it('the done screen is the last step: nothing but Back leaves it', () => {
+    const s = run(
+      initJourney({ mode: 'first' }),
       { type: 'ORG_SUBMITTED', orgNumber: '556677-8899' },
       { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: lookup() } },
       { type: 'FY_CALENDAR_CONFIRMED' },
@@ -472,27 +504,8 @@ describe('journeyReducer: branch question step (source)', () => {
       { type: 'METHOD_PICKED', method: 'accrual' },
       { type: 'SUBMIT_SUCCEEDED' },
     )
-  }
-
-  it('continue moves the done screen to the source step, still on the Klart station', () => {
-    const s = journeyReducer(atDone(), { type: 'DONE_CONTINUE' })
-    expect(s.step).toBe('source')
-    expect(stationOfStep(s.step)).toBe(4)
-  })
-
-  it("mode='add' never reaches the source step", () => {
-    const s = atDone('add')
-    expect(journeyReducer(s, { type: 'DONE_CONTINUE' })).toBe(s)
-  })
-
-  it('is ignored anywhere but the done screen', () => {
-    const s = manualAbAtFy()
-    expect(journeyReducer(s, { type: 'DONE_CONTINUE' })).toBe(s)
-  })
-
-  it('Back from the source step restores the done screen', () => {
-    const s = run(atDone(), { type: 'DONE_CONTINUE' }, { type: 'BACK' })
     expect(s.step).toBe('done')
+    expect(stationOfStep(s.step)).toBe(4)
   })
 })
 

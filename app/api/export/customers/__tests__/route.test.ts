@@ -27,6 +27,7 @@ const mockUser = { id: 'user-1', email: 'test@test.se' }
 const CUSTOMER = {
   id: 'c1',
   name: 'Acme AB',
+  customer_number: '1001',
   customer_type: 'swedish_business',
   org_number: '5560217780',
   personal_number: null,
@@ -71,6 +72,24 @@ describe('GET /api/export/customers', () => {
     const rows = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1 })
     expect((rows[0] as string[])[0]).toBe('Namn')
     expect((rows[1] as string[])).toContain('Acme AB')
+  })
+
+  it('exports the customer number (#2368)', async () => {
+    // The register is what a company reconciles against its own numbering, so
+    // the number it edits on the customer has to leave with the file too.
+    enqueue({ data: { company_name: 'Acme AB' } })
+    const res = await GET(createMockRequest('/api/export/customers'), { params: Promise.resolve({}) })
+    expect(res.status).toBe(200)
+
+    const buf = Buffer.from(await res.arrayBuffer())
+    const wb = XLSX.read(new Uint8Array(buf), { type: 'array' })
+    const sheet = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1 })
+    const header = rows[0] as string[]
+    expect(header).toContain('Kundnummer')
+    // Appended, so the established column positions are untouched.
+    expect(header[0]).toBe('Namn')
+    expect((rows[1] as string[])[header.indexOf('Kundnummer')]).toBe('1001')
   })
 
   it('returns a CSV with BOM when format=csv', async () => {

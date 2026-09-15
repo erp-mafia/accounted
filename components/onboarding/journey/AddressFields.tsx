@@ -8,16 +8,18 @@ import { useRef, useState, type ReactNode } from 'react'
  * the address is optional in onboarding, exactly like the wizard.
  */
 interface AddressFieldsProps {
+  initial?: { street: string; postalCode: string; city: string }
+  onChange?: (value: { street: string; postalCode: string; city: string }) => void
   placeholders: { street: string; postalCode: string; city: string }
   enterHint: ReactNode
   skipLabel: string
   onSubmit: (v: { addressLine1?: string; postalCode?: string; city?: string }) => void
 }
 
-export default function AddressFields({ placeholders, enterHint, skipLabel, onSubmit }: AddressFieldsProps) {
-  const [street, setStreet] = useState('')
-  const [zip, setZip] = useState('')
-  const [city, setCity] = useState('')
+export default function AddressFields({ initial, onChange, placeholders, enterHint, skipLabel, onSubmit }: AddressFieldsProps) {
+  const [street, setStreet] = useState(initial?.street ?? '')
+  const [zip, setZip] = useState(initial?.postalCode ?? '')
+  const [city, setCity] = useState(initial?.city ?? '')
   const zipRef = useRef<HTMLInputElement | null>(null)
   const cityRef = useRef<HTMLInputElement | null>(null)
 
@@ -39,7 +41,7 @@ export default function AddressFields({ placeholders, enterHint, skipLabel, onSu
             aria-label={placeholders.street}
             autoComplete="off"
             autoFocus
-            onChange={(e) => setStreet(e.target.value)}
+            onChange={(e) => { setStreet(e.target.value); onChange?.({ street: e.target.value, postalCode: zip, city }) }}
             onKeyDown={(e) => e.key === 'Enter' && zipRef.current?.focus()}
           />
         </div>
@@ -52,7 +54,7 @@ export default function AddressFields({ placeholders, enterHint, skipLabel, onSu
               aria-label={placeholders.postalCode}
               inputMode="numeric"
               autoComplete="off"
-              onChange={(e) => setZip(e.target.value)}
+              onChange={(e) => { setZip(e.target.value); onChange?.({ street, postalCode: e.target.value, city }) }}
               onKeyDown={(e) => e.key === 'Enter' && cityRef.current?.focus()}
             />
           </div>
@@ -63,7 +65,7 @@ export default function AddressFields({ placeholders, enterHint, skipLabel, onSu
               placeholder={placeholders.city}
               aria-label={placeholders.city}
               autoComplete="off"
-              onChange={(e) => setCity(e.target.value)}
+              onChange={(e) => { setCity(e.target.value); onChange?.({ street, postalCode: zip, city: e.target.value }) }}
               onKeyDown={(e) => e.key === 'Enter' && submit()}
             />
           </div>

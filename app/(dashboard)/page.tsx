@@ -7,6 +7,7 @@ import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
 import { claudeStepDone } from '@/lib/onboarding/checklist'
+import { loadConnectedAiClients } from '@/lib/onboarding/ai-clients.server'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
   getDashboardAuthContext,
@@ -92,6 +93,7 @@ export default async function DashboardPage() {
     agentProfile,
     { count: skatteverketTokenCount },
     { count: oauthKeyCount, error: oauthKeyError },
+    aiClients,
   ] =
     await Promise.all([
       getDashboardSettings(),
@@ -100,7 +102,7 @@ export default async function DashboardPage() {
       getResolvedDashboardAgentProfile(),
       // The Skatteverket promo below the panes needs this flag in the shell;
       // the checklist section reads it again for its own step (cheap head count).
-      supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('company_id', companyId),
+      supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('company_id', companyId).eq('status', 'active'),
       // The checklist's "Anslut till Claude" step is done when the MCP OAuth
       // token route has minted a key for this user (claudeStepDone). Keyed on
       // the user, not the company: the Claude connection follows the person,
@@ -113,6 +115,10 @@ export default async function DashboardPage() {
         .eq('user_id', user.id)
         .eq('name', OAUTH_MCP_KEY_NAME)
         .is('revoked_at', null),
+      // Which of Claude / ChatGPT / Grok completed the OAuth sign-in: the
+      // Att göra footer hands the first row to a connected client. Same
+      // per-user rule as the count above; a failed read answers none.
+      loadConnectedAiClients(serviceClient, user.id),
     ])
 
   // A FAILED settings read must not masquerade as "onboarding not done":
@@ -190,12 +196,17 @@ export default async function DashboardPage() {
       agentBuilt={agentBuilt}
       userFirstName={userFirstName}
       initialSetup={initialSetup}
-      hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
       notices={notices}
       checklist={checklist}
       panes={
         <Suspense fallback={<PanesSkeleton />}>
-          <HemPanesSection companyId={companyId} now={now} setupOpen={setupOpen} />
+          <HemPanesSection
+            companyId={companyId}
+            now={now}
+            setupOpen={setupOpen}
+            hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
+            aiClients={aiClients}
+          />
         </Suspense>
       }
     />

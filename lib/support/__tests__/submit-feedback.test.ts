@@ -22,7 +22,8 @@ describe('submitFeedback', () => {
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
     captureMock.mockClear()
-    sendMessageMock.mockClear()
+    sendMessageMock.mockReset()
+    sendMessageMock.mockResolvedValue({ ticket_id: 't1' })
     isAvailableMock.mockReturnValue(true)
     // Analytics on by default so the breadcrumb path is exercised.
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
@@ -40,13 +41,22 @@ describe('submitFeedback', () => {
     return fetchSpy
   }
 
-  it('delivers over email and reports the email channel', async () => {
+  it('delivers a plain message as a PostHog ticket and sends no email', async () => {
     const fetchSpy = stubFetchOk()
 
     const result = await submitFeedback({ subject: 'Hjälpsida', message: 'Hjälp tack' })
 
-    expect(result.ok).toBe(true)
-    expect(result.channels).toEqual(['email', 'ticket'])
+    expect(result).toEqual({ ok: true, channels: ['ticket'] })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('delivers over email when conversations are unavailable', async () => {
+    isAvailableMock.mockReturnValue(false)
+    const fetchSpy = stubFetchOk()
+
+    const result = await submitFeedback({ subject: 'Hjälpsida', message: 'Hjälp tack' })
+
+    expect(result).toEqual({ ok: true, channels: ['email'] })
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/support/contact',
       expect.objectContaining({
@@ -57,9 +67,10 @@ describe('submitFeedback', () => {
   })
 
   // Recapt used to mask a failing email endpoint by reporting success on its
-  // own channel. Email is now the only delivery path, so its failure must
-  // surface to the user instead of being swallowed.
-  it('reports failure when the email endpoint rejects', async () => {
+  // own channel. When the ticket also failed, the email failure must surface
+  // to the user instead of being swallowed.
+  it('reports failure when the ticket failed and the email endpoint rejects', async () => {
+    sendMessageMock.mockResolvedValue(null)
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -70,13 +81,13 @@ describe('submitFeedback', () => {
 
     const result = await submitFeedback({ message: 'msg' })
 
-    // A ticket may still open, but delivery failed, so ok stays false.
     expect(result.ok).toBe(false)
-    expect(result.channels).not.toContain('email')
+    expect(result.channels).toEqual([])
     expect(result.error).toBe('Mailtjänsten är inte konfigurerad')
   })
 
-  it('reports failure when fetch itself throws', async () => {
+  it('reports failure when the ticket failed and fetch itself throws', async () => {
+    sendMessageMock.mockResolvedValue(null)
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network down')))
 
     const result = await submitFeedback({ message: 'msg' })
@@ -94,7 +105,7 @@ describe('submitFeedback', () => {
     expect(captureMock).toHaveBeenCalledWith('support_feedback_submitted', {
       subject: 'Hjälpsida',
       delivered: true,
-      email: 'ok',
+      email: 'skipped',
       ticket: 'ok',
       lost: false,
     })
@@ -102,14 +113,15 @@ describe('submitFeedback', () => {
     expect(JSON.stringify(captureMock.mock.calls)).not.toContain('känslig text')
   })
 
-  it('marks the breadcrumb undelivered when email failed', async () => {
+  it('marks the breadcrumb undelivered when both channels failed', async () => {
+    sendMessageMock.mockResolvedValue(null)
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }))
 
     await submitFeedback({ message: 'msg' })
 
     expect(captureMock).toHaveBeenCalledWith(
       'support_feedback_submitted',
-      expect.objectContaining({ delivered: false })
+      expect.objectContaining({ delivered: false, email: 'failed', ticket: 'failed', lost: true })
     )
   })
 
@@ -132,7 +144,7 @@ describe('submitFeedback', () => {
     const result = await submitFeedback({ message: 'msg' })
 
     expect(result.ok).toBe(true)
-    expect(result.channels).toContain('email')
+    expect(result.channels).toContain('ticket')
   })
 
   describe('PostHog Support ticket channel', () => {
@@ -148,14 +160,21 @@ describe('submitFeedback', () => {
       expect(sendMessageMock).toHaveBeenCalledWith('bara text')
     })
 
-    // A ticket alone is NOT delivery: nobody is watching PostHog at 02:00, and
-    // Recapt masking a dead email endpoint is the exact bug we removed.
-    it('does not report success when only the ticket worked', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'down' }) }))
+    // Since 2026-09-14 the founders answer in PostHog and the reply shows in
+    // the app, so the ticket IS the delivery; email is not even attempted.
+    it('reports success on the ticket alone and leaves email untouched', async () => {
+      const fetchSpy = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: 'down' }) })
+      vi.stubGlobal('fetch', fetchSpy)
       const result = await submitFeedback({ message: 'msg' })
-      expect(result.ok).toBe(false)
-      expect(result.channels).toEqual(['ticket'])
-      expect(result.error).toBe('down')
+      expect(result).toEqual({ ok: true, channels: ['ticket'] })
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it('falls back to email when the SDK resolves null', async () => {
+      sendMessageMock.mockResolvedValue(null)
+      stubFetchOk()
+      const result = await submitFeedback({ message: 'msg' })
+      expect(result).toEqual({ ok: true, channels: ['email'] })
     })
 
     it('still delivers by email when conversations are unavailable', async () => {
@@ -217,12 +236,12 @@ describe('submitFeedback', () => {
       )
     })
 
-    it('reports email: failed but not lost when the ticket still opened', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }))
+    it('reports email: skipped when the ticket opened', async () => {
+      stubFetchOk()
       await submitFeedback({ message: 'msg' })
       expect(captureMock).toHaveBeenCalledWith(
         'support_feedback_submitted',
-        expect.objectContaining({ email: 'failed', ticket: 'ok', lost: false })
+        expect.objectContaining({ email: 'skipped', ticket: 'ok', lost: false })
       )
     })
 
@@ -248,7 +267,7 @@ describe('submitFeedback', () => {
     })
 
     // A hung sendMessage must not hold the confirmation dialog open: the ticket
-    // is capped and reported as 'timeout', while email still decides ok.
+    // is capped, reported as 'timeout', and email takes over.
     it('does not let a hanging ticket call block the user', async () => {
       vi.useFakeTimers()
       sendMessageMock.mockImplementationOnce(() => new Promise(() => {}))
@@ -280,17 +299,23 @@ describe('submitFeedback', () => {
       })
       const props = captureMock.mock.calls[0][1] as Record<string, unknown>
       expect(props).not.toHaveProperty('attachment_count')
+      expect(props).toMatchObject({ email: 'ok', ticket: 'skipped' })
       expect(JSON.stringify(captureMock.mock.calls)).not.toContain('kontoutdrag-privat')
     })
   })
 
   describe('attachments', () => {
-    it('sends multipart with the files when there are any', async () => {
+    // Files cannot ride on the conversation API, so a message with files goes
+    // by email only, and opens no ticket: the desk makes the ticket from the
+    // mail with the files on it, and a second one would be a duplicate.
+    it('sends multipart with the files when there are any, and opens no ticket', async () => {
       const fetchSpy = stubFetchOk()
       const file = new File(['x'], 'skarmbild.png', { type: 'image/png' })
 
-      await submitFeedback({ subject: 'Trasig vy', message: 'Ser ut så här', files: [file] })
+      const result = await submitFeedback({ subject: 'Trasig vy', message: 'Ser ut så här', files: [file] })
 
+      expect(result).toEqual({ ok: true, channels: ['email'] })
+      expect(sendMessageMock).not.toHaveBeenCalled()
       const init = fetchSpy.mock.calls[0][1]
       expect(init.body).toBeInstanceOf(FormData)
       // The browser has to set the multipart boundary itself.
@@ -303,6 +328,7 @@ describe('submitFeedback', () => {
     })
 
     it('keeps the JSON body when the file list is empty', async () => {
+      isAvailableMock.mockReturnValue(false)
       const fetchSpy = stubFetchOk()
 
       await submitFeedback({ subject: 'Moms', message: 'Jag fastnar', files: [] })

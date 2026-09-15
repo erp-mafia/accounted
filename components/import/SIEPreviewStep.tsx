@@ -364,6 +364,12 @@ export default function SIEPreviewStep({
         </div>
       )}
 
+      {Boolean(preview.archivedOnlyAccounts?.length) && (
+        <p className="text-sm text-muted-foreground" data-ph-mask>
+          {t('archived_only_accounts', { accounts: preview.archivedOnlyAccounts!.map(account => account.number).join(', ') })}
+        </p>
+      )}
+
       {/* Create missing accounts */}
       {missingAccounts.length > 0 ? (
         <Card className="border-primary/50">
@@ -409,7 +415,7 @@ export default function SIEPreviewStep({
       ) : preview.mappingStatus.mapped === preview.mappingStatus.total && preview.mappingStatus.total > 0 && (
         <div className="flex items-center gap-2 rounded-lg border border-success/50 bg-success/5 px-4 py-3 text-sm">
           <CheckCircle className="h-4 w-4 text-success flex-shrink-0" />
-          <span>Alla konton skapade och automatiskt kopplade</span>
+          <span>{t('accounts_mapped_ready')}</span>
         </div>
       )}
 

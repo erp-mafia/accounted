@@ -42,7 +42,6 @@ export type JourneyStep =
   | 'moms'
   | 'method'
   | 'done'
-  | 'source'
 
 export type JourneyStation = 0 | 1 | 2 | 3 | 4
 
@@ -62,7 +61,6 @@ const STATION_OF: Record<JourneyStep, JourneyStation> = {
   moms: 2,
   method: 3,
   done: 4,
-  source: 4,
 }
 
 export function stationOfStep(step: JourneyStep): JourneyStation {
@@ -115,6 +113,8 @@ export interface JourneyInit {
 }
 
 export type JourneyAction =
+  | { type: 'RESTORE'; state: JourneyState }
+  | { type: 'DRAFT_SETTINGS'; settings: Partial<CompanySettings> }
   | { type: 'ORG_SUBMITTED'; orgNumber: string }
   | { type: 'LOOKUP_RESULT'; outcome: CompanyLookupOutcome }
   | { type: 'SEARCH_SUBMITTED'; query: string }
@@ -140,7 +140,6 @@ export type JourneyAction =
   | { type: 'METHOD_PICKED'; method: 'accrual' | 'cash' }
   | { type: 'SUBMIT_SUCCEEDED' }
   | { type: 'SUBMIT_FAILED'; code: 'org_number_invalid' | 'period_invalid' | 'generic' }
-  | { type: 'DONE_CONTINUE' }
   | { type: 'BACK' }
   | { type: 'STATION_JUMP'; station: 0 | 1 | 2 | 3 }
 
@@ -206,16 +205,17 @@ function stay(state: JourneyState, patch: Partial<JourneyState>): JourneyState {
 /**
  * The Företaget station asks only what is still unknown, then hands over to
  * the fiscal-year station. Order: name → address → F-skatt.
- * - AB with a known company_name (lookup or BankID roles) skips the name
- *   question; EF always confirms the verksamhetsnamn (it defaults to the
- *   person's name but is freely choosable, same as the wizard).
+ * - A company_name from the lookup (or BankID roles) skips the name
+ *   question for every form: the orgnr answers it, Enter is the whole step
+ *   (founder call 2026-09-11). An EF without lookup data still names its
+ *   verksamhet, and the name stays editable in Settings.
  * - Address is asked only when the lookup did not provide one.
  * - F-skatt is asked whenever it is not lookup data.
  */
 function nextCompanyStep(state: JourneyState): JourneyStep {
   const s = state.settings
   const nameKnown =
-    s.entity_type === 'aktiebolag'
+    s.entity_type === 'aktiebolag' || state.lookupRan || state.viaPrefill
       ? Boolean(s.company_name)
       : Boolean(s.company_name) && state.nameConfirmedForEf === true
   if (!nameKnown) return 'name'
@@ -288,6 +288,17 @@ function applyLookupFound(state: JourneyState, lookup: CompanyLookupResult): Jou
 
 export function journeyReducer(state: JourneyState, action: JourneyAction): JourneyState {
   switch (action.type) {
+    case 'RESTORE':
+      // Restoring a draft must never re-submit company creation or a lookup.
+      return {
+        ...action.state,
+        settings: state.settings.org_number && state.settings.org_number === action.state.settings.org_number
+          ? { ...action.state.settings, ...state.settings }
+          : action.state.settings,
+        submitting: false, lookupPending: false, searchHits: [], serverError: null,
+      }
+    case 'DRAFT_SETTINGS':
+      return { ...state, settings: { ...state.settings, ...action.settings } }
     case 'ORG_SUBMITTED': {
       if (state.submitting) return state
       // Fresh orgnr invalidates any previous lookup facts.
@@ -579,14 +590,6 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
 
     case 'SUBMIT_SUCCEEDED':
       return go(stay(state, { submitting: false }), 'done')
-
-    case 'DONE_CONTINUE': {
-      // Welcome screen → the branch question ("Var fanns bokföringen
-      // innan?") as its own step. First-company flow only: mode='add'
-      // ends on the done screen with "Öppna appen".
-      if (state.step !== 'done' || state.mode !== 'first') return state
-      return go(state, 'source')
-    }
 
     case 'SUBMIT_FAILED': {
       const cleared = stay(state, { submitting: false })

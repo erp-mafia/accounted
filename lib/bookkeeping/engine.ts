@@ -6,6 +6,7 @@ import { createLogger } from '@/lib/logger'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
+  CannotCancelNonDraftError,
   CannotEditNonDraftError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
@@ -621,6 +622,127 @@ export async function updateDraftEntry(
     .single()
 
   return completeEntry as JournalEntry
+}
+
+/**
+ * Cancel a DRAFT journal entry: the one sanctioned way out of the draft state
+ * that is not a commit.
+ *
+ * A draft holds no voucher_number (drafts are outside the verifikationsserie),
+ * so cancelling one leaves no löpnummer gap in the sense BFL 5 kap 7 § means
+ * (verifikationsnummer in unbroken löpande nummerordning) and therefore needs
+ * no documented gap explanation. The header row is kept as `cancelled` rather than
+ * deleted: the immutability trigger's own instruction ("Use cancelled status
+ * instead") and the same reason reverseEntry keeps its failed reversal headers
+ * around, which is that a row someone looked at should stay explainable.
+ *
+ * Guards, in order:
+ *   - not found / other company  → JournalEntryNotFoundError
+ *   - already cancelled          → returned unchanged (idempotent; no event)
+ *   - posted / reversed          → CannotCancelNonDraftError (storno instead)
+ *
+ * The status guard lives here and not only in the DB: the immutability
+ * trigger ALLOWS posted → cancelled (migration 20260428160000 relies on it
+ * for orphaned payment vouchers, which must also write a voucher-gap
+ * explanation). Cancelling a posted verifikat through this path would
+ * silently drop a number out of the series, so the application is the
+ * authority on which statuses may pass.
+ *
+ * Period locks are NOT worked around: the update runs through
+ * enforce_period_lock / enforce_company_lock_date like any other write, and a
+ * draft stranded behind a lock surfaces the DB refusal as a
+ * BookkeepingDatabaseError. Callers on the v1 surface pre-check the lock so
+ * the client gets PERIOD_LOCKED instead.
+ */
+export async function cancelDraftEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  entryId: string
+): Promise<JournalEntry> {
+  const { data: existing, error: loadError } = await supabase
+    .from('journal_entries')
+    .select('*, lines:journal_entry_lines(*)')
+    .eq('id', entryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (loadError) {
+    log.error('load journal entry for cancel failed', loadError, {
+      operation: 'cancel_draft_entry',
+      companyId,
+      userId,
+      entityType: 'journal_entry',
+      entityId: entryId,
+      pgCode: (loadError as { code?: string }).code,
+    })
+    throw new BookkeepingDatabaseError('cancel_draft_entry', loadError.message)
+  }
+  if (!existing) {
+    throw new JournalEntryNotFoundError()
+  }
+
+  const entry = existing as JournalEntry
+  // Idempotent: a repeated cancel is the caller reaching the state it asked
+  // for, not a conflict. Returned without emitting a second event.
+  if (entry.status === 'cancelled') {
+    return entry
+  }
+  if (entry.status !== 'draft') {
+    throw new CannotCancelNonDraftError(entry.status)
+  }
+
+  // CAS on status: a concurrent commit between the read and this write must
+  // lose, not silently un-post a verifikat. The trigger would reject
+  // posted → cancelled only for the statuses it protects, so the filter is
+  // the guarantee, not a convenience.
+  const { data: cancelled, error: cancelError } = await supabase
+    .from('journal_entries')
+    .update({ status: 'cancelled' })
+    .eq('id', entryId)
+    .eq('company_id', companyId)
+    .eq('status', 'draft')
+    .select('*, lines:journal_entry_lines(*)')
+    .maybeSingle()
+
+  if (cancelError) {
+    log.error('cancel draft journal entry failed', cancelError, {
+      operation: 'cancel_draft_entry',
+      companyId,
+      userId,
+      entityType: 'journal_entry',
+      entityId: entryId,
+      pgCode: (cancelError as { code?: string }).code,
+      pgDetails: (cancelError as { details?: string }).details,
+      pgHint: (cancelError as { hint?: string }).hint,
+    })
+    throw new BookkeepingDatabaseError('cancel_draft_entry', cancelError.message)
+  }
+
+  if (!cancelled) {
+    // Zero rows matched: the entry left 'draft' between the read and the
+    // write. Re-read so the caller is told what it actually became.
+    const { data: current } = await supabase
+      .from('journal_entries')
+      .select('status')
+      .eq('id', entryId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const status = (current as { status?: string } | null)?.status
+    if (status === 'cancelled') {
+      return { ...entry, status: 'cancelled' }
+    }
+    throw new CannotCancelNonDraftError(status ?? 'unknown')
+  }
+
+  const result = cancelled as JournalEntry
+
+  await eventBus.emit({
+    type: 'journal_entry.cancelled',
+    payload: { entry: result, userId, companyId },
+  })
+
+  return result
 }
 
 /**

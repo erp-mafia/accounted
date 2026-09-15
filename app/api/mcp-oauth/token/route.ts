@@ -11,7 +11,7 @@ import {
   DEFAULT_OAUTH_SCOPES,
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
-import { capScopesForRole, lookupCompanyRole } from '@/lib/auth/oauth-allowlist'
+import { builtInRedirectProvider, capScopesForRole, lookupCompanyRole } from '@/lib/auth/oauth-allowlist'
 import { getActiveCompanyId } from '@/lib/company/context'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
@@ -197,6 +197,11 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
       name: OAUTH_MCP_KEY_NAME,
       scopes: grantedScopes,
       refresh_token_hash: refresh.hash,
+      // Which built-in client this is (claude, chatgpt, grok, ...): the
+      // onboarding Done step and Hem show a connected state per client.
+      // The redirect URI was validated against the allowlist at /authorize
+      // and travels in the code payload; a registered client stores null.
+      client: builtInRedirectProvider(payload.redirectUri),
       // Literal keys (null when no conflict): the no-phantom-columns scanner
       // resolves object literals only, never spreads.
       sod_acknowledged_at: sodAcknowledgedAt,

@@ -32,6 +32,13 @@ export interface ReadOptions {
   vatRegistered: boolean
   /** Extracted receipt/invoice text when the caller already has it. */
   underlag?: string
+  /**
+   * A document the caller attached for this read ahead of the row's own
+   * document_id: the underlag uploaded in the review dialog is not linked
+   * to the transaction until the booking exists, so without this the read
+   * never sees it. Keys the read on that document.
+   */
+  documentId?: string | null
   samples?: number
 }
 
@@ -41,7 +48,8 @@ export async function readTransaction(
   tx: Transaction,
   opts: ReadOptions,
 ): Promise<{ selection: AccountSelection; candidates: AccountCandidate[]; read: AssistantRead }> {
-  const underlag = opts.underlag ?? (await gatherUnderlag(supabase, companyId, tx.id, tx.document_id))
+  const underlag =
+    opts.underlag ?? (await gatherUnderlag(supabase, companyId, tx.id, opts.documentId ?? tx.document_id))
   const candidates = await gatherCandidates(supabase, companyId, tx)
   const selection = await selectAccount({
     transaction: {
@@ -59,7 +67,7 @@ export async function readTransaction(
   })
   const read: AssistantRead = {
     transaction_id: tx.id,
-    underlag_key: underlagKeyFor(tx),
+    underlag_key: opts.documentId ?? underlagKeyFor(tx),
     has_underlag: underlag.trim().length > 0,
     account: selection.account,
     category: selection.category,

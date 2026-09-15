@@ -147,6 +147,12 @@ export async function GET(request: Request) {
     // Require the row still be the original pending state. POST /connect can
     // invalidate this row between lookup and activate; filtering only by id
     // would revive the abandoned flow and attach the wrong Zettle org.
+    // Seed the purchase cursor with the connection moment. Sales made before
+    // the merchant connected are already in the books from the bank side, so
+    // a first sync that reached further back would only manufacture
+    // duplicates. Reaching further back is an explicit choice: POST
+    // /api/extensions/ext/zettle/backfill with a start date.
+    const connectedAt = new Date().toISOString()
     const { data: updatedConnection, error: updateError } = await supabase
       .from('zettle_connections')
       .update({
@@ -154,7 +160,8 @@ export async function GET(request: Request) {
         organization_name: null,
         refresh_token_encrypted: encryptCredential(tokens.refresh_token),
         status: 'active',
-        connected_at: new Date().toISOString(),
+        connected_at: connectedAt,
+        last_order_synced_at: connectedAt,
         error_message: null,
         oauth_state: null,
         transaction_sync_enabled: true,

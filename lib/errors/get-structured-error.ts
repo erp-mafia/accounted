@@ -25,6 +25,7 @@ import {
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
+  CannotCancelNonDraftError,
   CannotCorrectNonPostedError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
@@ -492,6 +493,9 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   if (err instanceof CannotCorrectNonPostedError) {
     return { code: err.code, details: { currentStatus: err.currentStatus } }
   }
+  if (err instanceof CannotCancelNonDraftError) {
+    return { code: err.code, details: { currentStatus: err.currentStatus } }
+  }
   if (err instanceof EntryAlreadyReversedError) return { code: err.code }
   if (err instanceof CurrencyRevaluationAlreadyExistsError) return { code: err.code }
   if (err instanceof InvalidMappingResultError) {
@@ -542,6 +546,12 @@ function buildResponse(
       ...(requestId ? { requestId } : {}),
       ...(details !== undefined ? { details } : {}),
     },
+  }
+  // Consumers that read only error.message need the same actionable summary
+  // as the app. Keep the full issues array and stable code for API clients.
+  if (code === 'VALIDATION_ERROR' && Array.isArray((details as { issues?: unknown } | undefined)?.issues)) {
+    body.error.message = getErrorMessage(body, { locale: 'sv' })
+    body.error.message_en = getErrorMessage(body, { locale: 'en' })
   }
   const res = NextResponse.json(body, { status: entry.httpStatus })
   if (requestId) res.headers.set('X-Request-Id', requestId)

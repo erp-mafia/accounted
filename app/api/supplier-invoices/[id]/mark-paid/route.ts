@@ -17,6 +17,7 @@ import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findDuplicatePaymentCandidatesForSupplierInvoice } from '@/lib/invoices/duplicate-payment-candidates'
+import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplicate-guard-history'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -57,14 +58,6 @@ export const POST = withRouteContext(
     const paymentDate = body.payment_date || new Date().toISOString().split('T')[0]
     const paymentAmount = body.amount || invoice.remaining_amount
 
-    if (body.force) {
-      opLog.warn('duplicate-payment guard bypassed', {
-        reason: 'force=true',
-        paymentAmount,
-        paymentDate,
-      })
-    }
-
     // Duplicate-payment guard: if a bank transaction already looks like this
     // payment, surface it before booking a new payment entry. Caller can
     // override with `force: true`. Skipped on partial payments: those are an
@@ -77,7 +70,18 @@ export const POST = withRouteContext(
     // link, and the UI words it that way.
     const paidRounded = Math.round(paymentAmount * 100) / 100
     const remainingRounded = Math.round(invoice.remaining_amount * 100) / 100
-    if (!body.force && paidRounded >= remainingRounded) {
+    // Whether the guard had anything to say at all. force on a PARTIAL payment
+    // overrides nothing (the guard never runs there), so it must not be
+    // recorded as an override further down.
+    const guardApplies = paidRounded >= remainingRounded
+    if (body.force && guardApplies) {
+      opLog.warn('duplicate-payment guard bypassed', {
+        reason: 'force=true',
+        paymentAmount,
+        paymentDate,
+      })
+    }
+    if (!body.force && guardApplies) {
       const supplierName = (invoice as SupplierInvoice & { supplier?: { name?: string } })
         .supplier?.name
       const candidates = await findDuplicatePaymentCandidatesForSupplierInvoice(supabase, {
@@ -308,6 +312,35 @@ export const POST = withRouteContext(
       return errorResponseFromCode('SI_PAID_FAILED', opLog, {
         requestId,
         details: { reason: 'payment_record_insert_failed' },
+      })
+    }
+
+    // The user was warned about a possible double payment and booked anyway.
+    // The server log alone leaves the books with no trace of that decision, so
+    // append one behandlingshistorik row naming the payment voucher and what
+    // the guard would have flagged (BFNAR 2013:2 p. 9.16). Runs after the
+    // payment is committed so the record can name a voucher that really
+    // exists, and never throws: the payment is already immutable.
+    if (body.force && guardApplies) {
+      await recordSupplierInvoiceDuplicateGuardBypass(supabase, {
+        companyId: companyId!,
+        invoice: {
+          id: invoice.id,
+          supplier_invoice_number: invoice.supplier_invoice_number ?? null,
+          payment_reference:
+            (invoice as { payment_reference?: string | null }).payment_reference ?? null,
+          supplier_name: (invoice as SupplierInvoice & { supplier?: { name?: string } }).supplier
+            ?.name,
+          currency: invoice.currency ?? null,
+          total: invoice.total ?? null,
+          total_sek: invoice.total_sek ?? null,
+          exchange_rate: invoice.exchange_rate ?? null,
+        },
+        paymentAmount,
+        paymentDate,
+        paymentAccount: paymentAccount ?? null,
+        journalEntryId,
+        actor: { user_id: user.id, actor_type: 'user' },
       })
     }
 

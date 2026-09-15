@@ -4,13 +4,16 @@ import {
   fromMinor,
   mapLineItems,
   mapPurchaseToWebshopRows,
+  parseBackfillFrom,
   purchaseQualifiesAsPaidSale,
   purchaseQualifiesAsRefund,
+  resolveWindowStartIso,
   unsupportedReason,
   zettlePurchaseExternalId,
   zettleStoreScope,
 } from '../lib/order-sync'
-import type { ZettlePurchase } from '../types'
+import { MAX_BACKFILL_YEARS } from '../types'
+import type { ZettleConnection, ZettlePurchase } from '../types'
 
 function sale(overrides: Partial<ZettlePurchase> = {}): ZettlePurchase {
   return {
@@ -202,5 +205,101 @@ describe('zettle order-sync mapping', () => {
   it('converts minor units via fromMinor', () => {
     expect(fromMinor(12500)).toBe(125)
     expect(fromMinor(-50)).toBe(-0.5)
+  })
+})
+
+const CONNECTED_AT = '2026-09-09T10:00:00.000Z'
+
+function connection(overrides: Partial<ZettleConnection> = {}): ZettleConnection {
+  return {
+    id: 'conn-1',
+    company_id: 'company-1',
+    user_id: 'user-1',
+    organization_uuid: 'org-1',
+    organization_name: 'Caféet',
+    refresh_token_encrypted: 'enc',
+    oauth_state: null,
+    return_origin: null,
+    sync_lock_until: '1970-01-01T00:00:00.000Z',
+    status: 'active',
+    currency: 'SEK',
+    transaction_sync_enabled: true,
+    last_order_synced_at: CONNECTED_AT,
+    error_message: null,
+    connected_at: CONNECTED_AT,
+    disconnected_at: null,
+    created_at: '2026-09-09T09:59:00.000Z',
+    updated_at: CONNECTED_AT,
+    ...overrides,
+  }
+}
+
+describe('zettle sync window', () => {
+  it('starts the first sync at the connection moment, not a day earlier', () => {
+    // The callback seeds the cursor with connected_at; the 24 h overlap must
+    // not drag the window back into sales the user booked from the bank.
+    expect(resolveWindowStartIso(connection())).toBe(CONNECTED_AT)
+  })
+
+  it('keeps the 24 h overlap once the cursor has moved past the connection', () => {
+    const start = resolveWindowStartIso(
+      connection({ last_order_synced_at: '2026-09-20T10:00:00.000Z' }),
+    )
+    expect(start).toBe('2026-09-19T10:00:00.000Z')
+  })
+
+  it('clamps the overlap at the connection moment while it is still within a day', () => {
+    const start = resolveWindowStartIso(
+      connection({ last_order_synced_at: '2026-09-09T18:00:00.000Z' }),
+    )
+    expect(start).toBe(CONNECTED_AT)
+  })
+
+  it('falls back to the connection\'s own start when the cursor is null', () => {
+    expect(resolveWindowStartIso(connection({ last_order_synced_at: null }))).toBe(CONNECTED_AT)
+    expect(
+      resolveWindowStartIso(
+        connection({ last_order_synced_at: null, connected_at: null }),
+      ),
+    ).toBe('2026-09-09T09:59:00.000Z')
+  })
+
+  it('honours an explicit backfill cursor exactly, without reaching a day further back', () => {
+    const start = resolveWindowStartIso(
+      connection({ last_order_synced_at: '2026-01-01T00:00:00.000Z' }),
+    )
+    expect(start).toBe('2026-01-01T00:00:00.000Z')
+  })
+})
+
+describe('parseBackfillFrom', () => {
+  const now = new Date('2026-09-14T12:00:00.000Z')
+
+  it('accepts a plain date and pins it to midnight UTC', () => {
+    expect(parseBackfillFrom('2026-01-01', now)).toEqual({ iso: '2026-01-01T00:00:00.000Z' })
+  })
+
+  it('rejects anything that is not a YYYY-MM-DD string', () => {
+    expect(parseBackfillFrom(undefined, now)).toEqual({ error: 'invalid' })
+    expect(parseBackfillFrom('2026-1-1', now)).toEqual({ error: 'invalid' })
+    expect(parseBackfillFrom(20260101, now)).toEqual({ error: 'invalid' })
+  })
+
+  it('rejects a day that does not exist instead of rolling it over', () => {
+    // Date.parse turns 2026-02-31T00:00:00Z into 3 March.
+    expect(parseBackfillFrom('2026-02-31', now)).toEqual({ error: 'invalid' })
+  })
+
+  it('rejects a future start date', () => {
+    expect(parseBackfillFrom('2026-09-15', now)).toEqual({ error: 'future' })
+  })
+
+  it('caps how far back a backfill may reach', () => {
+    const floor = new Date(now)
+    floor.setUTCFullYear(floor.getUTCFullYear() - MAX_BACKFILL_YEARS)
+    const justInside = new Date(floor.getTime() + 86_400_000).toISOString().slice(0, 10)
+    const tooOld = new Date(floor.getTime() - 2 * 86_400_000).toISOString().slice(0, 10)
+    expect(parseBackfillFrom(justInside, now)).toHaveProperty('iso')
+    expect(parseBackfillFrom(tooOld, now)).toEqual({ error: 'too_old' })
   })
 })

@@ -93,6 +93,8 @@ import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
+import UnitDatalist from '@/components/invoices/UnitDatalist'
 import {
   buildInvoiceWritePayload,
   buildSelfBilledPayload,
@@ -111,7 +113,6 @@ import type {
 } from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
-const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
 
 // A draft invoice + its line items, as fetched for the edit flow.
 export type InvoiceForEdit = Invoice & { items: InvoiceItem[] }
@@ -994,7 +995,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // amount, quantity, unit or VAT cell of a row that does not exist yet, so
   // the click births the row (description as typed, possibly empty) and
   // lands in the same cell. The inputs mount on the next commit, hence the
-  // timeout; the Select triggers are not registered fields, so they are
+  // timeout; the VAT Select trigger is not a registered field, so it is
   // reached through the data-cell anchor instead of setFocus.
   function commitEntryToCell(text: string, cell: EntryGhostCell) {
     const index = fields.length
@@ -1004,7 +1005,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     setEntryActiveIdx(-1)
     markRowSettled(index)
     window.setTimeout(() => {
-      if (cell === 'quantity' || cell === 'unit_price') {
+      if (cell === 'quantity' || cell === 'unit_price' || cell === 'unit') {
         setFocus(`items.${index}.${cell}`, { shouldSelect: true })
         return
       }
@@ -2385,6 +2386,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             </SectionLabel>
             <div ref={entryRootRef} className="relative">
               <div className="overflow-x-auto">
+                <UnitDatalist />
                 <div className="min-w-[540px]">
                   {/* Header row: offset by the drag-grip gutter (w-8). */}
                   <div className="pl-8">
@@ -2505,30 +2507,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                     rowErrors?.quantity && 'border-destructive',
                                   )}
                                 />
-                                <Controller
-                                  name={`items.${index}.unit`}
-                                  control={control}
-                                  render={({ field: unitField }) => (
-                                    <Select value={unitField.value} onValueChange={unitField.onChange}>
-                                      <SelectTrigger
-                                        data-cell="unit"
-                                        className={cn(
-                                          CELL_SELECT_TRIGGER_CLASS,
-                                          'text-muted-foreground',
-                                          rowErrors?.unit && 'border-destructive',
-                                        )}
-                                        aria-label={t('unit_label')}
-                                      >
-                                        <SelectValue />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {units.map((unit) => (
-                                          <SelectItem key={unit} value={unit}>
-                                            {unit}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
+                                {/* Free text with suggestions, not a closed
+                                    list: any unit the API stores (an article
+                                    imported as "l" or "m2") must be typable
+                                    here and must render as itself. */}
+                                <input
+                                  data-cell="unit"
+                                  list={UNIT_DATALIST_ID}
+                                  maxLength={UNIT_MAX_LENGTH}
+                                  {...register(`items.${index}.unit`)}
+                                  aria-label={t('unit_label')}
+                                  aria-invalid={rowErrors?.unit ? true : undefined}
+                                  className={cn(
+                                    CELL_INPUT_CLASS,
+                                    'w-14 text-muted-foreground',
+                                    rowErrors?.unit && 'border-destructive',
                                   )}
                                 />
                               </div>

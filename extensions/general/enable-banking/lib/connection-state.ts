@@ -21,12 +21,21 @@ export const EXPIRY_WARNING_DAYS = 7
  *  The nightly cron runs daily, so 3 days is several missed runs. */
 export const STALE_SYNC_DAYS = 3
 
+/** Minutes a 'pending' row may sit before it counts as an abandoned attempt.
+ *  A bank authorization (BankID, account consent) completes in a couple of
+ *  minutes; past this the user timed out or closed the bank tab, and Enable
+ *  Banking's page never redirected to our callback, so no cleanup ran. The
+ *  row is only presented differently: a late callback still activates it. */
+export const PENDING_ABANDON_MINUTES = 10
+export const PENDING_ABANDON_MS = PENDING_ABANDON_MINUTES * 60 * 1000
+
 const DAY_MS = 24 * 60 * 60 * 1000
 
 /** Presentation state, from most to least urgent (see STATE_PRECEDENCE). */
 export type ConnectionUiState =
   | 'pending_selection'
   | 'pending'
+  | 'abandoned'
   | 'error'
   | 'expired'
   | 'expiring'
@@ -40,6 +49,10 @@ export interface ConnectionStateInput {
   status: string
   consent_expires: string | null
   last_synced_at: string | null
+  /** When the row was created; a 'pending' row older than
+   *  PENDING_ABANDON_MS is an abandoned attempt. Optional so callers that
+   *  never see pending rows need not pass it. */
+  created_at?: string
 }
 
 export function getConnectionUiState(
@@ -49,8 +62,11 @@ export function getConnectionUiState(
   switch (connection.status) {
     case 'pending_selection':
       return 'pending_selection'
-    case 'pending':
-      return 'pending'
+    case 'pending': {
+      if (!connection.created_at) return 'pending'
+      const age = now - new Date(connection.created_at).getTime()
+      return age >= PENDING_ABANDON_MS ? 'abandoned' : 'pending'
+    }
     case 'error':
       return 'error'
     case 'expired':
@@ -76,12 +92,13 @@ export function getConnectionUiState(
 const STATE_PRECEDENCE: Record<ConnectionUiState, number> = {
   pending_selection: 0,
   pending: 1,
-  error: 2,
-  expired: 3,
-  expiring: 4,
-  stale: 5,
-  never_synced: 6,
-  active: 7,
+  abandoned: 2,
+  error: 3,
+  expired: 4,
+  expiring: 5,
+  stale: 6,
+  never_synced: 7,
+  active: 8,
 }
 
 export function sortConnectionsByPrecedence<
@@ -99,10 +116,11 @@ export function sortConnectionsByPrecedence<
 
 /** States that earn the page's one .attn sentence (design convention 6:
  *  attention is ONE ochre sentence per page). Worst first. */
-export type PageAttentionState = 'error' | 'expired' | 'expiring' | 'stale' | 'never_synced'
+export type PageAttentionState = 'error' | 'abandoned' | 'expired' | 'expiring' | 'stale' | 'never_synced'
 
 const ATTENTION_PRECEDENCE: PageAttentionState[] = [
   'error',
+  'abandoned',
   'expired',
   'expiring',
   'stale',
@@ -137,6 +155,8 @@ export function buildPageAttentionSentence(
   switch (attention.state) {
     case 'error':
       return `${bank}: anslutningen har ett fel. Försök igen eller förnya samtycket.`
+    case 'abandoned':
+      return `${bank}: anslutningen slutfördes inte hos banken. Starta bankkopplingen på nytt och slutför alla steg direkt.`
     case 'expired':
       return `${bank}: PSD2-samtycket har löpt ut. Förnya samtycket för att återuppta synkroniseringen.`
     case 'expiring': {

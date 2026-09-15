@@ -7,6 +7,7 @@ import { SIE_JOB_VERSION, SIE_LIMITS, type SIEJob } from './sie-job-contract'
 import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { isValidBASRange } from './account-mapper'
+import { SIELegacyReviewRequiredError } from './sie-legacy-recovery'
 
 export interface SIEJobOptions {
   filename: string
@@ -244,9 +245,17 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   return data as SIEJob
 }
 
+/** Reject untracked legacy attempts before forwarding durable actions to guarded RPCs. */
 export async function requestSIEJobAction(supabase: SupabaseClient, companyId: string, userId: string,
   importId: string, action: 'resume' | 'undo',
 ): Promise<SIEJob> {
+  // A legacy row exists but cannot be acted on by the durable job RPCs.
+  // Keep this preflight read-only; the RPC still rechecks durable authorization and locks.
+  const lookup = await supabase.from('sie_imports').select('id,job_state')
+    .eq('company_id', companyId).eq('id', importId).maybeSingle()
+  if (lookup.error) throw lookup.error
+  if (!lookup.data) throw Object.assign(new Error('SIE import not found'), { code: 'NOT_FOUND' })
+  if (!lookup.data.job_state) throw new SIELegacyReviewRequiredError()
   const { data, error } = await supabase.rpc(action === 'undo' ? 'request_sie_import_undo' : 'resume_sie_import_job', {
     p_company_id: companyId, p_import_id: importId, p_actor: userId,
   })

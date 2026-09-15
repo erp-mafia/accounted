@@ -311,8 +311,10 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
       // the user. The 24h service window is long gone at 48h and v1 sends no
       // templates, so the honest recovery is to keep accepting a LATE answer:
       // the rows stay staged and company_options stay in the context, which
-      // classify() treats as an open choice even in idle. Only when Meta has
-      // stopped serving the media (~30 days) does the marker become true.
+      // classify() treats as an open choice even in idle. This pass stamps
+      // only rows past the OUTER BOUND, where the answer is no longer in
+      // doubt; whether a younger file is still fetchable is asked of Meta at
+      // release time, in the drain, not guessed from an age here (#2363).
       let keepCompanyOptions = false
       if (conversation.state === 'awaiting_company') {
         const staleCutoff = new Date(now - STAGED_MEDIA_MAX_AGE_MS).toISOString()

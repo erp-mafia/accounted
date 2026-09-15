@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import useSWR from 'swr'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
@@ -36,8 +36,9 @@ import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import VatTreatmentSelect from './VatTreatmentSelect'
-import AiCategorizeProposal, { type AiProposalMeta, type AssistantPick } from './AiCategorizeProposal'
+import AiCategorizeProposal, { AiStatusLine, pickFromRead, proposalMetaFromRead, type AiProposalMeta, type AssistantPick } from './AiCategorizeProposal'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import { useDocumentExtraction } from '@/lib/hooks/use-document-extraction'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { VatTreatment, EntityType } from '@/types'
@@ -145,6 +146,23 @@ export default function QuickReviewDialog({
   )
   const documentId = preAttachedDocumentId ?? underlag?.document?.id ?? null
   const [useDocVat, setUseDocVat] = useState(true)
+  // Underlag attached in this dialog (an upload, or a pick from the inkorg)
+  // before the booking exists. It is not on the row yet, so the assistant's
+  // stored read never saw it: once its extraction lands, the row is read
+  // again with it (Jonas, 2026-09-14: "INTERNET BET 1" with an If invoice
+  // attached kept proposing internet). Latest upload first: that is the one
+  // the person just dropped.
+  const inDialogDocId = documentId
+    ? null
+    : ([...uploadedFiles].reverse().find((f) => f.status === 'uploaded' && f.id)?.id ??
+        pickedInboxDocs[0]?.document_id ??
+        null)
+  const inDialogExtraction = useDocumentExtraction(inDialogDocId)
+  const readDocId = inDialogExtraction.status === 'succeeded' ? inDialogDocId : null
+  const [docReading, setDocReading] = useState(false)
+  // The whole dialog takes a dropped file, not only the dashed box: the box
+  // is folded away until asked for, so the first drag also unfolds it.
+  const dropSurfaceRef = useRef<HTMLDivElement>(null)
 
   // An account the person (or the assistant) sets: the proposal becomes an
   // account booking on it. A class-2 account carries no VAT.
@@ -158,8 +176,9 @@ export default function QuickReviewDialog({
   }, [amountForLegs])
   // The assistant's pick, taken into this review: the proposal becomes the
   // account it named with its VAT. A pick that pre-filled on its own leaves
-  // nothing to undo; one the person clicked keeps the previous proposal.
-  const takeAssistantPick = useCallback((pick: AssistantPick, opts: { auto: boolean }) => {
+  // nothing to undo; one the person clicked, or one read off a document
+  // they just attached, keeps the previous proposal so it can be undone.
+  const takeAssistantPick = useCallback((pick: AssistantPick, opts: { auto: boolean; fromDocument?: boolean }) => {
     setProposal((p) => {
       if (!opts.auto) setPrevious(p)
       return accountProposal({
@@ -170,10 +189,47 @@ export default function QuickReviewDialog({
         category: pick.category ?? (p.booking.kind === 'counterparty' ? (amountForLegs < 0 ? 'expense_other' : 'income_other') : p.booking.category),
         vat_treatment: pick.account.startsWith('2') || pick.vat === 'none' ? 'exempt' : pick.vat,
         amount: amountForLegs,
-        has_underlag: !!transaction?.document_id,
+        has_underlag: opts.fromDocument || !!transaction?.document_id,
       })
     })
   }, [amountForLegs, transaction?.id, transaction?.document_id])
+
+  // Read the row again with the underlag attached in this dialog, once its
+  // extraction has landed. The pick replaces the proposal (undo stays
+  // offered) and reports itself for the calibration sample. Nothing here is
+  // stored server-side: the row does not carry the document until booked.
+  useEffect(() => {
+    if (!open || !readDocId || !transaction?.id) return
+    let alive = true
+    setDocReading(true)
+    ;(async () => {
+      try {
+        const res = await fetch('/api/agent/categorize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transaction_id: transaction.id, document_id: readDocId }),
+        })
+        if (!alive) return
+        const body = res.ok ? ((await res.json()) as { data?: AssistantRead }) : null
+        if (!alive) return
+        const read = body?.data
+        const pick = read ? pickFromRead(read) : null
+        // A low guess off the document is no better than the row's: the
+        // proposal already shown stands.
+        if (read && pick && read.confidence >= 0.5) {
+          setAiProposal(proposalMetaFromRead(read, pick))
+          takeAssistantPick(pick, { auto: false, fromDocument: true })
+        }
+      } catch {
+        // The document is attached either way; only the re-read was lost.
+      } finally {
+        if (alive) setDocReading(false)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [open, readDocId, transaction?.id, takeAssistantPick])
   // The person's own VAT choice. It also settles the underlag question: a
   // rate picked by hand is what gets booked, and the moms line below offers
   // the document's figure as the way back. Without this the document's moms
@@ -490,7 +546,19 @@ export default function QuickReviewDialog({
       {/* Both variants cap at the space left of a docked agent sheet so the
           right edge never lands unreachable under it (sheet is z-60).
           --agent-sheet-w is docked-only: sheet closed = the old widths. */}
-      <DialogContent className={documentId ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto' : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[85vh] overflow-y-auto'}>
+      <DialogContent
+        ref={dropSurfaceRef}
+        className={documentId ? 'max-w-[min(72rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[90vh] overflow-y-auto' : 'max-w-[min(28rem,calc(100vw-var(--agent-sheet-w,0px)))] sm:max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[85vh] overflow-y-auto'}
+        // A file dragged anywhere over the dialog unfolds the upload zone,
+        // which then owns the drop (DocumentUploadZone dropSurfaceRef). The
+        // two preventDefaults keep a drop that lands with no zone mounted
+        // (document already attached) from navigating the tab to the file.
+        onDragEnter={(e) => {
+          if (!documentId && !showUploadZone && e.dataTransfer.types.includes('Files')) setShowUploadZone(true)
+        }}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription className="sr-only">
@@ -607,6 +675,12 @@ export default function QuickReviewDialog({
                 {t('changed_undo')}
               </button>
             </p>
+          )}
+          {/* The row is being read again with the underlag just attached:
+              said here, above the verdict line, since that line is gone once
+              this review already is the assistant's pick. */}
+          {(docReading || (!!inDialogDocId && inDialogExtraction.status === 'running')) && (
+            <AiStatusLine text={t('ai_reading')} />
           )}
           {tx.id && proposal.source !== 'assistant' && (
             <AiCategorizeProposal
@@ -779,6 +853,7 @@ export default function QuickReviewDialog({
                   files={uploadedFiles}
                   onFilesChange={setUploadedFiles}
                   compact
+                  dropSurfaceRef={dropSurfaceRef}
                 />
                 {pickedInboxDocs.map((doc) => (
                   <div

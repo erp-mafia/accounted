@@ -184,10 +184,11 @@ export default async function RootLayout({
         <link rel="apple-touch-icon" href={branding.appleTouchIconPath} />
         {/* Tab icon: the brand's dedicated square favicon when set, else the
             logo (a wide lockup squeezed to 16px, but better than the default
-            on a branded host). */}
-        {brand?.faviconUrl || brand?.logoUrl ? (
-          <link rel="icon" href={brand.faviconUrl ?? brand.logoUrl ?? undefined} />
-        ) : null}
+            on a branded host), else the default mark. Always exactly one
+            rel="icon" tag: app/icon.png (Next's file-convention favicon) was
+            removed because it injected its own unconditional tag that beat
+            this one in the browser, so branded hosts never saw their icon. */}
+        <link rel="icon" href={brand?.faviconUrl ?? brand?.logoUrl ?? branding.logoPath} />
       </head>
       <body
         className="antialiased"

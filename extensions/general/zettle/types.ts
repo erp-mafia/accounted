@@ -1,3 +1,12 @@
+/**
+ * How far back an explicit backfill (POST /backfill) may reach. Zettle's
+ * Purchase API v2 documents no history limit, so this is our own floor: far
+ * enough to cover the years anyone still books, short enough that a mistyped
+ * year cannot ask for an unbounded scan. Lives here so the client panel can
+ * bound its date picker without importing the server-side sync module.
+ */
+export const MAX_BACKFILL_YEARS = 3
+
 /** Row shape of public.zettle_connections. */
 export interface ZettleConnection {
   id: string

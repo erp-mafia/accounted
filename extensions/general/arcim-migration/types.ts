@@ -59,6 +59,14 @@ export interface SkipReasons {
    * covers. Never fetched in detail, never inserted: their ledger is not here.
    */
   outsideFiscalYears?: number
+  /**
+   * Supplier invoices the provider returned with no amount and no line items.
+   * Bokio answers that way for invoices older than the register its API
+   * exposes; importing them wrote rows whose zero balance then read as a
+   * settled 0 kr payable. An amount-less record is not a 0 kr invoice, so it
+   * is declined and counted rather than imported.
+   */
+  zeroTotal?: number
 }
 
 /**

@@ -4,22 +4,27 @@ import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
 export interface SubmitFeedbackInput {
   message: string
   subject?: string
-  /** Screenshots or PDFs relayed on the support email only. */
+  /** Screenshots or PDFs. A message with files goes by email only: the
+   *  conversation API carries text, and the desk turns the mail into a
+   *  ticket with the files attached. */
   files?: File[]
 }
 
 /**
  * Delivery channels.
  *
- * 'email'  - Resend to the support inbox. The guarantee: it works with no
- *            third party beyond the mail provider and needs no analytics.
  * 'ticket' - PostHog Support conversation, linked to the person and their
- *            session replay so we can see what they were doing.
+ *            session replay. Since 2026-09-14 this is the inbox the founders
+ *            answer in, and the reply shows up in the same dialog
+ *            (components/ui/support-link.tsx), so it is the delivery for a
+ *            plain message.
+ * 'email'  - Resend to the support address. The delivery for a message with
+ *            attachments, and the fallback when conversations are
+ *            unavailable (self-hosted, analytics off) or the call fails.
  *
- * Recapt used to be the second channel and would report success on its own,
- * masking a failing /api/support/contact. This does NOT repeat that: the
- * result is `ok` only when email actually delivered. A ticket alone is not
- * treated as delivery, because nobody is watching PostHog at 02:00.
+ * Recapt used to report success on its own channel while the real delivery
+ * failed. This does NOT repeat that: `ok` is true only when one of the two
+ * channels confirmed the message, and the breadcrumb says which.
  */
 export type SupportChannel = 'email' | 'ticket'
 
@@ -70,8 +75,8 @@ async function submitViaEmail(
 /** Outcome of each channel, for the analytics breadcrumb. */
 type ChannelOutcome = 'ok' | 'failed' | 'unavailable' | 'timeout'
 
-/** How long the ticket call may run before we stop waiting on it. The user is
- *  waiting on this dialog, and the ticket is a complement, not the delivery. */
+/** How long the ticket call may run before email takes over. The user is
+ *  waiting on this dialog; a hung SDK must not hold it. */
 const TICKET_TIMEOUT_MS = 4000
 
 /**
@@ -95,19 +100,20 @@ const TICKET_TIMEOUT_MS = 4000
  */
 function noteInAnalytics(
   { subject }: SubmitFeedbackInput,
-  outcomes: { email: boolean; ticket: ChannelOutcome }
+  outcomes: { email: 'ok' | 'failed' | 'skipped'; ticket: ChannelOutcome | 'skipped' }
 ): void {
   if (!isAnalyticsEnabled()) return
   try {
+    const delivered = outcomes.ticket === 'ok' || outcomes.email === 'ok'
     posthog.capture('support_feedback_submitted', {
       subject: subject ?? null,
       // Kept for continuity: existing insights filter on `delivered`.
-      delivered: outcomes.email,
-      email: outcomes.email ? 'ok' : 'failed',
+      delivered,
+      email: outcomes.email,
       ticket: outcomes.ticket,
       // True only when the user's message reached neither channel. This is the
       // one that deserves an alert.
-      lost: !outcomes.email && outcomes.ticket !== 'ok',
+      lost: !delivered,
     })
   } catch {
     // Telemetry must never affect whether the user's message went out.
@@ -130,8 +136,10 @@ async function submitViaTicket({ message, subject }: SubmitFeedbackInput): Promi
   try {
     const conversations = posthog.conversations
     if (!conversations?.isAvailable?.()) return 'unavailable'
-    await conversations.sendMessage(composeTicketBody(message, subject))
-    return 'ok'
+    // The SDK resolves null (not a rejection) when the ticket could not be
+    // created; that must count as failed so email takes over.
+    const res = await conversations.sendMessage(composeTicketBody(message, subject))
+    return res ? 'ok' : 'failed'
   } catch {
     return 'failed'
   }
@@ -158,24 +166,27 @@ function withTimeout(
 }
 
 export async function submitFeedback(input: SubmitFeedbackInput): Promise<SubmitFeedbackResult> {
-  // Both channels start together, so the user waits max(email, ticket) rather
-  // than the sum. Email is the delivery guarantee and decides `ok`; the ticket
-  // is a complement, so it is additionally capped: a hung sendMessage must
-  // never hold the confirmation dialog open. It resolves to 'timeout' instead,
-  // which is reported rather than silently rounded to 'failed'.
-  const ticketPromise = submitViaTicket(input)
+  // Attachments only travel by email: the conversation API is text, and the
+  // desk turns that mail into the ticket with the files on it. Opening a
+  // ticket as well would make the same message show up twice.
+  if (input.files?.length) {
+    const emailResult = await submitViaEmail(input)
+    noteInAnalytics(input, { email: emailResult.ok ? 'ok' : 'failed', ticket: 'skipped' })
+    if (emailResult.ok) return { ok: true, channels: ['email'] }
+    return { ok: false, channels: [], error: emailResult.error }
+  }
+
+  // Plain message: the ticket is the delivery, capped so a hung SDK cannot
+  // hold the dialog; anything but 'ok' falls through to email, so nothing is
+  // lost on installs without PostHog or when the call fails.
+  const ticket = await withTimeout(submitViaTicket(input), TICKET_TIMEOUT_MS, 'timeout')
+  if (ticket === 'ok') {
+    noteInAnalytics(input, { email: 'skipped', ticket })
+    return { ok: true, channels: ['ticket'] }
+  }
+
   const emailResult = await submitViaEmail(input)
-  const ticket = await withTimeout(ticketPromise, TICKET_TIMEOUT_MS, 'timeout')
-
-  noteInAnalytics(input, { email: emailResult.ok, ticket })
-
-  if (emailResult.ok) {
-    return { ok: true, channels: ticket === 'ok' ? ['email', 'ticket'] : ['email'] }
-  }
-
-  return {
-    ok: false,
-    channels: ticket === 'ok' ? ['ticket'] : [],
-    error: emailResult.error,
-  }
+  noteInAnalytics(input, { email: emailResult.ok ? 'ok' : 'failed', ticket })
+  if (emailResult.ok) return { ok: true, channels: ['email'] }
+  return { ok: false, channels: [], error: emailResult.error }
 }

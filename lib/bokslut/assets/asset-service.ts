@@ -41,10 +41,18 @@ export interface AssetAccountTriple {
  * company never lands on the egenupparbetade pair. See
  * ACQUIRED_IMMATERIAL_ACCOUNTS below.
  *
- * vehicle (1240) and computer (1250) both sit in the maskiner-och-inventarier
- * asset range, so their depreciation maps to 7832 (Avskrivningar på
+ * vehicle (1226 Bilar och transportmedel, ej för produktion) and computer
+ * (1224 Datorer, ej för produktion) are inventarier under BAS 2026: both
+ * accumulate on 1229 and depreciate through 7832 (Avskrivningar på
  * inventarier, verktyg och installationer). 7833/7834 are not in the standard
  * BAS catalog (removed as non-standard in #463).
+ *
+ * BAS 2026 splits kontogrupp 12 by production use, not by asset kind: a car or
+ * a computer used FOR production is machinery (1216 Arbetsfordon / 1214
+ * Datorer för produktion, both on 1219), which the machinery category already
+ * covers. Non-production is the right default for a small company. 1240/1249
+ * and 1250/1259, the pre-2026 bil- and datorkonton these defaults used to
+ * point at, are free accounts with no kind of their own after #2413 (#2414).
  */
 export const DEFAULT_ACCOUNTS_BY_CATEGORY: Record<AssetCategory, AssetAccountTriple> = {
   immaterial: { asset: '1010', accumulated: '1019', expense: '7810' },
@@ -52,8 +60,8 @@ export const DEFAULT_ACCOUNTS_BY_CATEGORY: Record<AssetCategory, AssetAccountTri
   land_improvement: { asset: '1150', accumulated: '1159', expense: '7824' },
   machinery: { asset: '1210', accumulated: '1219', expense: '7831' },
   equipment: { asset: '1220', accumulated: '1229', expense: '7832' },
-  vehicle: { asset: '1240', accumulated: '1249', expense: '7832' },
-  computer: { asset: '1250', accumulated: '1259', expense: '7832' },
+  vehicle: { asset: '1226', accumulated: '1229', expense: '7832' },
+  computer: { asset: '1224', accumulated: '1229', expense: '7832' },
   other_tangible: { asset: '1290', accumulated: '1299', expense: '7839' },
 }
 
@@ -501,7 +509,22 @@ export async function updateAsset(
   return data as Asset
 }
 
-const BAS_RANGES_BY_CATEGORY: Record<
+/**
+ * The legitimate BAS window per category, for both the Zod refinement on
+ * POST /api/assets and the defense-in-depth check in updateAsset(). Exported
+ * so the route validates against this one table: a second hand-maintained
+ * copy there is what let the BAS 2026 catalogue update (#2413) miss it.
+ *
+ * vehicle and computer span the whole maskiner-och-inventarier block
+ * (1210-1269) on purpose. BAS 2026 puts a non-production car on 1226 and a
+ * non-production computer on 1224, a production one on 1216 / 1214, and the
+ * ackumulerade avskrivningar for either on 1219 or 1229, so no narrow
+ * per-kind window exists any more. The span also keeps the assets booked on
+ * the pre-2026 accounts (1240/1249, 1250/1259, now free accounts) valid on
+ * read and update: they keep their stored accounts, and refusing them here
+ * would block every edit to an asset created before BAS 2026 (#2414).
+ */
+export const BAS_RANGES_BY_CATEGORY: Record<
   AssetCategory,
   { asset: [string, string]; accumulated: [string, string]; expense: [string, string] }
 > = {
@@ -510,12 +533,12 @@ const BAS_RANGES_BY_CATEGORY: Record<
   land_improvement:{ asset: ['1150', '1159'], accumulated: ['1150', '1159'], expense: ['7820', '7829'] },
   machinery:       { asset: ['1210', '1219'], accumulated: ['1210', '1219'], expense: ['7830', '7839'] },
   equipment:       { asset: ['1220', '1229'], accumulated: ['1220', '1229'], expense: ['7830', '7839'] },
-  vehicle:         { asset: ['1240', '1249'], accumulated: ['1240', '1249'], expense: ['7830', '7839'] },
-  computer:        { asset: ['1250', '1259'], accumulated: ['1250', '1259'], expense: ['7830', '7839'] },
+  vehicle:         { asset: ['1210', '1269'], accumulated: ['1210', '1269'], expense: ['7830', '7839'] },
+  computer:        { asset: ['1210', '1269'], accumulated: ['1210', '1269'], expense: ['7830', '7839'] },
   other_tangible:  { asset: ['1280', '1299'], accumulated: ['1280', '1299'], expense: ['7830', '7839'] },
 }
 
-function inBasRange(account: string, range: [string, string]): boolean {
+export function inBasRange(account: string, range: [string, string]): boolean {
   return account >= range[0] && account <= range[1]
 }
 

@@ -1,4 +1,5 @@
-import { getSIEJob } from '@/lib/import/sie-jobs'
+import { readSIEImportStatus, SIE_IMPORT_STATUS_SCHEMA } from './sie-import-status'
+import { SIELegacyReviewRequiredError } from '@/lib/import/sie-legacy-recovery'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import {
   ENTITY_TYPES,
@@ -19880,7 +19881,7 @@ export const tools: McpTool[] = [
           verdict === 'invalid'
             ? 'The file has blocking errors: report them to the user and do not import. A fresh export from the source system usually fixes them.'
             : verdict === 'duplicate'
-              ? 'This file or fiscal year is already imported. Report it; use gnubok_undo_sie_import first if the user wants to replace it.'
+              ? 'This file or fiscal year has import history. Read gnubok_sie_import_status for the import before proposing replacement. Legacy imports need outcome review; do not retry or undo them automatically.'
               : orgMatch.match === false
                 ? 'STOP: the file belongs to a different organisation than this company. Confirm with the user before any import.'
                 : 'Summarize the scan for the user (source system, fiscal year, voucher count, balance status, any warnings). On their go-ahead call gnubok_import_sie with this same file and the returned mappings; the import stages for approval.',
@@ -20033,18 +20034,12 @@ export const tools: McpTool[] = [
 
   {
     name:'gnubok_sie_import_status',title:'SIE Import Status',keywords:['sie','importstatus'],catalogVisibility:'search',
-    description:'Read durable SIE import progress, failure details and the final result. Poll after gnubok_import_sie or gnubok_undo_sie_import commits; accepted submission is not completed bookkeeping.',
+    description:'Read durable SIE job progress or a read-only legacy recovery assessment. Legacy counts describe the whole year, not entry ownership; review_required never permits undo, reset or retry. Poll durable jobs after approval until completed or undone.',
     inputSchema:{type:'object',additionalProperties:false,properties:{import_id:{type:'string',format:'uuid'}},required:['import_id']},
-    outputSchema:{type:'object',additionalProperties:false,properties:{
-      import_id:{type:'string'},state:{type:'string'},chunks_done:{type:'integer'},chunks_total:{type:'integer'},
-      vouchers_written:{type:'integer'},error_message:{type:['string','null']},result:{type:['object','null'],additionalProperties:true},
-    },required:['import_id','state','chunks_done','chunks_total','vouchers_written','error_message','result']},
+    outputSchema:SIE_IMPORT_STATUS_SCHEMA,
     annotations:ANNOTATIONS_READ_ONLY,
     async execute(args,companyId,_userId,supabase) {
-      const job = await getSIEJob(supabase,companyId,args.import_id as string)
-      if (!job) throw new Error('SIE import not found')
-      return {import_id:job.id,state:job.job_state,chunks_done:job.chunks_done,chunks_total:job.chunks_total,
-        vouchers_written:job.transactions_count,error_message:job.error_message,result:job.job_result}
+      return readSIEImportStatus(supabase,companyId,args.import_id as string)
     },
   },
   {
@@ -20072,8 +20067,8 @@ export const tools: McpTool[] = [
         throw reasonTooLongError()
       }
 
-      // Pre-flight mirrors undoSIEImport: confirm row exists, belongs to
-      // this company, is in 'completed' status, and (if linked) the fiscal
+      // Pre-flight confirms a tracked job exists, belongs to this company,
+      // supports undo, and (if linked) the fiscal
       // period is open + unlocked. Surfacing rejection at stage-time keeps
       // the agent honest about what the approver is being asked to confirm.
       type ImportRow = {
@@ -20102,7 +20097,8 @@ export const tools: McpTool[] = [
       if (!importRow) {
         throw new Error(`SIE-import hittades inte: ${importId}`)
       }
-      if (!importRow.job_state || ['undone','failed'].includes(importRow.job_state)) {
+      if (!importRow.job_state) throw new SIELegacyReviewRequiredError()
+      if (['undone','failed'].includes(importRow.job_state)) {
         throw new Error(`Bara slutförda importer kan ångras (nuvarande status: ${importRow.status}).`)
       }
 

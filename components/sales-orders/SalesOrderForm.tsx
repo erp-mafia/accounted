@@ -23,6 +23,8 @@ import { resolveLineVatRates, FALLBACK_VAT_RATE } from '@/components/invoices/li
 import { useArticles, useCustomers } from '@/lib/reference-data/hooks'
 import { sortArticles } from '@/lib/articles/sort'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
+import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
+import UnitDatalist from '@/components/invoices/UnitDatalist'
 import { roundOre } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -406,6 +408,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
 
       <DetailSection kicker={t('section_lines')}>
         <div className="overflow-x-auto">
+          <UnitDatalist />
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
@@ -487,8 +490,9 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
                           value={line.unit}
                           onChange={(e) => updateLine(line.key, { unit: e.target.value })}
                           aria-label={t('th_unit')}
+                          list={UNIT_DATALIST_ID}
                           className={cn(CELL_INPUT_CLASS, 'w-16')}
-                          maxLength={32}
+                          maxLength={UNIT_MAX_LENGTH}
                         />
                       )}
                     </td>

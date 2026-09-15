@@ -84,14 +84,14 @@ interface UnlinkedSupplierRow {
  * trimmed to the same ten characters in case a provider ever ships a
  * datetime. A date that does not start like an ISO date joins nothing.
  */
-function joinKey(number: string | null | undefined, date: string | null | undefined): string | null {
+export function joinKey(number: string | null | undefined, date: string | null | undefined): string | null {
   if (!number || !date) return null
   const day = date.slice(0, 10)
   return ISO_DATE_RE.test(day) ? `${number}::${day}` : null
 }
 
 /** A map that remembers keys seen more than once, so those are never joined on. */
-function uniqueByKey<T>(rows: T[], keyOf: (row: T) => string | null): Map<string, T> {
+export function uniqueByKey<T>(rows: T[], keyOf: (row: T) => string | null): Map<string, T> {
   const out = new Map<string, T>()
   const dupes = new Set<string>()
   for (const row of rows) {

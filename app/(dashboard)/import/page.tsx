@@ -56,7 +56,7 @@ import type {
 } from '@/lib/import/articles/types'
 
 import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
-import { applyMappingOverride } from '@/lib/import/account-mapper'
+import { applyMappingOverride, isValidBASRange } from '@/lib/import/account-mapper'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileParseResult, BankFileFormatId, BankFileDuplicateInfo, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
@@ -985,7 +985,7 @@ function SIEImportWizard({
   }, [mappings])
 
   const missingAccounts = mappings
-    .filter((m) => !m.targetAccount)
+    .filter((m) => !m.targetAccount && isValidBASRange(m.sourceAccount))
     .map((m) => ({ number: m.sourceAccount, name: m.sourceName }))
 
   const handleCreateAccounts = useCallback(async () => {

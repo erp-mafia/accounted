@@ -2,7 +2,8 @@
  * POST /api/v1/companies/{companyId}/journal-entries/{id}/reverse
  *
  * Storno: posts a reversing journal entry that nullifies the original.
- * The original stays in place (posted entries are immutable per BFL 5 kap 2 §);
+ * The original stays in place: a posted verifikation is corrected through a
+ * rättelse that keeps it visible, never overwritten (BFL 5 kap 5 §);
  * the reversal carries `reverses_id` back to it and the original is annotated
  * with `reversed_by_id`. Both entries remain visible in the verifikationsserie.
  *
@@ -53,7 +54,7 @@ registerEndpoint({
   useWhen:
     'A posted entry needs to be cancelled and there is no replacement coming: e.g. a duplicate booking, an entry posted to the wrong period. Use /correct instead when you need to replace the entry with corrected lines.',
   doNotUseFor:
-    'Cancelling a draft (drafts have no voucher_number; cancel via the dashboard). Reversing an already-reversed entry (returns ENTRY_ALREADY_REVERSED).',
+    'Cancelling a draft (drafts have no voucher_number: use DELETE /journal-entries/{id}). Reversing an already-reversed entry (returns ENTRY_ALREADY_REVERSED).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'reversal_date defaults to today; the reversal is posted in the fiscal period covering that date. If today\'s period is locked the call returns PERIOD_LOCKED.',

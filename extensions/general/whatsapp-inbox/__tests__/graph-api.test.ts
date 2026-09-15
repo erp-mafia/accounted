@@ -8,6 +8,8 @@ import {
   sendReaction,
   RECEIVED_REACTION_EMOJI,
   downloadMedia,
+  lookupMedia,
+  isMediaGone,
   getDisplayPhoneNumber,
   resetDisplayNumberCacheForTests,
   GraphApiError,
@@ -199,6 +201,71 @@ describe('graph-api', () => {
       delete process.env.WHATSAPP_ACCESS_TOKEN
       await expect(sendReaction('46701234567', 'wamid.IN1')).resolves.toBeUndefined()
       expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('lookupMedia (the release-time probe, #2363)', () => {
+    it('returns the fresh URL and metadata when Meta still serves the id', async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            url: 'https://lookaside.example/m1',
+            mime_type: 'image/jpeg',
+            file_size: 2048,
+          }),
+          { status: 200 },
+        ),
+      )
+      await expect(lookupMedia('media-1')).resolves.toEqual({
+        ok: true,
+        url: 'https://lookaside.example/m1',
+        mimeType: 'image/jpeg',
+        fileSize: 2048,
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/media-1?phone_number_id=111222333')
+      expect((init.headers as Record<string, string>).Authorization).toBe('Bearer token-1')
+    })
+
+    it('returns a non-2xx status as a VALUE, so the caller can tell gone from unwell', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('{}', { status: 400 }))
+      const gone = await lookupMedia('media-1')
+      expect(gone).toEqual({ ok: false, status: 400, message: 'Media lookup failed (400)' })
+
+      fetchMock.mockResolvedValueOnce(new Response('{}', { status: 503 }))
+      const unwell = await lookupMedia('media-1')
+      expect(unwell.ok).toBe(false)
+      if (unwell.ok) throw new Error('expected a refusal')
+      expect(isMediaGone(unwell.status)).toBe(false)
+    })
+
+    it('treats a 200 without a URL as an inconclusive answer, not as a gone file', async () => {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ mime_type: 'image/jpeg' }), { status: 200 }))
+      const result = await lookupMedia('media-1')
+      expect(result).toEqual({
+        ok: false,
+        status: 200,
+        message: 'Media lookup returned no download URL',
+      })
+      if (result.ok) throw new Error('expected a refusal')
+      expect(isMediaGone(result.status)).toBe(false)
+    })
+
+    it('still throws on a transport failure: that says nothing about the file', async () => {
+      fetchMock.mockRejectedValueOnce(new TimeoutError('WhatsApp media lookup timed out'))
+      await expect(lookupMedia('media-1')).rejects.toThrow(TimeoutError)
+    })
+  })
+
+  describe('isMediaGone', () => {
+    it('is true only for the statuses that mean the file itself is gone', () => {
+      expect(isMediaGone(400)).toBe(true) // Meta's answer for an id it no longer serves
+      expect(isMediaGone(404)).toBe(true)
+      // Our credentials or Meta's health: a receipt must never be discarded
+      // because of either.
+      for (const status of [401, 403, 429, 500, 502, 503]) {
+        expect(isMediaGone(status)).toBe(false)
+      }
     })
   })
 

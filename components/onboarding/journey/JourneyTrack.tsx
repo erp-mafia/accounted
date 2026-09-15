@@ -27,7 +27,12 @@ interface JourneyTrackProps {
   orbLabel?: string
 }
 
-const LEFTS = ['7.0%', '28.5%', '50.0%', '71.5%', '93.0%']
+/** Stations sit evenly between 7% and 93% of the band, whatever their count
+ *  (five in the first act, four in the books act), so the last one always
+ *  lands where the orb's final target is. */
+function stationLeft(i: number, count: number): string {
+  return `${(7 + (i * 86) / Math.max(count - 1, 1)).toFixed(2)}%`
+}
 
 export default function JourneyTrack({ stations, active, onJump, children, orbLabel }: JourneyTrackProps) {
   return (
@@ -38,7 +43,7 @@ export default function JourneyTrack({ stations, active, onJump, children, orbLa
           <div
             key={st.label}
             className={`jny-pt${done ? ' is-done' : ''}${i === active ? ' is-active' : ''}`}
-            style={{ left: LEFTS[i] ?? LEFTS[LEFTS.length - 1] }}
+            style={{ left: stationLeft(i, stations.length) }}
             role={done && onJump ? 'button' : undefined}
             tabIndex={done && onJump ? 0 : -1}
             title={done && onJump ? 'Ändra' : undefined}

@@ -1,7 +1,12 @@
 'use server'
 
-import { headers } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
+import {
+  BOOKS_GATE_COOKIE,
+  BOOKS_GATE_MAX_AGE_SECONDS,
+  booksGateEnabled,
+} from '@/lib/onboarding/books-gate'
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { createCompanyCore } from '@/lib/company/create-company'
@@ -70,6 +75,10 @@ export async function createCompanyFromOnboarding(params: {
   // (specialized accountant agent composer, MCP briefing) can read the same
   // Bolagsverket-sourced data the form used. Empty for manual entry paths.
   ticLookup?: CompanyLookupResult | null
+  // First company of a fresh account (journey mode='first'): arm the books
+  // gate so the dashboard stays closed until act two ran or was skipped
+  // (issue #2438). Adding a company from inside the app never arms it.
+  booksGate?: boolean
 }): Promise<{ companyId?: string; error?: string }> {
   try {
     return await createCompanyFromOnboardingImpl(params)
@@ -88,6 +97,7 @@ async function createCompanyFromOnboardingImpl(params: {
   settings: Record<string, unknown>
   fiscalPeriod: { startDate: string; endDate: string; name: string }
   ticLookup?: CompanyLookupResult | null
+  booksGate?: boolean
 }): Promise<{ companyId?: string; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -211,6 +221,23 @@ async function createCompanyFromOnboardingImpl(params: {
   } catch (err) {
     // Non-fatal: the company was created successfully; the user can switch manually
     console.error('[createCompanyFromOnboarding] setActiveCompany failed', err)
+  }
+
+  // 7. Arm the first-session books gate. Non-fatal: without the cookie the
+  // user simply lands on Hem with the checklist, exactly as before.
+  if (params.booksGate && booksGateEnabled()) {
+    try {
+      const cookieStore = await cookies()
+      cookieStore.set(BOOKS_GATE_COOKIE, newCompanyId, {
+        path: '/',
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: BOOKS_GATE_MAX_AGE_SECONDS,
+      })
+    } catch (err) {
+      console.error('[createCompanyFromOnboarding] books gate cookie failed', err)
+    }
   }
 
   revalidatePath('/')

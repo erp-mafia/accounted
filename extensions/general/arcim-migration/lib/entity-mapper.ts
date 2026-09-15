@@ -741,6 +741,64 @@ function trustedBalance(paymentStatus: PaymentStatusDto, total: number): number 
   return balance
 }
 
+/** What the provider's payment fields say, as the columns an invoice row carries. */
+export interface SupplierSettlement {
+  /**
+   * The status the payment state implies, or null when it implies nothing
+   * and the caller should keep the provider's lifecycle status.
+   */
+  status: 'paid' | 'partially_paid' | null
+  paidAmount: number
+  remainingAmount: number
+  /** Non-null exactly when `status` is. */
+  paidAt: string | null
+}
+
+/**
+ * One rule for reading a supplier invoice's payment state, shared by the
+ * migration mapper below and by the repair pass that refreshes payment state
+ * from the provider afterwards (refresh-migrated-payment-state.ts). Two
+ * copies of this rule would drift, and the repair would then contradict the
+ * import it repairs.
+ *
+ * The balance may declare a settlement on its own only when there is an
+ * amount to settle and no enum spoke. `total > 0` is the part Bokio needed:
+ * its API returns totalAmount 0 for invoices older than the register it
+ * exposes, and a zero balance beside a zero total is an amount-less record,
+ * not a payment (384 such rows across two migrated companies were written as
+ * "paid" for 0 kr on 2026-09-14). An explicit paid = false from an enum is
+ * never overridden by a zero either: see trustedBalance.
+ */
+export function resolveSupplierSettlement(
+  paymentStatus: PaymentStatusDto,
+  total: number,
+  issueDate: string,
+): SupplierSettlement {
+  const balance = trustedBalance(paymentStatus, total)
+  // Treat the balance numerically (never strict === 0) so floating drift or a
+  // residual öre resolves cleanly to paid/unpaid.
+  const paidAmount = paymentStatus.paid ? total : round2(total - balance)
+  const settled =
+    paymentStatus.paid || (balance <= 0 && total > 0 && paymentStatus.source !== 'enum')
+
+  if (settled) {
+    return {
+      status: 'paid',
+      paidAmount: total,
+      remainingAmount: 0,
+      paidAt: paymentStatus.lastPaymentDate || issueDate,
+    }
+  }
+
+  const partial = paidAmount > 0 && paidAmount < total
+  return {
+    status: partial ? 'partially_paid' : null,
+    paidAmount: Math.max(0, paidAmount),
+    remainingAmount: Math.max(0, balance),
+    paidAt: partial ? paymentStatus.lastPaymentDate || issueDate : null,
+  }
+}
+
 export function mapSalesInvoice(
   dto: SalesInvoiceDto,
   userId: string,
@@ -951,14 +1009,8 @@ export function mapSupplierInvoice(
 
   const isCreditNote = dto.invoiceTypeCode === '381'
 
-  // Payment-derived amounts. Treat Balance numerically (never strict === 0) so
-  // floating drift or a residual öre resolves cleanly to paid/unpaid, unless
-  // the provider's enum said unpaid: see trustedBalance.
-  const balance = trustedBalance(dto.paymentStatus, total)
-  const paidAmount = dto.paymentStatus.paid ? total : round2(total - balance)
-  // The balance may declare a settlement on its own only when no enum spoke:
-  // an explicit paid = false from the enum is never overridden by a zero.
-  const balanceSaysSettled = balance <= 0 && dto.paymentStatus.source !== 'enum'
+  // Payment-derived status and amounts, by the rule the repair pass shares.
+  const settlement = resolveSupplierSettlement(dto.paymentStatus, total, dto.issueDate)
 
   // Status MUST stay consistent with the payment amounts. The provider's
   // lifecycle status (dto.status) and its payment status are computed
@@ -979,24 +1031,17 @@ export function mapSupplierInvoice(
   } else if (mappedStatus === 'credited' || mappedStatus === 'reversed') {
     // Terminal states from the provider: never flipped by payment.
     resolvedStatus = mappedStatus
-  } else if (dto.paymentStatus.paid || balanceSaysSettled) {
-    resolvedStatus = 'paid'
-  } else if (paidAmount > 0 && paidAmount < total) {
-    resolvedStatus = 'partially_paid'
   } else {
-    resolvedStatus = mappedStatus
+    resolvedStatus = settlement.status ?? mappedStatus
   }
 
   // Nothing is ever paid on a kreditfaktura: it reduces what is owed to the
   // supplier rather than settling anything, so it carries no open balance
   // either (prod: a credited Fora note landed with remaining_amount = its
   // total). Same rule as the customer side.
-  const settlement = isCreditNote
+  const amounts = isCreditNote
     ? { paidAmount: 0, remainingAmount: 0 }
-    : {
-        paidAmount: resolvedStatus === 'paid' ? total : Math.max(0, paidAmount),
-        remainingAmount: resolvedStatus === 'paid' ? 0 : Math.max(0, balance),
-      }
+    : { paidAmount: settlement.paidAmount, remainingAmount: settlement.remainingAmount }
 
   // SEK value of a foreign invoice, at the rate valid on its own issue date.
   const fx = resolveFx(dto.currencyCode, dto.issueDate, fxRates)
@@ -1030,10 +1075,10 @@ export function mapSupplierInvoice(
     reverse_charge: vatTreatment === 'reverse_charge',
     payment_reference: dto.ocrNumber || null,
     paid_at: resolvedStatus === 'paid' || resolvedStatus === 'partially_paid'
-      ? dto.paymentStatus.lastPaymentDate || dto.issueDate
+      ? settlement.paidAt
       : null,
-    paid_amount: settlement.paidAmount,
-    remaining_amount: settlement.remainingAmount,
+    paid_amount: amounts.paidAmount,
+    remaining_amount: amounts.remainingAmount,
     is_credit_note: isCreditNote,
     notes: isCreditNote ? creditNoteUnlinkedNote(dto.note) : (dto.note || null),
   }

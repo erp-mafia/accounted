@@ -2351,6 +2351,9 @@ const BANK_NOISE_PHRASES: readonly string[] = [
   'överföring inom bank',
   'överföring mellan konton',
   'internetbetalning',
+  // Handelsbanken's truncated form ("INTERNET BET 1"): a supplier payment
+  // made in the internet bank, not an internet subscription.
+  'internet bet',
   'mobilbetalning',
   'direktbetalning',
   'direktöverföring',

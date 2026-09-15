@@ -11,6 +11,9 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
     sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null }),
     sendReplyButtons: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null }),
     sendList: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null }),
+    // The drain asks Meta whether it still serves each parked file; the real
+    // one would issue a Graph round trip per row.
+    lookupMedia: vi.fn(),
   }
 })
 
@@ -18,6 +21,7 @@ import {
   sendText,
   sendReplyButtons,
   sendList,
+  lookupMedia,
   truncateTitle,
   uniqueTitles,
 } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
@@ -37,6 +41,15 @@ import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 const sendTextMock = vi.mocked(sendText)
 const sendButtonsMock = vi.mocked(sendReplyButtons)
 const sendListMock = vi.mocked(sendList)
+const lookupMediaMock = vi.mocked(lookupMedia)
+
+/** Meta still serves the file. */
+const mediaLive = {
+  ok: true,
+  url: 'https://lookaside.example/m1',
+  mimeType: 'image/jpeg',
+  fileSize: 1024,
+} as const
 
 function makeLink(overrides: Record<string, unknown> = {}) {
   return {
@@ -414,6 +427,7 @@ describe('askCompanyQuestion', () => {
 describe('applyCompanyChoice', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    lookupMediaMock.mockResolvedValue({ ...mediaLive })
   })
 
   const awaitingConversation = () =>
@@ -433,7 +447,13 @@ describe('applyCompanyChoice', () => {
     enqueue({ data: { company_id: 'company-2' } }) // membership check
     enqueue({ data: null }) // conversation update
     enqueue({ data: null }) // link last_company_id update
-    enqueue({ data: [] }) // expiry stamp: nothing past the media window
+    enqueue({ data: [] }) // outer-bound stamp: nothing that old
+    enqueue({
+      data: [
+        { id: 'stg-1', media_id: 'media-1' },
+        { id: 'stg-2', media_id: 'media-2' },
+      ],
+    }) // probe candidates: Meta still serves both
     enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // staged reopen
 
     const before = Date.now()
@@ -580,25 +600,60 @@ describe('applyCompanyChoice', () => {
 describe('drainParkedRows', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    lookupMediaMock.mockResolvedValue({ ...mediaLive })
   })
 
-  it('stamps rows past the media window expired and re-opens only the rest', async () => {
+  it('releases only the rows Meta still serves, and stamps the ones it refuses', async () => {
     const { supabase, enqueue, calls } = createQueuedMockSupabase()
-    enqueue({ data: [{ id: 'old-1' }, { id: 'old-2' }] }) // expiry stamp
-    enqueue({ data: [{ id: 'stg-1' }] }) // reopen
+    enqueue({ data: [] }) // outer-bound stamp: nothing that old
+    enqueue({
+      data: [
+        { id: 'stg-1', media_id: 'media-1' },
+        { id: 'stg-2', media_id: 'media-2' },
+        { id: 'stg-3', media_id: 'media-3' },
+      ],
+    }) // probe candidates
+    enqueue({ data: [{ id: 'stg-2' }] }) // expiry stamp for the refused row
+    enqueue({ data: [{ id: 'stg-1' }] }) // re-open for the live row
 
-    const before = Date.now()
+    lookupMediaMock
+      .mockResolvedValueOnce({ ...mediaLive }) // stg-1: still there
+      .mockResolvedValueOnce({ ok: false, status: 400, message: 'Media lookup failed (400)' }) // stg-2: gone
+      .mockResolvedValueOnce({ ok: false, status: 503, message: 'Media lookup failed (503)' }) // stg-3: unknown
+
     const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
-    expect(drained).toEqual({ reopenedIds: ['stg-1'], expiredCount: 2, failed: false })
+    expect(drained).toEqual({ reopenedIds: ['stg-1'], expiredCount: 1, failed: false })
+    expect(lookupMediaMock).toHaveBeenCalledTimes(3)
+    expect(lookupMediaMock.mock.calls.map((c) => c[0])).toEqual(['media-1', 'media-2', 'media-3'])
 
     const updates = calls.filter((c) => c.table === 'whatsapp_messages' && c.method === 'update')
     expect(updates[0].args[0]).toEqual({ error_message: COMPANY_CHOICE_EXPIRED })
-    expect(updates[1].args[0]).toEqual({ processing_status: 'received', error_message: null })
-    // Both writes are guarded on the staged marker and split on ONE cutoff.
+    expect(updates[1].args[0]).toEqual({ error_message: COMPANY_CHOICE_EXPIRED })
+    expect(updates[2].args[0]).toEqual({ processing_status: 'received', error_message: null })
+    // Each id-targeted write names exactly the rows its probe decided, and
+    // the 503 row is in neither: it stays parked for the next pass.
+    const ins = calls.filter((c) => c.method === 'in' && c.args[0] === 'id')
+    expect(ins.map((c) => c.args[1])).toEqual([['stg-2'], ['stg-1']])
+    // Every write stays guarded on the staged marker (a racing drain must not
+    // re-open a row this one already stamped).
     const staged = calls.filter(
       (c) => c.method === 'eq' && c.args[0] === 'error_message' && c.args[1] === STAGED_AWAITING_COMPANY,
     )
-    expect(staged).toHaveLength(2)
+    expect(staged).toHaveLength(4) // outer-bound stamp, candidate scan, both id writes
+  })
+
+  it('stamps rows past the outer bound without asking Meta', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'old-1' }, { id: 'old-2' }] }) // outer-bound stamp
+    enqueue({ data: [] }) // nothing inside the bound
+
+    const before = Date.now()
+    const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
+    expect(drained).toEqual({ reopenedIds: [], expiredCount: 2, failed: false })
+    expect(lookupMediaMock).not.toHaveBeenCalled()
+
+    // One cutoff splits the two queries: older than it is stamped, the rest
+    // is probed.
     const lt = calls.find((c) => c.method === 'lt' && c.args[0] === 'created_at')
     const gte = calls.find((c) => c.method === 'gte' && c.args[0] === 'created_at')
     expect(lt?.args[1]).toBe(gte?.args[1])
@@ -606,10 +661,35 @@ describe('drainParkedRows', () => {
     expect(Math.abs(cutoffAge - STAGED_MEDIA_MAX_AGE_MS)).toBeLessThan(5_000)
   })
 
+  it('leaves a row parked when the probe itself errors (our outage is not its expiry)', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // outer-bound stamp
+    enqueue({ data: [{ id: 'stg-1', media_id: 'media-1' }] }) // probe candidates
+    lookupMediaMock.mockRejectedValueOnce(new Error('WhatsApp media lookup timed out'))
+
+    const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
+    expect(drained).toEqual({ reopenedIds: [], expiredCount: 0, failed: false })
+    // Nothing was written: not released, not expired.
+    expect(calls.filter((c) => c.method === 'update')).toHaveLength(1) // the outer-bound stamp only
+    expect(calls.some((c) => c.method === 'in' && c.args[0] === 'id')).toBe(false)
+  })
+
+  it('releases a parked row that has no media id at all', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // outer-bound stamp
+    enqueue({ data: [{ id: 'stg-1', media_id: null }] }) // probe candidates
+    enqueue({ data: [{ id: 'stg-1' }] }) // re-open
+
+    const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
+    expect(drained).toEqual({ reopenedIds: ['stg-1'], expiredCount: 0, failed: false })
+    expect(lookupMediaMock).not.toHaveBeenCalled()
+  })
+
   it('a failed expiry stamp still re-opens the recoverable rows and reports failed', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ error: { message: 'canceling statement due to statement timeout' } }) // expiry stamp
-    enqueue({ data: [{ id: 'stg-1' }] }) // reopen
+    enqueue({ error: { message: 'canceling statement due to statement timeout' } }) // outer-bound stamp
+    enqueue({ data: [{ id: 'stg-1', media_id: 'media-1' }] }) // probe candidates
+    enqueue({ data: [{ id: 'stg-1' }] }) // re-open
 
     const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
     expect(drained).toEqual({ reopenedIds: ['stg-1'], expiredCount: 0, failed: true })
@@ -617,11 +697,22 @@ describe('drainParkedRows', () => {
 
   it('a failed re-open reports failed with nothing re-opened', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: [] }) // expiry stamp
-    enqueue({ error: { message: 'connection reset' } }) // reopen
+    enqueue({ data: [] }) // outer-bound stamp
+    enqueue({ data: [{ id: 'stg-1', media_id: 'media-1' }] }) // probe candidates
+    enqueue({ error: { message: 'connection reset' } }) // re-open
 
     const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
     expect(drained).toEqual({ reopenedIds: [], expiredCount: 0, failed: true })
+  })
+
+  it('a failed candidate scan leaves every row parked and reports failed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // outer-bound stamp
+    enqueue({ error: { message: 'connection reset' } }) // probe candidates
+
+    const drained = await drainParkedRows(supabase as unknown as SupabaseClient, 'conv-1')
+    expect(drained).toEqual({ reopenedIds: [], expiredCount: 0, failed: true })
+    expect(lookupMediaMock).not.toHaveBeenCalled()
   })
 
   it('applyCompanyChoice keeps the answer applied when the drain fails (sweep retries the rows)', async () => {
@@ -629,8 +720,9 @@ describe('drainParkedRows', () => {
     enqueue({ data: { company_id: 'company-2' } }) // membership check
     enqueue({ data: null }) // conversation update
     enqueue({ data: null }) // link last_company_id update
-    enqueue({ data: [] }) // expiry stamp
-    enqueue({ error: { message: 'connection reset' } }) // reopen failed
+    enqueue({ data: [] }) // outer-bound stamp
+    enqueue({ data: [{ id: 'stg-1', media_id: 'media-1' }] }) // probe candidates
+    enqueue({ error: { message: 'connection reset' } }) // re-open failed
 
     const applied = await applyCompanyChoice(supabase as unknown as SupabaseClient, {
       conversation: makeConversation({
@@ -659,13 +751,26 @@ describe('drainParkedRows', () => {
     expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6CompanyConfirm)
   })
 
-  it('applyCompanyChoice tells the sender once about receipts that could not be recovered', async () => {
+  it('applyCompanyChoice tells the sender once about receipts Meta refused', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { company_id: 'company-2' } }) // membership check
     enqueue({ data: null }) // conversation update
     enqueue({ data: null }) // link last_company_id update
-    enqueue({ data: [{ id: 'old-1' }, { id: 'old-2' }, { id: 'old-3' }] }) // expiry stamp
-    enqueue({ data: [{ id: 'stg-1' }] }) // reopen
+    enqueue({ data: [{ id: 'old-1' }] }) // outer-bound stamp: one ancient row
+    enqueue({
+      data: [
+        { id: 'stg-1', media_id: 'media-1' },
+        { id: 'stg-2', media_id: 'media-2' },
+        { id: 'stg-3', media_id: 'media-3' },
+      ],
+    }) // probe candidates
+    enqueue({ data: [{ id: 'stg-2' }, { id: 'stg-3' }] }) // expiry stamp
+    enqueue({ data: [{ id: 'stg-1' }] }) // re-open
+
+    lookupMediaMock
+      .mockResolvedValueOnce({ ...mediaLive })
+      .mockResolvedValueOnce({ ok: false, status: 400, message: 'Media lookup failed (400)' })
+      .mockResolvedValueOnce({ ok: false, status: 404, message: 'Media lookup failed (404)' })
 
     const applied = await applyCompanyChoice(supabase as unknown as SupabaseClient, {
       conversation: makeConversation({
@@ -691,8 +796,41 @@ describe('drainParkedRows', () => {
     expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6CompanyConfirm)
     const notice = sendTextMock.mock.calls[1][1]
     expect(notice.template).toBe(TEMPLATE.m20ReceiptsExpired)
+    // One ancient row plus the two Meta refused.
     expect(notice.body).toContain('3')
-    expect(notice.body).toContain('30 dagar')
+    // No retention figure is promised any more: #2363 saw 400 at 11 days.
+    expect(notice.body).not.toContain('30 dagar')
+  })
+
+  it('applyCompanyChoice sends no expiry notice when Meta still serves everything', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { company_id: 'company-2' } }) // membership check
+    enqueue({ data: null }) // conversation update
+    enqueue({ data: null }) // link last_company_id update
+    enqueue({ data: [] }) // outer-bound stamp
+    enqueue({ data: [{ id: 'stg-1', media_id: 'media-1' }] }) // probe candidates
+    enqueue({ data: [{ id: 'stg-1' }] }) // re-open
+
+    const applied = await applyCompanyChoice(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation({
+        state: 'idle',
+        context: {
+          company_options: [
+            { id: 'company-1', name: 'Bolag A AB' },
+            { id: 'company-2', name: 'Bolag B AB' },
+          ],
+        },
+      }),
+      link: makeLink(),
+      choice: { digit: 2 },
+      via: 'numbered',
+      to: '46701234567',
+      replyBase,
+    })
+
+    expect(applied.ok).toBe(true)
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6CompanyConfirm)
   })
 })
 

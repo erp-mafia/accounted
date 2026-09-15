@@ -34,7 +34,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 import { GET, DELETE } from '../route'
 
-const routeParams = () => createMockRouteParams({ id: 'import-1' })
+const routeParams = () => createMockRouteParams({ id: '11111111-1111-4111-8111-111111111111' })
 
 describe('GET/DELETE /api/import/sie/[id]', () => {
   beforeEach(() => {
@@ -52,7 +52,7 @@ describe('GET/DELETE /api/import/sie/[id]', () => {
     })
 
     const response = await DELETE(
-      createMockRequest('/api/import/sie/import-1', { method: 'DELETE' }),
+      createMockRequest('/api/import/sie/11111111-1111-4111-8111-111111111111', { method: 'DELETE' }),
       routeParams(),
     )
 
@@ -66,7 +66,7 @@ describe('GET/DELETE /api/import/sie/[id]', () => {
     })
 
     const response = await DELETE(
-      createMockRequest('/api/import/sie/import-1', { method: 'DELETE' }),
+      createMockRequest('/api/import/sie/11111111-1111-4111-8111-111111111111', { method: 'DELETE' }),
       routeParams(),
     )
 
@@ -77,13 +77,13 @@ describe('GET/DELETE /api/import/sie/[id]', () => {
     enqueue({ data: { status: 'completed' } })
 
     const response = await DELETE(
-      createMockRequest('/api/import/sie/import-1', { method: 'DELETE' }),
+      createMockRequest('/api/import/sie/11111111-1111-4111-8111-111111111111', { method: 'DELETE' }),
       routeParams(),
     )
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; message_en: string; remediation: { tool: string } } }>(response)
 
-    expect(status).toBe(403)
-    expect(body.error).toContain('Importhistoriken bevaras')
+    expect(status).toBe(409)
+    expect(body.error.message).toContain('Importhistoriken bevaras')
   })
 
   it('DELETE retains failed imports whose outcomes may be unknown', async () => {
@@ -91,25 +91,75 @@ describe('GET/DELETE /api/import/sie/[id]', () => {
     enqueue({ data: { status: 'failed' } })
 
     const response = await DELETE(
-      createMockRequest('/api/import/sie/import-1', { method: 'DELETE' }),
+      createMockRequest('/api/import/sie/11111111-1111-4111-8111-111111111111', { method: 'DELETE' }),
       routeParams(),
     )
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; message_en: string; remediation: { tool: string } } }>(response)
 
-    expect(status).toBe(403)
-    expect(body.error).toContain('Importhistoriken bevaras')
+    expect(status).toBe(409)
+    expect(body.error.message).toContain('Importhistoriken bevaras')
   })
 
   it('GET returns the import record', async () => {
-    enqueue({ data: { id: 'import-1', status: 'pending' } })
+    enqueue({ data: { id: '11111111-1111-4111-8111-111111111111', status: 'pending' } })
 
     const response = await GET(
-      createMockRequest('/api/import/sie/import-1'),
+      createMockRequest('/api/import/sie/11111111-1111-4111-8111-111111111111'),
       routeParams(),
     )
-    const { status, body } = await parseJsonResponse<{ data: { id: string } }>(response)
+    const { status, body } = await parseJsonResponse<{ data: { id: string }; recovery_url: string }>(response)
 
     expect(status).toBe(200)
-    expect(body.data.id).toBe('import-1')
+    expect(body.data.id).toBe('11111111-1111-4111-8111-111111111111')
+    expect(body.recovery_url).toBe('/api/import/sie/11111111-1111-4111-8111-111111111111/recovery')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+  })
+
+  it.each([401, 403])('GET preserves auth/MFA refusal %s before querying imports', async status => {
+    requireAuthMock.mockResolvedValue({ user: null, supabase, error: NextResponse.json({ error: 'Denied' }, { status }) })
+    expect((await GET(createMockRequest('/api/import/sie/import'), routeParams())).status).toBe(status)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('keeps durable progress on the job view without a legacy recovery link', async () => {
+    enqueue({ data: { id: '11111111-1111-4111-8111-111111111111', job_state: 'completed' } })
+    const response = await GET(createMockRequest('/api/import/sie/import?progress'), routeParams())
+    expect(response.status).toBe(200)
+    expect((await response.json()).recovery_url).toBeUndefined()
+  })
+
+  it.each([GET, DELETE])('rejects malformed IDs before database access', async route => {
+    expect((await route(createMockRequest('/api/import/sie/invalid'), createMockRouteParams({ id: 'invalid' }))).status).toBe(400)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it.each([GET, DELETE])('does not disguise database failure as a missing import', async route => {
+    enqueue({ error: { code: '57014', message: 'statement timeout' } })
+    expect((await route(createMockRequest('/api/import/sie/import'), routeParams())).status).toBe(500)
+  })
+
+  it.each([GET, DELETE])('returns a scoped 404 for a missing or inaccessible import', async route => {
+    enqueue({ data: null })
+    const response = await route(createMockRequest('/api/import/sie/import'), routeParams())
+    expect(response.status).toBe(404)
+    expect((await response.json()).error.code).toBe('NOT_FOUND')
+  })
+
+  it('provides bilingual review guidance without deleting legacy history', async () => {
+    enqueue({ data: { status: 'failed', job_state: null } })
+    const response = await DELETE(createMockRequest('/api/import/sie/import', { method: 'DELETE' }), routeParams())
+    expect(response.status).toBe(409)
+    expect((await response.json()).error).toMatchObject({
+      code: 'SIE_IMPORT_LEGACY_REVIEW_REQUIRED', message: expect.stringContaining('Granska'),
+      message_en: expect.stringContaining('Review'), remediation: { tool: 'gnubok_sie_import_status' },
+    })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('retains the durable history refusal', async () => {
+    enqueue({ data: { status: 'completed', job_state: 'completed' } })
+    const response = await DELETE(createMockRequest('/api/import/sie/import', { method: 'DELETE' }), routeParams())
+    expect(response.status).toBe(403)
+    expect((await response.json()).error.code).toBe('SIE_IMPORT_HISTORY_RETAINED')
   })
 })

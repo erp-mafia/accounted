@@ -944,6 +944,54 @@ describe('connector mode', () => {
     expect(headers['Authorization']).toBe('Bearer gnubok_ck_testsecret')
   })
 
+  it('sends prefilled credentials with autosubmit off, and neither field when there is nothing to prefill', async () => {
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
+    await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '5568098239' })
+    const withCredentials = JSON.parse(String(lastCall().init.body))
+    expect(withCredentials.credentials).toEqual({ companyId: '5568098239' })
+    expect(withCredentials.credentials_autosubmit).toBe(false)
+    expect(withCredentials.auth_method).toBe('BANKID')
+
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a2' }))
+    await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-2', 'business', 'BANKID', 'company-42', {})
+    const without = JSON.parse(String(lastCall().init.body))
+    expect(without).not.toHaveProperty('credentials')
+    expect(without).not.toHaveProperty('credentials_autosubmit')
+  })
+
+  it('retries once without credentials when the upstream rejects the prefilled ones with a 4xx', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fetchSpy
+      .mockResolvedValueOnce(new Response('{"error":"companyId 8501011234 not accepted"}', { status: 400 }))
+      .mockResolvedValueOnce(okJson({ url: 'https://bank/auth', authorization_id: 'a-retry' }))
+    const result = await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '8501011234' })
+    expect(result.authorization_id).toBe('a-retry')
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    const first = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))
+    const second = JSON.parse(String(fetchSpy.mock.calls[1][1]?.body))
+    expect(first.credentials).toEqual({ companyId: '8501011234' })
+    expect(second).not.toHaveProperty('credentials')
+    expect(second).not.toHaveProperty('credentials_autosubmit')
+    expect(second.state).toBe('oauth-state-1')
+    expect(second.auth_method).toBe('BANKID')
+    // The warning names the keys, never the value (a sole trader's is a personnummer).
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('8501011234')
+    warnSpy.mockRestore()
+  })
+
+  it('does not retry a 5xx, and the failure log never carries the credential value', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // An upstream that echoes the submitted value back in its body.
+    fetchSpy.mockResolvedValue(new Response('companyId 8501011234 not accepted', { status: 503 }))
+    await expect(
+      startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '8501011234' }),
+    ).rejects.toThrow('503')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('8501011234')
+    expect(JSON.stringify(errorSpy.mock.calls)).toContain('[redacted]')
+    errorSpy.mockRestore()
+  })
+
   it('binds /sessions to the signed connector_state when one is passed', async () => {
     fetchSpy.mockResolvedValue(okJson({ session_id: 's1', accounts: [], access: { valid_until: '2027-01-01' } }))
     await createSession('auth-code', 'signed-connector-state')

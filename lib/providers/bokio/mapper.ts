@@ -30,6 +30,11 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
   return { value: value ?? 0, currencyCode: currency };
 }
 
+/**
+ * Bokio's SALES invoice lifecycle enum. Supplier invoices carry no `status`
+ * at all (see mapBokioToSupplierInvoice), so this must not be used for them:
+ * every one of them would fall through to 'draft'.
+ */
 function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
   const status = (raw['status'] as string | undefined)?.toLowerCase();
   if (status === 'cancelled') return 'cancelled';
@@ -265,21 +270,40 @@ export function mapBokioToSupplier(raw: Record<string, unknown>): SupplierDto {
 }
 
 /**
- * Map Bokio Supplier Invoice to SupplierInvoiceDto.
+ * Map Bokio Supplier Invoice (`supplierInvoiceGet` in Bokio's published
+ * company-api spec) to SupplierInvoiceDto.
  *
- * Bokio Supplier Invoice fields:
- * - id, invoiceNumber, status (draft|published|paid|overdue|cancelled)
- * - invoiceDate, dueDate, currency, totalAmount, totalTax, paidAmount
- * - supplierRef: { id, name }, lineItems: [{ id, description, quantity, unitPrice, taxRate, unitType }]
- * - ocrNumber
+ * What Bokio actually sends on a supplier invoice:
+ * - id, supplierRef { id, name }, invoiceNumber, invoiceDate, dueDate
+ * - totalAmount, remainingAmount (readOnly: the OPEN balance), currency, currencyRate
+ * - journalEntryRef { id } (nullable: the voucher that booked it)
+ * - lineItems (preview): description, quantity, unitPrice, unitType, taxRate
+ * - uploadRefs
+ *
+ * There is no `status`, no `paidAmount` and no `totalTax` on this schema:
+ * those belong to Bokio's SALES invoice. Reading them here anyway is what
+ * made every migrated Bokio supplier invoice land as "Registrerad" with its
+ * whole total still outstanding, because an absent field read as 0.
+ * `remainingAmount` is the one payment field Bokio publishes, so it is the
+ * one the payment state comes from.
  */
 export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): SupplierInvoiceDto {
   const currency = (raw['currency'] as string) ?? 'SEK';
   const totalAmount = (raw['totalAmount'] as number) ?? 0;
-  const paidAmount = (raw['paidAmount'] as number) ?? 0;
-  const balance = totalAmount - paidAmount;
+  // The open balance, per the spec. Absent means an older or trimmed payload
+  // said nothing about payment at all: fall back to the pre-fix reading (the
+  // whole total outstanding, nothing settled) rather than invent a zero.
+  const remaining = readNumber(raw, ['remainingAmount']);
+  const balance = remaining ?? totalAmount;
+  // Bokio ships no paid flag. A settled invoice is one that has an amount and
+  // nothing left of it; a 0 kr record is amount-less, not settled.
+  const paid = remaining !== undefined && totalAmount > 0 && remaining <= 0;
 
   const supplierRef = raw['supplierRef'] as Record<string, unknown> | undefined;
+  // journalEntryRef.id is a Bokio uuid, not a series/number pair, so it
+  // cannot fill SourceVoucherRefDto (see lib/providers/source-voucher.ts).
+  // It does answer one question: has Bokio booked this invoice.
+  const journalEntryRef = raw['journalEntryRef'] as Record<string, unknown> | null | undefined;
   const rawLines = (raw['lineItems'] as Record<string, unknown>[] | undefined) ?? [];
 
   const lines: SupplierInvoiceLineDto[] = rawLines.map((line, idx) => {
@@ -313,9 +337,21 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: paidAmount >= totalAmount && totalAmount > 0,
+    paid,
     balance: amount(balance, currency),
+    // Derived from the balance, never from a provider enum: Bokio publishes
+    // no payment-status enum on a supplier invoice.
+    source: 'balance',
   };
+
+  // Bokio publishes no lifecycle status here either, so state the one thing
+  // the payload does establish: settled, or booked (it named a journal
+  // entry), or merely registered. 'sent' and 'booked' both land as
+  // 'registered' in the migration; the distinction is kept because the DTO
+  // has it and the next consumer may not collapse them.
+  const status: InvoiceStatusCode = paid
+    ? 'paid'
+    : (journalEntryRef?.['id'] ? 'booked' : 'sent');
 
   return {
     id: String(raw['id'] ?? ''),
@@ -323,7 +359,7 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw),
+    status,
     supplier: buildParty(
       (supplierRef?.['name'] as string) ?? '',
     ),

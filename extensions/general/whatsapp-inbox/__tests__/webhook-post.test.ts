@@ -16,6 +16,13 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
     sendReaction: vi.fn().mockResolvedValue(undefined),
     markReadWithTyping: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn(),
+    // The company-answer drain probes each parked file before releasing it.
+    lookupMedia: vi.fn().mockResolvedValue({
+      ok: true,
+      url: 'https://lookaside.example/m1',
+      mimeType: 'image/jpeg',
+      fileSize: 1024,
+    }),
     getDisplayPhoneNumber: vi.fn().mockResolvedValue(null),
   }
 })
@@ -975,7 +982,13 @@ describe('POST /webhook', () => {
       mock.enqueue({ data: { company_id: 'company-2' } }) // membership check
       mock.enqueue({ data: null }) // guarded conversation pin update
       mock.enqueue({ data: null }) // link last_company_id
-      mock.enqueue({ data: [] }) // expiry stamp: nothing past the media window
+      mock.enqueue({ data: [] }) // outer-bound stamp: nothing that old
+      mock.enqueue({
+        data: [
+          { id: 'stg-1', media_id: 'media-1' },
+          { id: 'stg-2', media_id: 'media-2' },
+        ],
+      }) // probe candidates: Meta still serves both
       mock.enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // staged reopen
       mock.enqueue({ data: null }) // terminal row insert
 
@@ -998,7 +1011,8 @@ describe('POST /webhook', () => {
       mock.enqueue({ data: { company_id: 'company-1' } }) // membership check
       mock.enqueue({ data: null }) // guarded conversation pin update
       mock.enqueue({ data: null }) // link last_company_id
-      mock.enqueue({ data: [] }) // expiry stamp: nothing past the media window
+      mock.enqueue({ data: [] }) // outer-bound stamp: nothing that old
+      mock.enqueue({ data: [{ id: 'stg-1', media_id: 'media-1' }] }) // probe candidates
       mock.enqueue({ data: [{ id: 'stg-1' }] }) // staged reopen
       mock.enqueue({ data: null }) // terminal row insert
 
@@ -1209,7 +1223,8 @@ describe('POST /webhook', () => {
       mock.enqueue({ data: { company_id: 'company-2' } }) // membership check
       mock.enqueue({ data: null }) // guarded pin write
       mock.enqueue({ data: null }) // link last_company_id
-      mock.enqueue({ data: [] }) // expiry stamp: nothing past the media window
+      mock.enqueue({ data: [] }) // outer-bound stamp: nothing that old
+      mock.enqueue({ data: [{ id: 'stg-1', media_id: 'media-1' }] }) // probe candidates
       mock.enqueue({ data: [{ id: 'stg-1' }] }) // staged reopen
       mock.enqueue({ data: null }) // terminal row insert
 

@@ -2377,6 +2377,10 @@ function formatSkipReasons(
       `${reasons.outsideFiscalYears} avslutad${reasons.outsideFiscalYears > 1 ? 'e' : ''} före importerade räkenskapsår`,
     )
   }
+  // The source returned the record without an amount and without rader, so
+  // there is nothing to import: say that, rather than let the count vanish
+  // into an unexplained "hoppades över".
+  if (reasons.zeroTotal) parts.push(`${reasons.zeroTotal} saknar belopp hos leverantören`)
   if (reasons.inactive) {
     parts.push(
       entityType === 'asset'

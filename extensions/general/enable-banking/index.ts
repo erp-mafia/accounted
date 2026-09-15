@@ -15,6 +15,7 @@ import {
   BANK_UNAVAILABLE_MESSAGE,
   type ASPSP,
 } from './lib/api-client'
+import { buildPrefilledCredentials, wantsCompanyId } from './lib/prefill-credentials'
 import { syncAccountTransactions } from './lib/sync'
 import { emitBankSyncFailed } from './lib/sync-failure-event'
 import { triggerConnectionSync } from './lib/trigger-sync'
@@ -370,20 +371,30 @@ export const enableBankingExtension: Extension = {
           // personal Mobile BankID) back to 'business' on every consent renewal,
           // failing at the bank's signing step. The client can still pass an
           // explicit psu_type to switch account type in place.
+          // entity_type decides the default PSU type; org_number is the
+          // företags-ID some banks ask for on Enable Banking's page. Read
+          // once, and only when one of them is needed.
+          type CompanyRow = { entity_type: string | null; org_number: string | null }
+          let companyRow: CompanyRow | null | undefined
+          const loadCompany = async (): Promise<CompanyRow | null> => {
+            if (companyRow === undefined) {
+              const { data } = await supabase
+                .from('companies')
+                .select('entity_type, org_number')
+                .eq('id', companyId)
+                .single()
+              companyRow = (data as CompanyRow | null) ?? null
+            }
+            return companyRow
+          }
+
           let psuType: 'personal' | 'business' = 'business'
           if (explicitPsuType === 'personal' || explicitPsuType === 'business') {
             psuType = explicitPsuType
           } else if (isReconnect && (existing?.psu_type === 'personal' || existing?.psu_type === 'business')) {
             psuType = existing.psu_type
-          } else {
-            const { data: company } = await supabase
-              .from('companies')
-              .select('entity_type')
-              .eq('id', companyId)
-              .single()
-            if (company?.entity_type === 'enskild_firma') {
-              psuType = 'personal'
-            }
+          } else if ((await loadCompany())?.entity_type === 'enskild_firma') {
+            psuType = 'personal'
           }
 
           // Resolve the bank's preferred auth method. Handelsbanken (and some
@@ -401,12 +412,24 @@ export const enableBankingExtension: Extension = {
           )
           const authMethod = preferredMethod?.name
 
+          // Prefill what the ledger already knows (the organisationsnummer
+          // as företags-ID) so the person is not asked to type it in a
+          // format Enable Banking's page never explains. Value stays out of
+          // the log; only whether one was sent.
+          const credentials = wantsCompanyId(preferredMethod)
+            ? buildPrefilledCredentials(preferredMethod, {
+                org_number: (await loadCompany())?.org_number ?? null,
+                entity_type: (await loadCompany())?.entity_type ?? null,
+              })
+            : undefined
+
           log.info('[enable-banking] Starting bank connection', {
             user_id: user.id,
             bank: resolvedAspspName,
             country: resolvedAspspCountry,
             psu_type: psuType,
             auth_method: authMethod ?? '(aspsp default)',
+            credentials_prefilled: credentials ? Object.keys(credentials) : [],
             // Chosen method's metadata, so prod logs can verify per-bank pinning
             // behavior after deploy (hidden-only + psu_types selection). A
             // pinned method with no psu_types (the documented Handelsbanken
@@ -620,7 +643,8 @@ export const enableBankingExtension: Extension = {
               oauthState,
               psuType,
               authMethod,
-              companyId
+              companyId,
+              credentials
             )
 
             // Record the bank's authorization_id for audit/traceability. The
@@ -654,7 +678,8 @@ export const enableBankingExtension: Extension = {
             oauthState,
             psuType,
             authMethod,
-            companyId
+            companyId,
+            credentials
           )
 
           const { data: connection, error } = await supabase

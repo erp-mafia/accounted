@@ -41,6 +41,7 @@ import {
 import { fetchFortnoxAssetPreview } from './lib/import-assets'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { relinkRegistrationVouchers } from './lib/relink-registration-vouchers'
+import { refreshMigratedSupplierPaymentState } from './lib/refresh-migrated-payment-state'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
@@ -70,6 +71,20 @@ import { createLogger } from '@/lib/logger'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
 
 const moduleLog = createLogger('extensions/arcim-migration')
+
+/**
+ * Wall-clock budget for one /migrate run.
+ *
+ * The dispatcher (app/api/extensions/ext/[...path]/route.ts) runs under
+ * maxDuration = 800, and a run that is still going when Vercel terminates
+ * the function never writes its terminal NDJSON line: the wizard reports a
+ * dropped connection over a job that half-landed. The orchestrator fits its
+ * budget-aware steps inside this deadline and keeps the rest of the ceiling
+ * for the unbudgeted tail (voucher links, reconciliation, party
+ * suggestions, the accept write). Self-hosted has no ceiling; the same
+ * budget keeps a run bounded there too.
+ */
+const MIGRATE_RUN_BUDGET_MS = 660_000
 
 /**
  * The one answer the unauthenticated OAuth callback gives for every state
@@ -1624,6 +1639,7 @@ export const arcimMigrationExtension: Extension = {
             importSupplierInvoices,
             importAssets,
             reconcileVouchers,
+            deadlineMs: Date.now() + MIGRATE_RUN_BUDGET_MS,
           }
 
           // Streaming mode (the migration wizard opts in via Accept): one
@@ -1705,15 +1721,20 @@ export const arcimMigrationExtension: Extension = {
     // { dryRun: true } to preview the plan (incl. items needing manual review)
     // without writing.
     //
-    // Pass { consentId } to ALSO re-link registration vouchers (the verifikat
-    // that BOOKED each invoice). The imported rows do not store the provider's
-    // voucher ref, so that pass re-fetches both registers from the provider
-    // through the given consent; without a consentId it is skipped and the
-    // response carries no `registrationLinks`. The consent is validated
-    // (company-scoped) BEFORE the payment reconcile writes anything, so a
-    // wrong id is a clean 404; a provider failure during the relink itself is
-    // reported beside the payment result, which was already persisted, as
-    // `registrationLinksError` rather than by discarding that result.
+    // Pass { consentId } to ALSO run the two provider-backed passes:
+    //   `registrationLinks`: re-link registration vouchers (the verifikat that
+    //     BOOKED each invoice). The imported rows do not store the provider's
+    //     voucher ref, so the registers are re-fetched through the consent.
+    //   `paymentRefresh`: refresh the payment state of migrated supplier
+    //     invoices that are still open here, from what the provider reports
+    //     now. This is the repair path for invoices imported by a mapper that
+    //     could not read the provider's payment fields (Bokio, 2026-09-14).
+    // Without a consentId both are skipped and the response carries neither.
+    // The consent is validated (company-scoped) BEFORE the payment reconcile
+    // writes anything, so a wrong id is a clean 404; a provider failure inside
+    // either pass is reported beside the results that were already persisted,
+    // as `registrationLinksError` / `paymentRefreshError`, rather than by
+    // discarding them. The two passes are independent of each other.
     {
       method: 'POST',
       path: '/reconcile',
@@ -1775,8 +1796,22 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json({ success: true, dryRun, result })
         }
 
+        // resolveConsent throws plain `{ status, message }` objects for a
+        // consent that vanished or lost its tokens between the check above
+        // and here; classifyProviderError handles the provider-side ones.
+        const providerErrorCode = (error: unknown): string => {
+          const status = typeof error === 'object' && error !== null && 'status' in error
+            ? (error as { status?: unknown }).status
+            : undefined
+          return error instanceof ConsentNotFoundError || status === 404
+            ? 'PROVIDER_CONSENT_NOT_FOUND'
+            : classifyProviderError(error) ?? 'PROVIDER_MIGRATE_FAILED'
+        }
+
+        let registrationLinks: Awaited<ReturnType<typeof relinkRegistrationVouchers>> | null = null
+        let registrationLinksError: { code: string } | null = null
         try {
-          const registrationLinks = await relinkRegistrationVouchers({
+          registrationLinks = await relinkRegistrationVouchers({
             supabase,
             companyId,
             consentId,
@@ -1792,26 +1827,50 @@ export const arcimMigrationExtension: Extension = {
             ambiguous: registrationLinks.ambiguous,
             amountMismatch: registrationLinks.amountMismatch,
           })
-          return NextResponse.json({ success: true, dryRun, result, registrationLinks })
         } catch (error) {
-          // resolveConsent throws plain `{ status, message }` objects for a
-          // consent that vanished or lost its tokens between the check above
-          // and here; classifyProviderError handles the provider-side ones.
           log.error('arcim registration relink failed', error as Error)
-          const status = typeof error === 'object' && error !== null && 'status' in error
-            ? (error as { status?: unknown }).status
-            : undefined
-          const code = error instanceof ConsentNotFoundError || status === 404
-            ? 'PROVIDER_CONSENT_NOT_FOUND'
-            : classifyProviderError(error) ?? 'PROVIDER_MIGRATE_FAILED'
-          return NextResponse.json({
-            success: true,
-            dryRun,
-            result,
-            registrationLinks: null,
-            registrationLinksError: { code },
-          })
+          registrationLinksError = { code: providerErrorCode(error) }
         }
+
+        // The same consent also knows which migrated supplier invoices the
+        // provider considers settled. A migration can only write what its
+        // mapper read, and the Bokio supplier-invoice mapper read fields that
+        // schema does not have, so those rows stand as "Registrerad" with
+        // their whole total open. Ask the provider and write what it says,
+        // by the same rule the import uses. Independent of the relink: a
+        // provider failure in one must not discard the other's result.
+        let paymentRefresh: Awaited<ReturnType<typeof refreshMigratedSupplierPaymentState>> | null = null
+        let paymentRefreshError: { code: string } | null = null
+        try {
+          paymentRefresh = await refreshMigratedSupplierPaymentState({
+            supabase,
+            companyId,
+            consentId,
+            dryRun,
+          })
+          log.info('arcim supplier payment-state refresh completed', {
+            companyId,
+            dryRun,
+            providerInvoices: paymentRefresh.providerInvoices,
+            matched: paymentRefresh.matched,
+            updated: paymentRefresh.updated,
+            unchanged: paymentRefresh.unchanged,
+            unmatched: paymentRefresh.unmatched,
+          })
+        } catch (error) {
+          log.error('arcim supplier payment-state refresh failed', error as Error)
+          paymentRefreshError = { code: providerErrorCode(error) }
+        }
+
+        return NextResponse.json({
+          success: true,
+          dryRun,
+          result,
+          registrationLinks,
+          ...(registrationLinksError ? { registrationLinksError } : {}),
+          paymentRefresh,
+          ...(paymentRefreshError ? { paymentRefreshError } : {}),
+        })
       },
     },
 

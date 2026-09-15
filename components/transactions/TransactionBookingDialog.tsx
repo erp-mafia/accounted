@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -138,6 +138,8 @@ export default function TransactionBookingDialog({
   const t = useTranslations('tx_booking_dialog')
   const { toast } = useToast()
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  // The whole dialog takes a dropped file, not only the dashed box.
+  const dropSurfaceRef = useRef<HTMLDivElement>(null)
   const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
   // Settlement account for the bank line: resolved from the session-cached
@@ -263,6 +265,12 @@ export default function TransactionBookingDialog({
     }} modal={false}>
       <DialogVeil />
       <DialogContent
+        ref={dropSurfaceRef}
+        // A drop anywhere on the dialog is the upload zone's (dropSurfaceRef);
+        // once a document is shown instead, the two preventDefaults keep a
+        // stray drop from navigating the tab to the file.
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => e.preventDefault()}
         // Width caps at the space left of a docked agent sheet so the form's
         // right edge, and the Granska button, never end up unreachable under
         // the sheet (z-60 over z-50). --agent-sheet-w is docked-only, so with
@@ -335,6 +343,7 @@ export default function TransactionBookingDialog({
               <DocumentUploadZone
                 files={uploadedFiles}
                 onFilesChange={setUploadedFiles}
+                dropSurfaceRef={dropSurfaceRef}
               />
             )}
 

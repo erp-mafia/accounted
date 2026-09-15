@@ -1197,6 +1197,16 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'annual_report_validation_runs', file: 'annual_report_validation_runs.json', orderBy: 'created_at' },
   { name: 'arsredovisning_signature_requests', file: 'arsredovisning_signature_requests.json', orderBy: 'created_at' },
   { name: 'arsredovisning_submissions', file: 'arsredovisning_submissions.json' },
+  // Which four verifikat are the kontantmetod year-end cut-off, and which two
+  // of them are the vändningar a momsdeklaration leaves out (20260914150109).
+  // Dumped rather than treated as covered by the verifikat themselves: that
+  // classification used to be readable off the Swedish description, and the
+  // whole point of the marker table is that it no longer has to be.
+  {
+    name: 'kontantmetod_cutoff_entries',
+    file: 'kontantmetod_cutoff_entries.json',
+    orderBy: 'created_at',
+  },
   // Settings
   { name: 'company_settings', file: 'company_settings.json' },
 ]

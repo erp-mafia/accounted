@@ -119,6 +119,35 @@ describe('GET /api/extensions/zettle/callback', () => {
     expect(activateChain.maybeSingle).toHaveBeenCalled()
   })
 
+  it('seeds the purchase cursor with the connection moment', async () => {
+    // Without this the first sync would backfill history the merchant has
+    // already booked from the bank side (issue #2570).
+    const findChain = mockChain({
+      data: { id: CONNECTION_ID, user_id: 'user-1', company_id: 'company-1' },
+    })
+    const replayChain = mockChain({ error: null })
+    const activateChain = mockChain({
+      data: {
+        id: CONNECTION_ID,
+        company_id: 'company-1',
+        user_id: 'user-1',
+        organization_uuid: 'org-uuid-1',
+      },
+    })
+    mockFrom
+      .mockReturnValueOnce(findChain)
+      .mockReturnValueOnce(replayChain)
+      .mockReturnValueOnce(activateChain)
+
+    await GET(makeRequest({ code: 'ac_123', state: OAUTH_STATE }))
+
+    const payload = (activateChain.update as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as Record<string, unknown>
+    expect(payload.status).toBe('active')
+    expect(payload.last_order_synced_at).toBe(payload.connected_at)
+    expect(typeof payload.last_order_synced_at).toBe('string')
+  })
+
   it('refuses activation when /connect invalidated the pending row mid-callback', async () => {
     // Lookup still sees the original pending row (TOCTOU), then a concurrent
     // POST /connect flips it to error and clears oauth_state before activate.

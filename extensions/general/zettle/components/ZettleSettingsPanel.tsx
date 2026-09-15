@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -12,7 +13,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useFormat } from '@/lib/hooks/use-format'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
-import { CreditCard, Link2, Loader2, RefreshCw, Unlink } from 'lucide-react'
+import { CreditCard, History, Link2, Loader2, RefreshCw, Unlink } from 'lucide-react'
 import {
   zettleRequest,
   syncSummary,
@@ -20,9 +21,21 @@ import {
   ZETTLE_SYNC_TIMEOUT_MS,
   type ZettleSyncPayload,
 } from '../lib/settings-actions'
+import { MAX_BACKFILL_YEARS } from '../types'
 import type { ZettleStatusResponse } from '../types'
 
 type ConnectionInfo = NonNullable<ZettleStatusResponse['connection']>
+
+/** Bounds of the backfill date picker, mirroring parseBackfillFrom on the server. */
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
+function earliestBackfillDay(): string {
+  const floor = new Date()
+  floor.setUTCFullYear(floor.getUTCFullYear() - MAX_BACKFILL_YEARS)
+  return isoDay(floor)
+}
 
 const STATUS_VARIANT: Record<ConnectionInfo['status'], 'success' | 'secondary' | 'destructive' | 'warning'> = {
   active: 'success',
@@ -48,6 +61,8 @@ export default function ZettleSettingsPanel() {
   const [disconnecting, setDisconnecting] = useState(false)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [backfillFrom, setBackfillFrom] = useState('')
+  const [backfilling, setBackfilling] = useState(false)
   const [togglingTransactionSync, setTogglingTransactionSync] = useState(false)
 
   const failureCopy = { timeout: t('action_timeout'), network: t('action_network') }
@@ -122,6 +137,28 @@ export default function ZettleSettingsPanel() {
     }
   }
 
+  /** Same counts, two entry points: "Synka nu" and the explicit backfill. */
+  function showSyncOutcome(
+    payload: ZettleSyncPayload | null | undefined,
+    doneTitle: string,
+    failedTitle: string,
+  ) {
+    const summary = syncSummary(payload ?? null)
+    if (summary.reason === 'revoked') {
+      toast({ title: failedTitle, description: t('sync_revoked'), variant: 'destructive' })
+    } else if (summary.reason === 'partial') {
+      toast({ title: t('sync_partial_title'), description: t('sync_partial', summary.values) })
+    } else if (summary.reason === 'empty') {
+      toast({ title: doneTitle, description: t('sync_done_empty') })
+    } else if (summary.reason === 'errors') {
+      toast({ title: doneTitle, description: t('sync_done_feed_errors', summary.values) })
+    } else if (summary.reason === 'feed') {
+      toast({ title: doneTitle, description: t('sync_done_feed', summary.values) })
+    } else {
+      toast({ title: doneTitle })
+    }
+  }
+
   async function handleSyncNow() {
     if (syncing) return
     setSyncing(true)
@@ -139,27 +176,43 @@ export default function ZettleSettingsPanel() {
         })
         return
       }
-      const summary = syncSummary(result.data)
-      if (summary.reason === 'revoked') {
-        toast({
-          title: t('sync_failed_title'),
-          description: t('sync_revoked'),
-          variant: 'destructive',
-        })
-      } else if (summary.reason === 'partial') {
-        toast({ title: t('sync_partial_title'), description: t('sync_partial', summary.values) })
-      } else if (summary.reason === 'empty') {
-        toast({ title: t('sync_done_title'), description: t('sync_done_empty') })
-      } else if (summary.reason === 'errors') {
-        toast({ title: t('sync_done_title'), description: t('sync_done_feed_errors', summary.values) })
-      } else if (summary.reason === 'feed') {
-        toast({ title: t('sync_done_title'), description: t('sync_done_feed', summary.values) })
-      } else {
-        toast({ title: t('sync_done_title') })
-      }
+      showSyncOutcome(result.data, t('sync_done_title'), t('sync_failed_title'))
       await loadStatus()
     } finally {
       setSyncing(false)
+    }
+  }
+
+  async function handleBackfill() {
+    if (backfilling) return
+    if (!backfillFrom) {
+      toast({
+        title: t('backfill_failed_title'),
+        description: t('backfill_missing_date'),
+        variant: 'destructive',
+      })
+      return
+    }
+    setBackfilling(true)
+    try {
+      const result = await zettleRequest<ZettleSyncPayload>({
+        url: '/api/extensions/ext/zettle/backfill',
+        body: { from: backfillFrom },
+        locale,
+        timeoutMs: ZETTLE_SYNC_TIMEOUT_MS,
+      })
+      if (!result.ok) {
+        toast({
+          title: t('backfill_failed_title'),
+          description: failureDescription(result, failureCopy),
+          variant: 'destructive',
+        })
+        return
+      }
+      showSyncOutcome(result.data, t('backfill_done_title'), t('backfill_failed_title'))
+      await loadStatus()
+    } finally {
+      setBackfilling(false)
     }
   }
 
@@ -378,6 +431,40 @@ export default function ZettleSettingsPanel() {
               disabled={togglingTransactionSync}
               aria-label={t('transaction_sync_title')}
             />
+          </div>
+        )}
+
+        {isActive && connection && (
+          <div className="space-y-4 rounded-lg border border-border p-4">
+            <div className="min-w-0 max-w-prose space-y-1">
+              <p className="text-sm font-medium">{t('backfill_title')}</p>
+              <p className="text-sm text-muted-foreground">{t('backfill_description')}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Input
+                type="date"
+                className="w-48"
+                value={backfillFrom}
+                min={earliestBackfillDay()}
+                max={isoDay(new Date())}
+                onChange={(event) => setBackfillFrom(event.target.value)}
+                aria-label={t('backfill_from_label')}
+                disabled={backfilling}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBackfill}
+                disabled={backfilling}
+              >
+                {backfilling ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <History className="mr-2 h-4 w-4" />
+                )}
+                {backfilling ? t('backfill_running') : t('backfill_submit')}
+              </Button>
+            </div>
           </div>
         )}
       </CardContent>

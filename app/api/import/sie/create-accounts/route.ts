@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import type { SIEAccount } from '@/lib/import/types'
+import { SIECreateAccountsSchema } from '@/lib/api/schemas'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -55,14 +56,24 @@ function getNormalBalance(accountType: string): 'debit' | 'credit' {
  */
 export const POST = withRouteContext(
   'sie_import.create_accounts',
-  async (request, { supabase, user, companyId }) => {
+  async (request, { supabase, user, companyId, log, requestId }) => {
     try {
       const body = await request.json()
-      const accounts: SIEAccount[] = body.accounts
-
-      if (!accounts || !Array.isArray(accounts) || accounts.length === 0) {
-        return NextResponse.json({ error: 'Inga konton att skapa.' }, { status: 400 })
+      const checked = SIECreateAccountsSchema.safeParse(body)
+      if (!checked.success) {
+        return errorResponse(checked.error, log, { requestId, details: {
+          issues: checked.error.issues.map(issue => {
+            const number = issue.path[0] === 'accounts' && typeof issue.path[1] === 'number' &&
+              issue.path[2] === 'number' && Array.isArray(body?.accounts)
+              ? body.accounts[issue.path[1]]?.number : undefined
+            return {
+              field: issue.path.join('.'), message: issue.message, code: issue.code,
+              ...(typeof number === 'string' && /^\d{1,40}$/.test(number) ? { sourceAccount: number } : {}),
+            }
+          }),
+        } })
       }
+      const { accounts } = checked.data
 
       // Prepare accounts for upsert (idempotent, safe to retry)
       const accountsToUpsert = accounts.map(account => {
@@ -122,6 +133,7 @@ export const POST = withRouteContext(
       })
 
     } catch (error) {
+      if (error instanceof SyntaxError) return errorResponseFromCode('VALIDATION_ERROR', log, { requestId })
       console.error('Create accounts error:', error)
       return NextResponse.json(
         { error: `Kunde inte skapa konton: ${error instanceof Error ? getUserErrorMessage(error) : 'Okänt fel'}. Försök igen.` },

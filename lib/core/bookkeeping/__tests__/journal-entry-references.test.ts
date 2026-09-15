@@ -20,6 +20,12 @@ import { MAX_CHAIN_WALK } from '../correction-chain'
  *   5. supplier_invoices         (payment_journal_entry_id)
  *   6. supplier_invoice_payments (payment rows → supplier_invoice_id)
  *   7. supplier_invoices         (by id: only when step 6 found new ids)
+ *   8. journal_entries           (the entry's own source_type / source_id)
+ *   9. salary_runs               (by id: only when step 8 says salary_payment)
+ *
+ * Steps 8 and 9 run LAST on purpose: every case below that enqueues only the
+ * invoice arms leaves the queue empty there, which the mock resolves as
+ * `{ data: null }`, i.e. no salary reference.
  */
 describe('getJournalEntryUnderlagReferences', () => {
   const run = (results: { data: unknown }[]) => {
@@ -183,6 +189,97 @@ describe('getJournalEntryUnderlagReferences', () => {
     const notCalls = mock.findCalls('invoices', 'not')
     expect(notCalls).toHaveLength(2)
     for (const call of notCalls) expect(call).toEqual(['status', 'in', '("draft","cancelled")'])
+  })
+
+  it('surfaces the lönekörning that posted the entry, off the entry own source columns', async () => {
+    // The whole relation: createSalaryRunEntries() writes source_type
+    // 'salary_payment' with source_id = salary_runs.id, so no join is needed.
+    const refs = await run([
+      { data: [] }, // 1. invoices direct
+      { data: [] }, // 2. invoice_payments
+      { data: [] }, // 4. supplier registration
+      { data: [] }, // 5. supplier payment
+      { data: [] }, // 6. supplier_invoice_payments
+      { data: { source_type: 'salary_payment', source_id: 'run-1' } }, // 8. journal_entries
+      { data: { id: 'run-1', period_year: 2026, period_month: 7 } }, // 9. salary_runs
+    ])
+
+    expect(refs).toEqual([{ type: 'salary_run', id: 'run-1', number: '2026-07' }])
+  })
+
+  it('pads the salary period to YYYY-MM', async () => {
+    const refs = await run([
+      { data: [] }, // 1. invoices direct
+      { data: [] }, // 2. invoice_payments
+      { data: [] }, // 4. supplier registration
+      { data: [] }, // 5. supplier payment
+      { data: [] }, // 6. supplier_invoice_payments
+      { data: { source_type: 'salary_payment', source_id: 'run-2' } }, // 8. journal_entries
+      { data: { id: 'run-2', period_year: 2026, period_month: 3 } }, // 9. salary_runs
+    ])
+
+    expect(refs).toEqual([{ type: 'salary_run', id: 'run-2', number: '2026-03' }])
+  })
+
+  it('never returns a dead link: a source_id with no readable run yields nothing', async () => {
+    const refs = await run([
+      { data: [] }, // 1. invoices direct
+      { data: [] }, // 2. invoice_payments
+      { data: [] }, // 4. supplier registration
+      { data: [] }, // 5. supplier payment
+      { data: [] }, // 6. supplier_invoice_payments
+      { data: { source_type: 'salary_payment', source_id: 'run-gone' } }, // 8. journal_entries
+      { data: null }, // 9. salary_runs: deleted, or another company's
+    ])
+
+    expect(refs).toEqual([])
+  })
+
+  it('leaves a non-salary source_type alone and never reads salary_runs', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: [] }, // 1. invoices direct
+      { data: [] }, // 2. invoice_payments
+      { data: [] }, // 4. supplier registration
+      { data: [] }, // 5. supplier payment
+      { data: [] }, // 6. supplier_invoice_payments
+      { data: { source_type: 'bank_transaction', source_id: 'txn-1' } }, // 8. journal_entries
+    ])
+    const refs = await getJournalEntryUnderlagReferences(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      'je-1',
+    )
+
+    expect(refs).toEqual([])
+    expect(mock.calls.some((c) => c.table === 'salary_runs')).toBe(false)
+  })
+
+  it('scopes both salary reads to the company (defense in depth alongside RLS)', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: [] }, // 1. invoices direct
+      { data: [] }, // 2. invoice_payments
+      { data: [] }, // 4. supplier registration
+      { data: [] }, // 5. supplier payment
+      { data: [] }, // 6. supplier_invoice_payments
+      { data: { source_type: 'salary_payment', source_id: 'run-1' } }, // 8. journal_entries
+      { data: { id: 'run-1', period_year: 2026, period_month: 7 } }, // 9. salary_runs
+    ])
+    await getJournalEntryUnderlagReferences(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      'je-1',
+    )
+
+    expect(mock.findCalls('journal_entries', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['id', 'je-1'],
+    ])
+    expect(mock.findCalls('salary_runs', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['id', 'run-1'],
+    ])
   })
 })
 

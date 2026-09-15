@@ -57,6 +57,10 @@ export const GET = withRouteContext(
               textColumn('VAT-nummer'),
               integerColumn('Betalningsvillkor'),
               textColumn('Anteckning'),
+              // Appended, not inserted next to the name: the existing column
+              // order is what anyone's downstream sheet or script reads by
+              // position.
+              textColumn('Kundnummer'),
             ],
             rows: customers,
             mapRow: (c) => [
@@ -87,6 +91,7 @@ export const GET = withRouteContext(
               c.vat_number,
               c.default_payment_terms,
               c.notes,
+              c.customer_number,
             ],
           },
         ],

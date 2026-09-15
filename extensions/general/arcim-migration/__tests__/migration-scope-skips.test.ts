@@ -3,10 +3,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 /**
- * #2469: the orchestrator hands the fetchers a predicate that declines paid
- * invoices outside the imported fiscal years, counts what they declined as
- * a named skip, and runs the party scan only when the request says so (the
- * wizard sends one request per step and finishes on the last).
+ * #2469: the orchestrator scopes the listed register before any detail
+ * fetch, declining paid invoices outside the imported fiscal years, counts
+ * what it declined as a named skip, and runs the party scan only when the
+ * request says so (the wizard sends one request per step and finishes on
+ * the last). The invoice steps list first and hydrate only what this run
+ * can insert, so the scope is asserted on what the hydration pass receives.
  */
 
 vi.mock('@/lib/providers/resolve-consent', () => ({
@@ -21,8 +23,10 @@ vi.mock('@/lib/providers/provider-data-fetcher', () => ({
   fetchCompanyInfoDirect: vi.fn(),
   fetchCustomersDirect: vi.fn(),
   fetchSuppliersDirect: vi.fn(),
-  fetchSalesInvoicesHydrated: vi.fn(),
-  fetchSupplierInvoicesHydrated: vi.fn(),
+  fetchSalesInvoicesDirect: vi.fn(),
+  fetchSupplierInvoicesDirect: vi.fn(),
+  hydrateSalesInvoices: vi.fn(),
+  hydrateSupplierInvoices: vi.fn(),
 }))
 
 vi.mock('@/lib/invoices/bulk-reconcile-supplier-vouchers', () => ({
@@ -57,8 +61,10 @@ vi.mock('../lib/insert-fallback', () => ({
 
 import { executeMigration } from '../lib/migration-orchestrator'
 import {
-  fetchSalesInvoicesHydrated,
-  fetchSupplierInvoicesHydrated,
+  fetchSalesInvoicesDirect,
+  fetchSupplierInvoicesDirect,
+  hydrateSalesInvoices,
+  hydrateSupplierInvoices,
 } from '@/lib/providers/provider-data-fetcher'
 import { suggestPartiesForCompany } from '@/lib/parties/suggest'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -71,7 +77,26 @@ function vismaError(statusCode: number): Error {
   return e
 }
 
+const mListSales = fetchSalesInvoicesDirect as Mock
+const mListSupplier = fetchSupplierInvoicesDirect as Mock
+const mHydrateSales = hydrateSalesInvoices as Mock
+const mHydrateSupplier = hydrateSupplierInvoices as Mock
+
 const HYDRATION = { needed: 0, hydrated: 0, failed: 0, skippedForBudget: 0 }
+
+/** Hydration hands back whatever it was given, unchanged. */
+function passThrough(mock: Mock) {
+  mock.mockImplementation(async (_p: unknown, _t: unknown, _c: unknown, given: unknown[]) => ({
+    invoices: given,
+    hydration: HYDRATION,
+    unhydratedIds: new Set<string>(),
+  }))
+}
+
+/** Invoice numbers the hydration pass was handed, in order. */
+function hydratedNumbers(mock: Mock): string[] {
+  return (mock.mock.calls[0][3] as { invoiceNumber: string }[]).map((dto) => dto.invoiceNumber)
+}
 
 function party(name: string) {
   return { name, identifications: [] }
@@ -134,43 +159,49 @@ const SCOPE = { start: '2026-01-01', end: '2026-12-31' }
 describe('executeMigration: fiscal-year scope', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    ;(fetchAllRows as Mock).mockResolvedValue([])
+    passThrough(mHydrateSales)
+    passThrough(mHydrateSupplier)
   })
 
-  it('hands the fetchers a predicate that mirrors the scope, unpaid kept from any year', async () => {
-    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({ invoices: [], hydration: HYDRATION, unhydratedIds: new Set(), excluded: [] })
-    ;(fetchSupplierInvoicesHydrated as Mock).mockResolvedValue({ invoices: [], hydration: HYDRATION, unhydratedIds: new Set(), excluded: [] })
+  it('scopes the listed register before hydration: paid outside the years declined, unpaid kept from any year', async () => {
+    mListSales.mockResolvedValue([
+      salesDto('1', '2026-03-01', true),
+      salesDto('2', '2025-03-01', true),
+      salesDto('3', '2025-03-01', false),
+    ])
+    mListSupplier.mockResolvedValue([
+      supplierDto('L1', '2024-12-31', true),
+      supplierDto('L2', '2024-12-31', false),
+    ])
 
-    await executeMigration(baseOptions({ importSalesInvoices: true, importSupplierInvoices: true, fiscalYearScope: SCOPE }))
+    const results = await executeMigration(baseOptions({ importSalesInvoices: true, importSupplierInvoices: true, fiscalYearScope: SCOPE }))
 
-    const salesSelect = (fetchSalesInvoicesHydrated as Mock).mock.calls[0][4] as (dto: SalesInvoiceDto) => boolean
-    expect(salesSelect(salesDto('1', '2026-03-01', true))).toBe(true)
-    expect(salesSelect(salesDto('2', '2025-03-01', true))).toBe(false)
-    expect(salesSelect(salesDto('3', '2025-03-01', false))).toBe(true)
-
-    const supplierSelect = (fetchSupplierInvoicesHydrated as Mock).mock.calls[0][4] as (dto: SupplierInvoiceDto) => boolean
-    expect(supplierSelect(supplierDto('L1', '2024-12-31', true))).toBe(false)
-    expect(supplierSelect(supplierDto('L2', '2024-12-31', false))).toBe(true)
+    expect(hydratedNumbers(mHydrateSales)).toEqual(['1', '3'])
+    expect(hydratedNumbers(mHydrateSupplier)).toEqual(['L2'])
+    expect(results.salesInvoices).toMatchObject({ total: 3, imported: 2, skipped: 1, skipReasons: { outsideFiscalYears: 1 } })
+    expect(results.supplierInvoices).toMatchObject({ total: 2, imported: 1, skipped: 1, skipReasons: { outsideFiscalYears: 1 } })
   })
 
   it('keeps everything when the request carries no scope', async () => {
-    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({ invoices: [], hydration: HYDRATION, unhydratedIds: new Set(), excluded: [] })
+    mListSales.mockResolvedValue([salesDto('2', '2019-03-01', true)])
 
-    await executeMigration(baseOptions({ importSalesInvoices: true }))
+    const results = await executeMigration(baseOptions({ importSalesInvoices: true }))
 
-    const salesSelect = (fetchSalesInvoicesHydrated as Mock).mock.calls[0][4] as (dto: SalesInvoiceDto) => boolean
-    expect(salesSelect(salesDto('2', '2019-03-01', true))).toBe(true)
+    expect(hydratedNumbers(mHydrateSales)).toEqual(['2'])
+    expect(results.salesInvoices).toMatchObject({ total: 1, imported: 1, skipped: 0 })
   })
 
-  it('counts what the fetcher declined as a named skip and keeps the register total honest', async () => {
-    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({
-      invoices: [salesDto('1001', '2026-03-01', false)],
-      hydration: HYDRATION,
-      unhydratedIds: new Set(),
-      excluded: [salesDto('900', '2024-01-10', true), salesDto('901', '2025-06-10', true)],
-    })
+  it('counts what the scope declined as a named skip and keeps the register total honest', async () => {
+    mListSales.mockResolvedValue([
+      salesDto('1001', '2026-03-01', false),
+      salesDto('900', '2024-01-10', true),
+      salesDto('901', '2025-06-10', true),
+    ])
 
     const results = await executeMigration(baseOptions({ importSalesInvoices: true, fiscalYearScope: SCOPE }))
 
+    expect(hydratedNumbers(mHydrateSales)).toEqual(['1001'])
     expect(results.salesInvoices).toMatchObject({
       total: 3,
       imported: 1,
@@ -179,12 +210,8 @@ describe('executeMigration: fiscal-year scope', () => {
     })
   })
 
-  it('still reads a fetcher that predates the excluded field', async () => {
-    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({
-      invoices: [salesDto('1001', '2026-03-01', false)],
-      hydration: HYDRATION,
-      unhydratedIds: new Set(),
-    })
+  it('reports no outsideFiscalYears skip when the scope declined nothing', async () => {
+    mListSales.mockResolvedValue([salesDto('1001', '2026-03-01', false)])
 
     const results = await executeMigration(baseOptions({ importSalesInvoices: true, fiscalYearScope: SCOPE }))
 
@@ -197,15 +224,15 @@ describe('executeMigration: per-step requests (#2469)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     ;(fetchAllRows as Mock).mockResolvedValue([])
+    passThrough(mHydrateSales)
+    passThrough(mHydrateSupplier)
   })
 
   it('resolves invoices against the customers an earlier request imported instead of re-creating them', async () => {
     // Request N-1 imported "Kund AB"; this request runs only the sales
     // invoice step, so the customer step's in-memory maps are empty.
     const kund = { ...salesDto('1001', '2026-03-01', false), customer: { name: 'Kund AB', identifications: [{ schemeId: 'SE:ORGNR', id: '5560125790' }] } }
-    ;(fetchSalesInvoicesHydrated as Mock).mockResolvedValue({
-      invoices: [kund], hydration: HYDRATION, unhydratedIds: new Set(), excluded: [],
-    })
+    mListSales.mockResolvedValue([kund])
     // First register read in the step is the customer register, then invoices.
     ;(fetchAllRows as Mock)
       .mockResolvedValueOnce([{ id: 'cust-existing', org_number: '5560125790', name: 'Kund AB' }])
@@ -222,9 +249,7 @@ describe('executeMigration: per-step requests (#2469)', () => {
 
   it('resolves supplier invoices against the suppliers an earlier request imported', async () => {
     const lev = { ...supplierDto('L-1', '2026-03-01', false), supplier: { name: 'Leverantör AB', identifications: [{ schemeId: 'SE:ORGNR', id: '5566778899' }] } }
-    ;(fetchSupplierInvoicesHydrated as Mock).mockResolvedValue({
-      invoices: [lev], hydration: HYDRATION, unhydratedIds: new Set(), excluded: [],
-    })
+    mListSupplier.mockResolvedValue([lev])
     ;(fetchAllRows as Mock)
       .mockResolvedValueOnce([{ id: 'supp-existing', org_number: '5566778899', name: 'Leverantör AB' }])
       .mockResolvedValue([])
@@ -238,7 +263,7 @@ describe('executeMigration: per-step requests (#2469)', () => {
   })
 
   it('reads an opaque 403 as one closed register when an earlier request proved the grant', async () => {
-    ;(fetchSupplierInvoicesHydrated as Mock).mockRejectedValue(vismaError(403))
+    mListSupplier.mockRejectedValue(vismaError(403))
 
     const results = await executeMigration(baseOptions({ importSupplierInvoices: true, grantProven: true }))
 
@@ -247,7 +272,7 @@ describe('executeMigration: per-step requests (#2469)', () => {
   })
 
   it('still treats a 403 on the first call of a migration as a dead grant', async () => {
-    ;(fetchSupplierInvoicesHydrated as Mock).mockRejectedValue(vismaError(403))
+    mListSupplier.mockRejectedValue(vismaError(403))
 
     await expect(
       executeMigration(baseOptions({ importSupplierInvoices: true })),
@@ -267,5 +292,59 @@ describe('executeMigration: suggestParties', () => {
     vi.clearAllMocks()
     await executeMigration(baseOptions({ suggestParties: false }))
     expect(suggestPartiesForCompany).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Bokio returns supplier invoices older than the register its API exposes
+ * with totalAmount 0 and no line items. Imported, they became 0 kr payables
+ * whose zero balance read as "betald" (292 of 661 rows for the company that
+ * reported it on 2026-09-14). An amount-less record is not a 0 kr invoice:
+ * it is declined, and the count is reported rather than left unexplained.
+ */
+describe('executeMigration: supplier invoices the provider sent without an amount', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(fetchAllRows as Mock).mockResolvedValue([])
+    passThrough(mHydrateSupplier)
+  })
+
+  function amountless(invoiceNumber: string): SupplierInvoiceDto {
+    const dto = supplierDto(invoiceNumber, '2019-06-01', false)
+    return {
+      ...dto,
+      lines: [],
+      legalMonetaryTotal: { payableAmount: { value: 0, currencyCode: 'SEK' } },
+      taxTotal: undefined,
+      paymentStatus: { paid: false, balance: { value: 0, currencyCode: 'SEK' }, source: 'balance' },
+    }
+  }
+
+  it('skips them under their own reason and imports the rest', async () => {
+    mListSupplier.mockResolvedValue([amountless('L-OLD-1'), amountless('L-OLD-2'), supplierDto('L-1', '2026-03-01', false)])
+
+    const results = await executeMigration(baseOptions({ importSupplierInvoices: true }))
+
+    expect(results.supplierInvoices).toMatchObject({
+      total: 3,
+      imported: 1,
+      skipped: 2,
+      skipReasons: { zeroTotal: 2 },
+    })
+    const rows = (insertWithPerRowFallback as Mock).mock.calls.find((c) => c[1] === 'supplier_invoices')![2]
+    expect(rows).toHaveLength(1)
+    expect(rows[0].supplier_invoice_number).toBe('L-1')
+  })
+
+  it('keeps an amount-less invoice that still carries line items: those say what it is', async () => {
+    const withLines: SupplierInvoiceDto = {
+      ...amountless('L-OLD-3'),
+      lines: [{ id: '1', description: 'Tjänst', lineExtensionAmount: { value: 800, currencyCode: 'SEK' } }],
+    }
+    mListSupplier.mockResolvedValue([withLines])
+
+    const results = await executeMigration(baseOptions({ importSupplierInvoices: true }))
+
+    expect(results.supplierInvoices).toMatchObject({ imported: 1, skipped: 0 })
   })
 })

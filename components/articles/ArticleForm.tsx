@@ -29,6 +29,8 @@ import {
   RUT_WORK_TYPES,
   normalizeHouseworkType,
 } from '@/lib/invoices/rot-rut-rules'
+import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
+import UnitDatalist from '@/components/invoices/UnitDatalist'
 
 // A row from the currencies reference table (lib migration
 // 20260630110000_currencies_reference_table.sql).
@@ -36,9 +38,6 @@ interface CurrencyOption {
   code: string
   name: string
 }
-
-// Unit list mirrors the invoice line editor (components/invoices/InvoiceEditor.tsx).
-const UNITS = ['st', 'tim', 'dag', 'månad', 'km', 'kg'] as const
 
 // Legal Swedish VAT rates as integer percent. Matches vatRatePercent in
 // lib/api/schemas.ts (25 | 12 | 6 | 0).
@@ -140,7 +139,7 @@ export default function ArticleForm({
         name: z.string().min(1, t('name_required')),
         name_en: z.string().optional(),
         type: z.enum(['vara', 'tjanst']),
-        unit: z.string().min(1),
+        unit: z.string().trim().min(1, t('unit_required')).max(UNIT_MAX_LENGTH, t('unit_too_long')),
         price_excl_vat: z.number({ message: t('price_required') }).nonnegative(t('price_required')),
         vat_rate: z.union([z.literal(25), z.literal(12), z.literal(6), z.literal(0)]),
         // ISO 4217 alpha-3; the authoritative allow-list is the currencies
@@ -309,24 +308,24 @@ export default function ArticleForm({
 
         {/* Enhet closes the group when the company charges no moms, so the
             group never ends on a dangling hairline. */}
-        <SettingsRow label={t('unit_label')} htmlFor="article-unit" borderless={!vatRegistered}>
-          <Controller
-            name="unit"
-            control={control}
-            render={({ field }) => (
-              <SettingsSelect
-                id="article-unit"
-                value={field.value}
-                onChange={(e) => field.onChange(e.target.value)}
-              >
-                {UNITS.map((u) => (
-                  <option key={u} value={u}>
-                    {u}
-                  </option>
-                ))}
-              </SettingsSelect>
-            )}
+        <SettingsRow
+          label={t('unit_label')}
+          htmlFor="article-unit"
+          align="baseline"
+          borderless={!vatRegistered}
+        >
+          {/* Free text with suggestions, not a closed list: the API stores any
+              unit up to 32 characters, so a fuel seller types "l" and an
+              article imported with a unit we do not suggest still shows it. */}
+          <SettingsInput
+            id="article-unit"
+            list={UNIT_DATALIST_ID}
+            maxLength={UNIT_MAX_LENGTH}
+            className="w-28 flex-none"
+            {...register('unit')}
           />
+          <UnitDatalist />
+          {fieldError(errors.unit?.message)}
         </SettingsRow>
 
         {vatRegistered && (

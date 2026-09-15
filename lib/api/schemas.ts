@@ -51,6 +51,10 @@ import {
   PERIOD_PLACEHOLDER_REQUIRES_START_MESSAGE,
 } from '@/lib/invoices/recurring-placeholders'
 
+export const SIECreateAccountsSchema = z.object({
+  accounts: z.array(z.object({ number: accountNumberSchema, name: z.string().max(500) })).min(1).max(10_000),
+})
+
 export const SIEJobOptionsSchema = z.object({
   createFiscalPeriod: z.boolean().default(true),
   importOpeningBalances: z.boolean().default(true),

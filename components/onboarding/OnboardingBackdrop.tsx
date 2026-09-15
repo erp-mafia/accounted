@@ -9,7 +9,11 @@ export default function OnboardingBackdrop() {
   const skyline = ILLUSTRATIONS['about-stockholm']
 
   return (
-    <div aria-hidden className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
+    <div
+      aria-hidden
+      data-onboarding-backdrop
+      className="pointer-events-none fixed inset-0 z-0 overflow-hidden transition-opacity duration-700 ease-out"
+    >
       {/* Stadshuset skyline anchored to the bottom: translated down so its
           water reflection falls below the fold and only the silhouette hugs
           the edge, masked so it dissolves upward into the page. min-width

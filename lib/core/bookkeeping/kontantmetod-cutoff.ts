@@ -69,12 +69,34 @@ export const VILANDE_INPUT_VAT_ACCOUNT = '2648'
 export const RECEIVABLES_ACCOUNT = '1510'
 export const PAYABLES_ACCOUNT = '2440'
 
+/**
+ * Grundbok text for the four cut-off verifikat. DISPLAY ONLY.
+ *
+ * Nothing may key off these strings. What a cut-off verifikat IS lives in
+ * `kontantmetod_cutoff_entries.kind`, written by the writer below and read by
+ * the finder and by the two VAT functions (migration 20260914150109). Before
+ * that table every reader reconstructed the set from this text, including the
+ * SQL that decides what reaches a filed momsdeklaration, so a rewording here
+ * would have silently changed a legal figure (issue #2053).
+ */
 export const KONTANTMETOD_CUTOFF_DESCRIPTIONS = {
   receivable: 'Kundfordringar vid bokslut (kontantmetoden)',
   receivableReversal: 'Vändning kundfordringar bokslut (kontantmetoden)',
   payable: 'Leverantörsskulder vid bokslut (kontantmetoden)',
   payableReversal: 'Vändning leverantörsskulder bokslut (kontantmetoden)',
 } as const
+
+/** The stable identity of each of the four verifikat. */
+export type KontantmetodCutoffKind =
+  'receivable' | 'receivable_reversal' | 'payable' | 'payable_reversal'
+
+/** Grundbok text per kind, used only to label a conflict for a human. */
+const CUTOFF_DESCRIPTION_BY_KIND: Record<KontantmetodCutoffKind, string> = {
+  receivable: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+  receivable_reversal: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+  payable: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable,
+  payable_reversal: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal,
+}
 
 /** A customer invoice still outstanding at period end. Amounts are SEK. */
 export interface CutoffReceivable {
@@ -127,16 +149,21 @@ export interface CutoffLines {
   payableTotal: number
 }
 
-interface PostedCutoffEntry {
+interface MarkedCutoffEntry {
   id: string
   fiscal_period_id: string
   entry_date: string
-  description: string
+  status: string
   lines: Array<{
     account_number: string
     debit_amount: number | string | null
     credit_amount: number | string | null
-  }>
+  }> | null
+}
+
+interface PostedCutoffEntry extends Omit<MarkedCutoffEntry, 'lines'> {
+  kind: KontantmetodCutoffKind
+  lines: NonNullable<MarkedCutoffEntry['lines']>
 }
 
 export interface KontantmetodCutoffPostingStatus {
@@ -146,7 +173,7 @@ export interface KontantmetodCutoffPostingStatus {
   receivableReversalId: string | null
   payableEntryId: string | null
   payableReversalId: string | null
-  missing: Array<'receivable' | 'receivable_reversal' | 'payable' | 'payable_reversal'>
+  missing: KontantmetodCutoffKind[]
   duplicates: string[]
 }
 
@@ -459,9 +486,19 @@ export function cutoffLinesEqual(
 
 /**
  * Inspect the immutable journal for a complete cut-off and its day-one
- * reversals. Matching exact account totals, rather than only a description,
- * makes a late invoice or payment reopen the blocker until a fresh cut-off is
- * posted. `source_id` anchors all four entries to the year being closed.
+ * reversals.
+ *
+ * Entries are found through their marker rows, never through their grundbok
+ * text: `kontantmetod_cutoff_entries` is what the writer wrote, so the finder
+ * and the two VAT functions now agree on the same recorded fact instead of
+ * three independent copies of a Swedish sentence. Legacy cut-offs were marked
+ * by the migration's one-time backfill, so there is no text fallback here.
+ *
+ * Matching exact account totals on top of the marker, rather than trusting the
+ * marker alone, makes a late invoice or payment reopen the blocker until a
+ * fresh cut-off is posted. Status is filtered here rather than in the query:
+ * a stornoed cut-off keeps its marker (posted rows are never edited), and it
+ * must read as absent so a replacement pair can be posted.
  */
 export async function inspectKontantmetodCutoffPostings(
   supabase: SupabaseClient,
@@ -472,38 +509,46 @@ export async function inspectKontantmetodCutoffPostings(
   expected: CutoffLines,
 ): Promise<KontantmetodCutoffPostingStatus> {
   const { data, error } = await supabase
-    .from('journal_entries')
+    .from('kontantmetod_cutoff_entries')
     .select(
-      'id, fiscal_period_id, entry_date, description, lines:journal_entry_lines(account_number, debit_amount, credit_amount)',
+      'kind, entry:journal_entries!inner(id, fiscal_period_id, entry_date, status, lines:journal_entry_lines(account_number, debit_amount, credit_amount))',
     )
     .eq('company_id', companyId)
-    .eq('source_type', 'year_end')
-    .eq('source_id', fiscalPeriodId)
-    .eq('status', 'posted')
-    .in('fiscal_period_id', [fiscalPeriodId, nextFiscalPeriodId])
-    .in('description', Object.values(KONTANTMETOD_CUTOFF_DESCRIPTIONS))
+    .eq('fiscal_period_id', fiscalPeriodId)
 
   if (error) {
     throw new Error(`Kontantmetodens bokslutsavgränsning kunde inte kontrolleras: ${error.message}`)
   }
 
-  const rows = (data ?? []) as PostedCutoffEntry[]
+  const rows: PostedCutoffEntry[] = []
+  for (const row of (data ?? []) as Array<{
+    kind: KontantmetodCutoffKind
+    entry: MarkedCutoffEntry | MarkedCutoffEntry[] | null
+  }>) {
+    const entry = Array.isArray(row.entry) ? row.entry[0] : row.entry
+    if (!entry || entry.status !== 'posted') continue
+    if (entry.fiscal_period_id !== fiscalPeriodId && entry.fiscal_period_id !== nextFiscalPeriodId) {
+      continue
+    }
+    rows.push({ ...entry, kind: row.kind, lines: entry.lines ?? [] })
+  }
+
   const missing: KontantmetodCutoffPostingStatus['missing'] = []
   const duplicates: string[] = []
 
   const matchOne = (
-    description: string,
+    kind: KontantmetodCutoffKind,
     periodId: string,
     lines: CreateJournalEntryLineInput[],
-    missingKind: KontantmetodCutoffPostingStatus['missing'][number],
     expectedDate: string,
   ): string | null => {
+    const label = CUTOFF_DESCRIPTION_BY_KIND[kind]
     const candidates = rows.filter(
-      (row) => row.description === description && row.fiscal_period_id === periodId,
+      (row) => row.kind === kind && row.fiscal_period_id === periodId,
     )
 
     if (lines.length === 0) {
-      if (candidates.length > 0) duplicates.push(description)
+      if (candidates.length > 0) duplicates.push(label)
       return null
     }
 
@@ -514,39 +559,35 @@ export async function inspectKontantmetodCutoffPostings(
       // Any marker with non-matching lines is a conflict, even when only one
       // exists. Treating it as merely missing could stage a second cut-off on
       // top of an immutable entry after the source reskontra changed.
-      if (candidates.length > 0) duplicates.push(description)
-      missing.push(missingKind)
+      if (candidates.length > 0) duplicates.push(label)
+      missing.push(kind)
       return null
     }
     return exact[0]!.id
   }
 
   const receivableEntryId = matchOne(
-    KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+    'receivable',
     fiscalPeriodId,
     expected.receivableLines,
-    'receivable',
     periodEnd,
   )
   const receivableReversalId = matchOne(
-    KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+    'receivable_reversal',
     nextFiscalPeriodId,
     reverseLines(expected.receivableLines),
-    'receivable_reversal',
     nextDay(periodEnd),
   )
   const payableEntryId = matchOne(
-    KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable,
+    'payable',
     fiscalPeriodId,
     expected.payableLines,
-    'payable',
     periodEnd,
   )
   const payableReversalId = matchOne(
-    KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal,
+    'payable_reversal',
     nextFiscalPeriodId,
     reverseLines(expected.payableLines),
-    'payable_reversal',
     nextDay(periodEnd),
   )
 
@@ -999,6 +1040,46 @@ export class KontantmetodCutoffPartialError extends Error {
   }
 }
 
+/** A cut-off verifikat committed but could not be recorded as one. */
+export class KontantmetodCutoffMarkerError extends Error {
+  constructor(message: string, readonly cause?: unknown) {
+    super(message)
+    this.name = 'KontantmetodCutoffMarkerError'
+  }
+}
+
+/**
+ * Record what the writer just created.
+ *
+ * There is no shared transaction to put this in: `commit_journal_entry` is its
+ * own RPC boundary, so the marker is a second round trip and can fail on its
+ * own. It must never fail silently. An unmarked vändning is counted as new VAT
+ * activity in the next period's momsdeklaration, which undoes the final-period
+ * reporting bokslutsmetoden requires, and a momsdeklaration is
+ * räkenskapsinformation under BFL 5 kap. So the caller treats a failure here
+ * exactly like a failed vändning: storno what committed, and refuse.
+ */
+async function recordCutoffMarker(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  kind: KontantmetodCutoffKind,
+  journalEntryId: string,
+): Promise<void> {
+  const { error } = await supabase.from('kontantmetod_cutoff_entries').insert({
+    company_id: companyId,
+    fiscal_period_id: fiscalPeriodId,
+    kind,
+    journal_entry_id: journalEntryId,
+  })
+  if (error) {
+    throw new KontantmetodCutoffMarkerError(
+      `Bokslutsavgränsningen kunde inte märkas i redovisningen: ${error.message}`,
+      error,
+    )
+  }
+}
+
 /**
  * Assert the vändning can actually be posted BEFORE any cut-off entry exists.
  *
@@ -1142,20 +1223,30 @@ export async function postKontantmetodCutoff(
   }
 
   /**
-   * Post a cut-off/vändning pair. On reversal failure the cut-off is stornoed
-   * so the pair is all-or-nothing from the ledger's point of view.
+   * Post a cut-off/vändning pair, each verifikat marked as what it is.
+   *
+   * On reversal failure, or on a failure to record either marker, the cut-off
+   * is stornoed so the pair is all-or-nothing from the ledger's point of view.
+   * A marker is treated as part of the posting, not as bookkeeping about it:
+   * an unmarked vändning is an unexcluded vändning, and that lands in a filed
+   * momsdeklaration.
    */
   const postPair = async (
     lines: CreateJournalEntryLineInput[],
     label: string,
     references: string[],
   ): Promise<[JournalEntry, JournalEntry]> => {
-    const description = label === 'Kundfordringar'
+    const isReceivable = label === 'Kundfordringar'
+    const description = isReceivable
       ? KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable
       : KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable
-    const reversalDescription = label === 'Kundfordringar'
+    const reversalDescription = isReceivable
       ? KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal
       : KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal
+    const kind: KontantmetodCutoffKind = isReceivable ? 'receivable' : 'payable'
+    const reversalKind: KontantmetodCutoffKind = isReceivable
+      ? 'receivable_reversal'
+      : 'payable_reversal'
 
     const entry = await createJournalEntry(supabase, companyId, userId, {
       fiscal_period_id: opts.fiscalPeriodId,
@@ -1168,6 +1259,8 @@ export async function postKontantmetodCutoff(
     })
 
     try {
+      await recordCutoffMarker(supabase, companyId, opts.fiscalPeriodId, kind, entry.id)
+
       const reversal = await createJournalEntry(supabase, companyId, userId, {
         fiscal_period_id: opts.nextFiscalPeriodId,
         entry_date: reversalDate,
@@ -1177,6 +1270,31 @@ export async function postKontantmetodCutoff(
         notes: buildCutoffNote(`Vändning ${label.toLowerCase()}`, references),
         lines: reverseLines(lines),
       })
+
+      try {
+        await recordCutoffMarker(
+          supabase,
+          companyId,
+          opts.fiscalPeriodId,
+          reversalKind,
+          reversal.id,
+        )
+      } catch (markerError) {
+        // The vändning committed but is not recorded as one, so the VAT
+        // functions would count it. Storno it here; the outer catch then
+        // stornoes the cut-off, and both periods net back to zero.
+        try {
+          await reverseEntry(supabase, companyId, userId, reversal.id, reversalDate)
+        } catch (stornoError) {
+          log.error(
+            'unmarked cut-off vändning could not be stornoed: it will be counted in the next momsdeklaration until corrected by hand',
+            stornoError as Error,
+            { companyId, entryId: reversal.id },
+          )
+        }
+        throw markerError
+      }
+
       return [entry, reversal]
     } catch (reversalError) {
       // Compensate: an un-reversed cut-off is worse than no cut-off at all.
@@ -1193,9 +1311,11 @@ export async function postKontantmetodCutoff(
           { companyId, entryId: entry.id },
         )
       }
-      const key = label === 'Kundfordringar' ? 'receivable' : 'payable'
+      const key = isReceivable ? 'receivable' : 'payable'
       throw new KontantmetodCutoffPartialError(
-        `Vändningen för ${label.toLowerCase()} kunde inte bokföras`,
+        reversalError instanceof KontantmetodCutoffMarkerError
+          ? `Bokslutsavgränsningen för ${label.toLowerCase()} kunde inte märkas och har återförts`
+          : `Vändningen för ${label.toLowerCase()} kunde inte bokföras`,
         {
           [`${key}_entry_id`]: entry.id,
           ...(stornoId ? { [`${key}_storno_entry_id`]: stornoId } : {}),

@@ -45,9 +45,18 @@ vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
   clearSettledInvoiceSuggestions: vi.fn().mockResolvedValue(undefined),
 }))
 
+// Mocked for the same reason: the helper re-runs the detector and writes the
+// audit row itself, and its payload is pinned by
+// lib/invoices/__tests__/duplicate-guard-history.test.ts. Here we assert the
+// orchestration: that the route hands it the payment it just posted.
+vi.mock('@/lib/invoices/duplicate-guard-history', () => ({
+  recordSupplierInvoiceDuplicateGuardBypass: vi.fn().mockResolvedValue(undefined),
+}))
+
 import { eventBus } from '@/lib/events'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplicate-guard-history'
 
 import { POST } from '../route'
 
@@ -745,7 +754,58 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(body.error.code).toBe('SI_PAID_LIKELY_DUPLICATE')
   })
 
-  it('proceeds when force=true even with candidates present', async () => {
+  it('proceeds when force=true even with candidates present, and records the bypass', async () => {
+    const supplier = makeSupplier({ name: 'Hi3G Access AB' })
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      supplier_invoice_number: 'LF-7',
+      total: 10000,
+      remaining_amount: 10000,
+      paid_amount: 0,
+      supplier,
+      items: [],
+    })
+
+    enqueue({ data: invoice, error: null })
+    // No candidates query happens because force=true skips the blocking guard
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { force: true, payment_date: '2026-05-12', payment_account: '1930' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; status: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.status).toBe('paid')
+    expect(mockCreateSupplierInvoicePaymentEntry).toHaveBeenCalled()
+    // BFNAR 2013:2 p. 9.16: the override leaves a durable record naming the
+    // voucher it produced, not just a server log line.
+    expect(recordSupplierInvoiceDuplicateGuardBypass).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: 'company-1',
+        invoice: expect.objectContaining({
+          id: 'si-1',
+          supplier_invoice_number: 'LF-7',
+          supplier_name: 'Hi3G Access AB',
+        }),
+        paymentAmount: 10000,
+        paymentDate: '2026-05-12',
+        paymentAccount: '1930',
+        journalEntryId: 'je-1',
+        actor: { user_id: 'user-1', actor_type: 'user' },
+      }),
+    )
+  })
+
+  it('force on a partial payment records nothing: the guard never ran there', async () => {
     const supplier = makeSupplier()
     const invoice = makeSupplierInvoice({
       id: 'si-1',
@@ -758,7 +818,6 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // No candidates query happens because force=true skips it
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: [{ id: 'si-1' }], error: null })
@@ -766,15 +825,14 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
-      body: { force: true },
+      body: { force: true, amount: 3000 },
     })
     const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
-    const { status, body } = await parseJsonResponse<{ success: boolean; status: string }>(response)
+    const { status, body } = await parseJsonResponse<{ status: string }>(response)
 
     expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.status).toBe('paid')
-    expect(mockCreateSupplierInvoicePaymentEntry).toHaveBeenCalled()
+    expect(body.status).toBe('partially_paid')
+    expect(recordSupplierInvoiceDuplicateGuardBypass).not.toHaveBeenCalled()
   })
 
   it('skips duplicate guard on partial payment (amount < remaining)', async () => {

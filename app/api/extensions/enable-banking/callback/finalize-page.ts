@@ -169,7 +169,22 @@ export function renderFinalizeRedirect(url: string, cspNonce: string): string {
   // early, even though our URLs are app-relative and query-encoded.
   const jsUrl = JSON.stringify(url).replace(/</g, '\\u003c')
 
-  return `  <script nonce="${escapeHtml(cspNonce)}">window.location.replace(${jsUrl});</script>
+  // Opened as a popup by the onboarding journey: hand the outcome URL back
+  // to the opener (same origin as the outcome, which is the app's own) and
+  // close, so the page that started the flow never navigates. Without an
+  // opener (the settings page, or a blocked popup that fell back to a
+  // full-page flow) the redirect below runs as before.
+  return `  <script nonce="${escapeHtml(cspNonce)}">(function () {
+    var url = ${jsUrl};
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({ type: 'enable-banking-connected', url: url }, new URL(url, window.location.origin).origin);
+        window.close();
+        return;
+      }
+    } catch (e) {}
+    window.location.replace(url);
+  })();</script>
   <noscript><meta http-equiv="refresh" content="0;url=${escapeHtml(url)}"></noscript>
   <div class="fallback"><a href="${escapeHtml(url)}">Klicka h&auml;r om du inte skickas vidare automatiskt</a></div>
 </body>

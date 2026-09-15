@@ -46,9 +46,10 @@ import {
   RECURRING_PLACEHOLDER_KEYS,
   mentionsPeriodPlaceholder,
 } from '@/lib/invoices/recurring-placeholders'
+import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
+import UnitDatalist from '@/components/invoices/UnitDatalist'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
-const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
 
 /**
  * Today as yyyy-mm-dd in Europe/Stockholm: the calendar the server validates
@@ -709,23 +710,15 @@ function NewRecurringScheduleForm({
                 )}
               </div>
               <div className="col-span-3 sm:col-span-1">
-                <Controller
-                  control={control}
-                  name={`items.${index}.unit`}
-                  render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {units.map((u) => (
-                          <SelectItem key={u} value={u}>
-                            {u}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
+                {/* Free text with suggestions, not a closed list: the API
+                    stores any unit, so an item copied from an article with an
+                    unlisted unit keeps it instead of rendering blank. */}
+                <Input
+                  list={UNIT_DATALIST_ID}
+                  maxLength={UNIT_MAX_LENGTH}
+                  placeholder={t('unit_placeholder')}
+                  aria-label={t('unit_placeholder')}
+                  {...register(`items.${index}.unit`)}
                 />
                 {errors.items?.[index]?.unit && (
                   <p className="text-sm text-destructive mt-1">
@@ -795,6 +788,9 @@ function NewRecurringScheduleForm({
               {RECURRING_PLACEHOLDER_KEYS.map((key) => `{${key}}`).join(' ')}
             </span>
           </p>
+          {/* Last child on purpose: a datalist renders nothing, but space-y
+              would still count it as a sibling and offset the first row. */}
+          <UnitDatalist />
         </CardContent>
       </Card>
 

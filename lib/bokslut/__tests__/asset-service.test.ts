@@ -2,9 +2,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   AssetCorrectionBlockedError,
+  BAS_RANGES_BY_CATEGORY,
   DEFAULT_ACCOUNTS_BY_CATEGORY,
   createAsset,
   defaultAccountsForCategory,
+  inBasRange,
   updateAsset,
 } from '../assets/asset-service'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -18,20 +20,51 @@ describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
       land_improvement: { asset: '1150', accumulated: '1159', expense: '7824' },
       machinery: { asset: '1210', accumulated: '1219', expense: '7831' },
       equipment: { asset: '1220', accumulated: '1229', expense: '7832' },
-      vehicle: { asset: '1240', accumulated: '1249', expense: '7832' },
-      computer: { asset: '1250', accumulated: '1259', expense: '7832' },
+      vehicle: { asset: '1226', accumulated: '1229', expense: '7832' },
+      computer: { asset: '1224', accumulated: '1229', expense: '7832' },
       other_tangible: { asset: '1290', accumulated: '1299', expense: '7839' },
     } as const
     expect(DEFAULT_ACCOUNTS_BY_CATEGORY).toEqual(expected)
   })
 
-  it('uses the convention that accumulated = asset + 9 for tangible categories', () => {
-    const tangible = ['machinery', 'equipment', 'vehicle', 'computer', 'other_tangible'] as const
-    for (const cat of tangible) {
-      const triple = DEFAULT_ACCOUNTS_BY_CATEGORY[cat]
-      const assetNum = parseInt(triple.asset, 10)
-      const accumulatedNum = parseInt(triple.accumulated, 10)
-      expect(accumulatedNum).toBe(assetNum + 9)
+  // The old guard here asserted accumulated = asset + 9. That arithmetic held
+  // only while every category defaulted to a kontogrupp head, and BAS 2026
+  // broke it: a non-production car (1226) and a non-production computer (1224)
+  // both accumulate on 1229. Assert the property the convention was standing
+  // in for instead, read off the catalogue: same kontogrupp, and a genuine
+  // ackumulerade-avskrivningar account.
+  it('pairs every default with an ackumulerade-avskrivningar account in the same kontogrupp', () => {
+    for (const framework of ['k2', 'k3'] as const) {
+      for (const cat of Object.keys(DEFAULT_ACCOUNTS_BY_CATEGORY) as AssetCategory[]) {
+        const { asset, accumulated } = defaultAccountsForCategory(cat, framework)
+        expect(asset, `${framework}/${cat}`).not.toBe(accumulated)
+        expect(getBASReference(accumulated)?.account_group, `${framework}/${cat}`).toBe(
+          getBASReference(asset)?.account_group,
+        )
+        expect(getBASReference(accumulated)?.account_name, `${framework}/${cat}`).toMatch(
+          /^Ackumulerade avskrivningar/,
+        )
+      }
+    }
+  })
+
+  // Regression guard for #2414. After the BAS 2026 catalogue update (#2413)
+  // 1230/1240/1249/1250/1259/1260/1269 became "(Fritt konto ...)": accounts
+  // with no prescribed meaning that every company is free to use for anything.
+  // Defaulting a new asset onto one of them puts it in a bucket the SIE
+  // reader, the INK2R mapping and the next accountant cannot interpret, which
+  // is exactly what vehicle (1240/1249) and computer (1250/1259) did.
+  it('never defaults to a free BAS account', () => {
+    for (const framework of ['k2', 'k3'] as const) {
+      for (const cat of Object.keys(DEFAULT_ACCOUNTS_BY_CATEGORY) as AssetCategory[]) {
+        const { asset, accumulated, expense } = defaultAccountsForCategory(cat, framework)
+        for (const account of [asset, accumulated, expense]) {
+          expect(
+            getBASReference(account)?.account_name,
+            `${framework}/${cat}: ${account} is a free account`,
+          ).not.toMatch(/[Ff]ritt konto/)
+        }
+      }
     }
   })
 
@@ -61,6 +94,38 @@ describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
         }
       }
     }
+  })
+})
+
+describe('BAS_RANGES_BY_CATEGORY', () => {
+  it('accepts every category default', () => {
+    for (const framework of ['k2', 'k3'] as const) {
+      for (const cat of Object.keys(DEFAULT_ACCOUNTS_BY_CATEGORY) as AssetCategory[]) {
+        const { asset, accumulated, expense } = defaultAccountsForCategory(cat, framework)
+        const ranges = BAS_RANGES_BY_CATEGORY[cat]
+        expect(inBasRange(asset, ranges.asset), `${framework}/${cat}: ${asset}`).toBe(true)
+        expect(
+          inBasRange(accumulated, ranges.accumulated),
+          `${framework}/${cat}: ${accumulated}`,
+        ).toBe(true)
+        expect(inBasRange(expense, ranges.expense), `${framework}/${cat}: ${expense}`).toBe(true)
+      }
+    }
+  })
+
+  // Prod carries assets booked on the pre-2026 bil- and datorkonton (30
+  // computers on 1250/1259, 1 vehicle on 1240/1249 when #2414 was filed).
+  // They keep their stored accounts: narrowing the window to the BAS 2026
+  // accounts would make every later edit of those assets fail validation.
+  it.each([
+    ['vehicle' as const, '1240', '1249'],
+    ['computer' as const, '1250', '1259'],
+    ['vehicle' as const, '1216', '1219'],
+    ['computer' as const, '1214', '1219'],
+  ])('keeps %s assets on %s/%s valid', (category, asset, accumulated) => {
+    const ranges = BAS_RANGES_BY_CATEGORY[category]
+    expect(inBasRange(asset, ranges.asset)).toBe(true)
+    expect(inBasRange(accumulated, ranges.accumulated)).toBe(true)
   })
 })
 
@@ -487,8 +552,8 @@ describe('createAsset: framework-aware immaterial defaults', () => {
     })
     expect(captured.companyReads).toBe(0)
     expect(captured.insert).toMatchObject({
-      bas_asset_account: '1250',
-      bas_accumulated_account: '1259',
+      bas_asset_account: '1224',
+      bas_accumulated_account: '1229',
     })
   })
 

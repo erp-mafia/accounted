@@ -17,6 +17,7 @@ import {POST as execute} from '../route'
 import {POST as createAccounts} from '../../create-accounts/route'
 import {POST as upload} from '../../upload/route'
 import {POST as act} from '../../[id]/action/route'
+import {DELETE as undo} from '../../[id]/undo/route'
 import {GET as holds} from '../../holds/route'
 
 const queued=createQueuedMockSupabase()
@@ -38,6 +39,18 @@ beforeEach(()=>{
 afterEach(() => vi.unstubAllEnvs())
 
 describe('durable SIE HTTP boundaries',()=>{
+  it.each(['undo', 'resume', 'compatibility-undo'])('returns actionable legacy guidance through the real %s service', async name => {
+    const actual = await vi.importActual<typeof import('@/lib/import/sie-jobs')>('@/lib/import/sie-jobs')
+    action.mockImplementationOnce(actual.requestSIEJobAction)
+    queued.enqueue({ data: { id: job.id, job_state: null } })
+    const response = name === 'compatibility-undo' ? await undo(request({}), params) : await act(request({ action: name }), params)
+    expect(response.status).toBe(409)
+    expect((await response.json()).error).toMatchObject({ code: 'SIE_IMPORT_LEGACY_REVIEW_REQUIRED',
+      message_en: expect.stringContaining('Review'), remediation: { tool: 'gnubok_sie_import_status' } })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    const { after } = await import('next/server')
+    expect(after).not.toHaveBeenCalled()
+  })
   for(const [name,route] of Object.entries(routes)) it(`${name} requires authentication`,async()=>{
     auth.mockResolvedValue({user:null,supabase,error:NextResponse.json({error:'Unauthorized'},{status:401})})
     expect((await route(request({}))).status).toBe(401)
@@ -128,6 +141,26 @@ describe('durable SIE HTTP boundaries',()=>{
     })
     expect(supabase.from).not.toHaveBeenCalled()
     expect(supabase.storage.from).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('names both invalid source mappings in the API response instead of a generic 400', async () => {
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231'], 'invalid-mappings.se'))
+    form.set('mappings', JSON.stringify(['999', '193000'].map(number => ({
+      sourceAccount: number, targetAccount: number, sourceName: 'Source', targetName: 'Target',
+      confidence: 1, matchType: 'manual', isOverride: true,
+    }))))
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    const { error } = await response.json()
+    expect(response.status).toBe(400)
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message).toContain('Källkonto 999')
+    expect(error.message).toContain('Källkonto 193000')
+    expect(error.message).toContain('måste ha exakt fyra siffror')
+    expect(error.message_en).toContain('Source account 193000')
+    expect(error.message_en).toContain('four digits')
+    expect(submit).not.toHaveBeenCalled()
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
   it('refuses malformed action input before ownership RPCs',async()=>{

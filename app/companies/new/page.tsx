@@ -34,7 +34,7 @@ export default async function NewCompanyPage() {
     <div className="min-h-dvh bg-background">
       <SessionTimeoutController />
       <OnboardingBackdrop />
-      <OnboardingJourney teamId={teamId} mode="add" companySearchEnabled={isScbConfigured()} />
+      <OnboardingJourney userId={user.id} teamId={teamId} mode="add" companySearchEnabled={isScbConfigured()} />
     </div>
   )
 }

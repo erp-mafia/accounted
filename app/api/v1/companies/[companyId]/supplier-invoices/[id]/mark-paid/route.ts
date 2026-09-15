@@ -39,6 +39,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { findDuplicatePaymentCandidatesForSupplierInvoice } from '@/lib/invoices/duplicate-payment-candidates'
+import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplicate-guard-history'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -77,7 +78,7 @@ registerEndpoint({
     'Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner: retry the call.',
     'Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.',
     'payment_account picks the BAS account credited for the payment (1930 Företagskonto when omitted, on both the accrual and the cash path). It must be active in the chart of accounts: an unknown or deactivated account returns 400 ACCOUNTS_NOT_IN_CHART and books nothing. Beyond that it is credited exactly as given, with no range check: 19xx bank or kassa is the ordinary choice, but 1630 (betald via skattekontot) and 2893 / 2018 / 2820 (someone else paid, utlägg) are equally valid, so choosing an account that does not represent where the money actually came from is the caller\'s error to avoid. Unlike the dashboard dialog, this endpoint does not read the company\'s last-used payment account: omitting the field always means 1930.',
-    'Duplicate-payment guard: on a full settlement, if a business bank transaction of the same amount around payment_date carries the supplier name (first distinctive token, so abbreviated bank text such as "HI3G" for Hi3G Access AB counts), returns 409 SI_PAID_LIKELY_DUPLICATE with candidate transactions. A candidate with match_reason `already_booked` is a bank row that is ALREADY a verifikat: do not pay the invoice, correct the double booking instead. Retry with `force: true` only after the user confirms, and with a fresh Idempotency-Key (the original is body-hash bound). Also evaluated under dry-run.',
+    'Duplicate-payment guard: on a full settlement, if a business bank transaction of the same amount around payment_date carries the supplier name (first distinctive token, so abbreviated bank text such as "HI3G" for Hi3G Access AB counts), returns 409 SI_PAID_LIKELY_DUPLICATE with candidate transactions. A candidate with match_reason `already_booked` is a bank row that is ALREADY a verifikat: do not pay the invoice, correct the double booking instead. Retry with `force: true` only after the user confirms, and with a fresh Idempotency-Key (the original is body-hash bound). Also evaluated under dry-run. A forced full settlement is recorded in behandlingshistorik together with the candidates the guard would have flagged.',
   ],
   example: {
     request: { payment_date: '2026-05-13' },
@@ -373,7 +374,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           details: { candidates },
         })
       }
-    } else if (force) {
+    } else if (force && newStatus === 'paid') {
+      // force on a PARTIAL payment overrides nothing: the guard never runs
+      // there. Only a bypassed full settlement is logged here and recorded in
+      // behandlingshistorik after the voucher exists.
       ctx.log.warn('duplicate-payment guard bypassed', {
         reason: 'force=true',
         invoiceId,
@@ -570,6 +574,37 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (paymentErr) {
       ctx.log.warn('supplier_invoice_payments insert failed (non-blocking)', paymentErr, {
         invoiceId,
+      })
+    }
+
+    // The caller was told a possible double payment existed and asked for it
+    // to be booked anyway. Append one behandlingshistorik row naming the
+    // payment voucher and what the guard would have flagged (BFNAR 2013:2
+    // p. 9.16): the server log alone leaves the books with no trace of the
+    // override. Runs after the voucher is committed and never throws.
+    if (force && newStatus === 'paid') {
+      await recordSupplierInvoiceDuplicateGuardBypass(ctx.supabase, {
+        companyId: ctx.companyId!,
+        invoice: {
+          id: invoiceId,
+          supplier_invoice_number: typed.supplier_invoice_number ?? null,
+          payment_reference: (typed as { payment_reference?: string | null }).payment_reference ?? null,
+          supplier_name: supplierRow?.name,
+          currency: typed.currency ?? null,
+          total: typed.total ?? null,
+          total_sek: (typed as { total_sek?: number | null }).total_sek ?? null,
+          exchange_rate: (typed as { exchange_rate?: number | null }).exchange_rate ?? null,
+        },
+        paymentAmount,
+        paymentDate,
+        paymentAccount: bodyPaymentAccount ?? null,
+        journalEntryId,
+        actor: {
+          user_id: ctx.userId,
+          actor_id: ctx.apiKeyId ?? null,
+          actor_type: ctx.apiKeyId ? 'api_key' : 'user',
+          actor_label: ctx.apiKeyName ?? null,
+        },
       })
     }
 

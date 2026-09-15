@@ -67,6 +67,15 @@ vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
   clearSettledInvoiceSuggestions: mockClearSuggestions,
 }))
 
+// Issue #2366: force leaves a behandlingshistorik record. Mocked for the same
+// reason as above: the helper re-runs the detector and writes the audit row
+// with its own service-role client, and its payload is pinned by
+// lib/invoices/__tests__/duplicate-guard-history.test.ts.
+const { mockRecordGuardBypass } = vi.hoisted(() => ({ mockRecordGuardBypass: vi.fn() }))
+vi.mock('@/lib/invoices/duplicate-guard-history', () => ({
+  recordSupplierInvoiceDuplicateGuardBypass: mockRecordGuardBypass,
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
   createSupplierInvoiceCashEntry,
@@ -324,7 +333,54 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.status).toBe('paid')
+    // The BLOCKING sweep is skipped: the route reaches the booking without
+    // querying transactions. The re-detection that feeds the record happens
+    // inside the mocked helper, not here.
     expect(calls.some((c) => c.table === 'transactions')).toBe(false)
+    // Issue #2366: the override is recorded against the voucher it produced,
+    // with the API-key actor the sibling v1 routes record.
+    expect(mockRecordGuardBypass).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        companyId: COMPANY_ID,
+        invoice: expect.objectContaining({
+          id: SI_ID,
+          supplier_invoice_number: 'LF-1',
+          supplier_name: 'Hi3G Access AB',
+        }),
+        paymentAmount: 1000,
+        paymentDate: '2026-05-12',
+        journalEntryId: 'je-si-payment',
+        actor: {
+          user_id: USER_ID,
+          actor_id: 'ak_1',
+          actor_type: 'api_key',
+          actor_label: 'CI key',
+        },
+      }),
+    )
+  })
+
+  it('force on a partial payment records nothing: the guard never ran there', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: [
+          { data: hi3gSI, error: null },
+          { data: { ...hi3gSI, status: 'partially_paid', paid_amount: 400, remaining_amount: 600 }, error: null },
+        ],
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        supplier_invoice_payments: { data: null, error: null },
+      }),
+    )
+
+    const res = await markPaid(
+      makeRequest({ payment_date: '2026-05-12', amount: 400, force: true }),
+      detailParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockRecordGuardBypass).not.toHaveBeenCalled()
   })
 
   it('a partial payment skips the guard: it is an explicit, deliberate action', async () => {

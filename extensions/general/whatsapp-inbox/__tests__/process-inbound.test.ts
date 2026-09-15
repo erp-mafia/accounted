@@ -11,6 +11,13 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
     sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null, failure: null }),
     markReadWithTyping: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn(),
+    // The single-company drain probes each parked file before releasing it.
+    lookupMedia: vi.fn().mockResolvedValue({
+      ok: true,
+      url: 'https://lookaside.example/m1',
+      mimeType: 'image/jpeg',
+      fileSize: 1024,
+    }),
   }
 })
 
@@ -56,6 +63,7 @@ import {
   sendText,
   markReadWithTyping,
   downloadMedia,
+  lookupMedia,
   GraphApiError,
 } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
 import { askCompanyQuestion } from '@/extensions/general/whatsapp-inbox/lib/company-question'
@@ -70,6 +78,7 @@ import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 
 const sendTextMock = vi.mocked(sendText)
 const downloadMediaMock = vi.mocked(downloadMedia)
+const lookupMediaMock = vi.mocked(lookupMedia)
 const uploadAndExtractMock = vi.mocked(uploadAndExtract)
 const rateLimitMock = vi.mocked(checkInboxUploadRateLimit)
 const appendHistoryMock = vi.mocked(appendProcessingHistory)
@@ -242,8 +251,14 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() }) // load link
     enqueue({ data: makeConversation() }) // load conversation
     enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership
-    enqueue({ data: [] }) // drain: nothing past the media window
-    enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // drain: two rows were parked
+    enqueue({ data: [] }) // drain: nothing past the outer bound
+    enqueue({
+      data: [
+        { id: 'stg-1', media_id: 'media-1' },
+        { id: 'stg-2', media_id: 'media-2' },
+      ],
+    }) // drain: two parked rows, both still served by Meta
+    enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // drain: both re-opened
     enqueue({ data: null }) // sha256 dup check: none
     enqueue({ data: null }) // item channel_context load
     enqueue({ data: null }) // item channel_context update
@@ -269,7 +284,7 @@ describe('processInboundMessage (media intake)', () => {
     kickClient.current = null
   })
 
-  it('single-company drain leaves month-old receipts expired and says so once', async () => {
+  it('single-company drain leaves receipts Meta refuses expired and says so once', async () => {
     const kick = createQueuedMockSupabase()
     kickClient.current = kick.supabase
     kick.enqueue({ data: null })
@@ -280,8 +295,23 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() }) // load link
     enqueue({ data: makeConversation() }) // load conversation
     enqueue({ data: [{ company_id: 'company-1' }] }) // sole live membership
-    enqueue({ data: [{ id: 'old-1' }] }) // drain: one row past the media window
+    enqueue({ data: [{ id: 'old-1' }] }) // drain: one row past the outer bound
+    enqueue({
+      data: [
+        { id: 'stg-1', media_id: 'media-1' },
+        { id: 'stg-2', media_id: 'media-2' },
+      ],
+    }) // drain: probe candidates
+    enqueue({ data: [{ id: 'stg-2' }] }) // drain: Meta refused stg-2
     enqueue({ data: [{ id: 'stg-1' }] }) // drain: one row re-opened
+    lookupMediaMock
+      .mockResolvedValueOnce({
+        ok: true,
+        url: 'https://lookaside.example/m1',
+        mimeType: 'image/jpeg',
+        fileSize: 1024,
+      })
+      .mockResolvedValueOnce({ ok: false, status: 400, message: 'Media lookup failed (400)' })
     enqueue({ data: null }) // sha256 dup check: none
     enqueue({ data: null }) // item channel_context load
     enqueue({ data: null }) // item channel_context update
@@ -296,10 +326,12 @@ describe('processInboundMessage (media intake)', () => {
     expect(patches.some((p) => p.error_message === 'company_choice_expired')).toBe(true)
     const notice = sendTextMock.mock.calls.find((c) => c[1].template === TEMPLATE.m20ReceiptsExpired)
     expect(notice).toBeTruthy()
-    expect(notice![1].body).toContain('30 dagar')
+    // One row past the outer bound plus the one Meta refused on the probe.
+    expect(notice![1].body).toContain('2')
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(kick.findCalls('whatsapp_messages', 'eq')).toContainEqual(['id', 'stg-1'])
     expect(kick.findCalls('whatsapp_messages', 'eq')).not.toContainEqual(['id', 'old-1'])
+    expect(kick.findCalls('whatsapp_messages', 'eq')).not.toContainEqual(['id', 'stg-2'])
     kickClient.current = null
   })
 

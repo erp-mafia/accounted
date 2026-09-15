@@ -139,6 +139,44 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(findCall('company_members', 'select')).toBeUndefined()
     })
 
+    it('records which built-in client minted the key, from the redirect URI in the code', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://chatgpt.com/connector_platform_oauth_redirect',
+        exp: Date.now() + 60_000,
+      })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults())
+
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: 'https://chatgpt.com/connector_platform_oauth_redirect' }))
+      expect(res.status).toBe(200)
+      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted.client).toBe('chatgpt')
+    })
+
+    it('stores client null for a redirect URI that is not a built-in client', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://agent.testbrand.example/oauth/callback',
+        exp: Date.now() + 60_000,
+      })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults())
+
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: 'https://agent.testbrand.example/oauth/callback' }))
+      expect(res.status).toBe(200)
+      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted.client).toBeNull()
+    })
+
     it('rejects an already-used auth code (replay)', async () => {
       vi.mocked(decryptAuthCode).mockReturnValue({
         userId: 'user-1',

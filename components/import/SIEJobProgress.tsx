@@ -10,6 +10,7 @@ import type { SIEJob } from '@/lib/import/sie-job-contract'
 import type { ImportResult } from '@/lib/import/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import Link from 'next/link'
+import { LoaderCircle } from 'lucide-react'
 
 export default function SIEJobProgress({importId,onCompleted,onUndone}:{
   importId:string;onCompleted?:(result:ImportResult)=>void;onUndone?:()=>void
@@ -52,11 +53,19 @@ export default function SIEJobProgress({importId,onCompleted,onUndone}:{
   }
   const terminal = job && ['completed','undone','failed'].includes(job.job_state)
   const canResume = job && ['paused', 'reconciling'].includes(job.job_state)
+  const progressText = !job ? t('loading')
+    : job.job_state === 'queued' && job.chunks_total === 0 ? t('waitingDetails')
+    : job.job_state === 'preparing' ? t('preparingProgress',{count:job.prepared_through})
+    : job.chunks_total > 0 ? t('progress',{done:job.chunks_done,total:job.chunks_total,count:job.transactions_count})
+    : t('savedProgress',{count:job.transactions_count})
   return <section className="space-y-4 rounded-lg border border-border p-6" aria-label={t('title')}>
     <div role="status" aria-live="polite" className="space-y-2">
       <p className="text-sm font-medium">{job?.job_result?.repairOutcome === 'stopped' ? t('repairStopped') : job ? t(`states.${job.job_state}`) : t('loading')}</p>
-      <p className="text-sm text-muted-foreground">{job ? t('progress',{done:job.chunks_done,total:job.chunks_total,count:job.transactions_count}) : t('durable')}</p>
-      <Progress value={job?.chunks_total ? 100*job.chunks_done/job.chunks_total : 0}/>
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        {job?.job_state === 'preparing' && <LoaderCircle aria-hidden="true" className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none"/>}
+        {progressText}
+      </p>
+      {job && job.chunks_total > 0 && <Progress value={100*job.chunks_done/job.chunks_total}/>}
     </div>
     {!terminal && <p className="text-sm text-muted-foreground">{t('durable')}</p>}
     {(error || job?.error_message) && <p role="alert" className="text-sm text-destructive">{error ?? job?.error_message}</p>}

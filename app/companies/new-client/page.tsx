@@ -37,7 +37,7 @@ export default async function NewClientCompanyPage() {
   return (
     <div className="min-h-screen bg-background">
       <OnboardingBackdrop />
-      <OnboardingJourney teamId={membership.teamId} mode="add" companySearchEnabled={isScbConfigured()} />
+      <OnboardingJourney userId={user.id} teamId={membership.teamId} mode="add" companySearchEnabled={isScbConfigured()} />
     </div>
   )
 }

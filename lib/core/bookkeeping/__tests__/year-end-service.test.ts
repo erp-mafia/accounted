@@ -35,6 +35,7 @@ interface SeededTables {
   invoice_payments?: Row[]
   supplier_invoice_payments?: Row[]
   company_settings?: Row[]
+  kontantmetod_cutoff_entries?: Row[]
 }
 
 /**
@@ -158,6 +159,7 @@ function fxBaseTables(extra: SeededTables = {}): SeededTables {
     supplier_invoices: extra.supplier_invoices ?? [],
     invoice_payments: extra.invoice_payments ?? [],
     supplier_invoice_payments: extra.supplier_invoice_payments ?? [],
+    kontantmetod_cutoff_entries: extra.kontantmetod_cutoff_entries ?? [],
   }
 }
 
@@ -741,9 +743,9 @@ describe('validateYearEndReadiness: kontantmetoden cut-off gate', () => {
     vi.mocked(findNextPeriod).mockResolvedValue(nextPeriod as never)
   })
 
-  function cashTables(journalEntries: Row[] = []): SeededTables {
+  function cashTables(cutoffMarkers: Row[] = []): SeededTables {
     return {
-      ...fxBaseTables({ journal_entries: journalEntries }),
+      ...fxBaseTables({ kontantmetod_cutoff_entries: cutoffMarkers }),
       company_settings: [{
         company_id: 'company-1', accounting_method: 'cash', entity_type: 'aktiebolag',
       }],
@@ -768,20 +770,27 @@ describe('validateYearEndReadiness: kontantmetoden cut-off gate', () => {
       id: 'inv-1', reference: 'F-1', vatTreatment: 'standard_25',
       outstanding: 1250, vat: 250,
     }], [], 'aktiebolag')
+    // Marker rows (kontantmetod_cutoff_entries), both anchored to the CLOSED
+    // period, each carrying its journal entry. The descriptions below are
+    // grundbok text the gate no longer reads.
     const markers = [
       {
-        id: 'cutoff', company_id: 'company-1', fiscal_period_id: 'fp-1',
-        voucher_series: 'A', voucher_number: 10, status: 'posted', source_type: 'year_end',
-        source_id: 'fp-1', entry_date: '2024-12-31',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
-        lines: expected.receivableLines,
+        company_id: 'company-1', fiscal_period_id: 'fp-1', kind: 'receivable',
+        entry: {
+          id: 'cutoff', fiscal_period_id: 'fp-1', status: 'posted',
+          entry_date: '2024-12-31',
+          description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+          lines: expected.receivableLines,
+        },
       },
       {
-        id: 'reversal', company_id: 'company-1', fiscal_period_id: 'fp-2',
-        voucher_series: 'A', voucher_number: 1, status: 'posted', source_type: 'year_end',
-        source_id: 'fp-1', entry_date: '2025-01-01',
-        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
-        lines: reverseLines(expected.receivableLines),
+        company_id: 'company-1', fiscal_period_id: 'fp-1', kind: 'receivable_reversal',
+        entry: {
+          id: 'reversal', fiscal_period_id: 'fp-2', status: 'posted',
+          entry_date: '2025-01-01',
+          description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+          lines: reverseLines(expected.receivableLines),
+        },
       },
     ]
 

@@ -276,6 +276,17 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       description: 'Use the correction (storno) flow to change a posted entry instead of editing it.',
     },
   },
+  CANNOT_CANCEL_NON_DRAFT: {
+    httpStatus: 409,
+    message_sv:
+      'Endast utkast kan makuleras. En bokförd verifikation måste stornas i stället.',
+    message_en:
+      'Only draft entries can be cancelled; a posted entry must be reversed (storno) instead.',
+    remediation: {
+      description:
+        'Storno the posted entry with POST /api/v1/companies/{companyId}/journal-entries/{id}/reverse. Cancelling a draft that is already cancelled succeeds: the endpoint is idempotent.',
+    },
+  },
   ENTRY_ALREADY_REVERSED: {
     httpStatus: 409,
     message_sv:
@@ -2310,6 +2321,24 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
 // ─────────────────────────────────────────────────────────────────
 
 const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
+  SIE_IMPORT_LEGACY_REVIEW_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Importhistoriken bevaras. Den här äldre SIE-importens utfall behöver granskas innan den kan ångras eller ersättas. Öppna importhistoriken och välj Granska.',
+    message_en: 'Import history is retained. This legacy SIE import needs an outcome review before it can be undone or replaced. Open import history and choose Review.',
+    retryable: false,
+    remediation: {
+      description: 'Read gnubok_sie_import_status with the same import_id for the assessment. In the app, open SIE import history and choose Review. No recovery mutation is available for this legacy import yet.',
+      tool: 'gnubok_sie_import_status',
+      resource: '/import?mode=sie',
+    },
+  },
+  SIE_IMPORT_HISTORY_RETAINED: {
+    httpStatus: 403,
+    message_sv: 'Importhistoriken bevaras. Öppna importen för att granska dess status och tillgängliga åtgärder.',
+    message_en: 'Import history is retained. Open the import to review its status and available actions.',
+    retryable: false,
+    remediation: { description: 'Read the import status with the same import_id.', tool: 'gnubok_sie_import_status', resource: '/import?mode=sie' },
+  },
   SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS: {
     httpStatus: 400,
     message_sv: 'Konton med belopp måste mappas till konton 1000-8999 före import. Målkonton i klass 0 och 9 stöds inte i balans- och resultatrapporterna. Oanvända kontodefinitioner kan behållas.',

@@ -124,14 +124,17 @@ export const MAX_QUESTIONS_PER_DAY = 6
  *  question is open. The answer handler re-opens exactly these. */
 export const STAGED_AWAITING_COMPANY = 'staged_awaiting_company'
 /** Marker on a parked row whose media Meta no longer serves: excluded from
- *  any later re-open. Stamped by the sweep's question-TTL pass and by both
- *  drains (answer and single-company), all against the same cutoff. */
+ *  any later re-open. Stamped when a release-time probe gets a 400/404 from
+ *  Meta (drainParkedRows), and by the sweep's question-TTL pass for rows past
+ *  the outer bound below. */
 export const COMPANY_CHOICE_EXPIRED = 'company_choice_expired'
-/** Staged receipts stay answerable while Meta still serves their media
- *  (~30 days). Past that the marker is honest: nothing can recover them.
- *  ONE definition, read by the sweep and by both drains (#2062): a drain that
- *  re-opened a row older than this sent it through media download to the
- *  MAX_ATTEMPTS error path and an M18 about a month-old receipt. */
+/** Outer bound on how long a staged receipt is worth keeping, NOT a promise
+ *  about Meta's media retention. Meta answered 400 on the lookup for an
+ *  11-day-old media id in #2363, so a row's age cannot decide whether its
+ *  file is still fetchable: the drains ask Meta per row (lookupMedia) before
+ *  releasing anything, and this constant only spares them the round trip for
+ *  rows so old the answer is no longer in doubt. ONE definition, read by the
+ *  sweep and by both drains (#2062). */
 export const STAGED_MEDIA_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 /** Terminal marker when the company question could not be asked at all:
  *  the sender has fewer than 2 companies to choose between, so nothing will

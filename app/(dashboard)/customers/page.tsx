@@ -22,6 +22,7 @@ import Link from 'next/link'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 import { customerListIdentifier } from '@/lib/customers/mask-personal-number'
+import { compareCustomerNumbers } from '@/lib/customers/sort'
 
 const CustomerForm = dynamic(
   () => import('@/components/customers/CustomerForm'),
@@ -43,10 +44,18 @@ const CUSTOMER_TYPE_LABEL_KEYS: Record<CustomerType, string> = {
   non_eu_business: 'type_non_eu_business',
 }
 
-type SortColumn = 'name' | 'customer_type' | 'identifier' | 'email' | 'city' | 'created_at'
+type SortColumn =
+  | 'customer_number'
+  | 'name'
+  | 'customer_type'
+  | 'identifier'
+  | 'email'
+  | 'city'
+  | 'created_at'
 type SortDir = 'asc' | 'desc'
 
 const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
+  'customer_number',
   'name',
   'customer_type',
   'identifier',
@@ -166,6 +175,9 @@ function CustomersPageInner() {
     return customers.filter((c) => {
       return (
         c.name.toLowerCase().includes(term) ||
+        // The customer's own number, so typing "1001" finds the customer the
+        // company knows by that number and not just by name.
+        c.customer_number?.toLowerCase().includes(term) ||
         c.email?.toLowerCase().includes(term) ||
         c.org_number?.includes(term) ||
         // The masked form, so this matches the last four digits. Against the
@@ -178,9 +190,24 @@ function CustomersPageInner() {
     })
   }, [customers, searchTerm])
 
+  // The Kundnr column only earns its place in the column budget for companies
+  // that actually number their customers: the field is optional (CustomerForm
+  // says "leave empty if you do not use customer numbers"), and a permanently
+  // blank column would squeeze the name column for everyone else.
+  const hasCustomerNumbers = useMemo(
+    () => customers.some((c) => Boolean(c.customer_number?.trim())),
+    [customers],
+  )
+
   const sortedCustomers = useMemo(() => {
     const arr = [...filteredCustomers]
     arr.sort((a, b) => {
+      // Customer numbers are numeric strings, so they collate numerically
+      // ('2' before '10'), not as text. See lib/customers/sort.ts.
+      if (sortColumn === 'customer_number') {
+        const cmp = compareCustomerNumbers(a.customer_number, b.customer_number)
+        return sortDir === 'asc' ? cmp : -cmp
+      }
       let av = ''
       let bv = ''
       switch (sortColumn) {
@@ -322,6 +349,13 @@ function CustomersPageInner() {
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
+                  {hasCustomerNumbers && (
+                    <SortableHeader
+                      column="customer_number"
+                      label={t('col_customer_number')}
+                      className="hidden sm:table-cell"
+                    />
+                  )}
                   <SortableHeader column="name" label={t('col_name')} className="w-full" />
                   <SortableHeader column="customer_type" label={t('col_type')} />
                   <SortableHeader
@@ -350,6 +384,11 @@ function CustomersPageInner() {
                       className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
                       onClick={() => router.push(`/customers/${customer.id}`)}
                     >
+                      {hasCustomerNumbers && (
+                        <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground sm:table-cell')}>
+                          {customer.customer_number || ''}
+                        </td>
+                      )}
                       {/* overflow-hidden: see #2003, the shrink-0 verified
                           badge cannot truncate. */}
                       <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>

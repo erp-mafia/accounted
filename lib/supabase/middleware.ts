@@ -20,6 +20,7 @@ import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { isEmailOnBrandAllowlist } from '@/lib/auth/brand-signup-gate'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { BOOKS_GATE_COOKIE, decideBooksGate } from '@/lib/onboarding/books-gate'
 import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
 import {
   apiRequestSkipsSessionTimeout,
@@ -615,6 +616,21 @@ async function updateSessionInner(
   // Allow access to onboarding (for adding new companies), select-company, and companies/new
   if (pathname.startsWith('/select-company') || pathname.startsWith('/companies/new') || pathname.startsWith('/onboarding')) {
     return supabaseResponse
+  }
+
+  // First-session books gate (issue #2438): a company the journey just
+  // created keeps the dashboard closed until act two (import, bank,
+  // Skatteverket) has run or been skipped. Cookie-scoped and self-expiring:
+  // no database read on the hot path, and a stale cookie for another
+  // company is simply ignored.
+  const booksGate = decideBooksGate({
+    pathname,
+    search: request.nextUrl.search,
+    cookieCompanyId: request.cookies.get(BOOKS_GATE_COOKIE)?.value,
+    activeCompanyId: companyId,
+  })
+  if (booksGate.action === 'redirect') {
+    return redirectWithAuthCookies(supabaseResponse, new URL(booksGate.to, request.url))
   }
 
   return supabaseResponse

@@ -85,7 +85,10 @@ describe('GET /api/import/sie', () => {
 
     // Scoped to the active company; ordered newest-first; default range 0-19.
     expect(findCalls('sie_imports', 'eq')).toContainEqual(['company_id', 'company-1'])
-    expect(findCalls('sie_imports', 'order')).toContainEqual(['created_at', { ascending: false }])
+    // A stable tie-breaker keeps records with the same timestamp on the same page.
+    expect(findCalls('sie_imports', 'order')).toEqual([
+      ['created_at', { ascending: false }], ['id', { ascending: false }],
+    ])
     expect(findCalls('sie_imports', 'range')).toContainEqual([0, 19])
   })
 

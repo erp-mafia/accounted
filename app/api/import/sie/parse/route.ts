@@ -6,7 +6,8 @@ import {
   decodeBuffer,
   calculateFileHash,
 } from '@/lib/import/sie-parser'
-import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
+import { suggestMappings, getMappingStats } from '@/lib/import/account-mapper'
+import { prepareSIEPreviewMappings } from '@/lib/import/sie-preview-mappings'
 import { planChartChanges } from '@/lib/import/chart-plan'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import {
@@ -107,25 +108,22 @@ export const POST = withRouteContext(
         })
       }
 
-      const excludedSystemAccounts = parsed.accounts
-        .filter((a) => isSystemAccount(a.number))
-        .map((a) => ({ number: a.number, name: a.name }))
-      const bookkeepingAccounts = parsed.accounts.filter((a) => !isSystemAccount(a.number))
-
       const { data: storedMappings } = await supabase
         .from('sie_account_mappings')
         .select('*')
         .eq('company_id', companyId)
 
-      const mappings = suggestMappings(
-        bookkeepingAccounts,
+      const suggested = suggestMappings(
+        parsed.accounts,
         BAS_REFERENCE,
         (storedMappings as SIEAccountMappingRecord[]) || undefined,
       )
+      const { mappings, archivedOnlyAccounts, excludedSystemAccounts } = prepareSIEPreviewMappings(parsed, suggested)
 
       const preview = generateImportPreview(parsed, mappings)
       preview.excludedSystemAccounts = excludedSystemAccounts
-      preview.accountCount = bookkeepingAccounts.length
+      preview.archivedOnlyAccounts = archivedOnlyAccounts
+      preview.accountCount = parsed.accounts.length - excludedSystemAccounts.length
 
       // The mapping stats above score the file against the BAS reference. A
       // consultant with a 41-account seeded company reads "150 mappade" as

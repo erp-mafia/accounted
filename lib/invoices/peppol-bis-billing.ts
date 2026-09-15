@@ -21,13 +21,21 @@ export const PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID =
   'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2::Invoice##urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0::2.1'
 
 const SUPPORTED_VAT_RATES = new Set([6, 12, 25])
-const UNIT_CODES: Record<string, string> = {
+/**
+ * UN/ECE Rec 20 codes for the units the editors suggest. Exported so
+ * lib/invoices/__tests__/units.test.ts can pin the pairing: a unit offered in
+ * UNIT_SUGGESTIONS with no code here would fail the Peppol export with
+ * UNIT_UNSUPPORTED. A unit the user typed themselves can still be unmapped,
+ * which is what that validation issue is for.
+ */
+export const UNIT_CODES: Record<string, string> = {
   st: 'EA',
   tim: 'HUR',
   dag: 'DAY',
   'månad': 'MON',
   km: 'KMT',
   kg: 'KGM',
+  l: 'LTR',
 }
 
 export interface PeppolValidationIssue {

@@ -253,4 +253,55 @@ describe('behandlingshistorik audit triggers (BFNAR 2013:2 p. 9.16)', () => {
       getPool().query(`DELETE FROM public.app_releases WHERE version = $1`, [version]),
     ).rejects.toThrow()
   })
+
+  /**
+   * Issue #2366: a guard that warns before a booking and is overridden with
+   * force writes its own audit row. The action is new (migration
+   * 20260914150102) and audit_log has a CHECK on `action`, so a helper that
+   * ships ahead of the migration would fail the insert and the override would
+   * leave no durable trace at all: exactly how ten processing_history event
+   * types went missing before. This pins the constraint to the writer.
+   */
+  it('accepts GUARD_BYPASSED, the action an overridden guard writes, and still refuses an unknown action', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const invoiceId = randomUUID()
+    const journalEntryId = randomUUID()
+
+    await getPool().query(
+      `INSERT INTO public.audit_log
+         (user_id, company_id, action, table_name, record_id, actor_type, new_state, description)
+       VALUES ($1, $2, 'GUARD_BYPASSED', 'supplier_invoices', $3, 'user', $4, 'Duplicate-payment guard bypassed with force')`,
+      [
+        userId,
+        companyId,
+        invoiceId,
+        JSON.stringify({
+          guard: 'supplier_invoice_duplicate_payment',
+          reason: 'force',
+          supplier_invoice_id: invoiceId,
+          journal_entry_id: journalEntryId,
+          candidate_count: 0,
+          candidates: [],
+        }),
+      ],
+    )
+
+    const rows = await getPool().query<{ action: string; guard: string | null; je: string | null }>(
+      `SELECT action, new_state->>'guard' AS guard, new_state->>'journal_entry_id' AS je
+         FROM public.audit_log WHERE table_name = 'supplier_invoices' AND record_id = $1`,
+      [invoiceId],
+    )
+    expect(rows.rows).toEqual([
+      { action: 'GUARD_BYPASSED', guard: 'supplier_invoice_duplicate_payment', je: journalEntryId },
+    ])
+
+    await expect(
+      getPool().query(
+        `INSERT INTO public.audit_log (user_id, company_id, action, table_name, record_id)
+         VALUES ($1, $2, 'NOT_AN_ACTION', 'supplier_invoices', $3)`,
+        [userId, companyId, randomUUID()],
+      ),
+    ).rejects.toThrow(/audit_log_action_check/)
+  })
 })

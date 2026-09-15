@@ -7,7 +7,7 @@ import { MAX_CHAIN_WALK } from './correction-chain'
 /**
  * A followable reference from a verifikation back to its underlag: the customer
  * or supplier invoice that identifies what the affärshändelse avser and who the
- * motpart is.
+ * motpart is, or the lönekörning that computed it.
  *
  * Surfacing these makes the verifieringskedja traceable from the verifikat side,
  * not only from the invoice side (BFL 5 kap 7§: hänvisning till underlag;
@@ -17,12 +17,15 @@ import { MAX_CHAIN_WALK } from './correction-chain'
  * affärshändelse, not its underlag. Counting it as underlag would wrongly silence
  * the "saknar underlag" warning for expenses that still genuinely need a kvitto.
  */
-export type UnderlagReferenceType = 'invoice' | 'supplier_invoice'
+export type UnderlagReferenceType = 'invoice' | 'supplier_invoice' | 'salary_run'
 
 export interface UnderlagReference {
   type: UnderlagReferenceType
   id: string
-  /** invoice_number / supplier_invoice_number: the UI builds the label from this. */
+  /**
+   * invoice_number / supplier_invoice_number, or the salary run's period as
+   * `YYYY-MM`: the UI builds the label from this.
+   */
   number: string
   /**
    * Retained source document owned by a referenced supplier invoice, if any.
@@ -40,6 +43,14 @@ export interface UnderlagReference {
    */
   document_id?: string
 }
+
+/**
+ * The source_type every entry `createSalaryRunEntries()` posts carries, with
+ * `source_id` = the `salary_runs` row that produced it (lib/salary/salary-entries.ts).
+ * Same shortcut as {@link INVOICE_SOURCED_ENTRY_TYPES}: the entry's own source
+ * columns ARE the link, so this arm needs no join and no salary-side scan.
+ */
+const SALARY_RUN_ENTRY_TYPE = 'salary_payment'
 
 interface InvoiceRow {
   id: string
@@ -77,6 +88,11 @@ function anchoredDocumentId(row: SupplierInvoiceRow): string | undefined {
  *   - invoice_payments.journal_entry_id            (kontantmetod inbetalning / delbetalning)
  *   - supplier_invoices.registration_journal_entry_id / payment_journal_entry_id
  *   - supplier_invoice_payments.journal_entry_id   (delbetalning)
+ *
+ * Plus the lönekörning that posted the entry, read off the entry's own
+ * source_type / source_id (SALARY_RUN_ENTRY_TYPE): the payslip basis lives in
+ * the salary module, so without this arm a salary verifikat offered a reader no
+ * route to its underlag at all.
  *
  * Every query is company-scoped (defense in depth alongside RLS). Results are
  * deduplicated by id, so an invoice reachable via several paths appears once.
@@ -190,6 +206,40 @@ export async function getJournalEntryUnderlagReferences(
     }
   }
 
+  // --- Salary runs ---------------------------------------------------------
+  // Runs LAST so the fixed `.from()` order the queued test mocks depend on
+  // stays stable above it. Two point reads, both company-scoped: the entry's
+  // own source columns, then the run they name. The second read is what makes
+  // the reference honest: a source_id whose run was deleted (or belongs to
+  // another company) yields no reference rather than a dead link.
+  let salaryRun: UnderlagReference | null = null
+
+  const { data: entryRow } = await supabase
+    .from('journal_entries')
+    .select('source_type, source_id')
+    .eq('company_id', companyId)
+    .eq('id', journalEntryId)
+    .maybeSingle()
+
+  const entrySource = entryRow as { source_type?: string | null; source_id?: string | null } | null
+  if (entrySource?.source_type === SALARY_RUN_ENTRY_TYPE && entrySource.source_id) {
+    const { data: runRow } = await supabase
+      .from('salary_runs')
+      .select('id, period_year, period_month')
+      .eq('company_id', companyId)
+      .eq('id', entrySource.source_id)
+      .maybeSingle()
+
+    const run = runRow as { id: string; period_year: number; period_month: number } | null
+    if (run) {
+      salaryRun = {
+        type: 'salary_run',
+        id: run.id,
+        number: `${run.period_year}-${String(run.period_month).padStart(2, '0')}`,
+      }
+    }
+  }
+
   // --- Assemble ------------------------------------------------------------
   const references: UnderlagReference[] = []
   for (const [id, number] of invoices) references.push({ type: 'invoice', id, number })
@@ -201,6 +251,7 @@ export async function getJournalEntryUnderlagReferences(
       ...(supplierInvoice.documentId ? { document_id: supplierInvoice.documentId } : {}),
     })
   }
+  if (salaryRun) references.push(salaryRun)
   return references
 }
 

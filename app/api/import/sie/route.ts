@@ -20,6 +20,7 @@ export const GET = withRouteContext(
       .select('*', { count: 'exact' })
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .range(offset, offset + limit - 1)
 
     if (status) {

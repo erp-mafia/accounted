@@ -434,6 +434,8 @@ export interface ImportResult {
  * Preview data shown to user before import
  */
 export interface ImportPreview {
+  /** Unused source definitions retained in the archive, not created as ledger accounts. */
+  archivedOnlyAccounts?: SIEAccount[]
   // Company info from file
   companyName: string | null
   orgNumber: string | null

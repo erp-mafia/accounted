@@ -1482,9 +1482,9 @@ describe('importVouchers: per-voucher series preservation', () => {
     // must preserve the SIE originals (1 and 3) so traceability is not lost.
     const parsed = makeParsedFile({
       vouchers: [
-        makeVoucher('A', 1),
+        { ...makeVoucher('A', 1), description: 'Receipt 2025-001, Acme AB' },
         { ...makeVoucher('A', 2), lines: [] },
-        makeVoucher('A', 3),
+        { ...makeVoucher('A', 3), description: 'Invoice 2025-003, Jane Doe' },
       ],
     })
 
@@ -1503,6 +1503,7 @@ describe('importVouchers: per-voucher series preservation', () => {
     expect(journalEntryInserts.map((r) => r.voucher_number)).toEqual([1, 2])
     expect(journalEntryInserts.map((r) => r.source_voucher_series)).toEqual(['A', 'A'])
     expect(journalEntryInserts.map((r) => r.source_voucher_number)).toEqual([1, 3])
+    expect(journalEntryInserts.map((r) => r.description)).toEqual(['Receipt 2025-001, Acme AB', 'Invoice 2025-003, Jane Doe'])
   })
 
   it('does not report imported IDs or counts when the atomic RPC fails', async () => {

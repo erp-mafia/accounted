@@ -866,9 +866,13 @@ export async function POST(request: Request) {
         salvage_value: 0,
         useful_life_months: 60,
         depreciation_method: 'linear',
-        bas_asset_account: '1250',
-        bas_accumulated_account: '1259',
-        bas_expense_account: '7831',
+        // BAS 2026: a non-production computer is 1224, accumulated on 1229,
+        // depreciated through 7832. 1250/1259 are free accounts and 7831 is
+        // the maskiner expense (#2414). This insert bypasses createAsset(),
+        // so nothing else would catch the drift.
+        bas_asset_account: '1224',
+        bas_accumulated_account: '1229',
+        bas_expense_account: '7832',
         notes: 'Demo-tillgång: visar planenlig avskrivning över 5 år.',
       })
 

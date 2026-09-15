@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Undo2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +12,9 @@ import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
 import Link from 'next/link'
+import SIELegacyRecoveryPanel from './SIELegacyRecoveryPanel'
+
+const PAGE_SIZE = 20
 
 /**
  * Subset of the sie_imports row (GET /api/import/sie) actually rendered here.
@@ -62,26 +65,44 @@ export default function SIEImportHistory() {
   const [rows, setRows] = useState<SIEImportListRow[] | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const [pendingUndo, setPendingUndo] = useState<SIEImportListRow | null>(null)
+  const [reviewImport, setReviewImport] = useState<SIEImportListRow | null>(null)
+  const [offset, setOffset] = useState(0)
+  const [total, setTotal] = useState(0)
+  const requestVersion = useRef(0)
+  const reviewTrigger = useRef<HTMLButtonElement | null>(null)
 
-  const fetchImports = useCallback(async () => {
+  const fetchImports = useCallback(async (signal?: AbortSignal) => {
+    const version = ++requestVersion.current
     try {
-      const res = await fetch('/api/import/sie?limit=20')
+      const res = await fetch(`/api/import/sie?limit=${PAGE_SIZE}&offset=${offset}`, { signal })
+      if (signal?.aborted || version !== requestVersion.current) return
       if (!res.ok) {
         setLoadFailed(true)
         return
       }
       const data = await res.json()
+      if (signal?.aborted || version !== requestVersion.current) return
       setRows(Array.isArray(data.data) ? data.data : [])
+      setTotal(data.count ?? 0)
       setLoadFailed(false)
     } catch {
+      if (signal?.aborted || version !== requestVersion.current) return
       setLoadFailed(true)
     }
-  }, [])
+  }, [offset])
 
   useEffect(() => {
-    void fetchImports()
-    const timer = setInterval(() => void fetchImports(),5000)
-    return () => clearInterval(timer)
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      await fetchImports(controller.signal)
+      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 5000)
+    }
+    timer = setTimeout(() => void poll(), 0)
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+    }
   }, [fetchImports])
 
   // The route acknowledges the durable undo job; history polls its progress.
@@ -140,7 +161,7 @@ export default function SIEImportHistory() {
     )
   }
 
-  if (loadFailed) {
+  if (loadFailed && rows === null) {
     return <p className="px-1 text-xs leading-5 text-muted-foreground">{t('sie_history_load_error')}</p>
   }
 
@@ -154,7 +175,7 @@ export default function SIEImportHistory() {
     )
   }
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && offset === 0) {
     return <p className="px-1 text-xs leading-5 text-muted-foreground">{t('sie_history_empty')}</p>
   }
 
@@ -162,6 +183,7 @@ export default function SIEImportHistory() {
 
   return (
     <div>
+      {loadFailed && <p role="status" className="mb-3 text-xs leading-5 text-muted-foreground">{t('sie_history_load_error')}</p>}
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-[13px]">
           <thead>
@@ -203,12 +225,39 @@ export default function SIEImportHistory() {
                       {t('sie_history_undo_button')}
                     </Button>
                   )}
+                  {!row.job_state && (
+                    <Button variant="outline" size="sm" className="min-h-10" onClick={event => {
+                      reviewTrigger.current = event.currentTarget
+                      setReviewImport(row)
+                    }}>
+                      {t('sie_recovery.review')}
+                    </Button>
+                  )}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {(total > PAGE_SIZE || offset > 0) && (
+        <nav className="mt-4 flex flex-wrap items-center justify-end gap-3" aria-label={t('sie_recovery.pagination')}>
+          <span className="text-xs tabular-nums text-muted-foreground">{t('sie_recovery.page', { page: offset / PAGE_SIZE + 1 })}</span>
+          <Button variant="outline" size="sm" className="min-h-10" disabled={offset === 0} onClick={() => {
+            setRows(null)
+            setOffset(value => Math.max(0, value - PAGE_SIZE))
+          }}>{t('sie_recovery.previous')}</Button>
+          <Button variant="outline" size="sm" className="min-h-10" disabled={offset + PAGE_SIZE >= total} onClick={() => {
+            setRows(null)
+            setOffset(value => value + PAGE_SIZE)
+          }}>{t('sie_recovery.next')}</Button>
+        </nav>
+      )}
+
+      {reviewImport && (
+        <SIELegacyRecoveryPanel key={reviewImport.id} importId={reviewImport.id} filename={reviewImport.filename}
+          onClose={() => setReviewImport(null)} onCloseAutoFocus={() => reviewTrigger.current?.focus()} />
+      )}
 
       <DestructiveConfirmDialog
         open={pendingUndo !== null}

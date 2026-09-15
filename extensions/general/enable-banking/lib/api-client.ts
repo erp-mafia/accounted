@@ -38,6 +38,20 @@ export interface ASPSP {
   auth_methods?: AuthMethod[]
 }
 
+/**
+ * A credential Enable Banking's hosted page asks the PSU for before the bank
+ * flow starts (Handelsbanken business: `userId` = 12-digit personnummer,
+ * `companyId` = 10-digit organisationsnummer). `template` is the regex the
+ * page validates against; the page itself shows no format hint.
+ */
+export interface AuthMethodCredential {
+  name: string
+  title?: string
+  required?: boolean
+  description?: string
+  template?: string
+}
+
 export interface AuthMethod {
   name: string
   title?: string
@@ -48,6 +62,7 @@ export interface AuthMethod {
   // explicitly via auth_method (it is not the implicit default).
   hidden_method?: boolean
   psu_types?: ('personal' | 'business')[]
+  credentials?: AuthMethodCredential[]
 }
 
 export interface AuthResponse {
@@ -616,7 +631,8 @@ export async function startAuthorization(
   state: string,
   psuType: 'personal' | 'business' = 'personal',
   authMethod?: string,
-  companyId?: string
+  companyId?: string,
+  credentials?: Record<string, string>
 ): Promise<AuthResponse> {
   // Calculate consent validity (90 days)
   const validUntil = new Date()
@@ -629,6 +645,8 @@ export async function startAuthorization(
     redirect_url: string
     psu_type: 'personal' | 'business'
     auth_method?: string
+    credentials?: Record<string, string>
+    credentials_autosubmit?: boolean
   } = {
     access: {
       valid_until: validUntil.toISOString()
@@ -644,6 +662,14 @@ export async function startAuthorization(
   if (authMethod) {
     requestBody.auth_method = authMethod
   }
+  // Credentials we already know (the company's organisationsnummer) go in
+  // prefilled; Enable Banking's page still asks for the rest (the signer's
+  // personnummer). autosubmit stays off so the person sees and can correct
+  // the value before the bank flow starts.
+  if (credentials && Object.keys(credentials).length > 0) {
+    requestBody.credentials = credentials
+    requestBody.credentials_autosubmit = false
+  }
 
   // In connector mode the hosted bank proxy meters the per-company connection
   // quota, so it needs to know which company this authorization is for. This is
@@ -655,26 +681,61 @@ export async function startAuthorization(
   const authHeaders =
     companyId && bankConnectorMode() ? { [CONNECTOR_COMPANY_HEADER]: companyId } : undefined
 
-  const response = await authenticatedFetch('/auth', {
-    method: 'POST',
-    body: JSON.stringify(requestBody),
-    ...(authHeaders ? { headers: authHeaders } : {}),
-  })
+  const send = (body: typeof requestBody) =>
+    authenticatedFetch('/auth', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      ...(authHeaders ? { headers: authHeaders } : {}),
+    })
+
+  let sentBody = requestBody
+  let response = await send(sentBody)
+
+  // Prefilled credentials are a convenience, never a requirement: if the
+  // upstream rejects the request with them (a 4xx: the shape or the value
+  // is not what this ASPSP takes), start the authorization once more the
+  // way it always worked, and let Enable Banking's page ask for the value.
+  // A 5xx is upstream trouble either way and is not retried here.
+  if (!response.ok && sentBody.credentials && response.status >= 400 && response.status < 500) {
+    // The upstream body is not logged: a validation error can echo the
+    // submitted value back, and a sole trader's companyId is a personnummer.
+    console.warn('[enable-banking] startAuthorization rejected prefilled credentials; retrying without', {
+      status: response.status,
+      aspspName,
+      aspspCountry,
+      psuType,
+      credentialKeys: Object.keys(sentBody.credentials),
+    })
+    const { credentials: _credentials, credentials_autosubmit: _autosubmit, ...bare } = sentBody
+    void _credentials
+    void _autosubmit
+    sentBody = bare
+    response = await send(sentBody)
+  }
 
   if (!response.ok) {
     const body = await response.text()
+    // A request that carried credentials gets neither its body nor the
+    // upstream's echoed back into a log line or an error message: a sole
+    // trader's companyId is their personnummer.
+    const carriedCredentials = !!sentBody.credentials
     console.error('[enable-banking] startAuthorization failed', {
       status: response.status,
       statusText: response.statusText,
-      body,
+      body: carriedCredentials ? '[omitted: request carried credentials]' : body,
       aspspName,
       aspspCountry,
       psuType,
       redirectUrl,
       apiUrl: ENABLE_BANKING_API_URL,
-      requestBody: JSON.stringify(requestBody),
+      requestBody: JSON.stringify({
+        ...sentBody,
+        ...(carriedCredentials ? { credentials: '[redacted]' } : {}),
+      }),
     })
-    throw new Error(`Failed to start bank connection (${response.status}): ${body}`)
+    throw new Error(
+      `Failed to start bank connection (${response.status})${carriedCredentials ? '' : `: ${body}`}`,
+    )
   }
 
   return response.json()

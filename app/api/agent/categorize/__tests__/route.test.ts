@@ -130,6 +130,28 @@ describe('POST /api/agent/categorize', () => {
     )
   })
 
+  it('reads with a dialog-attached document ahead of the row, keyed on it and never stored', async () => {
+    const doc = '33333333-3333-4333-8333-333333333333'
+    const upsert = vi.fn(async () => ({ error: null }))
+    const sb = makeSupabase({ tx: { id: VALID_TX, document_id: null } })
+    const from = sb.from.bind(sb)
+    sb.from = (table: string) => (table === 'transaction_assistant_reads' ? ({ upsert } as never) : from(table))
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: sb, error: null })
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body({ document_id: doc }) }), createMockRouteParams({}))
+    const { status, body: b } = await parseJsonResponse<{ data: { underlag_key: string | null; has_underlag: boolean } }>(res)
+    expect(status).toBe(200)
+    expect(gatherUnderlag).toHaveBeenCalledWith(expect.anything(), 'company-1', VALID_TX, doc)
+    expect(b.data.underlag_key).toBe(doc)
+    expect(b.data.has_underlag).toBe(true)
+    expect(upsert).not.toHaveBeenCalled()
+  })
+
+  it('400 on a malformed document_id', async () => {
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body({ document_id: 'not-a-uuid' }) }), createMockRouteParams({}))
+    expect(res.status).toBe(400)
+    expect(selectAccount).not.toHaveBeenCalled()
+  })
+
   it('gathers underlag server-side when the caller did not supply it', async () => {
     await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))
     expect(gatherUnderlag).toHaveBeenCalled()

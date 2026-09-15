@@ -3454,6 +3454,10 @@ export type AuditAction =
   | 'INTEGRITY_FAILURE'
   | 'COMMITTED_AT_OVERRIDE'
   | 'RESET_SNAPSHOT'
+  // A guard that warns before a booking was deliberately overridden. Which
+  // guard, what it would have flagged and the voucher it was overridden for
+  // live in new_state (migration 20260914150102).
+  | 'GUARD_BYPASSED'
 
 export interface AuditLogEntry {
   id: string

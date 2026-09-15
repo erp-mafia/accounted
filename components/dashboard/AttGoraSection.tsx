@@ -5,13 +5,16 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
+import type { AiTaskCategory } from '@/lib/worklist/ai-task'
+import type { AiClient } from '@/lib/onboarding/ai-clients'
+import { AiTaskAction } from './AiTaskAction'
+import { KopplingarChips } from './KopplingarChips'
 import {
   ArrowLeftRight,
   ArrowRight,
@@ -79,6 +82,20 @@ interface AttGoraSectionProps {
    * degrades to the ordinary all-clear copy, never to a wrong nag.
    */
   hasActiveBankConnection?: boolean
+  /**
+   * AI clients this user has connected over MCP OAuth (lib/onboarding/
+   * ai-clients). Drives the footer: hand the first row to a connected
+   * client, or offer the connect buttons when there is none.
+   */
+  aiClients?: AiClient[]
+  /** False when no Skatteverket token is stored: the kopplingar chip offers the connect. */
+  hasSkatteverketConnection?: boolean
+  /**
+   * Whether to render the kopplingar row under the list. Off while the
+   * getting-started checklist is open: it carries the bank and Skatteverket
+   * steps itself, and the row would repeat them.
+   */
+  showKopplingar?: boolean
 }
 
 interface WorklistRowProps {
@@ -88,19 +105,25 @@ interface WorklistRowProps {
   detail?: string
   count: number
   badge?: React.ReactNode
+  /** The row's own control (the "Gör i Claude" pill); sits above the stretched link. */
+  action?: React.ReactNode
 }
 
-function WorklistRow({ href, icon: Icon, label, detail, count, badge }: WorklistRowProps) {
+function WorklistRow({ href, icon: Icon, label, detail, count, badge, action }: WorklistRowProps) {
+  // The label is the link, stretched over the row with a pseudo-element, so
+  // the pill can be a real button beside it instead of a button inside an
+  // anchor. The pill sits above the stretched area (relative z-10).
   return (
-    <Link
-      href={href}
-      className="group flex w-full items-start gap-3 border-b border-border px-1 py-3.5 transition-colors duration-150 hover:bg-secondary/30"
-    >
+    <div className="group relative flex w-full items-start gap-3 border-b border-border px-1 py-3.5 transition-colors duration-150 hover:bg-secondary/30">
       <span className="mt-px w-[18px] shrink-0 text-muted-foreground" aria-hidden>
         <Icon className="h-[15px] w-[15px]" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[13.5px]">{label}</p>
+        <p className="truncate text-[13.5px]">
+          <Link href={href} className="after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring">
+            {label}
+          </Link>
+        </p>
         {detail && <p className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</p>}
       </div>
       <span className="ml-auto flex shrink-0 items-center gap-2.5 pt-px">
@@ -108,9 +131,10 @@ function WorklistRow({ href, icon: Icon, label, detail, count, badge }: Worklist
         <Badge variant="secondary" className="font-normal tabular-nums">
           {count}
         </Badge>
+        {action && <span className="relative z-10 flex items-center">{action}</span>}
         <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
       </span>
-    </Link>
+    </div>
   )
 }
 
@@ -130,6 +154,9 @@ export default function AttGoraSection({
   expiringBankConnections = [],
   emptyLedger = false,
   hasActiveBankConnection = true,
+  aiClients = [],
+  hasSkatteverketConnection = false,
+  showKopplingar = false,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
   const { toast } = useToast()
@@ -248,6 +275,10 @@ export default function AttGoraSection({
     hasAi,
     extra: expiringBankConnections.length,
   })
+  // "Gör i Claude" on every row an agent can clear, once a client is
+  // connected. Off the live counts, so a confirmed match updates the prompt.
+  const aiAction = (category: AiTaskCategory, count: number) =>
+    aiClients.length > 0 ? <AiTaskAction clients={aiClients} task={{ category, count }} /> : undefined
 
   return (
     <section aria-label={t('att_gora_title')}>
@@ -265,30 +296,16 @@ export default function AttGoraSection({
 
       <div>
           {allClear ? (
-            emptyLedger && !postedSinceLoad ? (
-              <EmptyState
-                icon={BookOpen}
-                title={t('att_gora_new_title')}
-                description={t('att_gora_new_body')}
-                className="py-10"
-              />
-            ) : hasActiveBankConnection ? (
-              <EmptyState
-                icon={CheckCircle2}
-                title={t('att_gora_empty_title')}
-                description={t('att_gora_empty_body')}
-                className="py-10"
-              />
-            ) : (
-              <EmptyState
-                icon={Landmark}
-                title={t('att_gora_no_bank_title')}
-                description={t('att_gora_no_bank_body')}
-                actionLabel={t('att_gora_no_bank_action')}
-                actionHref="/settings/banking"
-                className="py-10"
-              />
-            )
+            // One quiet line, not a hero: the kopplingar row under it is what
+            // an empty list should draw the eye to (founder direction 2026-09-14).
+            <p className="flex items-center gap-3 border-b border-border px-1 py-3.5 text-[13px] text-muted-foreground">
+              <span className="flex w-[18px] shrink-0 justify-center" aria-hidden>
+                {emptyLedger && !postedSinceLoad
+                  ? <BookOpen className="h-[15px] w-[15px]" />
+                  : <CheckCircle2 className="h-[15px] w-[15px]" />}
+              </span>
+              {emptyLedger && !postedSinceLoad ? t('att_gora_new_body') : t('att_gora_empty_body')}
+            </p>
           ) : (
             <div className="pb-2">
               {bokforRows && (
@@ -298,6 +315,7 @@ export default function AttGoraSection({
                     {counts.book_transaction > 0 && (
                       <WorklistRow
                         href="/transactions"
+                        action={aiAction('book_transaction', counts.book_transaction)}
                         icon={ArrowLeftRight}
                         label={t('row_book_transactions')}
                         count={counts.book_transaction}
@@ -306,6 +324,7 @@ export default function AttGoraSection({
                     {counts.book_skattekonto > 0 && (
                       <WorklistRow
                         href="/transactions?source=skatteverket"
+                        action={aiAction('book_skattekonto', counts.book_skattekonto)}
                         icon={Landmark}
                         label={t('row_book_skattekonto')}
                         count={counts.book_skattekonto}
@@ -390,6 +409,7 @@ export default function AttGoraSection({
                     {showInboxDocuments && (
                       <WorklistRow
                         href="/e/general/invoice-inbox"
+                        action={aiAction('inbox_document', counts.inbox_document)}
                         icon={Inbox}
                         label={t('row_inbox_documents')}
                         detail={t('row_inbox_documents_detail')}
@@ -462,6 +482,7 @@ export default function AttGoraSection({
                     {counts.supplier_invoice_approval > 0 && (
                       <WorklistRow
                         href="/supplier-invoices"
+                        action={aiAction('supplier_invoice_approval', counts.supplier_invoice_approval)}
                         icon={Stamp}
                         label={t('row_supplier_approval')}
                         count={counts.supplier_invoice_approval}
@@ -470,6 +491,7 @@ export default function AttGoraSection({
                     {counts.verifikat_missing_document > 0 && (
                       <WorklistRow
                         href="/bookkeeping?missingUnderlag=true"
+                        action={aiAction('verifikat_missing_document', counts.verifikat_missing_document)}
                         icon={FileWarning}
                         label={t('row_missing_underlag')}
                         count={counts.verifikat_missing_document}
@@ -494,6 +516,7 @@ export default function AttGoraSection({
                     {counts.overdue_invoice > 0 && (
                       <WorklistRow
                         href="/invoices?status=unpaid"
+                        action={aiAction('overdue_invoice', counts.overdue_invoice)}
                         icon={ReceiptText}
                         label={t('row_overdue_invoices')}
                         count={counts.overdue_invoice}
@@ -502,6 +525,7 @@ export default function AttGoraSection({
                     {counts.deadline_action > 0 && (
                       <WorklistRow
                         href="/deadlines"
+                        action={aiAction('deadline_action', counts.deadline_action)}
                         icon={CalendarClock}
                         label={t('row_deadlines')}
                         count={counts.deadline_action}
@@ -510,6 +534,7 @@ export default function AttGoraSection({
                     {counts.reconciliation_due > 0 && (
                       <WorklistRow
                         href="/reconciliation"
+                        action={aiAction('reconciliation_due', counts.reconciliation_due)}
                         icon={Scale}
                         label={t('row_reconciliation_due')}
                         detail={t('row_reconciliation_due_detail')}
@@ -541,6 +566,13 @@ export default function AttGoraSection({
             </div>
           )}
       </div>
+      {showKopplingar && (
+        <KopplingarChips
+          aiClients={aiClients}
+          hasBank={hasActiveBankConnection}
+          hasSkatteverket={hasSkatteverketConnection}
+        />
+      )}
     </section>
   )
 }

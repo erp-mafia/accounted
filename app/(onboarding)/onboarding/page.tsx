@@ -116,6 +116,7 @@ export default async function OnboardingPage({
 
   return (
     <OnboardingJourney
+      userId={user.id}
       teamId={teamId}
       mode="first"
       initialOrgNumber={initialOrgNumber}
