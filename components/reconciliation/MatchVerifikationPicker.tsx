@@ -4,8 +4,8 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, X } from 'lucide-react'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { Check, Search, X } from 'lucide-react'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 
 /**
@@ -59,8 +59,9 @@ export interface UnlinkedGLLine {
 
 interface MatchPickerProps {
   glLines: UnlinkedGLLine[]
-  value: string
-  onChange: (journalEntryId: string) => void
+  /** Single-select: the picked verifikat ('' = none). Ignored in multi-select. */
+  value?: string
+  onChange?: (journalEntryId: string) => void
   disabled?: boolean
   placeholder?: string
   /**
@@ -72,6 +73,15 @@ interface MatchPickerProps {
    * compact overlay (one picker per transaction row); the modal uses inline.
    */
   inline?: boolean
+  /**
+   * Multi-select (1:N: one bank row explained by several verifikat). When set,
+   * `selectedIds` are the picked entries and `onToggle` flips one; `value` /
+   * `onChange` are ignored. Every picked verifikat renders as a removable chip
+   * above the search box and the list stays open with the picked rows marked,
+   * so the next one is one click away.
+   */
+  selectedIds?: readonly string[]
+  onToggle?: (journalEntryId: string) => void
 }
 
 /**
@@ -87,12 +97,15 @@ interface MatchPickerProps {
  */
 export function MatchVerifikationPicker({
   glLines,
-  value,
+  value = '',
   onChange,
   disabled,
   placeholder = 'Sök ver.nr, datum, belopp eller beskrivning…',
   inline = false,
+  selectedIds,
+  onToggle,
 }: MatchPickerProps) {
+  const multiple = selectedIds !== undefined
   // `open` controls the overlay dropdown only. In inline mode the list is always
   // rendered, so the setOpen() writes in the handlers below are harmless no-ops
   // there (the inline branch never reads `open`).
@@ -111,7 +124,18 @@ export function MatchVerifikationPicker({
     return () => document.removeEventListener('mousedown', onDocMouseDown)
   }, [open, inline])
 
-  const selected = glLines.find((l) => l.journal_entry_id === value) || null
+  const selected = multiple ? null : glLines.find((l) => l.journal_entry_id === value) || null
+
+  // Multi-select chips, in pick order, one per verifikat (a verifikat with two
+  // lines on the account is still one pick).
+  const pickedLines = useMemo(() => {
+    if (!multiple) return []
+    return (selectedIds ?? []).flatMap((id) => {
+      const line = glLines.find((l) => l.journal_entry_id === id)
+      return line ? [line] : []
+    })
+  }, [glLines, multiple, selectedIds])
+  const pickedSet = useMemo(() => new Set(selectedIds ?? []), [selectedIds])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -130,19 +154,19 @@ export function MatchVerifikationPicker({
     return base.slice(0, 25)
   }, [search, glLines])
 
-  if (selected) {
-    const amount = selected.debit_amount > 0 ? selected.debit_amount : -selected.credit_amount
+  function renderChip(line: UnlinkedGLLine, onRemove: () => void) {
+    const amount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
     // Suppress the match-strength badge on an already-matched verifikat so a
     // green "Stark träff" can't visually encourage an accidental double-match:
     // "Redan matchad" is the signal that matters there (N:1 stays opt-in).
     const strength =
-      (selected.linked_transaction_count ?? 0) > 0 ? null : confidenceMark(selected.confidence)
+      (line.linked_transaction_count ?? 0) > 0 ? null : confidenceMark(line.confidence)
     return (
       <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm">
-        <span className="font-mono text-xs shrink-0">{formatVoucher(selected)}</span>
-        <span className="text-muted-foreground shrink-0 tabular-nums">{formatDate(selected.entry_date)}</span>
+        <span className="font-mono text-xs shrink-0">{formatVoucher(line)}</span>
+        <span className="text-muted-foreground shrink-0 tabular-nums">{formatDate(line.entry_date)}</span>
         <span className="tabular-nums shrink-0">{formatCurrency(amount)}</span>
-        <span className="truncate text-muted-foreground flex-1 min-w-0">{selected.entry_description}</span>
+        <span className="truncate text-muted-foreground flex-1 min-w-0">{line.entry_description}</span>
         {strength && (
           strength.variant ? (
             <Badge variant={strength.variant} className="shrink-0 text-[10px]">
@@ -152,7 +176,7 @@ export function MatchVerifikationPicker({
             <span className="shrink-0 text-[11px] text-muted-foreground">{strength.label}</span>
           )
         )}
-        {(selected.linked_transaction_count ?? 0) > 0 && (
+        {(line.linked_transaction_count ?? 0) > 0 && (
           <Badge variant="secondary" className="shrink-0 text-[10px]">
             Redan matchad
           </Badge>
@@ -162,7 +186,7 @@ export function MatchVerifikationPicker({
           size="icon"
           variant="ghost"
           className="h-6 w-6 shrink-0"
-          onClick={() => onChange('')}
+          onClick={onRemove}
           disabled={disabled}
           aria-label="Avmarkera verifikation"
         >
@@ -170,6 +194,22 @@ export function MatchVerifikationPicker({
         </Button>
       </div>
     )
+  }
+
+  if (selected) {
+    return renderChip(selected, () => onChange?.(''))
+  }
+
+  function pick(line: UnlinkedGLLine) {
+    if (multiple) {
+      // The search stays: the next verifikat of a split usually matches the
+      // same filter (same day, same payer prefix).
+      onToggle?.(line.journal_entry_id)
+      return
+    }
+    onChange?.(line.journal_entry_id)
+    setSearch('')
+    setOpen(false)
   }
 
   // The candidate list: shared by the inline and overlay layouts below.
@@ -184,23 +224,29 @@ export function MatchVerifikationPicker({
           const amount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
           const strength =
             (line.linked_transaction_count ?? 0) > 0 ? null : confidenceMark(line.confidence)
+          const picked = multiple && pickedSet.has(line.journal_entry_id)
           return (
             <button
               key={line.line_id}
               type="button"
-              className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-secondary/60 focus:bg-secondary/60 focus:outline-none"
+              className={cn(
+                'flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-secondary/60 focus:bg-secondary/60 focus:outline-none',
+                picked && 'bg-secondary/40',
+              )}
+              aria-pressed={multiple ? picked : undefined}
               onMouseDown={(e) => {
                 // mousedown beats blur: without this the popover closes
                 // before the click registers when the user has tabbed
                 // through and uses keyboard.
                 e.preventDefault()
               }}
-              onClick={() => {
-                onChange(line.journal_entry_id)
-                setSearch('')
-                setOpen(false)
-              }}
+              onClick={() => pick(line)}
             >
+              {multiple && (
+                <span className="w-4 shrink-0" aria-hidden>
+                  {picked && <Check className="h-3.5 w-3.5" />}
+                </span>
+              )}
               <span className="font-mono text-xs shrink-0 w-12">{formatVoucher(line)}</span>
               <span className="text-muted-foreground shrink-0 tabular-nums w-24">{formatDate(line.entry_date)}</span>
               <span className="tabular-nums shrink-0 w-24 text-right">{formatCurrency(amount)}</span>
@@ -249,11 +295,24 @@ export function MatchVerifikationPicker({
     </div>
   )
 
+  // Multi-select chips: the picks so far, each removable, above the search.
+  const chips =
+    pickedLines.length > 0 ? (
+      <div className="space-y-1.5">
+        {pickedLines.map((line) => (
+          <div key={line.journal_entry_id}>
+            {renderChip(line, () => onToggle?.(line.journal_entry_id))}
+          </div>
+        ))}
+      </div>
+    ) : null
+
   // Inline: list lives in normal flow so it can never be clipped by a scroll
   // container (Dialog). The enclosing modal scrolls if the whole thing is tall.
   if (inline) {
     return (
       <div ref={containerRef} className="space-y-2">
+        {chips}
         {searchBox}
         <div className="overflow-hidden rounded-lg border border-border bg-popover">
           {listContent}
@@ -265,7 +324,8 @@ export function MatchVerifikationPicker({
   // Overlay: compact, opens on focus, dismisses on outside click. Right for the
   // reconciliation view's one-picker-per-row layout.
   return (
-    <div ref={containerRef} className="relative">
+    <div ref={containerRef} className="relative space-y-2">
+      {chips}
       {searchBox}
       {open && (
         <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-border bg-popover shadow-[var(--shadow-md)]">
