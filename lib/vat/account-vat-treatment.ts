@@ -166,6 +166,14 @@ export function suggestVatTreatment(
   const accountClass = Number(accountNumber.charAt(0))
   if (accountClass < 3 || accountClass > 6) return null
   const name = accountName.toLocaleLowerCase('sv-SE')
+  // A motkonto is the technical credit side of a basis booking, never the
+  // basis. It carries no ruta by construction: BAS says so about 4598
+  // "Motkonto beräknad omvänd moms", which nets the basis out of the income
+  // statement while the 45xx accounts show it to ruta 20-24. Checked first
+  // because such a name repeats the basis account's own words: "Motkonto
+  // beskattningsunderlag import" would otherwise read as the ruta 50 account
+  // and subtract its own credit from the box it was meant to fill.
+  if (/motkonto/.test(name)) return null
   const percent = vatRateFromLabel(name)
   const rate = percent ?? 0.25
 

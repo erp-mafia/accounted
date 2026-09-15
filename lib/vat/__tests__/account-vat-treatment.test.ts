@@ -133,6 +133,20 @@ describe('momspliktiga uttag och importunderlag', () => {
       .toEqual({ treatment: 'exempt', rate: 0 })
   })
 
+  it('never reads a motkonto as the basis it counters', () => {
+    // Found in a real migration: "Motkonto beskattningsunderlag import" took
+    // import_goods from the rule meant for 4545, so the counter-account would
+    // have joined ruta 50 on the debit side and subtracted its own credit from
+    // the box the basis was filling. BAS says the same about its own
+    // equivalent, 4598, which nets the basis out of the income statement while
+    // the 45xx accounts carry it to ruta 20-24.
+    expect(suggestVatTreatment('4549', 'Motkonto beskattningsunderlag import')).toBeNull()
+    expect(suggestVatTreatment('4598', 'Motkonto beräknad omvänd moms')).toBeNull()
+    // The account it counters still reads as the basis.
+    expect(suggestVatTreatment('4545', 'Beskattningsunderlag vid import 25 %'))
+      .toEqual({ treatment: 'import_goods', rate: 0.25 })
+  })
+
   it('reads an import BASIS label but still declines a plain import cost account', () => {
     // The distinction the box turns on: ruta 50 is tullvärde plus tullar plus
     // bikostnader, booked on its own account. An account that merely buys
