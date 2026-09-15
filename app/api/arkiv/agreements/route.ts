@@ -26,6 +26,8 @@ export interface AgreementListItem {
   notice_deadline: { due_date: string; title: string } | null
   end_deadline: { due_date: string; title: string } | null
   source: { document_id: string; file_name: string; page: number | null }
+  /** The nightly lint found another agreement read from another file with the same kind, counterparty, amount and start. */
+  duplicate: boolean
 }
 
 interface AgreementRow {
