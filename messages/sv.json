@@ -5591,6 +5591,11 @@
     "role_original": "Original",
     "current": "Aktuell"
   },
+  "journal_transaction_links": {
+    "label": "Transaktion",
+    "show": "Visa transaktion",
+    "skattekonto": "Skattekonto"
+  },
   "journal_detail": {
     "title": "Verifikat {label}",
     "title_draft": "Utkast till verifikat",

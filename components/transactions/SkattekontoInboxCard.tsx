@@ -94,6 +94,7 @@ export default function SkattekontoInboxCard({
 
   return (
     <tr
+      data-tx-id={row.id}
       className={cn(
         'group transition-colors duration-150 hover:bg-secondary/35',
         isSelected && 'bg-secondary/40',

@@ -53,6 +53,7 @@ import { AccountNumber } from '@/components/ui/account-number'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
+import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
 import NoDocRequiredToggle from '@/components/bookkeeping/NoDocRequiredToggle'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -1789,6 +1790,10 @@ export default function JournalEntryList({
                                   {entry.notes}
                                 </p>
                               )}
+
+                              {/* The händelse this verifikat books or settles: the
+                                  mirror of "Visa verifikat" on the transactions page. */}
+                              <JournalEntryTransactionLinks journalEntryId={entry.id} />
 
                               <JournalEntryAttachments
                                 journalEntryId={entry.id}

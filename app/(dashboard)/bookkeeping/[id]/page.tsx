@@ -40,6 +40,7 @@ import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { AttnLine } from '@/components/ui/attn-line'
 import { HelpPopover } from '@/components/ui/help-popover'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
+import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import CorrectOpeningBalanceDialog from '@/components/bookkeeping/CorrectOpeningBalanceDialog'
@@ -731,6 +732,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             <span className="tabular-nums">{formatDate(entry.entry_date)}</span>
           </DefRow>
           <DefRow label={t('field_type')}>{sourceTypeLabels[entry.source_type] || entry.source_type}</DefRow>
+          {/* The bank / skattekonto händelse behind the entry, when there is
+              one: followable in the other direction from "Visa verifikat". */}
+          <JournalEntryTransactionLinks journalEntryId={entry.id} variant="detail" />
           {entry.source_voucher_series && entry.source_voucher_number != null && (
             <DefRow label={t('field_source_voucher')}>
               <span className="tabular-nums">

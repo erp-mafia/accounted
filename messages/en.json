@@ -5591,6 +5591,11 @@
     "role_original": "Original",
     "current": "Current"
   },
+  "journal_transaction_links": {
+    "label": "Transaction",
+    "show": "Show transaction",
+    "skattekonto": "Tax account"
+  },
   "journal_detail": {
     "title": "Voucher {label}",
     "title_draft": "Draft voucher",
