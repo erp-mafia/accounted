@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildSplitSelection, settlementAmount } from '../split-selection'
+import { buildSplitSelection, proposeSplitSelection, settlementAmount } from '../split-selection'
 
 describe('settlementAmount', () => {
   it('reads a debit on the bank account as money in and a credit as money out', () => {
@@ -68,5 +68,51 @@ describe('buildSplitSelection', () => {
 
     expect(split.allocations).toEqual([{ journal_entry_id: 'je-1', amount: 500 }])
     expect(split.balanced).toBe(true)
+  })
+})
+
+describe('proposeSplitSelection', () => {
+  const day = (id: string, amount: number, entry_date = '2026-09-05', extra: Partial<{ linked_transaction_count: number }> = {}) => ({
+    journal_entry_id: id,
+    debit_amount: amount > 0 ? amount : 0,
+    credit_amount: amount < 0 ? -amount : 0,
+    entry_date,
+    ...extra,
+  })
+
+  it('proposes the inbetalningar a bankgiro day-sum aggregates', () => {
+    const lines = [day('je-1', 500), day('je-2', 700), day('je-3', 300), day('je-4', 999)]
+
+    expect(proposeSplitSelection(lines, 1500, '2026-09-05')?.sort()).toEqual(['je-1', 'je-2', 'je-3'])
+  })
+
+  it('leaves a single exact match to the 1:1 path', () => {
+    const lines = [day('je-1', 1500), day('je-2', 700), day('je-3', 800)]
+
+    // je-1 alone explains the row: that is a plain link, ranked by the
+    // endpoint's confidence, never a proposed split.
+    expect(proposeSplitSelection(lines, 1500, '2026-09-05')).toBeNull()
+  })
+
+  it('never mixes directions or already-matched verifikat into a proposal', () => {
+    const lines = [
+      day('je-out', -500),
+      day('je-matched', 500, '2026-09-05', { linked_transaction_count: 1 }),
+      day('je-a', 600),
+      day('je-b', 900),
+    ]
+
+    expect(proposeSplitSelection(lines, 1500, '2026-09-05')?.sort()).toEqual(['je-a', 'je-b'])
+    expect(proposeSplitSelection(lines, 1100, '2026-09-05')).toBeNull()
+  })
+
+  it('prefers the set closest in date when two sets sum to the row', () => {
+    const lines = [day('je-far-a', 500, '2026-08-01'), day('je-far-b', 1000, '2026-08-01'), day('je-near-a', 700, '2026-09-04'), day('je-near-b', 800, '2026-09-06')]
+
+    expect(proposeSplitSelection(lines, 1500, '2026-09-05')?.sort()).toEqual(['je-near-a', 'je-near-b'])
+  })
+
+  it('returns null when nothing sums to the row', () => {
+    expect(proposeSplitSelection([day('je-1', 500), day('je-2', 700)], 1500, '2026-09-05')).toBeNull()
   })
 })

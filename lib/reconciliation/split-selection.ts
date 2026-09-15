@@ -1,4 +1,5 @@
 import { roundOre } from '@/lib/money'
+import { findExactCoveringSet } from './covering-set'
 
 /**
  * A posted line on the settlement account, as the unmatched-entries endpoint
@@ -58,4 +59,58 @@ export function buildSplitSelection(
   const sum = roundOre(allocations.reduce((acc, a) => acc + a.amount, 0))
   const difference = roundOre(transactionAmount - sum)
   return { allocations, sum, difference, balanced: Math.abs(difference) < TOLERANCE }
+}
+
+/** What the proposal needs beyond the amounts: the date, and whether the
+ *  verifikat is already settled by another bank row on this account. */
+export interface ProposableLine extends SettlementLine {
+  entry_date: string
+  linked_transaction_count?: number
+}
+
+const MS_PER_DAY = 86_400_000
+
+function dayDistance(a: string, b: string): number {
+  const ms = Math.abs(new Date(a).getTime() - new Date(b).getTime())
+  return Number.isFinite(ms) ? Math.round(ms / MS_PER_DAY) : Number.MAX_SAFE_INTEGER
+}
+
+/**
+ * Propose the split when no single verifikat explains the row: the smallest
+ * set of unmatched verifikat, same direction as the row, whose nets on the
+ * account sum to it to the öre (closest in date wins ties). A Bankgirot
+ * day-sum against the day's inbetalningar is the case this exists for. The
+ * exact sum is a deterministic signal that needs no counterparty text, which
+ * bank rows like "BGGIRERING 03447786" never carry.
+ *
+ * Returns the verifikat ids in pick order, or null when nothing sums (or when
+ * one verifikat alone does: that is the 1:1 path, ranked by the endpoint's
+ * confidence, not a split).
+ */
+export function proposeSplitSelection(
+  lines: readonly ProposableLine[],
+  transactionAmount: number,
+  transactionDate: string,
+): string[] | null {
+  if (Math.abs(transactionAmount) < TOLERANCE) return null
+  const byEntry = new Map<string, { net: number; entry_date: string; matched: boolean }>()
+  for (const line of lines) {
+    const prev = byEntry.get(line.journal_entry_id)
+    byEntry.set(line.journal_entry_id, {
+      net: roundOre((prev?.net ?? 0) + settlementAmount(line)),
+      entry_date: prev?.entry_date ?? line.entry_date,
+      matched: (prev?.matched ?? false) || (line.linked_transaction_count ?? 0) > 0,
+    })
+  }
+  const direction = Math.sign(transactionAmount)
+  const candidates = Array.from(byEntry, ([id, e]) => ({ id, ...e }))
+    .filter((e) => !e.matched && Math.sign(e.net) === direction)
+    .map((e) => ({
+      id: e.id,
+      amount: Math.abs(e.net),
+      dateDistanceDays: dayDistance(e.entry_date, transactionDate),
+    }))
+  const set = findExactCoveringSet(Math.abs(transactionAmount), candidates)
+  if (!set || set.length < 2) return null
+  return set.map((c) => c.id)
 }

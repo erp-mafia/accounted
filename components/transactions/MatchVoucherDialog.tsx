@@ -17,7 +17,7 @@ import {
 } from '@/components/reconciliation/MatchVerifikationPicker'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { buildSplitSelection } from '@/lib/reconciliation/split-selection'
+import { buildSplitSelection, proposeSplitSelection } from '@/lib/reconciliation/split-selection'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useToast } from '@/components/ui/use-toast'
 import { ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react'
@@ -60,6 +60,9 @@ export function MatchVoucherDialog({
   // booked as its own verifikat. The row stays whole and is linked to all of
   // them; nothing is "split" in the bookkeeping.
   const [selected, setSelected] = useState<string[]>([])
+  // The split the candidate load proposed (exact öre sum, no single match),
+  // kept so the dialog can say so while the selection is still that set.
+  const [proposal, setProposal] = useState<string[] | null>(null)
   const [accountNumber, setAccountNumber] = useState('1930')
   const [accountFallback, setAccountFallback] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -108,14 +111,18 @@ export function MatchVoucherDialog({
         // voucher the user already picked. (selected resets to '' on close.)
         // Never auto-select an already-matched voucher: N:1 must be a
         // deliberate choice, not the default when "visa matchade" is on.
+        // With no strong single match, propose the split instead: the
+        // smallest set of unmatched verifikat that sums to the row to the
+        // öre (a Bankgirot day-sum against the day's inbetalningar). The
+        // user still confirms; the button names how many.
         const top = lines[0]
-        setSelected((prev) =>
-          prev.length > 0
-            ? prev
-            : top && (top.confidence ?? 0) >= 0.85 && !(top.linked_transaction_count ?? 0)
-              ? [top.journal_entry_id]
-              : [],
-        )
+        const strong =
+          top && (top.confidence ?? 0) >= 0.85 && !(top.linked_transaction_count ?? 0)
+            ? top.journal_entry_id
+            : null
+        const proposed = strong ? null : proposeSplitSelection(lines, tx.amount, tx.date)
+        setProposal(proposed)
+        setSelected((prev) => (prev.length > 0 ? prev : strong ? [strong] : (proposed ?? [])))
       } finally {
         if (!signal.cancelled) setLoading(false)
       }
@@ -137,6 +144,7 @@ export function MatchVoucherDialog({
     if (open) return
     setGlLines([])
     setSelected([])
+    setProposal(null)
     setWideRange(false)
     setIncludeMatched(false)
     setAccountFallback(false)
@@ -177,6 +185,10 @@ export function MatchVoucherDialog({
   // the expected shape.
   const singleDiffers =
     selectedLine !== null && !isMatched(selectedLine.journal_entry_id) && !split.balanced
+  const showingProposal =
+    proposal !== null &&
+    proposal.length === selected.length &&
+    proposal.every((id) => selected.includes(id))
 
   async function handleConfirm() {
     if (!transaction || selected.length === 0) return
@@ -308,6 +320,12 @@ export function MatchVoucherDialog({
               )}
               {/* The arithmetic of a split, the same footer the worksheet
                   shows: what the picks sum to and what is left unexplained. */}
+              {showingProposal && (
+                <p className="text-xs text-muted-foreground">
+                  Förslag: de här {selected.length} verifikationerna summerar exakt till
+                  bankhändelsen. Kontrollera och klicka Matcha.
+                </p>
+              )}
               {isSplit && (
                 <div
                   className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs tabular-nums"
