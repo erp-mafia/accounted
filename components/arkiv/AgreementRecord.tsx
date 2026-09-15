@@ -77,6 +77,11 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
     return t(`${prefix}${o.status}` as never)
   }
 
+  // Sections that would only say "nothing": shown when the kind carries money or dates, hidden otherwise.
+  const PAYING_KINDS = ['rental', 'lease', 'loan', 'subscription', 'insurance', 'customer', 'investment']
+  const showPayments = view.obligations.length > 0 || PAYING_KINDS.includes(view.kind)
+  const showDates = view.deadlines.length > 0 || !!view.ends_on
+  const showHistory = view.history.length > 0
   const nodes: Array<LinkNode & { role: 'counterparty' | 'document_1' | 'source' | 'document_2' | 'payments' | 'deposit' | 'asset' | 'notice' }> = []
   if (view.counterparty.name)
     nodes.push({
@@ -163,76 +168,80 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
       </div>
 
       <div className="grid gap-x-10 gap-y-8 lg:grid-cols-2">
-        <Section title={t('agreement_expected_payments')} help={t('agreement_payments_help')}>
-          {view.obligations.length === 0 ? (
-            <p className="text-[13px] text-muted-foreground">{t('agreement_no_payments')}</p>
-          ) : (
-            <table className="w-full border-collapse text-[13px]">
-              <thead>
-                <tr>
-                  <th className={`${TH_CLASS} pl-0`}>{t('col_date')}</th>
-                  <th className={TH_CLASS}>{t('col_what')}</th>
-                  <th className={`${TH_CLASS} text-right`}>{t('col_amount')}</th>
-                  <th className={`${TH_CLASS} pr-0`}>{t('col_status')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {view.obligations.slice(0, 12).map((o) => (
-                  <tr key={o.id}>
-                    <td className={`${TD_CLASS} pl-0 tabular-nums`}>{o.due_on}</td>
-                    <td className={TD_CLASS}>{what(o)}</td>
-                    <td className={`${TD_CLASS} text-right tabular-nums`}>
-                      {formatCurrency(o.amount, o.currency)}
-                      {o.estimate ? '*' : ''}
-                    </td>
-                    <td className={`${TD_CLASS} pr-0 ${o.status === 'missed' ? 'text-destructive' : 'text-muted-foreground'}`}>{statusOf(o)}</td>
+        {showPayments && (
+          <Section title={t('agreement_expected_payments')} help={t('agreement_payments_help')}>
+            {view.obligations.length === 0 ? (
+              <p className="text-[13px] text-muted-foreground">{t('agreement_no_payments')}</p>
+            ) : (
+              <table className="w-full border-collapse text-[13px]">
+                <thead>
+                  <tr>
+                    <th className={`${TH_CLASS} pl-0`}>{t('col_date')}</th>
+                    <th className={TH_CLASS}>{t('col_what')}</th>
+                    <th className={`${TH_CLASS} text-right`}>{t('col_amount')}</th>
+                    <th className={`${TH_CLASS} pr-0`}>{t('col_status')}</th>
                   </tr>
+                </thead>
+                <tbody>
+                  {view.obligations.slice(0, 12).map((o) => (
+                    <tr key={o.id}>
+                      <td className={`${TD_CLASS} pl-0 tabular-nums`}>{o.due_on}</td>
+                      <td className={TD_CLASS}>{what(o)}</td>
+                      <td className={`${TD_CLASS} text-right tabular-nums`}>
+                        {formatCurrency(o.amount, o.currency)}
+                        {o.estimate ? '*' : ''}
+                      </td>
+                      <td className={`${TD_CLASS} pr-0 ${o.status === 'missed' ? 'text-destructive' : 'text-muted-foreground'}`}>{statusOf(o)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {view.obligations.some((o) => o.estimate) ? <p className="m-0 text-xs text-muted-foreground">{t('agreement_estimate_note')}</p> : null}
+          </Section>
+        )}
+
+        {showDates && (
+          <Section title={t('agreement_dates')} help={t('agreement_dates_help')}>
+            {view.deadlines.length === 0 ? (
+              <p className="text-[13px] text-muted-foreground">{t('agreement_no_dates')}</p>
+            ) : (
+              <DefList className="text-[13px]">
+                {view.deadlines.map((d) => (
+                  <DefRow
+                    key={d.id}
+                    label={<span className="tabular-nums">{d.due_date}</span>}
+                    source={d.page ? <SourceLink href={inlineHref(view.source.document_id, d.page)} label={t('source_page_short_only', { page: d.page })} /> : undefined}
+                  >
+                    <Link href="/deadlines" className={QUIET_LINK_CLASS}>
+                      {d.title}
+                    </Link>
+                  </DefRow>
                 ))}
-              </tbody>
-            </table>
-          )}
-          {view.obligations.some((o) => o.estimate) ? <p className="m-0 text-xs text-muted-foreground">{t('agreement_estimate_note')}</p> : null}
-        </Section>
-
-        <Section title={t('agreement_dates')} help={t('agreement_dates_help')}>
-          {view.deadlines.length === 0 ? (
-            <p className="text-[13px] text-muted-foreground">{t('agreement_no_dates')}</p>
-          ) : (
-            <DefList className="text-[13px]">
-              {view.deadlines.map((d) => (
-                <DefRow
-                  key={d.id}
-                  label={<span className="tabular-nums">{d.due_date}</span>}
-                  source={d.page ? <SourceLink href={inlineHref(view.source.document_id, d.page)} label={t('source_page_short_only', { page: d.page })} /> : undefined}
-                >
-                  <Link href="/deadlines" className={QUIET_LINK_CLASS}>
-                    {d.title}
-                  </Link>
-                </DefRow>
-              ))}
-            </DefList>
-          )}
-        </Section>
-
-        <Section title={t('agreement_history')} help={t('agreement_history_help')}>
-          {view.history.length === 0 ? (
-            <p className="text-[13px] text-muted-foreground">{t('agreement_no_history')}</p>
-          ) : (
-            <DefList className="text-[13px]">
-              {view.history.slice(0, 20).map((f) => (
-                <DefRow
-                  key={f.fact_id}
-                  label={f.sys_to ? t('agreement_until', { date: f.sys_to.slice(0, 10) }) : f.valid_from ? t('agreement_from', { date: f.valid_from }) : f.label}
-                  source={sourceOf(f)}
-                  muted
-                >
-                  {f.label} {f.value_text}
-                </DefRow>
-              ))}
-            </DefList>
-          )}
-        </Section>
-
+              </DefList>
+            )}
+          </Section>
+        )}
+        {showHistory && (
+          <Section title={t('agreement_history')} help={t('agreement_history_help')}>
+            {view.history.length === 0 ? (
+              <p className="text-[13px] text-muted-foreground">{t('agreement_no_history')}</p>
+            ) : (
+              <DefList className="text-[13px]">
+                {view.history.slice(0, 20).map((f) => (
+                  <DefRow
+                    key={f.fact_id}
+                    label={f.sys_to ? t('agreement_until', { date: f.sys_to.slice(0, 10) }) : f.valid_from ? t('agreement_from', { date: f.valid_from }) : f.label}
+                    source={sourceOf(f)}
+                    muted
+                  >
+                    {f.label} {f.value_text}
+                  </DefRow>
+                ))}
+              </DefList>
+            )}
+          </Section>
+        )}
         <Section title={t('agreement_referenced_by')} help={t('agreement_referenced_help')}>
           <DefList className="text-[13px]">
             <DefRow label={t('linked_verifikat')}>{t('agreement_verifikat', { count: view.verifikat_count })}</DefRow>
