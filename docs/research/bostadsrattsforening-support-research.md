@@ -140,7 +140,28 @@ Sizes: S (days), M (weeks), L (a quarter of one engineer). Order follows legal w
 - Bostadsrätterna, "Avgifter till föreningen": https://www.bostadsratterna.se/kunskapsbanken/a/avgifter-till-foreningen
 - Hittabrf.se, aktiva bostadsrättsföreningar: https://www.hittabrf.se/faktaaktiva.asp
 
-## Implementation status (2026-09-15, annual report package of the bostadsrättsförening PR)
+## Implementation status (2026-09-15, bostadsrättsförening PR: phases B1 and B2)
+
+Branch `feat/bostadsrattsforening`, stacked on the ekonomisk förening completion branch. Everything behind `NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED`, API-first. Phase B3 (avisering, autogiro, member ledger, mäklarbild) is not started.
+
+### Foundation (section 1, 2 and 8)
+
+- `bostadsrattsforening` as the fifth `EntityType`; `isEkonomiskForeningFamily` replaces the `=== 'ekonomisk_forening'` sites so the BRF inherits the föreningsstämma, the ÅRL 6 kap. 3 § disclosures, the mandatory revisor and the member-capital equity; `hasPropertyIncomeExemption` marks the form; `supportsAccountingFramework` is K3-only for financial years beginning after 2025-12-31 (BFN 2025-06-16) and eligibility raises AR-SCOPE-BRF-K3 on a K2 choice.
+- Migration `20260915170000`: CHECKs, `supported_entity_types()`, the BRF chart block (building components 1113-1117, 2087 relabelled Upplåtelseavgifter, 2088 Fond för yttre underhåll, 2892 Inre reparationsfond, 3011-3033 hyror and avgifter, property costs), `brf_property_facts` and `brf_tax_profiles` with company-scoped RLS; routes `/api/brf/property-facts` and `/api/brf/tax-profile`.
+- Thirteen booking templates (årsavgift, hyra lokal with and without frivillig beskattning, parkering, insats, upplåtelseavgift, överlåtelse- and pantsättningsavgift, fastighetsavgift, yttre fond by omföring, inre fond); K2 mapper legal form with the BRF equity posts; deadlines: the förening rules plus KU55 by 31 January.
+
+### Tax (section 5)
+
+- Äkta BRF: the year's `brf_tax_profiles` row (calendar year the räkenskapsår ends in) drives two reviewer-switchable detected INK2S items, `brf:property_income` (4.5c, class 3) and `brf:property_costs` (4.3c, classes 4-7 plus 84xx), read from the pre-closing books; the residue is taxed at 20,6 % through the ordinary adjustment totals and periodiseringsfond stays allowed on it. `lib/brf/privatbostadsforetag.ts`.
+- Unassessed year: no exemption, INK2 warning, `BRF_TAX_PROFILE_MISSING` blocker in bokslut readiness, tax commit refused with `BRF_TAX_PROFILE_REQUIRED`. Oäkta: warning about uttagsbeskattning (IL 22 kap., INK2S 4.6e, KU31), no computed amount.
+- Fastighetsavgift and fastighetsskatt: `lib/brf/fastighetsavgift.ts` (takbelopp 2024-2026, 0,3 % cap, 1,0 % lokaler, nybyggnad by värdeår) on `GET /api/brf/fastighetsavgift`; migration `20260915171000` adds `taxeringsvarde_bostader`, `taxeringsvarde_lokaler`, `vardear` to the facts. Booked by the user with the template.
+
+### Registers (section 3, the phase B1 minimum)
+
+- Migration `20260915173000`: `brf_apartments`, `brf_apartment_holdings` (open shares at most 100 %), append-only `brf_apartment_transfers` with the KU55 data points and the överlåtelseavtal WORM reference, `brf_pledges`; `record_brf_transfer()` moves a holding atomically and refuses a förvärvare who is not an admitted member on the day (BRL 6 kap. 5 §). Members stay in `association_members` (plus an encrypted personnummer for KU55).
+- Routes under `/api/brf/*`: apartments, holdings, transfers, pledges, `lagenhetsforteckning` (JSON or CSV, BRL 9 kap. 9-11 §§), `reconciliation` (insatser and upplåtelseavgifter against 2083 and 2087), `ku55` (Kontrolluppgifter 12.0 XML, one KU per överlåtare and transfer).
+
+### Annual report (section 6)
 
 Shipped, stacked on the BRF foundation commit:
 
