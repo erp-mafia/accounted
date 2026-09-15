@@ -270,7 +270,7 @@ The critical release rule is simple: the feature is not “supported” when onb
 
 Shipped, behind `NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED`:
 
-- `ekonomisk_forening` in `EntityType`, `ENTITY_TYPES`, the registry mapping (exact spellings only) and the onboarding picker; DB CHECK constraints, `supported_entity_types()` and the chart seed (2083, 2084, 2086, 2091, 2099, 2890, personnel accounts) in migration `20260915084538`, covered by `ekonomisk-forening-foundation.pg.test.ts`.
+- `ekonomisk_forening` in `EntityType`, `ENTITY_TYPES`, the registry mapping (exact spellings only) and the onboarding picker; DB CHECK constraints, `supported_entity_types()` and the chart seed (2083, 2084, 2086, 2091, 2099, 2890, personnel accounts) in migration `20260915150000`, covered by `ekonomisk-forening-foundation.pg.test.ts`.
 - Capabilities in `lib/company/entity-type.ts`: `usesInk2`, `booksCurrentTax`, `supportsCorporateTaxDispositions`, `requiresAuditorRegardlessOfSize`, `supportsMemberCapital`, `supportsAccountingFramework`, `preparesArsredovisning`.
 - Sites moved from `=== 'aktiebolag'` to a capability: dispositions proposal, överavskrivningar, INK2 engine, statement reconciliation, historical result repair, K2/K3 route and settings, skattekonto rule scoping, Peppol supplier gate, agent atom fallback, INK2 navigation and report catalog.
 - Deadlines: `inkomstdeklaration_ekonomisk_forening`, `arsredovisning_ekonomisk_forening`, `foreningsstamma`.
@@ -279,8 +279,8 @@ Shipped, behind `NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED`:
 Also shipped on the same branch (second iteration):
 
 - INK2S (section 7): membership fees on the seeded 3901 account are detected as a 4.5c deduction (`detectedTaxAdjustmentAccounts`), and the INK2 engine warns until the 4.3c administration cost has been entered manually.
-- K2 annual report (section 8): the K2 mapper has a legal-form option (2083 Medlemsinsatser, 2084 Förlagsinsatser as own posts; share capital flagged), the balance sheet, the equity-change table, the resultatdisposition table and the fastställelseintyg use association wording, förvaltningsberättelsen carries the four ÅRL 6 kap. 3 § member disclosures (new narrative columns, migration `20260915120000`), the revisionsberättelse is mandatory (EFL 8 kap. 1 §) and the ÅRL 6 kap. 3 § member statement blocks filing. iXBRL preview and direct filing stay disabled for the form; K3 fails closed.
-- Misclassified company (section 11, empty-books class): `correct_company_entity_type()` (migration `20260915121000`, owner-only, re-seeds the chart, audit-logged) exposed through `PATCH /api/company/current { entity_type }`.
+- K2 annual report (section 8): the K2 mapper has a legal-form option (2083 Medlemsinsatser, 2084 Förlagsinsatser as own posts; share capital flagged), the balance sheet, the equity-change table, the resultatdisposition table and the fastställelseintyg use association wording, förvaltningsberättelsen carries the four ÅRL 6 kap. 3 § member disclosures (new narrative columns, migration `20260915150100`), the revisionsberättelse is mandatory (EFL 8 kap. 1 §) and the ÅRL 6 kap. 3 § member statement blocks filing. iXBRL preview and direct filing stay disabled for the form; K3 fails closed.
+- Misclassified company (section 11, empty-books class): `correct_company_entity_type()` (migration `20260915150200`, owner-only, re-seeds the chart, audit-logged) exposed through `PATCH /api/company/current { entity_type }`.
 
 Deliberately not in this branch (fails closed or manual):
 
