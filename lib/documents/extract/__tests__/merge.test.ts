@@ -29,6 +29,16 @@ describe('mergeReadings', () => {
     expect(out.payload.lender_name.confidence).toBe(1)
   })
 
+  it('settles descriptive text when both readings found it, citing the careful reading', () => {
+    const out = mergeReadings(
+      loan,
+      reading({ ...LENDER, security: { value: 'Företagsinteckning 500 000 kr', page: 2 } }),
+      reading({ ...LENDER, security: { value: 'Företagsinteckning om 500 000 kronor' } }),
+    )
+    expect(out.payload.security).toMatchObject({ value: 'Företagsinteckning 500 000 kr', page: 2, confidence: 1, method: 'consensus' })
+    expect(out.reviewFields).toEqual([])
+  })
+
   it('keeps a value only one reading found, cites that reading, and asks a person', () => {
     const out = mergeReadings(loan, reading(LENDER), reading({ ...LENDER, maturity_on: { value: '2029-06-30', page: 2, quote: 'återbetalas senast 2029-06-30' } }))
     expect(out.payload.maturity_on).toMatchObject({ value: '2029-06-30', normalized: '2029-06-30', page: 2, confidence: 0.5, method: 'single_reading' })

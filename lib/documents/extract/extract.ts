@@ -3,7 +3,7 @@ import { getAiService } from '@/lib/ai'
 import type { CompanyIdentity } from '@/lib/documents/classify/classify'
 import { locateQuote, type PageText } from './locate'
 import { mergeReadings, type MergeResult } from './merge'
-import { jsonSchemaFor, type ExtractionSchemaDef } from './schemas'
+import { jsonSchemaFor, readingsFromAnswer, type ExtractionSchemaDef } from './schemas'
 
 /**
  * Arkiv phase 3: read a document's page text into its schema. Two
@@ -40,15 +40,15 @@ export function buildExtractSystem(def: ExtractionSchemaDef, company: CompanyIde
     .join('\n')
   return `You extract facts from ${def.subject} for the accounting archive of ${company.name}${company.orgNumber ? ` (organisationsnummer ${company.orgNumber})` : ''}.
 
-You are given the text of the document, page by page, each page headed "=== PAGE n ===". Fill every field below. For each field return:
-- value: the value, or null when the document does not state it. Amounts and percentages as plain numbers (no thousands separators, decimal point). Dates as YYYY-MM-DD. Organisation numbers as printed.
-- page: the page number you read it from, or null.
-- quote: up to twelve words copied exactly from that page, containing or surrounding the value, or null.
+You are given the text of the document, page by page, each page headed "=== PAGE n ===". For every field below return three properties:
+- <field>: the value, or null when the document does not state it. Amounts and percentages as plain numbers (no thousands separators, decimal point). Dates as YYYY-MM-DD. Organisation numbers as printed. Text in the document's own language and words, never translated.
+- <field>_page: the page number you read it from, or null.
+- <field>_quote: up to twelve words copied exactly from that page, containing or surrounding the value, or null.
 
 Fields:
 ${fields}
 
-Rules: never infer a value that is not written in the document; never compute totals; when several candidates exist, prefer the signed terms over an example or an appendix; when the document is not ${def.subject}, fill what applies and leave the rest null.`
+Rules: never infer a value that is not written in the document; never compute a value, such as a maturity date from a term or a total from lines; never write a placeholder such as "not stated", use null; when several candidates exist, prefer the signed terms over an example or an appendix; when the document is not ${def.subject}, fill what applies and leave the rest null.`
 }
 
 export function buildExtractPrompt(fileName: string, pages: PageText[], style: ReadingStyle): string {
@@ -89,7 +89,7 @@ export async function readFields(input: { def: ExtractionSchemaDef; company: Com
     ai.generateStructured({ tier: 'cheap', system, prompt: prompts[1], maxTokens: MAX_TOKENS, schema }),
   ])
 
-  const merged = mergeReadings(def, asRecord(a.value), asRecord(b.value))
+  const merged = mergeReadings(def, readingsFromAnswer(def, a.value), readingsFromAnswer(def, b.value))
   const payload = Object.fromEntries(
     Object.entries(merged.payload).map(([name, field]) => [name, { ...field, ...locateQuote(pages, field.quote, field.page) }]),
   )
@@ -100,8 +100,4 @@ export async function readFields(input: { def: ExtractionSchemaDef; company: Com
     promptSha256: createHash('sha256').update([system, ...prompts].join('\n')).digest('hex'),
     pagesSent: sent.map((p) => p.pageNo),
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }

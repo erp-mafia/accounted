@@ -11,11 +11,17 @@ const rental = SCHEMAS['agreement.rental']
 const company = { name: 'Exempelbolaget AB', orgNumber: '559000-0000' }
 const page = (pageNo: number, text: string, words: PageText['words'] = null): PageText => ({ pageNo, text, words })
 
-/** A model answer with every rental field null except the given ones. */
+/** A model answer in the flat tool shape, with only the given fields present. */
 const answer = (model: string, fields: Record<string, { value: unknown; page?: number; quote?: string }>) => ({
   model,
   usage: {},
-  value: Object.fromEntries(rental.fields.map((f) => [f.name, { page: null, quote: null, ...(fields[f.name] ?? { value: null }) }])),
+  value: Object.fromEntries(
+    Object.entries(fields).flatMap(([name, f]) => [
+      [name, f.value],
+      [`${name}_page`, f.page ?? null],
+      [`${name}_quote`, f.quote ?? null],
+    ]),
+  ),
 })
 
 beforeEach(() => {
@@ -27,7 +33,9 @@ describe('buildExtractSystem', () => {
     const system = buildExtractSystem(rental, company)
     expect(system).toContain('Exempelbolaget AB (organisationsnummer 559000-0000)')
     expect(system).toContain('- monthly_rent (amount, required):')
-    expect(system).toContain('One of: yes, no, unknown.')
+    expect(system).toContain('One of: yes, no.')
+    expect(system).toContain('never translated')
+    expect(system).toContain('never write a placeholder')
   })
 })
 

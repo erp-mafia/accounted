@@ -114,15 +114,21 @@ export function normalizeValue(kind: FieldKind, raw: unknown): string | number |
     case 'enum':
       return typeof raw === 'string' && raw.trim() ? raw.trim().toLowerCase() : null
     case 'text':
+    case 'prose':
       return normalizeText(raw)
   }
 }
 
 const letters = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
 
-/** Whether two normalized values say the same thing: numbers to the öre, text ignoring case and punctuation. */
+/**
+ * Whether two normalized values say the same thing: numbers to the öre, text
+ * ignoring case and punctuation, prose whenever both readings found it (the
+ * careful reading is cited), everything else exactly.
+ */
 export function valuesAgree(kind: FieldKind, a: string | number | null, b: string | number | null): boolean {
   if (a == null || b == null) return a == null && b == null
+  if (kind === 'prose') return true
   if (kind === 'amount' || kind === 'percent' || kind === 'int') return Math.abs(Number(a) - Number(b)) < 0.005
   if (kind === 'text') return letters(String(a)) === letters(String(b))
   return String(a) === String(b)

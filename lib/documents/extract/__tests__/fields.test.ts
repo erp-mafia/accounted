@@ -68,6 +68,8 @@ describe('valuesAgree', () => {
     expect(valuesAgree('percent', 11.1, 11.03)).toBe(false)
     expect(valuesAgree('text', 'Almi Företagspartner AB', 'ALMI Företagspartner, AB')).toBe(true)
     expect(valuesAgree('text', 'Kvarnen AB', 'Kvarnen HB')).toBe(false)
+    expect(valuesAgree('prose', 'Fast ränta 11,10 %', 'Räntan är fast, 11,10 procent')).toBe(true)
+    expect(valuesAgree('prose', 'Fast ränta 11,10 %', null)).toBe(false)
     expect(valuesAgree('date', '2026-03-01', '2026-03-02')).toBe(false)
     expect(valuesAgree('orgnr', null, null)).toBe(true)
     expect(valuesAgree('orgnr', '5595386219', null)).toBe(false)

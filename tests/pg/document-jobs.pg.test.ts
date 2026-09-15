@@ -32,6 +32,10 @@ describe('document_jobs', () => {
 
   beforeAll(async () => {
     ;({ userId, companyId } = await seedCompany())
+    // The claim spans every tenant by design. Only this file writes far-past
+    // jobs, so a database reused across runs drops the previous run's
+    // claimable leftovers before the ordering assertions.
+    await getPool().query(`DELETE FROM public.document_jobs WHERE run_after < '2001-01-01'`)
   })
 
   it('queues one job per step per document, and queues a step again only once it finished', async () => {
