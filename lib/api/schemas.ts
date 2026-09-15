@@ -466,6 +466,104 @@ export const BrfTaxProfileSchema = z
   })
   .strict()
 
+// --- PR 3 registers package: bostadsrättsförening apartment register (BRL 9 kap.) ---
+export const BrfApartmentTenureSchema = z.enum(['bostadsratt', 'hyresratt'])
+export const BrfTransferKindSchema = z.enum(['sale', 'gift', 'arv', 'bodelning', 'other'])
+const brfShare = z.number().gt(0).max(1)
+const brfAndelstal = z.number().min(0).max(1).nullable().optional()
+
+export const CreateBrfApartmentSchema = z
+  .object({
+    apartment_number: z.string().trim().min(1).max(40),
+    lantmateriet_number: z.string().trim().regex(/^[0-9]{4}$/).nullable().optional(),
+    location: z.string().trim().min(1).max(300),
+    rooms: z.number().min(0).max(99).nullable().optional(),
+    kvm: nonNegativeAmount.max(100_000).nullable().optional(),
+    other_spaces: z.string().trim().max(500).nullable().optional(),
+    upplaten_med: BrfApartmentTenureSchema,
+    andelstal_arsavgift: brfAndelstal,
+    andelstal_kapital: brfAndelstal,
+    insats: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
+    upplatelseavgift: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
+    upplatelse_date: saneIsoDate.nullable().optional(),
+    ekonomisk_plan_registered_on: saneIsoDate.nullable().optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+
+export const UpdateBrfApartmentSchema = CreateBrfApartmentSchema.omit({ apartment_number: true })
+  .partial()
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, { message: 'At least one field is required' })
+
+export const InitialBrfHoldingSchema = z
+  .object({
+    member_id: uuid,
+    share: brfShare,
+    from_date: saneIsoDate,
+  })
+  .strict()
+
+export const RecordBrfTransferSchema = z
+  .object({
+    from_member_id: uuid,
+    to_member_id: uuid,
+    share: brfShare,
+    transfer_date: saneIsoDate,
+    kind: BrfTransferKindSchema,
+    price: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
+    additional_price: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
+    forvarv_date: saneIsoDate.nullable().optional(),
+    forvarv_genom_arv_gava_bodelning: z.boolean().optional(),
+    forvarv_price: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
+    kapitaltillskott: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
+    inre_fond_vid_overlatelse: nonNegativeAmount.max(1_000_000_000).nullable().optional(),
+    inre_fond_vid_forvarv: nonNegativeAmount.max(1_000_000_000).nullable().optional(),
+    andel_formogenhet_1974: nonNegativeAmount.max(1_000_000_000).nullable().optional(),
+    ku55_uppgifter: z.enum(['G', 'I']).optional(),
+    agreement_document_id: uuid.nullable().optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+  .refine((value) => value.from_member_id !== value.to_member_id, {
+    message: 'from_member_id and to_member_id must differ',
+    path: ['to_member_id'],
+  })
+  .refine((value) => value.kind !== 'sale' || (value.price !== null && value.price !== undefined), {
+    message: 'price is required for a sale',
+    path: ['price'],
+  })
+
+export const CreateBrfPledgeSchema = z
+  .object({
+    apartment_id: uuid,
+    member_id: uuid.nullable().optional(),
+    creditor: z.string().trim().min(1).max(200),
+    notified_on: saneIsoDate,
+    reference: z.string().trim().max(120).nullable().optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+
+export const ReleaseBrfPledgeSchema = z
+  .object({
+    released_on: saneIsoDate,
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+
+export const BrfMemberPersonalNumberSchema = z
+  .object({
+    // 10 or 12 digits, optional separator; encrypted server-side, never stored in clear.
+    personal_number: z
+      .string()
+      .trim()
+      .regex(/^(\d{6}|\d{8})[-+]?\d{4}$/)
+      .nullable(),
+  })
+  .strict()
+// --- end PR 3 registers package ---
+
 export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
 
 /**

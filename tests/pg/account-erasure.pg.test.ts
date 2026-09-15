@@ -83,6 +83,13 @@ const RETAINED = new Set([
   // Bostadsrättsförening facts and tax profile: company configuration.
   'brf_property_facts.user_id',
   'brf_tax_profiles.user_id',
+  // PR 3 registers package: the lägenhetsförteckning, holdings, överlåtelser
+  // and pantsättningar are statutory registers of the association (BRL 9
+  // kap. 8-11 §§) and räkenskapsinformation (BFL 7 kap.): kept.
+  'brf_apartments.user_id',
+  'brf_apartment_holdings.user_id',
+  'brf_apartment_transfers.user_id',
+  'brf_pledges.user_id',
   'bank_file_imports.user_id',
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',

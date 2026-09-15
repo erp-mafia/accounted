@@ -1051,6 +1051,12 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // yearly privatbostadsföretag assessment (IL 2 kap. 17 §).
   { name: 'brf_property_facts', file: 'brf_property_facts.json', orderBy: 'created_at' },
   { name: 'brf_tax_profiles', file: 'brf_tax_profiles.json', orderBy: 'fiscal_year' },
+  // PR 3 registers package: lägenhetsförteckning (BRL 9 kap. 10 §), holdings,
+  // överlåtelser with their KU55 data (SFL 22 kap.) and pantsättningar.
+  { name: 'brf_apartments', file: 'brf_apartments.json', orderBy: 'created_at' },
+  { name: 'brf_apartment_holdings', file: 'brf_apartment_holdings.json', orderBy: 'created_at' },
+  { name: 'brf_apartment_transfers', file: 'brf_apartment_transfers.json', orderBy: 'created_at' },
+  { name: 'brf_pledges', file: 'brf_pledges.json', orderBy: 'created_at' },
   // Customer invoicing
   { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
   {

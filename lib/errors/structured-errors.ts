@@ -279,6 +279,78 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Registrera bedömningen av om föreningen är ett privatbostadsföretag (IL 2 kap. 17 §) för inkomståret innan skatten beräknas.',
     message_en: 'Record the privatbostadsföretag assessment (IL 2 kap. 17 §) for the taxation year before the tax is computed.',
   },
+  // --- PR 3 registers package: apartment register (BRL 9 kap.) and KU55 ---
+  BRF_APARTMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Lägenheten kunde inte hittas i lägenhetsförteckningen.',
+    message_en: 'Apartment not found in the register.',
+  },
+  BRF_APARTMENT_NUMBER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Det finns redan en lägenhet med den beteckningen.',
+    message_en: 'An apartment with that designation already exists.',
+  },
+  BRF_HOLDING_EXCEEDS_APARTMENT: {
+    httpStatus: 409,
+    message_sv: 'Bostadsrättshavarnas andelar i lägenheten skulle överstiga 100 %.',
+    message_en: 'The holders\' shares of the apartment would exceed 100 %.',
+  },
+  BRF_HOLDING_MEMBER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Medlemmen kunde inte hittas i medlemsförteckningen.',
+    message_en: 'Member not found in the member register.',
+  },
+  BRF_TRANSFER_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Endast företagets ägare, administratörer och medlemmar kan registrera en överlåtelse.',
+    message_en: 'Only company owners, admins and members can record a transfer.',
+  },
+  BRF_TRANSFER_SAME_MEMBER: {
+    httpStatus: 400,
+    message_sv: 'Överlåtare och förvärvare måste vara olika medlemmar.',
+    message_en: 'The transferor and the acquirer must be different members.',
+  },
+  BRF_TRANSFER_SELLER_NOT_HOLDER: {
+    httpStatus: 409,
+    message_sv: 'Överlåtaren innehar inte lägenheten enligt lägenhetsförteckningen.',
+    message_en: 'The transferor does not hold the apartment according to the register.',
+  },
+  BRF_TRANSFER_SHARE_EXCEEDS_HOLDING: {
+    httpStatus: 409,
+    message_sv: 'Den överlåtna andelen är större än överlåtarens andel i lägenheten.',
+    message_en: 'The transferred share exceeds the share the transferor holds.',
+  },
+  BRF_TRANSFER_DATE_BEFORE_HOLDING: {
+    httpStatus: 409,
+    message_sv: 'Överlåtelsedatumet ligger före den dag överlåtaren blev innehavare.',
+    message_en: 'The transfer date precedes the day the transferor became holder.',
+  },
+  BRF_TRANSFER_BUYER_NOT_MEMBER: {
+    httpStatus: 409,
+    message_sv: 'Förvärvaren är inte antagen som medlem på överlåtelsedagen: en överlåtelse till någon som vägras medlemskap är ogiltig (BRL 6 kap. 5 §). Anta förvärvaren som medlem först.',
+    message_en: 'The acquirer is not an admitted member on the transfer date: a transfer to someone refused membership is void (BRL 6 kap. 5 §). Admit the acquirer first.',
+  },
+  BRF_TRANSFER_DOCUMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Överlåtelseavtalet kunde inte hittas i företagets arkiv.',
+    message_en: 'The transfer agreement was not found in the company archive.',
+  },
+  BRF_PLEDGE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Pantsättningen kunde inte hittas.',
+    message_en: 'Pledge not found.',
+  },
+  BRF_PLEDGE_ALREADY_RELEASED: {
+    httpStatus: 409,
+    message_sv: 'Pantsättningen är redan avförd.',
+    message_en: 'The pledge has already been released.',
+  },
+  BRF_MEMBER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Medlemmen kunde inte hittas i medlemsförteckningen.',
+    message_en: 'Member not found in the member register.',
+  },
+  // --- end PR 3 registers package ---
   RATE_LIMITED: {
     httpStatus: 429,
     message_sv: 'För många förfrågningar. Vänta en stund och försök igen.',
