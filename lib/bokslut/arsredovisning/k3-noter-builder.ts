@@ -239,6 +239,13 @@ export const EKONOMISK_FORENING_EQUITY_LABELS: EquityChangesLabels = {
   distribution: 'Vinstutdelning till medlemmar',
 }
 
+/** BRL 1 kap. 1 §, ÅRL 3 kap. 10 b §: insatser and upplåtelseavgifter are the capital. */
+export const BOSTADSRATTSFORENING_EQUITY_LABELS: EquityChangesLabels = {
+  openingCapital: 'Ingående insatser, upplåtelseavgifter och förlagsinsatser',
+  capitalIncrease: 'Inbetalda insatser och upplåtelseavgifter',
+  distribution: 'Utdelning till medlemmar',
+}
+
 export function buildEquityChangesNote(
   summary: EquityChangesSummary,
   labels: EquityChangesLabels = AKTIEBOLAG_EQUITY_LABELS,

@@ -4,7 +4,7 @@
  */
 
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
-import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
+import { fiscalYearLockedToCalendar, isEkonomiskForeningFamily, isEntityType } from '@/lib/company/entity-type'
 import { isBankingDay } from './swedish-holidays'
 
 // Condition function type for determining if a deadline applies
@@ -865,7 +865,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     type: 'inkomstdeklaration_ekonomisk_forening',
     titleTemplate: 'Inkomstdeklaration 2 {periodLabel}',
     description: 'Inkomstdeklaration 2 (INK2) för ekonomisk förening',
-    condition: (s) => s.entity_type === 'ekonomisk_forening',
+    condition: (s) => isEntityType(s.entity_type) && isEkonomiskForeningFamily(s.entity_type),
     priority: 'critical',
     linkedReportType: null,
     generateDates: ink2DigitalFilingDates,
@@ -881,7 +881,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     titleTemplate: 'Årsredovisning och revisionsberättelse till Bolagsverket {periodLabel}',
     description:
       'Ekonomisk förening: årsredovisning och revisionsberättelse ska ha kommit in till Bolagsverket senast sju månader efter räkenskapsårets utgång (ÅRL 8 kap. 3 §)',
-    condition: (s) => s.entity_type === 'ekonomisk_forening',
+    condition: (s) => isEntityType(s.entity_type) && isEkonomiskForeningFamily(s.entity_type),
     priority: 'critical',
     linkedReportType: null,
     generateDates: bolagsverketFilingDatesEkonomiskForening,
@@ -898,7 +898,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     titleTemplate: 'Ordinarie föreningsstämma räkenskapsår {periodLabel}',
     description:
       'Ekonomisk förening: ordinarie föreningsstämma hålls senast sex månader efter räkenskapsårets utgång (EFL 6 kap. 9 §); årsredovisning och revisionsberättelse ska finnas tillgängliga för medlemmarna minst två veckor före stämman (EFL 6 kap. 23 §)',
-    condition: (s) => s.entity_type === 'ekonomisk_forening',
+    condition: (s) => isEntityType(s.entity_type) && isEkonomiskForeningFamily(s.entity_type),
     priority: 'important',
     linkedReportType: null,
     generateDates: annualMeetingDates,
@@ -918,6 +918,27 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     priority: 'important',
     linkedReportType: null,
     generateDates: auditorReportHandoverDates,
+  },
+  // KU55 (bostadsrättsförening): a kontrolluppgift for every överlåtelse of a
+  // bostadsrätt during the income year (sale, gift, arv, bodelning) with
+  // överlåtelsepris, andel, förvärvsuppgifter and kapitaltillskott, due
+  // 31 January of the following year like every other kontrolluppgift (SFL
+  // 22 kap.; Skatteverket, "Lämna kontrolluppgift om överlåtelse av
+  // bostadsrätt, KU55"). Always generated for the form: whether a year had
+  // transfers is only known from the apartment register, and a missed KU55
+  // is the member's capital-gains problem, not just the association's fee.
+  {
+    type: 'ku55_bostadsrattsforening',
+    titleTemplate: 'Kontrolluppgift KU55 (överlåtelser av bostadsrätt) {periodLabel}',
+    description:
+      'Bostadsrättsförening: kontrolluppgift KU55 för varje överlåtelse av bostadsrätt under inkomståret ska ha lämnats till Skatteverket senast 31 januari året efter (SFL 22 kap.)',
+    condition: (s) => s.entity_type === 'bostadsrattsforening',
+    priority: 'important',
+    linkedReportType: null,
+    generateDates: (year) => [
+      // The income year is always the calendar year, like every kontrolluppgift.
+      { day: 31, month: 0, year, period: `${year - 1}`, periodLabel: `${year - 1}` },
+    ],
   },
 ]
 

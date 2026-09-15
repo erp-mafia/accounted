@@ -1,6 +1,7 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
 import { formatPdfKronor } from './pdf-format'
+import { isEkonomiskForeningFamily, isEntityType } from '@/lib/company/entity-type'
 
 /**
  * K3 årsredovisning PDF template (BFNAR 2012:1).
@@ -238,7 +239,8 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
   // An ekonomisk förening adopts the statements at its ordinarie
   // föreningsstämma (EFL 6 kap. 9-10 §§), owns no share capital and adds the
   // ÅRL 6 kap. 3 § member disclosures to förvaltningsberättelsen.
-  const isForening = data.company.entity_type === 'ekonomisk_forening'
+  const isForening =
+    isEntityType(data.company.entity_type) && isEkonomiskForeningFamily(data.company.entity_type)
   const meeting = isForening ? 'föreningsstämman' : 'årsstämman'
   const meetingNoun = isForening ? 'föreningsstämma' : 'årsstämma'
   const entityNoun = isForening ? 'föreningens' : 'bolagets'

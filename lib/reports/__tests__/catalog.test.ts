@@ -22,6 +22,6 @@ describe('report catalog: legal-form gates', () => {
     expect(reportAppliesToForm('aktiebolag', 'ekonomisk_forening')).toBe(false)
     expect(reportAppliesToForm(['aktiebolag', 'ekonomisk_forening'], 'ekonomisk_forening')).toBe(true)
     expect(reportAppliesToForm(['aktiebolag', 'ekonomisk_forening'], undefined)).toBe(false)
-    expect(getReport('ink2-declaration')?.entityType).toEqual(['aktiebolag', 'ekonomisk_forening'])
+    expect(getReport('ink2-declaration')?.entityType).toEqual(['aktiebolag', 'ekonomisk_forening', 'bostadsrattsforening'])
   })
 })

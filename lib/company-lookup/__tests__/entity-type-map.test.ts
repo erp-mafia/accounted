@@ -23,7 +23,7 @@ describe('mapEntityType', () => {
     expect(mapEntityType('KB')).toBeNull()
     expect(mapEntityType('Kommanditbolag')).toBeNull()
     expect(mapEntityType('Stiftelse')).toBeNull()
-    expect(mapEntityType('Bostadsrättsförening')).toBeNull()
+    expect(mapEntityType('Samfällighetsförening')).toBeNull()
   })
 
   it('does not false-match strings that merely contain "enskild" or "aktiebolag"', () => {
@@ -73,9 +73,27 @@ describe('mapEntityType: ideell förening (issue #2072)', () => {
   })
 
   it('does not map other föreningar or stiftelser', () => {
-    expect(mapEntityType('Bostadsrättsförening')).toBeNull()
     expect(mapEntityType('Registrerat trossamfund')).toBeNull()
     expect(mapEntityType('Stiftelse')).toBeNull()
+    expect(mapEntityType('Kooperativ hyresrättsförening')).toBeNull()
+  })
+})
+
+describe('mapEntityType: bostadsrättsförening', () => {
+  it('maps the registry spelling of bostadsrättsförening to its own form, never to ekonomisk förening', () => {
+    expect(mapEntityType('Bostadsrättsförening')).toBe('bostadsrattsforening')
+    expect(mapEntityType('bostadsrattsforening')).toBe('bostadsrattsforening')
+    expect(mapEntityType('BRF')).toBe('bostadsrattsforening')
+    expect(mapEntityType('Ekonomisk förening')).toBe('ekonomisk_forening')
+  })
+
+  it('prefills a bostadsrättsförening only when its creation flag is on', () => {
+    vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', 'true')
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', '')
+    expect(mapSetupEntityType('Bostadsrättsförening')).toBeNull()
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', 'true')
+    expect(mapSetupEntityType('Bostadsrättsförening')).toBe('bostadsrattsforening')
+    vi.unstubAllEnvs()
   })
 })
 
@@ -87,7 +105,6 @@ describe('mapEntityType: ekonomisk förening', () => {
   })
 
   it('does not map specially regulated or adjacent association forms', () => {
-    expect(mapEntityType('Bostadsrättsförening')).toBeNull()
     expect(mapEntityType('Kooperativ hyresrättsförening')).toBeNull()
     expect(mapEntityType('Sambruksförening')).toBeNull()
   })

@@ -198,7 +198,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_arsredovisning',
     descKey: 'desc_arsredovisning',
     category: 'year_end',
-    entityType: ['aktiebolag', 'ekonomisk_forening'],
+    entityType: ['aktiebolag', 'ekonomisk_forening', 'bostadsrattsforening'],
     params: 'fiscal',
     route: '/bookkeeping/year-end/arsredovisning',
   },
@@ -235,7 +235,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_ink2_declaration',
     descKey: 'desc_ink2_declaration',
     category: 'tax_vat',
-    entityType: ['aktiebolag', 'ekonomisk_forening'],
+    entityType: ['aktiebolag', 'ekonomisk_forening', 'bostadsrattsforening'],
     params: 'fiscal',
   },
 

@@ -4,7 +4,13 @@ import type {
   AnnualReportProfile,
   AnnualReportSizeMetrics,
 } from './compliance-types'
-import { isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
+import {
+  BRF_K3_MANDATORY_FROM,
+  isEkonomiskForeningFamily,
+  isEntityType,
+  preparesArsredovisning,
+  supportsAccountingFramework,
+} from '@/lib/company/entity-type'
 
 const LARGE_COMPANY_THRESHOLDS = {
   employees: 50,
@@ -120,14 +126,26 @@ export function evaluateAnnualReportEligibility(
         'Använd rätt årsboksluts- eller deklarationsflöde för företagsformen.',
       ),
     )
-  } else if (input.entityType === 'ekonomisk_forening') {
-    // An ekonomisk förening prepares an årsredovisning every year (BFL 6 kap.
-    // 1 §) with medlemsinsatser and förlagsinsatser as separate posts under
-    // bundet eget kapital (ÅRL 3 kap. 10 b §), the ÅRL 6 kap. 3 § member
-    // disclosures, a föreningsstämma instead of an årsstämma (EFL 6 kap.) and
-    // a mandatory revisionsberättelse (EFL 8 kap. 1 §). Both the K2 and the
-    // K3 document carry that (the K3 equity roll-forward uses the member
-    // capital labels).
+  } else if (isEkonomiskForeningFamily(input.entityType)) {
+    // An ekonomisk förening (and a bostadsrättsförening, BRL 1 kap. 1 §)
+    // prepares an årsredovisning every year (BFL 6 kap. 1 §) with
+    // medlemsinsatser and förlagsinsatser as separate posts under bundet eget
+    // kapital (ÅRL 3 kap. 10 b §), the ÅRL 6 kap. 3 § member disclosures, a
+    // föreningsstämma instead of an årsstämma (EFL 6 kap.) and a mandatory
+    // revisionsberättelse (EFL 8 kap. 1 §). Both the K2 and the K3 document
+    // carry that (the K3 equity roll-forward uses the member capital labels).
+    // A bostadsrättsförening must apply K3 for financial years beginning
+    // after 2025-12-31 (BFN decision 2025-06-16, K3 chapter 38): a K2 choice
+    // for such a year is a scope error, not a warning.
+    if (!supportsAccountingFramework(input.entityType, input.framework, input.periodStart)) {
+      issues.push(
+        issue(
+          'AR-SCOPE-BRF-K3',
+          `En bostadsrättsförening ska tillämpa K3 (BFNAR 2012:1 kapitel 38) för räkenskapsår som börjar ${BRF_K3_MANDATORY_FROM} eller senare; K2 är inte längre tillåtet för föreningen.`,
+          'Byt redovisningsregelverk till K3 under Inställningar > Bokföring innan årsredovisningen upprättas.',
+        ),
+      )
+    }
     // An unanswered profile (null) is not an answer: the form always needs
     // the revisionsberättelse, so only an explicit true clears the check.
     if (profile.auditor_report_required !== true) {
@@ -311,7 +329,7 @@ export function evaluateAnnualReportEligibility(
 
   const k2Eligible = input.framework === 'k2' && issues.every((item) => item.severity !== 'error')
   const digitalIssues = [...issues]
-  if (input.entityType === 'ekonomisk_forening') {
+  if (isEntityType(input.entityType) && isEkonomiskForeningFamily(input.entityType)) {
     digitalIssues.push(
       issue(
         'AR-DIGITAL-ENTITY',

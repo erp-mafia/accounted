@@ -96,7 +96,7 @@ describe('measured-gap templates', () => {
     // money: an ekonomisk förening makes them like an AB; an enskild firma
     // books them privately.
     for (const id of ['capital_insurance_deposit', 'securities_purchase']) {
-      expect(getTemplateById(id)!.entity_applicability, id).toEqual(['aktiebolag', 'ekonomisk_forening'])
+      expect(getTemplateById(id)!.entity_applicability, id).toEqual(['aktiebolag', 'ekonomisk_forening', 'bostadsrattsforening'])
     }
   })
 })

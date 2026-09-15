@@ -26,12 +26,18 @@ import { flagEnabled } from '@/lib/env/public-flags'
  * - An ekonomisk förening files INK2 and an annual report, but its bound
  *   equity is member capital (2083/2084) rather than share capital (2081).
  *   It must always have an auditor, regardless of size.
+ * - A bostadsrättsförening IS an ekonomisk förening (BRL 1991:614 1 kap.
+ *   1 §; EFL applies where BRL is silent), so every answer below is the
+ *   ekonomisk förening one unless BRL, IL 2 kap. 17 § (privatbostadsföretag)
+ *   or the K3 duty from 2026 (BFN decision 2025-06-16, K3 chapter 38) says
+ *   otherwise. `isEkonomiskForeningFamily` is the one test for "either".
  */
 export const ENTITY_TYPES = [
   'enskild_firma',
   'aktiebolag',
   'ideell_forening',
   'ekonomisk_forening',
+  'bostadsrattsforening',
 ] as const satisfies readonly EntityType[]
 
 // Compile-time proof that ENTITY_TYPES lists every member of the union.
@@ -45,6 +51,7 @@ export const ENTITY_TYPE_LABELS_SV: Record<EntityType, string> = {
   aktiebolag: 'Aktiebolag',
   ideell_forening: 'Ideell förening',
   ekonomisk_forening: 'Ekonomisk förening',
+  bostadsrattsforening: 'Bostadsrättsförening',
 }
 
 export class UnknownEntityTypeError extends Error {
@@ -109,6 +116,7 @@ export async function resolveCompanyEntityType(
  */
 export const IDEELL_FORENING_FLAG = 'NEXT_PUBLIC_IDEELL_FORENING_ENABLED'
 export const EKONOMISK_FORENING_FLAG = 'NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED'
+export const BOSTADSRATTSFORENING_FLAG = 'NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED'
 
 export function isEntityTypeCreatable(entityType: EntityType): boolean {
   return byEntityType(entityType, {
@@ -116,6 +124,7 @@ export function isEntityTypeCreatable(entityType: EntityType): boolean {
     aktiebolag: true,
     ideell_forening: flagEnabled(process.env.NEXT_PUBLIC_IDEELL_FORENING_ENABLED),
     ekonomisk_forening: flagEnabled(process.env.NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED),
+    bostadsrattsforening: flagEnabled(process.env.NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED),
   })
 }
 
@@ -125,6 +134,41 @@ export function creatableEntityTypes(): EntityType[] {
 }
 
 // ── Domain facts ─────────────────────────────────────────────────────
+
+/**
+ * The ekonomisk förening and its special case, the bostadsrättsförening
+ * (BRL 1 kap. 1 §: a BRF is an ekonomisk förening whose purpose is to grant
+ * bostadsrätt in its buildings). Sites that mean "an association governed by
+ * EFL" test this instead of the `'ekonomisk_forening'` literal, so the BRF
+ * inherits the föreningsstämma, the ÅRL 6 kap. 3 § member disclosures, the
+ * mandatory revisor and the member-capital equity by construction.
+ */
+export function isEkonomiskForeningFamily(entityType: EntityType): boolean {
+  return byEntityType(entityType, {
+    enskild_firma: false,
+    aktiebolag: false,
+    ideell_forening: false,
+    ekonomisk_forening: true,
+    bostadsrattsforening: true,
+  })
+}
+
+/**
+ * IL 39 kap. 25 §: a privatbostadsföretag (an äkta bostadsrättsförening, IL
+ * 2 kap. 17 §) is not taxed on income from its property; only capital income
+ * outside the property and non-property activities reach the tax base. The
+ * form CAN have the exemption; whether a given year's company qualifies is
+ * the per-year assessment in brf_tax_profiles (lib/company/brf-tax-profile).
+ */
+export function hasPropertyIncomeExemption(entityType: EntityType): boolean {
+  return byEntityType(entityType, {
+    enskild_firma: false,
+    aktiebolag: false,
+    ideell_forening: false,
+    ekonomisk_forening: false,
+    bostadsrattsforening: true,
+  })
+}
 
 export interface ResultClosingAccounts {
   /** Account the year's net result is closed to. */
@@ -143,6 +187,7 @@ export function resultClosingAccounts(entityType: EntityType): ResultClosingAcco
     aktiebolag: { closing: '2099', closingName: 'Årets resultat', priorYearCarry: '2098' },
     ideell_forening: { closing: '2069', closingName: 'Årets resultat', priorYearCarry: '2068' },
     ekonomisk_forening: { closing: '2099', closingName: 'Årets resultat', priorYearCarry: '2098' },
+    bostadsrattsforening: { closing: '2099', closingName: 'Årets resultat', priorYearCarry: '2098' },
   })
 }
 
@@ -160,6 +205,7 @@ export function ownerSettlementAccount(
     aktiebolag: '2893',
     ideell_forening: '2890',
     ekonomisk_forening: '2890',
+    bostadsrattsforening: '2890',
   })
 }
 
@@ -178,21 +224,23 @@ export function templateAccountForForm(
   base: string | undefined,
   abOverride: string | undefined,
 ): string | undefined {
+  // A juridisk person with employees books like an aktiebolag (the `_ab`
+  // override: 7610 utbildning, 3004 momsfri försäljning), except that an
+  // owner account (2893 skuld till aktieägare, or a base 2013/2018) becomes
+  // the member settlement account 2890.
+  const juridiskPersonWithMembers = (form: EntityType): string | undefined => {
+    const resolved = abOverride ?? base
+    return resolved && OWNER_SETTLEMENT_ACCOUNTS.has(resolved)
+      ? ownerSettlementAccount(form, 'withdrawal')
+      : resolved
+  }
   return byEntityType(entityType, {
     enskild_firma: base,
     aktiebolag: abOverride ?? base,
     ideell_forening:
       base && OWNER_SETTLEMENT_ACCOUNTS.has(base) ? ownerSettlementAccount('ideell_forening', 'withdrawal') : base,
-    // A juridisk person with employees books like an aktiebolag (the `_ab`
-    // override: 7610 utbildning, 3004 momsfri försäljning), except that an
-    // owner account (2893 skuld till aktieägare, or a base 2013/2018) becomes
-    // the member settlement account 2890.
-    ekonomisk_forening: (() => {
-      const resolved = abOverride ?? base
-      return resolved && OWNER_SETTLEMENT_ACCOUNTS.has(resolved)
-        ? ownerSettlementAccount('ekonomisk_forening', 'withdrawal')
-        : resolved
-    })(),
+    ekonomisk_forening: juridiskPersonWithMembers('ekonomisk_forening'),
+    bostadsrattsforening: juridiskPersonWithMembers('bostadsrattsforening'),
   })
 }
 
@@ -208,6 +256,7 @@ export function preparesArsredovisning(entityType: EntityType): boolean {
     aktiebolag: true,
     ideell_forening: false,
     ekonomisk_forening: true,
+    bostadsrattsforening: true,
   })
 }
 
@@ -218,6 +267,7 @@ export function fiscalYearLockedToCalendar(entityType: EntityType): boolean {
     aktiebolag: false,
     ideell_forening: false,
     ekonomisk_forening: false,
+    bostadsrattsforening: false,
   })
 }
 
@@ -228,6 +278,7 @@ export function usesPersonnummerAsOrgNumber(entityType: EntityType): boolean {
     aktiebolag: false,
     ideell_forening: false,
     ekonomisk_forening: false,
+    bostadsrattsforening: false,
   })
 }
 
@@ -237,6 +288,7 @@ export function defaultAccountingMethod(entityType: EntityType): 'accrual' | 'ca
     aktiebolag: 'accrual',
     ideell_forening: 'accrual',
     ekonomisk_forening: 'accrual',
+    bostadsrattsforening: 'accrual',
   })
 }
 
@@ -251,6 +303,7 @@ export function simplifiedYearEndRegelverk(entityType: EntityType): 'K1' | 'K2' 
     aktiebolag: 'K2',
     ideell_forening: 'K1',
     ekonomisk_forening: 'K2',
+    bostadsrattsforening: 'K2',
   })
 }
 
@@ -266,6 +319,10 @@ export function usesInk2(entityType: EntityType): boolean {
     aktiebolag: true,
     ideell_forening: false,
     ekonomisk_forening: true,
+    // A BRF files INK2 every year (Skatteverket, "Deklarera åt en
+    // bostadsrättsförening"); an äkta BRF's property result is removed on
+    // INK2S, it does not skip the return.
+    bostadsrattsforening: true,
   })
 }
 
@@ -276,6 +333,10 @@ export function usesInk2(entityType: EntityType): boolean {
  * 20,6 % (IL 65 kap. 10 §). The rules are the same for an aktiebolag and an
  * ekonomisk förening; an enskild firma's counterparts are declaration-only
  * (NE-bilaga) and an ideell förening's income is mostly tax-exempt (IL 7 kap.).
+ * A bostadsrättsförening books current tax too: even a privatbostadsföretag
+ * pays 20,6 % on the capital income and activities outside the property
+ * (IL 39 kap. 25 §), so the 2510/8910 pair and the dispositions exist; the
+ * exempt property block is an INK2S adjustment, not a form-level opt-out.
  */
 export function booksCurrentTax(entityType: EntityType): boolean {
   return usesInk2(entityType)
@@ -296,6 +357,7 @@ export function requiresAuditorRegardlessOfSize(entityType: EntityType): boolean
     aktiebolag: false,
     ideell_forening: false,
     ekonomisk_forening: true,
+    bostadsrattsforening: true,
   })
 }
 
@@ -311,8 +373,18 @@ export function supportsMemberCapital(entityType: EntityType): boolean {
     aktiebolag: false,
     ideell_forening: false,
     ekonomisk_forening: true,
+    // Insatser and upplåtelseavgifter (2083/2087) are the BRF's bundet eget
+    // kapital (ÅRL 3 kap. 10 b §); the apartment-level register is later work.
+    bostadsrattsforening: true,
   })
 }
+
+/**
+ * From financial years beginning after 2025-12-31 every bostadsrättsförening
+ * must apply K3 (BFN decision 2025-06-16 adding chapter 38 to BFNAR 2012:1);
+ * K2 is closed to the form from then on. Earlier years may still be K2.
+ */
+export const BRF_K3_MANDATORY_FROM = '2026-01-01'
 
 /**
  * K2 (BFNAR 2016:10) is open to every mindre företag that prepares an
@@ -321,11 +393,20 @@ export function supportsMemberCapital(entityType: EntityType): boolean {
  * ekonomiska föreningar"). The K3 equity roll-forward carries member capital
  * for the form since the member-register work. Forms that close with an
  * årsbokslut (enskild firma, ideell förening) never pick a framework.
+ *
+ * A bostadsrättsförening is K3-only for a fiscal year that begins on or after
+ * BRF_K3_MANDATORY_FROM. `fiscalYearStart` (ISO date) is the first day of the
+ * year being judged; when the caller does not know it, the answer is the
+ * conservative one (K3 only), so a K2 choice is never granted by omission.
  */
 export function supportsAccountingFramework(
   entityType: EntityType,
   framework: 'k2' | 'k3',
+  fiscalYearStart?: string | null,
 ): boolean {
   if (!preparesArsredovisning(entityType)) return false
+  if (entityType === 'bostadsrattsforening' && framework === 'k2') {
+    return typeof fiscalYearStart === 'string' && fiscalYearStart < BRF_K3_MANDATORY_FROM
+  }
   return framework === 'k2' || framework === 'k3'
 }

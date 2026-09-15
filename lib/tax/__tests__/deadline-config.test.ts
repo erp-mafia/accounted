@@ -646,6 +646,26 @@ describe('ekonomisk förening: juridisk person deadlines with the association wo
     expect(handover.description).toContain('EFL 8 kap. 32 §')
   })
 
+  it('gives a bostadsrättsförening the same INK2, Bolagsverket and stämma rules plus KU55 by 31 January', () => {
+    const brf = (over: Partial<Parameters<typeof makeSettings>[0]> = {}) =>
+      makeSettings({ entity_type: 'bostadsrattsforening', ...over })
+    for (const type of ['inkomstdeklaration_ekonomisk_forening', 'arsredovisning_ekonomisk_forening', 'foreningsstamma'] as const) {
+      expect(getConfig(type).condition(brf()), type).toBe(true)
+      expect(getConfig(type).generateDates(2027, brf())).toEqual(getConfig(type).generateDates(2027, ekf()))
+    }
+    expect(getConfig('inkomstdeklaration_ab').condition(brf())).toBe(false)
+    expect(getConfig('arsredovisning').condition(brf())).toBe(false)
+    const ku55 = getConfig('ku55_bostadsrattsforening')
+    expect(ku55.condition(brf())).toBe(true)
+    expect(ku55.condition(ekf())).toBe(false)
+    expect(ku55.condition(makeSettings({ entity_type: 'aktiebolag' }))).toBe(false)
+    // Income year 2026 is reported by 31 January 2027, whatever the räkenskapsår.
+    expect(ku55.generateDates(2027, brf({ fiscal_year_start_month: 7 }))).toEqual([
+      { day: 31, month: 0, year: 2027, period: '2026', periodLabel: '2026' },
+    ])
+    expect(ku55.description).toContain('SFL 22 kap.')
+  })
+
   it('never offers the enskild firma or ideell förening rules to an ekonomisk förening', () => {
     expect(getConfig('inkomstdeklaration_ef').condition(ekf())).toBe(false)
     // Helårsmoms follows the juridisk person schedule (SFL 26 kap. 33 §).

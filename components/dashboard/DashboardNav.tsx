@@ -279,8 +279,8 @@ const navItems: NavItem[] = [
   { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt' },
   { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt' },
   { href: '/reports/bokslutsbilagor', labelKey: 'bokslutsbilagor', icon: FolderArchive, group: 'skatt' },
-  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
-  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
+  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: ['aktiebolag', 'ekonomisk_forening', 'bostadsrattsforening'] },
+  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: ['aktiebolag', 'ekonomisk_forening', 'bostadsrattsforening'] },
   { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'enskild_firma' },
 ]
 

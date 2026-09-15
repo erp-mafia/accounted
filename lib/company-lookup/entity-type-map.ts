@@ -45,12 +45,27 @@ const EKONOMISK_FORENING_VALUES = new Set<string>([
   'ekonomiska föreningar',
 ])
 
+/**
+ * Bostadsrättsförening: registered as its own legal form at Bolagsverket
+ * (BRL 9 kap. 6 §: only a BRF may carry the word in its name). Checked
+ * before the ekonomisk förening spellings because a BRF is one by law
+ * (BRL 1 kap. 1 §) and must never fall through to the generic form, whose
+ * tax profile (IL 39 kap. 25 §) and K3 duty it does not share.
+ */
+const BOSTADSRATTSFORENING_VALUES = new Set<string>([
+  'bostadsrättsförening',
+  'bostadsrattsforening',
+  'bostadsrättsföreningar',
+  'brf',
+])
+
 export function mapEntityType(ticType: string | null | undefined): EntityType | null {
   if (!ticType) return null
   const normalized = ticType.trim().toLowerCase()
   if (AKTIEBOLAG_VALUES.has(normalized)) return 'aktiebolag'
   if (ENSKILD_FIRMA_VALUES.has(normalized)) return 'enskild_firma'
   if (IDEELL_FORENING_VALUES.has(normalized)) return 'ideell_forening'
+  if (BOSTADSRATTSFORENING_VALUES.has(normalized)) return 'bostadsrattsforening'
   if (EKONOMISK_FORENING_VALUES.has(normalized)) return 'ekonomisk_forening'
   return null
 }

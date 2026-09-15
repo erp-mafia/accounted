@@ -61,7 +61,7 @@ export interface BokslutReadinessReport {
     closing_entry_id: string | null
   }
   /** Entity type drives which dispositions apply (e.g. bolagsskatt only for AB). */
-  entityType: 'aktiebolag' | 'enskild_firma' | 'ideell_forening' | 'handelsbolag' | 'kommanditbolag' | 'ekonomisk_forening'
+  entityType: 'aktiebolag' | 'enskild_firma' | 'ideell_forening' | 'handelsbolag' | 'kommanditbolag' | 'ekonomisk_forening' | 'bostadsrattsforening'
   /** The full raw validation, for callers that want every field. */
   rawValidation: YearEndValidation
 }

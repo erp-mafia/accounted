@@ -25,8 +25,8 @@ import { getCategoryAccountMapping } from '../category-mapping'
 // ============================================================
 
 describe('BOOKING_TEMPLATES data integrity', () => {
-  it('has exactly 93 templates', () => {
-    expect(BOOKING_TEMPLATES).toHaveLength(93)
+  it('has exactly 106 templates', () => {
+    expect(BOOKING_TEMPLATES).toHaveLength(106)
   })
 
   it('scopes templates to legal forms through templateAppliesToForm', () => {
@@ -38,6 +38,7 @@ describe('BOOKING_TEMPLATES data integrity', () => {
     for (const id of ['personnel_salary', 'personnel_employer_tax', 'personnel_preliminary_tax', 'insurance_pension_ab']) {
       expect(forForm('aktiebolag'), id).toContain(id)
       expect(forForm('ekonomisk_forening'), id).toContain(id)
+      expect(forForm('bostadsrattsforening'), id).toContain(id)
       expect(forForm('enskild_firma'), id).not.toContain(id)
     }
     // Share capital, aktieägartillskott and utdelning stay with the aktiebolag.
@@ -61,6 +62,61 @@ describe('BOOKING_TEMPLATES data integrity', () => {
       expect(forForm('aktiebolag'), id).not.toContain(id)
       expect(forForm('ideell_forening'), id).not.toContain(id)
     }
+    // A bostadsrättsförening shares the member-capital postings (BRL 1 kap.
+    // 1 §) but not insatsemission (2087 is upplåtelseavgifter there) nor the
+    // medlemsavgift template (its fees are årsavgifter on 3020).
+    for (const id of [
+      'member_contribution_received',
+      'debenture_contribution_received',
+      'member_contribution_repaid',
+      'debenture_contribution_redeemed',
+      'member_dividend_decided',
+      'member_dividend_paid',
+    ]) {
+      expect(forForm('bostadsrattsforening'), id).toContain(id)
+    }
+    for (const id of ['member_contribution_emission', 'membership_fee_received']) {
+      expect(forForm('bostadsrattsforening'), id).not.toContain(id)
+    }
+    // The BRF's own templates belong to it alone.
+    for (const id of [
+      'brf_arsavgift_received',
+      'brf_lokalhyra_exempt',
+      'brf_lokalhyra_frivillig',
+      'brf_parkering_non_member',
+      'brf_insats_received',
+      'brf_upplatelseavgift_received',
+      'brf_overlatelseavgift',
+      'brf_pantsattningsavgift',
+      'brf_fastighetsavgift',
+      'brf_yttre_fond_avsattning',
+      'brf_yttre_fond_iansprakstagande',
+      'brf_inre_fond_avsattning',
+      'brf_inre_fond_utbetalning',
+    ]) {
+      expect(forForm('bostadsrattsforening'), id).toContain(id)
+      expect(forForm('ekonomisk_forening'), id).not.toContain(id)
+      expect(forForm('aktiebolag'), id).not.toContain(id)
+    }
+  })
+
+  it('books the bostadsrättsförening fees, capital and funds to the BRF chart (BRL 7 kap. 14 §, ÅRL 3 kap. 10 b §, K3 38.12)', () => {
+    expect(getTemplateById('brf_arsavgift_received')).toMatchObject({ credit_account: '3020', vat_treatment: 'exempt', vat_rate: 0 })
+    expect(getTemplateById('brf_lokalhyra_exempt')).toMatchObject({ credit_account: '3012', vat_treatment: 'exempt' })
+    expect(getTemplateById('brf_lokalhyra_frivillig')).toMatchObject({ credit_account: '3012', vat_treatment: 'standard_25', vat_rate: 0.25 })
+    expect(getTemplateById('brf_parkering_non_member')).toMatchObject({ credit_account: '3014', vat_treatment: 'standard_25', vat_rate: 0.25 })
+    expect(getTemplateById('brf_insats_received')).toMatchObject({ debit_account: '1930', credit_account: '2083', vat_treatment: null })
+    expect(getTemplateById('brf_upplatelseavgift_received')).toMatchObject({ credit_account: '2087', vat_treatment: null })
+    expect(getTemplateById('brf_overlatelseavgift')).toMatchObject({ credit_account: '3031' })
+    expect(getTemplateById('brf_pantsattningsavgift')).toMatchObject({ credit_account: '3032' })
+    expect(getTemplateById('brf_fastighetsavgift')).toMatchObject({ debit_account: '5191', credit_account: '1930' })
+    // The yttre fond moves inside eget kapital, never through the income statement.
+    expect(getTemplateById('brf_yttre_fond_avsattning')).toMatchObject({ debit_account: '2091', credit_account: '2088', direction: 'transfer' })
+    expect(getTemplateById('brf_yttre_fond_iansprakstagande')).toMatchObject({ debit_account: '2088', credit_account: '2091', direction: 'transfer' })
+    // The inre fond is a liability to the members.
+    expect(getTemplateById('brf_inre_fond_avsattning')).toMatchObject({ credit_account: '2892' })
+    expect(getTemplateById('brf_inre_fond_utbetalning')).toMatchObject({ debit_account: '2892', credit_account: '1930' })
+    expect(getTemplateById('brf_upplatelseavgift_received')?.special_rules_sv).toContain('ÅRL 3 kap. 10 b §')
   })
 
   it('books a gottgörelse as a deductible cost on 8840 against the member liability, paid from 2890 (IL 39 kap. 22 §)', () => {
@@ -128,7 +184,7 @@ describe('BOOKING_TEMPLATES data integrity', () => {
       const forms = Array.isArray(t.entity_applicability) ? t.entity_applicability : [t.entity_applicability]
       expect(forms.length).toBeGreaterThan(0)
       for (const form of forms) {
-        expect(['all', 'enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening']).toContain(form)
+        expect(['all', 'enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening', 'bostadsrattsforening']).toContain(form)
       }
       expect(t.debit_account).toMatch(/^\d{4}$/)
       expect(t.credit_account).toMatch(/^\d{4}$/)
@@ -233,7 +289,7 @@ describe('getTemplateGroups', () => {
   it('every template is in exactly one group', () => {
     const groups = getTemplateGroups()
     const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(93)
+    expect(allTemplates).toHaveLength(106)
   })
 })
 

@@ -348,6 +348,24 @@ export const CreateAssociationDistributionSchema = z
   })
   .strict()
 
+// Bostadsrättsförening: property facts (ÅRL 6 kap. 3 a § nyckeltal inputs)
+// and the per-year privatbostadsföretag assessment (IL 2 kap. 17 §).
+export const BrfPropertyFactsSchema = z
+  .object({
+    kvm_bostadsratt: nonNegativeAmount.max(10_000_000).nullable().optional(),
+    kvm_hyresratt: nonNegativeAmount.max(10_000_000).nullable().optional(),
+    kvm_lokaler: nonNegativeAmount.max(10_000_000).nullable().optional(),
+    antal_bostadslagenheter: z.number().int().min(0).max(100_000).nullable().optional(),
+    antal_lokaler: z.number().int().min(0).max(100_000).nullable().optional(),
+    taxeringsvarde: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
+    tomtratt: z.boolean().nullable().optional(),
+    tomtratt_avgald_until: saneIsoDate.nullable().optional(),
+    samfallighet: z.string().trim().max(500).nullable().optional(),
+    underhallsplan: z.boolean().nullable().optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+
 export const BookAssociationDistributionSchema = z
   .object({
     // Defaults to the decision date; must fall in the distribution's period.
@@ -428,6 +446,16 @@ export const UpdateAssociationAuditorSchema = z
   .refine((value) => Object.keys(value).length > 0, { message: 'At least one field is required' })
 
 export const AuditorReportOpinionSchema = z.enum(['unmodified', 'qualified', 'adverse', 'disclaimer'])
+
+export const BrfTaxProfileSchema = z
+  .object({
+    fiscal_year: z.number().int().min(1990).max(2200),
+    privatbostadsforetag: z.boolean(),
+    qualified_share: z.number().min(0).max(1).nullable().optional(),
+    assessed_on: saneIsoDate,
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
 
 export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
 

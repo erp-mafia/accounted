@@ -47,17 +47,23 @@ const FORM_PICKER_ORDER: EntityType[] = [
   'enskild_firma',
   'ideell_forening',
   'ekonomisk_forening',
+  'bostadsrattsforening',
 ]
 
 /** i18n key per legal form for the picker chips and the summary card. */
 const FORM_LABEL_KEY: Record<
   EntityType,
-  'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening' | 'journey_form_ekonomisk_forening'
+  | 'journey_form_ab'
+  | 'journey_form_ef'
+  | 'journey_form_forening'
+  | 'journey_form_ekonomisk_forening'
+  | 'journey_form_bostadsrattsforening'
 > = {
   aktiebolag: 'journey_form_ab',
   enskild_firma: 'journey_form_ef',
   ideell_forening: 'journey_form_forening',
   ekonomisk_forening: 'journey_form_ekonomisk_forening',
+  bostadsrattsforening: 'journey_form_bostadsrattsforening',
 }
 import JourneyTrack from './JourneyTrack'
 import Question from './Question'

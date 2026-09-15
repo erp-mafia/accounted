@@ -13,7 +13,11 @@ import type {
 } from './compliance-types'
 import { evaluateAuditDependency } from './audit-dependency'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { isEntityType, requiresAuditorRegardlessOfSize } from '@/lib/company/entity-type'
+import {
+  isEkonomiskForeningFamily,
+  isEntityType,
+  requiresAuditorRegardlessOfSize,
+} from '@/lib/company/entity-type'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -446,10 +450,9 @@ export function validateAnnualReportCompleteness(
     // ÅRL 6 kap. 3 § p. 1: the förvaltningsberättelse of an ekonomisk
     // förening must state material changes in the number of members; the
     // amount disclosures default to "inga", the text cannot.
-    if (
-      report.company.entity_type === 'ekonomisk_forening' &&
-      !report.forvaltningsberattelse.member_disclosures?.member_count_change?.trim()
-    ) {
+    const isForening =
+      isEntityType(report.company.entity_type) && isEkonomiskForeningFamily(report.company.entity_type)
+    if (isForening && !report.forvaltningsberattelse.member_disclosures?.member_count_change?.trim()) {
       push(
         issues,
         'AR-EF-MEMBER-INFO',
@@ -467,7 +470,7 @@ export function validateAnnualReportCompleteness(
         (row) => row.semantic_key === 'balance_sheet_forlagsinsatser',
       )?.current ?? 0
     if (
-      report.company.entity_type === 'ekonomisk_forening' &&
+      isForening &&
       forlagsinsatserBalance !== 0 &&
       !report.forvaltningsberattelse.member_disclosures?.forlagsinsatser_dividend_right?.trim()
     ) {

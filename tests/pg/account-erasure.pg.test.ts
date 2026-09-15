@@ -80,6 +80,9 @@ const RETAINED = new Set([
   'association_member_contributions.user_id',
   'association_member_events.user_id',
   'association_members.user_id',
+  // Bostadsrättsförening facts and tax profile: company configuration.
+  'brf_property_facts.user_id',
+  'brf_tax_profiles.user_id',
   'bank_file_imports.user_id',
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',

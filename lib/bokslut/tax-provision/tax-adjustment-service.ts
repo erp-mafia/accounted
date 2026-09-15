@@ -7,7 +7,7 @@ import type {
   TaxAdjustmentType,
 } from '../types'
 import type { EntityType } from '@/types'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { isEkonomiskForeningFamily, resolveCompanyEntityType } from '@/lib/company/entity-type'
 
 interface DetectedTaxAdjustmentAccount {
   accountNumber: string
@@ -54,7 +54,7 @@ const EKONOMISK_FORENING_DETECTED_ACCOUNTS: readonly DetectedTaxAdjustmentAccoun
 export function detectedTaxAdjustmentAccounts(
   entityType: EntityType | null,
 ): readonly DetectedTaxAdjustmentAccount[] {
-  if (entityType === 'ekonomisk_forening') {
+  if (entityType && isEkonomiskForeningFamily(entityType)) {
     return [...DETECTED_TAX_ADJUSTMENT_ACCOUNTS, ...EKONOMISK_FORENING_DETECTED_ACCOUNTS]
   }
   return DETECTED_TAX_ADJUSTMENT_ACCOUNTS

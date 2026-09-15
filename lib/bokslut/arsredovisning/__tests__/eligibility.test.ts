@@ -87,6 +87,53 @@ describe('evaluateAnnualReportEligibility', () => {
     expect(result.digital_filing_eligible).toBe(false)
   })
 
+  it('refuses K2 for a bostadsrättsförening from fiscal years beginning 2026 and accepts K3 (BFN 2025-06-16)', () => {
+    const profile = completeProfile()
+    profile.auditor_report_required = true
+    const k2in2026 = evaluateAnnualReportEligibility({
+      entityType: 'bostadsrattsforening',
+      framework: 'k2',
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+      profile,
+      metrics,
+    })
+    expect(k2in2026.issues.map((issue) => issue.code)).toContain('AR-SCOPE-BRF-K3')
+    expect(k2in2026.k2_eligible).toBe(false)
+    const k2in2025 = evaluateAnnualReportEligibility({
+      entityType: 'bostadsrattsforening',
+      framework: 'k2',
+      periodStart: '2025-01-01',
+      periodEnd: '2025-12-31',
+      profile,
+      metrics,
+    })
+    expect(k2in2025.issues.map((issue) => issue.code)).not.toContain('AR-SCOPE-BRF-K3')
+    expect(k2in2025.issues.map((issue) => issue.code)).not.toContain('AR-SCOPE-ENTITY')
+    expect(k2in2025.digital_issues.map((issue) => issue.code)).toContain('AR-DIGITAL-ENTITY')
+    const k3 = evaluateAnnualReportEligibility({
+      entityType: 'bostadsrattsforening',
+      framework: 'k3',
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+      profile,
+      metrics,
+    })
+    expect(k3.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+    // The revisor rule of EFL 8 kap. 1 § applies to the BRF too.
+    // auditor_report_required is boolean | null on the row; the fixture's literal narrowed it to boolean.
+    ;(profile as { auditor_report_required: boolean | null }).auditor_report_required = null
+    const unanswered = evaluateAnnualReportEligibility({
+      entityType: 'bostadsrattsforening',
+      framework: 'k3',
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+      profile,
+      metrics,
+    })
+    expect(unanswered.issues.map((issue) => issue.code)).toContain('AR-AUDITOR-REQUIRED-FORENING')
+  })
+
   it('keeps the generic scope message for forms that never prepare an årsredovisning here', () => {
     const result = evaluateAnnualReportEligibility({
       entityType: 'ideell_forening',

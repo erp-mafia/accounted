@@ -7,7 +7,12 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-import { isEntityType, supportsAccountingFramework } from '@/lib/company/entity-type'
+import {
+  BRF_K3_MANDATORY_FROM,
+  hasPropertyIncomeExemption,
+  isEntityType,
+  supportsAccountingFramework,
+} from '@/lib/company/entity-type'
 /**
  * GET /api/company/current
  *
@@ -130,6 +135,33 @@ export const PATCH = withRouteContext(
         },
         { status: 400 },
       )
+    }
+    // A bostadsrättsförening is K3-only for fiscal years beginning after
+    // 2025-12-31 (BFN decision 2025-06-16): K2 may only be kept or chosen
+    // when the company's latest fiscal year started before that date. No
+    // fiscal year at all means no K2: the first year of a new BRF is 2026 or
+    // later by construction.
+    if (
+      resultingFramework === 'k2'
+      && isEntityType(resultingEntityType)
+      && hasPropertyIncomeExemption(resultingEntityType)
+    ) {
+      const { data: latestPeriod } = await supabase
+        .from('fiscal_periods')
+        .select('period_start')
+        .eq('company_id', companyId)
+        .order('period_start', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const fiscalYearStart = (latestPeriod as { period_start?: string } | null)?.period_start ?? null
+      if (!supportsAccountingFramework(resultingEntityType, 'k2', fiscalYearStart)) {
+        return NextResponse.json(
+          {
+            error: `En bostadsrättsförening ska tillämpa K3 (BFNAR 2012:1 kapitel 38) för räkenskapsår som börjar ${BRF_K3_MANDATORY_FROM} eller senare; K2 kan inte väljas.`,
+          },
+          { status: 400 },
+        )
+      }
     }
     if (wantsFramework) updates.accounting_framework = validation.data.accounting_framework
   }

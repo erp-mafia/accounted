@@ -1,4 +1,5 @@
 import { flagEnabled } from '@/lib/env/public-flags'
+import { isEkonomiskForeningFamily, isEntityType } from '@/lib/company/entity-type'
 import type { AnnualReportEligibilityResult, AnnualReportFramework } from './compliance-types'
 
 export interface AnnualReportCapabilities {
@@ -31,7 +32,8 @@ export function getAnnualReportCapabilities(
   // The bundled taxonomy is K2 for aktiebolag; an ekonomisk förening files
   // the PDF package on paper until a Bolagsverket taxonomy for the form is
   // adopted (see eligibility AR-DIGITAL-ENTITY).
-  const ixbrlEnabled = framework === 'k2' && entityType !== 'ekonomisk_forening'
+  const isForening = isEntityType(entityType) && isEkonomiskForeningFamily(entityType)
+  const ixbrlEnabled = framework === 'k2' && !isForening
   const eligible = eligibility?.digital_filing_eligible ?? false
   return {
     paper: {
@@ -46,8 +48,8 @@ export function getAnnualReportCapabilities(
       enabled: ixbrlEnabled,
       reason: ixbrlEnabled
         ? null
-        : entityType === 'ekonomisk_forening'
-          ? 'iXBRL-generering stöds ännu endast för aktiebolag (K2-taxonomin täcker inte ekonomiska föreningar).'
+        : isForening
+          ? 'iXBRL-generering stöds ännu endast för aktiebolag (K2-taxonomin täcker inte ekonomiska föreningar eller bostadsrättsföreningar).'
           : 'iXBRL-generering stöds ännu endast för K2.',
     },
     connected_filing: {
@@ -56,7 +58,7 @@ export function getAnnualReportCapabilities(
       reason: !releaseGateOpen
         ? 'Direktinlämning öppnas först efter avtal, certifikat och godkänd acceptanstest.'
         : !ixbrlEnabled
-          ? entityType === 'ekonomisk_forening'
+          ? isForening
             ? 'Direktinlämning stöds ännu endast för aktiebolag.'
             : 'Direktinlämning stöds ännu endast för K2.'
           : !eligible

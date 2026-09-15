@@ -422,10 +422,16 @@ const SIGN_RECLASSIFICATION_POSTS: Record<
  * Legal forms with their own K2 equity presentation. An aktiebolag shows
  * share capital; an ekonomisk förening shows medlemsinsatser and
  * förlagsinsatser as separate posts under bundet eget kapital (ÅRL 3 kap.
- * 10 b §). Every other form renders with the aktiebolag layout and the
- * reclassification warnings.
+ * 10 b §); a bostadsrättsförening shows insatser, upplåtelseavgifter and the
+ * fond för yttre underhåll (K3 38.11 to 38.12, the same posts under K2 for
+ * the years it is still allowed). Every other form renders with the
+ * aktiebolag layout and the reclassification warnings.
  */
-export type K2LegalForm = 'aktiebolag' | 'ekonomisk_forening'
+export type K2LegalForm = 'aktiebolag' | 'ekonomisk_forening' | 'bostadsrattsforening'
+
+export function isK2LegalForm(value: string): value is K2LegalForm {
+  return value === 'aktiebolag' || value === 'ekonomisk_forening' || value === 'bostadsrattsforening'
+}
 
 export interface K2MappingOptions {
   legalForm?: K2LegalForm
@@ -459,8 +465,37 @@ export const K2_BR_MAPPINGS_EKONOMISK_FORENING: PostMapping[] = K2_BR_MAPPINGS.f
   },
 )
 
+/**
+ * Bostadsrättsförening: 2083 Insatser and 2087 Upplåtelseavgifter are the
+ * member capital (ÅRL 3 kap. 10 b § treats upplåtelseavgifter as insatser;
+ * BAS has no account of its own, so 2087 is relabelled in the BRF chart),
+ * 2088 Fond för yttre underhåll is its own bundet post moved by omföring
+ * against fritt eget kapital (K3 38.11 to 38.12), never through the income
+ * statement. 2084 Förlagsinsatser stays as for any ekonomisk förening.
+ */
+export const K2_BR_MAPPINGS_BOSTADSRATTSFORENING: PostMapping[] = K2_BR_MAPPINGS.flatMap(
+  (mapping) => {
+    if (AKTIEBOLAG_ONLY_EQUITY_CONCEPTS.has(mapping.concept)) return []
+    if (mapping.concept !== 'Reservfond') return [mapping]
+    return [
+      { concept: 'Medlemsinsatser', balance: 'credit', ranges: [r('2083', '2083')] },
+      { concept: 'Upplatelseavgifter', balance: 'credit', ranges: [r('2087', '2087')] },
+      { concept: 'Forlagsinsatser', balance: 'credit', ranges: [r('2084', '2084')] },
+      { concept: 'FondYttreUnderhall', balance: 'credit', ranges: [r('2088', '2088')] },
+      { ...mapping, ranges: [r('2086', '2086'), r('2089', '2089')] },
+    ]
+  },
+)
+
 function brMappingsFor(legalForm: K2LegalForm): PostMapping[] {
-  return legalForm === 'ekonomisk_forening' ? K2_BR_MAPPINGS_EKONOMISK_FORENING : K2_BR_MAPPINGS
+  switch (legalForm) {
+    case 'ekonomisk_forening':
+      return K2_BR_MAPPINGS_EKONOMISK_FORENING
+    case 'bostadsrattsforening':
+      return K2_BR_MAPPINGS_BOSTADSRATTSFORENING
+    default:
+      return K2_BR_MAPPINGS
+  }
 }
 
 const RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING: Record<string, string> = {
@@ -470,6 +505,25 @@ const RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING: Record<string, string> = {
   '2097': 'Överkursfond (2097) finns inte i en ekonomisk förening: granska klassificeringen (insatser hör till 2083/2087, förlagsinsatser till 2084).',
   '2088': RECLASSIFIED_ACCOUNTS['2088'],
   '2089': RECLASSIFIED_ACCOUNTS['2089'],
+}
+
+const RECLASSIFIED_ACCOUNTS_BOSTADSRATTSFORENING: Record<string, string> = {
+  '2080': 'Aktiekapital (2080) finns inte i en bostadsrättsförening (BRL 1 kap., EFL 1 kap.): flytta saldot till 2083 Insatser eller 2087 Upplåtelseavgifter innan årsredovisningen upprättas.',
+  '2081': 'Aktiekapital (2081) finns inte i en bostadsrättsförening (BRL 1 kap., EFL 1 kap.): flytta saldot till 2083 Insatser eller 2087 Upplåtelseavgifter innan årsredovisningen upprättas.',
+  '2082': 'Ej registrerat aktiekapital (2082) finns inte i en bostadsrättsförening: granska klassificeringen.',
+  '2097': 'Överkursfond (2097) finns inte i en bostadsrättsförening: granska klassificeringen (insatser hör till 2083, upplåtelseavgifter till 2087, förlagsinsatser till 2084).',
+  '2089': RECLASSIFIED_ACCOUNTS['2089'],
+}
+
+function reclassifiedAccountsFor(legalForm: K2LegalForm): Record<string, string> {
+  switch (legalForm) {
+    case 'ekonomisk_forening':
+      return RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING
+    case 'bostadsrattsforening':
+      return RECLASSIFIED_ACCOUNTS_BOSTADSRATTSFORENING
+    default:
+      return RECLASSIFIED_ACCOUNTS
+  }
 }
 
 export interface K2MappingResult {
@@ -634,8 +688,7 @@ export function mapTrialBalancesToK2(
 ): K2MappingResult {
   const legalForm: K2LegalForm = options.legalForm ?? 'aktiebolag'
   const brMappings = brMappingsFor(legalForm)
-  const reclassifiedAccounts =
-    legalForm === 'ekonomisk_forening' ? RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING : RECLASSIFIED_ACCOUNTS
+  const reclassifiedAccounts = reclassifiedAccountsFor(legalForm)
   const warnings: string[] = []
   const rr: ConceptAmounts = {}
   const rrExact: ConceptAmounts = {}
@@ -984,7 +1037,9 @@ function computeTotals(rr: ConceptAmounts, br: ConceptAmounts): K2MappingResult[
     'Aktiekapital',
     'EjRegistreratAktiekapital',
     'Medlemsinsatser',
+    'Upplatelseavgifter',
     'Forlagsinsatser',
+    'FondYttreUnderhall',
     'OverkursfondBunden',
     'Uppskrivningsfond',
     'Reservfond',

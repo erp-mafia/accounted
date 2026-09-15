@@ -30,6 +30,7 @@ import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
 import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { isEkonomiskForeningFamily, isEntityType } from '@/lib/company/entity-type'
 
 const SIGNATURE_EVIDENCE_REFERENCE_PATTERN =
   /^(archive|document|receipt):[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/
@@ -807,7 +808,7 @@ export default function ArsredovisningPage() {
                 fält visas som &quot;Inga.&quot; i PDF:en.
               </p>
             </div>
-            {data?.company.entity_type === 'ekonomisk_forening' && (
+            {data && isEntityType(data.company.entity_type) && isEkonomiskForeningFamily(data.company.entity_type) && (
               <div className="space-y-4 pb-4 border-b border-border">
                 <div>
                   <h4 className="text-sm font-medium">Medlemmar och insatser (ÅRL 6 kap. 3 §)</h4>

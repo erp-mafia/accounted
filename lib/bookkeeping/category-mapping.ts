@@ -74,6 +74,7 @@ function getExpenseAccount(category: string, entityType: EntityType): string {
       enskild_firma: '6991',
       ideell_forening: '6991',
       ekonomisk_forening: '7610',
+      bostadsrattsforening: '7610',
     })
   }
   return EXPENSE_ACCOUNTS[category] || '6991'

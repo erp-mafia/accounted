@@ -363,6 +363,19 @@ export function buildBrRows(mapping: StatementMapping): {
     })
     e.post('Uppskrivningsfond', br['Uppskrivningsfond'], { indent: 2 })
     e.post('Reservfond', br['Reservfond'], { indent: 2 })
+  } else if (mapping.legalForm === 'bostadsrattsforening') {
+    // ÅRL 3 kap. 10 b § (upplåtelseavgifter count as insatser) and K3 38.11:
+    // insatser, upplåtelseavgifter and fond för yttre underhåll are the
+    // BRF's bundet posts; no share capital, no överkursfond.
+    e.post('Insatser', br['Medlemsinsatser'], { indent: 2, alwaysShow: true })
+    e.post('Upplåtelseavgifter', br['Upplatelseavgifter'], { indent: 2, alwaysShow: true })
+    e.post('Förlagsinsatser', br['Forlagsinsatser'], {
+      indent: 2,
+      semantic_key: 'balance_sheet_forlagsinsatser',
+    })
+    e.post('Fond för yttre underhåll', br['FondYttreUnderhall'], { indent: 2, alwaysShow: true })
+    e.post('Uppskrivningsfond', br['Uppskrivningsfond'], { indent: 2 })
+    e.post('Reservfond', br['Reservfond'], { indent: 2 })
   } else {
     e.post('Aktiekapital', br['Aktiekapital'], { indent: 2, alwaysShow: true })
     e.post('Ej registrerat aktiekapital', br['EjRegistreratAktiekapital'], { indent: 2 })
@@ -372,7 +385,7 @@ export function buildBrRows(mapping: StatementMapping): {
   }
   e.total('Summa bundet eget kapital', totals.bundetEgetKapital, { indent: 1 })
   e.heading('Fritt eget kapital', 1)
-  if (mapping.legalForm !== 'ekonomisk_forening') {
+  if (mapping.legalForm === 'aktiebolag') {
     e.post('Överkursfond', br['Overkursfond'], { indent: 2 })
   }
   e.post('Balanserat resultat', br['BalanseratResultat'], { indent: 2, alwaysShow: true })

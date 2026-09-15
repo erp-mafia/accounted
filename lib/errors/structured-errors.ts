@@ -261,6 +261,17 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Dokumentet med revisionsberättelsen kunde inte hittas i företagets arkiv.',
     message_en: 'The auditor report document was not found in the company archive.',
   },
+  // Bostadsrättsförening: property facts and the privatbostadsföretag profile.
+  BRF_FORM_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Uppgifterna finns bara för en bostadsrättsförening.',
+    message_en: 'These facts exist only for a bostadsrättsförening.',
+  },
+  BRF_TAX_PROFILE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Ingen bedömning av privatbostadsföretag finns för det året.',
+    message_en: 'No privatbostadsföretag assessment exists for that year.',
+  },
   RATE_LIMITED: {
     httpStatus: 429,
     message_sv: 'För många förfrågningar. Vänta en stund och försök igen.',

@@ -6,6 +6,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { LATENT_TAX_DEFAULT_RATE } from '@/lib/bokslut/tax-provision/latent-tax-calculator'
 import { roundOre } from '@/lib/money'
 import {
+  isK2LegalForm,
   mapTrialBalancesToK2,
   type K2MappingResult,
   type TrialBalancePair,
@@ -14,6 +15,7 @@ import { buildBrRows, buildRrRows } from './statement-rows'
 import { getNarrative, type NarrativeRow } from './narrative-service'
 import {
   AKTIEBOLAG_EQUITY_LABELS,
+  BOSTADSRATTSFORENING_EQUITY_LABELS,
   EKONOMISK_FORENING_EQUITY_LABELS,
   anyAssetHasComponents,
   buildEquityChangesNote,
@@ -38,7 +40,7 @@ import type {
 } from './types'
 import type { AccountingFramework, Asset, TrialBalanceRow } from '@/types'
 
-import { isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
+import { isEkonomiskForeningFamily, isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
 /**
  * Pre-populate the K2 årsredovisning data for a fiscal period. Loads:
  *   - Income statement + balance sheet for the current period
@@ -120,6 +122,9 @@ export async function buildArsredovisningData(
     companyRow?.entity_type
     ?? (settings as { entity_type?: string } | null)?.entity_type
     ?? 'unknown'
+  // An ekonomisk förening or a bostadsrättsförening (BRL 1 kap. 1 §): the
+  // föreningsstämma wording and the ÅRL 6 kap. 3 § member disclosures.
+  const isForening = isEntityType(entityType) && isEkonomiskForeningFamily(entityType)
   // K3 is opt-in; only AB ever set it. Default to K2 when not set.
   const accountingFramework: AccountingFramework =
     companyRow?.accounting_framework === 'k3' ? 'k3' : 'k2'
@@ -199,11 +204,10 @@ export async function buildArsredovisningData(
       `Föregående räkenskapsår (${prevPeriodRow.name}) saknar bokföring i Accounted, så jämförelsesiffrorna visar 0 kr. ÅRL 3 kap. 5 § kräver föregående års belopp för varje post. Bokför eller SIE-importera året innan årsredovisningen lämnas in; ett klarmarkerat år öppnas igen under Inställningar > Bokföring > Räkenskapsår.`,
     )
   }
-  const isForening = entityType === 'ekonomisk_forening'
   const mapping = mapTrialBalancesToK2(
     { full: tbFull.rows, preClosing: tbPreClosing.rows },
     previousTb,
-    { legalForm: isForening ? 'ekonomisk_forening' : 'aktiebolag' },
+    { legalForm: isK2LegalForm(entityType) ? entityType : 'aktiebolag' },
   )
   const previousPeriod =
     prevPeriodRow && previousTb
@@ -346,7 +350,7 @@ export async function buildArsredovisningData(
   // obalans, reclass review nudges), surfacing them pre-download is what
   // keeps a non-fileable PDF from reaching Bolagsverket.
   const warnings: string[] = [...statementWarnings, ...mapping.warnings, ...noterWarnings]
-  if (entityType !== 'aktiebolag' && entityType !== 'ekonomisk_forening' && entityType !== 'unknown') {
+  if (!isK2LegalForm(entityType) && entityType !== 'unknown') {
     warnings.push(
       'Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.',
     )
@@ -631,7 +635,20 @@ function buildEquityChanges(mapping: K2MappingResult): EgenKapitalRow[] {
           { label: 'Balanserat resultat', concept: 'BalanseratResultat', alwaysShow: true },
           { label: 'Årets resultat', concept: 'AretsResultatEgetKapital', alwaysShow: true },
         ]
-      : [
+      : mapping.legalForm === 'bostadsrattsforening'
+        ? [
+            // ÅRL 3 kap. 10 b § and K3 38.11: insatser, upplåtelseavgifter and
+            // the fond för yttre underhåll as their own bundet posts.
+            { label: 'Insatser', concept: 'Medlemsinsatser', alwaysShow: true },
+            { label: 'Upplåtelseavgifter', concept: 'Upplatelseavgifter', alwaysShow: true },
+            { label: 'Förlagsinsatser', concept: 'Forlagsinsatser' },
+            { label: 'Fond för yttre underhåll', concept: 'FondYttreUnderhall', alwaysShow: true },
+            { label: 'Uppskrivningsfond', concept: 'Uppskrivningsfond' },
+            { label: 'Reservfond', concept: 'Reservfond' },
+            { label: 'Balanserat resultat', concept: 'BalanseratResultat', alwaysShow: true },
+            { label: 'Årets resultat', concept: 'AretsResultatEgetKapital', alwaysShow: true },
+          ]
+        : [
           { label: 'Aktiekapital', concept: 'Aktiekapital', alwaysShow: true },
           { label: 'Ej registrerat aktiekapital', concept: 'EjRegistreratAktiekapital' },
           { label: 'Bunden överkursfond', concept: 'OverkursfondBunden' },
@@ -878,7 +895,7 @@ async function buildK2Noter(
   )
   if (medelantal > 0 || (isEntityType(entityType) && preparesArsredovisning(entityType))) {
     const medelantalNote = resolveMedelantalNote({
-      subject: entityType === 'ekonomisk_forening' ? 'Föreningen' : 'Bolaget',
+      subject: isEntityType(entityType) && isEkonomiskForeningFamily(entityType) ? 'Föreningen' : 'Bolaget',
       medelantal,
       hasOverride: hasMedelantalOverride(narrative?.medelantal_anstallda_override),
       tbFullRows,
@@ -1285,7 +1302,7 @@ async function buildK3Noter(
   )
   if (medelantal > 0 || (isEntityType(entityType) && preparesArsredovisning(entityType))) {
     const medelantalNote = resolveMedelantalNote({
-      subject: entityType === 'ekonomisk_forening' ? 'Föreningen' : 'Bolaget',
+      subject: isEntityType(entityType) && isEkonomiskForeningFamily(entityType) ? 'Föreningen' : 'Bolaget',
       medelantal,
       hasOverride: hasMedelantalOverride(narrative?.medelantal_anstallda_override),
       tbFullRows,
@@ -1368,11 +1385,18 @@ export function buildK3EquityChangesStatement(
   // The "capital" column of the roll-forward: aktiekapital for an AB, the
   // member and subordinated contributions for an ekonomisk förening (ÅRL 3
   // kap. 10 b §); the remaining bundet posts are "övriga bundna reserver".
-  const isForening = mapping.legalForm === 'ekonomisk_forening'
-  const capitalConcepts = isForening
-    ? ['Medlemsinsatser', 'Forlagsinsatser']
-    : ['Aktiekapital', 'EjRegistreratAktiekapital']
-  const labels = isForening ? EKONOMISK_FORENING_EQUITY_LABELS : AKTIEBOLAG_EQUITY_LABELS
+  const capitalConcepts =
+    mapping.legalForm === 'ekonomisk_forening'
+      ? ['Medlemsinsatser', 'Forlagsinsatser']
+      : mapping.legalForm === 'bostadsrattsforening'
+        ? ['Medlemsinsatser', 'Upplatelseavgifter', 'Forlagsinsatser']
+        : ['Aktiekapital', 'EjRegistreratAktiekapital']
+  const labels =
+    mapping.legalForm === 'ekonomisk_forening'
+      ? EKONOMISK_FORENING_EQUITY_LABELS
+      : mapping.legalForm === 'bostadsrattsforening'
+        ? BOSTADSRATTSFORENING_EQUITY_LABELS
+        : AKTIEBOLAG_EQUITY_LABELS
 
   const aretsResultat = cur('AretsResultatEgetKapital')
   const aktiekapitalClosing = capitalConcepts.reduce((sum, concept) => sum + cur(concept), 0)

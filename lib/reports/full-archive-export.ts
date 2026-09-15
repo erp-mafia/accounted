@@ -1047,6 +1047,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   },
   // Revisor roster of an ekonomisk förening (EFL 8 kap.), ended terms included.
   { name: 'association_auditors', file: 'association_auditors.json', orderBy: 'created_at' },
+  // Bostadsrättsförening: the property facts behind the nyckeltal and the
+  // yearly privatbostadsföretag assessment (IL 2 kap. 17 §).
+  { name: 'brf_property_facts', file: 'brf_property_facts.json', orderBy: 'created_at' },
+  { name: 'brf_tax_profiles', file: 'brf_tax_profiles.json', orderBy: 'fiscal_year' },
   // Customer invoicing
   { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
   {

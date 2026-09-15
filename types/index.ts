@@ -6,6 +6,7 @@ export type EntityType =
   | 'aktiebolag'
   | 'ideell_forening'
   | 'ekonomisk_forening'
+  | 'bostadsrattsforening'
 
 // Swedish accounting framework. K2 (BFNAR 2016:10) is the default simplified
 // ruleset for smaller AB; K3 (BFNAR 2012:1) is the principles-based ruleset
@@ -2706,6 +2707,7 @@ export type TaxDeadlineType =
   | 'arsstamma'
   | 'foreningsstamma'
   | 'revisionsberattelse_ekonomisk_forening'
+  | 'ku55_bostadsrattsforening'
   | 'periodisk_sammanstallning'
   | 'kontrolluppgifter'
   | 'rot_rut_begaran'

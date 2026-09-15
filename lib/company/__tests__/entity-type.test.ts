@@ -9,6 +9,8 @@ import {
   creatableEntityTypes,
   defaultAccountingMethod,
   fiscalYearLockedToCalendar,
+  hasPropertyIncomeExemption,
+  isEkonomiskForeningFamily,
   isEntityType,
   isEntityTypeCreatable,
   ownerSettlementAccount,
@@ -42,6 +44,7 @@ describe('entity-type: parsing', () => {
       'aktiebolag',
       'ideell_forening',
       'ekonomisk_forening',
+      'bostadsrattsforening',
     ])
   })
 
@@ -61,6 +64,7 @@ describe('entity-type: parsing', () => {
       aktiebolag: 2,
       ideell_forening: 3,
       ekonomisk_forening: 4,
+      bostadsrattsforening: 5,
     })).toBe(3)
     expect(() =>
       byEntityType('stiftelse' as never, {
@@ -68,6 +72,7 @@ describe('entity-type: parsing', () => {
         aktiebolag: 2,
         ideell_forening: 3,
         ekonomisk_forening: 4,
+        bostadsrattsforening: 5,
       }),
     ).toThrow(UnknownEntityTypeError)
   })
@@ -170,6 +175,52 @@ describe('entity-type: domain facts', () => {
     expect(templateAccountForForm('ideell_forening', '3100', '3004')).toBe('3100')
   })
 
+  it('treats a bostadsrättsförening as an ekonomisk förening except where BRL, IL 39 kap. 25 § or the K3 duty differ', () => {
+    // BRL 1 kap. 1 §: a BRF is an ekonomisk förening.
+    expect(isEkonomiskForeningFamily('bostadsrattsforening')).toBe(true)
+    expect(isEkonomiskForeningFamily('ekonomisk_forening')).toBe(true)
+    for (const form of ['aktiebolag', 'enskild_firma', 'ideell_forening'] as const) {
+      expect(isEkonomiskForeningFamily(form)).toBe(false)
+      expect(hasPropertyIncomeExemption(form)).toBe(false)
+    }
+    expect(hasPropertyIncomeExemption('ekonomisk_forening')).toBe(false)
+    expect(hasPropertyIncomeExemption('bostadsrattsforening')).toBe(true)
+    expect(resultClosingAccounts('bostadsrattsforening')).toEqual({
+      closing: '2099',
+      closingName: 'Årets resultat',
+      priorYearCarry: '2098',
+    })
+    expect(ownerSettlementAccount('bostadsrattsforening', 'withdrawal')).toBe('2890')
+    expect(preparesArsredovisning('bostadsrattsforening')).toBe(true)
+    expect(fiscalYearLockedToCalendar('bostadsrattsforening')).toBe(false)
+    expect(usesPersonnummerAsOrgNumber('bostadsrattsforening')).toBe(false)
+    expect(defaultAccountingMethod('bostadsrattsforening')).toBe('accrual')
+    expect(simplifiedYearEndRegelverk('bostadsrattsforening')).toBe('K2')
+    expect(usesInk2('bostadsrattsforening')).toBe(true)
+    expect(booksCurrentTax('bostadsrattsforening')).toBe(true)
+    expect(supportsCorporateTaxDispositions('bostadsrattsforening')).toBe(true)
+    expect(requiresAuditorRegardlessOfSize('bostadsrattsforening')).toBe(true)
+    expect(supportsMemberCapital('bostadsrattsforening')).toBe(true)
+    expect(templateAccountForForm('bostadsrattsforening', '2013', '2893')).toBe('2890')
+    expect(templateAccountForForm('bostadsrattsforening', '6991', '7610')).toBe('7610')
+    expect(getRevenueAccount('exempt', 'bostadsrattsforening')).toBe('3004')
+    expect(getDefaultAccountForCategory('expense_education', 'bostadsrattsforening')).toBe('7610')
+  })
+
+  it('closes K2 to a bostadsrättsförening for fiscal years beginning 2026 or later (BFN 2025-06-16, K3 kap. 38)', () => {
+    expect(supportsAccountingFramework('bostadsrattsforening', 'k3')).toBe(true)
+    expect(supportsAccountingFramework('bostadsrattsforening', 'k3', '2020-01-01')).toBe(true)
+    // K2 only for a year that started before the cut-off, and never by omission.
+    expect(supportsAccountingFramework('bostadsrattsforening', 'k2', '2025-01-01')).toBe(true)
+    expect(supportsAccountingFramework('bostadsrattsforening', 'k2', '2025-07-01')).toBe(true)
+    expect(supportsAccountingFramework('bostadsrattsforening', 'k2', '2026-01-01')).toBe(false)
+    expect(supportsAccountingFramework('bostadsrattsforening', 'k2')).toBe(false)
+    expect(supportsAccountingFramework('bostadsrattsforening', 'k2', null)).toBe(false)
+    // The date does not restrict the other forms.
+    expect(supportsAccountingFramework('aktiebolag', 'k2', '2030-01-01')).toBe(true)
+    expect(supportsAccountingFramework('ekonomisk_forening', 'k2', '2030-01-01')).toBe(true)
+  })
+
   it('taxes an ekonomisk förening as a juridisk person, like an AB and unlike both other forms', () => {
     // IL 65 kap. 10 § (bolagsskatt), IL 30 kap. 5 § (periodiseringsfond 25 %)
     // and the INK2 return apply to the aktiebolag and the ekonomisk förening.
@@ -197,6 +248,7 @@ describe('entity-type: creation flag', () => {
   it('hides ideell_forening until the flag is on', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
     vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', '')
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', '')
     expect(isEntityTypeCreatable('ideell_forening')).toBe(false)
     expect(isEntityTypeCreatable('aktiebolag')).toBe(true)
     expect(creatableEntityTypes()).toEqual(['enskild_firma', 'aktiebolag'])
@@ -205,6 +257,7 @@ describe('entity-type: creation flag', () => {
   it('offers ideell_forening when the flag is on', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
     vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', '')
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', '')
     expect(isEntityTypeCreatable('ideell_forening')).toBe(true)
     expect(creatableEntityTypes()).toEqual(['enskild_firma', 'aktiebolag', 'ideell_forening'])
   })
@@ -212,11 +265,27 @@ describe('entity-type: creation flag', () => {
   it('offers ekonomisk_forening only when its flag is on', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
     vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', 'true')
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', '')
     expect(isEntityTypeCreatable('ekonomisk_forening')).toBe(true)
     expect(creatableEntityTypes()).toEqual([
       'enskild_firma',
       'aktiebolag',
       'ekonomisk_forening',
+    ])
+  })
+
+  it('offers bostadsrattsforening only behind its own flag, independent of the ekonomisk förening one', () => {
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
+    vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', 'true')
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', '')
+    expect(isEntityTypeCreatable('bostadsrattsforening')).toBe(false)
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', 'true')
+    expect(isEntityTypeCreatable('bostadsrattsforening')).toBe(true)
+    expect(creatableEntityTypes()).toEqual([
+      'enskild_firma',
+      'aktiebolag',
+      'ekonomisk_forening',
+      'bostadsrattsforening',
     ])
   })
 })
