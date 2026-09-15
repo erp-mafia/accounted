@@ -28,6 +28,7 @@ export interface FieldReviewDocument {
   document_id: string
   file_name: string
   created_at: string
+  page_count: number | null
   doc_type: string | null
   schema_type: string
   review_fields: string[]
@@ -88,16 +89,17 @@ export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
   if (pendingList.length) {
     const { data: docs, error: docsError } = await ctx.supabase
       .from('document_attachments')
-      .select('id, file_name, created_at, doc_type')
+      .select('id, file_name, created_at, page_count, doc_type')
       .eq('company_id', ctx.companyId)
       .in('id', pendingList.map((p) => p.document_id))
       .order('created_at', { ascending: false })
     if (docsError) return NextResponse.json({ error: getErrorMessage(docsError) }, { status: 500 })
     const byId = new Map(pendingList.map((p) => [p.document_id, p]))
-    fieldRows = ((docs ?? []) as Array<{ id: string; file_name: string; created_at: string; doc_type: string | null }>).map((d) => ({
+    fieldRows = ((docs ?? []) as Array<{ id: string; file_name: string; created_at: string; page_count: number | null; doc_type: string | null }>).map((d) => ({
       document_id: d.id,
       file_name: d.file_name,
       created_at: d.created_at,
+      page_count: d.page_count,
       doc_type: d.doc_type,
       schema_type: byId.get(d.id)?.schema_type ?? 'generic',
       review_fields: byId.get(d.id)?.review_fields ?? [],

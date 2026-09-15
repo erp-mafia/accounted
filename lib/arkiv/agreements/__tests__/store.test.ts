@@ -83,7 +83,7 @@ describe('deriveDocument', () => {
     ])
     const obligations = findCall('agreement_obligations', 'insert')?.[0] as Array<Record<string, unknown>>
     expect(obligations).toHaveLength(14)
-    expect(obligations[0]).toEqual({ company_id: 'co-1', agreement_id: 'agr-1', kind: 'payment', due_on: '2026-08-01', amount: 12500, currency: 'SEK', amount_is_estimate: false, evidence: { fields: ['monthly_rent', 'starts_on'] } })
+    expect(obligations[0]).toEqual({ company_id: 'co-1', agreement_id: 'agr-1', kind: 'payment', due_on: '2026-08-01', amount: 12500, currency: 'SEK', amount_is_estimate: false, direction: 'out', evidence: { fields: ['monthly_rent', 'starts_on'] } })
     const deadlines = findCalls('deadlines', 'insert').map((args) => args[0] as Record<string, unknown>)
     expect(deadlines).toEqual([
       expect.objectContaining({ company_id: 'co-1', user_id: null, title: 'Sista dag att säga upp hyresavtalet Vasagatan 12', due_date: '2028-03-31', deadline_type: 'other', priority: 'important', source: 'system', is_auto_generated: true, status: 'upcoming', source_document_id: 'doc-1', source_key: 'agreement:agr-1:notice', notes: 'Enligt hyresavtal.pdf, sida 3. Datumet räknas fram från ends_on, notice_months.' }),

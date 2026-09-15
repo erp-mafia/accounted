@@ -26,6 +26,8 @@ export interface AgreementListItem {
   notice_deadline: { due_date: string; title: string } | null
   end_deadline: { due_date: string; title: string } | null
   source: { document_id: string; file_name: string; page: number | null }
+  /** The nightly lint found another agreement read from another file with the same kind, counterparty, amount and start. */
+  duplicate: boolean
 }
 
 interface AgreementRow {
@@ -76,13 +78,39 @@ export const GET = withRouteContext('arkiv.agreements', async (_request, ctx) =>
   if (agreements.length === 0) return NextResponse.json({ data: [] })
   const ids = agreements.map((a) => a.id)
 
-  const [parties, obligations, deadlines, documents] = await Promise.all([
-    ctx.supabase.from('parties').select('id, display_name').in('id', agreements.map((a) => a.counterparty_party_id).filter((id): id is string => !!id)),
-    ctx.supabase.from('agreement_obligations').select('agreement_id, due_on, amount, currency, status, kind').in('agreement_id', ids).neq('status', 'waived').order('due_on', { ascending: true }),
-    ctx.supabase.from('deadlines').select('source_key, due_date, title').eq('company_id', ctx.companyId).like('source_key', 'agreement:%').eq('is_completed', false).is('dismissed_at', null),
-    ctx.supabase.from('document_attachments').select('id, file_name').in('id', agreements.map((a) => a.source_document_id)),
+  const [parties, obligations, deadlines, documents, duplicates] = await Promise.all([
+    ctx.supabase
+      .from('parties')
+      .select('id, display_name')
+      .in(
+        'id',
+        agreements.map((a) => a.counterparty_party_id).filter((id): id is string => !!id),
+      ),
+    ctx.supabase
+      .from('agreement_obligations')
+      .select('agreement_id, due_on, amount, currency, status, kind')
+      .in('agreement_id', ids)
+      .neq('status', 'waived')
+      .order('due_on', { ascending: true }),
+    ctx.supabase
+      .from('deadlines')
+      .select('source_key, due_date, title')
+      .eq('company_id', ctx.companyId)
+      .like('source_key', 'agreement:%')
+      .eq('is_completed', false)
+      .is('dismissed_at', null),
+    ctx.supabase
+      .from('document_attachments')
+      .select('id, file_name')
+      .in(
+        'id',
+        agreements.map((a) => a.source_document_id),
+      ),
+    ctx.supabase.from('arkiv_findings').select('detail').eq('company_id', ctx.companyId).eq('kind', 'agreement_duplicate').eq('status', 'open').limit(200),
   ])
-  for (const result of [parties, obligations, deadlines, documents]) if (result.error) return NextResponse.json({ error: getErrorMessage(result.error) }, { status: 500 })
+  for (const result of [parties, obligations, deadlines, documents, duplicates])
+    if (result.error) return NextResponse.json({ error: getErrorMessage(result.error) }, { status: 500 })
+  const duplicateIds = new Set(((duplicates.data ?? []) as Array<{ detail: { agreement_ids?: string[] } }>).flatMap((f) => f.detail.agreement_ids ?? []))
 
   const partyName = new Map(((parties.data ?? []) as Array<{ id: string; display_name: string }>).map((p) => [p.id, p.display_name]))
   const fileName = new Map(((documents.data ?? []) as Array<{ id: string; file_name: string }>).map((d) => [d.id, d.file_name]))
@@ -92,7 +120,8 @@ export const GET = withRouteContext('arkiv.agreements', async (_request, ctx) =>
 
   const items: AgreementListItem[] = agreements.map((a) => {
     const rows = obligationsByAgreement.get(a.id) ?? []
-    const next = rows.find((o) => o.due_on >= today && o.status === 'expected') ?? [...rows].reverse().find((o) => o.status === 'missed') ?? rows.find((o) => o.due_on >= today) ?? null
+    const next =
+      rows.find((o) => o.due_on >= today && o.status === 'expected') ?? [...rows].reverse().find((o) => o.status === 'missed') ?? rows.find((o) => o.due_on >= today) ?? null
     const pageField = AMOUNT_FIELDS.find((f) => a.sources[f]?.page != null) ?? Object.keys(a.sources).find((f) => a.sources[f]?.page != null)
     const deadline = (key: string) => {
       const d = deadlineByKey.get(`agreement:${a.id}:${key}`)
@@ -113,6 +142,7 @@ export const GET = withRouteContext('arkiv.agreements', async (_request, ctx) =>
       notice_deadline: deadline('notice'),
       end_deadline: deadline('end') ?? deadline('maturity'),
       source: { document_id: a.source_document_id, file_name: fileName.get(a.source_document_id) ?? '', page: pageField ? (a.sources[pageField]?.page ?? null) : null },
+      duplicate: duplicateIds.has(a.id),
     }
   })
   return NextResponse.json({ data: items })

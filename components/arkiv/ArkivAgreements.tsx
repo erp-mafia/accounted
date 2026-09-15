@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
+import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Input } from '@/components/ui/input'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { PageHeader } from '@/components/ui/page-header'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -23,6 +25,7 @@ const KINDS: AgreementKind[] = ['rental', 'lease', 'loan', 'subscription']
 export function ArkivAgreements() {
   const t = useTranslations('arkiv')
   const locale = useLocale()
+  const router = useRouter()
   const [items, setItems] = useState<AgreementListItem[] | null>(null)
   const [failed, setFailed] = useState(false)
   const [kind, setKind] = useState<'all' | AgreementKind>('all')
@@ -58,7 +61,7 @@ export function ArkivAgreements() {
 
       <div className="flex flex-wrap items-center gap-2">
         <Select value={kind} onValueChange={(v) => setKind(v as 'all' | AgreementKind)}>
-          <SelectTrigger className="h-8 w-48 text-[13px]">
+          <SelectTrigger className="h-8 w-auto gap-1.5 rounded-full px-3.5 text-[13px]" aria-label={t('col_type')}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -70,7 +73,7 @@ export function ArkivAgreements() {
             ))}
           </SelectContent>
         </Select>
-        <Input id="agreement-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('search_agreements')} className="h-8 w-64 text-[13px]" />
+        <ToolbarSearch id="agreement-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('search_agreements')} containerClassName="w-72" />
       </div>
 
       {failed && <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>}
@@ -95,10 +98,13 @@ export function ArkivAgreements() {
           </thead>
           <tbody>
             {visible.map((a) => (
-              <tr key={a.id} className="hover:bg-secondary/35">
+              <tr key={a.id} className="cursor-pointer hover:bg-secondary/35" onClick={() => router.push(`/arkiv/avtal/${a.id}`)}>
                 <td className={`${TD_CLASS} pl-0`}>
-                  <div className="truncate" title={a.title}>
-                    {a.title}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate" title={a.title}>
+                      {a.title.length > 64 ? `${a.title.slice(0, 63)}…` : a.title}
+                    </span>
+                    {a.duplicate ? <Badge variant="warning">{t('agreement_duplicate_chip')}</Badge> : null}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {t(`types.agreement.${a.kind}` as never)}
@@ -118,7 +124,7 @@ export function ArkivAgreements() {
                       <span className={a.next_payment.status === 'missed' ? ' text-destructive' : ' text-muted-foreground'}> · {t(`obligation_${a.next_payment.status}`)}</span>
                     </>
                   ) : (
-                    <span className="text-muted-foreground">{t('no_next_payment')}</span>
+                    ''
                   )}
                 </td>
                 <td className={`${TD_CLASS} tabular-nums`}>{a.ends_on ? formatDateLong(a.ends_on, locale) : ''}</td>

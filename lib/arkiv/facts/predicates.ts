@@ -20,6 +20,8 @@ export interface PredicateDef {
 
 const company = (predicate: string, label: string, kind: PredicateKind): PredicateDef => ({ predicate, label, kind, subject: 'company', singleValued: true })
 const agreement = (predicate: string, label: string, kind: PredicateKind): PredicateDef => ({ predicate, label, kind, subject: 'agreement', singleValued: true })
+/** A company fact that accumulates: every meeting's decisions, every filing. */
+const many = (predicate: string, label: string, kind: PredicateKind): PredicateDef => ({ predicate, label, kind, subject: 'company', singleValued: false })
 
 export const PREDICATES: Record<string, PredicateDef> = Object.fromEntries(
   [
@@ -68,6 +70,39 @@ export const PREDICATES: Record<string, PredicateDef> = Object.fromEntries(
     agreement('conversion_terms', 'Konverteringsvillkor', 'text'),
     agreement('fee_period', 'Betalningsperiod', 'enum'),
     agreement('signed_on', 'Undertecknat', 'date'),
+    agreement('policy_number', 'Försäkringsnummer', 'text'),
+    agreement('cover_description', 'Omfattning', 'text'),
+    agreement('deductible_amount', 'Självrisk', 'amount'),
+    agreement('employee_name', 'Anställd', 'text'),
+    agreement('role_title', 'Befattning', 'text'),
+    agreement('employment_form', 'Anställningsform', 'enum'),
+    agreement('hours_per_week', 'Arbetstid per vecka', 'amount'),
+    agreement('vacation_days', 'Semesterdagar', 'int'),
+    agreement('collective_agreement', 'Kollektivavtal', 'text'),
+    agreement('parties_summary', 'Parter', 'text'),
+    agreement('transfer_restrictions', 'Överlåtelsebegränsningar', 'text'),
+    agreement('drag_along', 'Drag along', 'enum'),
+    agreement('tag_along', 'Tag along', 'enum'),
+    agreement('board_composition', 'Styrelsens sammansättning', 'text'),
+    agreement('reserved_matters', 'Beslut som kräver samtycke', 'text'),
+    agreement('investment_amount', 'Investerat belopp', 'amount'),
+    agreement('shares_subscribed', 'Tecknade aktier', 'int'),
+    agreement('price_per_share', 'Pris per aktie', 'amount'),
+    agreement('pre_money_valuation', 'Värdering före emission', 'amount'),
+    agreement('closing_on', 'Tillträde', 'date'),
+    agreement('subject', 'Avtalet gäller', 'text'),
+    many('minutes_decisions', 'Beslut i protokoll', 'text'),
+    many('dividend_decided', 'Beslutad utdelning', 'amount'),
+    company('board_elected', 'Vald styrelse', 'text'),
+    company('auditor_elected', 'Vald revisor', 'text'),
+    company('share_issue_price', 'Teckningskurs', 'amount'),
+    company('annual_revenue', 'Nettoomsättning', 'amount'),
+    company('annual_net_result', 'Årets resultat', 'amount'),
+    company('annual_total_assets', 'Balansomslutning', 'amount'),
+    company('annual_equity', 'Eget kapital', 'amount'),
+    company('employees_average', 'Medelantal anställda', 'amount'),
+    company('auditor_report', 'Revisionsberättelse', 'enum'),
+    many('bolagsverket_filing', 'Anmält till Bolagsverket', 'text'),
   ].map((p) => [p.predicate, p]),
 )
 
@@ -80,6 +115,8 @@ export interface FieldPredicate {
   predicate: string
   /** The field that dates when the value starts to hold; none means unknown. */
   validFromField?: string
+  /** The field that dates when the value stops holding (an annual figure's year end). */
+  validToField?: string
 }
 
 const party = (prefix: string): FieldPredicate[] => [
@@ -133,6 +170,51 @@ export const FIELD_PREDICATES: Record<string, FieldPredicate[]> = {
     ...same('service_description', 'currency', 'fee_period', 'starts_on', 'ends_on', 'notice_period', 'auto_renewal', 'signed_on'),
     { field: 'fee_amount', predicate: 'amount' },
   ],
+  'agreement.insurance': [
+    ...party('insurer'),
+    ...same('policy_number', 'cover_description', 'currency', 'deductible_amount', 'starts_on', 'ends_on', 'notice_months', 'auto_renewal', 'signed_on'),
+    { field: 'premium_amount', predicate: 'amount' },
+    { field: 'premium_period', predicate: 'fee_period' },
+  ],
+  'agreement.employment': [
+    ...same('employee_name', 'role_title', 'employment_form', 'starts_on', 'ends_on', 'currency', 'hours_per_week', 'vacation_days', 'notice_months', 'collective_agreement', 'signed_on'),
+    { field: 'monthly_salary', predicate: 'amount' },
+  ],
+  'agreement.shareholder': [
+    ...same('parties_summary', 'transfer_restrictions', 'drag_along', 'tag_along', 'board_composition', 'reserved_matters', 'ends_on', 'signed_on'),
+    { field: 'effective_on', predicate: 'starts_on' },
+  ],
+  'agreement.investment': [
+    ...party('investor'),
+    ...same('investment_amount', 'currency', 'price_per_share', 'pre_money_valuation', 'closing_on', 'signed_on'),
+    { field: 'share_count', predicate: 'shares_subscribed' },
+  ],
+  'agreement.customer': [
+    ...party('customer'),
+    ...same('service_description', 'currency', 'fee_period', 'starts_on', 'ends_on', 'notice_months', 'signed_on'),
+    { field: 'fee_amount', predicate: 'amount' },
+  ],
+  'agreement.other': [
+    ...party('counterparty'),
+    ...same('subject', 'amount', 'currency', 'starts_on', 'ends_on', 'notice_months', 'signed_on'),
+  ],
+  'minutes.board': [{ field: 'decisions', predicate: 'minutes_decisions', validFromField: 'meeting_date' }],
+  'minutes.agm': [
+    { field: 'decisions', predicate: 'minutes_decisions', validFromField: 'meeting_date' },
+    { field: 'dividend_amount', predicate: 'dividend_decided', validFromField: 'meeting_date' },
+    { field: 'board_elected', predicate: 'board_elected', validFromField: 'meeting_date' },
+    { field: 'auditor_elected', predicate: 'auditor_elected', validFromField: 'meeting_date' },
+  ],
+  share_subscription_list: [{ field: 'price_per_share', predicate: 'share_issue_price', validFromField: 'decision_date' }],
+  annual_report: [
+    { field: 'revenue', predicate: 'annual_revenue', validFromField: 'fiscal_year_start', validToField: 'fiscal_year_end' },
+    { field: 'net_result', predicate: 'annual_net_result', validFromField: 'fiscal_year_start', validToField: 'fiscal_year_end' },
+    { field: 'total_assets', predicate: 'annual_total_assets', validFromField: 'fiscal_year_start', validToField: 'fiscal_year_end' },
+    { field: 'equity', predicate: 'annual_equity', validFromField: 'fiscal_year_start', validToField: 'fiscal_year_end' },
+    { field: 'employees_average', predicate: 'employees_average', validFromField: 'fiscal_year_start', validToField: 'fiscal_year_end' },
+    { field: 'auditor_report', predicate: 'auditor_report', validFromField: 'fiscal_year_start', validToField: 'fiscal_year_end' },
+  ],
+  'filing.bolagsverket': [{ field: 'changes_summary', predicate: 'bolagsverket_filing', validFromField: 'filed_on' }],
 }
 
 /** Schemas whose settled fields become facts. */

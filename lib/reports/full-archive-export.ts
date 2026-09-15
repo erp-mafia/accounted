@@ -1280,6 +1280,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   // re-readable from them, so it is not räkenskapsinformation of its own.
   document_pages: 'page text derived from the originals in dokument/; re-readable',
   document_jobs: 'pipeline queue state (read, classify and extract jobs); no bookkeeping content',
+  arkiv_findings: 'nightly lint findings, recomputed from the archive and the settings; no bookkeeping content',
+  arkiv_autonomy: 'audit tallies per document type, recomputed nightly from activities',
   // Verification metadata ABOUT räkenskapsinformation, not räkenskapsinformation
   // itself: one row per nightly SHA-256 recompute of an archived document
   // (migration 20260901130000). The documents ship under dokument/ with their

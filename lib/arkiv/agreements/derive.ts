@@ -7,7 +7,7 @@ import { addMonths, monthlySeries } from './dates'
  * rejected, stays out: the schedule that needs it waits for a person instead
  * of guessing. Nothing here touches the database.
  */
-export type AgreementKind = 'rental' | 'lease' | 'loan' | 'subscription'
+export type AgreementKind = 'rental' | 'lease' | 'loan' | 'subscription' | 'insurance' | 'employment' | 'shareholder' | 'investment' | 'customer' | 'other'
 export type Period = 'monthly' | 'quarterly' | 'yearly' | 'one_time'
 export type ObligationKind = 'payment' | 'deposit' | 'first_payment' | 'residual' | 'amortisation' | 'interest'
 
@@ -16,6 +16,12 @@ const KIND_BY_SCHEMA: Record<string, AgreementKind> = {
   'agreement.lease': 'lease',
   'agreement.loan': 'loan',
   'agreement.subscription': 'subscription',
+  'agreement.insurance': 'insurance',
+  'agreement.employment': 'employment',
+  'agreement.shareholder': 'shareholder',
+  'agreement.investment': 'investment',
+  'agreement.customer': 'customer',
+  'agreement.other': 'other',
 }
 
 export function agreementKindFor(schemaType: string | null | undefined): AgreementKind | null {
@@ -52,10 +58,12 @@ export interface ObligationDraft {
   /** Computed from other values rather than printed. */
   estimate: boolean
   fields: string[]
+  /** Money leaving the company (the default) or arriving, as with a customer's fee. */
+  direction?: 'out' | 'in'
 }
 
 export interface DeadlineDraft {
-  key: 'notice' | 'end' | 'maturity' | 'amortisation_start'
+  key: 'notice' | 'end' | 'maturity' | 'amortisation_start' | 'closing'
   title: string
   dueOn: string
   priority: 'important' | 'normal'
@@ -160,13 +168,33 @@ const DERIVERS: Record<AgreementKind, Deriver> = {
     }
     const deadlines: DeadlineDraft[] = []
     if (endsOn && noticeMonths != null) {
-      deadlines.push({ key: 'notice', title: `Sista dag att säga upp ${lower(title)}`, dueOn: addMonths(endsOn, -noticeMonths), priority: 'important', fields: ['ends_on', 'notice_months'] })
+      deadlines.push({
+        key: 'notice',
+        title: `Sista dag att säga upp ${lower(title)}`,
+        dueOn: addMonths(endsOn, -noticeMonths),
+        priority: 'important',
+        fields: ['ends_on', 'notice_months'],
+      })
     }
     if (endsOn) {
       deadlines.push({ key: 'end', title: `${title} löper ut${renewalTerms ? ', förlängs annars' : ''}`, dueOn: endsOn, priority: 'normal', fields: ['ends_on'] })
     }
     return {
-      agreement: { kind: 'rental', title, counterparty, startsOn, endsOn, noticeMonths, renewalTerms, amount, currency, period: 'monthly', principal: null, interestRate: null, sources: {} },
+      agreement: {
+        kind: 'rental',
+        title,
+        counterparty,
+        startsOn,
+        endsOn,
+        noticeMonths,
+        renewalTerms,
+        amount,
+        currency,
+        period: 'monthly',
+        principal: null,
+        interestRate: null,
+        sources: {},
+      },
       obligations,
       deadlines: futureOnly(deadlines, today),
       waitingOn: record.missing('monthly_rent', 'starts_on'),
@@ -188,13 +216,29 @@ const DERIVERS: Record<AgreementKind, Deriver> = {
         obligations.push({ kind: 'payment', dueOn, amount, currency, estimate: false, fields: ['monthly_fee', 'starts_on'] })
       }
       const first = record.number('first_payment')
-      if (first != null && inWindow(startsOn, window)) obligations.push({ kind: 'first_payment', dueOn: startsOn, amount: first, currency, estimate: false, fields: ['first_payment', 'starts_on'] })
+      if (first != null && inWindow(startsOn, window))
+        obligations.push({ kind: 'first_payment', dueOn: startsOn, amount: first, currency, estimate: false, fields: ['first_payment', 'starts_on'] })
       const residual = record.number('residual_value')
-      if (residual != null && endsOn && inWindow(endsOn, window)) obligations.push({ kind: 'residual', dueOn: endsOn, amount: residual, currency, estimate: false, fields: ['residual_value', 'ends_on'] })
+      if (residual != null && endsOn && inWindow(endsOn, window))
+        obligations.push({ kind: 'residual', dueOn: endsOn, amount: residual, currency, estimate: false, fields: ['residual_value', 'ends_on'] })
     }
     const deadlines: DeadlineDraft[] = endsOn ? [{ key: 'end', title: `${title} löper ut`, dueOn: endsOn, priority: 'normal', fields: ['ends_on'] }] : []
     return {
-      agreement: { kind: 'lease', title, counterparty, startsOn, endsOn, noticeMonths: null, renewalTerms: null, amount, currency, period: 'monthly', principal: null, interestRate: null, sources: {} },
+      agreement: {
+        kind: 'lease',
+        title,
+        counterparty,
+        startsOn,
+        endsOn,
+        noticeMonths: null,
+        renewalTerms: null,
+        amount,
+        currency,
+        period: 'monthly',
+        principal: null,
+        interestRate: null,
+        sources: {},
+      },
       obligations,
       deadlines: futureOnly(deadlines, today),
       waitingOn: record.missing('monthly_fee', 'starts_on'),
@@ -228,11 +272,25 @@ const DERIVERS: Record<AgreementKind, Deriver> = {
         const dueOn = addMonths(startsOn, k * step)
         if (dueOn > (endsOn && endsOn < window.to ? endsOn : window.to)) break
         if (rate != null && !interestAccrues && inWindow(dueOn, window)) {
-          obligations.push({ kind: 'interest', dueOn, amount: roundOre((remaining * rate) / 100 * (step / 12)), currency, estimate: true, fields: ['principal', 'interest_rate', 'disbursed_on'] })
+          obligations.push({
+            kind: 'interest',
+            dueOn,
+            amount: roundOre(((remaining * rate) / 100) * (step / 12)),
+            currency,
+            estimate: true,
+            fields: ['principal', 'interest_rate', 'disbursed_on'],
+          })
         }
         if (firstAmortisation && instalment != null && dueOn >= firstAmortisation) {
           if (inWindow(dueOn, window)) {
-            obligations.push({ kind: 'amortisation', dueOn, amount: instalment, currency, estimate: printedInstalment == null, fields: printedInstalment == null ? ['principal', 'term_months', 'disbursed_on'] : ['instalment_amount', 'disbursed_on'] })
+            obligations.push({
+              kind: 'amortisation',
+              dueOn,
+              amount: instalment,
+              currency,
+              estimate: printedInstalment == null,
+              fields: printedInstalment == null ? ['principal', 'term_months', 'disbursed_on'] : ['instalment_amount', 'disbursed_on'],
+            })
           }
           remaining = Math.max(0, roundOre(remaining - instalment))
         }
@@ -245,7 +303,13 @@ const DERIVERS: Record<AgreementKind, Deriver> = {
     const deadlines: DeadlineDraft[] = []
     if (endsOn) deadlines.push({ key: 'maturity', title: `${title} förfaller till slutbetalning`, dueOn: endsOn, priority: 'important', fields: ['maturity_on'] })
     if (firstAmortisation && freeMonths > 0 && (!endsOn || firstAmortisation < endsOn)) {
-      deadlines.push({ key: 'amortisation_start', title: `Amorteringen på ${lower(title)} börjar`, dueOn: firstAmortisation, priority: 'normal', fields: ['disbursed_on', 'amortisation_free_months'] })
+      deadlines.push({
+        key: 'amortisation_start',
+        title: `Amorteringen på ${lower(title)} börjar`,
+        dueOn: firstAmortisation,
+        priority: 'normal',
+        fields: ['disbursed_on', 'amortisation_free_months'],
+      })
     }
     return {
       agreement: {
@@ -289,14 +353,289 @@ const DERIVERS: Record<AgreementKind, Deriver> = {
     }
     const deadlines: DeadlineDraft[] = []
     if (endsOn && noticeMonths != null) {
-      deadlines.push({ key: 'notice', title: `Sista dag att säga upp ${lower(title)}`, dueOn: addMonths(endsOn, -noticeMonths), priority: 'important', fields: ['ends_on', 'notice_period'] })
+      deadlines.push({
+        key: 'notice',
+        title: `Sista dag att säga upp ${lower(title)}`,
+        dueOn: addMonths(endsOn, -noticeMonths),
+        priority: 'important',
+        fields: ['ends_on', 'notice_period'],
+      })
     }
-    if (endsOn) deadlines.push({ key: 'end', title: `Bindningstiden för ${lower(title)} går ut${autoRenewal ? ', förlängs annars automatiskt' : ''}`, dueOn: endsOn, priority: 'normal', fields: ['ends_on'] })
+    if (endsOn)
+      deadlines.push({
+        key: 'end',
+        title: `Bindningstiden för ${lower(title)} går ut${autoRenewal ? ', förlängs annars automatiskt' : ''}`,
+        dueOn: endsOn,
+        priority: 'normal',
+        fields: ['ends_on'],
+      })
     return {
-      agreement: { kind: 'subscription', title, counterparty, startsOn, endsOn, noticeMonths, renewalTerms: autoRenewal ? 'Förlängs automatiskt' : null, amount, currency, period, principal: null, interestRate: null, sources: {} },
+      agreement: {
+        kind: 'subscription',
+        title,
+        counterparty,
+        startsOn,
+        endsOn,
+        noticeMonths,
+        renewalTerms: autoRenewal ? 'Förlängs automatiskt' : null,
+        amount,
+        currency,
+        period,
+        principal: null,
+        interestRate: null,
+        sources: {},
+      },
       obligations,
       deadlines: futureOnly(deadlines, today),
       waitingOn: record.missing('fee_amount'),
+    }
+  },
+
+  insurance(record, window, today) {
+    const counterparty = party(record, 'insurer')
+    const amount = record.number('premium_amount')
+    const currency = record.text('currency') ?? 'SEK'
+    const period = periodFromEnum(record.text('premium_period')) ?? 'yearly'
+    const startsOn = record.date('starts_on')
+    const endsOn = record.date('ends_on')
+    const noticeMonths = record.number('notice_months')
+    const autoRenewal = record.text('auto_renewal') === 'yes'
+    const title = `Försäkring ${record.text('policy_number') ?? counterparty.name ?? ''}`.trim()
+    record.text('cover_description')
+
+    const obligations: ObligationDraft[] = []
+    if (amount != null && startsOn) {
+      const fields = ['premium_amount', 'premium_period', 'starts_on']
+      const dates = period === 'one_time' ? (inWindow(startsOn, window) ? [startsOn] : []) : monthlySeries(startsOn, PERIOD_MONTHS[period], { ...window, end: endsOn })
+      for (const dueOn of dates) obligations.push({ kind: 'payment', dueOn, amount, currency, estimate: false, fields })
+    }
+    const deadlines: DeadlineDraft[] = []
+    if (endsOn && noticeMonths != null) {
+      deadlines.push({
+        key: 'notice',
+        title: `Sista dag att säga upp ${lower(title)}`,
+        dueOn: addMonths(endsOn, -noticeMonths),
+        priority: 'important',
+        fields: ['ends_on', 'notice_months'],
+      })
+    }
+    if (endsOn) deadlines.push({ key: 'end', title: `${title} ${autoRenewal ? 'förnyas' : 'löper ut'}`, dueOn: endsOn, priority: 'normal', fields: ['ends_on'] })
+    return {
+      agreement: {
+        kind: 'insurance',
+        title,
+        counterparty,
+        startsOn,
+        endsOn,
+        noticeMonths,
+        renewalTerms: autoRenewal ? 'Förnyas automatiskt' : null,
+        amount,
+        currency,
+        period,
+        principal: null,
+        interestRate: null,
+        sources: {},
+      },
+      obligations,
+      deadlines: futureOnly(deadlines, today),
+      waitingOn: record.missing('premium_amount', 'starts_on'),
+    }
+  },
+
+  employment(record, _window, today) {
+    // Salary runs through payroll, never through expected payments.
+    const name = record.text('employee_name')
+    const amount = record.number('monthly_salary')
+    const currency = record.text('currency') ?? 'SEK'
+    const startsOn = record.date('starts_on')
+    const endsOn = record.date('ends_on')
+    const noticeMonths = record.number('notice_months')
+    const form = record.text('employment_form')
+    const title = `Anställningsavtal ${name ?? record.text('role_title') ?? ''}`.trim()
+    const deadlines: DeadlineDraft[] = []
+    if (endsOn) {
+      deadlines.push({
+        key: 'end',
+        title: form === 'probation' ? `Provanställningen för ${name ?? 'anställd'} går ut` : `${title} löper ut`,
+        dueOn: endsOn,
+        priority: 'important',
+        fields: ['ends_on'],
+      })
+    }
+    return {
+      agreement: {
+        kind: 'employment',
+        title,
+        counterparty: { name, orgNumber: null },
+        startsOn,
+        endsOn,
+        noticeMonths,
+        renewalTerms: null,
+        amount,
+        currency,
+        period: amount != null ? 'monthly' : null,
+        principal: null,
+        interestRate: null,
+        sources: {},
+      },
+      obligations: [],
+      deadlines: futureOnly(deadlines, today),
+      waitingOn: record.missing('employee_name'),
+    }
+  },
+
+  shareholder(record, _window, today) {
+    const startsOn = record.date('effective_on') ?? record.date('signed_on')
+    const endsOn = record.date('ends_on')
+    const title = `Aktieägaravtal ${record.text('company_name') ?? ''}`.trim()
+    // Read for its source: the parties are what the page shows as the excerpt.
+    record.text('parties_summary')
+    const deadlines: DeadlineDraft[] = endsOn ? [{ key: 'end', title: `${title} löper ut`, dueOn: endsOn, priority: 'normal', fields: ['ends_on'] }] : []
+    return {
+      agreement: {
+        kind: 'shareholder',
+        title,
+        counterparty: { name: null, orgNumber: null },
+        startsOn,
+        endsOn,
+        noticeMonths: null,
+        renewalTerms: null,
+        amount: null,
+        currency: 'SEK',
+        period: null,
+        principal: null,
+        interestRate: null,
+        sources: {},
+      },
+      obligations: [],
+      deadlines: futureOnly(deadlines, today),
+      waitingOn: record.missing('parties_summary'),
+    }
+  },
+
+  investment(record, window, today) {
+    const counterparty = party(record, 'investor')
+    const amount = record.number('investment_amount')
+    const currency = record.text('currency') ?? 'SEK'
+    const closingOn = record.date('closing_on')
+    const startsOn = record.date('signed_on')
+    const title = `Investering ${counterparty.name ?? ''}`.trim()
+    const obligations: ObligationDraft[] = []
+    if (amount != null && closingOn && inWindow(closingOn, window)) {
+      obligations.push({ kind: 'payment', dueOn: closingOn, amount, currency, estimate: false, fields: ['investment_amount', 'closing_on'], direction: 'in' })
+    }
+    const deadlines: DeadlineDraft[] = closingOn
+      ? [{ key: 'closing', title: `Tillträde för ${lower(title)}`, dueOn: closingOn, priority: 'important', fields: ['closing_on'] }]
+      : []
+    return {
+      agreement: {
+        kind: 'investment',
+        title,
+        counterparty,
+        startsOn,
+        endsOn: null,
+        noticeMonths: null,
+        renewalTerms: null,
+        amount,
+        currency,
+        period: 'one_time',
+        principal: null,
+        interestRate: null,
+        sources: {},
+      },
+      obligations,
+      deadlines: futureOnly(deadlines, today),
+      waitingOn: record.missing('investment_amount'),
+    }
+  },
+
+  customer(record, window, today) {
+    const counterparty = party(record, 'customer')
+    const amount = record.number('fee_amount')
+    const currency = record.text('currency') ?? 'SEK'
+    const period = periodFromEnum(record.text('fee_period')) ?? 'monthly'
+    const startsOn = record.date('starts_on')
+    const endsOn = record.date('ends_on')
+    const noticeMonths = record.number('notice_months')
+    const title = `Kundavtal ${counterparty.name ?? record.text('service_description') ?? ''}`.trim()
+    const obligations: ObligationDraft[] = []
+    if (amount != null && startsOn) {
+      const fields = ['fee_amount', 'fee_period', 'starts_on']
+      const dates = period === 'one_time' ? (inWindow(startsOn, window) ? [startsOn] : []) : monthlySeries(startsOn, PERIOD_MONTHS[period], { ...window, end: endsOn })
+      for (const dueOn of dates) obligations.push({ kind: 'payment', dueOn, amount, currency, estimate: false, fields, direction: 'in' })
+    }
+    const deadlines: DeadlineDraft[] = []
+    if (endsOn && noticeMonths != null) {
+      deadlines.push({
+        key: 'notice',
+        title: `Sista dag att säga upp ${lower(title)}`,
+        dueOn: addMonths(endsOn, -noticeMonths),
+        priority: 'important',
+        fields: ['ends_on', 'notice_months'],
+      })
+    }
+    if (endsOn) deadlines.push({ key: 'end', title: `${title} löper ut`, dueOn: endsOn, priority: 'normal', fields: ['ends_on'] })
+    return {
+      agreement: {
+        kind: 'customer',
+        title,
+        counterparty,
+        startsOn,
+        endsOn,
+        noticeMonths,
+        renewalTerms: null,
+        amount,
+        currency,
+        period,
+        principal: null,
+        interestRate: null,
+        sources: {},
+      },
+      obligations,
+      deadlines: futureOnly(deadlines, today),
+      waitingOn: record.missing('fee_amount', 'starts_on'),
+    }
+  },
+
+  other(record, _window, today) {
+    const counterparty = party(record, 'counterparty')
+    const amount = record.number('amount')
+    const currency = record.text('currency') ?? 'SEK'
+    const startsOn = record.date('starts_on') ?? record.date('signed_on')
+    const endsOn = record.date('ends_on')
+    const noticeMonths = record.number('notice_months')
+    const title = `Avtal ${counterparty.name ?? ''}`.trim()
+    record.text('subject')
+    const deadlines: DeadlineDraft[] = []
+    if (endsOn && noticeMonths != null) {
+      deadlines.push({
+        key: 'notice',
+        title: `Sista dag att säga upp ${lower(title)}`,
+        dueOn: addMonths(endsOn, -noticeMonths),
+        priority: 'important',
+        fields: ['ends_on', 'notice_months'],
+      })
+    }
+    if (endsOn) deadlines.push({ key: 'end', title: `${title} löper ut`, dueOn: endsOn, priority: 'normal', fields: ['ends_on'] })
+    return {
+      agreement: {
+        kind: 'other',
+        title,
+        counterparty,
+        startsOn,
+        endsOn,
+        noticeMonths,
+        renewalTerms: null,
+        amount,
+        currency,
+        period: amount != null ? 'one_time' : null,
+        principal: null,
+        interestRate: null,
+        sources: {},
+      },
+      obligations: [],
+      deadlines: futureOnly(deadlines, today),
+      waitingOn: record.missing('subject'),
     }
   },
 }
@@ -312,13 +651,27 @@ const futureOnly = (deadlines: DeadlineDraft[], today: string) => deadlines.filt
 /** "Hyresavtal Vasagatan 12" reads "hyresavtalet Vasagatan 12" inside a sentence. */
 function lower(title: string): string {
   const [head, ...rest] = title.split(' ')
-  const definite: Record<string, string> = { Hyresavtal: 'hyresavtalet', Leasingavtal: 'leasingavtalet', Lån: 'lånet', Abonnemang: 'abonnemanget' }
+  const definite: Record<string, string> = {
+    Hyresavtal: 'hyresavtalet',
+    Leasingavtal: 'leasingavtalet',
+    Lån: 'lånet',
+    Abonnemang: 'abonnemanget',
+    Försäkring: 'försäkringen',
+    Anställningsavtal: 'anställningsavtalet',
+    Aktieägaravtal: 'aktieägaravtalet',
+    Investering: 'investeringen',
+    Kundavtal: 'kundavtalet',
+    Avtal: 'avtalet',
+  }
   return [definite[head] ?? head.toLowerCase(), ...rest].join(' ')
 }
 
 /** Interest that is compounded, added to the loan, or paid at maturity or conversion, as the terms describe it. */
 function interestAccruesUntilMaturity(terms: string | null): boolean {
-  return terms != null && /compound|kapitalis|added to the (loan|principal)|läggs till (lånet|kapitalet)|vid förfall|(on|at|upon) (the )?maturity|upon conversion|vid konvertering/i.test(terms)
+  return (
+    terms != null &&
+    /compound|kapitalis|added to the (loan|principal)|läggs till (lånet|kapitalet)|vid förfall|(on|at|upon) (the )?maturity|upon conversion|vid konvertering/i.test(terms)
+  )
 }
 
 /** Months between instalments from prose such as "kvartalsvis" or "per år"; monthly when unsaid. */

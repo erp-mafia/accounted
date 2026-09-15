@@ -26,11 +26,12 @@ export function deriveFacts(input: { schemaType: string; payload: Payload; revie
     return field.normalized
   }
   const drafts: FactDraft[] = []
-  for (const { field, predicate, validFromField } of mapping) {
+  for (const { field, predicate, validFromField, validToField } of mapping) {
     const def = PREDICATES[predicate]
     const value = settled(field)
     if (!def || value == null) continue
     const validFrom = validFromField ? settled(validFromField) : null
+    const validTo = validToField ? settled(validToField) : null
     drafts.push({
       subjectKind: def.subject,
       predicate,
@@ -38,7 +39,7 @@ export function deriveFacts(input: { schemaType: string; payload: Payload; revie
       valueText: String(value),
       singleValued: def.singleValued,
       validFrom: typeof validFrom === 'string' ? validFrom : null,
-      validTo: null,
+      validTo: typeof validTo === 'string' ? validTo : null,
       evidence: { field, page: input.payload[field].page, quote: input.payload[field].quote },
     })
   }

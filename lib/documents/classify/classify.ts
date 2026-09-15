@@ -105,13 +105,14 @@ export async function classifyDocument(supabase: SupabaseClient, documentId: str
 
   const { data: pages, error: pagesError } = await supabase
     .from('document_pages')
-    .select('page_no, text')
+    .select('page_no, text, reader, has_text_layer')
     .eq('document_id', documentId)
     .order('page_no', { ascending: true })
   if (pagesError) return { status: 'error', reason: `pages fetch failed: ${pagesError.message}` }
-  const list = (pages ?? []) as Array<{ page_no: number; text: string }>
+  const list = (pages ?? []) as Array<{ page_no: number; text: string; reader: string; has_text_layer: boolean }>
   if (list.length === 0) return { status: 'skipped', reason: 'no_pages' }
   const first = list[0], last = list.length > 1 ? list[list.length - 1] : null
+  const contentSha256 = contentHash(list.map((p) => p.text))
 
   const system = buildClassifySystem(company)
   const prompt = buildClassifyPrompt({ fileName: row.file_name, pageCount: row.page_count, firstPage: first.text, lastPage: last?.text ?? null })
@@ -136,7 +137,49 @@ export async function classifyDocument(supabase: SupabaseClient, documentId: str
   }
 
   const admission: 'admitted' | 'held' = classification.relevance === 'relevant' ? 'admitted' : 'held'
-  return persistClassification(supabase, row, classification, { model, promptSha256: sha256(system + '\n' + prompt), decidedBy: 'model', admission })
+  const signals = await authenticitySignals(supabase, row, classification, list, contentSha256)
+  return persistClassification(supabase, row, classification, { model, promptSha256: sha256(system + '\n' + prompt), decidedBy: 'model', admission, signals, contentSha256 })
+}
+
+/**
+ * Phase 6: what a person should know before trusting the file. Not a verdict:
+ * a scan without a text layer is normal for a photographed receipt, a
+ * duplicate is often the same invoice sent twice, a bundle needs splitting.
+ */
+export type AuthenticitySignal = 'no_text_layer' | 'duplicate_content' | 'multi_document'
+
+async function authenticitySignals(
+  supabase: SupabaseClient,
+  doc: DocumentRow,
+  c: Classification,
+  pages: Array<{ reader: string; has_text_layer: boolean }>,
+  contentSha256: string | null,
+): Promise<AuthenticitySignal[]> {
+  const signals: AuthenticitySignal[] = []
+  if (pages.length > 0 && pages.every((p) => p.reader === 'claude_vision' && !p.has_text_layer)) signals.push('no_text_layer')
+  if (c.is_multi_document) signals.push('multi_document')
+  if (contentSha256) {
+    const { data, error } = await supabase
+      .from('document_classifications')
+      .select('document_id')
+      .eq('company_id', doc.company_id)
+      .eq('is_current', true)
+      .eq('content_sha256', contentSha256)
+      .neq('document_id', doc.id)
+      .limit(1)
+    if (error) log.warn('duplicate check failed', { doc: doc.id, reason: error.message })
+    else if ((data ?? []).length > 0) signals.push('duplicate_content')
+  }
+  return signals
+}
+
+/** The page text with whitespace folded, so the same document read twice hashes the same; null when there is nothing to hash. */
+export function contentHash(texts: string[]): string | null {
+  const folded = texts
+    .map((t) => t.toLowerCase().replace(/\s+/g, ' ').trim())
+    .join('\n')
+    .trim()
+  return folded.length >= 40 ? sha256(folded) : null
 }
 
 /** A person's verdict on type or relevance: the current classification from now on, never overridden by the model. */
@@ -155,7 +198,7 @@ export async function recordHumanClassification(
   if (!doc) return { status: 'skipped', reason: 'not_found' }
   const { data: current } = await supabase
     .from('document_classifications')
-    .select('summary, language, addressed_to, is_multi_document')
+    .select('summary, language, addressed_to, is_multi_document, signals, content_sha256')
     .eq('document_id', documentId)
     .eq('is_current', true)
     .maybeSingle()
@@ -178,7 +221,7 @@ async function persistClassification(
   supabase: SupabaseClient,
   doc: DocumentRow,
   c: Classification,
-  meta: { model: string | null; promptSha256: string | null; decidedBy: 'model' | 'human'; userId?: string; admission: 'admitted' | 'held' },
+  meta: { model: string | null; promptSha256: string | null; decidedBy: 'model' | 'human'; userId?: string; admission: 'admitted' | 'held'; signals?: AuthenticitySignal[]; contentSha256?: string | null },
 ): Promise<ClassifyOutcome> {
   const { error: retireError } = await supabase.from('document_classifications').update({ is_current: false }).eq('document_id', doc.id).eq('is_current', true)
   if (retireError) return { status: 'error', reason: `retire failed: ${retireError.message}` }
@@ -198,6 +241,8 @@ async function persistClassification(
     prompt_sha256: meta.promptSha256,
     decided_by: meta.decidedBy,
     decided_by_user_id: meta.userId ?? null,
+    signals: meta.signals ?? [],
+    content_sha256: meta.contentSha256 ?? null,
     is_current: true,
   })
   if (insertError) return { status: 'error', reason: `insert failed: ${insertError.message}` }

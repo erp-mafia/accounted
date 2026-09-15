@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server'
+import { documentDate, documentTitle } from '@/lib/arkiv/documents/title'
+import type { Payload } from '@/lib/documents/extract/fields'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -36,12 +38,33 @@ export const GET = withRouteContext('arkiv.graph', async (_request, ctx) => {
     ctx.supabase.from('companies').select('name').eq('id', company).maybeSingle(),
     ctx.supabase.from('document_attachments').select('id', { count: 'exact', head: true }).eq('company_id', company).eq('admission_state', 'admitted'),
     ctx.supabase.from('document_attachments').select('id', { count: 'exact', head: true }).eq('company_id', company).not('journal_entry_id', 'is', null),
-    ctx.supabase.from('agreements').select('id, title, kind, ends_on', { count: 'exact' }).eq('company_id', company).order('status', { ascending: true }).order('ends_on', { ascending: true, nullsFirst: false }).limit(MEMBERS_PER_CLUSTER),
-    ctx.supabase.from('document_attachments').select('id, file_name, doc_type, created_at', { count: 'exact' }).eq('company_id', company).eq('admission_state', 'admitted').in('doc_type', AUTHORITY_TYPES).order('created_at', { ascending: false }).limit(MEMBERS_PER_CLUSTER),
+    ctx.supabase
+      .from('agreements')
+      .select('id, title, kind, ends_on', { count: 'exact' })
+      .eq('company_id', company)
+      .order('status', { ascending: true })
+      .order('ends_on', { ascending: true, nullsFirst: false })
+      .limit(MEMBERS_PER_CLUSTER),
+    ctx.supabase
+      .from('document_attachments')
+      .select('id, file_name, doc_type, created_at', { count: 'exact' })
+      .eq('company_id', company)
+      .eq('admission_state', 'admitted')
+      .in('doc_type', AUTHORITY_TYPES)
+      .order('created_at', { ascending: false })
+      .limit(MEMBERS_PER_CLUSTER),
     ctx.supabase.from('document_links').select('party_id', { count: 'exact' }).eq('company_id', company).eq('target_kind', 'party').is('retired_at', null).limit(500),
     ctx.supabase.from('document_links').select('asset_id', { count: 'exact' }).eq('company_id', company).eq('target_kind', 'asset').is('retired_at', null).limit(500),
     ctx.supabase.from('document_attachments').select('id, file_name').eq('company_id', company).eq('admission_state', 'held').order('created_at', { ascending: false }).limit(3),
-    ctx.supabase.from('document_classifications').select('document_id').eq('company_id', company).eq('is_current', true).eq('decided_by', 'model').eq('relevance', 'relevant').eq('doc_type', 'other').limit(3),
+    ctx.supabase
+      .from('document_classifications')
+      .select('document_id')
+      .eq('company_id', company)
+      .eq('is_current', true)
+      .eq('decided_by', 'model')
+      .eq('relevance', 'relevant')
+      .eq('doc_type', 'other')
+      .limit(3),
   ])
   for (const r of [companyRow, documents, verifikat, agreements, authorities, partyLinks, assetLinks, held, unclassified]) {
     if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
@@ -52,22 +75,54 @@ export const GET = withRouteContext('arkiv.graph', async (_request, ctx) => {
   const [parties, assets, unclassifiedDocs] = await Promise.all([
     partyIds.length ? ctx.supabase.from('parties').select('id, display_name').in('id', partyIds.slice(0, MEMBERS_PER_CLUSTER)) : Promise.resolve({ data: [], error: null }),
     assetIds.length ? ctx.supabase.from('assets').select('id, name').in('id', assetIds.slice(0, MEMBERS_PER_CLUSTER)) : Promise.resolve({ data: [], error: null }),
-    unclassified.data?.length ? ctx.supabase.from('document_attachments').select('id, file_name').in('id', (unclassified.data as Array<{ document_id: string }>).map((d) => d.document_id)) : Promise.resolve({ data: [], error: null }),
+    unclassified.data?.length
+      ? ctx.supabase
+          .from('document_attachments')
+          .select('id, file_name')
+          .in(
+            'id',
+            (unclassified.data as Array<{ document_id: string }>).map((d) => d.document_id),
+          )
+      : Promise.resolve({ data: [], error: null }),
   ])
   for (const r of [parties, assets, unclassifiedDocs]) if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
 
+  const authorityRows = (authorities.data ?? []) as Array<{ id: string; file_name: string; doc_type: string; created_at: string }>
+  const authorityPayload = new Map<string, Payload>()
+  if (authorityRows.length) {
+    const { data: read, error: readError } = await ctx.supabase
+      .from('document_extractions')
+      .select('document_id, payload')
+      .in(
+        'document_id',
+        authorityRows.map((d) => d.id),
+      )
+      .eq('is_current', true)
+    if (readError) return NextResponse.json({ error: getErrorMessage(readError) }, { status: 500 })
+    for (const e of (read ?? []) as Array<{ document_id: string; payload: Payload }>) authorityPayload.set(e.document_id, e.payload)
+  }
   const graph: ArkivGraph = {
     company: { name: (companyRow.data as { name: string } | null)?.name ?? '', document_count: documents.count ?? 0 },
     clusters: [
       {
         key: 'avtal',
         count: agreements.count ?? 0,
-        nodes: ((agreements.data ?? []) as Array<{ id: string; title: string; kind: string; ends_on: string | null }>).map((a) => ({ id: a.id, label: a.title, href: `/arkiv/avtal/${a.id}`, meta: a.ends_on ? `till ${a.ends_on}` : null })),
+        nodes: ((agreements.data ?? []) as Array<{ id: string; title: string; kind: string; ends_on: string | null }>).map((a) => ({
+          id: a.id,
+          label: a.title,
+          href: `/arkiv/avtal/${a.id}`,
+          meta: a.ends_on ? `till ${a.ends_on}` : null,
+        })),
       },
       {
         key: 'myndighet',
         count: authorities.count ?? 0,
-        nodes: ((authorities.data ?? []) as Array<{ id: string; file_name: string; doc_type: string; created_at: string }>).map((d) => ({ id: d.id, label: d.file_name, href: `/arkiv/dokument/${d.id}`, meta: d.doc_type })),
+        nodes: authorityRows.map((d) => ({
+          id: d.id,
+          label: documentTitle({ docType: d.doc_type, fileName: d.file_name, payload: authorityPayload.get(d.id) ?? null }),
+          href: `/arkiv/dokument/${d.id}`,
+          meta: documentDate(d.doc_type, authorityPayload.get(d.id) ?? null),
+        })),
       },
       {
         key: 'motparter',
@@ -83,7 +138,12 @@ export const GET = withRouteContext('arkiv.graph', async (_request, ctx) => {
     verifikat_count: verifikat.count ?? 0,
     waiting: [
       ...((held.data ?? []) as Array<{ id: string; file_name: string }>).map((d) => ({ id: d.id, label: d.file_name, href: '/arkiv/granska', meta: 'held' })),
-      ...((unclassifiedDocs.data ?? []) as Array<{ id: string; file_name: string }>).map((d) => ({ id: d.id, label: d.file_name, href: '/arkiv/granska#typ', meta: 'unclassified' })),
+      ...((unclassifiedDocs.data ?? []) as Array<{ id: string; file_name: string }>).map((d) => ({
+        id: d.id,
+        label: d.file_name,
+        href: '/arkiv/granska#typ',
+        meta: 'unclassified',
+      })),
     ].slice(0, 3),
   }
   return NextResponse.json({ data: graph })
