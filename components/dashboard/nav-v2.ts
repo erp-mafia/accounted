@@ -1,17 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import {
-  CheckSquare,
-  Sparkles,
-  ArrowLeftRight,
-  ReceiptText,
-  Wallet,
-  BookOpen,
-  HandCoins,
-  Percent,
-  BarChart3,
-  FileCheck,
-  Landmark,
-} from 'lucide-react'
+import { Archive, ArrowLeftRight, BarChart3, BookOpen, CheckSquare, FileCheck, HandCoins, Landmark, Percent, ReceiptText, Sparkles, Wallet } from 'lucide-react'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
 
@@ -31,6 +19,8 @@ export interface NavGateFlags {
   requiresWebshop?: boolean
   requiresMileage?: boolean
   requiresExpenses?: boolean
+  // Arkiv: shown only for companies in the ARKIV_COMPANY_IDS rollout (computed by the layout).
+  requiresArkiv?: boolean
   requiredCapability?: CapabilityKey
   entityOnly?: EntityType
   byraOnly?: boolean
@@ -123,6 +113,20 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
       { href: '/mileage', labelKey: 'mileage', requiresMileage: true },
       { href: '/supplier-invoices/payment-files', labelKey: 'v2_payment_files' },
       { href: '/suppliers', labelKey: 'suppliers' },
+    ],
+  },
+  {
+    // Arkiv is its own entry after Inköp, where Underlag lives: Underlag is
+    // the queue for what must become a verifikat, Arkiv the place that grows
+    // (plan of record, decision 4).
+    href: '/arkiv',
+    labelKey: 'arkiv',
+    icon: Archive,
+    requiresArkiv: true,
+    sub: [
+      { href: '/arkiv', labelKey: 'arkiv_all' },
+      { href: '/arkiv/avtal', labelKey: 'arkiv_agreements' },
+      { href: '/arkiv/myndighet', labelKey: 'arkiv_authority' },
     ],
   },
   {

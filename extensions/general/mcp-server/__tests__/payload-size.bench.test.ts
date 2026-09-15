@@ -453,7 +453,11 @@ describe('tools/list payload size guard', () => {
     //     Paid for inside the same tool: both property notes lost their
     //     filler ('UUID of the invoice to credit' restates the schema).
     //     Ceiling unchanged, no read demoted.
-    expect(approxTokens).toBeLessThan(60_500)
+    //   * 60.5K → 61.4K when Arkiv phase 5 landed two default-catalog tools:
+    //     gnubok_search_records and gnubok_get_record (the record behind a
+    //     document, agreement, party or verifikat). The four other Arkiv tools
+    //     are catalogVisibility: 'search'. Measured 61 331 on landing.
+    expect(approxTokens).toBeLessThan(61_400)
   })
 
   /**

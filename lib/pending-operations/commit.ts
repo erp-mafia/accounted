@@ -15,6 +15,7 @@
  * private to this module: call `commitPendingOperation()` to invoke them.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { commitArkivProposeFact } from '@/lib/arkiv/facts/propose'
 import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
@@ -7508,6 +7509,9 @@ async function commitPendingOperationInner(
         break
       case 'set_voucher_note':
         result = await commitSetVoucherNote(supabase, companyId, pendingOp.params)
+        break
+      case 'arkiv_propose_fact':
+        result = await commitArkivProposeFact(supabase, userId, companyId, pendingOp.params)
         break
       case 'ignore_transaction':
         result = await commitIgnoreTransaction(supabase, companyId, pendingOp.params)

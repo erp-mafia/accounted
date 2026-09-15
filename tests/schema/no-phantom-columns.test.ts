@@ -195,7 +195,12 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // 2026-09-15: 407 -> 408 for lib/arkiv/agreements/store.ts syncObligations,
 // which inserts one row per due date built by a map; the columns are literal
 // inside the callback but the scanner reads only object and array literals.
-const UNRESOLVED_CEILING = 408
+// 2026-09-15: 408 -> 413 for the Arkiv facts reads (lib/arkiv/facts/store.ts,
+// arkiv-tools.ts, behandlingshistorik.ts): five .or() filters whose values are
+// a date or a search term at runtime (valid_from/valid_to as of a date,
+// belief window, ilike on title and counterparty), which PostgREST can only
+// express as a formatted or-string.
+const UNRESOLVED_CEILING = 413
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

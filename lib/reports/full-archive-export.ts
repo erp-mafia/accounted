@@ -1109,6 +1109,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'document_links', file: 'document_links.json', orderBy: 'created_at' },
   { name: 'agreements', file: 'agreements.json', orderBy: 'created_at' },
   { name: 'agreement_obligations', file: 'agreement_obligations.json', orderBy: 'due_on' },
+  // Arkiv: the dated, sourced facts about the company and its agreements,
+  // every reading kept (superseded and deprecated rows included).
+  { name: 'company_facts', file: 'company_facts.json', orderBy: 'sys_from' },
   // Receipts
   { name: 'receipts', file: 'receipts.json', orderBy: 'receipt_date' },
   // `receipts` has no exchange_rate column, so only the currency is copied:

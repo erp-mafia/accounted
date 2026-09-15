@@ -2444,6 +2444,8 @@ export interface CreateJournalEntryLineInput {
 
 export type PendingOperationType =
   | 'categorize_transaction'
+  // Arkiv: an agent's fact proposal, recorded on approval (lib/arkiv/facts/propose.ts)
+  | 'arkiv_propose_fact'
   | 'create_customer'
   | 'update_customer'
   | 'update_company_settings'

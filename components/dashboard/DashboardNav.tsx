@@ -107,6 +107,8 @@ interface DashboardNavProps {
   // start from the Underlag pane ("Vem betalade?"), so the page only earns a
   // nav row once there is a person to pay out. Computed by the layout.
   hasExpenseClaims?: boolean
+  // Whether the company is in the Arkiv rollout (ARKIV_COMPANY_IDS). Computed by the layout.
+  arkivEnabled?: boolean
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
   // Signed-in user's full name + email: drives the bottom-left account
@@ -123,6 +125,10 @@ type NavLabelKey =
   | 'agent_knowledge'
   | 'kpi'
   | 'invoice_inbox'
+  | 'arkiv'
+  | 'arkiv_all'
+  | 'arkiv_agreements'
+  | 'arkiv_authority'
   | 'invoices'
   | 'quotes'
   | 'sales_orders'
@@ -317,7 +323,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, arkivEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -552,6 +558,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     if (item.requiresMileage && !hasMileage) return false
     // Utlägg is hidden until a claim exists (registered from Underlag).
     if (item.requiresExpenses && !hasExpenseClaims) return false
+    // Arkiv rolls out per company; outside the rollout the pages 404.
+    if (item.requiresArkiv && !arkivEnabled) return false
     // Paywalled surfaces (e.g. the AI-only Dokumentinkorg) are hidden unless
     // the active company holds the capability. The page + API gates enforce
     // the paywall; this keeps the sidebar from advertising a dead workspace.
