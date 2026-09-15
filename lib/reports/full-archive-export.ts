@@ -1038,6 +1038,13 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     file: 'association_distribution_allocations.json',
     orderBy: 'created_at',
   },
+  // Legal-form migrations with posted history: preview snapshot, remap plan
+  // and the reclassification verifikat they produced.
+  {
+    name: 'company_entity_type_migrations',
+    file: 'company_entity_type_migrations.json',
+    orderBy: 'created_at',
+  },
   // Customer invoicing
   { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
   {

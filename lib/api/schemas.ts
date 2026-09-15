@@ -355,10 +355,40 @@ export const BookAssociationDistributionSchema = z
   })
   .strict()
 
+// Legal-form migration of a company with posted history (design section 11).
+export const PlanEntityTypeMigrationSchema = z
+  .object({
+    entity_type: EntityTypeSchema,
+  })
+  .strict()
+
+export const RemapPlanEntrySchema = z
+  .object({
+    account_from: accountNumber,
+    account_to: accountNumber.nullable(),
+    amount: z.number().finite(),
+    decision: z.enum(['confirmed', 'skipped']),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .strict()
+
+export const ApplyEntityTypeMigrationSchema = z
+  .object({
+    remap_plan: z.array(RemapPlanEntrySchema).max(50),
+    entry_date: saneIsoDate.optional(),
+  })
+  .strict()
+
 export const PayAssociationDistributionSchema = z
   .object({
     paid_on: saneIsoDate,
     bank_account: accountNumber.default('1930'),
+  })
+  .strict()
+
+export const RollbackEntityTypeMigrationSchema = z
+  .object({
+    reversal_date: saneIsoDate.optional(),
   })
   .strict()
 

@@ -184,6 +184,67 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Det finns inget öppet räkenskapsår för datumet.',
     message_en: 'No open fiscal period covers the date.',
   },
+  // Legal-form migration of a company with posted history (design section 11).
+  ENTITY_TYPE_MIGRATION_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Endast företagets ägare kan planera, genomföra eller återställa ett byte av företagsform.',
+    message_en: 'Only the company owner can plan, apply or roll back a legal-form migration.',
+  },
+  ENTITY_TYPE_MIGRATION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bytet av företagsform kunde inte hittas.',
+    message_en: 'Legal-form migration not found.',
+  },
+  ENTITY_TYPE_MIGRATION_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv: 'Företagsformen stöds inte.',
+    message_en: 'The legal form is not supported.',
+  },
+  ENTITY_TYPE_MIGRATION_SAME_FORM: {
+    httpStatus: 400,
+    message_sv: 'Företaget har redan den företagsformen.',
+    message_en: 'The company already has that legal form.',
+  },
+  ENTITY_TYPE_MIGRATION_EMPTY_BOOKS: {
+    httpStatus: 409,
+    message_sv: 'Bokföringen är tom: ändra företagsformen direkt (PATCH /api/company/current) i stället för att planera en migrering.',
+    message_en: 'The books are empty: change the legal form directly (PATCH /api/company/current) instead of planning a migration.',
+  },
+  ENTITY_TYPE_MIGRATION_NOT_PLANNED: {
+    httpStatus: 409,
+    message_sv: 'Bytet av företagsform är redan genomfört eller återställt.',
+    message_en: 'The legal-form migration is no longer in the planned state.',
+  },
+  ENTITY_TYPE_MIGRATION_NOT_APPLIED: {
+    httpStatus: 409,
+    message_sv: 'Bara ett genomfört byte av företagsform kan återställas.',
+    message_en: 'Only an applied legal-form migration can be rolled back.',
+  },
+  ENTITY_TYPE_MIGRATION_STALE: {
+    httpStatus: 409,
+    message_sv: 'Bokföringen har ändrats sedan planen gjordes: saldona på beslutskontona är inte längre desamma. Planera bytet på nytt.',
+    message_en: 'The books changed since the plan was made: the decision-account balances differ. Plan the migration again.',
+  },
+  ENTITY_TYPE_MIGRATION_UNDECIDED_ACCOUNT: {
+    httpStatus: 400,
+    message_sv: 'Varje beslutskonto med saldo måste antingen bekräftas med ett målkonto eller hoppas över uttryckligen.',
+    message_en: 'Every decision account with a balance must be confirmed with a target account or skipped explicitly.',
+  },
+  ENTITY_TYPE_MIGRATION_INVALID_PLAN: {
+    httpStatus: 400,
+    message_sv: 'Omföringsplanen hänvisar till ett konto som inte finns bland beslutskontona.',
+    message_en: 'The remap plan references an account outside the decision accounts.',
+  },
+  ENTITY_TYPE_MIGRATION_NO_OPEN_PERIOD: {
+    httpStatus: 409,
+    message_sv: 'Det finns ingen öppen räkenskapsperiod för omföringsdatumet.',
+    message_en: 'No open fiscal period covers the reclassification date.',
+  },
+  ENTITY_TYPE_MIGRATION_RECLASSIFICATION_NOT_REVERSED: {
+    httpStatus: 409,
+    message_sv: 'Omföringsverifikatet måste återföras innan företagsformen kan återställas.',
+    message_en: 'The reclassification voucher must be reversed before the legal form can be restored.',
+  },
   RATE_LIMITED: {
     httpStatus: 429,
     message_sv: 'För många förfrågningar. Vänta en stund och försök igen.',

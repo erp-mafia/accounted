@@ -81,6 +81,10 @@ const RETAINED = new Set([
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',
   'chart_of_accounts.user_id',
+  // Legal-form migrations with posted history (design section 11): who
+  // planned and applied them is part of the audit trail of the books.
+  'company_entity_type_migrations.applied_by',
+  'company_entity_type_migrations.user_id',
   'depreciation_schedules.user_id',
   'document_attachments.uploaded_by',
   'document_attachments.user_id',
