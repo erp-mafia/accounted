@@ -55,6 +55,21 @@ interface FileEntry {
 type Phase = 'drop' | 'importing' | 'imported'
 type Reg = null | 'card' | 'connecting' | 'token' | 'running' | 'done' | 'skipped'
 
+/**
+ * A chart filename short enough to sit beside the SIE file it belongs to.
+ *
+ * The drop surface is 560px wide and centred, and a Spiris export is named
+ * ChartAccounts_Export_20260914-2021.csv: thirty of those thirty-eight
+ * characters are the same on every row, and they pushed the count onto a line
+ * of its own. Elided in the middle rather than truncated at the end, because
+ * the tail is the half that matters here; the year is what says the chart was
+ * paired with the right ledger. The full name stays in the title attribute.
+ */
+function shortChartName(name: string): string {
+  if (name.length <= 24) return name
+  return `${name.slice(0, 10)}…${name.slice(-12)}`
+}
+
 function yearsOf(files: FileEntry[]): string[] {
   const set = new Set<string>()
   for (const f of files) for (const y of f.parsed?.header.fiscalYears ?? []) set.add(y.start)
@@ -511,19 +526,24 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                       is a fact; their sum is a number with no referent. */}
                   {f.status === 'ready' ? (
                     <>
-                      <button
-                        type="button"
-                        className="imp-change"
-                        style={{ marginLeft: 8 }}
-                        onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
-                      >
-                        {f.chart?.applied ? f.chart.name : f.chart ? t('sie_chart_unread') : t('sie_chart_pick')}
-                      </button>
-                      {f.chart?.applied ? (
-                        <span className="bks-f" style={{ marginLeft: 6, color: 'hsl(var(--muted-foreground))' }}>
-                          {t('sie_chart_count', { count: f.chart.treatments })}
-                        </span>
-                      ) : null}
+                      <span style={{ whiteSpace: 'nowrap' }}>
+                        <button
+                          type="button"
+                          className="imp-change"
+                          style={{ marginLeft: 8 }}
+                          title={f.chart?.applied ? f.chart.name : undefined}
+                          onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
+                        >
+                          {f.chart?.applied
+                            ? shortChartName(f.chart.name)
+                            : f.chart ? t('sie_chart_unread') : t('sie_chart_pick')}
+                        </button>
+                        {f.chart?.applied ? (
+                          <span className="bks-f" style={{ marginLeft: 6, color: 'hsl(var(--muted-foreground))' }}>
+                            {t('sie_chart_count', { count: f.chart.treatments })}
+                          </span>
+                        ) : null}
+                      </span>
                     </>
                   ) : null}
                 </p>
