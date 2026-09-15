@@ -50,19 +50,24 @@ interface FileEntry {
    * years, and last year's chart on this year's ledger is the quiet way to a
    * wrong ruta.
    */
-  chart?: {
-    name: string
-    applied: boolean
-    treatments: number
-    format: string | null
-    /**
-     * Why it could not be used, as an import_notices code. The parser knows
-     * whether the header matched no format, the file carried no codes, or it
-     * held no accounts at all, and a single "kunde inte läsas" throws away the
-     * half that says what to do next.
-     */
-    why: string | null
-  }
+  /**
+   * The chart currently in force for this year. Only ever the one whose codes
+   * the mappings actually carry, so the row cannot describe a file the import
+   * is not using.
+   */
+  chart?: { name: string; treatments: number; format: string | null }
+  /**
+   * A pick that could not be used, kept beside the chart rather than replacing
+   * it. applySourceChartCsv leaves the mappings untouched when it cannot read
+   * a file, so the previous chart's treatments are still what gets imported;
+   * overwriting the row's state here would have it report an unread chart
+   * while the import quietly used the old one.
+   *
+   * `why` is an import_notices code. The parser knows whether the header
+   * matched no format, the file carried no codes, or it held no accounts, and
+   * one flat "kunde inte läsas" throws away the half that says what to do next.
+   */
+  chartRejected?: { name: string; why: string | null }
 }
 
 type Phase = 'drop' | 'importing' | 'imported'
@@ -198,22 +203,26 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       setFiles((prev) => prev.map((f) => {
         if (f.id !== fileId || !f.parsed) return f
         const result = applySourceChartCsv(f.parsed.mappings, csv, [])
+        if (!result.applied) {
+          // The mappings are untouched, so whatever chart was in force still
+          // is. Say the pick failed without unsaying the chart.
+          return { ...f, chartRejected: { name: file.name, why: result.notices[0]?.code ?? null } }
+        }
         return {
           ...f,
           parsed: { ...f.parsed, mappings: acceptSourceChartWithoutReview(result.mappings) },
           chart: {
             name: file.name,
-            applied: result.applied,
             treatments: result.summary.treatmentsApplied,
             format: result.summary.formatLabel,
-            why: result.applied ? null : (result.notices[0]?.code ?? null),
           },
+          chartRejected: undefined,
         }
       }))
     } catch {
       if (pick !== chartPick.current[fileId]) return
       setFiles((prev) => prev.map((f) => (
-        f.id === fileId ? { ...f, chart: { name: file.name, applied: false, treatments: 0, format: null, why: null } } : f
+        f.id === fileId ? { ...f, chartRejected: { name: file.name, why: null } } : f
       )))
     }
   }
@@ -563,18 +572,24 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                         type="button"
                         className="imp-change"
                         style={{ marginLeft: 8 }}
-                        title={f.chart ? f.chart.name : undefined}
+                        title={f.chart?.name}
                         onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
                       >
-                        {f.chart?.applied
-                          ? shortChartName(f.chart.name)
-                          : f.chart
-                            ? (f.chart.why && tn.has(f.chart.why) ? tn(f.chart.why, { formats: chartFormat.label, format: chartFormat.label, count: 0 }) : t('sie_chart_unread'))
-                            : t('sie_chart_pick')}
+                        {f.chart ? shortChartName(f.chart.name) : t('sie_chart_pick')}
                       </button>
-                      {f.chart?.applied ? (
+                      {f.chart ? (
                         <span className="bks-f" style={{ marginLeft: 6, color: 'hsl(var(--muted-foreground))' }}>
                           {t('sie_chart_count', { count: f.chart.treatments })}
+                        </span>
+                      ) : null}
+                      {/* A rejected pick sits beside the chart, never over it:
+                          the row keeps naming the file whose codes the import
+                          will actually use. */}
+                      {f.chartRejected ? (
+                        <span className="bks-f is-warn" style={{ marginLeft: 6 }}>
+                          {f.chartRejected.why && tn.has(f.chartRejected.why)
+                            ? tn(f.chartRejected.why, { formats: chartFormat.label, format: chartFormat.label, count: 0 })
+                            : t('sie_chart_unread')}
                         </span>
                       ) : null}
                     </span>
