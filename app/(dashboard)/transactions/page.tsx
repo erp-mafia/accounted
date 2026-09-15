@@ -1761,10 +1761,20 @@ export default function TransactionsPage() {
   useEffect(() => {
     if (!highlightId) return
     if (handledHighlightRef.current === highlightId) return
-    if (transactions.length === 0) return
+    if (transactions.length === 0 && skvRows.length === 0) return
     const tx = transactions.find((t) => t.id === highlightId)
-    if (!tx) return
+    // A verifikat's "Visa transaktion" can also point at a skattekonto row.
+    const skvRow = tx ? null : skvRows.find((r) => r.id === highlightId)
+    if (!tx && !skvRow) return
     handledHighlightRef.current = highlightId
+
+    // The inbox never renders a row that is already booked or ignored, and a
+    // link from a verifikat lands on exactly such a row: widen to the history
+    // view, in memory only, so the deep link has something to scroll to.
+    const outsideInbox = tx
+      ? tx.is_business !== null || tx.is_ignored
+      : Boolean(skvRow?.journal_entry_id || skvRow?.is_ignored)
+    if (outsideInbox && mode === 'inbox') setMode('history')
 
     // A deep link must land on a visible row: when the remembered source
     // filter would hide the highlighted transaction, widen to 'all' in
@@ -1774,11 +1784,14 @@ export default function TransactionsPage() {
     // but the wanted one would hide the row the moment the accounts arrive.
     // 'all' rather than acct:<id> because it also covers rows with a null
     // cash_account_id.
-    const hiddenByFilter =
-      sourceFilter === 'skatteverket' ||
-      (sourceFilter.startsWith('acct:') &&
-        tx.cash_account_id !== sourceFilter.slice('acct:'.length)) ||
-      (sourceFilter === 'bank:other' && tx.cash_account_id != null)
+    // Skattekonto rows belong to no cash account, so any bank-side
+    // narrowing hides them.
+    const hiddenByFilter = tx
+      ? sourceFilter === 'skatteverket' ||
+        (sourceFilter.startsWith('acct:') &&
+          tx.cash_account_id !== sourceFilter.slice('acct:'.length)) ||
+        (sourceFilter === 'bank:other' && tx.cash_account_id != null)
+      : sourceFilter !== 'all' && sourceFilter !== 'skatteverket'
     if (hiddenByFilter) setSourceFilter('all')
 
     // Defer the scroll until React has committed the list to the DOM.
@@ -1786,13 +1799,13 @@ export default function TransactionsPage() {
     // immediately after fetchTransactions resolves.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const el = document.querySelector(`[data-tx-id="${tx.id}"]`)
+        const el = document.querySelector(`[data-tx-id="${highlightId}"]`)
         if (el && 'scrollIntoView' in el) {
           el.scrollIntoView({ behavior: 'smooth', block: 'center' })
         }
       })
     })
-  }, [highlightId, sourceFilter, transactions])
+  }, [highlightId, mode, skvRows, sourceFilter, transactions])
 
   // Auto-fetch suggestions when transactions load
   useEffect(() => {
