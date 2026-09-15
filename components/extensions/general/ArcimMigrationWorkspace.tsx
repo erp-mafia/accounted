@@ -2389,6 +2389,9 @@ function formatSkipReasons(
     )
   }
   if (reasons.unsupported) parts.push(`${reasons.unsupported} kunde inte tolkas`)
+  if (reasons.typeUnresolved) {
+    parts.push(`${reasons.typeUnresolved} utan tillgångstyp: standardkonton användes`)
+  }
   if (reasons.noMatch) {
     const matchLabel = entityType === 'invoice' ? 'utan matchning' : 'utan matchning'
     parts.push(`${reasons.noMatch} ${matchLabel}`)
