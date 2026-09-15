@@ -21,6 +21,7 @@ import type {
 } from '@/lib/bokslut/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
+import { isEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
 interface DispositionsStepProps {
   periodId: string
   onBack: () => void
@@ -220,9 +221,10 @@ export function DispositionsStep({
     (item) => item.status === 'needs_correction',
   ) ?? false
 
-  // EF: depreciation can apply (skattemässig hanteras separat); replace the
-  // AB-only dispositioner with a NE-bilaga declaration section.
-  if (proposal.entityType !== 'aktiebolag') {
+  // Forms without juridisk-person dispositioner (enskild firma, ideell
+  // förening): depreciation can still apply (skattemässig hanteras separat);
+  // replace the dispositioner with a NE-bilaga declaration section.
+  if (!isEntityType(proposal.entityType) || !supportsCorporateTaxDispositions(proposal.entityType)) {
     const fiscalYear = parseInt(proposal.fiscalPeriod.period_end.slice(0, 4), 10)
     return (
       <div className="space-y-6">

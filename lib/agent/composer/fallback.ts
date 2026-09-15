@@ -1,6 +1,6 @@
 import type { ComposerInputs } from './inputs'
 import type { AtomSelection } from './schemas'
-import { ENTITY_TYPE_LABELS_SV, isEntityType } from '@/lib/company/entity-type'
+import { ENTITY_TYPE_LABELS_SV, isEntityType, usesInk2 } from '@/lib/company/entity-type'
 
 // Deterministic atom selection used when the Opus call times out or fails.
 //
@@ -19,6 +19,9 @@ export function fallbackAtomSelection(inputs: ComposerInputs): AtomSelection {
 
   const isAB = inputs.entityType === 'aktiebolag'
   const isEF = inputs.entityType === 'enskild_firma'
+  // Annual report, SRU filing and corporate tax planning follow the INK2
+  // forms: aktiebolag and ekonomisk förening alike.
+  const filesInk2 = isEntityType(inputs.entityType) && usesInk2(inputs.entityType)
 
   const tic = inputs.ticSnapshot as
     | {
@@ -39,7 +42,7 @@ export function fallbackAtomSelection(inputs: ComposerInputs): AtomSelection {
   pushIfKnown(horizontal, 'horizontal/swedish-sie-import-export', has)
   pushIfKnown(horizontal, 'horizontal/swedish-asset-accounting', has)
 
-  if (isAB) {
+  if (filesInk2) {
     pushIfKnown(horizontal, 'horizontal/swedish-financial-reporting', has)
     pushIfKnown(horizontal, 'horizontal/swedish-sru-filing', has)
     pushIfKnown(horizontal, 'horizontal/swedish-tax-planning', has)

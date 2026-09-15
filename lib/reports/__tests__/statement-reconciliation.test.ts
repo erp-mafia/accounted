@@ -177,6 +177,47 @@ describe('reconcileStatements: a failing generator must not read as reconciled',
   })
 })
 
+describe('reconcileStatements: ekonomisk förening', () => {
+  it('reconciles against INK2R like an aktiebolag', async () => {
+    const supabase = {
+      from: (table: string) => {
+        function chain(result: unknown): Record<string, unknown> {
+          const c: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'or', 'order', 'limit', 'contains']) {
+            c[m] = () => c
+          }
+          c.single = async () => result
+          c.maybeSingle = async () => result
+          c.range = async () => result
+          return c
+        }
+        if (table === 'company_settings') {
+          return chain({
+            data: {
+              company_name: 'Testkooperativet',
+              org_number: '7696001234',
+              entity_type: 'ekonomisk_forening',
+              address_line1: 'Testgatan 1',
+              postal_code: '11122',
+              city: 'Stockholm',
+              email: 'test@example.com',
+            },
+            error: null,
+          })
+        }
+        if (table === 'companies') return chain({ data: { entity_type: 'ekonomisk_forening' }, error: null })
+        return makeSupabase().from(table)
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    const result = await reconcileStatements(supabase, COMPANY_ID, PERIOD_ID)
+
+    const statutory = result.figures.find((f) => f.family === 'statutory')
+    expect(statutory?.surface).toBe('INK2R (3.26/3.27)')
+  })
+})
+
 describe('reconcileStatements: entity-type resolution must not fail silently', () => {
   it('throws when the companies lookup genuinely fails', async () => {
     // Regression: resolveEntityType ignored both queries' error, so a DB

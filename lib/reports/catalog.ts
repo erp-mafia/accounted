@@ -43,7 +43,8 @@ export interface ReportDescriptor {
   descKey: string
   category: ReportCategory
   /** When set, the report only appears for this entity type. */
-  entityType?: EntityType
+  /** Restrict to one legal form or a list of forms; omitted means every form. */
+  entityType?: EntityType | readonly EntityType[]
   /** When true, only shown if the company has employees. */
   needsEmployees?: boolean
   params: ReportParams
@@ -234,7 +235,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_ink2_declaration',
     descKey: 'desc_ink2_declaration',
     category: 'tax_vat',
-    entityType: 'aktiebolag',
+    entityType: ['aktiebolag', 'ekonomisk_forening'],
     params: 'fiscal',
   },
 
@@ -358,13 +359,21 @@ export function getReport(slug: string): ReportDescriptor | undefined {
   return REPORT_CATALOG.find((r) => r.slug === slug)
 }
 
+export function reportAppliesToForm(
+  gate: EntityType | readonly EntityType[],
+  entityType: EntityType | undefined,
+): boolean {
+  if (entityType === undefined) return false
+  return Array.isArray(gate) ? gate.includes(entityType) : gate === entityType
+}
+
 function isVisible(
   r: ReportDescriptor,
   entityType?: EntityType,
   hasEmployees?: boolean,
   dimensionsEnabled?: boolean,
 ): boolean {
-  if (r.entityType && r.entityType !== entityType) return false
+  if (r.entityType && !reportAppliesToForm(r.entityType, entityType)) return false
   if (r.needsEmployees && !hasEmployees) return false
   if (r.needsDimensions && !dimensionsEnabled) return false
   return true

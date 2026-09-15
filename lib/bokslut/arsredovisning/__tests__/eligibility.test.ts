@@ -39,6 +39,34 @@ describe('evaluateAnnualReportEligibility', () => {
     expect(result.issues).toEqual([])
   })
 
+  it('fails closed for an ekonomisk förening with the association-specific reason', () => {
+    const result = evaluateAnnualReportEligibility({
+      entityType: 'ekonomisk_forening',
+      framework: 'k2',
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+      profile: completeProfile(),
+      metrics,
+    })
+    const scope = result.issues.find((issue) => issue.code === 'AR-SCOPE-ENTITY')
+    expect(scope?.message).toContain('ekonomisk förening')
+    expect(scope?.message).toContain('ÅRL 3 kap. 10 b §')
+    expect(result.k2_eligible).toBe(false)
+  })
+
+  it('keeps the generic scope message for forms that never prepare an årsredovisning here', () => {
+    const result = evaluateAnnualReportEligibility({
+      entityType: 'ideell_forening',
+      framework: 'k2',
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+      profile: completeProfile(),
+      metrics,
+    })
+    const scope = result.issues.find((issue) => issue.code === 'AR-SCOPE-ENTITY')
+    expect(scope?.message).toContain('aktiebolag')
+  })
+
   it('blocks EUR reports before they can be finalized or filed digitally', () => {
     const profile = completeProfile()
     profile.reporting_currency = 'EUR'

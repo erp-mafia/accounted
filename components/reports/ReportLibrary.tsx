@@ -14,6 +14,7 @@ import {
 } from '@/lib/reports/catalog'
 import type { EntityType } from '@/types'
 
+import { ENTITY_TYPE_ABBREVIATIONS_SV } from '@/lib/company/entity-type'
 /**
  * The report catalog as one dry table (concept "Tabellen"): band rows carry
  * the accounting taxonomy, each report is a single clickable line with its
@@ -179,9 +180,11 @@ function SectionRows({
 }
 
 function EntityMark({ item }: { item: ReportDescriptor }) {
-  if (item.entityType === 'enskild_firma')
-    return <span className="text-xs text-muted-foreground">EF</span>
-  if (item.entityType === 'aktiebolag')
-    return <span className="text-xs text-muted-foreground">AB</span>
-  return null
+  if (!item.entityType) return null
+  const forms: readonly EntityType[] = Array.isArray(item.entityType) ? item.entityType : [item.entityType]
+  return (
+    <span className="text-xs text-muted-foreground">
+      {forms.map((form) => ENTITY_TYPE_ABBREVIATIONS_SV[form]).join(' / ')}
+    </span>
+  )
 }

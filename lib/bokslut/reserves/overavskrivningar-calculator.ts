@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EntityType } from '@/types'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { isEntityType, resolveCompanyEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { proposeAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
@@ -68,7 +68,11 @@ export async function calculateOveravskrivningar(
 ): Promise<OveravskrivningarCalculation> {
   const { supabase, companyId, fiscalPeriod } = input
   const entityType = input.entityType ?? (await loadEntityType(supabase, companyId))
-  if (entityType !== 'aktiebolag') return notApplicable()
+  // Räkenskapsenlig avskrivning (IL 18 kap. 13-17 §§) is a juridisk-person
+  // disposition: it applies to an aktiebolag and an ekonomisk förening alike.
+  if (!isEntityType(entityType) || !supportsCorporateTaxDispositions(entityType)) {
+    return notApplicable()
+  }
 
   const [trialBalance, assets, fiscalPeriods] = await Promise.all([
     generateTrialBalance(supabase, companyId, fiscalPeriod.id, {

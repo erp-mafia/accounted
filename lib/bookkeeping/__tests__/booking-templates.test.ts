@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { makeTransaction } from '@/tests/helpers'
+import type { EntityType } from '@/types'
 import {
   BOOKING_TEMPLATES,
   getTemplateById,
@@ -14,6 +15,7 @@ import {
   validateTemplateForEntity,
   stripBankNoise,
   type BookingTemplate,
+  templateAppliesToForm,
 } from '../booking-templates'
 import { applySettlementAccount } from '../mapping-engine'
 
@@ -22,8 +24,58 @@ import { applySettlementAccount } from '../mapping-engine'
 // ============================================================
 
 describe('BOOKING_TEMPLATES data integrity', () => {
-  it('has exactly 83 templates', () => {
-    expect(BOOKING_TEMPLATES).toHaveLength(83)
+  it('has exactly 86 templates', () => {
+    expect(BOOKING_TEMPLATES).toHaveLength(86)
+  })
+
+  it('scopes templates to legal forms through templateAppliesToForm', () => {
+    const forForm = (entityType: EntityType) =>
+      BOOKING_TEMPLATES.filter((t) => templateAppliesToForm(t, entityType)).map((t) => t.id)
+
+    // Payroll postings do not depend on the form: an ekonomisk förening's
+    // workers are employees, exactly as in an aktiebolag.
+    for (const id of ['personnel_salary', 'personnel_employer_tax', 'personnel_preliminary_tax', 'insurance_pension_ab']) {
+      expect(forForm('aktiebolag'), id).toContain(id)
+      expect(forForm('ekonomisk_forening'), id).toContain(id)
+      expect(forForm('enskild_firma'), id).not.toContain(id)
+    }
+    // Share capital, aktieägartillskott and utdelning stay with the aktiebolag.
+    for (const id of ['share_capital_deposit', 'shareholder_contribution', 'dividend_paid', 'shareholder_loan_received']) {
+      expect(forForm('ekonomisk_forening'), id).not.toContain(id)
+    }
+    // Member capital (EFL 10-11 kap.) exists only for the ekonomisk förening.
+    for (const id of ['member_contribution_received', 'debenture_contribution_received', 'membership_fee_received']) {
+      expect(forForm('ekonomisk_forening'), id).toContain(id)
+      expect(forForm('aktiebolag'), id).not.toContain(id)
+      expect(forForm('ideell_forening'), id).not.toContain(id)
+    }
+  })
+
+  it('books member capital to bundet eget kapital, never to revenue (ÅRL 3 kap. 10 b §)', () => {
+    expect(getTemplateById('member_contribution_received')).toMatchObject({
+      debit_account: '1930',
+      credit_account: '2083',
+      vat_treatment: null,
+      requires_review: true,
+    })
+    expect(getTemplateById('debenture_contribution_received')).toMatchObject({
+      credit_account: '2084',
+      vat_treatment: null,
+    })
+    expect(getTemplateById('membership_fee_received')).toMatchObject({
+      credit_account: '3900',
+      vat_treatment: 'exempt',
+      requires_review: true,
+    })
+    expect(getTemplateById('membership_fee_received')?.special_rules_sv).toContain('4.5c')
+  })
+
+  it('validateTemplateForEntity names every form a multi-form template accepts', () => {
+    const template = getTemplateById('personnel_salary')!
+    expect(validateTemplateForEntity(template, 'ekonomisk_forening')).toEqual({ valid: true })
+    const rejected = validateTemplateForEntity(template, 'enskild_firma')
+    expect(rejected.valid).toBe(false)
+    expect(rejected.error).toContain('aktiebolag, ekonomisk_forening')
   })
 
   it('all template IDs are unique', () => {
@@ -38,7 +90,11 @@ describe('BOOKING_TEMPLATES data integrity', () => {
       expect(t.name_en).toBeTruthy()
       expect(t.group).toBeTruthy()
       expect(['expense', 'income', 'transfer']).toContain(t.direction)
-      expect(['all', 'enskild_firma', 'aktiebolag']).toContain(t.entity_applicability)
+      const forms = Array.isArray(t.entity_applicability) ? t.entity_applicability : [t.entity_applicability]
+      expect(forms.length).toBeGreaterThan(0)
+      for (const form of forms) {
+        expect(['all', 'enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening']).toContain(form)
+      }
       expect(t.debit_account).toMatch(/^\d{4}$/)
       expect(t.credit_account).toMatch(/^\d{4}$/)
       expect(['full', 'non_deductible', 'conditional']).toContain(t.deductibility)
@@ -142,7 +198,7 @@ describe('getTemplateGroups', () => {
   it('every template is in exactly one group', () => {
     const groups = getTemplateGroups()
     const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(83)
+    expect(allTemplates).toHaveLength(86)
   })
 })
 

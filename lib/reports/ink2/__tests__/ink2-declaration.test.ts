@@ -392,6 +392,63 @@ describe('generateINK2Declaration: guards', () => {
     ).rejects.toThrow(/aktiebolag/i)
   })
 
+  it('accepts an ekonomisk förening: the same INK2 return as an aktiebolag', async () => {
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    company_name: 'Testkooperativet ek. för.',
+                    org_number: '7696001234',
+                    entity_type: 'ekonomisk_forening',
+                    address_line1: 'Testgatan 1',
+                    postal_code: '11122',
+                    city: 'Stockholm',
+                    email: 'test@example.com',
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return makeSupabase().from(table)
+      },
+    }
+
+    const result = await generateINK2Declaration(anySupabase(supabase), COMPANY_ID, PERIOD_ID)
+    expect(result.fiscalYear.id).toBe(PERIOD_ID)
+    expect(result.ink2r).toBeDefined()
+    expect(result.ink2s).toBeDefined()
+  })
+
+  it('rejects an ideell förening (INK3, not modelled)', async () => {
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: { entity_type: 'ideell_forening' },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return makeSupabase().from(table)
+      },
+    }
+
+    await expect(
+      generateINK2Declaration(anySupabase(supabase), COMPANY_ID, PERIOD_ID),
+    ).rejects.toThrow(/aktiebolag and ekonomisk förening/i)
+  })
+
   it('warns about a BAS account with no SRU mapping', async () => {
     const withUnmapped = [
       ...PRE_CLOSING_ROWS,

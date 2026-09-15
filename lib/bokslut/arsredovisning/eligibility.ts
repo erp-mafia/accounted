@@ -4,6 +4,7 @@ import type {
   AnnualReportProfile,
   AnnualReportSizeMetrics,
 } from './compliance-types'
+import { isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
 
 const LARGE_COMPANY_THRESHOLDS = {
   employees: 50,
@@ -111,12 +112,27 @@ export function evaluateAnnualReportEligibility(
   const size = sizeClassification(input.metrics)
   const relief = reliefClassification(input.metrics)
 
-  if (input.entityType !== 'aktiebolag') {
+  if (!isEntityType(input.entityType) || !preparesArsredovisning(input.entityType)) {
     issues.push(
       issue(
         'AR-SCOPE-ENTITY',
         'Accounteds årsredovisningsflöde stöder för närvarande aktiebolag.',
         'Använd rätt årsboksluts- eller deklarationsflöde för företagsformen.',
+      ),
+    )
+  } else if (input.entityType !== 'aktiebolag') {
+    // An ekonomisk förening prepares an årsredovisning every year (BFL 6 kap.
+    // 1 §), but its equity is presented with medlemsinsatser and
+    // förlagsinsatser as separate posts under bundet eget kapital (ÅRL 3 kap.
+    // 10 b §), its result disposition is decided by the föreningsstämma and
+    // the revisionsberättelse is mandatory (EFL 8 kap. 1 §). The document
+    // model and iXBRL taxonomy here are built for the aktiebolag, so the form
+    // fails closed until its own adapter ships.
+    issues.push(
+      issue(
+        'AR-SCOPE-ENTITY',
+        'Årsredovisning för ekonomisk förening stöds inte ännu: medlemsinsatser och förlagsinsatser ska redovisas som egna poster under bundet eget kapital (ÅRL 3 kap. 10 b §) och revisionsberättelsen är obligatorisk (EFL 8 kap. 1 §), vilket Accounteds aktiebolagsmall inte hanterar.',
+        'Upprätta årsredovisningen med hjälp av redovisningskonsult eller revisor tills föreningsstödet finns.',
       ),
     )
   }

@@ -569,3 +569,57 @@ describe('arsredovisning: 7 months after FY end (ÅRL 8:3)', () => {
     expect(dates[0].day).toBe(28) // 2025 is not a leap year
   })
 })
+
+describe('ekonomisk förening: juridisk person deadlines with the association wording', () => {
+  const ekf = (over: Partial<Parameters<typeof makeSettings>[0]> = {}) =>
+    makeSettings({ entity_type: 'ekonomisk_forening', ...over })
+
+  it('files INK2 on the same digital schedule as an aktiebolag, under its own rule', () => {
+    const ab = getConfig('inkomstdeklaration_ab')
+    const forening = getConfig('inkomstdeklaration_ekonomisk_forening')
+    expect(ab.condition(ekf())).toBe(false)
+    expect(forening.condition(ekf())).toBe(true)
+    expect(forening.condition(makeSettings({ entity_type: 'aktiebolag' }))).toBe(false)
+    expect(forening.condition(makeSettings({ entity_type: 'ideell_forening' }))).toBe(false)
+    for (const month of [1, 5, 7, 9]) {
+      expect(forening.generateDates(2027, ekf({ fiscal_year_start_month: month }))).toEqual(
+        ab.generateDates(2027, makeSettings({ entity_type: 'aktiebolag', fiscal_year_start_month: month })),
+      )
+    }
+    expect(forening.titleTemplate).toContain('Inkomstdeklaration 2')
+  })
+
+  it('sends årsredovisning and revisionsberättelse to Bolagsverket seven months after year end (ÅRL 8 kap. 3 §)', () => {
+    const ab = getConfig('arsredovisning')
+    const forening = getConfig('arsredovisning_ekonomisk_forening')
+    expect(ab.condition(ekf())).toBe(false)
+    expect(forening.condition(ekf())).toBe(true)
+    expect(forening.generateDates(2027, ekf())[0]).toMatchObject({ day: 31, month: 6, year: 2027, period: '2026' })
+    expect(forening.generateDates(2027, ekf({ fiscal_year_start_month: 7 }))).toEqual(
+      ab.generateDates(2027, makeSettings({ entity_type: 'aktiebolag', fiscal_year_start_month: 7 })),
+    )
+    expect(forening.titleTemplate).toContain('revisionsberättelse')
+    expect(forening.description).toContain('ÅRL 8 kap. 3 §')
+  })
+
+  it('holds the ordinarie föreningsstämma within six months of year end (EFL 6 kap. 9 §)', () => {
+    const ab = getConfig('arsstamma')
+    const forening = getConfig('foreningsstamma')
+    expect(ab.condition(ekf())).toBe(false)
+    expect(forening.condition(ekf())).toBe(true)
+    expect(forening.generateDates(2027, ekf())[0]).toMatchObject({ day: 30, month: 5, year: 2027, period: '2026' })
+    expect(forening.generateDates(2027, ekf({ fiscal_year_start_month: 5 }))).toEqual(
+      ab.generateDates(2027, makeSettings({ entity_type: 'aktiebolag', fiscal_year_start_month: 5 })),
+    )
+    expect(forening.description).toContain('EFL 6 kap. 9 §')
+  })
+
+  it('never offers the enskild firma or ideell förening rules to an ekonomisk förening', () => {
+    expect(getConfig('inkomstdeklaration_ef').condition(ekf())).toBe(false)
+    // Helårsmoms follows the juridisk person schedule (SFL 26 kap. 33 §).
+    const yearly = getConfig('moms_yearly')
+    expect(yearly.generateDates(2027, ekf({ moms_period: 'yearly', vat_filing_method: 'paper' }))[0]).toMatchObject(
+      yearly.generateDates(2027, makeSettings({ entity_type: 'aktiebolag', moms_period: 'yearly', vat_filing_method: 'paper' }))[0],
+    )
+  })
+})

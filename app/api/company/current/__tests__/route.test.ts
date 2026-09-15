@@ -70,6 +70,30 @@ describe('PATCH /api/company/current', () => {
     expect(body.error).toContain('aktiebolag')
   })
 
+  it('rejects K3 for an ideell förening with 400 (årsbokslut, never K2/K3)', async () => {
+    enqueue({ data: { entity_type: 'ideell_forening' } })
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { accounting_framework: 'k3' },
+    })
+    const { status } = await parseJsonResponse<{ error: string }>(await PATCH(req, routeParams))
+    expect(status).toBe(400)
+  })
+
+  it('lets an ekonomisk förening choose K3 (BFNAR 2012:1 applies to every årsredovisning)', async () => {
+    enqueue({ data: { entity_type: 'ekonomisk_forening' } }) // entity check
+    enqueue({ data: { id: 'company-1', accounting_framework: 'k3', entity_type: 'ekonomisk_forening' } }) // update
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { accounting_framework: 'k3' },
+    })
+    const { status, body } = await parseJsonResponse<{
+      data: { accounting_framework: string }
+    }>(await PATCH(req, routeParams))
+    expect(status).toBe(200)
+    expect(body.data.accounting_framework).toBe('k3')
+  })
+
   it('updates the framework for an aktiebolag', async () => {
     enqueue({ data: { entity_type: 'aktiebolag' } }) // entity check
     enqueue({ data: { id: 'company-1', accounting_framework: 'k3', entity_type: 'aktiebolag' } }) // update

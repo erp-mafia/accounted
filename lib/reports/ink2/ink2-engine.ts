@@ -23,6 +23,7 @@ import {
 } from './types'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
 
+import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
 // Re-exported so existing importers (ne-engine, tests) keep their paths.
 export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
 
@@ -30,7 +31,12 @@ export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
  * INK2 Declaration Engine
  *
  * Generates INK2 (huvudblankett), INK2R (räkenskapsschema), and INK2S
- * (skattemässiga justeringar) for aktiebolag tax reporting.
+ * (skattemässiga justeringar) for the juridiska personer that file INK2:
+ * aktiebolag and ekonomiska föreningar (usesInk2 in lib/company/entity-type).
+ * Association-specific INK2S items (tax-exempt membership fees on 4.5c and
+ * the matching non-deductible administration cost on 4.3c, Skatteverket
+ * "Deklarera för en ekonomisk förening") are entered through the generic
+ * manual adjustments until dedicated tagging ships.
  *
  * Account mappings follow the official BAS-to-SRU mapping from
  * bas.se/kontoplaner/sru/ and Skatteverket field code spec.
@@ -254,8 +260,10 @@ export async function generateINK2Declaration(
     entityType = company?.entity_type
   }
 
-  if (entityType !== 'aktiebolag') {
-    throw new Error('INK2 declaration is only for aktiebolag (limited company)')
+  if (!isEntityType(entityType) || !usesInk2(entityType)) {
+    throw new Error(
+      'INK2 declaration is only for aktiebolag and ekonomisk förening (juridiska personer taxed under IL 65 kap. 10 §)',
+    )
   }
 
   // The balance sheet reads the closed books, the income statement the

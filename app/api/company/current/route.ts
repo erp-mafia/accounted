@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
+import { isEntityType, supportsAccountingFramework } from '@/lib/company/entity-type'
 /**
  * GET /api/company/current
  *
@@ -56,8 +57,9 @@ const PatchBodySchema = z.object({
  * because the columns live on different tables.
  *
  * Currently scoped to `accounting_framework` (K2 / K3), only meaningful for
- * entity_type='aktiebolag'. The handler rejects K3 for non-AB to prevent
- * impossible chart-of-accounts states downstream.
+ * forms that prepare an årsredovisning (aktiebolag, ekonomisk förening). The
+ * handler rejects K3 for every other form to prevent impossible
+ * chart-of-accounts states downstream.
  */
 export const PATCH = withRouteContext(
   'company.update_current',
@@ -70,8 +72,9 @@ export const PATCH = withRouteContext(
   const updates: Record<string, unknown> = {}
 
   if (validation.data.accounting_framework !== undefined) {
-    // Only AB can opt in to K3; EF stays on the simpler EF rules and never
-    // touches K2/K3. Fetch the entity_type before applying.
+    // Only forms that prepare an årsredovisning can opt in to K3 (BFNAR
+    // 2012:1); an enskild firma stays on its own rules and never touches
+    // K2/K3. Fetch the entity_type before applying.
     const { data: company } = await supabase
       .from('companies')
       .select('entity_type')
@@ -85,10 +88,10 @@ export const PATCH = withRouteContext(
     }
     if (
       validation.data.accounting_framework === 'k3'
-      && company.entity_type !== 'aktiebolag'
+      && !(isEntityType(company.entity_type) && supportsAccountingFramework(company.entity_type, 'k3'))
     ) {
       return NextResponse.json(
-        { error: 'K3 (BFNAR 2012:1) gäller endast aktiebolag.' },
+        { error: 'K3 (BFNAR 2012:1) gäller endast företag som upprättar årsredovisning (aktiebolag och ekonomisk förening).' },
         { status: 400 },
       )
     }
