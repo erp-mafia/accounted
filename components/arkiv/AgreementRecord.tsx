@@ -72,7 +72,7 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
           )}
         </Section>
         <div className="rounded-lg border border-border p-4">
-          <div className="rounded bg-secondary p-4 text-[12px] leading-relaxed">
+          <div className="rounded-sm bg-secondary p-4 text-[12px] leading-relaxed">
             {view.source.quote ? <span className="rounded-sm border border-warning/60 bg-warning/10 px-1.5 py-0.5">{view.source.quote}</span> : <span className="text-muted-foreground">{view.source.file_name}</span>}
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
