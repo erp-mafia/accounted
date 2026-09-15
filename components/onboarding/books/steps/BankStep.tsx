@@ -12,6 +12,7 @@ import type { CashAccount } from '@/types'
 import { allocateLedgers, ledgerName, ledgerOptions } from '@/lib/onboarding-books/ledger'
 import { LOOKBACK_SAFE_DAYS, resolveLookback, type LookbackMode } from '@/lib/onboarding-books/lookback'
 import { biggestInflow, buildCashSeries, type CashPoint, type CashTx } from '@/lib/onboarding-books/cash-series'
+import { toPickerAccounts, type PickerAccount, type StoredPickerAccount } from '@/lib/onboarding-books/picker-accounts'
 import { InkText } from '@/components/onboarding/journey/ink'
 import { fmtKr } from '../engines/cash-draw'
 import { CashLine } from '../ui/CashLine'
@@ -28,15 +29,6 @@ interface Bank {
   name: string
   country: string
   logo?: string
-}
-
-interface ConnAccount {
-  uid: string
-  name: string
-  nr: string
-  currency: string
-  ledger: string | null
-  balance: number | null
 }
 
 interface SyncSummary {
@@ -76,7 +68,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const [more, setMore] = useState(false)
   const [query, setQuery] = useState('')
 
-  const [accts, setAccts] = useState<ConnAccount[] | null>(null)
+  const [accts, setAccts] = useState<PickerAccount[] | null>(null)
   const [ticked, setTicked] = useState<Record<string, boolean>>(state.bankDraft?.ticked ?? {})
   const [picks, setPicks] = useState<Record<string, string>>(state.bankDraft?.picks ?? {})
   const [open, setOpen] = useState(false)
@@ -236,28 +228,25 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
         .eq('id', state.bankConnectionId)
         .maybeSingle()
       if (cancelled) return
-      const row = data as { id: string; bank_name: string | null; status: string; accounts_data: Array<{ uid: string; name?: string; product?: string; iban?: string; bban?: string; currency: string; ledger_account?: string; balance?: number; claimed_by_company_id?: string }> | null } | null
-      if (!row || !row.accounts_data) {
+      const row = data as { id: string; bank_name: string | null; status: string; accounts_data: StoredPickerAccount[] | null } | null
+      // Nothing to choose from is the bank's answer, not a state to sit in:
+      // back to the bank list with the reason. An account another company
+      // books is NOT that case: it is listed, named and left to the user.
+      if (!row || !row.accounts_data || row.accounts_data.length === 0) {
         setAttn(t('bank_no_accounts'))
         dispatch({ type: 'BANK_PICK_FAILED' })
         return
       }
       if (row.bank_name && row.bank_name !== state.bankName) dispatch({ type: 'BANK_AUTHED', name: row.bank_name, connectionId: row.id })
-      setAccts(row.accounts_data
-        .filter((a) => !a.claimed_by_company_id)
-        .map((a) => ({
-          uid: a.uid,
-          name: a.name || a.product || t('bank_account'),
-          nr: a.bban || a.iban || '',
-          currency: (a.currency || 'SEK').toUpperCase(),
-          ledger: a.ledger_account ?? null,
-          balance: typeof a.balance === 'number' ? a.balance : null,
-        })))
+      setAccts(toPickerAccounts(row.accounts_data, { account: t('bank_account'), otherCompany: t('bank_claimed_other_company') }))
     })()
     return () => { cancelled = true }
   }, [phase, accts, state.bankConnectionId, state.bankName, supabase, dispatch, t])
 
   const tickedList = useMemo(() => (accts ?? []).filter((a) => ticked[a.uid]), [accts, ticked])
+  // The consequence line appears only once one of those accounts is actually
+  // ticked: a notice, not a dialog, and nothing to dismiss.
+  const tickedClaimed = useMemo(() => tickedList.filter((a) => a.claimedBy), [tickedList])
   const usedLedgers = useMemo(
     () => cashAccounts.filter((c) => c.bank_connection_id !== state.bankConnectionId).map((c) => c.ledger_account),
     [cashAccounts, state.bankConnectionId],
@@ -448,20 +437,29 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       {accts === null ? (
           <Wait text={t('bank_loading_accounts')} height={96} />
         ) : (
-          <Pills column>
-            {accts.map((a, i) => (
-              <Pill
-                key={a.uid}
-                index={i}
-                toggle
-                on={!!ticked[a.uid]}
-                onClick={() => setTicked((prev) => ({ ...prev, [a.uid]: !prev[a.uid] }))}
-                trailing={<><span className="cur">{a.currency === 'SEK' ? '' : a.currency}</span><span className="nr">{a.nr}</span></>}
-              >
-                {a.name}
-              </Pill>
-            ))}
-          </Pills>
+          <>
+            <Pills column>
+              {accts.map((a, i) => (
+                <Pill
+                  key={a.uid}
+                  index={i}
+                  toggle
+                  on={!!ticked[a.uid]}
+                  onClick={() => setTicked((prev) => ({ ...prev, [a.uid]: !prev[a.uid] }))}
+                  trailing={<><span className="cur">{a.currency === 'SEK' ? '' : a.currency}</span><span className="nr">{a.nr}</span></>}
+                >
+                  {/* An account another company books is offered like any
+                      other, with the claimant named under it: the app cannot
+                      know which company is its right home (issue #2647). */}
+                  <span className="acct-lbl">
+                    <span>{a.name}</span>
+                    {a.claimedBy ? <span className="acct-claim">{t('bank_claimed', { company: a.claimedBy })}</span> : null}
+                  </span>
+                </Pill>
+              ))}
+            </Pills>
+            {tickedClaimed.length > 0 ? <p className="imp-info">{t('bank_claimed_notice')}</p> : null}
+          </>
         )}
 
       {tickedList.length > 0 ? (

@@ -31,8 +31,10 @@ export default function AddressFields({ initial, onChange, placeholders, enterHi
     })
   }
 
+  // A fragment, not a wrapper div: the action row below has to stay a direct
+  // child of the step for the sticky rule in journey.css to reach it (#2642).
   return (
-    <div>
+    <>
       <div className="jny-addr">
         <div className="jny-biginput">
           <input
@@ -77,6 +79,6 @@ export default function AddressFields({ initial, onChange, placeholders, enterHi
           {skipLabel}
         </button>
       </div>
-    </div>
+    </>
   )
 }

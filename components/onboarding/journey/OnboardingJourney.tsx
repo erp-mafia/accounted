@@ -1375,8 +1375,8 @@ function DoneStep({
   )
 }
 
-/** Delayed mount so the continue action enters (with the standard .jny-qstep
- *  rise) only after the profile card and notes have finished settling. */
+/** Delayed mount so the continue action enters (with the standard step rise)
+ *  only after the profile card and notes have finished settling. */
 function Reveal({ delay, children }: { delay: number; children: React.ReactNode }) {
   const [on, setOn] = useState(false)
   useEffect(() => {
@@ -1386,7 +1386,7 @@ function Reveal({ delay, children }: { delay: number; children: React.ReactNode 
   }, [delay])
   // The slot is laid out from the start (hidden, not absent) so the button's
   // arrival never shifts the card above it; only the fade plays.
-  return <div className={on ? 'jny-qstep' : 'jny-reveal-wait'}>{children}</div>
+  return <div className={on ? 'jny-reveal' : 'jny-reveal-wait'}>{children}</div>
 }
 
 function CardRow({ label, value, delay }: { label: string; value: string; delay: number }) {

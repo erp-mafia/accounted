@@ -40,10 +40,18 @@
 .ypill .cur { font-size: 11px; color: hsl(var(--muted-foreground)); margin-left: 2px; }
 .ypill.is-on { background: hsl(var(--foreground)); color: hsl(var(--background)); border-color: hsl(var(--foreground)); }
 .ypill.is-on .pmark { background: hsl(var(--background)); border-color: hsl(var(--background)); color: hsl(var(--foreground)); }
-.ypill.is-on .cur, .ypill.is-on .nr { color: hsl(var(--background) / 0.7); }
+.ypill.is-on .cur, .ypill.is-on .nr, .ypill.is-on .acct-claim { color: hsl(var(--background) / 0.7); }
 .pills.is-col { flex-direction: column; align-items: stretch; max-width: 400px; gap: 8px; }
 .pills.is-col .pill { justify-content: flex-start; padding-right: 14px; }
 .pills.is-col .nr { margin-left: auto; padding-left: 16px; font-size: 11.5px; color: hsl(var(--muted-foreground)); font-variant-numeric: tabular-nums; }
+/* Account pills carry a second line when another company already books the
+   account: the name above, the claimant quietly under it (issue #2647). */
+.pills.is-col .acct-lbl { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; }
+/* Both lines wrap rather than truncate: which company books the account is
+   the whole point of the label, and "Bokförs redan i Redovisningskompaniet i
+   Stockholm AB" is exactly the length an ellipsis would eat. */
+.pills.is-col .acct-lbl > span { max-width: 100%; overflow-wrap: anywhere; }
+.acct-claim { font-size: 11px; line-height: 1.35; color: hsl(var(--muted-foreground)); }
 
 /* ── the upload surface and the facts that ink in ─────────────────── */
 .drop1 {
