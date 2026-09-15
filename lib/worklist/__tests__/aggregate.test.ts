@@ -8,6 +8,8 @@ vi.mock('../categories', () => ({
   countSuggestedMatches: vi.fn().mockResolvedValue(2),
   countSupplierInvoicesAwaitingApproval: vi.fn().mockResolvedValue(1),
   countVerifikatMissingDocument: vi.fn().mockResolvedValue(3),
+  countHeldDocuments: vi.fn().mockResolvedValue(0),
+  countUnclassifiedDocuments: vi.fn().mockResolvedValue(0),
   countOverdueInvoices: vi.fn().mockResolvedValue(5),
   countDeadlinesNeedingAction: vi.fn().mockResolvedValue(1),
   countPendingOperations: vi.fn().mockResolvedValue(2),
@@ -40,6 +42,8 @@ describe('getWorklistCounts', () => {
       reconciliation_due: 1,
       expense_payout: 2,
       skattekonto_payment_due: 1,
+      document_relevance: 0,
+      document_unclassified: 0,
     })
   })
 

@@ -60,6 +60,7 @@
 5,20,35,50 * * * *  curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/peppol/outbound/status/cron
 45 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/parties/resolver/cron
 */5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/read/cron
+2-59/5 * * * *      curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/classify/cron
 
 # self-hosted-only jobs, not in vercel.json: see EXTRA_JOBS in scripts/generate-crontabs.ts
 17 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/connector/sync/cron

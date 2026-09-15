@@ -133,6 +133,18 @@ export const WORKLIST_CATEGORIES = [
    * a settled event; this one is money that has to move before a date.
    */
   'skattekonto_payment_due',
+  /**
+   * Arkiv (phase 2): documents held at the door because nothing ties them to
+   * the company. Pending: document_attachments.admission_state = 'held'.
+   * Done: a person admitted or removed the document.
+   */
+  'document_relevance',
+  /**
+   * Arkiv (phase 2): admitted documents the classifier could not type
+   * (doc_type 'other' from the model) or typed with low confidence.
+   * Done: a person picked the type.
+   */
+  'document_unclassified',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]

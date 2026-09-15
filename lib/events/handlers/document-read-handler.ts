@@ -2,6 +2,8 @@ import { eventBus } from '@/lib/events/bus'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { readAndStoreDocument } from '@/lib/documents/read/store'
+import { classifyDocument, loadCompanyIdentity } from '@/lib/documents/classify/classify'
+import { isArkivEnabled } from '@/lib/arkiv/flag'
 
 const log = createLogger('document-read')
 
@@ -21,6 +23,12 @@ export function registerDocumentReadHandler(): () => void {
         mime_type: document.mime_type ?? null,
       })
       log.info('document read', { doc: document.id, outcome })
+      const company = document.company_id ?? companyId
+      if (outcome.status === 'read' && isArkivEnabled(company)) {
+        const identity = await loadCompanyIdentity(supabase, company)
+        const classified = await classifyDocument(supabase, document.id, identity)
+        log.info('document classified', { doc: document.id, outcome: classified.status === 'classified' ? { type: classified.classification.doc_type, admission: classified.admission } : classified })
+      }
     } catch (err) {
       log.warn('document read failed', { doc: document.id, reason: err instanceof Error ? err.message : String(err) })
     }
