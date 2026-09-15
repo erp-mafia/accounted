@@ -49,6 +49,7 @@ import { monthsBetween, parseDateParts } from '@/lib/bookkeeping/validate-period
 import { findUntransferredResults } from '@/lib/reports/imbalance-diagnosis'
 import { formatCurrency } from '@/lib/utils'
 import { legacyNotices, makeNotice, type ImportNotice } from '@/lib/import/notices'
+import { userFacing } from '@/lib/errors/user-facing'
 
 /**
  * Format a date to ISO date string (YYYY-MM-DD)
@@ -732,7 +733,12 @@ export async function ensureFiscalPeriod(
   }
 
   if (precheck.verdict === 'conflict' || precheck.verdict === 'invalid') {
-    throw new Error(precheck.message)
+    // precheckFiscalPeriod writes for the reader: closedPeriodRefusal names the
+    // year and the exact settings path that reopens it. Marked so the sentence
+    // survives the error envelope, which otherwise answered a klarmarkerat
+    // year with "Ett oväntat serverfel uppstod" and a 500 on an expected,
+    // self-serve state.
+    throw userFacing(new Error(precheck.message))
   }
 
   const periodToReplaceId: string | null = precheck.replacesEmptyPeriodId
