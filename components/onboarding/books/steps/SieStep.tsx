@@ -68,6 +68,14 @@ interface FileEntry {
    * one flat "kunde inte läsas" throws away the half that says what to do next.
    */
   chartRejected?: { name: string; why: string | null }
+  /**
+   * A chart file whose text() has not come back yet. The import reads the
+   * mappings out of this state, so between the pick and the state update the
+   * row holds a ledger the chart has not reached; starting the import in that
+   * window would write the whole year without the momskoder the pick was for,
+   * and the row would then claim the chart was applied.
+   */
+  chartReading?: boolean
 }
 
 type Phase = 'drop' | 'importing' | 'imported'
@@ -197,18 +205,24 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
    */
   async function applyChart(fileId: string, file: File) {
     const pick = (chartPick.current[fileId] = (chartPick.current[fileId] ?? 0) + 1)
+    const settled = (entry: FileEntry): FileEntry => ({ ...entry, chartReading: false })
+    // Before the await: the import is gated on this flag, and a gate raised
+    // after the read has started is not a gate. A superseded pick leaves it
+    // set on purpose, because the pick that replaced it is still reading.
+    setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, chartReading: true } : f)))
     try {
       const csv = await file.text()
       if (pick !== chartPick.current[fileId]) return
       setFiles((prev) => prev.map((f) => {
-        if (f.id !== fileId || !f.parsed) return f
+        if (f.id !== fileId) return f
+        if (!f.parsed) return settled(f)
         const result = applySourceChartCsv(f.parsed.mappings, csv, [])
         if (!result.applied) {
           // The mappings are untouched, so whatever chart was in force still
           // is. Say the pick failed without unsaying the chart.
-          return { ...f, chartRejected: { name: file.name, why: result.notices[0]?.code ?? null } }
+          return settled({ ...f, chartRejected: { name: file.name, why: result.notices[0]?.code ?? null } })
         }
-        return {
+        return settled({
           ...f,
           parsed: { ...f.parsed, mappings: acceptSourceChartWithoutReview(result.mappings) },
           chart: {
@@ -217,12 +231,12 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
             format: result.summary.formatLabel,
           },
           chartRejected: undefined,
-        }
+        })
       }))
     } catch {
       if (pick !== chartPick.current[fileId]) return
       setFiles((prev) => prev.map((f) => (
-        f.id === fileId ? { ...f, chartRejected: { name: file.name, why: null } } : f
+        f.id === fileId ? settled({ ...f, chartRejected: { name: file.name, why: null } }) : f
       )))
     }
   }
@@ -251,6 +265,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const ready = useMemo(() => files.filter((f) => f.status === 'ready' && f.parsed), [files])
   const ordered = useMemo(() => [...ready].sort((a, b) => (a.parsed!.stats.fiscalYearStart ?? '').localeCompare(b.parsed!.stats.fiscalYearStart ?? '')), [ready])
   const parsing = files.some((f) => f.status === 'parsing')
+  const readingChart = files.some((f) => f.chartReading)
   const company = ready[0]?.parsed?.header.companyName ?? null
   const nYears = yearsOf(ready).length || ready.length
   const totalVouchers = ready.reduce((s, f) => s + (f.parsed?.stats.totalVouchers ?? 0), 0)
@@ -311,7 +326,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   }
 
   async function runImport() {
-    if (ordered.length === 0 || parsing) return
+    if (ordered.length === 0 || parsing || readingChart) return
     setPhase('importing')
     setImportError(null)
     setTick(0)
@@ -642,7 +657,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
               </>
             ) : null}
             {ready.length > 0 && !parsing ? (
-              <button type="button" className="jny-btn" onClick={() => void runImport()}>{t('sie_import', { count: nYears })}</button>
+              <button type="button" className="jny-btn" disabled={readingChart} onClick={() => void runImport()}>{t('sie_import', { count: nYears })}</button>
             ) : null}
           </div>
         </>
