@@ -3531,6 +3531,8 @@ export type YearEndBlockerCode =
   | 'KONTANTMETOD_CUTOFF_CHECK_FAILED'
   | 'UNBOOKED_TRANSACTIONS'
   | 'UNBOOKED_CHECK_FAILED'
+  /** Bostadsrättsförening: no privatbostadsföretag assessment for the taxation year (IL 2 kap. 17 §). */
+  | 'BRF_TAX_PROFILE_MISSING'
 
 export interface YearEndBlocker {
   code: YearEndBlockerCode

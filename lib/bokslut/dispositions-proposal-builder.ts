@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveCompanyEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
+import {
+  hasPropertyIncomeExemption,
+  resolveCompanyEntityType,
+  supportsCorporateTaxDispositions,
+} from '@/lib/company/entity-type'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import {
   calculateBolagsskatt,
@@ -197,14 +201,38 @@ export async function buildDispositionsProposal(
     + overavskrivningarResultEffect
     - (avsattning?.amount ?? 0) - (slp?.amount ?? 0)
 
-  const bolagsskatt = await calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
-    resultBeforeTaxOverride: resultAfterDispositions,
-    manualAdjustments: {
-      nonDeductibleExpenses: taxAdjustments.nonDeductibleExpenses,
-      nonTaxableIncome: taxAdjustments.nonTaxableIncome,
-      schablonintaktPeriodiseringsfond: ateforing.schablonintaktAmount,
-    },
-  })
+  // Bostadsrättsförening: the äkta/oäkta assessment of the year (IL 2 kap.
+  // 17 §) decides whether the property block leaves the base (IL 39 kap.
+  // 25 §, carried by the brf:* adjustment items above). Without it no tax
+  // can be proposed: an äkta förening would be taxed on its årsavgifter,
+  // an oäkta one would miss the uttagsbeskattning.
+  const brfUnassessed =
+    hasPropertyIncomeExemption(form)
+    && (!taxAdjustments.brf || taxAdjustments.brf.status === 'unassessed')
+  if (brfUnassessed) {
+    warnings.push(
+      `Bedömningen av om föreningen är ett privatbostadsföretag (IL 2 kap. 17 §) saknas för inkomståret ${fiscalYear}: ingen bolagsskatt föreslås förrän den är registrerad under Skatt > Bostadsrättsförening.`,
+    )
+  } else if (taxAdjustments.brf?.status === 'akta') {
+    warnings.push(
+      'Privatbostadsföretag: bolagsskatten beräknas på kapitalinkomster utanför fastigheten och annan verksamhet (IL 39 kap. 25 §); periodiseringsfond får sättas av på det skattepliktiga överskottet (IL 30 kap.).',
+    )
+  } else if (taxAdjustments.brf?.status === 'oakta') {
+    warnings.push(
+      'Oäkta bostadsrättsförening: bostadsförmånen (marknadshyra minus årsavgift) ska tas upp som intäkt (IL 22 kap., INK2S 4.6e) och redovisas på KU31; ange beloppet som manuell justering innan skatten bokförs.',
+    )
+  }
+
+  const bolagsskatt = brfUnassessed
+    ? null
+    : await calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
+        resultBeforeTaxOverride: resultAfterDispositions,
+        manualAdjustments: {
+          nonDeductibleExpenses: taxAdjustments.nonDeductibleExpenses,
+          nonTaxableIncome: taxAdjustments.nonTaxableIncome,
+          schablonintaktPeriodiseringsfond: ateforing.schablonintaktAmount,
+        },
+      })
   if (bookedTax > 0) {
     const expectedTax = bolagsskatt?.amount ?? 0
     const matches = bookedTax === expectedTax

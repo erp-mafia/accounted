@@ -27,6 +27,7 @@ import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivni
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { roundOre } from '@/lib/money'
 import { buildDispositionsProposal } from '@/lib/bokslut/dispositions-proposal-builder'
+import { BrfError } from '@/lib/company/brf-tax-profile'
 import type { ProposedDisposition } from '@/lib/bokslut/types'
 import type { JournalEntry } from '@/types'
 
@@ -88,6 +89,9 @@ const PutBodySchema = z.object({
   // (tax-adjustment-service), so the shape is open and the service ignores
   // accounts it does not detect for this company.
   detectedAccounts: z.record(z.string().regex(/^\d{4}$/), z.boolean()),
+  // Keyed by source key: the property block of an äkta bostadsrättsförening
+  // (brf:property_income, brf:property_costs) has no account of its own.
+  detectedItems: z.record(z.string().regex(/^brf:[a-z_]+$/), z.boolean()).optional(),
 })
 
 export const PUT = withRouteContext(
@@ -235,6 +239,9 @@ export const POST = withRouteContext(
 
       return NextResponse.json({ data: { created } })
     } catch (err) {
+      if (err instanceof BrfError) {
+        return errorResponseFromCode(err.code, opLog, { requestId })
+      }
       if (err instanceof OveravskrivningarConflictError) {
         return errorResponseFromCode('CONFLICT', opLog, {
           requestId,
@@ -343,6 +350,12 @@ async function computeProposal(
         0,
         bookedTax - dispositionsEffect.taxProvisionPortion,
       )
+      // Bostadsrättsförening without the year's privatbostadsföretag
+      // assessment (IL 2 kap. 17 §): no tax can be booked, see the
+      // dispositions builder.
+      if (taxAdjustments.brf?.status === 'unassessed') {
+        throw new BrfError('BRF_TAX_PROFILE_REQUIRED')
+      }
       const proposal = await calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
         resultBeforeTaxOverride:
           incomeStatement.net_result + dispositionsEffect.total + manuallyBookedTax,

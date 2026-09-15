@@ -360,6 +360,11 @@ export const BrfPropertyFactsSchema = z
     antal_bostadslagenheter: z.number().int().min(0).max(100_000).nullable().optional(),
     antal_lokaler: z.number().int().min(0).max(100_000).nullable().optional(),
     taxeringsvarde: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
+    // PR 3 tax package: bostadsdel and lokaldel of the taxeringsvärde (the
+    // fastighetsavgift and fastighetsskatt caps) and the building's värdeår.
+    taxeringsvarde_bostader: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
+    taxeringsvarde_lokaler: nonNegativeAmount.max(1_000_000_000_000).nullable().optional(),
+    vardear: z.number().int().min(1800).max(2200).nullable().optional(),
     tomtratt: z.boolean().nullable().optional(),
     tomtratt_avgald_until: saneIsoDate.nullable().optional(),
     // K3 38.2: how long the tomträtt runs, next to the avgäld period.

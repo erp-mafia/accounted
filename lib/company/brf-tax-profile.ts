@@ -27,7 +27,10 @@ import { hasPropertyIncomeExemption, resolveCompanyEntityType } from '@/lib/comp
 
 export const PRIVATBOSTADSFORETAG_QUALIFIED_SHARE_MIN = 0.6
 
-export type BrfErrorCode = 'BRF_FORM_REQUIRED' | 'BRF_TAX_PROFILE_NOT_FOUND'
+export type BrfErrorCode =
+  | 'BRF_FORM_REQUIRED'
+  | 'BRF_TAX_PROFILE_NOT_FOUND'
+  | 'BRF_TAX_PROFILE_REQUIRED'
 
 export class BrfError extends Error {
   readonly code: BrfErrorCode
@@ -49,6 +52,9 @@ export interface BrfPropertyFactsRow {
   antal_bostadslagenheter: number | null
   antal_lokaler: number | null
   taxeringsvarde: number | string | null
+  taxeringsvarde_bostader: number | string | null
+  taxeringsvarde_lokaler: number | string | null
+  vardear: number | null
   tomtratt: boolean | null
   tomtratt_avgald_until: string | null
   /** K3 38.2: the day the tomträtt runs to. */
@@ -108,7 +114,7 @@ export async function getPropertyFacts(
 ): Promise<BrfPropertyFactsRow | null> {
   const { data, error } = await supabase
     .from('brf_property_facts')
-    .select('id, company_id, kvm_bostadsratt, kvm_hyresratt, kvm_lokaler, kvm_lokaler_bostadsratt, antal_bostadslagenheter, antal_lokaler, taxeringsvarde, tomtratt, tomtratt_avgald_until, tomtratt_expires_on, samfallighet, underhallsplan, notes, created_at, updated_at')
+    .select('id, company_id, kvm_bostadsratt, kvm_hyresratt, kvm_lokaler, kvm_lokaler_bostadsratt, antal_bostadslagenheter, antal_lokaler, taxeringsvarde, taxeringsvarde_bostader, taxeringsvarde_lokaler, vardear, tomtratt, tomtratt_avgald_until, tomtratt_expires_on, samfallighet, underhallsplan, notes, created_at, updated_at')
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) throw error
@@ -134,6 +140,9 @@ export async function upsertPropertyFacts(
         antal_bostadslagenheter: input.antal_bostadslagenheter ?? null,
         antal_lokaler: input.antal_lokaler ?? null,
         taxeringsvarde: input.taxeringsvarde ?? null,
+        taxeringsvarde_bostader: input.taxeringsvarde_bostader ?? null,
+        taxeringsvarde_lokaler: input.taxeringsvarde_lokaler ?? null,
+        vardear: input.vardear ?? null,
         tomtratt: input.tomtratt ?? null,
         tomtratt_avgald_until: input.tomtratt_avgald_until ?? null,
         tomtratt_expires_on: input.tomtratt_expires_on ?? null,
@@ -143,7 +152,7 @@ export async function upsertPropertyFacts(
       },
       { onConflict: 'company_id' },
     )
-    .select('id, company_id, kvm_bostadsratt, kvm_hyresratt, kvm_lokaler, kvm_lokaler_bostadsratt, antal_bostadslagenheter, antal_lokaler, taxeringsvarde, tomtratt, tomtratt_avgald_until, tomtratt_expires_on, samfallighet, underhallsplan, notes, created_at, updated_at')
+    .select('id, company_id, kvm_bostadsratt, kvm_hyresratt, kvm_lokaler, kvm_lokaler_bostadsratt, antal_bostadslagenheter, antal_lokaler, taxeringsvarde, taxeringsvarde_bostader, taxeringsvarde_lokaler, vardear, tomtratt, tomtratt_avgald_until, tomtratt_expires_on, samfallighet, underhallsplan, notes, created_at, updated_at')
     .single()
   if (error) throw error
   return data as BrfPropertyFactsRow

@@ -49,10 +49,32 @@ export interface TaxAdjustmentItem {
   included: boolean
 }
 
+/**
+ * Bostadsrättsförening: the privatbostadsföretag status of the taxation year
+ * (IL 2 kap. 17 §) and the property block IL 39 kap. 25 § removes from the
+ * tax base when the year is assessed as äkta. 'unassessed' means no row in
+ * brf_tax_profiles for the year: no exemption is applied and the year-end
+ * tax step is blocked until the board's assessment is recorded.
+ */
+export type BrfTaxStatus = 'akta' | 'oakta' | 'unassessed'
+
+export interface BrfTaxContext {
+  taxationYear: number
+  status: BrfTaxStatus
+  /** Class 3 credits reversed on INK2S 4.5c when äkta (0 otherwise). */
+  propertyIncome: number
+  /** Classes 4-7 and 84xx debits reversed on INK2S 4.3c when äkta (0 otherwise). */
+  propertyCosts: number
+  /** 80xx-83xx credits that stay in the base (ränteintäkter, utdelningar, kapitalvinster). */
+  taxableCapitalIncome: number
+}
+
 export interface TaxAdjustmentSnapshot {
   items: TaxAdjustmentItem[]
   nonDeductibleExpenses: number
   nonTaxableIncome: number
+  /** Present only for a bostadsrättsförening. */
+  brf?: BrfTaxContext
 }
 
 export interface CompletedDisposition {

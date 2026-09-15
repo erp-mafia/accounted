@@ -39,6 +39,9 @@ interface TaxAdjustmentDraft {
   nonTaxableIncome: string
   /** Keyed by account number; the detected list depends on the legal form. */
   detectedAccounts: Record<string, boolean>
+  /** Keyed by source key: detected items without an account (the property
+   *  block of an äkta bostadsrättsförening, brf:*). */
+  detectedItems: Record<string, boolean>
 }
 
 /**
@@ -115,6 +118,7 @@ export function DispositionsStep({
               nonTaxableIncome: parseNonNegativeAmount(taxAdjustmentDraft.nonTaxableIncome),
             },
             detectedAccounts: taxAdjustmentDraft.detectedAccounts,
+            detectedItems: taxAdjustmentDraft.detectedItems,
           }),
         },
       )
@@ -439,6 +443,11 @@ function TaxAdjustmentsCard({
   const detected = snapshot.items.filter(
     (item) => item.source === 'detected' && item.accountNumber && item.amount > 0,
   )
+  // The property block of an äkta bostadsrättsförening (IL 39 kap. 25 §):
+  // detected from whole account classes, so it has no single account.
+  const detectedBlocks = snapshot.items.filter(
+    (item) => item.source === 'detected' && item.accountNumber === null && item.amount > 0,
+  )
   const computation = taxProposal?.computation
 
   return (
@@ -451,6 +460,34 @@ function TaxAdjustmentsCard({
         </p>
       </CardHeader>
       <CardContent className="space-y-5">
+        {detectedBlocks.length > 0 && (
+          <div className="space-y-3">
+            <Label>Privatbostadsföretag (IL 39 kap. 25 §)</Label>
+            {detectedBlocks.map((item) => (
+              <div key={item.sourceKey} className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <Checkbox
+                    id={`tax-adjustment-${item.sourceKey}`}
+                    checked={draft.detectedItems[item.sourceKey] ?? item.included}
+                    onCheckedChange={(checked) =>
+                      onChange({
+                        ...draft,
+                        detectedItems: {
+                          ...draft.detectedItems,
+                          [item.sourceKey]: Boolean(checked),
+                        },
+                      })
+                    }
+                  />
+                  <Label htmlFor={`tax-adjustment-${item.sourceKey}`} className="cursor-pointer">
+                    {item.description}
+                  </Label>
+                </div>
+                <span className="tabular-nums font-medium">{formatCurrency(item.amount)}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {detected.length > 0 && (
           <div className="space-y-3">
             <Label>Upptäckt i bokföringen</Label>
@@ -709,6 +746,7 @@ const emptyTaxDraft: TaxAdjustmentDraft = {
   nonDeductibleExpenses: '0',
   nonTaxableIncome: '0',
   detectedAccounts: {},
+  detectedItems: {},
 }
 
 function createUiState(proposal: DispositionsProposal): UiState {
@@ -735,15 +773,20 @@ function createTaxAdjustmentDraft(
     (item) => item.sourceKey === 'manual:non_taxable_income',
   )
   const detectedAccounts: Record<string, boolean> = {}
+  const detectedItems: Record<string, boolean> = {}
   for (const item of snapshot.items) {
-    if (item.source === 'detected' && item.accountNumber) {
+    if (item.source !== 'detected') continue
+    if (item.accountNumber) {
       detectedAccounts[item.accountNumber] = Boolean(item.included)
+    } else {
+      detectedItems[item.sourceKey] = Boolean(item.included)
     }
   }
   return {
     nonDeductibleExpenses: String(manualNonDeductible?.amount ?? 0),
     nonTaxableIncome: String(manualNonTaxable?.amount ?? 0),
     detectedAccounts,
+    detectedItems,
   }
 }
 

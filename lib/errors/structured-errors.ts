@@ -272,6 +272,13 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ingen bedömning av privatbostadsföretag finns för det året.',
     message_en: 'No privatbostadsföretag assessment exists for that year.',
   },
+  // PR 3 tax package: the year-end tax step of a bostadsrättsförening needs
+  // the year's privatbostadsföretag assessment (IL 2 kap. 17 §).
+  BRF_TAX_PROFILE_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Registrera bedömningen av om föreningen är ett privatbostadsföretag (IL 2 kap. 17 §) för inkomståret innan skatten beräknas.',
+    message_en: 'Record the privatbostadsföretag assessment (IL 2 kap. 17 §) for the taxation year before the tax is computed.',
+  },
   RATE_LIMITED: {
     httpStatus: 429,
     message_sv: 'För många förfrågningar. Vänta en stund och försök igen.',

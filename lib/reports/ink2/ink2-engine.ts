@@ -26,7 +26,8 @@ import {
 } from './types'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
 
-import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
+import { hasPropertyIncomeExemption, isEntityType, usesInk2 } from '@/lib/company/entity-type'
+import { PROPERTY_BLOCK_SOURCE_KEYS } from '@/lib/brf/privatbostadsforetag'
 // Re-exported so existing importers (ne-engine, tests) keep their paths.
 export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
 
@@ -495,6 +496,41 @@ export async function generateINK2Declaration(
     if (decidedDividend >= 1) {
       warnings.push(
         `Utdelning på insatser ${Math.trunc(decidedDividend)} kr har beslutats under året (konto 2898). En kooperativ förening får dra av utdelning som lämnas i förhållande till inbetalda insatser (IL 39 kap. 23 §); avdraget ingår inte i det bokförda resultatet och ska yrkas i INK2S under skattemässiga justeringar. Kontrollera villkoren i IL 39 kap. 21-24 §§ med revisorn.`,
+      )
+    }
+  }
+
+  // Bostadsrättsförening (Skatteverket, "Deklarera åt en bostadsrättsförening"):
+  // an äkta förening (privatbostadsföretag, IL 2 kap. 17 §) reverses the
+  // property block on INK2S 4.3c/4.5c and is taxed only on the residue
+  // (IL 39 kap. 25 §); an oäkta förening is taxed like any ekonomisk
+  // förening plus uttagsbeskattning of the bostadsförmån (INK2S 4.6e, KU31).
+  // Without the year's assessment neither treatment is applied.
+  if (hasPropertyIncomeExemption(entityType)) {
+    const brf = taxAdjustments.brf
+    if (!brf || brf.status === 'unassessed') {
+      warnings.push(
+        `SPÄRR: Bedömningen av om föreningen är ett privatbostadsföretag (IL 2 kap. 17 §) saknas för inkomståret ${brf?.taxationYear ?? fyEnd.slice(0, 4)}. Registrera bedömningen under Skatt > Bostadsrättsförening innan deklarationen lämnas; utan den tillämpas varken skattefriheten för fastigheten (IL 39 kap. 25 §) eller uttagsbeskattningen för en oäkta förening.`,
+      )
+    } else if (brf.status === 'akta') {
+      const income = adjustmentItems.find((item) => item.sourceKey === PROPERTY_BLOCK_SOURCE_KEYS.income)
+      const costs = adjustmentItems.find((item) => item.sourceKey === PROPERTY_BLOCK_SOURCE_KEYS.costs)
+      const includedIncome = income?.included ? Math.trunc(income.amount) : 0
+      const includedCosts = costs?.included ? Math.trunc(costs.amount) : 0
+      warnings.push(
+        `Privatbostadsföretag (IL 2 kap. 17 §): fastighetens intäkter ${includedIncome} kr har tagits upp som ej skattepliktiga (INK2S 4.5c) och fastighetens kostnader inklusive räntor och avskrivningar ${includedCosts} kr som ej avdragsgilla (INK2S 4.3c) enligt IL 39 kap. 25 §. Kvar i underlaget är kapitalinkomster utanför fastigheten (${Math.trunc(brf.taxableCapitalIncome)} kr) och eventuell annan verksamhet; bedriver föreningen ingen annan verksamhet räcker huvudblankettens sida 1 (ruta 1.1/1.2, hjälpblankett SKV 2195). Ränteintäkter som hör till fastigheten och intäkter från annan verksamhet som ligger på klass 3 justeras manuellt.`,
+      )
+      if (!(income?.included) || !(costs?.included)) {
+        warnings.push(
+          'Minst en av justeringarna för fastighetens intäkter och kostnader är avmarkerad: kontrollera att fastighetsresultatet ändå lämnas utanför det skattepliktiga resultatet (IL 39 kap. 25 §).',
+        )
+      }
+      warnings.push(
+        'Underlaget för kommunal fastighetsavgift (INK2 ruta 1.9, hyreshus bostäder) och statlig fastighetsskatt (ruta 1.11, lokaler) är förifyllt av Skatteverket; avgiften ingår i fastighetens kostnader och är inte avdragsgill för ett privatbostadsföretag.',
+      )
+    } else {
+      warnings.push(
+        `Oäkta bostadsrättsförening inkomståret ${brf.taxationYear}: föreningen beskattas som en ekonomisk förening och ska dessutom ta upp skillnaden mellan marknadshyran och medlemmarnas årsavgifter som intäkt (uttagsbeskattning, IL 22 kap.; INK2S 4.6e) samt lämna KU31 för varje medlem som är fysisk person. Marknadshyran finns inte i bokföringen: ange beloppet som ej bokförd intäkt bland de manuella justeringarna. Fastighetsavgift och fastighetsskatt är avdragsgilla kostnader för en oäkta förening.`,
       )
     }
   }

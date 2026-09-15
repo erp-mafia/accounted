@@ -90,7 +90,7 @@ describe('PUT /api/brf/property-facts', () => {
       await PUT(
         createMockRequest('/api/brf/property-facts', {
           method: 'PUT',
-          body: { kvm_bostadsratt: 2500, antal_bostadslagenheter: 40, taxeringsvarde: 120_000_000, underhallsplan: true },
+          body: { kvm_bostadsratt: 2500, antal_bostadslagenheter: 40, taxeringsvarde: 150_000_000, taxeringsvarde_bostader: 120_000_000, taxeringsvarde_lokaler: 30_000_000, vardear: 1998, underhallsplan: true },
         }),
         routeParams,
       ),
@@ -101,7 +101,7 @@ describe('PUT /api/brf/property-facts', () => {
       supabase,
       'company-1',
       'user-1',
-      expect.objectContaining({ kvm_bostadsratt: 2500, antal_bostadslagenheter: 40 }),
+      expect.objectContaining({ kvm_bostadsratt: 2500, antal_bostadslagenheter: 40, taxeringsvarde_bostader: 120_000_000, vardear: 1998 }),
     )
   })
 

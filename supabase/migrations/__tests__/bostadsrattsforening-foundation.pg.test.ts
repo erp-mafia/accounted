@@ -141,9 +141,37 @@ describe('bostadsrattsforening foundation: chart seed', () => {
   })
 })
 
+describe('brf_property_facts: taxeringsvärde split and värdeår (20260915171000)', () => {
+  it('stores the bostadsdel, lokaldel and värdeår and refuses negative or impossible values', async () => {
+    const { userId, companyId } = await seedCompany()
+    const inserted = await getPool().query<{ taxeringsvarde_bostader: string; taxeringsvarde_lokaler: string; vardear: number }>(
+      `INSERT INTO public.brf_property_facts (company_id, user_id, taxeringsvarde, taxeringsvarde_bostader, taxeringsvarde_lokaler, vardear)
+       VALUES ($1, $2, 150000000, 120000000, 30000000, 1998)
+       RETURNING taxeringsvarde_bostader, taxeringsvarde_lokaler, vardear`,
+      [companyId, userId],
+    )
+    expect(Number(inserted.rows[0].taxeringsvarde_bostader)).toBe(120_000_000)
+    expect(Number(inserted.rows[0].taxeringsvarde_lokaler)).toBe(30_000_000)
+    expect(inserted.rows[0].vardear).toBe(1998)
+    await expect(
+      getPool().query(`UPDATE public.brf_property_facts SET taxeringsvarde_lokaler = -1 WHERE company_id = $1`, [companyId]),
+    ).rejects.toMatchObject({ code: '23514' })
+    await expect(
+      getPool().query(`UPDATE public.brf_property_facts SET vardear = 12 WHERE company_id = $1`, [companyId]),
+    ).rejects.toMatchObject({ code: '23514' })
+    const nulls = await getPool().query<{ vardear: number | null }>(
+      `UPDATE public.brf_property_facts SET vardear = NULL, taxeringsvarde_bostader = NULL WHERE company_id = $1 RETURNING vardear`,
+      [companyId],
+    )
+    expect(nulls.rows[0].vardear).toBeNull()
+  })
+})
+
 describe('bostadsrattsforening foundation: property facts and tax profile RLS', () => {
   it('lets company members read, writers insert as themselves, and strangers see nothing', async () => {
     const { userId, companyId } = await seedCompany()
+    // withUserContext rolls back: assert the writer's own insert passes the
+    // policy inside it, then persist a row through the pool for the reads.
     const inserted = await withUserContext(userId, (c) =>
       c.query<{ id: string }>(
         `INSERT INTO public.brf_property_facts (company_id, user_id, kvm_bostadsratt, antal_bostadslagenheter, taxeringsvarde)
@@ -152,9 +180,6 @@ describe('bostadsrattsforening foundation: property facts and tax profile RLS', 
       ),
     )
     expect(inserted.rows).toHaveLength(1)
-    // withUserContext rolls its transaction back, so the row the reads below
-    // look for is committed through the pool (same pattern as the member
-    // register suite).
     await getPool().query(
       `INSERT INTO public.brf_property_facts (company_id, user_id, kvm_bostadsratt, antal_bostadslagenheter, taxeringsvarde)
        VALUES ($1, $2, 2500, 40, 120000000)`,

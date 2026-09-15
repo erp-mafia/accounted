@@ -76,7 +76,7 @@ describe('gnubok_year_end_readiness: registration', () => {
     )
     // Guards the summarizing itself: if a kind stops being period-state, or a
     // new one appears, it has to show up in the description.
-    expect(actionable.length).toBe(8)
+    expect(actionable.length).toBe(9)
     for (const kind of actionable) {
       expect(tool.description, `blocker kind ${kind} missing from description`).toContain(kind)
     }

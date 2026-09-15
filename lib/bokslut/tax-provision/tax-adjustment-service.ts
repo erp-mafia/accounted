@@ -2,12 +2,23 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import type {
+  BrfTaxContext,
   TaxAdjustmentItem,
   TaxAdjustmentSnapshot,
   TaxAdjustmentType,
 } from '../types'
 import type { EntityType } from '@/types'
-import { isEkonomiskForeningFamily, resolveCompanyEntityType } from '@/lib/company/entity-type'
+import {
+  hasPropertyIncomeExemption,
+  isEkonomiskForeningFamily,
+  resolveCompanyEntityType,
+} from '@/lib/company/entity-type'
+import { getTaxProfile } from '@/lib/company/brf-tax-profile'
+import {
+  computePropertyBlock,
+  PROPERTY_BLOCK_SOURCE_KEYS,
+  taxationYearOf,
+} from '@/lib/brf/privatbostadsforetag'
 
 interface DetectedTaxAdjustmentAccount {
   accountNumber: string
@@ -102,6 +113,81 @@ export interface SaveTaxAdjustmentsInput {
   }
   /** Keyed by account number; an account missing from the map is excluded. */
   detectedAccounts: Record<string, boolean>
+  /** Keyed by source key for detected items without an account (the
+   *  bostadsrättsförening property block); an item missing from the map
+   *  keeps its current inclusion. */
+  detectedItems?: Record<string, boolean>
+}
+
+/**
+ * Bostadsrättsförening: the year's privatbostadsföretag assessment and the
+ * property block. Read from the pre-closing books ('exclude-final': the
+ * final resultatavslut is dropped but avskrivningar and the other year-end
+ * postings stay, exactly what the INK2 income statement reports), so the
+ * building's depreciation is inside the block it belongs to.
+ */
+async function loadBrfTaxContext(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<BrfTaxContext> {
+  const { data: period, error: periodError } = await supabase
+    .from('fiscal_periods')
+    .select('period_end')
+    .eq('id', fiscalPeriodId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (periodError) throw new Error(`Failed to load fiscal period: ${periodError.message}`)
+  if (!period?.period_end) throw new Error('Fiscal period not found')
+  const taxationYear = taxationYearOf(String(period.period_end))
+  const [profile, preClosing] = await Promise.all([
+    getTaxProfile(supabase, companyId, taxationYear),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'exclude-final' }),
+  ])
+  const status: BrfTaxContext['status'] =
+    profile === null ? 'unassessed' : profile.privatbostadsforetag ? 'akta' : 'oakta'
+  const block = computePropertyBlock(preClosing.rows)
+  return {
+    taxationYear,
+    status,
+    propertyIncome: status === 'akta' ? block.propertyIncome : 0,
+    propertyCosts: status === 'akta' ? block.propertyCosts : 0,
+    taxableCapitalIncome: block.taxableCapitalIncome,
+  }
+}
+
+/** The two reviewer-switchable items that carry the property block of an äkta BRF. */
+function brfPropertyBlockItems(
+  brf: BrfTaxContext,
+  persistedByKey: Map<string, PersistedAdjustmentRow>,
+): TaxAdjustmentItem[] {
+  if (brf.status !== 'akta') return []
+  const configs = [
+    {
+      sourceKey: PROPERTY_BLOCK_SOURCE_KEYS.income,
+      adjustmentType: 'non_taxable_income' as const,
+      description: `Fastighetens intäkter, ej skattepliktiga för privatbostadsföretag (IL 39 kap. 25 §, INK2S 4.5c)`,
+      amount: brf.propertyIncome,
+    },
+    {
+      sourceKey: PROPERTY_BLOCK_SOURCE_KEYS.costs,
+      adjustmentType: 'non_deductible_expense' as const,
+      description: `Fastighetens kostnader inklusive räntor och avskrivningar, ej avdragsgilla för privatbostadsföretag (IL 39 kap. 25 §, INK2S 4.3c)`,
+      amount: brf.propertyCosts,
+    },
+  ]
+  return configs.map((config) => {
+    const persisted = persistedByKey.get(config.sourceKey)
+    return {
+      sourceKey: config.sourceKey,
+      source: 'detected',
+      adjustmentType: config.adjustmentType,
+      description: config.description,
+      accountNumber: null,
+      amount: config.amount,
+      included: persisted?.included ?? config.amount > 0,
+    }
+  })
 }
 
 export async function loadTaxAdjustmentSnapshot(
@@ -155,6 +241,11 @@ export async function loadTaxAdjustmentSnapshot(
     }
   })
 
+  const brf = form && hasPropertyIncomeExemption(form)
+    ? await loadBrfTaxContext(supabase, companyId, fiscalPeriodId)
+    : undefined
+  const brfItems = brf ? brfPropertyBlockItems(brf, persistedByKey) : []
+
   const manualItems: TaxAdjustmentItem[] = MANUAL_ADJUSTMENTS.map((config) => {
     const persisted = persistedByKey.get(config.sourceKey)
     const amount = roundOre(Math.max(0, Number(persisted?.amount) || 0))
@@ -169,7 +260,8 @@ export async function loadTaxAdjustmentSnapshot(
     }
   })
 
-  return summarizeTaxAdjustments([...detectedItems, ...manualItems])
+  const snapshot = summarizeTaxAdjustments([...detectedItems, ...brfItems, ...manualItems])
+  return brf ? { ...snapshot, brf } : snapshot
 }
 
 export async function saveTaxAdjustments(
@@ -188,7 +280,26 @@ export async function saveTaxAdjustments(
       .map((item) => [item.sourceKey, item.amount]),
   )
 
+  // The property block rows of an äkta bostadsrättsförening are keyed by
+  // source key (no account); an item absent from detectedItems keeps the
+  // inclusion the snapshot resolved.
+  const brfRows = current.items
+    .filter((item) => item.source === 'detected' && item.accountNumber === null)
+    .map((item) => ({
+      company_id: companyId,
+      user_id: userId,
+      fiscal_period_id: fiscalPeriodId,
+      adjustment_type: item.adjustmentType,
+      source: 'detected',
+      source_key: item.sourceKey,
+      description: item.description,
+      account_number: null,
+      amount: item.amount,
+      included: input.detectedItems?.[item.sourceKey] ?? item.included,
+    }))
+
   const rows = [
+    ...brfRows,
     ...detectedTaxAdjustmentAccounts(form).map((config) => ({
       company_id: companyId,
       user_id: userId,

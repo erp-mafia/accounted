@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { hasPropertyIncomeExemption, resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { getTaxProfile } from '@/lib/company/brf-tax-profile'
+import { taxationYearOf } from '@/lib/brf/privatbostadsforetag'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
@@ -266,6 +268,50 @@ export async function buildBokslutReadinessReport(
     log.warn('bilagor reminder failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
   }
 
+  // Bostadsrättsförening: the year's privatbostadsföretag assessment (IL 2
+  // kap. 17 §) decides the whole tax step (IL 39 kap. 25 §), so a missing
+  // assessment blocks the bokslut rather than letting the wizard tax the
+  // årsavgifter of an äkta förening. A failed read is reported as a warning,
+  // never as a silent pass.
+  const brfBlockers: YearEndBlocker[] = []
+  if (hasPropertyIncomeExemption(entityType)) {
+    const taxationYear = taxationYearOf(period.period_end)
+    try {
+      const profile = await getTaxProfile(supabase, companyId, taxationYear)
+      if (!profile) {
+        brfBlockers.push({
+          code: 'BRF_TAX_PROFILE_MISSING',
+          message: `Bedömningen av om föreningen är ett privatbostadsföretag (IL 2 kap. 17 §) saknas för inkomståret ${taxationYear}. Registrera den under Skatt > Bostadsrättsförening innan bokslutet kan genomföras.`,
+        })
+        reminders.push({
+          code: 'brf_tax_profile_missing',
+          severity: 'warning',
+          message: `Privatbostadsföretag: bedömningen för inkomståret ${taxationYear} saknas. Utan den kan varken skattefriheten för fastigheten (IL 39 kap. 25 §) eller uttagsbeskattningen för en oäkta förening tillämpas.`,
+          href: '/settings/tax',
+        })
+      } else if (profile.privatbostadsforetag) {
+        reminders.push({
+          code: 'brf_akta',
+          severity: 'info',
+          message: `Privatbostadsföretag inkomståret ${taxationYear}: fastighetens intäkter och kostnader lämnas utanför det skattepliktiga resultatet (IL 39 kap. 25 §, INK2S 4.3c/4.5c). Bolagsskatt beräknas bara på kapitalinkomster utanför fastigheten och annan verksamhet; periodiseringsfond får sättas av på det överskottet (IL 30 kap.).`,
+        })
+      } else {
+        reminders.push({
+          code: 'brf_oakta',
+          severity: 'warning',
+          message: `Oäkta bostadsrättsförening inkomståret ${taxationYear}: föreningen beskattas som en ekonomisk förening och ska ta upp bostadsförmånen (marknadshyra minus årsavgift) som intäkt genom uttagsbeskattning (IL 22 kap., INK2S 4.6e) samt lämna KU31 per medlem. Marknadshyran finns inte i bokföringen: beloppet anges som manuell justering på dispositionssteget.`,
+        })
+      }
+    } catch (err) {
+      log.warn('brf tax profile check failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
+      reminders.push({
+        code: 'brf_tax_profile_check_failed',
+        severity: 'warning',
+        message: 'Bedömningen av privatbostadsföretag kunde inte läsas; kontrollera den innan bokslutet genomförs.',
+      })
+    }
+  }
+
   if (entityType === 'enskild_firma') {
     // Pre-compute the EF declaration so the wizard's overview reflects what
     // the user will see when they reach the dispositions step. Egenavgifter,
@@ -299,9 +345,9 @@ export async function buildBokslutReadinessReport(
   }
 
   return {
-    ready: validation.ready,
-    blockers: validation.errors,
-    blockerItems: validation.blockers,
+    ready: validation.ready && brfBlockers.length === 0,
+    blockers: [...validation.errors, ...brfBlockers.map((b) => b.message)],
+    blockerItems: [...validation.blockers, ...brfBlockers],
     warnings: [...validation.warnings, ...(await fiscalYearGapWarnings(supabase, companyId))],
     reminders,
     draftCount: validation.draftCount,
