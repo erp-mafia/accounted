@@ -287,6 +287,17 @@ export async function countDocumentFieldReviews(supabase: SupabaseClient, compan
   return count ?? 0
 }
 
+/** Arkiv: open findings of the nightly lint. */
+export async function countArkivFindings(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('arkiv_findings')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('status', 'open')
+  if (error) return logAndZero('arkiv_finding', companyId, error)
+  return count ?? 0
+}
+
 /** Arkiv: expected payments from agreements that never arrived. */
 export async function countMissedAgreementPayments(supabase: SupabaseClient, companyId: string): Promise<number> {
   const { count, error } = await supabase

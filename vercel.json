@@ -169,6 +169,10 @@
     {
       "path": "/api/arkiv/derive/cron",
       "schedule": "40 4 * * *"
+    },
+    {
+      "path": "/api/arkiv/lint/cron",
+      "schedule": "10 5 * * *"
     }
   ]
 }

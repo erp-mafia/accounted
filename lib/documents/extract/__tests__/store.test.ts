@@ -86,6 +86,7 @@ describe('extractDocument', () => {
       promptSha256: 'f'.repeat(64),
       pagesSent: [1],
     })
+    enqueue({ data: null }) // autonomy level: none earned yet
     enqueue({ error: null }) // schema registration
     enqueue({ data: 'ext-2' }) // save
 
@@ -117,6 +118,7 @@ describe('extractDocument', () => {
     enqueue({ data: null })
     enqueue({ data: [{ page_no: 1, text: 'Skuldebrev', words: null }] })
     ;(readFields as ReturnType<typeof vi.fn>).mockResolvedValue({ payload: {}, checks: [], reviewFields: [], modelIds: [], promptSha256: '', pagesSent: [1] })
+    enqueue({ data: null })
     enqueue({ error: null })
     enqueue({ error: { message: 'extraction of document doc-1 changed since it was read' } })
     const out = await extractDocument(supabase, 'doc-1', company)
@@ -159,5 +161,25 @@ describe('recordHumanFields', () => {
     const [, args] = rpc.mock.calls.at(-1) as [string, Record<string, { interest_rate?: unknown }>]
     expect(args).toMatchObject({ p_pass: 'human', p_supersedes_id: 'ext-1', p_schema_version: 1, p_validation: [{ check: 'orgnr_luhn', field: 'lender_org_number' }] })
     expect(args.p_payload.interest_rate).toMatchObject({ value: '11,03', normalized: 11.03, page: 3, confidence: 1, method: 'human' })
+  })
+
+  it('records whether an audited field was changed, so the autonomy ladder can count it', async () => {
+    const audited = () =>
+      current({
+        payload: { lender_name: field('Almi AB'), principal: field(1_000_000, { readings: [{ value: 1_000_000, page: 1, quote: null }] }) },
+        validation: [{ check: 'audit', field: 'principal' }],
+        review_fields: ['principal'],
+      })
+    enqueue({ data: DOC })
+    enqueue({ data: audited() })
+    enqueue({ data: 'ext-2' })
+    await recordHumanFields(supabase, 'doc-1', 'user-1', { principal: '1000000' })
+    expect(recordActivity).toHaveBeenLastCalledWith(supabase, expect.objectContaining({ detail: { fields: ['principal'], audit: { field: 'principal', changed: false } } }))
+
+    enqueue({ data: DOC })
+    enqueue({ data: audited() })
+    enqueue({ data: 'ext-3' })
+    await recordHumanFields(supabase, 'doc-1', 'user-1', { principal: '900000' })
+    expect(recordActivity).toHaveBeenLastCalledWith(supabase, expect.objectContaining({ detail: { fields: ['principal'], audit: { field: 'principal', changed: true } } }))
   })
 })

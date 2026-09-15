@@ -30,6 +30,7 @@ interface ObligationRow {
   currency: string
   amount_is_estimate: boolean
   status: 'expected' | 'missed'
+  direction: 'out' | 'in'
 }
 
 interface AgreementRow {
@@ -67,7 +68,8 @@ export async function observeObligations(supabase: SupabaseClient, companyId: st
   for (const obligation of obligations) {
     const agreement = agreements.find((a) => a.id === obligation.agreement_id)
     const party = agreement?.counterparty_party_id ? parties.find((p) => p.id === agreement.counterparty_party_id) : undefined
-    const match = obligation.amount_is_estimate ? null : findMatch(obligation, transactions.filter((t) => !used.has(t.id)), counterpartyKeys(party, agreement?.counterparty_name))
+    const candidates = transactions.filter((t) => !used.has(t.id) && (obligation.direction === 'in' ? Number(t.amount) > 0 : Number(t.amount) < 0))
+    const match = obligation.amount_is_estimate ? null : findMatch(obligation, candidates, counterpartyKeys(party, agreement?.counterparty_name))
     if (match) {
       used.add(match.transaction.id)
       const { error } = await supabase
@@ -135,7 +137,7 @@ function textTokens(t: TransactionRow): Set<string> {
 async function loadObligations(supabase: SupabaseClient, companyId: string, today: string): Promise<ObligationRow[]> {
   const { data, error } = await supabase
     .from('agreement_obligations')
-    .select('id, agreement_id, due_on, amount, currency, amount_is_estimate, status')
+    .select('id, agreement_id, due_on, amount, currency, amount_is_estimate, status, direction')
     .eq('company_id', companyId)
     .in('status', ['expected', 'missed'])
     .gte('due_on', addDays(today, -LOOKBACK_DAYS))
@@ -158,7 +160,7 @@ async function loadParties(supabase: SupabaseClient, ids: string[]): Promise<Par
   return (data ?? []) as PartyRow[]
 }
 
-/** Outgoing, unignored transactions around the obligations' due dates. */
+/** Unignored transactions around the obligations' due dates; the sign is checked per obligation's direction. */
 async function loadTransactions(supabase: SupabaseClient, companyId: string, obligations: ObligationRow[]): Promise<TransactionRow[]> {
   const dates = obligations.map((o) => o.due_on).sort()
   const { data, error } = await supabase
@@ -166,7 +168,6 @@ async function loadTransactions(supabase: SupabaseClient, companyId: string, obl
     .select('id, date, amount, currency, description, original_description, merchant_name')
     .eq('company_id', companyId)
     .eq('is_ignored', false)
-    .lt('amount', 0)
     .gte('date', addDays(dates[0], -DATE_TOLERANCE_DAYS))
     .lte('date', addDays(dates[dates.length - 1], DATE_TOLERANCE_DAYS))
     .limit(2000)

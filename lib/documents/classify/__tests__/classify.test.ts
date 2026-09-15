@@ -6,7 +6,7 @@ vi.mock('@/lib/ai', () => ({
   getAiStatus: vi.fn(() => ({ configured: true })),
 }))
 
-import { classifyDocument, recordHumanClassification, buildClassifySystem } from '../classify'
+import { classifyDocument, recordHumanClassification, buildClassifySystem, contentHash } from '../classify'
 import { getAiStatus } from '@/lib/ai'
 
 type Row = Record<string, unknown>
@@ -28,8 +28,10 @@ function makeSupabase(script: Scripted) {
     api.eq = (k: string, v: unknown) => { state.filters[k] = v; return api }
     api.is = chain
     api.not = chain
+    api.neq = chain
     api.gt = chain
-    api.limit = chain
+    // The duplicate check is the one chain that ends on limit(): it answers with the scripted twins.
+    api.limit = () => (table === 'document_classifications' ? Promise.resolve({ data: script.duplicates ?? [], error: null }) : api)
     api.order = () => Promise.resolve({ data: table === 'document_pages' ? script.pages ?? [] : [], error: null })
     api.maybeSingle = () => {
       if (table === 'document_attachments') return Promise.resolve({ data: script.document ?? null, error: null })
@@ -75,6 +77,27 @@ describe('classifyDocument', () => {
     expect(writes[1].payload).toMatchObject({ doc_type: 'agreement.rental', decided_by: 'model', is_current: true, model: 'haiku' })
     expect(writes[2].payload).toMatchObject({ doc_type: 'agreement.rental', admission_state: 'admitted' })
     expect(writes[2].payload).toHaveProperty('admitted_at')
+  })
+
+  it('stores authenticity signals and a content hash: a scan without text layer, a bundle, a twin already in the archive', async () => {
+    generateStructured.mockResolvedValue(answer({ is_multi_document: true }))
+    const long = 'Hyresavtal för lokal på Vasagatan 12 i Stockholm, undertecknat av båda parter.'
+    const { supabase, writes } = makeSupabase({
+      document: doc,
+      pages: [{ page_no: 1, text: long, reader: 'claude_vision', has_text_layer: false }, { page_no: 2, text: 'Underskrifter', reader: 'claude_vision', has_text_layer: false }],
+      duplicates: [{ document_id: 'doc-0' }],
+    })
+    await classifyDocument(supabase, 'doc-1', company)
+    const inserted = writes.find((w) => w.table === 'document_classifications' && w.op === 'insert')!.payload
+    expect(inserted.signals).toEqual(['no_text_layer', 'multi_document', 'duplicate_content'])
+    expect(inserted.content_sha256).toEqual(contentHash([long, 'Underskrifter']))
+    expect(contentHash(['short'])).toBeNull()
+    expect(contentHash([`  ${long.toUpperCase()}  `])).toBe(contentHash([long]))
+
+    const typed = makeSupabase({ document: doc, pages: [{ page_no: 1, text: long, reader: 'pdf_text', has_text_layer: true }] })
+    generateStructured.mockResolvedValue(answer())
+    await classifyDocument(typed.supabase, 'doc-1', company)
+    expect(typed.writes.find((w) => w.table === 'document_classifications' && w.op === 'insert')!.payload.signals).toEqual([])
   })
 
   it('holds a document the model cannot tie to the company', async () => {

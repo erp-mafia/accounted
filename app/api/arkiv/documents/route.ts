@@ -20,7 +20,9 @@ export interface ArkivDocumentRow {
   counterparty: string | null
   amount: number | null
   currency: string | null
-  linked: { journal_entry_id: string | null; agreement_id: string | null; facts: number; held: boolean }
+  /** An agreement's amount recurs: monthly, quarterly, yearly; null for a one-off or a non-agreement. */
+  period: string | null
+  linked: { journal_entry_id: string | null; voucher: string | null; agreement_id: string | null; expected: number; facts: number; held: boolean; unclassified: boolean }
   href: string
 }
 
@@ -72,23 +74,33 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   if (docs.length === 0) return NextResponse.json({ data: [] })
   const ids = docs.map((d) => d.id)
 
-  const [extractions, agreements, facts] = await Promise.all([
+  const entryIds = docs.map((d) => d.journal_entry_id).filter((id): id is string => !!id)
+  const [extractions, agreements, facts, entries] = await Promise.all([
     ctx.supabase.from('document_extractions').select('document_id, payload').in('document_id', ids).eq('is_current', true),
-    ctx.supabase.from('agreements').select('id, source_document_id, counterparty_name, amount, currency').in('source_document_id', ids),
+    ctx.supabase.from('agreements').select('id, source_document_id, counterparty_name, amount, currency, period').in('source_document_id', ids),
     ctx.supabase.from('company_facts').select('source_document_id').in('source_document_id', ids).is('sys_to', null).neq('rank', 'deprecated'),
+    entryIds.length ? ctx.supabase.from('journal_entries').select('id, voucher_series, voucher_number').in('id', entryIds) : Promise.resolve({ data: [], error: null }),
   ])
-  for (const r of [extractions, agreements, facts]) if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
+  for (const r of [extractions, agreements, facts, entries]) if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
   const payloadByDoc = new Map(((extractions.data ?? []) as Array<{ document_id: string; payload: Record<string, { normalized: unknown }> }>).map((e) => [e.document_id, e.payload]))
-  const agreementByDoc = new Map(((agreements.data ?? []) as Array<{ id: string; source_document_id: string; counterparty_name: string | null; amount: string | null; currency: string }>).map((a) => [a.source_document_id, a]))
+  const agreementRows = (agreements.data ?? []) as Array<{ id: string; source_document_id: string; counterparty_name: string | null; amount: string | null; currency: string; period: string | null }>
+  const agreementByDoc = new Map(agreementRows.map((a) => [a.source_document_id, a]))
   const factCount = new Map<string, number>()
   for (const f of (facts.data ?? []) as Array<{ source_document_id: string }>) factCount.set(f.source_document_id, (factCount.get(f.source_document_id) ?? 0) + 1)
+  const voucherOf = new Map(((entries.data ?? []) as Array<{ id: string; voucher_series: string | null; voucher_number: number | null }>).map((e) => [e.id, `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`]))
+  const expectedCount = new Map<string, number>()
+  if (agreementRows.length) {
+    const { data: expected, error: expectedError } = await ctx.supabase.from('agreement_obligations').select('agreement_id').in('agreement_id', agreementRows.map((a) => a.id)).eq('status', 'expected')
+    if (expectedError) return NextResponse.json({ error: getErrorMessage(expectedError) }, { status: 500 })
+    for (const o of (expected ?? []) as Array<{ agreement_id: string }>) expectedCount.set(o.agreement_id, (expectedCount.get(o.agreement_id) ?? 0) + 1)
+  }
 
   const rows: ArkivDocumentRow[] = docs.map((d) => {
     const payload = payloadByDoc.get(d.id) ?? {}
     const agreement = agreementByDoc.get(d.id)
     const settled = (...names: string[]) => names.map((n) => payload[n]?.normalized).find((v) => v != null) ?? null
-    const counterparty = agreement?.counterparty_name ?? (settled('counterparty_name', 'landlord_name', 'lessor_name', 'lender_name', 'provider_name', 'company_name') as string | null)
-    const amount = agreement?.amount != null ? Number(agreement.amount) : (settled('total_amount', 'monthly_rent', 'monthly_fee', 'principal', 'fee_amount', 'amount') as number | null)
+    const counterparty = agreement?.counterparty_name ?? (settled('counterparty_name', 'landlord_name', 'lessor_name', 'lender_name', 'provider_name', 'insurer_name', 'investor_name', 'customer_name', 'supplier_name', 'merchant_name', 'issuer_name', 'employee_name', 'company_name') as string | null)
+    const amount = agreement?.amount != null ? Number(agreement.amount) : (settled('total_amount', 'monthly_rent', 'monthly_fee', 'principal', 'fee_amount', 'premium_amount', 'investment_amount', 'monthly_salary', 'net_result', 'closing_balance', 'amount') as number | null)
     return {
       document_id: d.id,
       created_at: d.created_at,
@@ -97,7 +109,16 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
       counterparty,
       amount,
       currency: agreement?.currency ?? (settled('currency', 'rent_currency') as string | null) ?? (amount != null ? 'SEK' : null),
-      linked: { journal_entry_id: d.journal_entry_id, agreement_id: agreement?.id ?? null, facts: factCount.get(d.id) ?? 0, held: d.admission_state === 'held' },
+      period: agreement?.period ?? null,
+      linked: {
+        journal_entry_id: d.journal_entry_id,
+        voucher: d.journal_entry_id ? (voucherOf.get(d.journal_entry_id) ?? null) : null,
+        agreement_id: agreement?.id ?? null,
+        expected: agreement ? (expectedCount.get(agreement.id) ?? 0) : 0,
+        facts: factCount.get(d.id) ?? 0,
+        held: d.admission_state === 'held',
+        unclassified: d.admission_state === 'admitted' && (d.doc_type == null || d.doc_type === 'other'),
+      },
       href: agreement ? `/arkiv/avtal/${agreement.id}` : `/arkiv/dokument/${d.id}`,
     }
   })

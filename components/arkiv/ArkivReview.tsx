@@ -1,20 +1,20 @@
 'use client'
 
-import { Fragment, useCallback, useEffect, useState } from 'react'
-import { useLocale, useTranslations } from 'next-intl'
+import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
+import { useTranslations } from 'next-intl'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Input } from '@/components/ui/input'
 import { PageHeader } from '@/components/ui/page-header'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
-import { DOC_TYPES, type DocType } from '@/lib/documents/classify/taxonomy'
+import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import type { FieldReviewDocument, ReviewDocument } from '@/app/api/arkiv/review/route'
-import { formatDateLong } from '@/lib/utils'
-import { FieldReview, useFieldLabel } from './FieldReview'
+import type { FindingView } from '@/app/api/arkiv/findings/route'
+import { DocumentDecision, type DecisionDocument } from './DocumentDecision'
+import { inlineHref, shortFileName } from './DefList'
+import { useFieldLabel } from './useFieldLabel'
 
 interface ReviewData {
   held: ReviewDocument[]
@@ -22,31 +22,32 @@ interface ReviewData {
   fields: FieldReviewDocument[]
 }
 
-async function post(url: string, body: unknown): Promise<void> {
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  if (!res.ok) {
-    const json = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(json.error ?? String(res.status))
-  }
+async function send(method: 'POST' | 'PUT', url: string, body: unknown): Promise<void> {
+  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  if (!res.ok) throw new Error(String(res.status))
 }
 
+/**
+ * Granska (canvas artboard Granska): the questions Arkiv has for a person,
+ * as rows grouped by question. A document row opens the decision sheet;
+ * a finding row carries its own actions.
+ */
 export function ArkivReview() {
   const t = useTranslations('arkiv')
-  const locale = useLocale()
   const { toast } = useToast()
   const [data, setData] = useState<ReviewData | null>(null)
+  const [findings, setFindings] = useState<FindingView[] | null>(null)
   const [failed, setFailed] = useState(false)
+  const [open, setOpen] = useState<DecisionDocument | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [reasons, setReasons] = useState<Record<string, string>>({})
-  const [types, setTypes] = useState<Record<string, DocType>>({})
-  const [openFields, setOpenFields] = useState<string | null>(null)
+  const fieldLabel = useFieldLabel()
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/arkiv/review')
-      if (!res.ok) throw new Error(String(res.status))
-      const json = (await res.json()) as { data: ReviewData }
-      setData(json.data)
+      const [review, found] = await Promise.all([fetch('/api/arkiv/review'), fetch('/api/arkiv/findings')])
+      if (!review.ok || !found.ok) throw new Error('load')
+      setData(((await review.json()) as { data: ReviewData }).data)
+      setFindings(((await found.json()) as { data: FindingView[] }).data)
       setFailed(false)
     } catch {
       setFailed(true)
@@ -57,11 +58,18 @@ export function ArkivReview() {
     void load()
   }, [load])
 
-  const act = async (id: string, fn: () => Promise<void>, doneMessage: string) => {
-    setBusy(id)
+  const typeLabel = (type: string | null) => (type && (DOC_TYPES as readonly string[]).includes(type) ? t(`types.${type}` as never) : t('type_unknown'))
+  const docMeta = (d: { file_name: string; page_count: number | null; doc_type: string | null }) =>
+    [d.page_count ? t('decision_pages', { count: d.page_count }) : null, d.doc_type ? typeLabel(d.doc_type) : null].filter(Boolean).join(', ')
+
+  const closeFinding = async (f: FindingView, resolution: 'applied' | 'dismissed') => {
+    setBusy(f.finding_id)
     try {
-      await fn()
-      toast({ title: doneMessage })
+      if (resolution === 'applied' && f.kind === 'settings_mismatch') {
+        await send('PUT', '/api/settings', { [String(f.detail.field)]: f.detail.proposed })
+      }
+      await send('POST', `/api/arkiv/findings/${f.finding_id}`, { resolution })
+      toast({ title: resolution === 'applied' ? t('finding_applied') : t('finding_dismissed') })
       await load()
     } catch {
       toast({ title: t('action_failed'), variant: 'destructive' })
@@ -70,14 +78,13 @@ export function ArkivReview() {
     }
   }
 
-  const typeLabel = (type: string | null) => (type && (DOC_TYPES as readonly string[]).includes(type) ? t(`types.${type}` as never) : type ?? t('types.other'))
-  const fieldLabel = useFieldLabel()
+  const total = data ? data.held.length + data.unclassified.length + data.fields.length + (findings?.length ?? 0) : 0
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <PageHeader title={t('review_title')} help={<HelpPopover>{t('review_help')}</HelpPopover>} />
 
-      {failed && <p className="attn">{t('load_failed')}</p>}
+      {failed && <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>}
       {!data && !failed && (
         <div className="space-y-3">
           <Skeleton className="h-6 w-1/3" />
@@ -86,194 +93,157 @@ export function ArkivReview() {
       )}
 
       {data && (
-        <>
-          <section className="space-y-2">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('held_title')}</h2>
-            {data.held.length === 0 ? (
-              <EmptyState title={t('held_empty_title')} description={t('held_empty_body')} />
-            ) : (
-              <table className="w-full border-collapse text-[13px]">
-                <thead>
-                  <tr>
-                    <th className={`${TH_CLASS} pl-0`}>{t('col_document')}</th>
-                    <th className={TH_CLASS}>{t('col_reason')}</th>
-                    <th className={`${TH_CLASS} pr-0 text-right`}>{t('col_answer')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.held.map((d) => (
-                    <tr key={d.document_id} className="hover:bg-secondary/35">
-                      <td className={`${TD_CLASS} pl-0`}>
-                        <div className="truncate" title={d.file_name}>
-                          {d.file_name}
-                        </div>
-                        <div className="text-xs text-muted-foreground tabular-nums">
-                          {formatDateLong(d.created_at, locale)}
-                          {d.doc_type ? ` · ${typeLabel(d.doc_type)}` : ''}
-                        </div>
-                      </td>
-                      <td className={`${TD_CLASS} max-w-md whitespace-normal text-muted-foreground`}>
-                        {d.relevance_reason ?? d.summary ?? ''}
-                        {d.addressed_to ? ` ${t('addressed_to', { name: d.addressed_to })}` : ''}
-                      </td>
-                      <td className={`${TD_CLASS} pr-0`}>
-                        <div className="flex flex-col items-end gap-2">
-                          <Input
-                            id={`reason-${d.document_id}`}
-                            value={reasons[d.document_id] ?? ''}
-                            onChange={(e) => setReasons((r) => ({ ...r, [d.document_id]: e.target.value }))}
-                            placeholder={t('reason_placeholder')}
-                            className="h-8 w-64 text-[13px]"
-                          />
-                          <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={busy === d.document_id}
-                              onClick={() => act(d.document_id, () => post(`/api/documents/${d.document_id}/admission`, { decision: 'discard' }), t('discarded'))}
-                            >
-                              {t('discard')}
-                            </Button>
-                            <Button
-                              size="sm"
-                              disabled={busy === d.document_id}
-                              onClick={() =>
-                                act(
-                                  d.document_id,
-                                  () => post(`/api/documents/${d.document_id}/admission`, { decision: 'admit', reason: reasons[d.document_id] || undefined }),
-                                  t('admitted'),
-                                )
-                              }
-                            >
-                              {t('admit')}
-                            </Button>
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </section>
+        <div className="max-w-[760px]">
+          <div className="flex items-baseline justify-between border-b border-border px-1 pb-2.5">
+            <h2 className="text-sm font-medium">{t('review_title')}</h2>
+            <span className="text-xs text-muted-foreground">{t('review_count', { count: total })}</span>
+          </div>
+          {total === 0 && <p className="px-1 py-6 text-[13px] text-muted-foreground">{t('review_all_clear')}</p>}
 
-          <section className="space-y-2" id="typ">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('unclassified_title')}</h2>
-            {data.unclassified.length === 0 ? (
-              <EmptyState title={t('unclassified_empty_title')} description={t('unclassified_empty_body')} />
-            ) : (
-              <table className="w-full border-collapse text-[13px]">
-                <thead>
-                  <tr>
-                    <th className={`${TH_CLASS} pl-0`}>{t('col_document')}</th>
-                    <th className={TH_CLASS}>{t('col_model_says')}</th>
-                    <th className={`${TH_CLASS} pr-0 text-right`}>{t('col_type')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.unclassified.map((d) => {
-                    const chosen = types[d.document_id] ?? (d.doc_type as DocType | null) ?? 'other'
-                    return (
-                      <tr key={d.document_id} className="hover:bg-secondary/35">
-                        <td className={`${TD_CLASS} pl-0`}>
-                          <div className="truncate" title={d.file_name}>
-                            {d.file_name}
-                          </div>
-                          <div className="text-xs text-muted-foreground tabular-nums">{formatDateLong(d.created_at, locale)}</div>
-                        </td>
-                        <td className={`${TD_CLASS} max-w-md whitespace-normal text-muted-foreground`}>
-                          {d.suggested_type ? t('suggested', { label: d.suggested_type }) : d.summary ?? ''}
-                        </td>
-                        <td className={`${TD_CLASS} pr-0`}>
-                          <div className="flex items-center justify-end gap-2">
-                            <Select value={chosen} onValueChange={(v) => setTypes((s) => ({ ...s, [d.document_id]: v as DocType }))}>
-                              <SelectTrigger className="h-8 w-56 text-[13px]">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {DOC_TYPES.map((type) => (
-                                  <SelectItem key={type} value={type}>
-                                    {t(`types.${type}` as never)}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <Button
-                              size="sm"
-                              disabled={busy === d.document_id}
-                              onClick={() => act(d.document_id, () => post(`/api/documents/${d.document_id}/classification`, { doc_type: chosen }), t('type_saved'))}
-                            >
-                              {t('save_type')}
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    )
+          {data.held.length > 0 && (
+            <Group title={t('held_title')}>
+              {data.held.map((d) => (
+                <Row key={d.document_id} onClick={() => setOpen({ ...d, question: 'held' })} label={`${shortFileName(d.file_name, 48)}: ${t('held_row', { meta: docMeta(d) })}`} />
+              ))}
+            </Group>
+          )}
+          {data.unclassified.length > 0 && (
+            <Group title={t('unclassified_title')} id="typ">
+              {data.unclassified.map((d) => (
+                <Row
+                  key={d.document_id}
+                  onClick={() => setOpen({ ...d, question: 'type' })}
+                  label={t('unclassified_row', { file: shortFileName(d.file_name, 48), meta: docMeta(d) })}
+                />
+              ))}
+            </Group>
+          )}
+          {data.fields.length > 0 && (
+            <Group title={t('fields_title')} id="falt">
+              {data.fields.map((d) => (
+                <Row
+                  key={d.document_id}
+                  onClick={() =>
+                    setOpen({ document_id: d.document_id, file_name: d.file_name, created_at: d.created_at, page_count: d.page_count, doc_type: d.doc_type, question: 'fields' })
+                  }
+                  label={t('fields_row', {
+                    count: d.review_fields.length,
+                    file: shortFileName(d.file_name, 40),
+                    fields: d.review_fields.slice(0, 3).map(fieldLabel).join(', ').toLowerCase(),
                   })}
-                </tbody>
-              </table>
-            )}
-          </section>
-
-          <section className="space-y-2" id="falt">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('fields_title')}</h2>
-              <HelpPopover>{t('fields_help')}</HelpPopover>
-            </div>
-            {data.fields.length === 0 ? (
-              <EmptyState title={t('fields_empty_title')} description={t('fields_empty_body')} />
-            ) : (
-              <table className="w-full border-collapse text-[13px]">
-                <thead>
-                  <tr>
-                    <th className={`${TH_CLASS} pl-0`}>{t('col_document')}</th>
-                    <th className={TH_CLASS}>{t('col_fields')}</th>
-                    <th className={`${TH_CLASS} pr-0 text-right`}>{t('col_answer')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.fields.map((d) => (
-                    <Fragment key={d.document_id}>
-                      <tr className="hover:bg-secondary/35">
-                        <td className={`${TD_CLASS} pl-0`}>
-                          <div className="truncate" title={d.file_name}>
-                            {d.file_name}
-                          </div>
-                          <div className="text-xs text-muted-foreground tabular-nums">
-                            {formatDateLong(d.created_at, locale)}
-                            {d.doc_type ? ` · ${typeLabel(d.doc_type)}` : ''}
-                          </div>
-                        </td>
-                        <td className={`${TD_CLASS} max-w-md whitespace-normal text-muted-foreground`}>{d.review_fields.map(fieldLabel).join(', ')}</td>
-                        <td className={`${TD_CLASS} pr-0 text-right`}>
-                          <Button variant="outline" size="sm" onClick={() => setOpenFields((o) => (o === d.document_id ? null : d.document_id))}>
-                            {openFields === d.document_id ? t('close_fields') : t('open_fields')}
-                          </Button>
-                        </td>
-                      </tr>
-                      {openFields === d.document_id && (
-                        <tr>
-                          <td colSpan={3} className="pb-3 pl-0 pr-0">
-                            <FieldReview
-                              documentId={d.document_id}
-                              onSaved={() => {
-                                toast({ title: t('fields_saved') })
-                                setOpenFields(null)
-                                void load()
-                              }}
-                              onFailed={() => toast({ title: t('action_failed'), variant: 'destructive' })}
-                            />
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </section>
-        </>
+                  count={d.review_fields.length}
+                />
+              ))}
+            </Group>
+          )}
+          {findings && findings.length > 0 && (
+            <Group title={t('findings_title')} id="fynd">
+              {findings.map((f) => (
+                <FindingRow key={f.finding_id} finding={f} busy={busy === f.finding_id} onClose={(resolution) => closeFinding(f, resolution)} />
+              ))}
+            </Group>
+          )}
+        </div>
       )}
+
+      <DocumentDecision
+        doc={open}
+        onClose={() => setOpen(null)}
+        onSaved={(message) => {
+          toast({ title: message })
+          setOpen(null)
+          void load()
+        }}
+        onFailed={() => toast({ title: t('action_failed'), variant: 'destructive' })}
+      />
+    </div>
+  )
+}
+
+function Group({ title, id, children }: { title: string; id?: string; children: React.ReactNode }) {
+  return (
+    <section id={id}>
+      <div className="px-1 pb-1 pt-5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">{title}</div>
+      {children}
+    </section>
+  )
+}
+
+function Row({ label, count, onClick }: { label: string; count?: number; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-3 border-b border-border px-1 py-3.5 text-left text-[13.5px] transition-colors duration-150 hover:bg-secondary/35"
+    >
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {count != null && count > 1 ? <Badge variant="secondary">{count}</Badge> : null}
+    </button>
+  )
+}
+
+/** One finding of the nightly lint with what to do about it. */
+function FindingRow({ finding, busy, onClose }: { finding: FindingView; busy: boolean; onClose: (resolution: 'applied' | 'dismissed') => void }) {
+  const t = useTranslations('arkiv')
+  const d = finding.detail
+  const settingValue = (value: unknown): string => {
+    if (typeof value === 'boolean') return value ? t('finding_yes') : t('finding_no')
+    if (d.field === 'moms_period' && typeof value === 'string') return t(`finding_moms_${value}` as never)
+    if (d.field === 'accounting_method' && typeof value === 'string') return t(`finding_method_${value}` as never)
+    return String(value ?? '')
+  }
+  let text = ''
+  let href: string | null = null
+  let external = false
+  switch (finding.kind) {
+    case 'settings_mismatch':
+      text = t('finding_settings_mismatch', { field: t(`finding_field_${String(d.field)}` as never), current: settingValue(d.current), proposed: settingValue(d.proposed) })
+      href = d.source_document_id ? inlineHref(String(d.source_document_id), typeof d.page === 'number' ? d.page : null) : null
+      external = true
+      break
+    case 'agreement_ending':
+      text = t('finding_agreement_ending', { title: String(d.title), date: String(d.ends_on) })
+      href = `/arkiv/avtal/${finding.subject_id}`
+      break
+    case 'agreement_no_counterparty':
+      text = t('finding_agreement_no_counterparty', { title: String(d.title), name: String(d.counterparty_name ?? '') })
+      href = `/arkiv/avtal/${finding.subject_id}`
+      break
+    case 'duplicate_document':
+      text = t('finding_duplicate_document', { files: ((d.file_names as string[] | undefined) ?? []).map((f) => shortFileName(f, 30)).join(', ') })
+      href = `/arkiv/dokument/${finding.subject_id}`
+      break
+    case 'document_stuck':
+      text = t('finding_document_stuck', { file: shortFileName(String(d.file_name), 40), step: String(d.step) })
+      href = `/arkiv/dokument/${finding.subject_id}`
+      break
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-1 py-3 text-[13.5px]">
+      <span className="min-w-0 flex-1">
+        {text}
+        {href ? (
+          external ? (
+            <a href={href} target="_blank" rel="noreferrer" className="ml-2 text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground">
+              {t('record_open_document')}
+            </a>
+          ) : (
+            <Link href={href} className="ml-2 text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground">
+              {t('graph_open')}
+            </Link>
+          )
+        ) : null}
+      </span>
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => onClose('dismissed')}>
+          {t('finding_dismiss')}
+        </Button>
+        {finding.kind === 'settings_mismatch' && (
+          <Button size="sm" disabled={busy} onClick={() => onClose('applied')}>
+            {t('finding_apply')}
+          </Button>
+        )}
+      </div>
     </div>
   )
 }

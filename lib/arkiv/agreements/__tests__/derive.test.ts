@@ -137,3 +137,68 @@ describe('deriveAgreement: subscription', () => {
     expect(deriveAgreement({ schemaType: 'agreement.subscription', payload: once, reviewFields: [], today: TODAY })!.obligations).toEqual([{ kind: 'payment', dueOn: '2026-10-01', amount: 5000, currency: 'SEK', estimate: false, fields: ['fee_amount', 'fee_period', 'starts_on'] }])
   })
 })
+
+describe('phase 6 kinds', () => {
+  const today = '2026-09-15'
+  const f = (value: string | number, page = 1) => ({ value, normalized: value, page, quote: 'q', bbox: null, confidence: 1, method: 'consensus' as const, readings: [] })
+
+  it('schedules insurance premiums per period with renewal and notice dates', () => {
+    const out = deriveAgreement({
+      schemaType: 'agreement.insurance',
+      payload: { insurer_name: f('Trygg AB'), policy_number: f('P-1'), premium_amount: f(3720), premium_period: f('quarterly'), starts_on: f('2026-01-01'), ends_on: f('2026-12-31'), notice_months: f(1), auto_renewal: f('yes') },
+      reviewFields: [],
+      today,
+    })!
+    expect(out.agreement).toMatchObject({ kind: 'insurance', title: 'Försäkring P-1', amount: 3720, period: 'quarterly', renewalTerms: 'Förnyas automatiskt', noticeMonths: 1 })
+    expect(out.obligations.map((o) => o.dueOn)).toEqual(['2026-10-01'])
+    expect(out.obligations[0]).toMatchObject({ kind: 'payment', amount: 3720, estimate: false })
+    expect(out.deadlines.map((d) => [d.key, d.dueOn, d.title])).toEqual([
+      ['notice', '2026-11-30', 'Sista dag att säga upp försäkringen P-1'],
+      ['end', '2026-12-31', 'Försäkring P-1 förnyas'],
+    ])
+  })
+
+  it('keeps salary out of expected payments and watches a probation end', () => {
+    const out = deriveAgreement({
+      schemaType: 'agreement.employment',
+      payload: { employee_name: f('Alice Jönsson'), monthly_salary: f(42000), starts_on: f('2026-09-01'), ends_on: f('2027-02-28'), employment_form: f('probation'), notice_months: f(1) },
+      reviewFields: [],
+      today,
+    })!
+    expect(out.agreement).toMatchObject({ kind: 'employment', title: 'Anställningsavtal Alice Jönsson', counterparty: { name: 'Alice Jönsson', orgNumber: null }, amount: 42000, period: 'monthly' })
+    expect(out.obligations).toEqual([])
+    expect(out.deadlines).toEqual([{ key: 'end', title: 'Provanställningen för Alice Jönsson går ut', dueOn: '2027-02-28', priority: 'important', fields: ['ends_on'] }])
+  })
+
+  it('expects an investment to arrive at closing and a customer fee to arrive each period', () => {
+    const investment = deriveAgreement({
+      schemaType: 'agreement.investment',
+      payload: { investor_name: f('Propel VII AB'), investor_org_number: f('5595138057'), investment_amount: f(400000), closing_on: f('2026-10-13'), signed_on: f('2026-09-10') },
+      reviewFields: [],
+      today,
+    })!
+    expect(investment.obligations).toEqual([{ kind: 'payment', dueOn: '2026-10-13', amount: 400000, currency: 'SEK', estimate: false, fields: ['investment_amount', 'closing_on'], direction: 'in' }])
+    expect(investment.deadlines[0]).toMatchObject({ key: 'closing', title: 'Tillträde för investeringen Propel VII AB' })
+
+    const customer = deriveAgreement({
+      schemaType: 'agreement.customer',
+      payload: { customer_name: f('Kund AB'), service_description: f('Bokföring'), fee_amount: f(2500), fee_period: f('monthly'), starts_on: f('2026-08-01') },
+      reviewFields: [],
+      today,
+    })!
+    expect(customer.agreement).toMatchObject({ kind: 'customer', title: 'Kundavtal Kund AB', period: 'monthly' })
+    expect(customer.obligations.every((o) => o.direction === 'in')).toBe(true)
+    expect(customer.obligations.map((o) => o.dueOn).slice(0, 3)).toEqual(['2026-08-01', '2026-09-01', '2026-10-01'])
+  })
+
+  it('records a shareholders agreement and any other agreement without inventing payments', () => {
+    const sha = deriveAgreement({ schemaType: 'agreement.shareholder', payload: { parties_summary: f('A och B'), company_name: f('Arcim Technology AB'), effective_on: f('2026-01-01') }, reviewFields: [], today })!
+    expect(sha.agreement).toMatchObject({ kind: 'shareholder', title: 'Aktieägaravtal Arcim Technology AB', startsOn: '2026-01-01', amount: null })
+    expect(sha.obligations).toEqual([])
+    const other = deriveAgreement({ schemaType: 'agreement.other', payload: { counterparty_name: f('Sting'), subject: f('Core-programmet'), amount: f(0), ends_on: f('2026-12-31'), notice_months: f(2) }, reviewFields: [], today })!
+    expect(other.agreement).toMatchObject({ kind: 'other', title: 'Avtal Sting', period: 'one_time' })
+    expect(other.obligations).toEqual([])
+    expect(other.deadlines.map((d) => d.key)).toEqual(['notice', 'end'])
+    expect(other.waitingOn).toEqual([])
+  })
+})

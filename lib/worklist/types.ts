@@ -159,6 +159,14 @@ export const WORKLIST_CATEGORIES = [
    * arrives (the daily observation marks it matched) or the row is waived.
    */
   'agreement_payment_missed',
+  /**
+   * Arkiv (phase 6): a finding of the nightly lint that a person should look
+   * at: a setting that contradicts a Skatteverket decision, an agreement
+   * ending with an unknown notice period, a duplicate document, a document
+   * that could not be read. Pending: arkiv_findings.status = 'open'. Done:
+   * the person applies or dismisses it, or the next lint no longer sees it.
+   */
+  'arkiv_finding',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]

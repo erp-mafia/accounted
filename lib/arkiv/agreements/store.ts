@@ -14,6 +14,10 @@ import { deriveAgreement, HORIZON, type AgreementDraft, type DeadlineDraft, type
  */
 export const DERIVER = { name: 'arkiv.derive', version: '1' } as const
 
+/** Where a counterparty is printed, per schema, hard keys first. */
+const COUNTERPARTY_PREFIXES = ['landlord', 'lessor', 'lender', 'provider', 'insurer', 'investor', 'customer', 'counterparty']
+const COUNTERPARTY_FIELDS = [...COUNTERPARTY_PREFIXES.map((p) => `${p}_org_number`), ...COUNTERPARTY_PREFIXES.map((p) => `${p}_name`)]
+
 export type DeriveOutcome =
   | {
       status: 'derived'
@@ -66,16 +70,7 @@ export async function deriveDocument(supabase: SupabaseClient, documentId: strin
       documentId,
       name: derivation.agreement.counterparty.name,
       orgNumber: derivation.agreement.counterparty.orgNumber,
-      citation: citationFor(derivation.agreement, [
-        'landlord_org_number',
-        'lessor_org_number',
-        'lender_org_number',
-        'provider_org_number',
-        'landlord_name',
-        'lessor_name',
-        'lender_name',
-        'provider_name',
-      ]),
+      citation: citationFor(derivation.agreement, COUNTERPARTY_FIELDS),
     })
     const activityId = await recordActivity(supabase, {
       companyId: doc.company_id,
@@ -101,16 +96,7 @@ export async function deriveDocument(supabase: SupabaseClient, documentId: strin
         method: counterparty.method,
         confidence: counterparty.confidence,
         evidence:
-          citationFor(derivation.agreement, [
-            'landlord_org_number',
-            'lessor_org_number',
-            'lender_org_number',
-            'provider_org_number',
-            'landlord_name',
-            'lessor_name',
-            'lender_name',
-            'provider_name',
-          ]) ?? {},
+          citationFor(derivation.agreement, COUNTERPARTY_FIELDS) ?? {},
         activityId,
       })
     }
@@ -325,6 +311,7 @@ async function syncObligations(supabase: SupabaseClient, companyId: string, agre
       amount: d.amount,
       currency: d.currency,
       amount_is_estimate: d.estimate,
+      direction: d.direction ?? 'out',
       evidence: { fields: d.fields },
     }))
   if (inserts.length) {

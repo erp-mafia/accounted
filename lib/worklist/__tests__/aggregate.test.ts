@@ -12,6 +12,7 @@ vi.mock('../categories', () => ({
   countUnclassifiedDocuments: vi.fn().mockResolvedValue(0),
   countDocumentFieldReviews: vi.fn().mockResolvedValue(0),
   countMissedAgreementPayments: vi.fn().mockResolvedValue(0),
+  countArkivFindings: vi.fn().mockResolvedValue(0),
   countOverdueInvoices: vi.fn().mockResolvedValue(5),
   countDeadlinesNeedingAction: vi.fn().mockResolvedValue(1),
   countPendingOperations: vi.fn().mockResolvedValue(2),
@@ -48,6 +49,7 @@ describe('getWorklistCounts', () => {
       document_unclassified: 0,
       document_field_review: 0,
       agreement_payment_missed: 0,
+      arkiv_finding: 0,
     })
   })
 

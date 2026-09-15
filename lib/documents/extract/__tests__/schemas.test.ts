@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { SCHEMAS, fieldKinds, jsonSchemaFor, readingsFromAnswer, schemaForType } from '../schemas'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 
-const FIRST_SIX = ['agreement.rental', 'agreement.lease', 'agreement.loan', 'agreement.subscription', 'registration.bolagsverket', 'decision.skatteverket']
+const TYPED = DOC_TYPES.filter((t) => t !== 'other')
 
 describe('extraction schemas', () => {
-  it('reads the six first types with their own schema and every other type with the generic one', () => {
-    for (const type of FIRST_SIX) expect(schemaForType(type).schemaType).toBe(type)
-    expect(Object.keys(SCHEMAS).sort()).toEqual([...FIRST_SIX, 'generic'].sort())
-    for (const type of FIRST_SIX) expect(DOC_TYPES).toContain(type)
-    expect(schemaForType('receipt').schemaType).toBe('generic')
+  it('reads every type of the taxonomy with its own schema, and the untyped rest with the generic one', () => {
+    for (const type of TYPED) expect(schemaForType(type).schemaType).toBe(type)
+    expect(Object.keys(SCHEMAS).sort()).toEqual([...TYPED, 'generic'].sort())
+    expect(schemaForType('other').schemaType).toBe('generic')
+    expect(schemaForType('made_up').schemaType).toBe('generic')
     expect(schemaForType(null).schemaType).toBe('generic')
   })
 
