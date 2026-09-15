@@ -51,6 +51,7 @@ describe('GET /api/arkiv/agreements', () => {
     })
     enqueue({ data: [{ source_key: 'agreement:agr-1:notice', due_date: '2028-03-31', title: 'Sista dag att säga upp hyresavtalet Vasagatan 12' }, { source_key: 'agreement:agr-1:end', due_date: '2028-12-31', title: 'löper ut' }] })
     enqueue({ data: [{ id: 'doc-1', file_name: 'hyresavtal.pdf' }, { id: 'doc-2', file_name: 'lan.pdf' }] })
+    enqueue({ data: [{ detail: { agreement_ids: ['agr-1', 'agr-9'] } }] }) // open duplicate findings
 
     const { status, body } = await parseJsonResponse(await call())
     expect(status).toBe(200)
@@ -70,8 +71,9 @@ describe('GET /api/arkiv/agreements', () => {
       notice_deadline: { due_date: '2028-03-31', title: 'Sista dag att säga upp hyresavtalet Vasagatan 12' },
       end_deadline: { due_date: '2028-12-31', title: 'löper ut' },
       source: { document_id: 'doc-1', file_name: 'hyresavtal.pdf', page: 2 },
+      duplicate: true,
     })
-    expect(loan).toMatchObject({ counterparty: { party_id: null, name: 'Banken AB' }, amount: null, next_payment: null, notice_deadline: null, end_deadline: null, source: { document_id: 'doc-2', file_name: 'lan.pdf', page: null } })
+    expect(loan).toMatchObject({ counterparty: { party_id: null, name: 'Banken AB' }, amount: null, next_payment: null, notice_deadline: null, end_deadline: null, source: { document_id: 'doc-2', file_name: 'lan.pdf', page: null }, duplicate: false })
   })
 
   it('shows the latest missed payment when nothing is expected ahead', async () => {
@@ -80,6 +82,7 @@ describe('GET /api/arkiv/agreements', () => {
     enqueue({ data: [{ agreement_id: 'agr-1', due_on: '2026-08-10', amount: '299', currency: 'SEK', status: 'missed', kind: 'payment' }] })
     enqueue({ data: [] })
     enqueue({ data: [{ id: 'doc-1', file_name: 'x.pdf' }] })
+    enqueue({ data: [] })
     const { body } = await parseJsonResponse(await call())
     expect((body as { data: Array<{ next_payment: { status: string; due_on: string } }> }).data[0].next_payment).toMatchObject({ status: 'missed', due_on: '2026-08-10' })
   })

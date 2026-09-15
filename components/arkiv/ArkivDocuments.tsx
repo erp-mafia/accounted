@@ -19,6 +19,7 @@ const FILTERS: Array<{ value: string; labelKey: string }> = [
   { value: 'all', labelKey: 'filter_all_documents' },
   { value: 'agreement', labelKey: 'filter_agreements' },
   { value: 'authority', labelKey: 'filter_authority' },
+  { value: 'corporate', labelKey: 'filter_corporate' },
   { value: 'receipt', labelKey: 'filter_receipts' },
   { value: 'supplier_invoice', labelKey: 'filter_supplier_invoices' },
   { value: 'bank_statement', labelKey: 'filter_bank_statements' },
@@ -158,11 +159,12 @@ export function ArkivDocuments({ fixedType }: { fixedType?: string }) {
             <tbody>
               {rows.map((row) => (
                 <tr key={row.document_id} className="cursor-pointer hover:bg-secondary/35" onClick={() => router.push(row.href)}>
-                  <td className={`${TD_CLASS} pl-1 tabular-nums text-muted-foreground`}>{formatDate(row.created_at)}</td>
+                  <td className={`${TD_CLASS} pl-1 tabular-nums text-muted-foreground`}>{row.document_date ?? formatDate(row.created_at)}</td>
                   <td className={`${TD_CLASS} truncate`}>
                     <Link href={row.href} className={`${QUIET_LINK_CLASS} text-[13px] text-foreground`} title={row.file_name}>
-                      {row.file_name}
+                      {row.title}
                     </Link>
+                    {row.title !== row.file_name && !row.file_name.startsWith(row.title) ? <div className="truncate text-[11px] text-muted-foreground">{row.file_name}</div> : null}
                   </td>
                   <td className={`${TD_CLASS} truncate text-muted-foreground`}>{typeLabel(row.doc_type)}</td>
                   <td className={`${TD_CLASS} truncate text-muted-foreground`} title={row.counterparty ?? undefined}>

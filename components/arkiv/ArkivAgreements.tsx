@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
+import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
@@ -99,8 +100,11 @@ export function ArkivAgreements() {
             {visible.map((a) => (
               <tr key={a.id} className="cursor-pointer hover:bg-secondary/35" onClick={() => router.push(`/arkiv/avtal/${a.id}`)}>
                 <td className={`${TD_CLASS} pl-0`}>
-                  <div className="truncate" title={a.title}>
-                    {a.title}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate" title={a.title}>
+                      {a.title.length > 64 ? `${a.title.slice(0, 63)}…` : a.title}
+                    </span>
+                    {a.duplicate ? <Badge variant="warning">{t('agreement_duplicate_chip')}</Badge> : null}
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {t(`types.agreement.${a.kind}` as never)}

@@ -10163,6 +10163,8 @@
 ,
   "arkiv": {
     "review_title": "Granska dokument",
+    "filter_corporate": "Protokoll och bolagshandlingar",
+    "agreement_duplicate_chip": "Dubblett",
     "show_all_fields": "Visa alla {count} fält",
     "show_fewer_fields": "Visa färre",
     "decision_custom_value": "Eget värde…",

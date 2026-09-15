@@ -69,6 +69,7 @@ function build(
   const add = (n: Node3) => nodes.push(n) - 1
   const hub = add({ x: 0, y: 0, z: 0, d: 30, kind: 'hub', color: ARKIV.hub, name: graph.company.name, sub: labels.documents })
   for (const cluster of graph.clusters) {
+    if (cluster.count === 0 && cluster.nodes.length === 0) continue
     const c = CLUSTERS[cluster.key]
     const ci = add({
       x: c.r * Math.cos(rad(c.deg)),

@@ -50,7 +50,14 @@ export function DocumentRecord({ documentId }: { documentId: string }) {
   if (!view) return <Skeleton className="h-40 w-full" />
 
   const typeLabel = view.doc_type && (DOC_TYPES as readonly string[]).includes(view.doc_type) ? t(`types.${view.doc_type}` as never) : t('type_unknown')
-  const meta = [typeLabel, formatDateLong(view.created_at, locale), view.page_count ? t('decision_pages', { count: view.page_count }) : null].filter(Boolean).join(' · ')
+  const meta = [
+    typeLabel,
+    view.file_name !== view.title ? view.file_name : null,
+    formatDateLong(view.created_at, locale),
+    view.page_count ? t('decision_pages', { count: view.page_count }) : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
   const signals = view.classification?.signals ?? []
   const multiPage = (view.page_count ?? 0) > 1
   const allFields = (view.record?.fields ?? []).filter((f) => f.value != null)
@@ -69,7 +76,7 @@ export function DocumentRecord({ documentId }: { documentId: string }) {
   return (
     <div className="space-y-8">
       <PageHeader
-        title={view.file_name}
+        title={view.title}
         description={meta}
         action={
           <Button asChild size="sm">

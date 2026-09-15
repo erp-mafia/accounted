@@ -10163,6 +10163,8 @@
 ,
   "arkiv": {
     "review_title": "Review documents",
+    "filter_corporate": "Minutes and corporate records",
+    "agreement_duplicate_chip": "Duplicate",
     "show_all_fields": "Show all {count} fields",
     "show_fewer_fields": "Show fewer",
     "decision_custom_value": "Own value…",
