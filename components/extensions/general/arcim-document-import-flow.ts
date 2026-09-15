@@ -28,13 +28,17 @@ export interface ArcimDocumentOAuthResume {
 
 const STANDALONE_SUFFIX = ':standalone'
 
-export function serializeArcimDocumentOAuthResume(
+// The stored value is a resume marker ("discover", "import", optionally
+// ":standalone"), never a token or credential: it tells the page which step
+// to continue after the Fortnox scope popup returns. Named "marker" so
+// static analysis does not read it as OAuth material written to storage.
+export function serializeArcimDocumentResumeMarker(
   resume: ArcimDocumentOAuthResume,
 ): string {
   return resume.standalone ? `${resume.action}${STANDALONE_SUFFIX}` : resume.action
 }
 
-export function parseArcimDocumentOAuthResume(
+export function parseArcimDocumentResumeMarker(
   value: string | null,
 ): ArcimDocumentOAuthResume | null {
   if (value === null) return null

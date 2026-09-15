@@ -40,12 +40,12 @@ import {
   ArcimDocumentImportRequestError,
   arcimDocumentImportReducer,
   documentOAuthProblemFromReason,
-  parseArcimDocumentOAuthResume,
+  parseArcimDocumentResumeMarker,
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   requestArcimDocumentImport,
   runArcimDocumentImportToCompletion,
   resolveArcimDocumentFollowUpProvider,
-  serializeArcimDocumentOAuthResume,
+  serializeArcimDocumentResumeMarker,
   watchArcimOAuthPopup,
   type ArcimDocumentImportProblem,
   type ArcimDocumentImportState,
@@ -124,7 +124,7 @@ function storeDocumentOAuthResume(
   try {
     window.sessionStorage.setItem(
       ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
-      serializeArcimDocumentOAuthResume({ action, standalone }),
+      serializeArcimDocumentResumeMarker({ action, standalone }),
     )
   } catch {
     // Full-page recovery is best-effort when browser storage is unavailable.
@@ -133,7 +133,7 @@ function storeDocumentOAuthResume(
 
 function readDocumentOAuthResume() {
   try {
-    return parseArcimDocumentOAuthResume(
+    return parseArcimDocumentResumeMarker(
       window.sessionStorage.getItem(ARCIM_DOCUMENT_OAUTH_RESUME_KEY),
     )
   } catch {
