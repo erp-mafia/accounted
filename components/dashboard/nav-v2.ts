@@ -173,7 +173,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     icon: FileCheck,
     sub: [
       { href: '/bookkeeping/year-end', labelKey: 'year_end' },
-      { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', entityOnly: 'aktiebolag' },
+      { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
       { href: '/reports/ink2-declaration', labelKey: 'income_declaration', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
       { href: '/reports/ne-declaration', labelKey: 'income_declaration', entityOnly: 'enskild_firma' },
     ],

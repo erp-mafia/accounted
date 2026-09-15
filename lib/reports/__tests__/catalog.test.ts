@@ -12,8 +12,9 @@ describe('report catalog: legal-form gates', () => {
     expect(slugsFor('enskild_firma')).toContain('ne-declaration')
     expect(slugsFor('enskild_firma')).not.toContain('ink2-declaration')
     expect(slugsFor('ideell_forening')).not.toContain('ink2-declaration')
-    // The annual-report flow only renders the aktiebolag document today.
-    expect(slugsFor('ekonomisk_forening')).not.toContain('arsredovisning')
+    // BFL 6 kap. 1 §: an ekonomisk förening prepares an årsredovisning too.
+    expect(slugsFor('ekonomisk_forening')).toContain('arsredovisning')
+    expect(slugsFor('ideell_forening')).not.toContain('arsredovisning')
   })
 
   it('reportAppliesToForm handles a single form, a list, and an unknown company', () => {

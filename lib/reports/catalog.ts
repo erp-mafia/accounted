@@ -198,7 +198,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_arsredovisning',
     descKey: 'desc_arsredovisning',
     category: 'year_end',
-    entityType: 'aktiebolag',
+    entityType: ['aktiebolag', 'ekonomisk_forening'],
     params: 'fiscal',
     route: '/bookkeeping/year-end/arsredovisning',
   },
