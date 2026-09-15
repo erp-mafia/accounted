@@ -207,7 +207,12 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // row's own keys.
 // Phase 4 links and agreements (+1): lib/arkiv/agreements/store.ts
 // syncObligations inserts one row per due date built by a map.
-const UNRESOLVED_CEILING = 417
+// Phase 5 facts (+5): five .or() filters whose values are a date or a search
+// term at runtime (lib/arkiv/facts/store.ts, arkiv-tools.ts,
+// behandlingshistorik.ts: valid_from/valid_to as of a date, belief window,
+// ilike on title and counterparty), which PostgREST can only express as a
+// formatted or-string.
+const UNRESOLVED_CEILING = 422
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

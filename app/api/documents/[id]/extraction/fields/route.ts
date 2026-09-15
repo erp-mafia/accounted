@@ -7,6 +7,7 @@ import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { recordHumanFields } from '@/lib/documents/extract/store'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
+import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -42,7 +43,7 @@ export const POST = withRouteContext('document.extraction.fields', async (reques
   const out = await recordHumanFields(service, id, ctx.user.id, parsed.data.fields)
   switch (out.status) {
     case 'extracted':
-      if (agreementKindFor(out.schemaType)) await enqueueDocumentJob(service, ctx.companyId, id, 'derive')
+      if (agreementKindFor(out.schemaType) || hasFactPredicates(out.schemaType)) await enqueueDocumentJob(service, ctx.companyId, id, 'derive')
       ctx.log.info('document fields settled by person', { doc: id, fields: Object.keys(parsed.data.fields) })
       return NextResponse.json({ data: { document_id: id, extraction_id: out.extractionId, review_fields: out.reviewFields } })
     case 'skipped':

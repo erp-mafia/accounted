@@ -73,7 +73,7 @@ const sampleReport = {
   generated_at: '2026-08-21T12:00:00.000Z',
   app_version: 'abc1234',
   total_events: 1,
-  by_category: { verifikation: 1, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, ovrigt: 0 },
+  by_category: { verifikation: 1, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, arkiv: 0, ovrigt: 0 },
   events: [
     {
       id: 'entry:1',

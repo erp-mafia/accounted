@@ -44,6 +44,8 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // notes-only diff on committed entries and rejects anything more, so the
   // op cannot touch booking data even if tampered with.
   set_voucher_note: 'low',
+  // A fact in Arkiv: no journal impact, reverted in one call (revert_company_fact).
+  arkiv_propose_fact: 'low',
   // Ignoring a bank transaction flips transactions.is_ignored and nothing
   // else: no verifikat, no ledger impact, reversible with the same op
   // (ignored: false). The DB CHECK transactions_is_ignored_no_journal_entry

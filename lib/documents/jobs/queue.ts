@@ -4,6 +4,8 @@ import { classifyDocument, loadCompanyIdentity, type CompanyIdentity } from '@/l
 import { extractDocument } from '@/lib/documents/extract/store'
 import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
 import { deriveDocument } from '@/lib/arkiv/agreements/store'
+import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
+import { recordFactsForDocument } from '@/lib/arkiv/facts/store'
 import { readAndStoreDocument, type ReadableDocumentRow } from '@/lib/documents/read/store'
 import { createLogger } from '@/lib/logger'
 
@@ -136,7 +138,7 @@ async function runExtract(supabase: SupabaseClient, job: ClaimedJob, identities:
   const out = await extractDocument(supabase, job.document_id, await identityFor(supabase, job.company_id, identities))
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return skipNote(out.reason)
-  if (agreementKindFor(out.schemaType)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'derive')
+  if (agreementKindFor(out.schemaType) || hasFactPredicates(out.schemaType)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'derive')
   return `extracted ${out.schemaType}${out.reviewFields.length ? `, review: ${out.reviewFields.join(', ')}` : ''}`
 }
 
@@ -144,8 +146,11 @@ async function runDerive(supabase: SupabaseClient, job: ClaimedJob): Promise<str
   if (!isArkivEnabled(job.company_id)) return 'skipped: not_in_rollout'
   const out = await deriveDocument(supabase, job.document_id)
   if (out.status === 'error') throw new Error(out.reason)
-  if (out.status === 'skipped') return `skipped: ${out.reason}`
-  return `derived ${out.obligations} obligations, ${out.deadlines} deadlines${out.waitingOn.length ? `, waiting on ${out.waitingOn.join(', ')}` : ''}`
+  const facts = await recordFactsForDocument(supabase, job.document_id)
+  if (facts.status === 'error') throw new Error(facts.reason)
+  const factNote = facts.status === 'recorded' ? `${facts.facts} facts` : `facts skipped: ${facts.reason}`
+  if (out.status === 'skipped') return `skipped: ${out.reason}; ${factNote}`
+  return `derived ${out.obligations} obligations, ${out.deadlines} deadlines, ${factNote}${out.waitingOn.length ? `, waiting on ${out.waitingOn.join(', ')}` : ''}`
 }
 
 /** Outcome note for a skip. A model that is not configured yet is worth waiting for, so that skip fails the job and retries. */

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { AuditLogEntry } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases'
@@ -1954,6 +1955,140 @@ export async function resolveUserLabelsFromProfiles(
 // Generator
 // ============================================================
 
+/**
+ * Arkiv (BFL 5 kap 11 §, BFNAR 2013:2 p. 9.16): the facts the archive holds
+ * about the company, with every supersession and deprecation, and the moment
+ * each extraction schema version and each software version was first used
+ * for this company. Read from company_facts and activities directly: both
+ * are append-only with their own timestamps, so no audit row is needed.
+ */
+export interface CompanyFactRow {
+  id: string
+  predicate: string
+  value_text: string
+  subject_kind: string
+  sys_from: string
+  sys_to: string | null
+  rank: string
+  deprecation_reason: string | null
+  supersedes_id: string | null
+  source_kind: string
+  source_document_id: string | null
+  approved_by_user_id: string | null
+  rationale: string | null
+}
+
+export interface ArkivActivityRow {
+  id: string
+  kind: string
+  schema_type: string | null
+  schema_version: number | null
+  model_ids: string[] | null
+  started_at: string
+  agents: { name: string; version: string | null } | Array<{ name: string; version: string | null }> | null
+}
+
+const ARKIV_ACTOR: RawActor = { type: 'system', user_id: null, actor_label: 'Arkiv' }
+
+const FACT_SOURCE_LABELS: Record<string, string> = {
+  extraction: 'läst ur dokument',
+  ledger: 'härlett ur bokföringen',
+  registry: 'från register',
+  person: 'angivet av person',
+  agent: 'föreslaget av agent, godkänt av person',
+}
+
+export function companyFactEvents(row: CompanyFactRow, labels: (predicate: string) => string): RawBehandlingshistorikEvent[] {
+  const object = `${labels(row.predicate)}: ${row.value_text}`
+  const actor: RawActor = row.approved_by_user_id ? { type: 'user', user_id: row.approved_by_user_id, actor_label: null } : ARKIV_ACTOR
+  const events: RawBehandlingshistorikEvent[] = [
+    {
+      id: `fact:${row.id}`,
+      occurred_at: toIso(row.sys_from)!,
+      category: 'arkiv',
+      code: row.supersedes_id ? 'fact.superseded' : 'fact.recorded',
+      event: row.supersedes_id ? 'Faktum ersatt' : 'Faktum fastställt',
+      object,
+      actor,
+      details: [FACT_SOURCE_LABELS[row.source_kind] ?? row.source_kind, ...(row.rationale ? [row.rationale] : [])],
+      source: 'audit_log',
+      count: 1,
+    },
+  ]
+  if (row.rank === 'deprecated' && row.sys_to) {
+    events.push({
+      id: `fact:${row.id}:deprecated`,
+      occurred_at: toIso(row.sys_to)!,
+      category: 'arkiv',
+      code: 'fact.deprecated',
+      event: 'Faktum avfärdat',
+      object,
+      actor: ARKIV_ACTOR,
+      details: row.deprecation_reason ? [row.deprecation_reason] : [],
+      source: 'audit_log',
+      count: 1,
+    })
+  }
+  return events
+}
+
+/** One event per schema version and per software version, dated the first time this company's documents met it. */
+export function arkivActivityEvents(rows: ArkivActivityRow[]): RawBehandlingshistorikEvent[] {
+  const firstBy = new Map<string, { at: string; event: string; object: string; details: string[]; id: string }>()
+  for (const row of [...rows].sort((a, b) => a.started_at.localeCompare(b.started_at))) {
+    if (row.schema_type && row.schema_version != null) {
+      const key = `schema:${row.schema_type}:${row.schema_version}`
+      if (!firstBy.has(key)) {
+        firstBy.set(key, { at: row.started_at, id: `arkiv:${row.id}:schema`, event: 'Extraktionsschema togs i bruk', object: `${row.schema_type} version ${row.schema_version}`, details: row.model_ids?.length ? [`Modeller: ${row.model_ids.join(', ')}`] : [] })
+      }
+    }
+    const agent = Array.isArray(row.agents) ? row.agents[0] : row.agents
+    if (agent?.name && agent.version) {
+      const key = `agent:${agent.name}:${agent.version}`
+      if (!firstBy.has(key)) {
+        firstBy.set(key, { at: row.started_at, id: `arkiv:${row.id}:agent`, event: 'Programvaruversion togs i bruk i Arkiv', object: `${agent.name} version ${agent.version}`, details: [] })
+      }
+    }
+  }
+  return [...firstBy.values()].map((e) => ({
+    id: e.id,
+    occurred_at: toIso(e.at)!,
+    category: 'arkiv',
+    code: e.id.endsWith(':schema') ? 'arkiv.schema_in_use' : 'arkiv.agent_in_use',
+    event: e.event,
+    object: e.object,
+    actor: ARKIV_ACTOR,
+    details: e.details,
+    source: 'audit_log',
+    count: 1,
+  }))
+}
+
+async function fetchCompanyFacts(supabase: SupabaseClient, companyId: string, window: { fromTs: string; toTs: string }): Promise<CompanyFactRow[]> {
+  return fetchAllRows<CompanyFactRow>(({ from, to }) =>
+    supabase
+      .from('company_facts')
+      .select('id, predicate, value_text, subject_kind, sys_from, sys_to, rank, deprecation_reason, supersedes_id, source_kind, source_document_id, approved_by_user_id, rationale')
+      .eq('company_id', companyId)
+      .lte('sys_from', window.toTs)
+      .or(`sys_to.is.null,sys_to.gte.${window.fromTs}`)
+      .order('sys_from', { ascending: true })
+      .range(from, to),
+  )
+}
+
+async function fetchArkivActivities(supabase: SupabaseClient, companyId: string): Promise<ArkivActivityRow[]> {
+  return fetchAllRows<ArkivActivityRow>(({ from, to }) =>
+    supabase
+      .from('activities')
+      .select('id, kind, schema_type, schema_version, model_ids, started_at, agents(name, version)')
+      .eq('company_id', companyId)
+      .eq('kind', 'extract')
+      .order('started_at', { ascending: true })
+      .range(from, to),
+  )
+}
+
 export async function generateBehandlingshistorik(
   supabase: SupabaseClient,
   companyId: string,
@@ -1978,7 +2113,7 @@ export async function generateBehandlingshistorik(
   const entryIds = entries.map((e) => e.id)
   const unionIds = mode === 'fiscal_year' ? entryIds : []
 
-  const [auditRows, rattelseRows, resets, sieImports, bankImports, releases, globalAuditRows] = await Promise.all([
+  const [auditRows, rattelseRows, resets, sieImports, bankImports, releases, globalAuditRows, companyFacts, arkivActivities] = await Promise.all([
     fetchAuditRows(supabase, companyId, window, unionIds, mode === 'fiscal_year'
       ? [...new Set(entries.map(entry => entry.import_batch_id).filter((id): id is string => !!id))] : []),
     fetchRattelseRows(supabase, companyId, window, unionIds),
@@ -1987,6 +2122,8 @@ export async function generateBehandlingshistorik(
     fetchBankFileImports(supabase, companyId),
     fetchAppReleases(supabase, window),
     options.globalClient ? fetchGlobalAuditRows(options.globalClient, window) : Promise.resolve([] as AuditLogEntry[]),
+    fetchCompanyFacts(supabase, companyId, window),
+    fetchArkivActivities(supabase, companyId),
   ])
 
   const raw: RawBehandlingshistorikEvent[] = []
@@ -1994,6 +2131,11 @@ export async function generateBehandlingshistorik(
   // System-wide changes (p. 9.16 second paragraph): program versions and the
   // statutory payroll constants, dated by when they entered production.
   raw.push(...appReleaseEvents(releases))
+  // Arkiv: the record's facts and the schema and software versions that read
+  // them, inside the window (p. 9.16: schema, model and prompt changes).
+  const inWindow = (ev: RawBehandlingshistorikEvent) => ev.occurred_at >= window.fromTs && ev.occurred_at <= window.toTs
+  for (const fact of companyFacts) raw.push(...companyFactEvents(fact, (p) => predicateDef(p)?.label ?? p).filter(inWindow))
+  raw.push(...arkivActivityEvents(arkivActivities).filter(inWindow))
   for (const row of globalAuditRows) {
     const ev = auditRowToEvent(row)
     if (ev) raw.push(ev)

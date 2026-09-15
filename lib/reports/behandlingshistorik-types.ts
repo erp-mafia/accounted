@@ -12,6 +12,7 @@ export const BEHANDLINGSHISTORIK_CATEGORIES = [
   'period',
   'import',
   'atkomst',
+  'arkiv',
   'ovrigt',
 ] as const
 
@@ -84,5 +85,6 @@ export const BEHANDLINGSHISTORIK_CATEGORY_LABELS: Record<BehandlingshistorikCate
   period: 'Räkenskapsår',
   import: 'Import',
   atkomst: 'Åtkomst',
+  arkiv: 'Arkiv',
   ovrigt: 'Övrigt',
 }

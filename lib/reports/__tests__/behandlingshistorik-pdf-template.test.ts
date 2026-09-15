@@ -29,7 +29,7 @@ function report(overrides: Partial<BehandlingshistorikReport> = {}): Behandlings
     event({ id: 'e1' }),
     event({ id: 'e2', object: 'A13', code: 'journal_entry.reversed', event: 'Verifikation makulerad (storno)', actor: { type: 'api_key', user_id: null, label: 'API-nyckel: Revisorn' }, occurred_at: '2026-04-02T10:00:00.000Z' }),
   ]
-  const by_category = { verifikation: 0, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, ovrigt: 0 }
+  const by_category = { verifikation: 0, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, arkiv: 0, ovrigt: 0 }
   for (const e of events) by_category[e.category] += 1
   return {
     company: { name: 'Testbolaget AB', org_number: '5566778899' },
@@ -71,7 +71,7 @@ describe('BehandlingshistorikPDF', () => {
     async () => {
       const empty = await renderToBuffer(
         BehandlingshistorikPDF({
-          report: report({ events: [], total_events: 0, by_category: { verifikation: 0, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, ovrigt: 0 } }),
+          report: report({ events: [], total_events: 0, by_category: { verifikation: 0, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, arkiv: 0, ovrigt: 0 } }),
         }),
       )
       expect(empty.slice(0, 5).toString()).toBe('%PDF-')

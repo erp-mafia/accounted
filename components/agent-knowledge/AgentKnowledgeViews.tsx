@@ -6,6 +6,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control'
 import { AgentMemoryPanel } from '@/components/settings/AgentMemoryPanel'
 import { AgentSkillsPanel } from '@/components/settings/AgentSkillsPanel'
 import { AgentKnowledgePanel } from './AgentKnowledgePanel'
+import { AgentFactsPanel } from './AgentFactsPanel'
 
 /**
  * The three views of "Vad din agent vet" on one page: Kunskap (the ledger
@@ -15,7 +16,7 @@ import { AgentKnowledgePanel } from './AgentKnowledgePanel'
  * a link from the chat lands on the right one. The settings hub keeps its
  * own copy of the same views for people who arrive through settings.
  */
-export type KnowledgeView = 'knowledge' | 'memory' | 'skills'
+export type KnowledgeView = 'knowledge' | 'facts' | 'memory' | 'skills'
 
 export function knowledgeViewHref(view: KnowledgeView): string {
   return view === 'knowledge' ? '/agent-knowledge' : `/agent-knowledge?view=${view}`
@@ -26,7 +27,7 @@ export function AgentKnowledgeViews() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const raw = searchParams.get('view')
-  const view: KnowledgeView = raw === 'skills' ? 'skills' : raw === 'memory' ? 'memory' : 'knowledge'
+  const view: KnowledgeView = raw === 'skills' ? 'skills' : raw === 'memory' ? 'memory' : raw === 'facts' ? 'facts' : 'knowledge'
 
   return (
     <div className="space-y-6">
@@ -35,6 +36,7 @@ export function AgentKnowledgeViews() {
         onChange={(next) => router.replace(knowledgeViewHref(next), { scroll: false })}
         options={[
           { value: 'knowledge', label: t('view_knowledge') },
+          { value: 'facts', label: t('view_facts') },
           { value: 'memory', label: t('view_memory') },
           { value: 'skills', label: t('view_skills') },
         ]}
@@ -43,6 +45,7 @@ export function AgentKnowledgeViews() {
       {/* Only the active view mounts, so each panel fetches the first time
           its view is opened. */}
       {view === 'knowledge' && <AgentKnowledgePanel />}
+      {view === 'facts' && <AgentFactsPanel />}
       {view === 'memory' && <AgentMemoryPanel />}
       {view === 'skills' && <AgentSkillsPanel />}
     </div>
