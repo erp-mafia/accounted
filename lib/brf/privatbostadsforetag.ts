@@ -1,3 +1,4 @@
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { roundOre } from '@/lib/money'
 
 /**
@@ -92,7 +93,7 @@ export function computePropertyBlock(rows: readonly BalanceRow[]): PropertyBlock
 
   for (const row of rows) {
     const account = String(row.account_number)
-    if (!/^[0-9]{4}$/.test(account) || EXCLUDED_FROM_BLOCK.has(account)) continue
+    if (!ACCOUNT_NUMBER_RE.test(account) || EXCLUDED_FROM_BLOCK.has(account)) continue
 
     if (inRange(account, '3000', '3999')) {
       const amount = roundOre(net(row, 'credit'))

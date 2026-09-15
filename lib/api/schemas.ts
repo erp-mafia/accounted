@@ -475,7 +475,8 @@ const brfAndelstal = z.number().min(0).max(1).nullable().optional()
 export const CreateBrfApartmentSchema = z
   .object({
     apartment_number: z.string().trim().min(1).max(40),
-    lantmateriet_number: z.string().trim().regex(/^[0-9]{4}$/).nullable().optional(),
+    // Lantmäteriet's lägenhetsnummer (lag 2006:378) is four digits but not an account number.
+    lantmateriet_number: z.string().trim().length(4).regex(/^\d+$/).nullable().optional(),
     location: z.string().trim().min(1).max(300),
     rooms: z.number().min(0).max(99).nullable().optional(),
     kvm: nonNegativeAmount.max(100_000).nullable().optional(),

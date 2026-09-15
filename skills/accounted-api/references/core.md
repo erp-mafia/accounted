@@ -93,7 +93,7 @@ Request body:
 ```ts
 {
   name: string,
-  entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening" | "ekonomisk_forening",
+  entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening" | "ekonomisk_forening" | "bostadsrattsforening",
   org_number?: string,
   vat_registered: boolean,
   moms_period?: "monthly" | "quarterly" | "yearly" | null,
@@ -127,7 +127,7 @@ Response `200`:
   data: {
     id: string,
     name: string,
-    entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening" | "ekonomisk_forening",
+    entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening" | "ekonomisk_forening" | "bostadsrattsforening",
     org_number: string | null,
     vat_registered: boolean,
     moms_period: "monthly" | "quarterly" | "yearly" | null,
