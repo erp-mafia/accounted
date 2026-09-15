@@ -357,7 +357,10 @@ export function buildBrRows(mapping: StatementMapping): {
     // on their own under bundet eget kapital; a förening has no share
     // capital and no överkursfond.
     e.post('Medlemsinsatser', br['Medlemsinsatser'], { indent: 2, alwaysShow: true })
-    e.post('Förlagsinsatser', br['Forlagsinsatser'], { indent: 2 })
+    e.post('Förlagsinsatser', br['Forlagsinsatser'], {
+      indent: 2,
+      semantic_key: 'balance_sheet_forlagsinsatser',
+    })
     e.post('Uppskrivningsfond', br['Uppskrivningsfond'], { indent: 2 })
     e.post('Reservfond', br['Reservfond'], { indent: 2 })
   } else {

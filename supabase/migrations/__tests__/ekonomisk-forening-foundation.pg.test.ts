@@ -40,6 +40,25 @@ describe('ekonomisk_forening foundation: database contract', () => {
     ).toContain('ekonomisk_forening')
   })
 
+  it('validates the re-added CHECKs in the follow-up migration (NOT VALID swap, then VALIDATE)', async () => {
+    const res = await getPool().query<{ conname: string; convalidated: boolean }>(
+      `SELECT conname, convalidated
+         FROM pg_constraint
+        WHERE conname IN (
+          'companies_entity_type_check',
+          'company_settings_entity_type_check',
+          'booking_template_library_entity_type_check'
+        )
+        ORDER BY conname`,
+    )
+    expect(res.rows.map((row) => row.conname)).toEqual([
+      'booking_template_library_entity_type_check',
+      'companies_entity_type_check',
+      'company_settings_entity_type_check',
+    ])
+    expect(res.rows.every((row) => row.convalidated)).toBe(true)
+  })
+
   it('keeps one exhaustive allow-list for all creation RPCs', async () => {
     const res = await getPool().query<{ list: string[] }>(
       `SELECT public.supported_entity_types() AS list`,

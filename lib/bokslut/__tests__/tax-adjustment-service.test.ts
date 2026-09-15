@@ -45,7 +45,7 @@ beforeEach(() => {
 
 describe('loadTaxAdjustmentSnapshot', () => {
   it('detects Miles account balances as non-deductible expenses', async () => {
-    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1')
+    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
 
     expect(snapshot.nonDeductibleExpenses).toBe(5_244)
     expect(snapshot.nonTaxableIncome).toBe(0)
@@ -57,6 +57,15 @@ describe('loadTaxAdjustmentSnapshot', () => {
       amount: 2_250,
       included: true,
     })
+  })
+
+  it('fails loudly instead of dropping form-specific accounts when the company row cannot be resolved', async () => {
+    // Without a form the snapshot would silently fall back to the base
+    // accounts and omit 3901 for an ekonomisk förening; the lookup error
+    // must surface instead.
+    await expect(loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1')).rejects.toThrow(
+      /entity_type/,
+    )
   })
 
   it('honors saved exclusions and includes manual adjustments', async () => {
@@ -83,6 +92,7 @@ describe('loadTaxAdjustmentSnapshot', () => {
       ]),
       'company-1',
       'period-1',
+      'aktiebolag',
     )
 
     expect(snapshot.nonDeductibleExpenses).toBe(3_094)

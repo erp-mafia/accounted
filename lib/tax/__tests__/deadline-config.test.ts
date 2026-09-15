@@ -602,6 +602,20 @@ describe('ekonomisk förening: juridisk person deadlines with the association wo
     expect(forening.description).toContain('ÅRL 8 kap. 3 §')
   })
 
+  it('starts the Bolagsverket filing duty with fiscal years beginning 1 January 2025', () => {
+    const forening = getConfig('arsredovisning_ekonomisk_forening')
+    const ab = getConfig('arsredovisning')
+    // Calendar year 2024 (deadline July 2025) predates the general duty.
+    expect(forening.generateDates(2025, ekf())).toEqual([])
+    expect(ab.generateDates(2025, makeSettings({ entity_type: 'aktiebolag' }))).toHaveLength(1)
+    // Calendar year 2025 (deadline July 2026) is the first one filed.
+    expect(forening.generateDates(2026, ekf())[0]).toMatchObject({ day: 31, month: 6, year: 2026, period: '2025' })
+    // Brutet räkenskapsår 2024-07-01..2025-06-30 (deadline January 2026)
+    // started before the cut-off; 2025-07-01..2026-06-30 (January 2027) did not.
+    expect(forening.generateDates(2026, ekf({ fiscal_year_start_month: 7 }))).toEqual([])
+    expect(forening.generateDates(2027, ekf({ fiscal_year_start_month: 7 }))).toHaveLength(1)
+  })
+
   it('holds the ordinarie föreningsstämma within six months of year end (EFL 6 kap. 9 §)', () => {
     const ab = getConfig('arsstamma')
     const forening = getConfig('foreningsstamma')

@@ -734,7 +734,7 @@ export function mapTrialBalancesToK2(
   for (const field of ['current', 'previous'] as const) {
     if (field === 'previous' && previous === null) continue
     const rrSmoothed = smoothRrResidual(rr, rrExact, br, brExact, totals, field)
-    const brSmoothed = smoothBrResidual(br, brExact, totals, field)
+    const brSmoothed = smoothBrResidual(br, brExact, totals, field, brMappings)
     smoothedAny = smoothedAny || rrSmoothed || brSmoothed
   }
   if (smoothedAny) totals = computeTotals(rr, br)
@@ -809,9 +809,6 @@ const FIRST_EQ_LIAB_MAPPING_INDEX = K2_BR_MAPPINGS.findIndex(
   (mapping) => mapping.concept === 'Aktiekapital',
 )
 const ASSET_MAPPINGS = K2_BR_MAPPINGS.slice(0, FIRST_EQ_LIAB_MAPPING_INDEX)
-const EQ_LIAB_MAPPINGS = K2_BR_MAPPINGS.slice(
-  FIRST_EQ_LIAB_MAPPING_INDEX,
-)
 
 /**
  * Reconcile each BR side to its own rounded exact total without changing exact
@@ -824,7 +821,14 @@ function smoothBrResidual(
   brExact: ConceptAmounts,
   totals: K2MappingResult['totals'],
   field: 'current' | 'previous',
+  brMappings: PostMapping[],
 ): boolean {
+  // The equity candidates come from the table the mapping was built with:
+  // an ekonomisk förening carries Medlemsinsatser and Forlagsinsatser instead
+  // of the aktiebolag concepts, and a residual could otherwise find no
+  // fractional post on that side. The asset mappings are shared by every
+  // legal form, so everything else in the table is the equity/liability side.
+  const eqLiabMappings = brMappings.filter((mapping) => !ASSET_MAPPINGS.includes(mapping))
   const assets = totals.tillgangar[field]
   const eqLiab = totals.egetKapitalSkulder[field]
   if (assets === null || eqLiab === null) return false
@@ -836,7 +840,7 @@ function smoothBrResidual(
 
   const sides = [
     { mappings: ASSET_MAPPINGS, rounded: assets, target: roundWhole(exactAssets) },
-    { mappings: EQ_LIAB_MAPPINGS, rounded: eqLiab, target: roundWhole(exactEqLiab) },
+    { mappings: eqLiabMappings, rounded: eqLiab, target: roundWhole(exactEqLiab) },
   ]
   const residuals = sides.map((side) => side.target - side.rounded)
   if (residuals.every((residual) => residual === 0)) return false

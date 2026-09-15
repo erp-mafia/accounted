@@ -91,4 +91,21 @@ describe('mapTrialBalancesToK2: ekonomisk förening equity (ÅRL 3 kap. 10 b §)
     )
     expect(withShareCapital.warnings.some((w) => w.includes('Aktiekapital (2081)'))).toBe(true)
   })
+
+  it('absorbs an öre-rounding residual into medlemsinsatser or förlagsinsatser (the form has no aktiebolag posts to smooth)', () => {
+    // Two insatser posts of 50,49 each round to 50 + 50 = 100 while the bank
+    // balance (100,98) rounds to 101. The +1 residual must land on one of the
+    // förening's own fractional equity posts; the aktiebolag candidate set
+    // holds neither concept and would leave a false balance error.
+    const rows = [
+      row('1930', 'Företagskonto', 100.98, 0),
+      row('2083', 'Medlemsinsatser', 0, 50.49),
+      row('2084', 'Förlagsinsatser', 0, 50.49),
+    ]
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null, { legalForm: 'ekonomisk_forening' })
+    expect(res.totals.tillgangar.current).toBe(101)
+    expect(res.totals.egetKapitalSkulder.current).toBe(101)
+    expect((res.br['Medlemsinsatser']?.current ?? 0) + (res.br['Forlagsinsatser']?.current ?? 0)).toBe(101)
+    expect(res.warnings).toEqual([])
+  })
 })

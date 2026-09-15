@@ -353,6 +353,40 @@ describe('validateAnnualReportCompleteness: ekonomisk förening', () => {
     expect(present.issues.map((issue) => issue.code)).not.toContain('AR-EF-MEMBER-INFO')
   })
 
+  it('requires the dividend-right statement when förlagsinsatser are on the balance sheet (ÅRL 6 kap. 3 §)', () => {
+    const base = input('filing')
+    const withForlag = (dividendRight: string | null): ArsredovisningData => {
+      const r = foreningReport('Medlemsantalet ökade från 40 till 52.')
+      return {
+        ...r,
+        balansrakning: {
+          ...r.balansrakning,
+          equity_liabilities: [
+            ...r.balansrakning.equity_liabilities,
+            { label: 'Förlagsinsatser', semantic_key: 'balance_sheet_forlagsinsatser', current: 50_000, previous: null },
+          ],
+        },
+        forvaltningsberattelse: {
+          ...r.forvaltningsberattelse,
+          member_disclosures: {
+            ...r.forvaltningsberattelse.member_disclosures,
+            forlagsinsatser_dividend_right: dividendRight,
+          },
+        },
+      } as unknown as ArsredovisningData
+    }
+    const missing = validateAnnualReportCompleteness({ ...base, report: withForlag(null) })
+    expect(missing.issues.map((issue) => issue.code)).toContain('AR-EF-FORLAGSINSATSER-DIVIDEND')
+    const present = validateAnnualReportCompleteness({
+      ...base,
+      report: withForlag('Förlagsinsatserna ger rätt till 4 % årlig utdelning enligt stadgarna.'),
+    })
+    expect(present.issues.map((issue) => issue.code)).not.toContain('AR-EF-FORLAGSINSATSER-DIVIDEND')
+    // No förlagsinsatser: the text is optional and the PDF prints "inga".
+    const none = validateAnnualReportCompleteness({ ...base, report: foreningReport('Oförändrat medlemsantal.') })
+    expect(none.issues.map((issue) => issue.code)).not.toContain('AR-EF-FORLAGSINSATSER-DIVIDEND')
+  })
+
   it('demands the revisionsberättelse even when the profile says none is required (EFL 8 kap. 1 §)', () => {
     const base = input('filing')
     const profile: AnnualReportProfile = {

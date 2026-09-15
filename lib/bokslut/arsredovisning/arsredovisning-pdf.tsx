@@ -278,22 +278,27 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
 
         <Text style={styles.sectionTitle}>Förslag till resultatdisposition</Text>
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.resultatdisposition}</Text>
-        {[
-          ['Balanserat resultat', data.forvaltningsberattelse.resultatdisposition_amounts.retained_earnings],
-          ...(isForening
-            ? []
-            : [['Fri överkursfond', data.forvaltningsberattelse.resultatdisposition_amounts.share_premium_reserve] as const]),
-          ['Årets resultat', data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result],
-          [`Summa till ${meeting}s förfogande`, data.forvaltningsberattelse.resultatdisposition_amounts.total],
-          [isForening ? 'Föreslagen vinstutdelning till medlemmarna' : 'Föreslagen utdelning', -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend],
-          ['Balanseras i ny räkning', data.forvaltningsberattelse.resultatdisposition_amounts.carried_forward],
-        ].map(([label, amount], index) => (
+        {(
+          [
+            { label: 'Balanserat resultat', amount: data.forvaltningsberattelse.resultatdisposition_amounts.retained_earnings, isTotal: false },
+            // Fri överkursfond is an aktiebolag post (ÅRL 5 kap. 14 §); a
+            // förening has no överkurs and the row is omitted, so the total
+            // rows are flagged explicitly rather than found by position.
+            ...(isForening
+              ? []
+              : [{ label: 'Fri överkursfond', amount: data.forvaltningsberattelse.resultatdisposition_amounts.share_premium_reserve, isTotal: false }]),
+            { label: 'Årets resultat', amount: data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result, isTotal: false },
+            { label: `Summa till ${meeting}s förfogande`, amount: data.forvaltningsberattelse.resultatdisposition_amounts.total, isTotal: true },
+            { label: isForening ? 'Föreslagen vinstutdelning till medlemmarna' : 'Föreslagen utdelning', amount: -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend, isTotal: false },
+            { label: 'Balanseras i ny räkning', amount: data.forvaltningsberattelse.resultatdisposition_amounts.carried_forward, isTotal: true },
+          ] as const
+        ).map(({ label, amount, isTotal }) => (
           <View
-            key={String(label)}
-            style={index === 3 || index === 5 ? styles.tableRowTotal : styles.tableRow}
+            key={label}
+            style={isTotal ? styles.tableRowTotal : styles.tableRow}
           >
             <Text style={styles.colLabel}>{label}</Text>
-            <Text style={styles.colAmount}>{fmt(Number(amount))}</Text>
+            <Text style={styles.colAmount}>{fmt(amount)}</Text>
           </View>
         ))}
       </Page>

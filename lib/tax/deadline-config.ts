@@ -884,7 +884,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     condition: (s) => s.entity_type === 'ekonomisk_forening',
     priority: 'critical',
     linkedReportType: null,
-    generateDates: bolagsverketFilingDates,
+    generateDates: bolagsverketFilingDatesEkonomiskForening,
   },
 
   // Ordinarie föreningsstämma: within six months of the fiscal year end (EFL
@@ -904,6 +904,33 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     generateDates: annualMeetingDates,
   },
 ]
+
+/**
+ * The general filing duty for an ekonomisk förening applies to financial
+ * years beginning on or after 1 January 2025 (ÅRL 8 kap. 3 § as amended;
+ * Bolagsverket, "Årsredovisning för ekonomisk förening"). Earlier years only
+ * had to be filed by större föreningar, which the deadline settings cannot
+ * tell apart, so no instance is generated for them: the deadline that would
+ * follow from `bolagsverketFilingDates` for a fiscal year that started
+ * before that date is dropped.
+ */
+const EKONOMISK_FORENING_FILING_DUTY_FROM = new Date(2025, 0, 1)
+
+function bolagsverketFilingDatesEkonomiskForening(
+  year: number,
+  settings: CompanySettingsForDeadlines,
+): DeadlineInstance[] {
+  return bolagsverketFilingDates(year, settings).filter((instance) => {
+    // The instance is dated seven months after the fiscal year end; walk
+    // back to the fiscal year's first day (a twelve-month year is assumed,
+    // as the generator does everywhere else).
+    const fyEndMonth0 = (instance.month + 5) % 12
+    const fyEndYear = instance.month >= 7 ? instance.year : instance.year - 1
+    const fyStartMonth0 = (fyEndMonth0 + 1) % 12
+    const fyStartYear = fyEndMonth0 === 11 ? fyEndYear : fyEndYear - 1
+    return new Date(fyStartYear, fyStartMonth0, 1) >= EKONOMISK_FORENING_FILING_DUTY_FROM
+  })
+}
 
 /**
  * Helper to get month label in Swedish

@@ -57,7 +57,7 @@ describe('GET /api/company/current', () => {
 
 describe('PATCH /api/company/current', () => {
   it('rejects K3 for enskild firma with 400', async () => {
-    enqueue({ data: { entity_type: 'enskild_firma' } })
+    enqueue({ data: { entity_type: 'enskild_firma', accounting_framework: 'k2' } })
 
     const req = createMockRequest('/api/company/current', {
       method: 'PATCH',
@@ -71,7 +71,7 @@ describe('PATCH /api/company/current', () => {
   })
 
   it('rejects K3 for an ideell förening with 400 (årsbokslut, never K2/K3)', async () => {
-    enqueue({ data: { entity_type: 'ideell_forening' } })
+    enqueue({ data: { entity_type: 'ideell_forening', accounting_framework: 'k2' } })
     const req = createMockRequest('/api/company/current', {
       method: 'PATCH',
       body: { accounting_framework: 'k3' },
@@ -80,21 +80,65 @@ describe('PATCH /api/company/current', () => {
     expect(status).toBe(400)
   })
 
-  it('lets an ekonomisk förening choose K3 (BFNAR 2012:1 applies to every årsredovisning)', async () => {
-    enqueue({ data: { entity_type: 'ekonomisk_forening' } }) // entity check
-    enqueue({ data: { id: 'company-1', accounting_framework: 'k3', entity_type: 'ekonomisk_forening' } }) // update
+  it('keeps an ekonomisk förening on K2 until its K3 document ships (K3 rejected with 400)', async () => {
+    enqueue({ data: { entity_type: 'ekonomisk_forening', accounting_framework: 'k2' } }) // entity check
     const req = createMockRequest('/api/company/current', {
       method: 'PATCH',
       body: { accounting_framework: 'k3' },
     })
+    const { status, body } = await parseJsonResponse<{ error: string }>(await PATCH(req, routeParams))
+    expect(status).toBe(400)
+    expect(body.error).toContain('ekonomisk förening')
+  })
+
+  it('refuses a legal-form change that would leave K3 on a form that cannot carry it', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag', accounting_framework: 'k3' } }) // current row
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { entity_type: 'ekonomisk_forening' },
+    })
+    const { status, body } = await parseJsonResponse<{ error: string }>(await PATCH(req, routeParams))
+    expect(status).toBe(400)
+    expect(body.error).toContain('K2')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('accepts the same change when the request also moves the company to K2', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag', accounting_framework: 'k3' } }) // current row
+    enqueue({ data: { ok: true, changed: true, entity_type: 'ekonomisk_forening', previous_entity_type: 'aktiebolag' } }) // rpc
+    enqueue({ data: { id: 'company-1', accounting_framework: 'k2', entity_type: 'ekonomisk_forening' } }) // update
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { entity_type: 'ekonomisk_forening', accounting_framework: 'k2' },
+    })
     const { status, body } = await parseJsonResponse<{
-      data: { accounting_framework: string }
+      data: { entity_type: string; accounting_framework: string }
     }>(await PATCH(req, routeParams))
     expect(status).toBe(200)
-    expect(body.data.accounting_framework).toBe('k3')
+    expect(body.data).toMatchObject({ entity_type: 'ekonomisk_forening', accounting_framework: 'k2' })
+    expect(supabase.rpc).toHaveBeenCalledWith('correct_company_entity_type', {
+      p_company_id: 'company-1',
+      p_entity_type: 'ekonomisk_forening',
+    })
+  })
+
+  it('judges K3 against the form the company is moving to, not the one it leaves', async () => {
+    enqueue({ data: { entity_type: 'ekonomisk_forening', accounting_framework: 'k2' } }) // current row
+    enqueue({ data: { ok: true, changed: true, entity_type: 'aktiebolag', previous_entity_type: 'ekonomisk_forening' } }) // rpc
+    enqueue({ data: { id: 'company-1', accounting_framework: 'k3', entity_type: 'aktiebolag' } }) // update
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { entity_type: 'aktiebolag', accounting_framework: 'k3' },
+    })
+    const { status, body } = await parseJsonResponse<{
+      data: { entity_type: string; accounting_framework: string }
+    }>(await PATCH(req, routeParams))
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ entity_type: 'aktiebolag', accounting_framework: 'k3' })
   })
 
   it('corrects the legal form through the owner-only RPC when the books are empty', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag', accounting_framework: 'k2' } }) // current row
     enqueue({ data: { ok: true, changed: true, entity_type: 'ekonomisk_forening', previous_entity_type: 'aktiebolag' } }) // rpc
     enqueue({ data: { id: 'company-1', accounting_framework: 'k2', entity_type: 'ekonomisk_forening' } }) // read-back
     const req = createMockRequest('/api/company/current', {
@@ -113,6 +157,7 @@ describe('PATCH /api/company/current', () => {
   })
 
   it('maps a refused legal-form change to a conflict with the Swedish reason', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag', accounting_framework: 'k2' } }) // current row
     enqueue({ data: { ok: false, code: 'ENTITY_TYPE_CHANGE_BOOKS_NOT_EMPTY', journal_entries: 3 } })
     const req = createMockRequest('/api/company/current', {
       method: 'PATCH',
@@ -137,7 +182,7 @@ describe('PATCH /api/company/current', () => {
   })
 
   it('updates the framework for an aktiebolag', async () => {
-    enqueue({ data: { entity_type: 'aktiebolag' } }) // entity check
+    enqueue({ data: { entity_type: 'aktiebolag', accounting_framework: 'k2' } }) // entity check
     enqueue({ data: { id: 'company-1', accounting_framework: 'k3', entity_type: 'aktiebolag' } }) // update
 
     const req = createMockRequest('/api/company/current', {

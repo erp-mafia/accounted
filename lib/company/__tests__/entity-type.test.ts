@@ -153,7 +153,8 @@ describe('entity-type: domain facts', () => {
     expect(requiresAuditorRegardlessOfSize('ekonomisk_forening')).toBe(true)
     expect(supportsMemberCapital('ekonomisk_forening')).toBe(true)
     expect(supportsAccountingFramework('ekonomisk_forening', 'k2')).toBe(true)
-    expect(supportsAccountingFramework('ekonomisk_forening', 'k3')).toBe(true)
+    // K3 opens for the form with its own equity statement (phase 2).
+    expect(supportsAccountingFramework('ekonomisk_forening', 'k3')).toBe(false)
     expect(requiresAuditorRegardlessOfSize('aktiebolag')).toBe(false)
     expect(supportsMemberCapital('aktiebolag')).toBe(false)
   })

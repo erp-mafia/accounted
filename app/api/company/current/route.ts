@@ -81,10 +81,12 @@ const ENTITY_TYPE_CHANGE_ERRORS: Record<string, { status: number; message: strin
  * company. Separate from /api/settings (which writes to `company_settings`)
  * because the columns live on different tables.
  *
- * Currently scoped to `accounting_framework` (K2 / K3), only meaningful for
- * forms that prepare an årsredovisning (aktiebolag, ekonomisk förening). The
- * handler rejects K3 for every other form to prevent impossible
- * chart-of-accounts states downstream.
+ * Scoped to `accounting_framework` (K2 / K3) and, while the books are empty,
+ * `entity_type` (see correct_company_entity_type). K3 is only meaningful for
+ * forms that prepare an årsredovisning under it (aktiebolag today); the
+ * handler validates the RESULTING (entity_type, accounting_framework) pair,
+ * so a legal-form change can neither keep K3 on a form that never uses it
+ * nor be judged against the form the company is leaving.
  */
 export const PATCH = withRouteContext(
   'company.update_current',
@@ -95,14 +97,13 @@ export const PATCH = withRouteContext(
   if (!validation.success) return validation.response
 
   const updates: Record<string, unknown> = {}
+  const wantsFramework = validation.data.accounting_framework !== undefined
+  const wantsEntityType = validation.data.entity_type !== undefined
 
-  if (validation.data.accounting_framework !== undefined) {
-    // Only forms that prepare an årsredovisning can opt in to K3 (BFNAR
-    // 2012:1); an enskild firma stays on its own rules and never touches
-    // K2/K3. Fetch the entity_type before applying.
+  if (wantsFramework || wantsEntityType) {
     const { data: company } = await supabase
       .from('companies')
-      .select('entity_type')
+      .select('entity_type, accounting_framework')
       .eq('id', companyId)
       .single()
     if (!company) {
@@ -111,16 +112,27 @@ export const PATCH = withRouteContext(
         { status: 404 },
       )
     }
+    // Only forms that prepare an årsredovisning under K3 (BFNAR 2012:1) can
+    // carry it; an enskild firma and an ideell förening close with an
+    // årsbokslut and an ekonomisk förening is K2-only until its K3 document
+    // ships. Judge the pair the row will hold after this request, not the
+    // form it holds now.
+    const resultingEntityType = validation.data.entity_type ?? company.entity_type
+    const resultingFramework = validation.data.accounting_framework ?? company.accounting_framework
     if (
-      validation.data.accounting_framework === 'k3'
-      && !(isEntityType(company.entity_type) && supportsAccountingFramework(company.entity_type, 'k3'))
+      resultingFramework === 'k3'
+      && !(isEntityType(resultingEntityType) && supportsAccountingFramework(resultingEntityType, 'k3'))
     ) {
       return NextResponse.json(
-        { error: 'K3 (BFNAR 2012:1) gäller endast företag som upprättar årsredovisning (aktiebolag och ekonomisk förening).' },
+        {
+          error: wantsEntityType && !wantsFramework
+            ? 'Företagsformen kan inte ändras medan K3 är valt: välj K2 först, eller skicka accounting_framework tillsammans med företagsformen.'
+            : 'K3 (BFNAR 2012:1) kan bara väljas av ett aktiebolag; en ekonomisk förening upprättar årsredovisningen enligt K2 och övriga företagsformer upprättar årsbokslut.',
+        },
         { status: 400 },
       )
     }
-    updates.accounting_framework = validation.data.accounting_framework
+    if (wantsFramework) updates.accounting_framework = validation.data.accounting_framework
   }
 
   if (validation.data.entity_type !== undefined) {

@@ -66,13 +66,10 @@ async function resolveFormForAdjustments(
   entityType?: EntityType,
 ): Promise<EntityType | null> {
   if (entityType) return entityType
-  try {
-    return await resolveCompanyEntityType(supabase, companyId)
-  } catch {
-    // A company row that cannot be read keeps the form-neutral rules; the
-    // caller's own entity resolution decides whether the declaration exists.
-    return null
-  }
+  // A failed lookup propagates: silently falling back to the form-neutral
+  // rules would drop 3901 for an ekonomisk förening and understate INK2S
+  // 4.5c, so the taxable base would be wrong without anyone noticing.
+  return resolveCompanyEntityType(supabase, companyId)
 }
 
 const MANUAL_ADJUSTMENTS = [

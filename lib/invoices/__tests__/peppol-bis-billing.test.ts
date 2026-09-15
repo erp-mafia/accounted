@@ -415,9 +415,8 @@ describe('generatePeppolBisBillingInvoice', () => {
 
     const result = generatePeppolBisBillingInvoice(input)
 
-    if (!result.ok) {
-      expect(result.issues.map(({ code }) => code)).not.toContain('SUPPLIER_ENTITY_TYPE_UNSUPPORTED')
-    } else {
+    expect(result.ok).toBe(true)
+    if (result.ok) {
       expect(result.xml).toContain('schemeID="0007"')
     }
   })

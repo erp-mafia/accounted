@@ -18,6 +18,7 @@ import {
   templateAppliesToForm,
 } from '../booking-templates'
 import { applySettlementAccount } from '../mapping-engine'
+import { getCategoryAccountMapping } from '../category-mapping'
 
 // ============================================================
 // Template Data Integrity
@@ -662,6 +663,17 @@ describe('buildMappingResultFromTemplate', () => {
 
     const abResult = buildMappingResultFromTemplate(template, tx, 'aktiebolag')
     expect(abResult.debit_account).toBe('7610')
+  })
+
+  it('books an ekonomisk förening course to the same account through the template and the category mapping', () => {
+    // Both resolvers (templateAccountForForm and getExpenseAccount) put the
+    // form's education cost on 7610, the personnel account, so the account
+    // does not depend on which path the user took.
+    const tx = makeTransaction({ amount: -5000 })
+    const viaTemplate = buildMappingResultFromTemplate(getTemplate('education_course'), tx, 'ekonomisk_forening')
+    const viaCategory = getCategoryAccountMapping('expense_education', -5000, true, 'ekonomisk_forening')
+    expect(viaTemplate.debit_account).toBe('7610')
+    expect(viaCategory.debitAccount).toBe('7610')
   })
 
   it('resolves AB-specific private account', () => {

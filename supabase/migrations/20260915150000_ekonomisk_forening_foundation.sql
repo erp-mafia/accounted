@@ -28,23 +28,30 @@
 -- migration.
 -- =============================================================================
 
+-- The replacement CHECKs are added NOT VALID so the swap never scans (and
+-- never blocks writes to) companies, company_settings or the template
+-- library on a live deploy; every existing row already satisfies the wider
+-- list. 20260915150300 validates them under SHARE UPDATE EXCLUSIVE.
 ALTER TABLE public.companies
   DROP CONSTRAINT IF EXISTS companies_entity_type_check;
 ALTER TABLE public.companies
   ADD CONSTRAINT companies_entity_type_check
-  CHECK (entity_type IN ('enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening'));
+  CHECK (entity_type IN ('enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening'))
+  NOT VALID;
 
 ALTER TABLE public.company_settings
   DROP CONSTRAINT IF EXISTS company_settings_entity_type_check;
 ALTER TABLE public.company_settings
   ADD CONSTRAINT company_settings_entity_type_check
-  CHECK (entity_type IN ('enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening'));
+  CHECK (entity_type IN ('enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening'))
+  NOT VALID;
 
 ALTER TABLE public.booking_template_library
   DROP CONSTRAINT IF EXISTS booking_template_library_entity_type_check;
 ALTER TABLE public.booking_template_library
   ADD CONSTRAINT booking_template_library_entity_type_check
-  CHECK (entity_type IN ('all', 'enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening'));
+  CHECK (entity_type IN ('all', 'enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening'))
+  NOT VALID;
 
 CREATE OR REPLACE FUNCTION public.supported_entity_types()
 RETURNS text[]

@@ -137,7 +137,9 @@ export function evaluateAnnualReportEligibility(
         ),
       )
     }
-    if (profile.auditor_report_required === false) {
+    // An unanswered profile (null) is not an answer: the form always needs
+    // the revisionsberättelse, so only an explicit true clears the check.
+    if (profile.auditor_report_required !== true) {
       issues.push(
         issue(
           'AR-AUDITOR-REQUIRED-FORENING',

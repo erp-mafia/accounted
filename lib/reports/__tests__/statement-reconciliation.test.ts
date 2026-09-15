@@ -215,6 +215,10 @@ describe('reconcileStatements: ekonomisk förening', () => {
 
     const statutory = result.figures.find((f) => f.family === 'statutory')
     expect(statutory?.surface).toBe('INK2R (3.26/3.27)')
+    // The surface alone is also emitted when INK2 generation throws (with a
+    // null amount and a disagreement), so require the declaration itself.
+    expect(statutory?.aretsResultat).not.toBeNull()
+    expect(result.isReconciled).toBe(true)
   })
 })
 
