@@ -10262,6 +10262,7 @@
     "finding_settings_mismatch": "{field} in settings ({current}) differs from the document ({proposed})",
     "finding_agreement_ending": "{title} ends {date} and the notice period is unknown",
     "finding_agreement_no_counterparty": "{title} has no counterparty: {name} is not among the parties",
+    "finding_agreement_duplicate": "The same agreement twice: {titles}",
     "finding_duplicate_document": "The same content in several documents: {files}",
     "finding_document_stuck": "{file} could not be read (step: {step})",
     "review_help": "Two questions Arkiv asks a person. Documents nothing ties to the company are held until you answer; saving one makes it accounting material that cannot be deleted for seven years. Documents already admitted but not typed wait for you to say what they are.",
@@ -10581,21 +10582,31 @@
       "customer_invoice": "Customer invoice",
       "bank_statement": "Bank statement",
       "tax_account_statement": "Tax account statement",
-      "agreement.lease": "Lease",
-      "agreement.loan": "Loan agreement",
-      "agreement.rental": "Rental contract",
-      "agreement.insurance": "Insurance policy",
-      "agreement.employment": "Employment contract",
-      "agreement.shareholder": "Shareholders agreement",
-      "agreement.investment": "Investment agreement",
-      "agreement.customer": "Customer contract",
-      "agreement.subscription": "Subscription",
-      "agreement.other": "Other agreement",
-      "registration.bolagsverket": "Registration certificate",
-      "filing.bolagsverket": "Filing to Bolagsverket",
-      "decision.skatteverket": "Decision from Skatteverket",
-      "minutes.board": "Board minutes",
-      "minutes.agm": "General meeting minutes",
+      "agreement": {
+        "lease": "Lease",
+        "loan": "Loan agreement",
+        "rental": "Rental contract",
+        "insurance": "Insurance policy",
+        "employment": "Employment contract",
+        "shareholder": "Shareholders agreement",
+        "investment": "Investment agreement",
+        "customer": "Customer contract",
+        "subscription": "Subscription",
+        "other": "Other agreement"
+      },
+      "registration": {
+        "bolagsverket": "Registration certificate"
+      },
+      "filing": {
+        "bolagsverket": "Filing to Bolagsverket"
+      },
+      "decision": {
+        "skatteverket": "Decision from Skatteverket"
+      },
+      "minutes": {
+        "board": "Board minutes",
+        "agm": "General meeting minutes"
+      },
       "share_subscription_list": "Subscription list",
       "annual_report": "Annual report",
       "other": "Other"

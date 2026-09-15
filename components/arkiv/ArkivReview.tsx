@@ -209,6 +209,10 @@ function FindingRow({ finding, busy, onClose }: { finding: FindingView; busy: bo
       text = t('finding_agreement_no_counterparty', { title: String(d.title), name: String(d.counterparty_name ?? '') })
       href = `/arkiv/avtal/${finding.subject_id}`
       break
+    case 'agreement_duplicate':
+      text = t('finding_agreement_duplicate', { titles: ((d.titles as string[] | undefined) ?? []).join(', ') })
+      href = `/arkiv/avtal/${finding.subject_id}`
+      break
     case 'duplicate_document':
       text = t('finding_duplicate_document', { files: ((d.file_names as string[] | undefined) ?? []).map((f) => shortFileName(f, 30)).join(', ') })
       href = `/arkiv/dokument/${finding.subject_id}`

@@ -14,6 +14,8 @@ interface Scripted {
   document?: Row | null
   current?: Row | null
   pages?: Row[]
+  /** Twins the duplicate check finds for the document. */
+  duplicates?: Row[]
 }
 type Write = { table: string; op: 'insert' | 'update'; payload: Row; filters: Row }
 

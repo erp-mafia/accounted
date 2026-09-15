@@ -40,7 +40,7 @@ CREATE INDEX idx_document_classifications_content
 CREATE TABLE public.arkiv_findings (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
-  kind text NOT NULL CHECK (kind IN ('settings_mismatch', 'agreement_ending', 'agreement_no_counterparty', 'duplicate_document', 'document_stuck')),
+  kind text NOT NULL CHECK (kind IN ('settings_mismatch', 'agreement_ending', 'agreement_no_counterparty', 'agreement_duplicate', 'duplicate_document', 'document_stuck')),
   -- Stable per company, so a rerun refreshes the finding instead of repeating it.
   key text NOT NULL,
   severity text NOT NULL CHECK (severity IN ('info', 'warning')),

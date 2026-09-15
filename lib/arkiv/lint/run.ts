@@ -166,7 +166,7 @@ async function loadLiveCompanyFacts(supabase: SupabaseClient, companyId: string)
 async function loadAgreements(supabase: SupabaseClient, companyId: string): Promise<AgreementForLint[]> {
   const { data, error } = await supabase
     .from('agreements')
-    .select('id, title, status, ends_on, notice_months, counterparty_party_id, counterparty_name')
+    .select('id, kind, title, status, starts_on, ends_on, amount, principal, notice_months, counterparty_party_id, counterparty_name')
     .eq('company_id', companyId)
     .limit(1000)
   if (error) throw new Error(`agreements fetch failed: ${error.message}`)

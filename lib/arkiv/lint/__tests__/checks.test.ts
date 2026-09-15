@@ -68,12 +68,22 @@ describe('settingsMismatches', () => {
 })
 
 describe('agreementFindings', () => {
-  const base = { status: 'active', ends_on: '2026-10-20', notice_months: null, counterparty_party_id: 'p-1', counterparty_name: 'Lokalen AB' }
+  const base = {
+    kind: 'rental',
+    status: 'active',
+    starts_on: '2026-01-01',
+    ends_on: '2026-10-20',
+    amount: 12000,
+    principal: null,
+    notice_months: null,
+    counterparty_party_id: 'p-1',
+    counterparty_name: 'Lokalen AB',
+  }
   it('flags an active agreement ending within 60 days with an unknown notice period, and one without a counterparty', () => {
     const out = agreementFindings(
       [
         { id: 'a-1', title: 'Hyresavtal', ...base },
-        { id: 'a-2', title: 'Abonnemang', ...base, notice_months: 3 },
+        { id: 'a-2', title: 'Abonnemang', ...base, kind: 'subscription', amount: 990, notice_months: 3 },
         { id: 'a-3', title: 'Lån', ...base, ends_on: '2027-06-01', counterparty_party_id: null },
         { id: 'a-4', title: 'Gammalt', ...base, status: 'ended', counterparty_party_id: null },
       ],
@@ -82,6 +92,50 @@ describe('agreementFindings', () => {
     expect(out.map((f) => f.key)).toEqual(['agreement_ending:a-1', 'agreement_no_counterparty:a-3'])
     expect(out[0].detail).toEqual({ title: 'Hyresavtal', ends_on: '2026-10-20', days: 35 })
     expect(out[1]).toMatchObject({ severity: 'info', subjectKind: 'agreement', subjectId: 'a-3', detail: { counterparty_name: 'Lokalen AB' } })
+  })
+
+  it('never asks for a counterparty on a shareholders agreement or an employment contract', () => {
+    const out = agreementFindings(
+      [
+        { id: 'a-5', title: 'Aktieägaravtal', ...base, kind: 'shareholder', ends_on: null, counterparty_party_id: null, counterparty_name: null },
+        { id: 'a-6', title: 'Anställningsavtal Alice', ...base, kind: 'employment', ends_on: null, counterparty_party_id: null, counterparty_name: 'Alice' },
+      ],
+      '2026-09-15',
+    )
+    expect(out).toEqual([])
+  })
+
+  it('files the same agreement read from two files as one duplicate finding', () => {
+    const out = agreementFindings(
+      [
+        { id: 'b-2', title: 'Lån 500050956', ...base, kind: 'loan', ends_on: null, amount: 10417, principal: 500000, starts_on: '2026-02-02', counterparty_party_id: 'p-almi' },
+        { id: 'b-1', title: 'Lån 500050956', ...base, kind: 'loan', ends_on: null, amount: 10417, principal: 500000, starts_on: '2026-02-02', counterparty_party_id: 'p-almi' },
+        { id: 'b-3', title: 'Lån Propel', ...base, kind: 'loan', ends_on: null, amount: 400000, principal: 400000, starts_on: '2025-10-13', counterparty_party_id: 'p-propel' },
+        {
+          id: 'b-4',
+          title: 'Gammalt lån',
+          ...base,
+          kind: 'loan',
+          status: 'ended',
+          ends_on: null,
+          amount: 10417,
+          principal: 500000,
+          starts_on: '2026-02-02',
+          counterparty_party_id: 'p-almi',
+        },
+      ],
+      '2026-09-15',
+    )
+    expect(out).toEqual([
+      {
+        kind: 'agreement_duplicate',
+        key: 'agreement_duplicate:b-1+b-2',
+        severity: 'info',
+        subjectKind: 'agreement',
+        subjectId: 'b-1',
+        detail: { agreement_ids: ['b-1', 'b-2'], titles: ['Lån 500050956', 'Lån 500050956'] },
+      },
+    ])
   })
 })
 

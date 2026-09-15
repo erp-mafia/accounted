@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { DOC_TYPES, isDocType } from '@/lib/documents/classify/taxonomy'
+import { searchDocumentPages, type PageHit } from '@/lib/documents/read/search'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -48,13 +49,15 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
 
   let searchIds: string[] | null = null
   if (q && q.length >= 2) {
-    const [pages, names] = await Promise.all([
-      ctx.supabase.rpc('search_document_pages', { p_company_id: ctx.companyId, p_query: q, p_limit: limit }),
-      ctx.supabase.from('document_attachments').select('id').eq('company_id', ctx.companyId).ilike('file_name', `%${q.replace(/[%_]/g, ' ')}%`).limit(limit),
-    ])
-    if (pages.error) return NextResponse.json({ error: getErrorMessage(pages.error) }, { status: 500 })
+    let pages: PageHit[]
+    try {
+      pages = await searchDocumentPages(ctx.supabase, ctx.companyId, q, limit)
+    } catch (err) {
+      return NextResponse.json({ error: getErrorMessage(err) }, { status: 500 })
+    }
+    const names = await ctx.supabase.from('document_attachments').select('id').eq('company_id', ctx.companyId).ilike('file_name', `%${q.replace(/[%_]/g, ' ')}%`).limit(limit)
     if (names.error) return NextResponse.json({ error: getErrorMessage(names.error) }, { status: 500 })
-    searchIds = [...new Set([...((pages.data ?? []) as Array<{ document_id: string }>).map((p) => p.document_id), ...((names.data ?? []) as Array<{ id: string }>).map((d) => d.id)])]
+    searchIds = [...new Set([...pages.map((p) => p.document_id), ...((names.data ?? []) as Array<{ id: string }>).map((d) => d.id)])]
     if (searchIds.length === 0) return NextResponse.json({ data: [] })
   }
 

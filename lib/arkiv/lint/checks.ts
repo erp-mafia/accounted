@@ -7,7 +7,7 @@ import { daysBetween } from '@/lib/arkiv/agreements/dates'
  * can act on, keyed so a rerun updates rather than repeats. Nothing here
  * changes settings or records: a finding proposes, a person applies.
  */
-export type FindingKind = 'settings_mismatch' | 'agreement_ending' | 'agreement_no_counterparty' | 'duplicate_document' | 'document_stuck'
+export type FindingKind = 'settings_mismatch' | 'agreement_ending' | 'agreement_no_counterparty' | 'agreement_duplicate' | 'duplicate_document' | 'document_stuck'
 export type FindingSeverity = 'info' | 'warning'
 export type FindingSubjectKind = 'company' | 'agreement' | 'document'
 
@@ -121,13 +121,20 @@ export function settingsMismatches(facts: LiveFact[], settings: SettingsSnapshot
 
 export interface AgreementForLint {
   id: string
+  kind: string
   title: string
   status: string
+  starts_on: string | null
   ends_on: string | null
+  amount: number | string | null
+  principal: number | string | null
   notice_months: number | null
   counterparty_party_id: string | null
   counterparty_name: string | null
 }
+
+/** Kinds with parties rather than one counterparty: a shareholders agreement, an employment contract. */
+const NO_COUNTERPARTY_KINDS = new Set(['shareholder', 'employment'])
 
 /** Days ahead an agreement's end is worth a finding when the notice period is unknown. */
 export const ENDING_WITHIN_DAYS = 60
@@ -149,7 +156,7 @@ export function agreementFindings(agreements: AgreementForLint[], today: string)
         })
       }
     }
-    if (!a.counterparty_party_id) {
+    if (!a.counterparty_party_id && !NO_COUNTERPARTY_KINDS.has(a.kind)) {
       out.push({
         kind: 'agreement_no_counterparty',
         key: `agreement_no_counterparty:${a.id}`,
@@ -159,6 +166,33 @@ export function agreementFindings(agreements: AgreementForLint[], today: string)
         detail: { title: a.title, counterparty_name: a.counterparty_name },
       })
     }
+  }
+  return [...out, ...duplicateAgreements(agreements)]
+}
+
+/** The same contract read from two files (a draft and the signed scan) becomes two agreements with the same kind, counterparty, amount and start. */
+export function duplicateAgreements(agreements: AgreementForLint[]): FindingDraft[] {
+  const groups = new Map<string, AgreementForLint[]>()
+  for (const a of agreements) {
+    if (a.status !== 'active') continue
+    const who = (a.counterparty_party_id ?? a.counterparty_name ?? '').toLowerCase().trim()
+    const money = a.principal ?? a.amount
+    if (!who || money == null) continue
+    const key = [a.kind, who, Number(money), a.starts_on ?? ''].join('|')
+    groups.set(key, [...(groups.get(key) ?? []), a])
+  }
+  const out: FindingDraft[] = []
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    const sorted = [...group].sort((x, y) => x.id.localeCompare(y.id))
+    out.push({
+      kind: 'agreement_duplicate',
+      key: `agreement_duplicate:${sorted.map((a) => a.id.slice(0, 8)).join('+')}`,
+      severity: 'info',
+      subjectKind: 'agreement',
+      subjectId: sorted[0].id,
+      detail: { agreement_ids: sorted.map((a) => a.id), titles: sorted.map((a) => a.title) },
+    })
   }
   return out
 }

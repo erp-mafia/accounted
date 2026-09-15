@@ -41,8 +41,8 @@ describe('lintCompany', () => {
         fiscal_year_start_month: 1,
       },
       agreements: [
-        { id: 'a-1', title: 'Hyresavtal', status: 'active', ends_on: '2026-10-01', notice_months: null, counterparty_party_id: 'p-1', counterparty_name: 'Lokalen' },
-        { id: 'a-2', title: 'Lån', status: 'active', ends_on: null, notice_months: null, counterparty_party_id: null, counterparty_name: 'Almi' },
+        { id: 'a-1', kind: 'rental', title: 'Hyresavtal', status: 'active', starts_on: null, ends_on: '2026-10-01', amount: null, principal: null, notice_months: null, counterparty_party_id: 'p-1', counterparty_name: 'Lokalen' },
+        { id: 'a-2', kind: 'loan', title: 'Lån', status: 'active', starts_on: null, ends_on: null, amount: null, principal: null, notice_months: null, counterparty_party_id: null, counterparty_name: 'Almi' },
       ],
       jobs: [{ document_id: 'doc-9', kind: 'read', attempts: 5, max_attempts: 5, last_error: 'boom', document_attachments: { file_name: 'scan.pdf' } }],
       existing: [

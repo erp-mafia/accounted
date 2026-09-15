@@ -10262,6 +10262,7 @@
     "finding_settings_mismatch": "{field} i inställningarna ({current}) avviker från dokumentet ({proposed})",
     "finding_agreement_ending": "{title} löper ut {date} och uppsägningstiden är okänd",
     "finding_agreement_no_counterparty": "{title} saknar motpart: {name} finns inte bland motparterna",
+    "finding_agreement_duplicate": "Samma avtal två gånger: {titles}",
     "finding_duplicate_document": "Samma innehåll i flera dokument: {files}",
     "finding_document_stuck": "{file} kunde inte läsas (steg: {step})",
     "review_help": "Två frågor Arkiv ställer till en människa. Dokument som inget knyter till bolaget hålls kvar tills du svarar; sparar du ett räknas det som räkenskapsinformation och kan inte tas bort på sju år. Dokument som redan är antagna men som inte gick att typa väntar på att du säger vad de är.",
@@ -10581,21 +10582,31 @@
       "customer_invoice": "Kundfaktura",
       "bank_statement": "Kontoutdrag",
       "tax_account_statement": "Skattekontoutdrag",
-      "agreement.lease": "Leasingavtal",
-      "agreement.loan": "Låneavtal",
-      "agreement.rental": "Hyresavtal",
-      "agreement.insurance": "Försäkringsbrev",
-      "agreement.employment": "Anställningsavtal",
-      "agreement.shareholder": "Aktieägaravtal",
-      "agreement.investment": "Investeringsavtal",
-      "agreement.customer": "Kundavtal",
-      "agreement.subscription": "Abonnemang",
-      "agreement.other": "Annat avtal",
-      "registration.bolagsverket": "Registreringsbevis",
-      "filing.bolagsverket": "Anmälan till Bolagsverket",
-      "decision.skatteverket": "Beslut från Skatteverket",
-      "minutes.board": "Styrelseprotokoll",
-      "minutes.agm": "Stämmoprotokoll",
+      "agreement": {
+        "lease": "Leasingavtal",
+        "loan": "Låneavtal",
+        "rental": "Hyresavtal",
+        "insurance": "Försäkringsbrev",
+        "employment": "Anställningsavtal",
+        "shareholder": "Aktieägaravtal",
+        "investment": "Investeringsavtal",
+        "customer": "Kundavtal",
+        "subscription": "Abonnemang",
+        "other": "Annat avtal"
+      },
+      "registration": {
+        "bolagsverket": "Registreringsbevis"
+      },
+      "filing": {
+        "bolagsverket": "Anmälan till Bolagsverket"
+      },
+      "decision": {
+        "skatteverket": "Beslut från Skatteverket"
+      },
+      "minutes": {
+        "board": "Styrelseprotokoll",
+        "agm": "Stämmoprotokoll"
+      },
       "share_subscription_list": "Teckningslista",
       "annual_report": "Årsredovisning",
       "other": "Övrigt"
