@@ -145,6 +145,13 @@ export const WORKLIST_CATEGORIES = [
    * Done: a person picked the type.
    */
   'document_unclassified',
+  /**
+   * Arkiv (phase 3): admitted documents whose extraction has fields the two
+   * readings disagreed on or a check rejected. Pending: current
+   * document_extractions row with review_fields non-empty. Done: a person
+   * settled every field.
+   */
+  'document_field_review',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]

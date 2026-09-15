@@ -1,36 +1,24 @@
 import { eventBus } from '@/lib/events/bus'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { createLogger } from '@/lib/logger'
-import { readAndStoreDocument } from '@/lib/documents/read/store'
-import { classifyDocument, loadCompanyIdentity } from '@/lib/documents/classify/classify'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 
 const log = createLogger('document-read')
 
 /**
- * Arkiv phase 1: read every uploaded document into page text at arrival.
- * Runs after the upload has committed; a failure here never fails the
- * upload, and the backfill cron retries anything left without pages_read_at.
+ * Arkiv: every uploaded document gets a read job at arrival. The worker cron
+ * reads it into page text and, for companies in the rollout, classifies and
+ * extracts it. Nothing here waits on a model, and a failure to queue never
+ * fails the upload: the read backfill cron picks up anything left unread.
  */
 export function registerDocumentReadHandler(): () => void {
   return eventBus.on('document.uploaded', async ({ document, companyId }) => {
+    const company = document.company_id ?? companyId
+    if (!company) return
     try {
-      const supabase = createServiceClientNoCookies()
-      const outcome = await readAndStoreDocument(supabase, {
-        id: document.id,
-        company_id: document.company_id ?? companyId,
-        storage_path: document.storage_path,
-        mime_type: document.mime_type ?? null,
-      })
-      log.info('document read', { doc: document.id, outcome })
-      const company = document.company_id ?? companyId
-      if (outcome.status === 'read' && isArkivEnabled(company)) {
-        const identity = await loadCompanyIdentity(supabase, company)
-        const classified = await classifyDocument(supabase, document.id, identity)
-        log.info('document classified', { doc: document.id, outcome: classified.status === 'classified' ? { type: classified.classification.doc_type, admission: classified.admission } : classified })
-      }
+      await enqueueDocumentJob(createServiceClientNoCookies(), company, document.id, 'read')
     } catch (err) {
-      log.warn('document read failed', { doc: document.id, reason: err instanceof Error ? err.message : String(err) })
+      log.warn('document read enqueue failed', { doc: document.id, reason: err instanceof Error ? err.message : String(err) })
     }
   })
 }

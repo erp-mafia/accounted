@@ -9,12 +9,14 @@ vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn(() => ({ tag: 'service' })) }))
 vi.mock('@/lib/core/documents/document-service', () => ({ deleteDocument: vi.fn() }))
 vi.mock('@/lib/documents/classify/classify', () => ({ recordHumanClassification: vi.fn() }))
+vi.mock('@/lib/documents/jobs/queue', () => ({ enqueueDocumentJob: vi.fn() }))
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { deleteDocument } from '@/lib/core/documents/document-service'
 import { recordHumanClassification } from '@/lib/documents/classify/classify'
+import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 
 const DOC = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const call = (body: unknown) =>
@@ -57,6 +59,7 @@ describe('POST /api/documents/[id]/admission', () => {
     expect(status).toBe(200)
     expect((body as { data: Record<string, unknown> }).data).toMatchObject({ decision: 'admit', doc_type: 'receipt' })
     expect(recordHumanClassification).toHaveBeenCalledWith({ tag: 'service' }, DOC, 'user-1', { docType: 'receipt', relevance: 'relevant', reason: 'Lunch med kund' })
+    expect(enqueueDocumentJob).toHaveBeenCalledWith({ tag: 'service' }, 'company-1', DOC, 'extract')
   })
 
   it('discards a held document through the guarded delete', async () => {
@@ -66,5 +69,6 @@ describe('POST /api/documents/[id]/admission', () => {
     expect(status).toBe(200)
     expect(deleteDocument).toHaveBeenCalledWith({ tag: 'service' }, 'company-1', DOC)
     expect(recordHumanClassification).not.toHaveBeenCalled()
+    expect(enqueueDocumentJob).not.toHaveBeenCalled()
   })
 })

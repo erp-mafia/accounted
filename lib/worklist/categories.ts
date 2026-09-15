@@ -275,6 +275,18 @@ export async function countUnclassifiedDocuments(supabase: SupabaseClient, compa
   return count ?? 0
 }
 
+/** Arkiv: current extractions with fields a person must settle. */
+export async function countDocumentFieldReviews(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('document_extractions')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('is_current', true)
+    .not('review_fields', 'eq', '{}')
+  if (error) return logAndZero('document_field_review', companyId, error)
+  return count ?? 0
+}
+
 /** Overdue customer invoices (not credited). */
 export async function countOverdueInvoices(
   supabase: SupabaseClient,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -12,12 +12,14 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { DOC_TYPES, type DocType } from '@/lib/documents/classify/taxonomy'
-import type { ReviewDocument } from '@/app/api/arkiv/review/route'
+import type { FieldReviewDocument, ReviewDocument } from '@/app/api/arkiv/review/route'
 import { formatDateLong } from '@/lib/utils'
+import { FieldReview, useFieldLabel } from './FieldReview'
 
 interface ReviewData {
   held: ReviewDocument[]
   unclassified: ReviewDocument[]
+  fields: FieldReviewDocument[]
 }
 
 async function post(url: string, body: unknown): Promise<void> {
@@ -37,6 +39,7 @@ export function ArkivReview() {
   const [busy, setBusy] = useState<string | null>(null)
   const [reasons, setReasons] = useState<Record<string, string>>({})
   const [types, setTypes] = useState<Record<string, DocType>>({})
+  const [openFields, setOpenFields] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -68,6 +71,7 @@ export function ArkivReview() {
   }
 
   const typeLabel = (type: string | null) => (type && (DOC_TYPES as readonly string[]).includes(type) ? t(`types.${type}` as never) : type ?? t('types.other'))
+  const fieldLabel = useFieldLabel()
 
   return (
     <div className="space-y-8">
@@ -206,6 +210,64 @@ export function ArkivReview() {
                       </tr>
                     )
                   })}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          <section className="space-y-2" id="falt">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">{t('fields_title')}</h2>
+              <HelpPopover>{t('fields_help')}</HelpPopover>
+            </div>
+            {data.fields.length === 0 ? (
+              <EmptyState title={t('fields_empty_title')} description={t('fields_empty_body')} />
+            ) : (
+              <table className="w-full border-collapse text-[13px]">
+                <thead>
+                  <tr>
+                    <th className={`${TH_CLASS} pl-0`}>{t('col_document')}</th>
+                    <th className={TH_CLASS}>{t('col_fields')}</th>
+                    <th className={`${TH_CLASS} pr-0 text-right`}>{t('col_answer')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.fields.map((d) => (
+                    <Fragment key={d.document_id}>
+                      <tr className="hover:bg-secondary/35">
+                        <td className={`${TD_CLASS} pl-0`}>
+                          <div className="truncate" title={d.file_name}>
+                            {d.file_name}
+                          </div>
+                          <div className="text-xs text-muted-foreground tabular-nums">
+                            {formatDateLong(d.created_at, locale)}
+                            {d.doc_type ? ` · ${typeLabel(d.doc_type)}` : ''}
+                          </div>
+                        </td>
+                        <td className={`${TD_CLASS} max-w-md whitespace-normal text-muted-foreground`}>{d.review_fields.map(fieldLabel).join(', ')}</td>
+                        <td className={`${TD_CLASS} pr-0 text-right`}>
+                          <Button variant="outline" size="sm" onClick={() => setOpenFields((o) => (o === d.document_id ? null : d.document_id))}>
+                            {openFields === d.document_id ? t('close_fields') : t('open_fields')}
+                          </Button>
+                        </td>
+                      </tr>
+                      {openFields === d.document_id && (
+                        <tr>
+                          <td colSpan={3} className="pb-3 pl-0 pr-0">
+                            <FieldReview
+                              documentId={d.document_id}
+                              onSaved={() => {
+                                toast({ title: t('fields_saved') })
+                                setOpenFields(null)
+                                void load()
+                              }}
+                              onFailed={() => toast({ title: t('action_failed'), variant: 'destructive' })}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
                 </tbody>
               </table>
             )}
