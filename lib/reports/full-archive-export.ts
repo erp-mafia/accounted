@@ -1031,6 +1031,13 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     orderBy: 'created_at',
   },
   { name: 'association_member_events', file: 'association_member_events.json', orderBy: 'created_at' },
+  // Värdeöverföringar to members (EFL 12-13 kap.): decisions and allocations.
+  { name: 'association_distributions', file: 'association_distributions.json', orderBy: 'created_at' },
+  {
+    name: 'association_distribution_allocations',
+    file: 'association_distribution_allocations.json',
+    orderBy: 'created_at',
+  },
   // Customer invoicing
   { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },
   {

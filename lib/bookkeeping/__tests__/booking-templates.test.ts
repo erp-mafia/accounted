@@ -25,8 +25,8 @@ import { getCategoryAccountMapping } from '../category-mapping'
 // ============================================================
 
 describe('BOOKING_TEMPLATES data integrity', () => {
-  it('has exactly 91 templates', () => {
-    expect(BOOKING_TEMPLATES).toHaveLength(91)
+  it('has exactly 93 templates', () => {
+    expect(BOOKING_TEMPLATES).toHaveLength(93)
   })
 
   it('scopes templates to legal forms through templateAppliesToForm', () => {
@@ -54,11 +54,31 @@ describe('BOOKING_TEMPLATES data integrity', () => {
       'debenture_contribution_redeemed',
       'member_dividend_decided',
       'member_dividend_paid',
+      'cooperative_rebate_decided',
+      'cooperative_rebate_paid',
     ]) {
       expect(forForm('ekonomisk_forening'), id).toContain(id)
       expect(forForm('aktiebolag'), id).not.toContain(id)
       expect(forForm('ideell_forening'), id).not.toContain(id)
     }
+  })
+
+  it('books a gottgörelse as a deductible cost on 8840 against the member liability, paid from 2890 (IL 39 kap. 22 §)', () => {
+    expect(getTemplateById('cooperative_rebate_decided')).toMatchObject({
+      debit_account: '8840',
+      credit_account: '2890',
+      deductibility: 'full',
+      vat_treatment: null,
+      requires_review: true,
+    })
+    expect(getTemplateById('cooperative_rebate_decided')?.special_rules_sv).toContain('IL 39 kap. 22 §')
+    expect(getTemplateById('cooperative_rebate_paid')).toMatchObject({
+      debit_account: '2890',
+      credit_account: '1930',
+    })
+    // The dividend pair stays the vinstdisposition path (2091 -> 2898 -> bank).
+    expect(getTemplateById('member_dividend_decided')).toMatchObject({ debit_account: '2091', credit_account: '2898' })
+    expect(getTemplateById('member_dividend_paid')).toMatchObject({ debit_account: '2898', credit_account: '1930' })
   })
 
   it('books member capital to bundet eget kapital, never to revenue (ÅRL 3 kap. 10 b §)', () => {
@@ -213,7 +233,7 @@ describe('getTemplateGroups', () => {
   it('every template is in exactly one group', () => {
     const groups = getTemplateGroups()
     const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(91)
+    expect(allTemplates).toHaveLength(93)
   })
 })
 

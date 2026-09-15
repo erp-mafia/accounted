@@ -143,6 +143,47 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Återbetalningen får inte överstiga den inbetalda insatsen (EFL 10 kap. 11 §).',
     message_en: 'The repayment may not exceed the paid contribution (EFL 10 kap. 11 §).',
   },
+  // Värdeöverföringar to members (EFL 12-13 kap., IL 39 kap. 22-23 §§).
+  ASSOCIATION_DISTRIBUTION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Värdeöverföringen kunde inte hittas.',
+    message_en: 'Distribution not found.',
+  },
+  ASSOCIATION_DISTRIBUTION_EXCEEDS_FREE_EQUITY: {
+    httpStatus: 409,
+    message_sv: 'Utdelningen överstiger det fria egna kapitalet enligt den senaste balansräkningen (beloppsspärren, EFL 12 kap. 2 §). Minska beloppet eller invänta fastställd balansräkning.',
+    message_en: 'The distribution exceeds the free equity in the latest balance sheet (EFL 12 kap. 2 §). Reduce the amount or wait for the adopted balance sheet.',
+  },
+  ASSOCIATION_DISTRIBUTION_NO_BASIS: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget fördelningsunderlag: inga medlemmar med inbetalda insatser av rätt slag, eller inga angivna andelar.',
+    message_en: 'Nothing to allocate on: no members with paid contributions of the right kind, or no basis values given.',
+  },
+  ASSOCIATION_DISTRIBUTION_ALLOCATIONS_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Fördelningen per medlem summerar inte till det beslutade beloppet.',
+    message_en: 'The allocations per member do not add up to the decided total.',
+  },
+  ASSOCIATION_DISTRIBUTION_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Beslutet är redan bokfört.',
+    message_en: 'The decision is already booked.',
+  },
+  ASSOCIATION_DISTRIBUTION_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Bokför stämmans beslut innan utbetalningen registreras.',
+    message_en: 'Book the decision before recording the payment.',
+  },
+  ASSOCIATION_DISTRIBUTION_ALREADY_PAID: {
+    httpStatus: 409,
+    message_sv: 'Utbetalningen är redan registrerad.',
+    message_en: 'The payment is already recorded.',
+  },
+  ASSOCIATION_DISTRIBUTION_NO_OPEN_PERIOD: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget öppet räkenskapsår för datumet.',
+    message_en: 'No open fiscal period covers the date.',
+  },
   RATE_LIMITED: {
     httpStatus: 429,
     message_sv: 'För många förfrågningar. Vänta en stund och försök igen.',

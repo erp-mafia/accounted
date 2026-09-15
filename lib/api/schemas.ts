@@ -318,6 +318,50 @@ export const SettleAssociationContributionSchema = z
   })
   .strict()
 
+// Värdeöverföringar to members (EFL 12-13 kap., IL 39 kap. 22-23 §§).
+export const AssociationDistributionKindSchema = z.enum(['insats_dividend', 'forlags_dividend', 'cooperative_rebate'])
+export const AssociationAllocationBasisSchema = z.enum(['contributions', 'turnover', 'custom'])
+
+export const CreateAssociationDistributionSchema = z
+  .object({
+    kind: AssociationDistributionKindSchema,
+    fiscal_period_id: uuid,
+    decision_date: saneIsoDate,
+    decided_by: z.enum(['stamma', 'board']),
+    decision_reference: z.string().trim().max(200).nullable().optional(),
+    allocation_basis: AssociationAllocationBasisSchema,
+    total_amount: z.number().positive().max(1_000_000_000_000),
+    // Required for 'turnover' and 'custom'; ignored for 'contributions'
+    // (the register supplies the basis).
+    allocations: z
+      .array(
+        z
+          .object({
+            member_id: uuid,
+            basis_value: nonNegativeAmount.max(1_000_000_000_000),
+          })
+          .strict(),
+      )
+      .max(10_000)
+      .optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+
+export const BookAssociationDistributionSchema = z
+  .object({
+    // Defaults to the decision date; must fall in the distribution's period.
+    entry_date: saneIsoDate.optional(),
+  })
+  .strict()
+
+export const PayAssociationDistributionSchema = z
+  .object({
+    paid_on: saneIsoDate,
+    bank_account: accountNumber.default('1930'),
+  })
+  .strict()
+
 export const AccountingFrameworkSchema = z.enum(['k2', 'k3'])
 
 /**

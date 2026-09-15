@@ -426,6 +426,39 @@ describe('generateINK2Declaration: guards', () => {
     expect(result.ink2s).toBeDefined()
   })
 
+  it('points an ekonomisk förening at the IL 39 kap. 23 § deduction when a dividend on insatser was decided (2898)', async () => {
+    const forening = () => ({
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: { entity_type: 'ekonomisk_forening', company_name: 'Kooperativet', org_number: '7696001234' },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return makeSupabase().from(table)
+      },
+    })
+    // Decision Dr 2091 / Cr 2898 during the year: 2898 carries a period credit.
+    const withDividend = [...PRE_CLOSING_ROWS, row('2898', 'Outtagen vinstutdelning', -8_000)]
+    stubTrialBalances(CLOSED_ROWS, withDividend)
+    const result = await generateINK2Declaration(anySupabase(forening()), COMPANY_ID, PERIOD_ID)
+    expect(result.warnings.some((w) => w.includes('IL 39 kap. 23 §') && w.includes('8000'))).toBe(true)
+
+    // No dividend: no warning. An aktiebolag with the same 2898 movement: no warning either.
+    stubTrialBalances(CLOSED_ROWS, PRE_CLOSING_ROWS)
+    const without = await generateINK2Declaration(anySupabase(forening()), COMPANY_ID, PERIOD_ID)
+    expect(without.warnings.some((w) => w.includes('IL 39 kap. 23 §'))).toBe(false)
+    stubTrialBalances(CLOSED_ROWS, withDividend)
+    const ab = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    expect(ab.warnings.some((w) => w.includes('IL 39 kap. 23 §'))).toBe(false)
+  })
+
   it('warns an ekonomisk förening about the 4.3c add-back until it is entered', async () => {
     const forening = () => ({
       from: (table: string) => {

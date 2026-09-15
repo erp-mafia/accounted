@@ -482,6 +482,23 @@ export async function generateINK2Declaration(
     )
   }
 
+  // Utdelning på insatser is a vinstdisposition (Dr 2091 / Cr 2898) and never
+  // reaches the result, but a kooperativ förening may deduct it (IL 39 kap.
+  // 23 §). The catalogue carries no INK2S deduction field for it, so the
+  // engine points at the manual adjustment instead of silently overstating
+  // the taxable result. A gottgörelse (IL 39 kap. 22 §) is a cost on 8840
+  // and needs no adjustment.
+  if (entityType === 'ekonomisk_forening') {
+    const decidedDividend = preClosingTrialBalance.rows
+      .filter((row) => row.account_number === '2898')
+      .reduce((sum, row) => sum + row.period_credit, 0)
+    if (decidedDividend >= 1) {
+      warnings.push(
+        `Utdelning på insatser ${Math.trunc(decidedDividend)} kr har beslutats under året (konto 2898). En kooperativ förening får dra av utdelning som lämnas i förhållande till inbetalda insatser (IL 39 kap. 23 §); avdraget ingår inte i det bokförda resultatet och ska yrkas i INK2S under skattemässiga justeringar. Kontrollera villkoren i IL 39 kap. 21-24 §§ med revisorn.`,
+      )
+    }
+  }
+
   // Add warnings
   if (!(period as FiscalPeriod).is_closed) {
     warnings.push('Räkenskapsåret är inte stängt; deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
