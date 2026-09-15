@@ -221,8 +221,17 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     list.push({ text: t('fact_years', { count: nYears }) })
     list.push({ text: t('fact_vouchers', { count: totalVouchers }) })
     list.push(unmapped.length === 0 ? { text: t('fact_accounts_known', { count: totalAccounts }) } : { text: t('fact_accounts_new', { count: totalAccounts, created: unmapped.length }) })
+    // What the per-file numbers mean, said once. The rows carry the counts;
+    // this names the system they came from and spares six repetitions of it.
+    const charted = ready.filter((f) => f.chart?.applied)
+    if (charted.length) {
+      list.push({ text: t('fact_chart', {
+        count: charted.reduce((sum, f) => sum + (f.chart?.treatments ?? 0), 0),
+        format: charted[0].chart?.format ?? '',
+      }) })
+    }
     return list
-  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, t])
+  }, [ready, company, nYears, totalVouchers, totalAccounts, unmapped.length, t])
 
   /* ── import ──────────────────────────────────────────────────────── */
   const lines: TheaterLine[] = [
@@ -503,27 +512,35 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                     </span>
                   ) : null}
                   {f.status === 'error' ? <span className="bks-f is-warn" style={{ marginLeft: 8 }}>{f.error}</span> : null}
-                  {/* The momskoder for this file's year, if the source system
-                      can export them. Quiet and optional: the act works exactly
-                      as before without it, and the genomlysning still catches
-                      whatever is left. */}
+                  {/* One element per row, never a sentence: the row either
+                      carries a count or an invitation, and the count is itself
+                      the way to replace it. Six files repeating "N konton fick
+                      momskod från kontoplanen (Spiris Bokföring). Byt kontoplan"
+                      was ninety per cent the same words six times over, and the
+                      only part that differed was the number. What the numbers
+                      mean is said once, in the facts line below. */}
                   {f.status === 'ready' ? (
-                    <span className="bks-f" style={{ marginLeft: 8, color: 'hsl(var(--muted-foreground))' }}>
+                    <button
+                      type="button"
+                      className="imp-change"
+                      style={{ marginLeft: 8 }}
+                      onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
+                    >
                       {f.chart?.applied
-                        ? t('sie_chart_applied', { count: f.chart.treatments, format: f.chart.format ?? '' })
-                        : null}
-                      {f.chart && !f.chart.applied ? t('sie_chart_unread') : null}{' '}
-                      <button
-                        type="button"
-                        className="imp-change"
-                        onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
-                      >
-                        {f.chart?.applied ? t('sie_chart_replace') : t('sie_chart_pick')}
-                      </button>
-                    </span>
+                        ? t('sie_chart_count', { count: f.chart.treatments })
+                        : f.chart
+                          ? t('sie_chart_unread')
+                          : t('sie_chart_pick')}
+                    </button>
                   ) : null}
                 </p>
               ))}
+              {/* Why you would want to, once and only while it is still an
+                  open question. Six rows each explaining themselves was the
+                  same noise as six rows each reporting themselves. */}
+              {ready.length > 0 && ready.every((f) => !f.chart) ? (
+                <p className="bks-f" style={{ marginTop: 6, color: 'hsl(var(--muted-foreground))' }}>{t('sie_chart_why')}</p>
+              ) : null}
               {facts.length ? <Facts facts={facts} /> : null}
             </div>
           )}
