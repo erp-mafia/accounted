@@ -10,6 +10,7 @@ import type {
   AnnualReportValidationStage,
 } from './compliance-types'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { isEntityType, requiresAuditorRegardlessOfSize } from '@/lib/company/entity-type'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -435,7 +436,49 @@ export function validateAnnualReportCompleteness(
         'Årsstämmans alternativa beslut om resultatdisposition saknar text.',
       )
     }
-    if (profile.auditor_report_required && !profile.auditor_report_included) {
+    // ÅRL 6 kap. 3 § p. 1: the förvaltningsberättelse of an ekonomisk
+    // förening must state material changes in the number of members; the
+    // amount disclosures default to "inga", the text cannot.
+    if (
+      report.company.entity_type === 'ekonomisk_forening' &&
+      !report.forvaltningsberattelse.member_disclosures?.member_count_change?.trim()
+    ) {
+      push(
+        issues,
+        'AR-EF-MEMBER-INFO',
+        'error',
+        'management_report',
+        'Förvaltningsberättelsen saknar uppgift om väsentliga förändringar i medlemsantalet (ÅRL 6 kap. 3 §).',
+      )
+    }
+    // ÅRL 6 kap. 3 § p. 3: when the förening has förlagsinsatser, the
+    // förvaltningsberättelse states the right to dividend they carry. The
+    // PDF prints "inga förlagsinsatser" for an empty text, which would be a
+    // false statement next to a nonzero balance-sheet post.
+    const forlagsinsatserBalance =
+      report.balansrakning.equity_liabilities.find(
+        (row) => row.semantic_key === 'balance_sheet_forlagsinsatser',
+      )?.current ?? 0
+    if (
+      report.company.entity_type === 'ekonomisk_forening' &&
+      forlagsinsatserBalance !== 0 &&
+      !report.forvaltningsberattelse.member_disclosures?.forlagsinsatser_dividend_right?.trim()
+    ) {
+      push(
+        issues,
+        'AR-EF-FORLAGSINSATSER-DIVIDEND',
+        'error',
+        'management_report',
+        'Föreningen har förlagsinsatser men förvaltningsberättelsen saknar uppgift om den rätt till utdelning som de medför (ÅRL 6 kap. 3 §).',
+      )
+    }
+    // EFL 8 kap. 1 §: an ekonomisk förening always has a revisor, so the
+    // revisionsberättelse is required whatever the profile answer says.
+    const auditorReportRequired =
+      profile.auditor_report_required ||
+      (isEntityType(report.company.entity_type) &&
+        requiresAuditorRegardlessOfSize(report.company.entity_type))
+    if (auditorReportRequired && !profile.auditor_report_included) {
       push(
         issues,
         'AR-AUDITOR-REPORT-MISSING',

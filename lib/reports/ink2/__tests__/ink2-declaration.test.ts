@@ -19,6 +19,7 @@ vi.mock('@/lib/reports/trial-balance', () => ({
 }))
 vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
   loadTaxAdjustmentSnapshot: vi.fn(),
+  MEMBERSHIP_FEE_ACCOUNT: '3901',
 }))
 
 import { generateINK2Declaration } from '../ink2-engine'
@@ -390,6 +391,120 @@ describe('generateINK2Declaration: guards', () => {
     await expect(
       generateINK2Declaration(anySupabase(supabase), COMPANY_ID, PERIOD_ID),
     ).rejects.toThrow(/aktiebolag/i)
+  })
+
+  it('accepts an ekonomisk förening: the same INK2 return as an aktiebolag', async () => {
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: {
+                    company_name: 'Testkooperativet ek. för.',
+                    org_number: '7696001234',
+                    entity_type: 'ekonomisk_forening',
+                    address_line1: 'Testgatan 1',
+                    postal_code: '11122',
+                    city: 'Stockholm',
+                    email: 'test@example.com',
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return makeSupabase().from(table)
+      },
+    }
+
+    const result = await generateINK2Declaration(anySupabase(supabase), COMPANY_ID, PERIOD_ID)
+    expect(result.fiscalYear.id).toBe(PERIOD_ID)
+    expect(result.ink2r).toBeDefined()
+    expect(result.ink2s).toBeDefined()
+  })
+
+  it('warns an ekonomisk förening about the 4.3c add-back until it is entered', async () => {
+    const forening = () => ({
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: { entity_type: 'ekonomisk_forening', company_name: 'Kooperativet', org_number: '7696001234' },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return makeSupabase().from(table)
+      },
+    })
+    const membershipItem = {
+      sourceKey: 'account:3901',
+      source: 'detected' as const,
+      adjustmentType: 'non_taxable_income' as const,
+      description: 'Medlemsavgifter',
+      accountNumber: '3901',
+      amount: 12_000,
+      included: true,
+    }
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      items: [membershipItem],
+      nonDeductibleExpenses: 0,
+      nonTaxableIncome: 12_000,
+    })
+    const withoutAddBack = await generateINK2Declaration(anySupabase(forening()), COMPANY_ID, PERIOD_ID)
+    expect(withoutAddBack.warnings.some((w) => w.includes('4.3c'))).toBe(true)
+    expect(withoutAddBack.ink2s['7754']).toBe(12_000)
+
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      items: [
+        membershipItem,
+        {
+          sourceKey: 'manual:non_deductible_expenses',
+          source: 'manual',
+          adjustmentType: 'non_deductible_expense',
+          description: 'Ytterligare ej avdragsgilla kostnader',
+          accountNumber: null,
+          amount: 4_000,
+          included: true,
+        },
+      ],
+      nonDeductibleExpenses: 4_000,
+      nonTaxableIncome: 12_000,
+    })
+    const withAddBack = await generateINK2Declaration(anySupabase(forening()), COMPANY_ID, PERIOD_ID)
+    expect(withAddBack.warnings.some((w) => w.includes('4.3c'))).toBe(false)
+    expect(withAddBack.ink2s['7653']).toBe(4_000)
+  })
+
+  it('rejects an ideell förening (INK3, not modelled)', async () => {
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: { entity_type: 'ideell_forening' },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
+        return makeSupabase().from(table)
+      },
+    }
+
+    await expect(
+      generateINK2Declaration(anySupabase(supabase), COMPANY_ID, PERIOD_ID),
+    ).rejects.toThrow(/aktiebolag and ekonomisk förening/i)
   })
 
   it('warns about a BAS account with no SRU mapping', async () => {

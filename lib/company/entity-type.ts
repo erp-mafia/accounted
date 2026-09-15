@@ -23,11 +23,15 @@ import { flagEnabled } from '@/lib/env/public-flags'
  *   a plain short-term liability, 2890.
  * - A förening is a juridisk person, so BFL 3 kap does not force the
  *   calendar year on it (the EF rule) and its default method is accrual.
+ * - An ekonomisk förening files INK2 and an annual report, but its bound
+ *   equity is member capital (2083/2084) rather than share capital (2081).
+ *   It must always have an auditor, regardless of size.
  */
 export const ENTITY_TYPES = [
   'enskild_firma',
   'aktiebolag',
   'ideell_forening',
+  'ekonomisk_forening',
 ] as const satisfies readonly EntityType[]
 
 // Compile-time proof that ENTITY_TYPES lists every member of the union.
@@ -40,6 +44,7 @@ export const ENTITY_TYPE_LABELS_SV: Record<EntityType, string> = {
   enskild_firma: 'Enskild firma',
   aktiebolag: 'Aktiebolag',
   ideell_forening: 'Ideell förening',
+  ekonomisk_forening: 'Ekonomisk förening',
 }
 
 export class UnknownEntityTypeError extends Error {
@@ -103,12 +108,14 @@ export async function resolveCompanyEntityType(
  * into client bundles; a computed key would read undefined in the browser.
  */
 export const IDEELL_FORENING_FLAG = 'NEXT_PUBLIC_IDEELL_FORENING_ENABLED'
+export const EKONOMISK_FORENING_FLAG = 'NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED'
 
 export function isEntityTypeCreatable(entityType: EntityType): boolean {
   return byEntityType(entityType, {
     enskild_firma: true,
     aktiebolag: true,
     ideell_forening: flagEnabled(process.env.NEXT_PUBLIC_IDEELL_FORENING_ENABLED),
+    ekonomisk_forening: flagEnabled(process.env.NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED),
   })
 }
 
@@ -135,6 +142,7 @@ export function resultClosingAccounts(entityType: EntityType): ResultClosingAcco
     enskild_firma: { closing: '2010', closingName: 'Eget kapital', priorYearCarry: null },
     aktiebolag: { closing: '2099', closingName: 'Årets resultat', priorYearCarry: '2098' },
     ideell_forening: { closing: '2069', closingName: 'Årets resultat', priorYearCarry: '2068' },
+    ekonomisk_forening: { closing: '2099', closingName: 'Årets resultat', priorYearCarry: '2098' },
   })
 }
 
@@ -151,6 +159,7 @@ export function ownerSettlementAccount(
     enskild_firma: direction === 'withdrawal' ? '2013' : '2018',
     aktiebolag: '2893',
     ideell_forening: '2890',
+    ekonomisk_forening: '2890',
   })
 }
 
@@ -159,10 +168,10 @@ const OWNER_SETTLEMENT_ACCOUNTS = new Set(['2013', '2018', '2893'])
 
 /**
  * Resolve a booking template's account for the form. Templates carry a base
- * (enskild firma) account and an optional `_ab` override; an ideell förening
- * takes the base account (6991 for a course, 3100 for exempt revenue) except
- * that any owner account becomes the member settlement account, since a
- * förening has no egna uttag/insättningar and no delägarskuld.
+ * (enskild firma) account and an optional `_ab` override. A förening takes
+ * the base account (6991 for a course, 3100 for exempt revenue) except that
+ * any owner account becomes the member settlement account, since a förening
+ * has no egna uttag/insättningar and no delägarskuld.
  */
 export function templateAccountForForm(
   entityType: EntityType,
@@ -174,33 +183,151 @@ export function templateAccountForForm(
     aktiebolag: abOverride ?? base,
     ideell_forening:
       base && OWNER_SETTLEMENT_ACCOUNTS.has(base) ? ownerSettlementAccount('ideell_forening', 'withdrawal') : base,
+    // A juridisk person with employees books like an aktiebolag (the `_ab`
+    // override: 7610 utbildning, 3004 momsfri försäljning), except that an
+    // owner account (2893 skuld till aktieägare, or a base 2013/2018) becomes
+    // the member settlement account 2890.
+    ekonomisk_forening: (() => {
+      const resolved = abOverride ?? base
+      return resolved && OWNER_SETTLEMENT_ACCOUNTS.has(resolved)
+        ? ownerSettlementAccount('ekonomisk_forening', 'withdrawal')
+        : resolved
+    })(),
   })
 }
 
-/** Only an aktiebolag prepares an årsredovisning in Accounted today. */
+/**
+ * Legal forms whose bookkeeping ends in an årsredovisning (BFL 6 kap. 1 §:
+ * every aktiebolag and every ekonomisk förening; an enskild firma and an
+ * ideell förening below the ÅRL 1 kap. 3 § thresholds close with an
+ * årsbokslut instead).
+ */
 export function preparesArsredovisning(entityType: EntityType): boolean {
-  return byEntityType(entityType, { enskild_firma: false, aktiebolag: true, ideell_forening: false })
+  return byEntityType(entityType, {
+    enskild_firma: false,
+    aktiebolag: true,
+    ideell_forening: false,
+    ekonomisk_forening: true,
+  })
 }
 
 /** BFL 3 kap 1 §: a fysisk person (enskild firma) is bound to the calendar year. */
 export function fiscalYearLockedToCalendar(entityType: EntityType): boolean {
-  return byEntityType(entityType, { enskild_firma: true, aktiebolag: false, ideell_forening: false })
+  return byEntityType(entityType, {
+    enskild_firma: true,
+    aktiebolag: false,
+    ideell_forening: false,
+    ekonomisk_forening: false,
+  })
 }
 
 /** The org number is the owner's personnummer only for an enskild firma. */
 export function usesPersonnummerAsOrgNumber(entityType: EntityType): boolean {
-  return byEntityType(entityType, { enskild_firma: true, aktiebolag: false, ideell_forening: false })
+  return byEntityType(entityType, {
+    enskild_firma: true,
+    aktiebolag: false,
+    ideell_forening: false,
+    ekonomisk_forening: false,
+  })
 }
 
 export function defaultAccountingMethod(entityType: EntityType): 'accrual' | 'cash' {
-  return byEntityType(entityType, { enskild_firma: 'cash', aktiebolag: 'accrual', ideell_forening: 'accrual' })
+  return byEntityType(entityType, {
+    enskild_firma: 'cash',
+    aktiebolag: 'accrual',
+    ideell_forening: 'accrual',
+    ekonomisk_forening: 'accrual',
+  })
 }
 
 /**
  * Simplified year-end regelverk label used by the accrual threshold logic
  * (K1: 5 000 kr per post may stay unperiodised). EF: BFNAR 2006:1; ideell
- * förening: BFNAR 2010:1; AB prepares under K2.
+ * förening: BFNAR 2010:1; AB and ekonomisk förening prepare under K2/K3.
  */
 export function simplifiedYearEndRegelverk(entityType: EntityType): 'K1' | 'K2' {
-  return byEntityType(entityType, { enskild_firma: 'K1', aktiebolag: 'K2', ideell_forening: 'K1' })
+  return byEntityType(entityType, {
+    enskild_firma: 'K1',
+    aktiebolag: 'K2',
+    ideell_forening: 'K1',
+    ekonomisk_forening: 'K2',
+  })
+}
+
+/**
+ * Legal forms that file Inkomstdeklaration 2. Skatteverket's INK2 is the
+ * return for aktiebolag, ekonomiska föreningar and other juridiska personer
+ * taxed under IL 65 kap. 10 § (SFL 30 kap. 1 §); an enskild firma files the
+ * NE-bilaga and an ideell förening INK3.
+ */
+export function usesInk2(entityType: EntityType): boolean {
+  return byEntityType(entityType, {
+    enskild_firma: false,
+    aktiebolag: true,
+    ideell_forening: false,
+    ekonomisk_forening: true,
+  })
+}
+
+/**
+ * Forms that book their own income tax (2510/8910) and the bokslutsdispositioner
+ * of a juridisk person: periodiseringsfond 25 % (IL 30 kap. 5 §),
+ * överavskrivningar (IL 18 kap. 13-17 §§), särskild löneskatt and bolagsskatt
+ * 20,6 % (IL 65 kap. 10 §). The rules are the same for an aktiebolag and an
+ * ekonomisk förening; an enskild firma's counterparts are declaration-only
+ * (NE-bilaga) and an ideell förening's income is mostly tax-exempt (IL 7 kap.).
+ */
+export function booksCurrentTax(entityType: EntityType): boolean {
+  return usesInk2(entityType)
+}
+
+export function supportsCorporateTaxDispositions(entityType: EntityType): boolean {
+  return usesInk2(entityType)
+}
+
+/**
+ * EFL 8 kap. 1 §: an ekonomisk förening must have at least one revisor
+ * whatever its size, and an authorised revisor above the EFL 8 kap. 14-15 §§
+ * thresholds. An aktiebolag may opt out below the ABL 9 kap. 1 § thresholds.
+ */
+export function requiresAuditorRegardlessOfSize(entityType: EntityType): boolean {
+  return byEntityType(entityType, {
+    enskild_firma: false,
+    aktiebolag: false,
+    ideell_forening: false,
+    ekonomisk_forening: true,
+  })
+}
+
+/**
+ * Bound equity made of member contributions (EFL 10 kap., BAS 2083) and
+ * optional förlagsinsatser (EFL 11 kap., BAS 2084), reported as separate
+ * posts under bundet eget kapital (ÅRL 3 kap. 10 b §). Share capital (2081)
+ * is the aktiebolag counterpart and never applies to a förening.
+ */
+export function supportsMemberCapital(entityType: EntityType): boolean {
+  return byEntityType(entityType, {
+    enskild_firma: false,
+    aktiebolag: false,
+    ideell_forening: false,
+    ekonomisk_forening: true,
+  })
+}
+
+/**
+ * K2 (BFNAR 2016:10) is open to every mindre företag that prepares an
+ * årsredovisning, K3 (BFNAR 2012:1) to all of them; by law an ekonomisk
+ * förening chooses between the two exactly like an aktiebolag (BFN, "Vad
+ * gäller för ekonomiska föreningar"). In Accounted the förening is K2-only
+ * for now: the K3 equity roll-forward is still shaped for aktiekapital and
+ * opens with the member-capital work (design doc, phase 2). Forms that close
+ * with an årsbokslut (enskild firma, ideell förening) never pick a framework.
+ */
+export function supportsAccountingFramework(
+  entityType: EntityType,
+  framework: 'k2' | 'k3',
+): boolean {
+  if (!preparesArsredovisning(entityType)) return false
+  if (entityType === 'ekonomisk_forening') return framework === 'k2'
+  return framework === 'k2' || framework === 'k3'
 }

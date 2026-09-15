@@ -92,6 +92,29 @@ const PostSchema = z.object({
   // employees only (the K2 note and the iXBRL fact are integers); the cap
   // matches the DB CHECK.
   medelantal_anstallda_override: z.number().int().min(0).max(100_000).nullable().optional(),
+  // ÅRL 6 kap. 3 §: förvaltningsberättelse disclosures of an ekonomisk
+  // förening. Stored for every form; rendered and required only for the
+  // ekonomisk förening (completeness AR-EF-MEMBER-INFO).
+  member_count_change: sanitizedText(2000).nullable().optional(),
+  insatser_repayable_next_year: z
+    .number()
+    .min(0)
+    .max(1_000_000_000_000)
+    .nullable()
+    .optional()
+    .transform((value) =>
+      value === null || value === undefined ? value : Math.round(value * 100) / 100,
+    ),
+  forlagsinsatser_dividend_right: sanitizedText(2000).nullable().optional(),
+  forlagsinsatser_redeemable_two_years: z
+    .number()
+    .min(0)
+    .max(1_000_000_000_000)
+    .nullable()
+    .optional()
+    .transform((value) =>
+      value === null || value === undefined ? value : Math.round(value * 100) / 100,
+    ),
   long_term_debt_over_five_years_confirmed: z.boolean().optional(),
   securities_pledged_confirmed: z.boolean().optional(),
   contingent_liabilities_confirmed: z.boolean().optional(),

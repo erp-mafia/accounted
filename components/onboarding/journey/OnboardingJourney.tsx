@@ -42,13 +42,22 @@ import { isEntityTypeCreatable, usesPersonnummerAsOrgNumber } from '@/lib/compan
 import JourneyOrb, { type OrbState } from './JourneyOrb'
 
 /** Display order of the form picker (AB first, as before); flags filter it. */
-const FORM_PICKER_ORDER: EntityType[] = ['aktiebolag', 'enskild_firma', 'ideell_forening']
+const FORM_PICKER_ORDER: EntityType[] = [
+  'aktiebolag',
+  'enskild_firma',
+  'ideell_forening',
+  'ekonomisk_forening',
+]
 
 /** i18n key per legal form for the picker chips and the summary card. */
-const FORM_LABEL_KEY: Record<EntityType, 'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening'> = {
+const FORM_LABEL_KEY: Record<
+  EntityType,
+  'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening' | 'journey_form_ekonomisk_forening'
+> = {
   aktiebolag: 'journey_form_ab',
   enskild_firma: 'journey_form_ef',
   ideell_forening: 'journey_form_forening',
+  ekonomisk_forening: 'journey_form_ekonomisk_forening',
 }
 import JourneyTrack from './JourneyTrack'
 import Question from './Question'

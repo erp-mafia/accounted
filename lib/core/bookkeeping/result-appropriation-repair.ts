@@ -5,6 +5,7 @@ import { equalOre, isZeroOre, roundOre, sumOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput, JournalEntry } from '@/types'
 import { PRIOR_RESULT_ACCOUNT, RESULT_ACCOUNT } from './result-appropriation-service'
 
+import { isEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 export type HistoricalResultRepairReason =
   | 'ready'
   | 'non_aktiebolag'
@@ -135,6 +136,18 @@ function resultLines(net: number): CreateJournalEntryLineInput[] {
  * is still the complete current posted 2099 balance and no other entry touched
  * 2099 in the period. Everything else stays unchanged for manual review.
  */
+/**
+ * The repair is defined on the 2099 "Årets resultat" -> 2098 "Vinst eller
+ * förlust från föregående år" pair. That pair belongs to the aktiebolag and
+ * the ekonomisk förening (resultClosingAccounts); an enskild firma has no
+ * carry and an ideell förening carries 2069 -> 2068.
+ */
+function usesAbResultChain(entityType: string | null): boolean {
+  if (!entityType || !isEntityType(entityType)) return false
+  const accounts = resultClosingAccounts(entityType)
+  return accounts.closing === '2099' && accounts.priorYearCarry === '2098'
+}
+
 export function classifyHistoricalResultRepair(
   snapshot: HistoricalResultRepairSnapshot,
 ): HistoricalResultRepairAssessment {
@@ -172,8 +185,9 @@ export function classifyHistoricalResultRepair(
   ): HistoricalResultRepairAssessment => ({ ...base, status, reason, plan: null })
 
   // An unknown form is NOT assumed to be an aktiebolag: the repair only ever
-  // applies to the 2099 -> 2098 chain, so anything else is skipped.
-  if (snapshot.entityType !== 'aktiebolag') {
+  // applies to the 2099 -> 2098 chain (aktiebolag and ekonomisk förening),
+  // so anything else is skipped.
+  if (!usesAbResultChain(snapshot.entityType)) {
     return finish('skipped', 'non_aktiebolag')
   }
   if (snapshot.isClosed) return finish('skipped', 'period_closed')
@@ -278,7 +292,7 @@ export async function assessHistoricalResultRepair(
   }
 
   if (
-    baseSnapshot.entityType !== 'aktiebolag' ||
+    !usesAbResultChain(baseSnapshot.entityType) ||
     baseSnapshot.isClosed ||
     baseSnapshot.lockedAt ||
     baseSnapshot.existingPostedAppropriation ||

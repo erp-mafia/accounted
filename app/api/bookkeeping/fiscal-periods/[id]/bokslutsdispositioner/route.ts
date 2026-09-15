@@ -84,10 +84,10 @@ const PutBodySchema = z.object({
     nonDeductibleExpenses: z.number().nonnegative().max(1_000_000_000_000),
     nonTaxableIncome: z.number().nonnegative().max(1_000_000_000_000),
   }),
-  detectedAccounts: z.object({
-    '6992': z.boolean(),
-    '8423': z.boolean(),
-  }),
+  // Keyed by account number: the detected list depends on the legal form
+  // (tax-adjustment-service), so the shape is open and the service ignores
+  // accounts it does not detect for this company.
+  detectedAccounts: z.record(z.string().regex(/^\d{4}$/), z.boolean()),
 })
 
 export const PUT = withRouteContext(

@@ -24,6 +24,7 @@ export const GET = withRouteContext(
           capabilities: getAnnualReportCapabilities(
             model.report.accounting_framework,
             model.eligibility,
+            model.report.company?.entity_type ?? null,
           ),
         },
       })

@@ -40,7 +40,12 @@ const TYPE_ICONS: Record<Deadline['deadline_type'], typeof CalendarClock> = {
 // Statutory deadlines carry the receiving authority's mark: Bolagsverket for
 // the company-law dates, Skatteverket for everything tax-shaped. Non-system
 // deadlines keep the neutral type icons.
-const BOLAGSVERKET_TYPES = new Set(['arsredovisning', 'arsstamma'])
+const BOLAGSVERKET_TYPES = new Set([
+  'arsredovisning',
+  'arsstamma',
+  'arsredovisning_ekonomisk_forening',
+  'foreningsstamma',
+])
 
 export function deadlineAuthorityLogo(deadline: Deadline): { src: string; alt: string } | null {
   if (deadline.tax_deadline_type) {

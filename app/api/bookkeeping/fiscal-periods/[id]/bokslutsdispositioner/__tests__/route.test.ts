@@ -272,6 +272,16 @@ describe('PUT /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =>
     expect(res.status).toBe(400)
   })
 
+  it('returns 400 when a detected-account key is not a four-digit account', async () => {
+    const res = await put({ ...validBody, detectedAccounts: { '69921': true } })
+    expect(res.status).toBe(400)
+  })
+
+  it('accepts a form-specific detected account such as 3901', async () => {
+    const res = await put({ ...validBody, detectedAccounts: { '6992': true, '8423': false, '3901': true } })
+    expect(res.status).not.toBe(400)
+  })
+
   it('returns 404 when the fiscal period is missing', async () => {
     requireAuthMock.mockResolvedValue({
       user: { id: 'user-1' },

@@ -12,6 +12,7 @@ import { toSingleLine } from '@/lib/invoices/display'
 import { equalOre, ORE_TOLERANCE, roundOre } from '@/lib/money'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
+import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 export const PEPPOL_BIS_BILLING_CUSTOMIZATION_ID =
   'urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0'
 export const PEPPOL_BIS_BILLING_PROFILE_ID =
@@ -312,11 +313,14 @@ function prepareInvoice(input: PeppolInvoiceInput):
       'The customer must be a Swedish business or organization.',
     ))
   }
-  if (company.entity_type !== 'aktiebolag') {
+  // The Peppol party id is the organisationsnummer (scheme 0007). Every
+  // juridisk person registered with an organisationsnummer qualifies; only an
+  // enskild firma, whose identifier is the owner's personnummer, needs a GLN.
+  if (!isEntityType(company.entity_type) || usesPersonnummerAsOrgNumber(company.entity_type)) {
     issues.push(validationIssue(
       'SUPPLIER_ENTITY_TYPE_UNSUPPORTED', 'company.entity_type',
-      'Enskild firma kräver ett separat GLN som Peppol-identifierare. Exporten stöder därför endast aktiebolag tills GLN kan konfigureras.',
-      'A sole trader requires a separate GLN as its Peppol identifier. This export therefore supports limited companies only until GLN can be configured.',
+      'Enskild firma kräver ett separat GLN som Peppol-identifierare. Exporten stöder därför endast företag med organisationsnummer tills GLN kan konfigureras.',
+      'A sole trader requires a separate GLN as its Peppol identifier. This export therefore supports only companies with an organisationsnummer until GLN can be configured.',
     ))
   }
 

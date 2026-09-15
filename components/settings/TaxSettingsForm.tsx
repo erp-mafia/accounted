@@ -89,6 +89,7 @@ export function TaxSettingsForm({
                   aktiebolag: t('entity_aktiebolag'),
                   enskild_firma: t('entity_enskild_firma'),
                   ideell_forening: t('entity_ideell_forening'),
+                  ekonomisk_forening: t('entity_ekonomisk_forening'),
                 })
               : ''}
           </span>

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { resolveCompanyEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import {
   calculateBolagsskatt,
@@ -44,16 +44,14 @@ export async function buildDispositionsProposal(
     .select('entity_type')
     .eq('company_id', companyId)
     .maybeSingle()
-  const entityType: DispositionsProposal['entityType'] = await resolveCompanyEntityType(
-    supabase,
-    companyId,
-    settings?.entity_type,
-  )
+  const form = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+  const entityType: DispositionsProposal['entityType'] = form
 
-  if (entityType !== 'aktiebolag') {
-    // Non-AB entities (enskild firma, handelsbolag, etc.) do not produce
-    // bookable bokslutsdispositioner: bolagsskatt, periodiseringsfond and
-    // SLP are AB-only mechanisms. EF tax mechanisms (egenavgifter,
+  if (!supportsCorporateTaxDispositions(form)) {
+    // Forms that are not taxed as a juridisk person (enskild firma, ideell
+    // förening) do not produce bookable bokslutsdispositioner: bolagsskatt,
+    // periodiseringsfond and SLP belong to the aktiebolag and the ekonomisk
+    // förening (IL 30 kap. 5 §, IL 65 kap. 10 §). EF tax mechanisms (egenavgifter,
     // räntefördelning, periodiseringsfond-EF, expansionsfond) are
     // declaration-only and surface through the dedicated
     // /api/bookkeeping/fiscal-periods/[id]/ef-declaration endpoint and the
@@ -87,7 +85,7 @@ export async function buildDispositionsProposal(
     fiscalPeriodId,
   )
   const [taxAdjustments, bookedTax] = await Promise.all([
-    loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
+    loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, form),
     getBookedBolagsskatt(supabase, companyId, fiscalPeriodId),
   ])
   // Income statement excludes tax posted by this year-end flow, but includes

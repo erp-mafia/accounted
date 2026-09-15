@@ -146,6 +146,32 @@ describe('buildDispositionsProposal: schablonintäkt rate resolution', () => {
     )
   })
 
+  it('builds the same juridisk-person proposal for an ekonomisk förening (IL 65 kap. 10 §)', async () => {
+    const supabase = supabaseFor(
+      { period_start: '2024-01-01', period_end: '2024-12-31' },
+      'ekonomisk_forening',
+    )
+
+    const result = await buildDispositionsProposal(supabase, 'company-1', 'period-1')
+
+    expect(result.entityType).toBe('ekonomisk_forening')
+    expect(result.proposals.map((p) => p.kind)).toContain('bolagsskatt')
+    expect(vi.mocked(calculateBolagsskatt)).toHaveBeenCalled()
+  })
+
+  it('returns no dispositions for an ideell förening (INK3, income mostly tax-exempt under IL 7 kap.)', async () => {
+    const supabase = supabaseFor(
+      { period_start: '2024-01-01', period_end: '2024-12-31' },
+      'ideell_forening',
+    )
+
+    const result = await buildDispositionsProposal(supabase, 'company-1', 'period-1')
+
+    expect(result.entityType).toBe('ideell_forening')
+    expect(result.proposals).toEqual([])
+    expect(vi.mocked(calculateBolagsskatt)).not.toHaveBeenCalled()
+  })
+
   it('does not consult the SLR table for a no-fond company even on an unmapped closing year', async () => {
     const supabase = supabaseFor({ period_start: '2019-01-01', period_end: '2019-12-31' })
 

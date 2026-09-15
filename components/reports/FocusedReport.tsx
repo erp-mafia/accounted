@@ -15,6 +15,7 @@ import { DimensionFilter, type DimensionFilterValue } from '@/components/reports
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import type { FiscalPeriod } from '@/types'
 
+import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
 const TrialBalanceView = dynamic(() => import('./lazy-views/TrialBalanceView'), { loading: ReportBodyLoading })
 const IncomeStatementView = dynamic(() => import('./lazy-views/IncomeStatementView'), { loading: ReportBodyLoading })
 const BalanceSheetView = dynamic(() => import('./lazy-views/BalanceSheetView'), { loading: ReportBodyLoading })
@@ -89,7 +90,7 @@ function FocusedReportInner({
   const accountFilter = searchParams.get('account')
 
   const isEnskildFirma = company?.entity_type === 'enskild_firma'
-  const isAktiebolag = company?.entity_type === 'aktiebolag'
+  const filesInk2 = isEntityType(company?.entity_type) && usesInk2(company.entity_type)
 
   // Drilling from a report into the general ledger is a route change, so the
   // account lands in the URL and the browser back button returns to the report.
@@ -161,7 +162,7 @@ function FocusedReportInner({
           dimensionFilter={dimensionFilter}
           accountFilter={accountFilter}
           isEnskildFirma={isEnskildFirma}
-          isAktiebolag={isAktiebolag}
+          filesInk2={filesInk2}
           onNavigateToAccount={navigateToAccount}
         />
       ) : (
@@ -184,7 +185,7 @@ function FocusedView({
   dimensionFilter,
   accountFilter,
   isEnskildFirma,
-  isAktiebolag,
+  filesInk2,
   onNavigateToAccount,
 }: {
   slug: string
@@ -194,7 +195,7 @@ function FocusedView({
   dimensionFilter: DimensionFilterValue | null
   accountFilter: string | null
   isEnskildFirma: boolean
-  isAktiebolag: boolean
+  filesInk2: boolean
   onNavigateToAccount: (account: string) => void
 }) {
   switch (slug) {
@@ -217,7 +218,7 @@ function FocusedView({
     case 'ne-declaration':
       return isEnskildFirma ? <NEDeclarationView periodId={periodId} /> : null
     case 'ink2-declaration':
-      return isAktiebolag ? <INK2DeclarationView periodId={periodId} /> : null
+      return filesInk2 ? <INK2DeclarationView periodId={periodId} /> : null
     case 'huvudbok':
       return <GeneralLedgerView periodId={periodId} initialAccountFilter={accountFilter} dimensionFilter={dimensionFilter} dateRange={dateRange} />
     case 'grundbok':

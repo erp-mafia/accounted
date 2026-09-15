@@ -32,9 +32,11 @@ import type {
   FlerarsoversiktRow,
   NoteEntry,
   KassaflodesAnalysisSummary,
+  MemberDisclosures,
 } from './types'
 import type { AccountingFramework, Asset, TrialBalanceRow } from '@/types'
 
+import { isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
 /**
  * Pre-populate the K2 årsredovisning data for a fiscal period. Loads:
  *   - Income statement + balance sheet for the current period
@@ -195,9 +197,11 @@ export async function buildArsredovisningData(
       `Föregående räkenskapsår (${prevPeriodRow.name}) saknar bokföring i Accounted, så jämförelsesiffrorna visar 0 kr. ÅRL 3 kap. 5 § kräver föregående års belopp för varje post. Bokför eller SIE-importera året innan årsredovisningen lämnas in; ett klarmarkerat år öppnas igen under Inställningar > Bokföring > Räkenskapsår.`,
     )
   }
+  const isForening = entityType === 'ekonomisk_forening'
   const mapping = mapTrialBalancesToK2(
     { full: tbFull.rows, preClosing: tbPreClosing.rows },
     previousTb,
+    { legalForm: isForening ? 'ekonomisk_forening' : 'aktiebolag' },
   )
   const previousPeriod =
     prevPeriodRow && previousTb
@@ -218,6 +222,7 @@ export async function buildArsredovisningData(
   const flerarsoversikt = buildFlerarsoversikt(overviewSlice, fiscalPeriodId, mapping, tbPairs)
 
   const egen_kapital_changes = buildEquityChanges(mapping)
+  const memberDisclosures = isForening ? memberDisclosuresFrom(narrative) : null
   const proposedDividend = narrative?.proposed_dividend ?? 0
   const retainedEarnings = mapping.br['BalanseratResultat']?.current ?? 0
   const sharePremiumReserve = mapping.br['Overkursfond']?.current ?? 0
@@ -339,9 +344,14 @@ export async function buildArsredovisningData(
   // obalans, reclass review nudges), surfacing them pre-download is what
   // keeps a non-fileable PDF from reaching Bolagsverket.
   const warnings: string[] = [...statementWarnings, ...mapping.warnings, ...noterWarnings]
-  if (entityType !== 'aktiebolag' && entityType !== 'unknown') {
+  if (entityType !== 'aktiebolag' && entityType !== 'ekonomisk_forening' && entityType !== 'unknown') {
     warnings.push(
       'Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.',
+    )
+  }
+  if (isForening && accountingFramework === 'k3') {
+    warnings.push(
+      'K3-dokumentet för ekonomisk förening använder aktiebolagets uppställning för förändringar i eget kapital: granska insatsposterna manuellt innan inlämning.',
     )
   }
   if (entityType === 'aktiebolag' && accountingFramework === 'k3') {
@@ -366,18 +376,23 @@ export async function buildArsredovisningData(
       'Företagsform saknas i inställningarna: fyll i Inställningar → Företag för att få rätt redovisningsprinciper i not 1.',
     )
   }
+  // The adopting meeting is the årsstämma of an aktiebolag (ABL 7 kap. 10 §)
+  // or the ordinarie föreningsstämma of an ekonomisk förening (EFL 6 kap.
+  // 9 §); both fall within six months of the fiscal year end.
+  const meetingLabel = isForening ? 'föreningsstämma' : 'årsstämma'
+  const meetingRule = isForening ? 'EFL 6 kap. 9 §' : 'ABL 7 kap. 10 §'
   if (!persistedAgmDate) {
     warnings.push(
-      'Datum för årsstämma saknas. Fastställelseintyget i PDF:en lämnas tomt på datumraden tills det fylls i nedan.',
+      `Datum för ${meetingLabel} saknas. Fastställelseintyget i PDF:en lämnas tomt på datumraden tills det fylls i nedan.`,
     )
   } else {
-    // ÅRL 8 kap 3 § + ÅRL 7 kap 10 §: AGM must be held after the räkenskapsår
-    // ends and within 6 months of period end (för privat AB). A date before
-    // period_end is logically impossible; after the deadline is a legally
-    // defective fastställelseintyg.
+    // ÅRL 8 kap 3 §: the meeting must be held after the räkenskapsår ends
+    // and within 6 months of period end. A date before period_end is
+    // logically impossible; after the deadline is a legally defective
+    // fastställelseintyg.
     if (persistedAgmDate <= period.period_end) {
       warnings.push(
-        `Datum för årsstämma (${persistedAgmDate}) ligger på eller före räkenskapsårets slut (${period.period_end}): fastställelseintyget blir juridiskt felaktigt. Kontrollera datumet.`,
+        `Datum för ${meetingLabel} (${persistedAgmDate}) ligger på eller före räkenskapsårets slut (${period.period_end}): fastställelseintyget blir juridiskt felaktigt. Kontrollera datumet.`,
       )
     } else {
       const periodEndDate = new Date(`${period.period_end}T00:00:00Z`)
@@ -386,7 +401,7 @@ export async function buildArsredovisningData(
       const deadlineIso = deadline.toISOString().slice(0, 10)
       if (persistedAgmDate > deadlineIso) {
         warnings.push(
-          `Datum för årsstämma (${persistedAgmDate}) är efter 6-månadersgränsen (${deadlineIso}). För privat AB ska årsstämman hållas inom 6 månader från räkenskapsårets slut (ÅRL 7 kap 10 §).`,
+          `Datum för ${meetingLabel} (${persistedAgmDate}) är efter 6-månadersgränsen (${deadlineIso}). ${isForening ? 'Ordinarie föreningsstämma' : 'Årsstämman'} ska hållas inom 6 månader från räkenskapsårets slut (${meetingRule}).`,
         )
       }
     }
@@ -411,7 +426,9 @@ export async function buildArsredovisningData(
       description:
         overrides.description ??
         persistedDescription ??
-        `${companyName} bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.`,
+        (isForening
+          ? `${companyName} bedriver verksamhet enligt ändamålet i föreningens stadgar.`
+          : `${companyName} bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.`),
       important_events:
         overrides.important_events ??
         persistedEvents ??
@@ -433,6 +450,9 @@ export async function buildArsredovisningData(
         carried_forward: distributableEquity - proposedDividend,
       },
       agm_date: persistedAgmDate,
+      // Only present for an ekonomisk förening: an absent key keeps the
+      // content hash of every existing aktiebolag report unchanged.
+      ...(memberDisclosures ? { member_disclosures: memberDisclosures } : {}),
       agm_disposition_outcome: narrative?.agm_disposition_outcome ?? null,
       agm_disposition_decision: narrative?.agm_disposition_decision ?? null,
     },
@@ -451,6 +471,14 @@ export async function buildArsredovisningData(
       parent_company_org_number: narrative?.parent_company_org_number ?? null,
       parent_company_city: narrative?.parent_company_city ?? null,
       medelantal_anstallda_override: narrative?.medelantal_anstallda_override ?? null,
+      ...(memberDisclosures
+        ? {
+            member_count_change: memberDisclosures.member_count_change,
+            insatser_repayable_next_year: memberDisclosures.insatser_repayable_next_year,
+            forlagsinsatser_dividend_right: memberDisclosures.forlagsinsatser_dividend_right,
+            forlagsinsatser_redeemable_two_years: memberDisclosures.forlagsinsatser_redeemable_two_years,
+          }
+        : {}),
       confirmations: {
         long_term_debt_over_five_years:
           narrative?.long_term_debt_over_five_years_confirmed ?? false,
@@ -485,6 +513,8 @@ export function resolveMedelantalNote(args: {
   medelantal: number
   hasOverride: boolean
   tbFullRows: Array<Pick<TrialBalanceRow, 'account_number' | 'period_debit' | 'period_credit'>>
+  /** "Bolaget" for an aktiebolag, "Föreningen" for an ekonomisk förening. */
+  subject?: string
 }): { body: string; warning: string | null } {
   if (args.medelantal > 0) {
     return {
@@ -507,7 +537,10 @@ export function resolveMedelantalNote(args: {
         'Löner är bokförda på konto 7000-7399 men medelantal anställda kunde inte beräknas (inga anställda registrerade under Löner): ange antalet under Årsredovisning (not Medelantal anställda).',
     }
   }
-  return { body: 'Bolaget har inte haft några anställda under räkenskapsåret.', warning: null }
+  return {
+    body: `${args.subject ?? 'Bolaget'} har inte haft några anställda under räkenskapsåret.`,
+    warning: null,
+  }
 }
 
 export function calculateSoliditet(mapping: K2MappingResult): number | null {
@@ -566,6 +599,23 @@ function buildFlerarsoversikt(
   return rows
 }
 
+/** ÅRL 6 kap. 3 § inputs for an ekonomisk förening, read from the narrative row. */
+function memberDisclosuresFrom(
+  narrative: {
+    member_count_change?: string | null
+    insatser_repayable_next_year?: number | null
+    forlagsinsatser_dividend_right?: string | null
+    forlagsinsatser_redeemable_two_years?: number | null
+  } | null,
+): MemberDisclosures {
+  return {
+    member_count_change: narrative?.member_count_change ?? null,
+    insatser_repayable_next_year: narrative?.insatser_repayable_next_year ?? null,
+    forlagsinsatser_dividend_right: narrative?.forlagsinsatser_dividend_right ?? null,
+    forlagsinsatser_redeemable_two_years: narrative?.forlagsinsatser_redeemable_two_years ?? null,
+  }
+}
+
 /**
  * Förvaltningsberättelsens "Förändring av eget kapital" table, post-level
  * labels only (no kontonummer). Only genuine equity posts (20xx) appear;
@@ -573,16 +623,27 @@ function buildFlerarsoversikt(
  * when the account-row version was replaced by the mapping-driven one.
  */
 function buildEquityChanges(mapping: K2MappingResult): EgenKapitalRow[] {
-  const posts: Array<{ label: string; concept: string; alwaysShow?: boolean }> = [
-    { label: 'Aktiekapital', concept: 'Aktiekapital', alwaysShow: true },
-    { label: 'Ej registrerat aktiekapital', concept: 'EjRegistreratAktiekapital' },
-    { label: 'Bunden överkursfond', concept: 'OverkursfondBunden' },
-    { label: 'Uppskrivningsfond', concept: 'Uppskrivningsfond' },
-    { label: 'Reservfond', concept: 'Reservfond' },
-    { label: 'Överkursfond', concept: 'Overkursfond' },
-    { label: 'Balanserat resultat', concept: 'BalanseratResultat', alwaysShow: true },
-    { label: 'Årets resultat', concept: 'AretsResultatEgetKapital', alwaysShow: true },
-  ]
+  const posts: Array<{ label: string; concept: string; alwaysShow?: boolean }> =
+    mapping.legalForm === 'ekonomisk_forening'
+      ? [
+          // ÅRL 3 kap. 10 b §: insatser as their own posts, no share capital.
+          { label: 'Medlemsinsatser', concept: 'Medlemsinsatser', alwaysShow: true },
+          { label: 'Förlagsinsatser', concept: 'Forlagsinsatser' },
+          { label: 'Uppskrivningsfond', concept: 'Uppskrivningsfond' },
+          { label: 'Reservfond', concept: 'Reservfond' },
+          { label: 'Balanserat resultat', concept: 'BalanseratResultat', alwaysShow: true },
+          { label: 'Årets resultat', concept: 'AretsResultatEgetKapital', alwaysShow: true },
+        ]
+      : [
+          { label: 'Aktiekapital', concept: 'Aktiekapital', alwaysShow: true },
+          { label: 'Ej registrerat aktiekapital', concept: 'EjRegistreratAktiekapital' },
+          { label: 'Bunden överkursfond', concept: 'OverkursfondBunden' },
+          { label: 'Uppskrivningsfond', concept: 'Uppskrivningsfond' },
+          { label: 'Reservfond', concept: 'Reservfond' },
+          { label: 'Överkursfond', concept: 'Overkursfond' },
+          { label: 'Balanserat resultat', concept: 'BalanseratResultat', alwaysShow: true },
+          { label: 'Årets resultat', concept: 'AretsResultatEgetKapital', alwaysShow: true },
+        ]
   const rows: EgenKapitalRow[] = []
   for (const post of posts) {
     const amount = mapping.br[post.concept]?.current ?? 0
@@ -663,12 +724,15 @@ async function buildK2Noter(
   // Note 1: framework. Only claim K2 explicitly when we know the company is
   // an AB and using K2: otherwise emit a generic principles note so the
   // ÅR doesn't falsely assert a framework the company isn't on.
-  // K3 election isn't yet tracked separately; we treat any non-AB as not-K2.
+  // Every form that prepares an årsredovisning here (aktiebolag, ekonomisk
+  // förening) is on K2 in this builder; an unknown or other form gets the
+  // generic wording so the note never asserts a framework it is not on.
+  const preparesAnnualReport = isEntityType(entityType) && preparesArsredovisning(entityType)
   const isAbK2 = entityType === 'aktiebolag'
   notes.push({
     number: 1,
     title: 'Redovisnings- och värderingsprinciper',
-    body: isAbK2
+    body: preparesAnnualReport
       ? 'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd BFNAR 2016:10 Årsredovisning i mindre företag (K2).'
       : 'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd.',
   })
@@ -815,8 +879,9 @@ async function buildK2Noter(
     periodStart,
     periodEnd,
   )
-  if (medelantal > 0 || entityType === 'aktiebolag') {
+  if (medelantal > 0 || (isEntityType(entityType) && preparesArsredovisning(entityType))) {
     const medelantalNote = resolveMedelantalNote({
+      subject: entityType === 'ekonomisk_forening' ? 'Föreningen' : 'Bolaget',
       medelantal,
       hasOverride: hasMedelantalOverride(narrative?.medelantal_anstallda_override),
       tbFullRows,
@@ -1221,8 +1286,9 @@ async function buildK3Noter(
     periodStartIso,
     periodEndIso,
   )
-  if (medelantal > 0 || entityType === 'aktiebolag') {
+  if (medelantal > 0 || (isEntityType(entityType) && preparesArsredovisning(entityType))) {
     const medelantalNote = resolveMedelantalNote({
+      subject: entityType === 'ekonomisk_forening' ? 'Föreningen' : 'Bolaget',
       medelantal,
       hasOverride: hasMedelantalOverride(narrative?.medelantal_anstallda_override),
       tbFullRows,

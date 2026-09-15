@@ -23,7 +23,6 @@ describe('mapEntityType', () => {
     expect(mapEntityType('KB')).toBeNull()
     expect(mapEntityType('Kommanditbolag')).toBeNull()
     expect(mapEntityType('Stiftelse')).toBeNull()
-    expect(mapEntityType('Ekonomisk förening')).toBeNull()
     expect(mapEntityType('Bostadsrättsförening')).toBeNull()
   })
 
@@ -52,10 +51,18 @@ describe('mapSetupEntityType: only creatable forms are prefilled', () => {
 
   it('maps ideell förening only when the creation flag is on', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
+    vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', '')
     expect(mapSetupEntityType('Ideell förening')).toBeNull()
     expect(mapSetupEntityType('Aktiebolag')).toBe('aktiebolag')
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
     expect(mapSetupEntityType('Ideell förening')).toBe('ideell_forening')
+  })
+
+  it('maps ekonomisk förening only when the creation flag is on', () => {
+    vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', '')
+    expect(mapSetupEntityType('Ekonomisk förening')).toBeNull()
+    vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', 'true')
+    expect(mapSetupEntityType('Ekonomisk förening')).toBe('ekonomisk_forening')
   })
 })
 
@@ -66,8 +73,22 @@ describe('mapEntityType: ideell förening (issue #2072)', () => {
   })
 
   it('does not map other föreningar or stiftelser', () => {
-    expect(mapEntityType('Ekonomisk förening')).toBeNull()
+    expect(mapEntityType('Bostadsrättsförening')).toBeNull()
     expect(mapEntityType('Registrerat trossamfund')).toBeNull()
     expect(mapEntityType('Stiftelse')).toBeNull()
+  })
+})
+
+describe('mapEntityType: ekonomisk förening', () => {
+  it('maps only the registry spellings of ekonomisk förening', () => {
+    expect(mapEntityType('Ekonomisk förening')).toBe('ekonomisk_forening')
+    expect(mapEntityType('ekonomisk forening')).toBe('ekonomisk_forening')
+    expect(mapEntityType('Ekonomiska föreningar')).toBe('ekonomisk_forening')
+  })
+
+  it('does not map specially regulated or adjacent association forms', () => {
+    expect(mapEntityType('Bostadsrättsförening')).toBeNull()
+    expect(mapEntityType('Kooperativ hyresrättsförening')).toBeNull()
+    expect(mapEntityType('Sambruksförening')).toBeNull()
   })
 })

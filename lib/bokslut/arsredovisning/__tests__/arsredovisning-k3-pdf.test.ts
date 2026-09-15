@@ -54,6 +54,7 @@ function makeMinimalK3Data(): ArsredovisningData {
         carried_forward: 0,
       },
       agm_date: '2026-06-15',
+      member_disclosures: null,
       agm_disposition_outcome: 'proposal_approved',
       agm_disposition_decision: null,
     },
@@ -160,6 +161,10 @@ function makeMinimalK3Data(): ArsredovisningData {
       parent_company_org_number: null,
       parent_company_city: null,
       medelantal_anstallda_override: null,
+      member_count_change: null,
+      insatser_repayable_next_year: null,
+      forlagsinsatser_dividend_right: null,
+      forlagsinsatser_redeemable_two_years: null,
       confirmations: {
         long_term_debt_over_five_years: true,
         securities_pledged: true,

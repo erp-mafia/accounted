@@ -4,6 +4,7 @@ import type {
   AnnualReportProfile,
   AnnualReportSizeMetrics,
 } from './compliance-types'
+import { isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
 
 const LARGE_COMPANY_THRESHOLDS = {
   employees: 50,
@@ -111,7 +112,7 @@ export function evaluateAnnualReportEligibility(
   const size = sizeClassification(input.metrics)
   const relief = reliefClassification(input.metrics)
 
-  if (input.entityType !== 'aktiebolag') {
+  if (!isEntityType(input.entityType) || !preparesArsredovisning(input.entityType)) {
     issues.push(
       issue(
         'AR-SCOPE-ENTITY',
@@ -119,6 +120,34 @@ export function evaluateAnnualReportEligibility(
         'Använd rätt årsboksluts- eller deklarationsflöde för företagsformen.',
       ),
     )
+  } else if (input.entityType === 'ekonomisk_forening') {
+    // An ekonomisk förening prepares an årsredovisning every year (BFL 6 kap.
+    // 1 §) with medlemsinsatser and förlagsinsatser as separate posts under
+    // bundet eget kapital (ÅRL 3 kap. 10 b §), the ÅRL 6 kap. 3 § member
+    // disclosures, a föreningsstämma instead of an årsstämma (EFL 6 kap.) and
+    // a mandatory revisionsberättelse (EFL 8 kap. 1 §). The K2 document
+    // carries all of that; the K3 equity statement is still shaped for the
+    // aktiebolag, so K3 fails closed for the form.
+    if (input.framework !== 'k2') {
+      issues.push(
+        issue(
+          'AR-SCOPE-ENTITY-FRAMEWORK',
+          'Accounteds K3-dokument för ekonomisk förening är inte färdigt: förändringen i eget kapital följer aktiebolagets uppställning.',
+          'Välj K2 (BFNAR 2016:10) om föreningen är ett mindre företag, annars upprätta K3-årsredovisningen med hjälp av redovisningskonsult eller revisor.',
+        ),
+      )
+    }
+    // An unanswered profile (null) is not an answer: the form always needs
+    // the revisionsberättelse, so only an explicit true clears the check.
+    if (profile.auditor_report_required !== true) {
+      issues.push(
+        issue(
+          'AR-AUDITOR-REQUIRED-FORENING',
+          'En ekonomisk förening ska alltid ha minst en revisor och revisionsberättelsen är en del av årsredovisningspaketet (EFL 8 kap. 1 §, ÅRL 8 kap. 3 §).',
+          'Markera att revisionsberättelse krävs i grunduppgifterna.',
+        ),
+      )
+    }
   }
 
   requireAnswer(
@@ -291,6 +320,15 @@ export function evaluateAnnualReportEligibility(
 
   const k2Eligible = input.framework === 'k2' && issues.every((item) => item.severity !== 'error')
   const digitalIssues = [...issues]
+  if (input.entityType === 'ekonomisk_forening') {
+    digitalIssues.push(
+      issue(
+        'AR-DIGITAL-ENTITY',
+        'Accounteds digitala Bolagsverket-flöde och iXBRL-taxonomi (K2 aktiebolag) täcker inte ekonomiska föreningar.',
+        'Skriv ut PDF-paketet och lämna in årsredovisning och revisionsberättelse till Bolagsverket enligt deras anvisningar för ekonomiska föreningar.',
+      ),
+    )
+  }
   if (input.framework !== 'k2') {
     digitalIssues.push(
       issue(

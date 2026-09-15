@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { EntityType } from '@/types'
 import { getPool } from './setup'
 import type { PoolClient } from 'pg'
 
@@ -28,7 +29,7 @@ export async function insertAuthUser(id: string = randomUUID()): Promise<string>
 export async function insertCompany(params: {
   createdBy: string
   name?: string
-  entityType?: 'enskild_firma' | 'aktiebolag' | 'ideell_forening'
+  entityType?: EntityType
 }): Promise<string> {
   const id = randomUUID()
   await getPool().query(

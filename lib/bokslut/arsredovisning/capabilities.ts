@@ -25,9 +25,13 @@ export const CONNECTED_FILING_PUBLIC_RELEASED = flagEnabled(
 export function getAnnualReportCapabilities(
   framework: AnnualReportFramework,
   eligibility?: AnnualReportEligibilityResult,
+  entityType?: string | null,
 ): AnnualReportCapabilities {
   const releaseGateOpen = flagEnabled(process.env.NEXT_PUBLIC_BOLAGSVERKET_FILING_ENABLED)
-  const ixbrlEnabled = framework === 'k2'
+  // The bundled taxonomy is K2 for aktiebolag; an ekonomisk förening files
+  // the PDF package on paper until a Bolagsverket taxonomy for the form is
+  // adopted (see eligibility AR-DIGITAL-ENTITY).
+  const ixbrlEnabled = framework === 'k2' && entityType !== 'ekonomisk_forening'
   const eligible = eligibility?.digital_filing_eligible ?? false
   return {
     paper: {
@@ -40,7 +44,11 @@ export function getAnnualReportCapabilities(
     },
     ixbrl_preview: {
       enabled: ixbrlEnabled,
-      reason: ixbrlEnabled ? null : 'iXBRL-generering stöds ännu endast för K2.',
+      reason: ixbrlEnabled
+        ? null
+        : entityType === 'ekonomisk_forening'
+          ? 'iXBRL-generering stöds ännu endast för aktiebolag (K2-taxonomin täcker inte ekonomiska föreningar).'
+          : 'iXBRL-generering stöds ännu endast för K2.',
     },
     connected_filing: {
       enabled: releaseGateOpen && ixbrlEnabled && eligible,
@@ -48,7 +56,9 @@ export function getAnnualReportCapabilities(
       reason: !releaseGateOpen
         ? 'Direktinlämning öppnas först efter avtal, certifikat och godkänd acceptanstest.'
         : !ixbrlEnabled
-          ? 'Direktinlämning stöds ännu endast för K2.'
+          ? entityType === 'ekonomisk_forening'
+            ? 'Direktinlämning stöds ännu endast för aktiebolag.'
+            : 'Direktinlämning stöds ännu endast för K2.'
           : !eligible
             ? 'Årsredovisningen uppfyller inte alla behörighets- och fullständighetskrav.'
             : null,
