@@ -145,6 +145,17 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
           <span className="text-muted-foreground/50"> · </span>
           <span>{deadline.title}</span>
         </p>
+        {deadline.source_document_id && deadline.source_document?.file_name && (
+          <a
+            href={`/api/documents/${deadline.source_document_id}/inline`}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className={cn(QUIET_LINK_CLASS, 'text-xs')}
+          >
+            {t('source_document', { name: deadline.source_document.file_name })}
+          </a>
+        )}
         {subParts.length > 0 && (
           <p
             className={cn(

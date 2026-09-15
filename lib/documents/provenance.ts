@@ -5,7 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * person, or a software version) runs an activity that produces a record.
  * Every stored extraction points at the activity that produced it.
  */
-export type ActivityKind = 'extract' | 'review'
+export type ActivityKind = 'extract' | 'review' | 'derive'
 
 export interface ActivityInput {
   companyId: string

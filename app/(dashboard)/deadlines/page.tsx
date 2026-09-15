@@ -73,7 +73,7 @@ export default function DeadlinesPage() {
         fetchAllRows<Deadline>(({ from, to }) =>
           supabase
             .from('deadlines')
-            .select('*, customer:customers(name)')
+            .select('*, customer:customers(name), source_document:document_attachments(file_name)')
             .eq('company_id', companyId)
             .is('dismissed_at', null)
             .order('due_date', { ascending: true })

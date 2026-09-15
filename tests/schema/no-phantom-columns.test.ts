@@ -192,7 +192,10 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // the day's other merges (peppol, SIE set-based import) under the Motparter
 // page. Same escape hatch, same reason: one expression somewhere in the files
 // the branches do not share.
-const UNRESOLVED_CEILING = 407
+// 2026-09-15: 407 -> 408 for lib/arkiv/agreements/store.ts syncObligations,
+// which inserts one row per due date built by a map; the columns are literal
+// inside the callback but the scanner reads only object and array literals.
+const UNRESOLVED_CEILING = 408
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

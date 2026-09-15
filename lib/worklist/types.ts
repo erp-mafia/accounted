@@ -152,6 +152,13 @@ export const WORKLIST_CATEGORIES = [
    * settled every field.
    */
   'document_field_review',
+  /**
+   * Arkiv (phase 4): a payment an agreement says was due, with nothing on
+   * the bank account within two weeks after the date. Pending:
+   * agreement_obligations.status = 'missed'. Done: a matching transaction
+   * arrives (the daily observation marks it matched) or the row is waived.
+   */
+  'agreement_payment_missed',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]

@@ -5,6 +5,8 @@ import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { recordHumanFields } from '@/lib/documents/extract/store'
+import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
+import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -12,7 +14,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
  * A person settles fields of the document's current record: a new current
  * extraction (pass 'human') on top of it, the settled fields out of review.
  * Values are stored as typed and normalized on the server. The model never
- * overwrites a person's record.
+ * overwrites a person's record. An agreement is derived again from the
+ * settled record.
  */
 const bodySchema = z.object({
   fields: z
@@ -35,9 +38,11 @@ export const POST = withRouteContext('document.extraction.fields', async (reques
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
   if (!doc) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  const out = await recordHumanFields(createServiceClient(), id, ctx.user.id, parsed.data.fields)
+  const service = createServiceClient()
+  const out = await recordHumanFields(service, id, ctx.user.id, parsed.data.fields)
   switch (out.status) {
     case 'extracted':
+      if (agreementKindFor(out.schemaType)) await enqueueDocumentJob(service, ctx.companyId, id, 'derive')
       ctx.log.info('document fields settled by person', { doc: id, fields: Object.keys(parsed.data.fields) })
       return NextResponse.json({ data: { document_id: id, extraction_id: out.extractionId, review_fields: out.reviewFields } })
     case 'skipped':

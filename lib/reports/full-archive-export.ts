@@ -1104,6 +1104,11 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // person's corrections, and the extraction runs and reviews behind them.
   { name: 'document_extractions', file: 'document_extractions.json', orderBy: 'created_at' },
   { name: 'activities', file: 'activities.json', orderBy: 'started_at' },
+  // Arkiv: what each document is tied to, and the agreements with the
+  // payments they imply, as derived and as a person or the bank confirmed.
+  { name: 'document_links', file: 'document_links.json', orderBy: 'created_at' },
+  { name: 'agreements', file: 'agreements.json', orderBy: 'created_at' },
+  { name: 'agreement_obligations', file: 'agreement_obligations.json', orderBy: 'due_on' },
   // Receipts
   { name: 'receipts', file: 'receipts.json', orderBy: 'receipt_date' },
   // `receipts` has no exchange_rate column, so only the currency is copied:

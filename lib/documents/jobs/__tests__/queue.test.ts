@@ -8,11 +8,13 @@ vi.mock('@/lib/documents/classify/classify', () => ({
   loadCompanyIdentity: vi.fn(async () => ({ name: 'Exempelbolaget AB', orgNumber: null })),
 }))
 vi.mock('@/lib/documents/extract/store', () => ({ extractDocument: vi.fn() }))
+vi.mock('@/lib/arkiv/agreements/store', () => ({ deriveDocument: vi.fn() }))
 
 import { enqueueDocumentJob, enqueueMissingExtractions, runDocumentJobs, type ClaimedJob } from '../queue'
 import { readAndStoreDocument } from '@/lib/documents/read/store'
 import { classifyDocument } from '@/lib/documents/classify/classify'
 import { extractDocument } from '@/lib/documents/extract/store'
+import { deriveDocument } from '@/lib/arkiv/agreements/store'
 
 const mock = createQueuedMockSupabase()
 const { enqueue, reset, findCalls } = mock
@@ -128,6 +130,28 @@ describe('runDocumentJobs', () => {
     await expect(run({ budgetMs: 10, now: () => ticks.shift() ?? 100 })).resolves.toEqual({ claimed: 2, done: 1, failed: 0, returned: 1 })
     expect(extractDocument).toHaveBeenCalledTimes(1)
     expect(lastJobUpdate()).toEqual({ status: 'queued', attempts: 1, locked_at: null, locked_by: null })
+  })
+
+  it('queues a derivation after extracting an agreement, and runs it', async () => {
+    enqueue({ data: [job({ kind: 'extract' }), job({ id: 'job-2', kind: 'derive', document_id: 'doc-2' })] })
+    mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'agreement.loan', reviewFields: [] })
+    enqueue({ data: true }) // enqueue derive for doc-1
+    enqueue({}) // job-1 done
+    mocked(deriveDocument).mockResolvedValue({ status: 'derived', agreementId: 'agr-1', obligations: 14, deadlines: 2, counterparty: 'proven', waitingOn: ['notice_months'] })
+    enqueue({}) // job-2 done
+
+    await expect(run()).resolves.toEqual({ claimed: 2, done: 2, failed: 0, returned: 0 })
+    expect(rpc).toHaveBeenCalledWith('enqueue_document_job', { p_company_id: 'co-1', p_document_id: 'doc-1', p_kind: 'derive' })
+    expect(deriveDocument).toHaveBeenCalledWith(supabase, 'doc-2')
+    expect(lastJobUpdate()).toMatchObject({ status: 'done', result: 'derived 14 obligations, 2 deadlines, waiting on notice_months' })
+  })
+
+  it('does not queue a derivation for a record that is not an agreement', async () => {
+    enqueue({ data: [job({ kind: 'extract' })] })
+    mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'registration.bolagsverket', reviewFields: [] })
+    enqueue({})
+    await expect(run()).resolves.toMatchObject({ done: 1 })
+    expect(rpc).not.toHaveBeenCalledWith('enqueue_document_job', expect.objectContaining({ p_kind: 'derive' }))
   })
 
   it('throws when the claim fails', async () => {
