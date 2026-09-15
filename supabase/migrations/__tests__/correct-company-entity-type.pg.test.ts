@@ -130,6 +130,18 @@ describe('correct_company_entity_type: fails closed', () => {
     expect(accounts).toContain('2081')
   })
 
+  it('refuses when a mapping rule references the chart that would be replaced', async () => {
+    const { ownerId, companyId } = await seededCompany('aktiebolag')
+    await getPool().query(
+      `INSERT INTO public.mapping_rules (user_id, company_id, rule_name, rule_type, debit_account, credit_account)
+       VALUES ($1, $2, 'Bankavgift', 'merchant_name', '6570', '1930')`,
+      [ownerId, companyId],
+    )
+    const { result, after } = await correct(ownerId, companyId, 'ekonomisk_forening')
+    expect(result).toMatchObject({ ok: false, code: 'ENTITY_TYPE_CHANGE_CONFIGURED_ACCOUNTS', configured_references: 1 })
+    expect(after.entity_type).toBe('aktiebolag')
+  })
+
   it('refuses when a user-created account would be discarded', async () => {
     const { ownerId, companyId } = await seededCompany('aktiebolag')
     await getPool().query(

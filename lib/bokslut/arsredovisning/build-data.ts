@@ -36,6 +36,7 @@ import type {
 } from './types'
 import type { AccountingFramework, Asset, TrialBalanceRow } from '@/types'
 
+import { isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
 /**
  * Pre-populate the K2 årsredovisning data for a fiscal period. Loads:
  *   - Income statement + balance sheet for the current period
@@ -449,7 +450,9 @@ export async function buildArsredovisningData(
         carried_forward: distributableEquity - proposedDividend,
       },
       agm_date: persistedAgmDate,
-      member_disclosures: memberDisclosures,
+      // Only present for an ekonomisk förening: an absent key keeps the
+      // content hash of every existing aktiebolag report unchanged.
+      ...(memberDisclosures ? { member_disclosures: memberDisclosures } : {}),
       agm_disposition_outcome: narrative?.agm_disposition_outcome ?? null,
       agm_disposition_decision: narrative?.agm_disposition_decision ?? null,
     },
@@ -468,10 +471,14 @@ export async function buildArsredovisningData(
       parent_company_org_number: narrative?.parent_company_org_number ?? null,
       parent_company_city: narrative?.parent_company_city ?? null,
       medelantal_anstallda_override: narrative?.medelantal_anstallda_override ?? null,
-      member_count_change: narrative?.member_count_change ?? null,
-      insatser_repayable_next_year: narrative?.insatser_repayable_next_year ?? null,
-      forlagsinsatser_dividend_right: narrative?.forlagsinsatser_dividend_right ?? null,
-      forlagsinsatser_redeemable_two_years: narrative?.forlagsinsatser_redeemable_two_years ?? null,
+      ...(memberDisclosures
+        ? {
+            member_count_change: memberDisclosures.member_count_change,
+            insatser_repayable_next_year: memberDisclosures.insatser_repayable_next_year,
+            forlagsinsatser_dividend_right: memberDisclosures.forlagsinsatser_dividend_right,
+            forlagsinsatser_redeemable_two_years: memberDisclosures.forlagsinsatser_redeemable_two_years,
+          }
+        : {}),
       confirmations: {
         long_term_debt_over_five_years:
           narrative?.long_term_debt_over_five_years_confirmed ?? false,
@@ -717,12 +724,15 @@ async function buildK2Noter(
   // Note 1: framework. Only claim K2 explicitly when we know the company is
   // an AB and using K2: otherwise emit a generic principles note so the
   // ÅR doesn't falsely assert a framework the company isn't on.
-  // K3 election isn't yet tracked separately; we treat any non-AB as not-K2.
+  // Every form that prepares an årsredovisning here (aktiebolag, ekonomisk
+  // förening) is on K2 in this builder; an unknown or other form gets the
+  // generic wording so the note never asserts a framework it is not on.
+  const preparesAnnualReport = isEntityType(entityType) && preparesArsredovisning(entityType)
   const isAbK2 = entityType === 'aktiebolag'
   notes.push({
     number: 1,
     title: 'Redovisnings- och värderingsprinciper',
-    body: isAbK2
+    body: preparesAnnualReport
       ? 'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd BFNAR 2016:10 Årsredovisning i mindre företag (K2).'
       : 'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd.',
   })
@@ -869,7 +879,7 @@ async function buildK2Noter(
     periodStart,
     periodEnd,
   )
-  if (medelantal > 0 || entityType === 'aktiebolag') {
+  if (medelantal > 0 || (isEntityType(entityType) && preparesArsredovisning(entityType))) {
     const medelantalNote = resolveMedelantalNote({
       subject: entityType === 'ekonomisk_forening' ? 'Föreningen' : 'Bolaget',
       medelantal,
@@ -1276,7 +1286,7 @@ async function buildK3Noter(
     periodStartIso,
     periodEndIso,
   )
-  if (medelantal > 0 || entityType === 'aktiebolag') {
+  if (medelantal > 0 || (isEntityType(entityType) && preparesArsredovisning(entityType))) {
     const medelantalNote = resolveMedelantalNote({
       subject: entityType === 'ekonomisk_forening' ? 'Föreningen' : 'Bolaget',
       medelantal,

@@ -274,7 +274,7 @@ Shipped, behind `NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED`:
 - Capabilities in `lib/company/entity-type.ts`: `usesInk2`, `booksCurrentTax`, `supportsCorporateTaxDispositions`, `requiresAuditorRegardlessOfSize`, `supportsMemberCapital`, `supportsAccountingFramework`, `preparesArsredovisning`.
 - Sites moved from `=== 'aktiebolag'` to a capability: dispositions proposal, överavskrivningar, INK2 engine, statement reconciliation, historical result repair, K2/K3 route and settings, skattekonto rule scoping, Peppol supplier gate, agent atom fallback, INK2 navigation and report catalog.
 - Deadlines: `inkomstdeklaration_ekonomisk_forening`, `arsredovisning_ekonomisk_forening`, `foreningsstamma`.
-- Booking templates: payroll, pension and placement templates apply to both juridiska personer; new `member_contribution_received` (2083), `debenture_contribution_received` (2084) and `membership_fee_received` (3900, INK2S 4.5c/4.3c note).
+- Booking templates: payroll, pension and placement templates apply to both juridiska personer; new `member_contribution_received` (2083), `debenture_contribution_received` (2084) and `membership_fee_received` (3901, INK2S 4.5c/4.3c note).
 
 Also shipped on the same branch (second iteration):
 

@@ -62,6 +62,27 @@ describe('mapTrialBalancesToK2: ekonomisk förening equity (ÅRL 3 kap. 10 b §)
     expect(abLabels).not.toContain('Medlemsinsatser')
   })
 
+  it('treats 2087 (insatsemission) as medlemsinsatser and keeps the rows summing to the bundet total', () => {
+    const withEmission = mapTrialBalancesToK2(
+      {
+        full: [...FULL, row('2087', 'Insatsemission', 0, 30_000), row('1930', 'Bank', 30_000, 0)],
+        preClosing: PRE_CLOSING,
+      },
+      null,
+      { legalForm: 'ekonomisk_forening' },
+    )
+    expect(withEmission.br['Medlemsinsatser']?.current).toBe(230_000)
+    expect(withEmission.br['OverkursfondBunden']).toBeUndefined()
+    expect(withEmission.totals.bundetEgetKapital.current).toBe(300_000)
+    const rows = buildBrRows(withEmission).equityLiabilities
+    const bundetPosts = rows.filter((r) =>
+      ['Medlemsinsatser', 'Förlagsinsatser', 'Uppskrivningsfond', 'Reservfond'].includes(r.label),
+    )
+    const sum = bundetPosts.reduce((acc, r) => acc + (r.current ?? 0), 0)
+    expect(sum).toBe(rows.find((r) => r.label === 'Summa bundet eget kapital')?.current)
+    expect(withEmission.warnings.some((w) => w.includes('2087'))).toBe(false)
+  })
+
   it('warns when share capital shows up in an association', () => {
     const withShareCapital = mapTrialBalancesToK2(
       { full: [...FULL, row('2081', 'Aktiekapital', 0, 25_000), row('1930', 'Bank', 25_000, 0)], preClosing: PRE_CLOSING },

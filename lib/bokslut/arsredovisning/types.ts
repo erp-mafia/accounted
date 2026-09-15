@@ -127,7 +127,7 @@ export interface ArsredovisningData {
     agm_date: string | null
     /** ÅRL 6 kap. 3 §: the four disclosures an ekonomisk förening must make
      *  in förvaltningsberättelsen. Null for every other legal form. */
-    member_disclosures: MemberDisclosures | null
+    member_disclosures?: MemberDisclosures | null
     /** What the AGM actually decided, distinct from the board's proposal. */
     agm_disposition_outcome: 'proposal_approved' | 'alternative_decision' | null
     agm_disposition_decision: string | null
@@ -179,11 +179,12 @@ export interface ArsredovisningData {
      *  the employees table"; the note and the iXBRL fact already reflect
      *  whichever won. */
     medelantal_anstallda_override: number | null
-    /** ÅRL 6 kap. 3 § inputs (ekonomisk förening only, otherwise null). */
-    member_count_change: string | null
-    insatser_repayable_next_year: number | null
-    forlagsinsatser_dividend_right: string | null
-    forlagsinsatser_redeemable_two_years: number | null
+    /** ÅRL 6 kap. 3 § inputs (ekonomisk förening only; absent for other forms
+     *  so their content hash is untouched). */
+    member_count_change?: string | null
+    insatser_repayable_next_year?: number | null
+    forlagsinsatser_dividend_right?: string | null
+    forlagsinsatser_redeemable_two_years?: number | null
     confirmations: {
       long_term_debt_over_five_years: boolean
       securities_pledged: boolean

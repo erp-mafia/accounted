@@ -319,8 +319,8 @@ function prepareInvoice(input: PeppolInvoiceInput):
   if (!isEntityType(company.entity_type) || usesPersonnummerAsOrgNumber(company.entity_type)) {
     issues.push(validationIssue(
       'SUPPLIER_ENTITY_TYPE_UNSUPPORTED', 'company.entity_type',
-      'Enskild firma kräver ett separat GLN som Peppol-identifierare. Exporten stöder därför endast aktiebolag tills GLN kan konfigureras.',
-      'A sole trader requires a separate GLN as its Peppol identifier. This export therefore supports limited companies only until GLN can be configured.',
+      'Enskild firma kräver ett separat GLN som Peppol-identifierare. Exporten stöder därför endast företag med organisationsnummer tills GLN kan konfigureras.',
+      'A sole trader requires a separate GLN as its Peppol identifier. This export therefore supports only companies with an organisationsnummer until GLN can be configured.',
     ))
   }
 

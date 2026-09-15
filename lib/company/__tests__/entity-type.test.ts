@@ -1,3 +1,5 @@
+import { getRevenueAccount } from '@/lib/bookkeeping/invoice-accounts'
+import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
@@ -14,7 +16,6 @@ import {
   preparesArsredovisning,
   requiresAuditorRegardlessOfSize,
   booksCurrentTax,
-  ENTITY_TYPE_ABBREVIATIONS_SV,
   resolveCompanyEntityType,
   resultClosingAccounts,
   simplifiedYearEndRegelverk,
@@ -23,6 +24,7 @@ import {
   supportsMemberCapital,
   usesInk2,
   usesPersonnummerAsOrgNumber,
+  templateAccountForForm,
 } from '@/lib/company/entity-type'
 
 function stubSupabase(companyRow: { entity_type: string } | null, error: { message: string } | null = null) {
@@ -156,6 +158,18 @@ describe('entity-type: domain facts', () => {
     expect(supportsMemberCapital('aktiebolag')).toBe(false)
   })
 
+  it('gives an ekonomisk förening the AB override accounts, with owner accounts on 2890', () => {
+    expect(templateAccountForForm('ekonomisk_forening', '3100', '3004')).toBe('3004')
+    expect(templateAccountForForm('ekonomisk_forening', '6991', '7610')).toBe('7610')
+    expect(templateAccountForForm('ekonomisk_forening', '2013', '2893')).toBe('2890')
+    expect(templateAccountForForm('ekonomisk_forening', '5410', undefined)).toBe('5410')
+    // The three account resolvers must agree for the same posting.
+    expect(getRevenueAccount('exempt', 'ekonomisk_forening')).toBe('3004')
+    expect(getDefaultAccountForCategory('expense_education', 'ekonomisk_forening')).toBe('7610')
+    // The ideell förening keeps its base-account behaviour.
+    expect(templateAccountForForm('ideell_forening', '3100', '3004')).toBe('3100')
+  })
+
   it('taxes an ekonomisk förening as a juridisk person, like an AB and unlike both other forms', () => {
     // IL 65 kap. 10 § (bolagsskatt), IL 30 kap. 5 § (periodiseringsfond 25 %)
     // and the INK2 return apply to the aktiebolag and the ekonomisk förening.
@@ -172,11 +186,6 @@ describe('entity-type: domain facts', () => {
       expect(supportsAccountingFramework(form, 'k2')).toBe(false)
       expect(supportsAccountingFramework(form, 'k3')).toBe(false)
     }
-  })
-
-  it('abbreviates every form for dense UI', () => {
-    for (const form of ENTITY_TYPES) expect(ENTITY_TYPE_ABBREVIATIONS_SV[form]).toBeTruthy()
-    expect(ENTITY_TYPE_ABBREVIATIONS_SV.ekonomisk_forening).toBe('Ek. för.')
   })
 })
 

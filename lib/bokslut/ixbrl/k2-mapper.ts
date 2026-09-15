@@ -436,11 +436,23 @@ export interface K2MappingOptions {
  * ekonomisk förening carries them as their own posts and warns about share
  * capital instead, which it cannot have (EFL 1 kap.).
  */
+const AKTIEBOLAG_ONLY_EQUITY_CONCEPTS = new Set([
+  'Aktiekapital',
+  'EjRegistreratAktiekapital',
+  'OverkursfondBunden',
+  'Overkursfond',
+])
+
 export const K2_BR_MAPPINGS_EKONOMISK_FORENING: PostMapping[] = K2_BR_MAPPINGS.flatMap(
   (mapping) => {
+    // Share capital and överkursfond do not exist in a förening; a balance
+    // there is reported by the unmapped sweep and the targeted warning below.
+    if (AKTIEBOLAG_ONLY_EQUITY_CONCEPTS.has(mapping.concept)) return []
     if (mapping.concept !== 'Reservfond') return [mapping]
     return [
-      { concept: 'Medlemsinsatser', balance: 'credit', ranges: [r('2083', '2083')] },
+      // 2087 is "Insatsemission" for an ekonomisk förening in BAS: insatser
+      // credited through insatsemission are medlemsinsatser (ÅRL 3 kap. 10 b §).
+      { concept: 'Medlemsinsatser', balance: 'credit', ranges: [r('2083', '2083'), r('2087', '2087')] },
       { concept: 'Forlagsinsatser', balance: 'credit', ranges: [r('2084', '2084')] },
       { ...mapping, ranges: [r('2086', '2086'), r('2088', '2089')] },
     ]
@@ -452,7 +464,10 @@ function brMappingsFor(legalForm: K2LegalForm): PostMapping[] {
 }
 
 const RECLASSIFIED_ACCOUNTS_EKONOMISK_FORENING: Record<string, string> = {
-  '2081': 'Aktiekapital (2081) förekommer i en ekonomisk förening, som saknar aktiekapital (EFL 1 kap.): granska klassificeringen, insatser hör till 2083/2084.',
+  '2080': 'Aktiekapital (2080) finns inte i en ekonomisk förening (EFL 1 kap.): flytta saldot till 2083 Medlemsinsatser eller 2084 Förlagsinsatser innan årsredovisningen upprättas.',
+  '2081': 'Aktiekapital (2081) finns inte i en ekonomisk förening (EFL 1 kap.): flytta saldot till 2083 Medlemsinsatser eller 2084 Förlagsinsatser innan årsredovisningen upprättas.',
+  '2082': 'Ej registrerat aktiekapital (2082) finns inte i en ekonomisk förening: granska klassificeringen.',
+  '2097': 'Överkursfond (2097) finns inte i en ekonomisk förening: granska klassificeringen (insatser hör till 2083/2087, förlagsinsatser till 2084).',
   '2088': RECLASSIFIED_ACCOUNTS['2088'],
   '2089': RECLASSIFIED_ACCOUNTS['2089'],
 }

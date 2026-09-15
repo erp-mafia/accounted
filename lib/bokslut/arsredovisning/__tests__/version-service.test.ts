@@ -74,6 +74,36 @@ function model(signedAt: string | null): CanonicalAnnualReport {
   } as unknown as CanonicalAnnualReport
 }
 
+describe('annualReportContentHash: form-only fields', () => {
+  it('ignores absent form-only fields, so an aktiebolag report hashes exactly as before', () => {
+    const base = model(null)
+    const withUndefined = {
+      ...base,
+      report: {
+        ...base.report,
+        forvaltningsberattelse: { ...base.report.forvaltningsberattelse, member_disclosures: undefined },
+      },
+    } as typeof base
+    expect(annualReportContentHash(withUndefined)).toBe(annualReportContentHash(base))
+    const forening = {
+      ...base,
+      report: {
+        ...base.report,
+        forvaltningsberattelse: {
+          ...base.report.forvaltningsberattelse,
+          member_disclosures: {
+            member_count_change: 'Oförändrat',
+            insatser_repayable_next_year: null,
+            forlagsinsatser_dividend_right: null,
+            forlagsinsatser_redeemable_two_years: null,
+          },
+        },
+      },
+    } as typeof base
+    expect(annualReportContentHash(forening)).not.toBe(annualReportContentHash(base))
+  })
+})
+
 describe('annualReportContentHash', () => {
   it('does not change when evidence dates are overlaid after locking', () => {
     expect(annualReportContentHash(model(null))).toBe(

@@ -64,6 +64,10 @@ const ENTITY_TYPE_CHANGE_ERRORS: Record<string, { status: number; message: strin
     status: 409,
     message: 'Företagsformen kan bara ändras innan bokföringen har börjat: det finns redan verifikat eller fakturor. Kontakta support för en granskad ändring.',
   },
+  ENTITY_TYPE_CHANGE_CONFIGURED_ACCOUNTS: {
+    status: 409,
+    message: 'Företagsformen kan bara ändras innan konteringsregler eller dimensionsregler har skapats: ta bort dem först.',
+  },
   ENTITY_TYPE_CHANGE_CUSTOM_ACCOUNTS: {
     status: 409,
     message: 'Företagsformen kan bara ändras när kontoplanen bara innehåller de förvalda kontona: ta bort egna konton först.',

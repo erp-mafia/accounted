@@ -89,3 +89,42 @@ describe('loadTaxAdjustmentSnapshot', () => {
     expect(snapshot.items.find((item) => item.accountNumber === '8423')?.included).toBe(false)
   })
 })
+
+describe('loadTaxAdjustmentSnapshot: ekonomisk förening membership fees', () => {
+  it('proposes the 3901 credit balance as non-taxable income (INK2S 4.5c) for the form only', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        { account_number: '3901', closing_debit: 0, closing_credit: 48_000 },
+        { account_number: '6992', closing_debit: 1_000, closing_credit: 0 },
+      ],
+      totalDebit: 1_000,
+      totalCredit: 48_000,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+
+    const forening = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'ekonomisk_forening')
+    expect(forening.items.find((item) => item.accountNumber === '3901')).toMatchObject({
+      adjustmentType: 'non_taxable_income',
+      amount: 48_000,
+      included: true,
+    })
+    expect(forening.nonTaxableIncome).toBe(48_000)
+    expect(forening.nonDeductibleExpenses).toBe(1_000)
+
+    const ab = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'aktiebolag')
+    expect(ab.items.find((item) => item.accountNumber === '3901')).toBeUndefined()
+    expect(ab.nonTaxableIncome).toBe(0)
+  })
+
+  it('never proposes a debit balance on 3901 as income', async () => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [{ account_number: '3901', closing_debit: 500, closing_credit: 0 }],
+      totalDebit: 500,
+      totalCredit: 0,
+      isBalanced: false,
+    } as Awaited<ReturnType<typeof generateTrialBalance>>)
+    const snapshot = await loadTaxAdjustmentSnapshot(makeClient(), 'company-1', 'period-1', 'ekonomisk_forening')
+    expect(snapshot.items.find((item) => item.accountNumber === '3901')?.amount).toBe(0)
+    expect(snapshot.nonTaxableIncome).toBe(0)
+  })
+})

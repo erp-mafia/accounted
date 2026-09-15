@@ -19,7 +19,17 @@
 --     been used;
 --   * every chart_of_accounts row is a system-seeded one, so re-seeding does
 --     not discard a user-created account (seed_chart_of_accounts() returns
---     early when any account exists, so the seeded rows are removed first).
+--     early when any account exists, so the seeded rows are removed first);
+--   * no mapping_rules or account_dimension_rules row exists: those store
+--     account numbers as text and would dangle after the re-seed
+--     (cash_accounts keeps 1930, which every seed contains).
+--
+-- Concurrency: the function takes a transaction-scoped advisory lock keyed on
+-- the company and re-checks journal_entries after removing the seeded chart.
+-- The posting path does not take the same lock, so a verifikat committed in
+-- the window between the two counts is caught by the second count and rolls
+-- the whole correction back; a commit that starts after the second count
+-- posts against the new chart (account numbers are text, no FK).
 --
 -- Effects, in one transaction: companies.entity_type and
 -- company_settings.entity_type updated, the seeded chart replaced by the
@@ -44,7 +54,9 @@ DECLARE
   v_invoice_count    integer;
   v_supplier_count   integer;
   v_custom_accounts  integer;
+  v_configured_refs  integer;
   v_removed_accounts integer;
+  v_entries_after    integer;
 BEGIN
   IF v_actor IS NULL THEN
     RETURN jsonb_build_object('ok', false, 'code', 'ENTITY_TYPE_CHANGE_FORBIDDEN');
@@ -80,9 +92,9 @@ BEGIN
     RETURN jsonb_build_object('ok', true, 'changed', false, 'entity_type', p_entity_type);
   END IF;
 
-  -- Lock the tables a concurrent posting would touch, then prove the books
-  -- are empty. A single verifikat of any status makes the company ineligible.
-  PERFORM 1 FROM public.journal_entries WHERE company_id = p_company_id FOR UPDATE;
+  -- Serialise corrections of the same company and prove the books are
+  -- empty. A single verifikat of any status makes the company ineligible.
+  PERFORM pg_advisory_xact_lock(hashtextextended('correct_company_entity_type:' || p_company_id::text, 0));
   PERFORM 1 FROM public.chart_of_accounts WHERE company_id = p_company_id FOR UPDATE;
 
   SELECT count(*) INTO v_entry_count FROM public.journal_entries WHERE company_id = p_company_id;
@@ -110,8 +122,28 @@ BEGIN
     );
   END IF;
 
+  SELECT
+    (SELECT count(*) FROM public.mapping_rules WHERE company_id = p_company_id)
+    + (SELECT count(*) FROM public.account_dimension_rules WHERE company_id = p_company_id)
+  INTO v_configured_refs;
+  IF v_configured_refs > 0 THEN
+    RETURN jsonb_build_object(
+      'ok', false,
+      'code', 'ENTITY_TYPE_CHANGE_CONFIGURED_ACCOUNTS',
+      'configured_references', v_configured_refs
+    );
+  END IF;
+
   DELETE FROM public.chart_of_accounts WHERE company_id = p_company_id;
   GET DIAGNOSTICS v_removed_accounts = ROW_COUNT;
+
+  -- Second look after the delete: a verifikat committed since the first
+  -- count would reference accounts that no longer exist.
+  SELECT count(*) INTO v_entries_after FROM public.journal_entries WHERE company_id = p_company_id;
+  IF v_entries_after > 0 THEN
+    RAISE EXCEPTION 'correct_company_entity_type: a journal entry was posted during the correction'
+      USING ERRCODE = '40001';
+  END IF;
 
   UPDATE public.companies
   SET entity_type = p_entity_type

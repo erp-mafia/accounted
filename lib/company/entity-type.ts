@@ -47,14 +47,6 @@ export const ENTITY_TYPE_LABELS_SV: Record<EntityType, string> = {
   ekonomisk_forening: 'Ekonomisk förening',
 }
 
-/** Short marks for dense UI (report library, pickers). */
-export const ENTITY_TYPE_ABBREVIATIONS_SV: Record<EntityType, string> = {
-  enskild_firma: 'EF',
-  aktiebolag: 'AB',
-  ideell_forening: 'Ideell förening',
-  ekonomisk_forening: 'Ek. för.',
-}
-
 export class UnknownEntityTypeError extends Error {
   readonly code = 'COMPANY_ENTITY_TYPE_UNKNOWN'
   constructor(value: unknown) {
@@ -191,8 +183,16 @@ export function templateAccountForForm(
     aktiebolag: abOverride ?? base,
     ideell_forening:
       base && OWNER_SETTLEMENT_ACCOUNTS.has(base) ? ownerSettlementAccount('ideell_forening', 'withdrawal') : base,
-    ekonomisk_forening:
-      base && OWNER_SETTLEMENT_ACCOUNTS.has(base) ? ownerSettlementAccount('ekonomisk_forening', 'withdrawal') : base,
+    // A juridisk person with employees books like an aktiebolag (the `_ab`
+    // override: 7610 utbildning, 3004 momsfri försäljning), except that an
+    // owner account (2893 skuld till aktieägare, or a base 2013/2018) becomes
+    // the member settlement account 2890.
+    ekonomisk_forening: (() => {
+      const resolved = abOverride ?? base
+      return resolved && OWNER_SETTLEMENT_ACCOUNTS.has(resolved)
+        ? ownerSettlementAccount('ekonomisk_forening', 'withdrawal')
+        : resolved
+    })(),
   })
 }
 
