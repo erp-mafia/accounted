@@ -8,11 +8,25 @@ import {
 import type { AccountMapping } from './types'
 
 /**
+ * Treatments whose box does not fix the sats, independently of account class.
+ *
+ * Momspliktiga uttag and an import basis both exist at 25, 12 and 6 %: ruta 06
+ * and ruta 50 are one box each, and the rate rides on the account label or a
+ * source chart code. Ruta 05 solved the same problem the other way, with three
+ * treatments, which is why standard_25/reduced_12/reduced_6 are not here.
+ */
+const RATE_NOT_FIXED_BY_BOX: ReadonlySet<AccountVatTreatment> = new Set([
+  'own_use',
+  'import_goods',
+])
+
+/**
  * Whether the suggested rate is read off the account label rather than fixed by
  * the treatment.
  *
- * Only true for a reverse charge on a purchase account, where the acquisition
- * rate is a real number the treatment does not determine. Everywhere else
+ * True for a reverse charge on a purchase account, where the acquisition rate
+ * is a real number the treatment does not determine, and for the treatments
+ * above, where the box covers three rates. Everywhere else
  * defaultRateForVatTreatment is authoritative, including where it deliberately
  * answers null: vmb has no single sats and oss carries a destination country's
  * rate that never drives ruta 05 arithmetic. Exported so a caller holding a
@@ -22,6 +36,7 @@ export function vatRateComesFromLabel(
   treatment: AccountVatTreatment,
   accountClass: number,
 ): boolean {
+  if (RATE_NOT_FIXED_BY_BOX.has(treatment)) return true
   return accountClass >= 4 && treatment.startsWith('reverse_charge')
 }
 

@@ -5866,6 +5866,8 @@
     "vat_treatment_reverse_charge_domestic": "Omvänd skattskyldighet Sverige (ruta 41/23/24)",
     "vat_treatment_reverse_charge_eu_goods": "EU-varor (ruta 35/20)",
     "vat_treatment_triangulation_eu_goods": "Trepartshandel, mellanman (ruta 37/38)",
+    "vat_treatment_own_use": "Momspliktiga uttag (ruta 06)",
+    "vat_treatment_import_goods": "Beskattningsunderlag vid import (ruta 50)",
     "vat_treatment_reverse_charge_eu_services": "EU-tjänster (ruta 39/21)",
     "vat_treatment_reverse_charge_non_eu_services": "Inköp av tjänster utanför EU (ruta 22)",
     "vat_treatment_export_goods": "Export av varor utanför EU (ruta 36)",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   defaultRateForVatTreatment,
+  isVatTreatmentAllowedForAccountClass,
   resolveVatTreatmentRuta,
   suggestVatTreatment,
   vatTreatmentsForAccountClass,
@@ -93,6 +94,53 @@ describe('trepartshandel', () => {
       .toEqual({ treatment: 'triangulation_eu_goods', rate: 0 })
     expect(suggestVatTreatment('4055', 'Trepartsförv varor fr EG'))
       .toEqual({ treatment: 'triangulation_eu_goods', rate: 0 })
+  })
+})
+
+describe('momspliktiga uttag och importunderlag', () => {
+  it('files each on its own box, by account class', () => {
+    expect(resolveVatTreatmentRuta('own_use', 3)).toEqual({ box: 'ruta06', side: 'credit' })
+    expect(resolveVatTreatmentRuta('import_goods', 4)).toEqual({ box: 'ruta50', side: 'debit' })
+  })
+
+  it('refuses each on the other side of the ledger', () => {
+    // ruta 06 is revenue and ruta 50 a cost-side basis; neither box can be
+    // filled from the wrong class, which is what the dropdown reads too.
+    expect(resolveVatTreatmentRuta('own_use', 4)).toBeNull()
+    expect(isVatTreatmentAllowedForAccountClass('import_goods', 3)).toBe(false)
+    expect(isVatTreatmentAllowedForAccountClass('own_use', 3)).toBe(true)
+    expect(isVatTreatmentAllowedForAccountClass('import_goods', 4)).toBe(true)
+  })
+
+  it('starts at 25 %, because the box covers three rates', () => {
+    // Unlike ruta 05, which spends a treatment per sats, one box here carries
+    // 25, 12 and 6 %. The label or a source chart code moves it.
+    expect(defaultRateForVatTreatment('own_use', 3)).toBe(0.25)
+    expect(defaultRateForVatTreatment('import_goods', 4)).toBe(0.25)
+  })
+
+  it('reads an uttag label, and the rate it names', () => {
+    expect(suggestVatTreatment('3401', 'Försäljning/uttag av varor 25 %'))
+      .toEqual({ treatment: 'own_use', rate: 0.25 })
+    expect(suggestVatTreatment('3910', 'Egna uttag av tjänster 12 %'))
+      .toEqual({ treatment: 'own_use', rate: 0.12 })
+  })
+
+  it('keeps momsfria uttag in ruta 42, where BAS 3404 puts them', () => {
+    // The uttag rule sits after the momsfri rule on purpose: an exempt
+    // withdrawal is not a taxable one and does not belong in ruta 06.
+    expect(suggestVatTreatment('3404', 'Momsfria uttag'))
+      .toEqual({ treatment: 'exempt', rate: 0 })
+  })
+
+  it('reads an import BASIS label but still declines a plain import cost account', () => {
+    // The distinction the box turns on: ruta 50 is tullvärde plus tullar plus
+    // bikostnader, booked on its own account. An account that merely buys
+    // imported goods holds what the supplier invoiced, and routing that to
+    // ruta 50 would overstate the basis.
+    expect(suggestVatTreatment('4540', 'Beskattningsunderlag vid import 25 %'))
+      .toEqual({ treatment: 'import_goods', rate: 0.25 })
+    expect(suggestVatTreatment('4049', 'Inköp varor import')).toBeNull()
   })
 })
 

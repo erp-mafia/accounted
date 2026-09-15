@@ -9530,7 +9530,7 @@ export const tools: McpTool[] = [
         account_name: { type: 'string' },
         description: { type: 'string' },
         default_vat_code: { type: 'string' },
-        default_vat_rate: { type: 'number', enum: [0, 0.06, 0.12, 0.25], description: 'Default VAT rate as a fraction (0.25 = 25%). Livsmedel: 0.06 from 2026-04-01 (temporary cut from 0.12, reverts 2027-12-31).' },
+        default_vat_rate: { type: 'number', enum: [0, 0.06, 0.12, 0.25], description: 'Fraction (0.25 = 25%). Livsmedel: 0.06 from 2026-04-01 (temporary cut from 0.12, reverts 2027-12-31).' },
         default_vat_treatment: {
           type: ['string', 'null'],
           enum: [...ACCOUNT_VAT_TREATMENTS, null],

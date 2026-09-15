@@ -40,6 +40,7 @@ export interface SpirisVatCode {
  * rate rather than the box: 25/12/6 are three different treatments.
  */
 const REVENUE_TREATMENT: Record<string, AccountVatTreatment> = {
+  '06': 'own_use',
   '07': 'vmb',
   '08': 'rental_voluntary',
   '35': 'reverse_charge_eu_goods',
@@ -57,6 +58,7 @@ const COST_TREATMENT: Record<string, AccountVatTreatment> = {
   '21': 'reverse_charge_eu_services',
   '22': 'reverse_charge_non_eu_services',
   '37': 'triangulation_eu_goods',
+  '50': 'import_goods',
   // Both are omvänd skattskyldighet inom Sverige. Which ruta gets filed is
   // decided downstream by resolveVatTreatmentRuta from the account number, so
   // the 23/24 split the source system made is not carried through. Lossy on
@@ -73,14 +75,17 @@ const COST_TREATMENT: Record<string, AccountVatTreatment> = {
  * mapping and shown to the user, and the row falls back to the label
  * suggestion and stays in the review list rather than being silently dropped.
  *
- *   06  momspliktiga egna uttag
- *   50  beskattningsunderlag vid import
+ * Empty today. It held 37 and 38 until triangulation_eu_goods existed, and 06
+ * and 50 until own_use and import_goods did: each of those boxes reached the
+ * declaration through a handful of BAS numbers and nothing else, so a chart
+ * that numbered the account differently dropped the amount out of the
+ * declaration in silence. Kept as the named place for the next such ruta.
  *
  * Class 2 rutor (10, 11, 12, 30, 31, 32, 48, 60, 61, 62) are not listed: those
  * sit on the VAT accounts themselves, which this project maps structurally
  * rather than through an account treatment.
  */
-const UNTRANSLATABLE_RUTOR = new Set(['06', '50'])
+const UNTRANSLATABLE_RUTOR = new Set<string>([])
 
 /** Parse a raw Spiris code, or null when it is blank or malformed. */
 export function parseSpirisVatCode(raw: string): SpirisVatCode | null {

@@ -191,6 +191,32 @@ describe('rutorFromTotals: ruta 37/38 (trepartshandel)', () => {
   })
 })
 
+describe('rutorFromTotals: ruta 06 and 50 on non-standard account numbers', () => {
+  it('projects an uttag and an import basis booked outside the BAS numbers', () => {
+    // ACCOUNT_RUTA carries 3401-3403 to ruta 06 and 4545-4547 to ruta 50 and
+    // knows no other number, so a chart that books either elsewhere dropped
+    // the amount out of the declaration with no box and no warning. The
+    // treatment is what reaches it now.
+    const totals = new Map([
+      ['3910', { debit: 0, credit: 40_000 }],
+      ['4540', { debit: 120_000, credit: 0 }],
+    ])
+    const rutor = rutorFromTotals(totals, {
+      mappingByAccount: new Map([
+        ['3910', { box: 'ruta06', side: 'credit' }],
+        ['4540', { box: 'ruta50', side: 'debit' }],
+      ]),
+      explicitAccounts: new Set(['3910', '4540']),
+    })
+    expect(rutor.ruta06).toBe(40_000)
+    expect(rutor.ruta50).toBe(120_000)
+    // Neither carries its own output VAT: that sits on 2612/2622/2632 and
+    // 2615/2625/2635, which reach rutor 10-12 and 60-62 by account number.
+    expect(rutor.ruta10).toBe(0)
+    expect(rutor.ruta60).toBe(0)
+  })
+})
+
 describe('rutorFromTotals: ruta 41 (omvänd skattskyldighet, sales side)', () => {
   it('projects 3231/3232/3233 credit balances into ruta 41', () => {
     const totals = new Map([

@@ -89,13 +89,15 @@ describe('applySourceChartCsv', () => {
   })
 
   it('keeps an untranslatable code visible instead of dropping it', () => {
-    // Ruta 50, beskattningsunderlag vid import: a real code with no treatment
-    // here. The row must keep the code and stay up for review.
+    // A bare "05" names the box but no sats, and 05 is the one box whose
+    // treatment depends on the rate, so it cannot be read. The row must keep
+    // the code and stay up for review. (Ruta 06 and 50 were the example here
+    // until own_use and import_goods existed.)
     const { mappings, summary } = applySourceChartCsv(
-      [mapping('4545', 'Import av varor, 25 % moms')],
-      csv('True;4545;Import av varor, 25 % moms;50-25%'),
+      [mapping('3051', 'Försäljning inrikes')],
+      csv('True;3051;Försäljning inrikes;05'),
     )
-    expect(mappings[0].providerVatCode).toBe('50-25%')
+    expect(mappings[0].providerVatCode).toBe('05')
     expect(mappings[0].providerVatTreatment).toBeNull()
     expect(summary).toMatchObject({ codesApplied: 1, treatmentsApplied: 0, codesWithoutTreatment: 1 })
   })
@@ -119,18 +121,15 @@ describe('applySourceChartCsv', () => {
     // is the only thing that tells the step this suggestion came from the
     // account name and not from the code beside it.
     //
-    // Constructed rather than observed: since ruta 38 became translatable,
-    // every code this project cannot read (06 uttag, 50 import) sits on a
-    // label the suggester also declines, so no export in hand produces the
-    // combination. The contract still has to hold the next time a ruta is
-    // added or removed, which is what this pins. Export label, import code.
+    // An export label carrying a code that names a box without a sats: the
+    // label answers, the code does not, and the pair has to survive.
     const { mappings } = applySourceChartCsv(
       [mapping('3055', 'Försäljn varor utanför EG momsfri')],
-      csv('True;3055;Försäljn varor utanför EG momsfri;06-25%'),
+      csv('True;3055;Försäljn varor utanför EG momsfri;05'),
     )
     const [enriched] = enrichAccountMappingsWithVat(mappings, [])
     expect(enriched.defaultVatTreatment).toBe('export_goods')
-    expect(enriched.providerVatCode).toBe('06-25%')
+    expect(enriched.providerVatCode).toBe('05')
     expect(enriched.providerVatTreatment).toBeNull()
   })
 
@@ -248,8 +247,8 @@ describe('applySourceChartCsv', () => {
     // because ImportNotices shows one and hides the rest, which is right for a
     // file that went wrong and wrong for a file that worked.
     const { summary, notices } = applySourceChartCsv(
-      [mapping('3401', 'Egna uttag av varor')],
-      csv('True;3401;Egna uttag av varor;06-25%'),
+      [mapping('3051', 'Försäljning inrikes')],
+      csv('True;3051;Försäljning inrikes;05'),
     )
     expect(summary.codesWithoutTreatment).toBe(1)
     expect(notices).toEqual([])
@@ -262,60 +261,75 @@ describe('applySourceChartCsv', () => {
     // project just has no treatment for either.
     const { summary } = applySourceChartCsv(
       [
-        mapping('4545', 'Beskattningsunderlag import 25%'),
-        mapping('3402', 'Egna uttag av tjänster'),
-        mapping('3401', 'Egna uttag av varor'),
+        mapping('4051', 'Inköp varor'),
+        mapping('3052', 'Försäljning butik'),
+        mapping('3051', 'Försäljning inrikes'),
       ],
       csv(
-        'True;4545;Beskattningsunderlag import 25%;50-25%',
-        'True;3402;Egna uttag av tjänster;06-25%',
-        'True;3401;Egna uttag av varor;06-25%',
+        // A sales box on a purchase account, refused so an acquisition cannot
+        // land in a sales box; a rate the format does not have; a box that
+        // names no sats.
+        'True;4051;Inköp varor;35-0%',
+        'True;3052;Försäljning butik;05-9%',
+        'True;3051;Försäljning inrikes;05',
       ),
     )
-    expect(summary.accountsWithoutTreatment).toEqual(['3401', '3402', '4545'])
+    expect(summary.accountsWithoutTreatment).toEqual(['3051', '3052', '4051'])
     // Derived from the list, so the sentence can never name three and count two.
     expect(summary.codesWithoutTreatment).toBe(summary.accountsWithoutTreatment.length)
   })
 
   it('leaves a translated account out of the list', () => {
     const { summary } = applySourceChartCsv(
-      [mapping('3058', 'Försäljn varor EG momsfri'), mapping('3401', 'Egna uttag av varor')],
-      csv('True;3058;Försäljn varor EG momsfri;35-0%', 'True;3401;Egna uttag av varor;06-25%'),
+      [mapping('3058', 'Försäljn varor EG momsfri'), mapping('3051', 'Försäljning inrikes')],
+      csv('True;3058;Försäljn varor EG momsfri;35-0%', 'True;3051;Försäljning inrikes;05'),
     )
-    expect(summary.accountsWithoutTreatment).toEqual(['3401'])
+    expect(summary.accountsWithoutTreatment).toEqual(['3051'])
   })
 
-  it('leaves an import basis on a non-standard number with nothing at all', () => {
+  it('leaves a row with nothing at all when all three sources are silent', () => {
     // The state the mapping step's fourth source-code sentence is about, and
     // the one that used to borrow the third and claim a suggestion that is not
-    // there. Ruta 50 reaches the declaration through ACCOUNT_RUTA, which knows
-    // 4545 to 4547 and no other number, so a chart that books the
-    // beskattningsunderlag anywhere else gets: no treatment from the code (this
-    // project has no member for ruta 50), no box from the number, and no
-    // suggestion from the label, since suggestVatTreatment declines
-    // /import/ + /var/ on purpose (a cost account named "import" holds the
-    // invoiced amount, while ruta 50 is tullvärde plus tullar plus
-    // bikostnader). The amount then reaches no ruta until the user picks one.
+    // there. A bare "05" names ruta 05 but no sats, and 05 is the one box whose
+    // treatment depends on the rate, so the code cannot be read; 3051 is not in
+    // ACCOUNT_TO_BOX; and the label names no percentage, so the suggester
+    // declines too. The amount reaches no ruta until the user picks one.
     const { mappings } = applySourceChartCsv(
-      [mapping('4540', 'Beskattningsunderlag import 25%')],
-      csv('True;4540;Beskattningsunderlag import 25%;50-25%'),
+      [mapping('3051', 'Försäljning inrikes')],
+      csv('True;3051;Försäljning inrikes;05'),
     )
     const row = mappings[0]
-    expect(row.providerVatCode).toBe('50-25%')
+    expect(row.providerVatCode).toBe('05')
     expect(row.providerVatTreatment).toBeNull()
     expect(row.defaultVatTreatment ?? null).toBeNull()
-    expect(ACCOUNT_TO_BOX['4540']).toBeUndefined()
-    expect(suggestVatTreatment('4540', 'Beskattningsunderlag import 25%')).toBeNull()
+    expect(ACCOUNT_TO_BOX['3051']).toBeUndefined()
+    expect(suggestVatTreatment('3051', 'Försäljning inrikes')).toBeNull()
   })
 
-  it('still reassures on the standard import numbers, which the BAS map routes', () => {
-    const { mappings } = applySourceChartCsv(
-      [mapping('4545', 'Import av varor, 25 % moms')],
-      csv('True;4545;Import av varor, 25 % moms;50-25%'),
-    )
-    expect(mappings[0].providerVatTreatment).toBeNull()
-    // Untranslated, but nothing is missing: the number carries it to ruta 50.
-    expect(ACCOUNT_TO_BOX['4545']).toBe('50')
+  it('reads an import basis whatever number the chart put it on', () => {
+    // The whole point of import_goods: ACCOUNT_RUTA knows 4545 to 4547, and a
+    // chart that books the beskattningsunderlag anywhere else used to drop the
+    // amount out of the declaration in silence.
+    for (const account of ['4545', '4540']) {
+      const { mappings } = applySourceChartCsv(
+        [mapping(account, 'Beskattningsunderlag import 25%')],
+        csv(`True;${account};Beskattningsunderlag import 25%;50-25%`),
+      )
+      expect(mappings[0].providerVatTreatment).toBe('import_goods')
+      expect(mappings[0].defaultVatRate).toBe(0.25)
+    }
+  })
+
+  it('reads an uttag whatever number the chart put it on, and takes the code rate', () => {
+    for (const account of ['3401', '3910']) {
+      const { mappings } = applySourceChartCsv(
+        [mapping(account, 'Egna uttag av varor')],
+        csv(`True;${account};Egna uttag av varor;06-12%`),
+      )
+      expect(mappings[0].providerVatTreatment).toBe('own_use')
+      // The box covers 25, 12 and 6 %, so the code's rate beats the default.
+      expect(mappings[0].defaultVatRate).toBe(0.12)
+    }
   })
 
   it('does not touch a remapped row, only identity mappings', () => {

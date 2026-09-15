@@ -5866,6 +5866,8 @@
     "vat_treatment_reverse_charge_domestic": "Domestic reverse charge (boxes 41/23/24)",
     "vat_treatment_reverse_charge_eu_goods": "EU goods (boxes 35/20)",
     "vat_treatment_triangulation_eu_goods": "Triangulation, intermediary (boxes 37/38)",
+    "vat_treatment_own_use": "Taxable own use / withdrawals (box 06)",
+    "vat_treatment_import_goods": "Import tax base (box 50)",
     "vat_treatment_reverse_charge_eu_services": "EU services (boxes 39/21)",
     "vat_treatment_reverse_charge_non_eu_services": "Services purchased outside the EU (box 22)",
     "vat_treatment_export_goods": "Goods exported outside the EU (box 36)",

@@ -55,15 +55,25 @@ describe('spirisVatTreatment', () => {
   })
 
   it.each([
-    ['06-25%', '3401', 'momspliktiga egna uttag'],
-    ['06-12%', '3402', 'momspliktiga egna uttag'],
-    ['50-25%', '4545', 'beskattningsunderlag vid import'],
-    ['50-6%', '4547', 'beskattningsunderlag vid import'],
-  ])('answers null for %s, which is %s', (code, account) => {
-    // Real codes this project has no treatment for. Null is not a failure:
-    // applySourceVatCodes keeps the code on the mapping and leaves the row in
-    // the review list with its label suggestion.
-    expect(spirisVatTreatment(code, account)).toBeNull()
+    ['06-25%', '3401', 'own_use'],
+    ['06-12%', '3402', 'own_use'],
+    ['06-25%', '3910', 'own_use'],
+    ['50-25%', '4545', 'import_goods'],
+    ['50-6%', '4547', 'import_goods'],
+    ['50-25%', '4540', 'import_goods'],
+  ])('reads %s on %s as %s', (code, account, treatment) => {
+    // Both boxes used to answer null here, which was survivable only while the
+    // account number happened to be one ACCOUNT_RUTA knows: 3401-3403 for ruta
+    // 06, 4545-4547 for ruta 50. On any other number the amount reached no box
+    // at all. The non-standard numbers in this list are the point.
+    expect(spirisVatTreatment(code, account)).toBe(treatment)
+  })
+
+  it('will not read an uttag code on a purchase account, or an import code on a sale', () => {
+    // The class check is what stops a box from being filled from the wrong
+    // side of the ledger: ruta 06 is revenue, ruta 50 is a cost-side basis.
+    expect(spirisVatTreatment('06-25%', '4010')).toBeNull()
+    expect(spirisVatTreatment('50-25%', '3010')).toBeNull()
   })
 
   it('answers null for the VAT accounts themselves', () => {

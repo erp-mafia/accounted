@@ -5,7 +5,7 @@ export const ACCOUNT_VAT_TREATMENTS = [
   'reverse_charge_domestic', 'reverse_charge_eu_goods',
   'reverse_charge_eu_services', 'reverse_charge_non_eu_services',
   'export_goods', 'export_services', 'vmb', 'rental_voluntary',
-  'oss', 'triangulation_eu_goods',
+  'oss', 'triangulation_eu_goods', 'own_use', 'import_goods',
 ] as const
 
 export type AccountVatTreatment = typeof ACCOUNT_VAT_TREATMENTS[number]
@@ -30,6 +30,10 @@ const REVENUE_RUTA: Partial<Record<AccountVatTreatment, keyof VatDeclarationRuto
   exempt: 'ruta42', reverse_charge_domestic: 'ruta41',
   reverse_charge_eu_goods: 'ruta35', reverse_charge_eu_services: 'ruta39',
   triangulation_eu_goods: 'ruta38',
+  // Momspliktiga uttag. A separate base box from ruta 05, but the output VAT
+  // is ordinary: it lands on 2612/2622/2632 and so in ruta 10/11/12 by account
+  // number, exactly as a sale does. The treatment therefore only names the box.
+  own_use: 'ruta06',
   export_goods: 'ruta36', export_services: 'ruta40', vmb: 'ruta07',
   rental_voluntary: 'ruta08',
   oss: null,
@@ -50,6 +54,11 @@ export function resolveVatTreatmentRuta(
   // treatment rather than two, resolved by account class, exactly as
   // reverse_charge_eu_goods already is.
   if (treatment === 'triangulation_eu_goods') return { box: 'ruta37', side: 'debit' }
+  // Beskattningsunderlag vid import: tullvärde + tullar + bikostnader, booked
+  // on its own account because it is not the invoiced amount. The output VAT
+  // is on 2615/2625/2635 (ruta 60-62) and the deduction in ruta 48; both reach
+  // the declaration by account number, so this names the base box only.
+  if (treatment === 'import_goods') return { box: 'ruta50', side: 'debit' }
   if (treatment === 'reverse_charge_eu_goods') return { box: 'ruta20', side: 'debit' }
   if (treatment === 'reverse_charge_eu_services') return { box: 'ruta21', side: 'debit' }
   if (treatment === 'reverse_charge_non_eu_services') return { box: 'ruta22', side: 'debit' }
@@ -95,6 +104,11 @@ export function defaultRateForVatTreatment(
   // line a purchase account would default to 25 % and invent a rate the trade
   // does not have.
   if (treatment === 'triangulation_eu_goods') return 0
+  // Both carry a real sats that the box does not fix: uttag and an import
+  // basis exist at 25, 12 and 6 %. 25 % is the common case and the starting
+  // point; the account label or a source chart code overrides it, which is
+  // what vatRateComesFromLabel is for.
+  if (treatment === 'own_use' || treatment === 'import_goods') return 0.25
   // Reverse charge on a class 4 to 6 account carries a real acquisition rate,
   // which drives the rc-basis check.
   return accountClass >= 4 && accountClass <= 6 ? 0.25 : 0
@@ -177,6 +191,9 @@ export function suggestVatTreatment(
     }
     if (UNION.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate: 0 }
     if (/momsfri|utan moms/.test(name)) return { treatment: 'exempt', rate: 0 }
+    // After the momsfri rule on purpose: BAS 3404 "Momsfria uttag" is ruta 42,
+    // not ruta 06, and it names uttag too.
+    if (/uttag/.test(name)) return { treatment: 'own_use', rate }
     if (/försälj|forsalj|intäkt|intakt/.test(name) && percent) {
       return {
         treatment: rate === 0.12 ? 'reduced_12' : rate === 0.06 ? 'reduced_6' : 'standard_25',
@@ -187,6 +204,14 @@ export function suggestVatTreatment(
   }
 
   if (/omvänd/.test(name) && /sverige|svensk|inrikes/.test(name)) return { treatment: 'reverse_charge_domestic', rate }
+  // Before the rule that declines import: an account whose name says
+  // beskattningsunderlag IS the ruta 50 account, and nothing else is. A plain
+  // "Inköp varor import" carries what the supplier invoiced, while ruta 50 is
+  // tullvärde + tullar + bikostnader, so reading one as the other would
+  // overstate the basis. That is why the decline below stays.
+  if (/beskattningsunderlag/.test(name) && /import/.test(name)) {
+    return { treatment: 'import_goods', rate }
+  }
   if ((OUTSIDE_UNION.test(name) || /import/.test(name)) && /var/.test(name)) return null
   if (OUTSIDE_UNION.test(name) && /tjänst|tjanst/.test(name)) {
     return { treatment: 'reverse_charge_non_eu_services', rate }

@@ -453,6 +453,13 @@ describe('tools/list payload size guard', () => {
     //     Paid for inside the same tool: both property notes lost their
     //     filler ('UUID of the invoice to credit' restates the schema).
     //     Ceiling unchanged, no read demoted.
+    //   * 2026-09-15, ruta 06/50 treatments: own_use and import_goods join
+    //     ACCOUNT_VAT_TREATMENTS, which is inlined in the two account tools,
+    //     so the enum grew four times. Paid for inside the same two tools:
+    //     update_account's default_vat_rate note said "Default VAT rate as a
+    //     fraction" on a property named default_vat_rate, so it now opens
+    //     "Fraction" like its twin on create_account. Ceiling unchanged, no
+    //     read demoted.
     expect(approxTokens).toBeLessThan(60_500)
   })
 
