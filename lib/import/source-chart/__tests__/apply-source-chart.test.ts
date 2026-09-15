@@ -224,21 +224,44 @@ describe('applySourceChartCsv', () => {
     expect(summary.codesApplied).toBe(0)
   })
 
-  it('will not overwrite a treatment the company chart already carries', () => {
-    // Same flag, different origin: enrichAccountMappingsWithVat marks a row
-    // reviewed when the account already has a treatment in Accounted, and a
-    // re-sync must not walk that back to the old system's answer.
-    const existing = enrichAccountMappingsWithVat(
-      [mapping('3058', 'Försäljn varor EG momsfri')],
-      [{ account_number: '3058', default_vat_treatment: 'exempt', default_vat_rate: 0 } as never],
-    )
+  it('leaves a settled account alone while the file agrees with it', () => {
+    // A multi-year migration re-reads a chart every year. Forty-five accounts
+    // that already carry the right treatment must not all return to the review
+    // list because the file repeated itself.
+    const chart = [{ account_number: '3542', default_vat_treatment: 'reverse_charge_eu_goods', default_vat_rate: 0 }] as never
+    const existing = enrichAccountMappingsWithVat([mapping('3542', 'Faktureringsavgifter, EU-land')], chart)
+    expect(existing[0].vatTreatmentReviewed).toBe(true)
+
     const { mappings } = applySourceChartCsv(
       existing,
-      csv('True;3058;Försäljn varor EG momsfri;35-0%'),
-      [{ account_number: '3058', default_vat_treatment: 'exempt', default_vat_rate: 0 } as never],
+      csv('True;3542;Faktureringsavgifter, EU-land;35-0%'),
+      chart,
     )
-    expect(mappings[0].defaultVatTreatment).toBe('exempt')
-    expect(mappings[0].providerVatCode).toBeUndefined()
+    expect(mappings[0].defaultVatTreatment).toBe('reverse_charge_eu_goods')
+    expect(mappings[0].vatTreatmentReviewed).toBe(true)
+    // It still records that the file named this account, so the row can say so.
+    expect(mappings[0].providerVatCode).toBe('35-0%')
+  })
+
+  it('re-opens a settled account when the file disagrees with it', () => {
+    // The real case, from six yearly Spiris exports of one company: 3541 and
+    // 3542 swapped both their names and their codes between 2022 and 2023.
+    // Each year is internally consistent, so the 2022 treatment on the 2023
+    // account would file EU sales as export, and with updateAccountNames on
+    // the account would even be renamed to say so.
+    const chart = [{ account_number: '3541', default_vat_treatment: 'export_goods', default_vat_rate: 0 }] as never
+    const existing = enrichAccountMappingsWithVat([mapping('3541', 'Faktureringsavgifter, EU-land')], chart)
+    expect(existing[0].vatTreatmentReviewed).toBe(true)
+
+    const { mappings } = applySourceChartCsv(
+      existing,
+      csv('True;3541;Faktureringsavgifter, EU-land;35-0%'),
+      chart,
+    )
+    expect(mappings[0].defaultVatTreatment).toBe('reverse_charge_eu_goods')
+    // Back in the review list: the user decides, but they get to see it.
+    expect(mappings[0].vatTreatmentReviewed).toBe(false)
+    expect(mappings[0].requiresVatTreatmentReview).toBe(true)
   })
 
   it('counts an unreadable code in the summary, not in the notices', () => {

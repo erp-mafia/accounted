@@ -77,13 +77,23 @@ function providerSuggestedRate(
  *
  * Only class 3-6 identity mappings are touched, the same rows the label
  * suggestion covers: a remapped account gets the target's treatment, and
- * classes 1-2 and 7-8 carry no treatment. A row already marked reviewed is
- * left alone too: that flag means either the user answered the row or the
- * company's own chart already carries a treatment for the account, and a
- * source file does not get to overwrite either of those. Reachable only
- * since the chart CSV made this runnable from inside the mapping step; the
- * provider-API path runs before the step is rendered, where no row is
- * reviewed yet.
+ * classes 1-2 and 7-8 carry no treatment.
+ *
+ * Two kinds of already-answered row, and they are not the same:
+ *
+ *   The USER answered it in this step. Never touched. applyVatTreatmentReview
+ *   leaves requiresVatTreatmentReview as it found it, so reviewed AND required
+ *   is the signature of a human answer.
+ *
+ *   The COMPANY CHART answered it, which enrichAccountMappingsWithVat records
+ *   by clearing requiresVatTreatmentReview. Here the file is the newer
+ *   statement about the same account and may update it, because a source
+ *   system does move a code between fiscal years: Spiris swapped the names AND
+ *   the codes of 3541 and 3542 between 2022 and 2023, so last year's treatment
+ *   on this year's account would file EU sales as export. Such a row is left
+ *   as it is while the file agrees, and re-opened for review only when it does
+ *   not, so a multi-year migration does not re-confirm dozens of unchanged
+ *   rows every year.
  *
  * Every row it does not touch is returned BY REFERENCE, which is what lets a
  * caller tell what this file changed from what an earlier one did.
@@ -97,7 +107,7 @@ export function applySourceVatCodes(
     if (!mapping.targetAccount || mapping.sourceAccount !== mapping.targetAccount) return mapping
     const accountClass = Number(mapping.sourceAccount.charAt(0))
     if (accountClass < 3 || accountClass > 6) return mapping
-    if (mapping.vatTreatmentReviewed) return mapping
+    if (mapping.vatTreatmentReviewed && mapping.requiresVatTreatmentReview) return mapping
 
     const code = codesByAccount.get(mapping.sourceAccount)?.trim()
     if (!code) return mapping
@@ -105,6 +115,9 @@ export function applySourceVatCodes(
     const treatment = translate(code, mapping.sourceAccount)
     const withFacts = { ...mapping, providerVatCode: code, providerVatTreatment: treatment }
     if (!treatment) return withFacts
+    // The file agrees with the treatment the account already carries: record
+    // that it spoke, and leave the row settled rather than asking again.
+    if (mapping.vatTreatmentReviewed && mapping.defaultVatTreatment === treatment) return withFacts
 
     return {
       ...withFacts,
