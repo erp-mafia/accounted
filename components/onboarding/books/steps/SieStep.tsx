@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
+import {
+  acceptSourceChartWithoutReview,
+  applySourceChartCsv,
+} from '@/lib/import/source-chart/apply-source-chart'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { waitForSIEJob } from '@/lib/import/sie-job-client'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
@@ -39,6 +43,13 @@ interface FileEntry {
   parsed?: ParsedFile
   error?: string
   dupImportId?: string
+  /**
+   * What this year's chart of accounts export did, once the user picked one.
+   * Per file because the chart belongs to a fiscal year: codes move between
+   * years, and last year's chart on this year's ledger is the quiet way to a
+   * wrong ruta.
+   */
+  chart?: { applied: boolean; treatments: number; format: string | null; complaint: string | null }
 }
 
 type Phase = 'drop' | 'importing' | 'imported'
@@ -65,6 +76,8 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const { settings } = useCompanySettings()
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [files, setFiles] = useState<FileEntry[]>([])
+  const chartInputRef = useRef<HTMLInputElement | null>(null)
+  const chartForFile = useRef<string | null>(null)
   const [over, setOver] = useState(false)
   const [optsOpen, setOptsOpen] = useState(false)
   const [ibOn, setIbOn] = useState<boolean | null>(null)
@@ -119,6 +132,43 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, status: 'error', error: t('sie_network') } : f)))
     }
   }, [t])
+
+  /**
+   * The chart of accounts the source system exports, for one SIE file's year.
+   *
+   * Applied and accepted in the same step: this act has no mapping page to
+   * confirm on, and the alternative is not a review, it is nothing at all.
+   * buildSIEVatDefaults writes a treatment only for a row marked reviewed, so
+   * an unaccepted chart would leave the ledger exactly as momskod-less as it
+   * is today. Only codes the translator could read are accepted; the rest stay
+   * open for the genomlysning.
+   *
+   * The empty chart argument is the company's own: in this act it is created
+   * by the very import being prepared, so there is nothing to restore against.
+   */
+  async function applyChart(fileId: string, file: File) {
+    try {
+      const csv = await file.text()
+      setFiles((prev) => prev.map((f) => {
+        if (f.id !== fileId || !f.parsed) return f
+        const result = applySourceChartCsv(f.parsed.mappings, csv, [])
+        return {
+          ...f,
+          parsed: { ...f.parsed, mappings: acceptSourceChartWithoutReview(result.mappings) },
+          chart: {
+            applied: result.applied,
+            treatments: result.summary.treatmentsApplied,
+            format: result.summary.formatLabel,
+            complaint: result.applied ? null : (result.notices[0]?.code ?? null),
+          },
+        }
+      }))
+    } catch {
+      setFiles((prev) => prev.map((f) => (
+        f.id === fileId ? { ...f, chart: { applied: false, treatments: 0, format: null, complaint: 'source_chart_unreadable' } } : f
+      )))
+    }
+  }
 
   function addFiles(list: FileList | File[]) {
     const incoming = Array.from(list).filter((f) => /\.(se|sie)$/i.test(f.name) || f.size > 0)
@@ -413,6 +463,21 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       {showDrop ? (
         <>
           <input ref={inputRef} type="file" accept=".se,.sie" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
+          {/* One input for every file's chart: chartForFile says which row
+              opened it, so the picker never has to be rendered per row. */}
+          <input
+            ref={chartInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            hidden
+            onChange={(e) => {
+              const picked = e.target.files?.[0]
+              const target = chartForFile.current
+              e.target.value = ''
+              chartForFile.current = null
+              if (picked && target) void applyChart(target, picked)
+            }}
+          />
           {files.length === 0 ? (
             <button
               type="button"
@@ -438,6 +503,25 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                     </span>
                   ) : null}
                   {f.status === 'error' ? <span className="bks-f is-warn" style={{ marginLeft: 8 }}>{f.error}</span> : null}
+                  {/* The momskoder for this file's year, if the source system
+                      can export them. Quiet and optional: the act works exactly
+                      as before without it, and the genomlysning still catches
+                      whatever is left. */}
+                  {f.status === 'ready' ? (
+                    <span className="bks-f" style={{ marginLeft: 8, color: 'hsl(var(--muted-foreground))' }}>
+                      {f.chart?.applied
+                        ? t('sie_chart_applied', { count: f.chart.treatments, format: f.chart.format ?? '' })
+                        : null}
+                      {f.chart && !f.chart.applied ? t('sie_chart_unread') : null}{' '}
+                      <button
+                        type="button"
+                        className="imp-change"
+                        onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
+                      >
+                        {f.chart?.applied ? t('sie_chart_replace') : t('sie_chart_pick')}
+                      </button>
+                    </span>
+                  ) : null}
                 </p>
               ))}
               {facts.length ? <Facts facts={facts} /> : null}

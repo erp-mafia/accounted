@@ -249,3 +249,30 @@ export function applySourceChartCsv(
     },
   }
 }
+
+/**
+ * Accept the source system's answer without a review step.
+ *
+ * The mapping step leaves every code the chart translated as a SUGGESTION, so
+ * the user confirms it before syncMappedAccounts writes it: a code they never
+ * saw must not overwrite a treatment they set in Accounted on a later re-sync.
+ *
+ * Onboarding is the one place that premise does not hold. The company chart is
+ * created in the same breath as the import, so there is nothing to overwrite,
+ * and the act exists to be fast: its genomlysning offers four treatments on
+ * class 3 alone, one account at a time, and never reaches the purchase side
+ * where reverse charge and an import basis live. A file the user deliberately
+ * picked, written by the system they are leaving, is a better answer than the
+ * blank it would otherwise leave behind.
+ *
+ * Only rows this file actually translated are accepted. A row it could not
+ * read keeps whatever the label suggested and stays unreviewed, so nothing is
+ * marked settled on the strength of a guess.
+ */
+export function acceptSourceChartWithoutReview(mappings: AccountMapping[]): AccountMapping[] {
+  return mappings.map((mapping) =>
+    mapping.providerVatCode && mapping.providerVatTreatment
+      ? { ...mapping, vatTreatmentSuggested: false, vatTreatmentReviewed: true }
+      : mapping,
+  )
+}

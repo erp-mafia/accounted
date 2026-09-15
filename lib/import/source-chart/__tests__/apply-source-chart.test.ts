@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applySourceChartCsv } from '../apply-source-chart'
+import { acceptSourceChartWithoutReview, applySourceChartCsv } from '../apply-source-chart'
 import {
   applyVatTreatmentReview,
   enrichAccountMappingsWithVat,
@@ -404,6 +404,32 @@ describe('applySourceChartCsv', () => {
     const noCodes = applySourceChartCsv(first.mappings, csv('True;3058;Försäljn varor EG momsfri;'))
     expect(noCodes.applied).toBe(false)
     expect(noCodes.mappings[0].providerVatCode).toBe('35-0%')
+  })
+
+  it('accepts a translated code without review, and only a translated one', () => {
+    // Onboarding writes the chart in the same breath as the import, so there
+    // is nothing to overwrite and nothing to confirm against. buildSIEVatDefaults
+    // only writes a treatment for a row marked reviewed, so without this the
+    // whole act imports a ledger with no momskoder at all.
+    const { mappings } = applySourceChartCsv(
+      [
+        mapping('3058', 'Försäljn varor EG momsfri'),
+        mapping('3051', 'Försäljning inrikes'),
+      ],
+      csv('True;3058;Försäljn varor EG momsfri;35-0%', 'True;3051;Försäljning inrikes;05'),
+    )
+    const accepted = acceptSourceChartWithoutReview(mappings)
+
+    // Translated: settled, so the import writes it.
+    expect(accepted[0]).toMatchObject({
+      defaultVatTreatment: 'reverse_charge_eu_goods',
+      vatTreatmentReviewed: true,
+      vatTreatmentSuggested: false,
+    })
+    // Read but not translated: a guess is not an answer, so it stays open.
+    expect(accepted[1].providerVatCode).toBe('05')
+    expect(accepted[1].providerVatTreatment).toBeNull()
+    expect(accepted[1].vatTreatmentReviewed ?? false).toBe(false)
   })
 
   it('does not touch a remapped row, only identity mappings', () => {
