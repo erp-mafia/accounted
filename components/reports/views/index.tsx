@@ -2153,8 +2153,13 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                   </Table>
 
                   {/* Omvänd skattskyldighet (inköp) */}
-                  {(data.rutor.ruta20 > 0 || data.rutor.ruta21 > 0 || data.rutor.ruta22 > 0 || data.rutor.ruta23 > 0 || data.rutor.ruta24 > 0 ||
-                    data.rutor.ruta30 > 0 || data.rutor.ruta31 > 0 || data.rutor.ruta32 > 0) && (
+                  {/* Non-zero, not positive, and the same test in all three
+                      sections below: VatRutaRow hides itself only at exactly
+                      zero, and a box legitimately goes negative in a period
+                      dominated by credit notes. A section testing > 0 would
+                      swallow the row the box most needs to show. */}
+                  {(data.rutor.ruta20 !== 0 || data.rutor.ruta21 !== 0 || data.rutor.ruta22 !== 0 || data.rutor.ruta23 !== 0 || data.rutor.ruta24 !== 0 ||
+                    data.rutor.ruta30 !== 0 || data.rutor.ruta31 !== 0 || data.rutor.ruta32 !== 0) && (
                     <>
                       <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         Omvänd skattskyldighet (inköp)
@@ -2182,10 +2187,6 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                       eSKD file, and the screen simply did not say so. Rutor 37
                       and 38 became reachable with triangulation_eu_goods and
                       would have landed in the same silence. */}
-                  {/* Non-zero, not positive: VatRutaRow hides itself only at exactly
-                      zero, and a base box legitimately goes negative in a period
-                      dominated by credit notes. A section testing > 0 would
-                      swallow the row the box most needs to show. */}
                   {(data.rutor.ruta35 !== 0 || data.rutor.ruta36 !== 0 || data.rutor.ruta37 !== 0 ||
                     data.rutor.ruta38 !== 0 || data.rutor.ruta39 !== 0 || data.rutor.ruta40 !== 0 ||
                     data.rutor.ruta41 !== 0 || data.rutor.ruta42 !== 0) && (
@@ -2211,7 +2212,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                   )}
 
                   {/* Moms vid import */}
-                  {(data.rutor.ruta50 > 0 || data.rutor.ruta60 > 0 || data.rutor.ruta61 > 0 || data.rutor.ruta62 > 0) && (
+                  {(data.rutor.ruta50 !== 0 || data.rutor.ruta60 !== 0 || data.rutor.ruta61 !== 0 || data.rutor.ruta62 !== 0) && (
                     <>
                       <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         Moms vid import
