@@ -80,11 +80,6 @@ export interface AssociationDistributionWithAllocations extends AssociationDistr
   allocations: AssociationAllocationRow[]
 }
 
-export const DISTRIBUTION_COLUMNS =
-  'id, company_id, kind, fiscal_period_id, decision_date, decided_by, decision_reference, allocation_basis, total_amount, status, journal_entry_id, payment_journal_entry_id, notes, created_at, updated_at'
-export const ALLOCATION_COLUMNS =
-  'id, company_id, distribution_id, member_id, basis_value, amount, created_at, updated_at'
-
 /** Accounts of the decision and payment verifikat per kind. */
 export const DISTRIBUTION_ACCOUNTS: Record<
   AssociationDistributionKind,
@@ -173,7 +168,7 @@ export async function listDistributions(
     ({ from, to }) => {
       let query = supabase
         .from('association_distributions')
-        .select(DISTRIBUTION_COLUMNS)
+        .select('id, company_id, kind, fiscal_period_id, decision_date, decided_by, decision_reference, allocation_basis, total_amount, status, journal_entry_id, payment_journal_entry_id, notes, created_at, updated_at')
         .eq('company_id', companyId)
         .order('id', { ascending: true })
         .range(from, to)
@@ -195,7 +190,7 @@ export async function listAllocations(
     ({ from, to }) =>
       supabase
         .from('association_distribution_allocations')
-        .select(ALLOCATION_COLUMNS)
+        .select('id, company_id, distribution_id, member_id, basis_value, amount, created_at, updated_at')
         .eq('company_id', companyId)
         .eq('distribution_id', distributionId)
         .order('id', { ascending: true })
@@ -211,7 +206,7 @@ async function readDistribution(
 ): Promise<AssociationDistributionRow> {
   const { data, error } = await supabase
     .from('association_distributions')
-    .select(DISTRIBUTION_COLUMNS)
+    .select('id, company_id, kind, fiscal_period_id, decision_date, decided_by, decision_reference, allocation_basis, total_amount, status, journal_entry_id, payment_journal_entry_id, notes, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('id', distributionId)
     .maybeSingle()
@@ -292,7 +287,7 @@ export async function createDistribution(
       total_amount: total,
       notes: input.notes ?? null,
     })
-    .select(DISTRIBUTION_COLUMNS)
+    .select('id, company_id, kind, fiscal_period_id, decision_date, decided_by, decision_reference, allocation_basis, total_amount, status, journal_entry_id, payment_journal_entry_id, notes, created_at, updated_at')
     .single()
   if (error) throw error
   const distribution = data as AssociationDistributionRow
@@ -309,7 +304,7 @@ export async function createDistribution(
         amount: line.amount,
       })),
     )
-    .select(ALLOCATION_COLUMNS)
+    .select('id, company_id, distribution_id, member_id, basis_value, amount, created_at, updated_at')
   if (allocationError) throw allocationError
   return { ...distribution, allocations: (allocations ?? []) as AssociationAllocationRow[] }
 }
@@ -356,7 +351,7 @@ export async function bookDistribution(
     .update({ status: 'booked', journal_entry_id: entry.id })
     .eq('company_id', companyId)
     .eq('id', distributionId)
-    .select(DISTRIBUTION_COLUMNS)
+    .select('id, company_id, kind, fiscal_period_id, decision_date, decided_by, decision_reference, allocation_basis, total_amount, status, journal_entry_id, payment_journal_entry_id, notes, created_at, updated_at')
     .single()
   if (error) throw error
   return data as AssociationDistributionRow
@@ -401,7 +396,7 @@ export async function payDistribution(
     .update({ status: 'paid', payment_journal_entry_id: entry.id })
     .eq('company_id', companyId)
     .eq('id', distributionId)
-    .select(DISTRIBUTION_COLUMNS)
+    .select('id, company_id, kind, fiscal_period_id, decision_date, decided_by, decision_reference, allocation_basis, total_amount, status, journal_entry_id, payment_journal_entry_id, notes, created_at, updated_at')
     .single()
   if (error) throw error
   return data as AssociationDistributionRow

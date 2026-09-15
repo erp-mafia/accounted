@@ -70,11 +70,6 @@ export interface AssociationContributionRow {
   updated_at: string
 }
 
-export const MEMBER_COLUMNS =
-  'id, company_id, member_number, name, postal_address, email, party_id, member_class, admitted_on, exited_on, notes, created_at, updated_at'
-export const CONTRIBUTION_COLUMNS =
-  'id, company_id, member_id, kind, units, amount, status, paid_on, settled_on, journal_entry_id, settlement_journal_entry_id, notes, created_at, updated_at'
-
 /** Accounts each contribution kind reconciles to (ÅRL 3 kap. 10 b §). */
 export const CONTRIBUTION_ACCOUNTS: Record<AssociationContributionKind, readonly string[]> = {
   obligatory: ['2083'],
@@ -105,7 +100,7 @@ export async function listMembers(
     ({ from, to }) => {
       let query = supabase
         .from('association_members')
-        .select(MEMBER_COLUMNS)
+        .select('id, company_id, member_number, name, postal_address, email, party_id, member_class, admitted_on, exited_on, notes, created_at, updated_at')
         .eq('company_id', companyId)
         .order('id', { ascending: true })
         .range(from, to)
@@ -138,7 +133,7 @@ export async function createMember(
       admitted_on: input.admitted_on,
       notes: input.notes ?? null,
     })
-    .select(MEMBER_COLUMNS)
+    .select('id, company_id, member_number, name, postal_address, email, party_id, member_class, admitted_on, exited_on, notes, created_at, updated_at')
     .single()
   if (error) throw error
   const member = data as AssociationMemberRow
@@ -157,7 +152,7 @@ export async function exitMember(
 ): Promise<AssociationMemberRow> {
   const { data: existing, error: readError } = await supabase
     .from('association_members')
-    .select(MEMBER_COLUMNS)
+    .select('id, company_id, member_number, name, postal_address, email, party_id, member_class, admitted_on, exited_on, notes, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('id', memberId)
     .maybeSingle()
@@ -171,7 +166,7 @@ export async function exitMember(
     .update({ exited_on: input.exited_on })
     .eq('company_id', companyId)
     .eq('id', memberId)
-    .select(MEMBER_COLUMNS)
+    .select('id, company_id, member_number, name, postal_address, email, party_id, member_class, admitted_on, exited_on, notes, created_at, updated_at')
     .single()
   if (error) throw error
   await appendEvent(supabase, companyId, userId, memberId, input.reason, input.exited_on, {
@@ -189,7 +184,7 @@ export async function listContributions(
     ({ from, to }) => {
       let query = supabase
         .from('association_member_contributions')
-        .select(CONTRIBUTION_COLUMNS)
+        .select('id, company_id, member_id, kind, units, amount, status, paid_on, settled_on, journal_entry_id, settlement_journal_entry_id, notes, created_at, updated_at')
         .eq('company_id', companyId)
         .order('id', { ascending: true })
         .range(from, to)
@@ -228,7 +223,7 @@ export async function recordContribution(
       journal_entry_id: input.journal_entry_id ?? null,
       notes: input.notes ?? null,
     })
-    .select(CONTRIBUTION_COLUMNS)
+    .select('id, company_id, member_id, kind, units, amount, status, paid_on, settled_on, journal_entry_id, settlement_journal_entry_id, notes, created_at, updated_at')
     .single()
   if (error) throw error
   const row = data as AssociationContributionRow
@@ -256,7 +251,7 @@ export async function settleContribution(
 ): Promise<AssociationContributionRow> {
   const { data: existing, error: readError } = await supabase
     .from('association_member_contributions')
-    .select(CONTRIBUTION_COLUMNS)
+    .select('id, company_id, member_id, kind, units, amount, status, paid_on, settled_on, journal_entry_id, settlement_journal_entry_id, notes, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('id', contributionId)
     .maybeSingle()
@@ -299,7 +294,7 @@ export async function settleContribution(
     })
     .eq('company_id', companyId)
     .eq('id', contributionId)
-    .select(CONTRIBUTION_COLUMNS)
+    .select('id, company_id, member_id, kind, units, amount, status, paid_on, settled_on, journal_entry_id, settlement_journal_entry_id, notes, created_at, updated_at')
     .single()
   if (error) throw error
   await appendEvent(supabase, companyId, userId, contribution.member_id, 'settlement', input.settled_on, {

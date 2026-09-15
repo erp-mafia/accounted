@@ -140,9 +140,6 @@ export interface EntityTypeMigrationRow {
   updated_at: string
 }
 
-export const MIGRATION_COLUMNS =
-  'id, company_id, user_id, from_entity_type, to_entity_type, preview, remap_plan, status, applied_at, applied_by, rolled_back_at, reclassification_journal_entry_id, rollback_journal_entry_id, notes, created_at, updated_at'
-
 type Rule = { to: string | null; plausibility: RemapProposal['plausibility']; reason: string }
 
 /**
@@ -300,7 +297,7 @@ async function previewChange(
 export async function listMigrations(supabase: SupabaseClient, companyId: string): Promise<EntityTypeMigrationRow[]> {
   const { data, error } = await supabase
     .from('company_entity_type_migrations')
-    .select(MIGRATION_COLUMNS)
+    .select('id, company_id, user_id, from_entity_type, to_entity_type, preview, remap_plan, status, applied_at, applied_by, rolled_back_at, reclassification_journal_entry_id, rollback_journal_entry_id, notes, created_at, updated_at')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
   if (error) throw error
@@ -314,7 +311,7 @@ export async function getMigration(
 ): Promise<EntityTypeMigrationRow> {
   const { data, error } = await supabase
     .from('company_entity_type_migrations')
-    .select(MIGRATION_COLUMNS)
+    .select('id, company_id, user_id, from_entity_type, to_entity_type, preview, remap_plan, status, applied_at, applied_by, rolled_back_at, reclassification_journal_entry_id, rollback_journal_entry_id, notes, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('id', migrationId)
     .maybeSingle()
@@ -358,7 +355,7 @@ export async function planMigration(
       })),
       status: 'planned',
     })
-    .select(MIGRATION_COLUMNS)
+    .select('id, company_id, user_id, from_entity_type, to_entity_type, preview, remap_plan, status, applied_at, applied_by, rolled_back_at, reclassification_journal_entry_id, rollback_journal_entry_id, notes, created_at, updated_at')
     .single()
   if (error) throw error
   return { migration: data as unknown as EntityTypeMigrationRow, proposals }

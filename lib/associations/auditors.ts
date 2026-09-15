@@ -55,9 +55,6 @@ export interface AssociationAuditorRow {
   updated_at: string
 }
 
-export const AUDITOR_COLUMNS =
-  'id, company_id, name, kind, registration_reference, appointed_on, term_ends_on, appointment_reference, ended_on, notes, created_at, updated_at'
-
 export async function listAuditors(
   supabase: SupabaseClient,
   companyId: string,
@@ -67,7 +64,7 @@ export async function listAuditors(
     ({ from, to }) => {
       let query = supabase
         .from('association_auditors')
-        .select(AUDITOR_COLUMNS)
+        .select('id, company_id, name, kind, registration_reference, appointed_on, term_ends_on, appointment_reference, ended_on, notes, created_at, updated_at')
         .eq('company_id', companyId)
         .order('id', { ascending: true })
         .range(from, to)
@@ -115,7 +112,7 @@ export async function appointAuditor(
       appointment_reference: input.appointment_reference ?? null,
       notes: input.notes ?? null,
     })
-    .select(AUDITOR_COLUMNS)
+    .select('id, company_id, name, kind, registration_reference, appointed_on, term_ends_on, appointment_reference, ended_on, notes, created_at, updated_at')
     .single()
   if (error) throw error
   return data as AssociationAuditorRow
@@ -134,7 +131,7 @@ export async function updateAuditor(
 ): Promise<AssociationAuditorRow> {
   const { data: existing, error: readError } = await supabase
     .from('association_auditors')
-    .select(AUDITOR_COLUMNS)
+    .select('id, company_id, name, kind, registration_reference, appointed_on, term_ends_on, appointment_reference, ended_on, notes, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('id', auditorId)
     .maybeSingle()
@@ -157,7 +154,7 @@ export async function updateAuditor(
     .update(patch)
     .eq('company_id', companyId)
     .eq('id', auditorId)
-    .select(AUDITOR_COLUMNS)
+    .select('id, company_id, name, kind, registration_reference, appointed_on, term_ends_on, appointment_reference, ended_on, notes, created_at, updated_at')
     .single()
   if (error) throw error
   return data as AssociationAuditorRow
