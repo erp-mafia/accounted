@@ -46,7 +46,8 @@ vi.mock('../lib/api-client', () => ({
 
 vi.mock('../lib/token-store', () => ({
   markNeedsReconsent: vi.fn().mockResolvedValue(undefined),
-  RECONSENT_ERROR_CODES: ['SESSION_EXPIRED', 'REFRESH_EXHAUSTED', 'MISSING_SCOPE', 'TOKEN_CORRUPTED'],
+  // Terminal codes only: ordinary session expiry never latches (#2567).
+  RECONSENT_ERROR_CODES: ['REFRESH_EXHAUSTED', 'MISSING_SCOPE', 'TOKEN_CORRUPTED'],
 }))
 
 import { runPostConnectRefresh } from '../lib/post-connect-refresh'
@@ -153,6 +154,20 @@ describe('runPostConnectRefresh', () => {
 
     expect(result.synced).toBe(false)
     expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(supabase, USER, COMPANY, 'MISSING_SCOPE')
+  })
+
+  it('does not persist needs_reconsent for an expired session (#2567)', async () => {
+    // A consent that expires between the callback and this refresh is the
+    // hourly contract doing its job, not a connection to flag as broken.
+    mockSyncSkattekonto.mockRejectedValueOnce(
+      new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED'),
+    )
+    const supabase = makeSupabase({ data: [] })
+
+    const result = await runPostConnectRefresh(supabase, USER, COMPANY)
+
+    expect(result.synced).toBe(false)
+    expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
   })
 
   it('does not persist needs_reconsent for non-terminal auth error codes', async () => {

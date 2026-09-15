@@ -5,6 +5,11 @@ import {
   CONNECTOR_UPSTREAM_AUTH_HEADER,
   CONNECTOR_UPSTREAM_CONTENT_TYPE_HEADER,
 } from '@/lib/connect/instance/upstreams'
+import {
+  isSkvSessionBeyondRecovery,
+  SKV_ACCESS_TOKEN_REFRESH_MARGIN_MS,
+  SKV_MAX_REFRESH_COUNT,
+} from '@/lib/skatteverket/session-lifetime'
 import { baseUrlToService, parseConnectorCode, skatteverketConnectorMode } from './connector-mode'
 import { refreshAccessToken } from './oauth'
 import { getTokens, storeTokens, deleteTokens } from './token-store'
@@ -56,8 +61,10 @@ function safeBodyForLog(body: string): string {
  */
 
 const DEFAULT_API_BASE_URL = 'https://api.test.skatteverket.se/momsdeklaration/v1'
-const MAX_REFRESH_COUNT = 10
-const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000 // Refresh 5 min before expiry
+// The cap Skatteverket enforces per BankID consent. Shared with every
+// surface that reasons about session health (lib/skatteverket/session-lifetime).
+const MAX_REFRESH_COUNT = SKV_MAX_REFRESH_COUNT
+const TOKEN_REFRESH_MARGIN_MS = SKV_ACCESS_TOKEN_REFRESH_MARGIN_MS // Refresh 5 min before expiry
 
 // Simple in-memory token bucket for 4 req/sec rate limit
 let lastRequestTime = 0
@@ -194,6 +201,18 @@ async function refreshTokenForUser(
     throw new SkatteverketAuthError(
       'Maximalt antal förnyelser uppnått. Logga in med BankID igen.',
       'REFRESH_EXHAUSTED'
+    )
+  }
+  // The refresh token dies five minutes after the access token (65 vs 60
+  // minutes from the same issue moment), so past that window the stored row
+  // already proves the answer. Ask the row, not Skatteverket: the nightly
+  // skattekonto cron alone would otherwise spend one doomed token call per
+  // connected company (150+ on prod) to be told what we knew, and every
+  // interactive surface would pay a round-trip for it too.
+  if (isSkvSessionBeyondRecovery({ expiresAt: tokens.expires_at, refreshCount: tokens.refresh_count })) {
+    throw new SkatteverketAuthError(
+      'Sessionen har gått ut. Logga in med BankID igen.',
+      'SESSION_EXPIRED'
     )
   }
 

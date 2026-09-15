@@ -172,8 +172,14 @@ export async function GET(request: Request) {
         results.push({ declarationId, period, status: 'expired_token', error: err.code })
         continue
       }
-      if (err instanceof SkatteverketAuthError && err.code === 'TOKEN_REVOKED') {
-        // skvRequest already deleted the token row.
+      if (
+        err instanceof SkatteverketAuthError &&
+        (err.code === 'SESSION_EXPIRED' || err.code === 'TOKEN_REVOKED')
+      ) {
+        // Quiet, expected outcomes that leave the token row alone:
+        // SESSION_EXPIRED is the hourly BankID expiry every connected company
+        // sits in between consents (#2567), and TOKEN_REVOKED means skvRequest
+        // already deleted the row.
         results.push({ declarationId, period, status: 'expired_token', error: err.code })
         continue
       }

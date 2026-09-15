@@ -58,13 +58,9 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', () => {
 
 vi.mock('@/extensions/general/skatteverket/lib/token-store', () => ({
   // Mirrors the real RECONSENT_ERROR_CODES: terminal codes that only a
-  // fresh BankID consent can fix.
-  RECONSENT_ERROR_CODES: [
-    'SESSION_EXPIRED',
-    'REFRESH_EXHAUSTED',
-    'MISSING_SCOPE',
-    'TOKEN_CORRUPTED',
-  ] as const,
+  // fresh BankID consent can fix. Ordinary session expiry is not one of
+  // them (#2567).
+  RECONSENT_ERROR_CODES: ['REFRESH_EXHAUSTED', 'MISSING_SCOPE', 'TOKEN_CORRUPTED'] as const,
   markNeedsReconsent: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -352,7 +348,9 @@ describe('AGI kvittenser cron', () => {
     expect(summaryLine).not.toContain('apigw')
   })
 
-  it('still flags reconsent codes as expired_token and marks the connection', async () => {
+  it('quiet-buckets an expired session WITHOUT latching a health fault (#2567)', async () => {
+    // The hourly BankID expiry: every connected company sits here between
+    // consents, so latching it flagged nearly every connection as broken.
     mockCreateClient.mockReturnValueOnce(stubHappyTables())
     mockAgiGetKvittenser.mockRejectedValueOnce(
       new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED'),
@@ -363,7 +361,7 @@ describe('AGI kvittenser cron', () => {
 
     expect(body.expired).toBe(1)
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'SESSION_EXPIRED' })
-    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'comp-1', 'SESSION_EXPIRED')
+    expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
     expect(errorSpy).not.toHaveBeenCalled()
     expect(errorRecorder).not.toHaveBeenCalled()
     expect(warnSpy).not.toHaveBeenCalled()

@@ -21,6 +21,7 @@ import {
   detectSkvUnexplained,
   expiringBankConnectionsFrom,
   skvAuthErrorNeedsReconnect,
+  skvDataIsStale,
   skvStatusNeedsReconnect,
 } from '../categories'
 
@@ -90,6 +91,27 @@ describe('skvStatusNeedsReconnect (pure)', () => {
     expect(
       skvStatusNeedsReconnect({ connected: true, disabled: true, needsReconsent: true }),
     ).toBe(false)
+  })
+})
+
+describe('skvDataIsStale (pure)', () => {
+  const daysAgo = (days: number) => new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000)
+
+  it('is false for data fetched within the week', () => {
+    expect(skvDataIsStale(daysAgo(6), NOW)).toBe(false)
+    expect(skvDataIsStale(daysAgo(0), NOW)).toBe(false)
+  })
+  it('is true past a week', () => {
+    expect(skvDataIsStale(daysAgo(8), NOW)).toBe(true)
+  })
+  it('accepts ISO strings and epoch ms', () => {
+    expect(skvDataIsStale(daysAgo(8).toISOString(), NOW)).toBe(true)
+    expect(skvDataIsStale(daysAgo(8).getTime(), NOW)).toBe(true)
+  })
+  it('never invents a complaint from an unknown timestamp', () => {
+    expect(skvDataIsStale(null, NOW)).toBe(false)
+    expect(skvDataIsStale(undefined, NOW)).toBe(false)
+    expect(skvDataIsStale('not a date', NOW)).toBe(false)
   })
 })
 
@@ -223,103 +245,124 @@ describe('detectExpiringBankConnections', () => {
 })
 
 describe('detectSkvDisconnected', () => {
+  // The token row, plus (for the merely-expired path) the extension_data row
+  // carrying the last successful skattekonto sync.
+  function enqueueToken(row: Record<string, unknown>) {
+    enqueue({
+      data: {
+        status: 'active',
+        refresh_token: 'ciphertext',
+        refresh_count: 0,
+        last_error_at: null,
+        last_error_code: null,
+        ...row,
+      },
+    })
+  }
+  function enqueueLastSync(value: string | null) {
+    enqueue({ data: value === null ? null : { value } })
+  }
+  const daysAgo = (days: number) =>
+    new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000).toISOString()
+
   it('returns null when no token row exists (not connected)', async () => {
     enqueue({ data: null })
     await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()
   })
 
-  it('fires on a needs_reconsent row, discriminated by the error timestamp', async () => {
-    enqueue({
-      data: {
-        status: 'needs_reconsent',
-        expires_at: '2026-08-19T10:00:00Z',
-        refresh_token: 'ciphertext',
-        refresh_count: 1,
-        last_error_at: '2026-08-18T03:00:00Z',
-      },
+  it('fires on a terminal needs_reconsent row, discriminated by the error timestamp', async () => {
+    enqueueToken({
+      status: 'needs_reconsent',
+      expires_at: '2026-08-19T10:00:00Z',
+      refresh_count: 1,
+      last_error_at: '2026-08-18T03:00:00Z',
+      last_error_code: 'MISSING_SCOPE',
     })
     const notice = await detectSkvDisconnected(supabase, USER, COMPANY, NOW)
     expect(notice).toMatchObject({
       id: 'skv_disconnected:needs_reconsent@2026-08-18T03:00:00Z',
       category: 'skv_disconnected',
-      severity: 'error',
+      severity: 'warning',
+      messageKey: 'skv_disconnected',
       actionHref: '/settings/tax',
     })
     expect(findCall('skatteverket_tokens', 'eq')).toEqual(['user_id', USER])
   })
 
-  it('fires on an expired token with no refresh token left', async () => {
-    enqueue({
-      data: {
-        status: 'active',
-        expires_at: '2026-08-19T10:00:00Z',
-        refresh_token: null,
-        refresh_count: 0,
-        last_error_at: null,
-      },
-    })
-    const notice = await detectSkvDisconnected(supabase, USER, COMPANY, NOW)
-    expect(notice).toMatchObject({ id: 'skv_disconnected:expired@2026-08-19T10:00:00Z' })
+  it('stays quiet on the hourly expiry while the data is fresh: the #2567 case', async () => {
+    // Every connected company sits here between consents. Saying "the
+    // connection needs renewing" about it daily is what made three reporters
+    // think the integration was broken.
+    enqueueToken({ expires_at: '2026-08-19T10:00:00Z', refresh_token: null })
+    enqueueLastSync(daysAgo(1))
+    await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()
   })
 
-  it('fires on an expired token whose refresh budget is exhausted', async () => {
-    enqueue({
-      data: {
-        status: 'active',
-        expires_at: '2026-08-19T10:00:00Z',
-        refresh_token: 'ciphertext',
-        refresh_count: 10,
-        last_error_at: null,
-      },
+  it('fires once the data has actually gone stale, with the honest message', async () => {
+    enqueueToken({ expires_at: '2026-08-19T10:00:00Z', refresh_token: null })
+    enqueueLastSync(daysAgo(9))
+    const notice = await detectSkvDisconnected(supabase, USER, COMPANY, NOW)
+    expect(notice).toMatchObject({
+      id: `skv_disconnected:stale@${daysAgo(9)}`,
+      category: 'skv_disconnected',
+      severity: 'warning',
+      messageKey: 'skv_session_expired',
+      actionKey: 'skv_disconnected_action',
     })
+  })
+
+  it('falls back to the end of the last session when nothing ever synced', async () => {
+    enqueueToken({ expires_at: daysAgo(30) })
+    enqueueLastSync(null)
+    await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toMatchObject({
+      id: `skv_disconnected:stale@${daysAgo(30)}`,
+      messageKey: 'skv_session_expired',
+    })
+  })
+
+  it('reads a legacy SESSION_EXPIRED latch as an expired session, not a fault', async () => {
+    // 97 of the 101 token rows touched in 30 days carried this latch on
+    // 2026-08-26, all of them from ordinary hourly expiry.
+    enqueueToken({
+      status: 'needs_reconsent',
+      expires_at: '2026-08-19T10:00:00Z',
+      last_error_at: '2026-08-18T03:00:00Z',
+      last_error_code: 'SESSION_EXPIRED',
+    })
+    enqueueLastSync(daysAgo(1))
+    await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()
+  })
+
+  it('fires on an expired token whose refresh budget is exhausted and whose data is stale', async () => {
+    enqueueToken({ expires_at: '2026-08-19T10:00:00Z', refresh_count: 10 })
+    enqueueLastSync(daysAgo(8))
     await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toMatchObject({
       category: 'skv_disconnected',
-    })
-  })
-
-  it('fires on a token expired hours ago even though a refresh token is still stored (dead 65-minute session)', async () => {
-    enqueue({
-      data: {
-        status: 'active',
-        expires_at: '2026-08-19T10:00:00Z',
-        refresh_token: 'ciphertext',
-        refresh_count: 3,
-        last_error_at: null,
-      },
-    })
-    await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toMatchObject({
-      id: 'skv_disconnected:expired@2026-08-19T10:00:00Z',
+      messageKey: 'skv_session_expired',
     })
   })
 
   it('stays quiet while the token is expired but inside the refresh window', async () => {
-    enqueue({
-      data: {
-        status: 'active',
-        // Three minutes past access-token expiry: the 65-minute refresh token still works.
-        expires_at: '2026-08-19T11:57:00Z',
-        refresh_token: 'ciphertext',
-        refresh_count: 3,
-        last_error_at: null,
-      },
-    })
+    // Three minutes past access-token expiry: the 65-minute refresh token still works.
+    enqueueToken({ expires_at: '2026-08-19T11:57:00Z', refresh_count: 3 })
     await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()
   })
 
   it('stays quiet on a healthy, unexpired token', async () => {
-    enqueue({
-      data: {
-        status: 'active',
-        expires_at: '2026-08-19T14:00:00Z',
-        refresh_token: 'ciphertext',
-        refresh_count: 0,
-        last_error_at: null,
-      },
-    })
+    enqueueToken({ expires_at: '2026-08-19T14:00:00Z' })
     await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()
   })
 
   it('soft-fails to null on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()
+  })
+
+  it('does not invent staleness when the last-sync lookup fails', async () => {
+    // The session ended 30 days ago, so the fallback WOULD read as stale. A
+    // failed lookup is not evidence that nothing synced since, so the
+    // detector soft-fails to no notice instead of warning on a guess.
+    enqueueToken({ expires_at: daysAgo(30) })
     enqueue({ error: { message: 'boom' } })
     await expect(detectSkvDisconnected(supabase, USER, COMPANY, NOW)).resolves.toBeNull()
   })

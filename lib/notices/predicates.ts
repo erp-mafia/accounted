@@ -56,6 +56,40 @@ export function skvStatusNeedsReconnect(s: SkvStatusLike): boolean {
 }
 
 /**
+ * How long Skatteverket data may go unrefreshed before a merely expired
+ * session (as opposed to a terminal fault) is worth a notice.
+ *
+ * The BankID session at Skatteverket lasts about an hour, so "the session
+ * expired" is true for nearly every connected company nearly all of the time
+ * and says nothing about whether anything is wrong. What can actually hurt is
+ * data going stale, so that is what the notice waits for. Page-level lines
+ * (the Skattekonto and Transaktioner banners) stay immediate: there the user
+ * is looking at the numbers and the expiry explains what they see.
+ */
+export const SKV_STALE_DATA_AFTER_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * The canonical "Skatteverket data is stale enough to mention" day-math.
+ * `lastFreshAt` is the last successful skattekonto sync, falling back to the
+ * end of the last BankID session when nothing has ever synced. An unknown or
+ * unparsable timestamp is not stale: never invent a complaint.
+ */
+export function skvDataIsStale(
+  lastFreshAt: string | number | Date | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (lastFreshAt === null || lastFreshAt === undefined) return false
+  const ms =
+    typeof lastFreshAt === 'number'
+      ? lastFreshAt
+      : lastFreshAt instanceof Date
+        ? lastFreshAt.getTime()
+        : new Date(lastFreshAt).getTime()
+  if (!Number.isFinite(ms)) return false
+  return now.getTime() - ms > SKV_STALE_DATA_AFTER_MS
+}
+
+/**
  * The canonical "this auth failure means reconnect" predicate over a failed
  * skatteverket API response. 401 covers several distinct auth states (see
  * handleSkvError in the skatteverket extension): only NOT_CONNECTED means "no

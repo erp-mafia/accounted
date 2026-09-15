@@ -167,13 +167,20 @@ export async function deleteTokens(
 }
 
 /**
- * Terminal auth-error codes: the stored token can never recover on its own —
- * only a fresh BankID consent fixes it. SESSION_EXPIRED qualifies because
- * SKV's `per`-flow refresh tokens live 65 minutes: once expired there is
- * nothing left to refresh with.
+ * Terminal auth-error codes: the stored token can never recover on its own,
+ * and only a fresh BankID consent fixes it, so the row is worth latching as
+ * a health fault that the UI reports until the user acts.
+ *
+ * SESSION_EXPIRED is deliberately NOT in this list (#2567). SKV's `per`-flow
+ * refresh tokens live 65 minutes, so an expired session is the resting state
+ * of every connected company, not a fault: latching it flagged nearly every
+ * row as broken, excluded it from the crons' active work list forever, and
+ * gave three reporters in two weeks a daily "the connection needs renewing"
+ * message for a contract working exactly as Skatteverket designed it. The
+ * honest report of that state is the time math in
+ * lib/skatteverket/session-lifetime, which needs no stored flag.
  */
 export const RECONSENT_ERROR_CODES = [
-  'SESSION_EXPIRED',
   'REFRESH_EXHAUSTED',
   'MISSING_SCOPE',
   'TOKEN_CORRUPTED',
@@ -184,6 +191,10 @@ export const RECONSENT_ERROR_CODES = [
  * night and the UI can prompt proactively. storeTokens() (delete + insert)
  * resets the row to status 'active' on the next successful consent.
  * Best-effort: health bookkeeping must never mask the original auth error.
+ *
+ * Non-terminal codes are a no-op here rather than at each call site: the
+ * guard is what stops the class, so a future caller cannot re-latch ordinary
+ * session expiry by forgetting to filter.
  */
 export async function markNeedsReconsent(
   _supabase: SupabaseClient,
@@ -191,6 +202,7 @@ export async function markNeedsReconsent(
   companyId: string,
   errorCode: string,
 ): Promise<void> {
+  if (!(RECONSENT_ERROR_CODES as readonly string[]).includes(errorCode)) return
   const db = getServiceClient()
   const { error } = await db
     .from('skatteverket_tokens')

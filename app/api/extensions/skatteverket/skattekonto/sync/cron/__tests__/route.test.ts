@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getCompanyIdsWithCapability: vi.fn(),
   createExtensionContext: vi.fn(),
   syncSkattekonto: vi.fn(),
+  markNeedsReconsent: vi.fn(),
 }))
 
 vi.mock('@supabase/supabase-js', () => ({
@@ -52,8 +53,10 @@ vi.mock('@/extensions/general/skatteverket/lib/skattekonto-client', () => {
 })
 
 vi.mock('@/extensions/general/skatteverket/lib/token-store', () => ({
-  RECONSENT_ERROR_CODES: [] as const,
-  markNeedsReconsent: vi.fn(),
+  // Mirrors the real RECONSENT_ERROR_CODES: terminal codes only. Ordinary
+  // session expiry is deliberately absent (#2567).
+  RECONSENT_ERROR_CODES: ['REFRESH_EXHAUSTED', 'MISSING_SCOPE', 'TOKEN_CORRUPTED'] as const,
+  markNeedsReconsent: mocks.markNeedsReconsent,
 }))
 
 vi.mock('@/extensions/general/skatteverket/lib/system-auth/config', () => ({
@@ -162,5 +165,89 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
     expect(body).toMatchObject({ processed: 1, synced: 1, errors: 0 })
     expect(mocks.syncSkattekonto).toHaveBeenCalledTimes(1)
     expect(mocks.syncSkattekonto.mock.calls[0][0]).toMatchObject({ companyId: entitledCompanyId })
+  })
+
+  it('skips a session past the refresh window without calling Skatteverket (#2567)', async () => {
+    // The resting state of the personal-token cohort: the row is 'active'
+    // (ordinary expiry is not a health fault any more), but its 65-minute
+    // session died hours ago, so there is nothing to sync with and nothing
+    // worth asking Skatteverket about.
+    const deadCompanyId = '44444444-4444-4444-8444-444444444444'
+    const tokens = [
+      {
+        user_id: '55555555-5555-4555-8555-555555555555',
+        company_id: deadCompanyId,
+        expires_at: new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(),
+        refresh_count: 1,
+      },
+    ]
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens))
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([deadCompanyId]))
+
+    const response = await GET(makeRequest())
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({ processed: 0, deadSessions: 1 })
+    expect(mocks.syncSkattekonto).not.toHaveBeenCalled()
+    expect(mocks.getCompanyIdsWithCapability).not.toHaveBeenCalled()
+  })
+
+  it('does not latch a health fault when Skatteverket reports SESSION_EXPIRED live', async () => {
+    // A session that dies between the pre-check and the call: quiet-bucketed
+    // as expired, row untouched, so the next consent just works.
+    const companyId = '66666666-6666-4666-8666-666666666666'
+    const tokens = [
+      {
+        user_id: '77777777-7777-4777-8777-777777777777',
+        company_id: companyId,
+        expires_at: '2099-01-01T00:00:00Z',
+        refresh_count: 0,
+      },
+    ]
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens))
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([companyId]))
+    const { SkatteverketAuthError } = await import(
+      '@/extensions/general/skatteverket/lib/api-client'
+    )
+    mocks.syncSkattekonto.mockRejectedValueOnce(
+      new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED'),
+    )
+
+    const response = await GET(makeRequest())
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({ processed: 1, expired: 1, errors: 0 })
+    expect(mocks.markNeedsReconsent).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still latches a terminal auth error so the row leaves the work list', async () => {
+    const companyId = '88888888-8888-4888-8888-888888888888'
+    const userId = '99999999-9999-4999-8999-999999999999'
+    const tokens = [
+      { user_id: userId, company_id: companyId, expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 },
+    ]
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens))
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([companyId]))
+    const { SkatteverketAuthError } = await import(
+      '@/extensions/general/skatteverket/lib/api-client'
+    )
+    mocks.syncSkattekonto.mockRejectedValueOnce(
+      new SkatteverketAuthError('Behörighet saknas.', 'MISSING_SCOPE'),
+    )
+
+    const response = await GET(makeRequest())
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({ processed: 1, expired: 1 })
+    expect(mocks.markNeedsReconsent).toHaveBeenCalledWith(
+      expect.anything(),
+      userId,
+      companyId,
+      'MISSING_SCOPE',
+    )
   })
 })

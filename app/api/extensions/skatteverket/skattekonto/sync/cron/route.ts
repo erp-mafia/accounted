@@ -10,6 +10,7 @@ import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from '@/extensions/ge
 import { SkatteverketAuthError, type SkvAuth } from '@/extensions/general/skatteverket/lib/api-client'
 import { SkatteverketSkattekontoError } from '@/extensions/general/skatteverket/lib/skattekonto-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
+import { isSkvSessionBeyondRecovery } from '@/lib/skatteverket/session-lifetime'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
 import { listVerifiedCompanies, markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -70,8 +71,10 @@ export async function GET(request: Request) {
 
   // User-token entries. The token row is keyed by user_id but carries
   // company_id (multi-tenant refactor). Rows flagged needs_reconsent are
-  // excluded: SKV's per-flow refresh tokens live 65 minutes, so a connection
-  // that failed with a terminal auth error can never heal on its own.
+  // excluded: those failed with a terminal auth error (missing behorighet,
+  // refresh budget spent, unreadable ciphertext) and cannot heal on their
+  // own. Ordinary hourly expiry is NOT one of those, so those rows stay
+  // 'active' and are filtered below on the session math instead (#2567).
   let tokens
   try {
     tokens = await fetchAllRows(
@@ -114,6 +117,15 @@ export async function GET(request: Request) {
     systemCompanyIds.add(company.company_id)
     work.push({ companyId: company.company_id, userId, source: 'system' })
   }
+  // Personal sessions that are provably past recovery (expired more than the
+  // five-minute refresh window ago, or out of refreshes). They are the
+  // resting state of the personal-token cohort, not a fault, so the row stays
+  // status 'active' and comes back the moment its owner re-consents. Dropping
+  // them here is what keeps that honest and cheap: no doomed token call to
+  // Skatteverket, and no dead company occupying one of the 50 slots ahead of
+  // one that can actually sync (the stalest-first order hands them the front
+  // of the queue by construction).
+  let deadSessions = 0
   for (const token of tokens) {
     const companyId = token.company_id as string | null
     if (!companyId) {
@@ -123,11 +135,27 @@ export async function GET(request: Request) {
       continue
     }
     if (systemCompanyIds.has(companyId)) continue
+    if (
+      isSkvSessionBeyondRecovery({
+        expiresAt: token.expires_at as string | null,
+        refreshCount: token.refresh_count as number | null,
+      })
+    ) {
+      deadSessions++
+      continue
+    }
     work.push({ companyId, userId: token.user_id as string, source: 'user' })
   }
 
   if (work.length === 0) {
-    return NextResponse.json({ message: 'No connected companies', processed: 0 })
+    return NextResponse.json({
+      message:
+        deadSessions > 0
+          ? 'No company with a usable Skatteverket session'
+          : 'No connected companies',
+      processed: 0,
+      deadSessions,
+    })
   }
 
   let entitledCompanyIds
@@ -172,6 +200,7 @@ export async function GET(request: Request) {
 
   console.info('[skattekonto-sync-cron] Work list built', {
     candidates: work.length,
+    deadSessions,
     entitledCompanies: entitledCompanyIds.size,
     selected: entitledWork.length,
   })
@@ -284,9 +313,16 @@ export async function GET(request: Request) {
         results.push({ userId, companyId, source, status: 'expired', error: err.code })
         continue
       }
-      // TOKEN_REVOKED auto-deletes the row inside skvRequest — treat it as
-      // the same quiet "reconnect needed" outcome, not a runtime error.
-      if (source === 'user' && err instanceof SkatteverketAuthError && err.code === 'TOKEN_REVOKED') {
+      // Quiet, expected outcomes that leave the row alone. SESSION_EXPIRED is
+      // the hourly BankID expiry (the pre-check above catches it for a row we
+      // can read; this catches the ones Skatteverket reports live), and
+      // TOKEN_REVOKED auto-deletes the row inside skvRequest. Neither is a
+      // runtime error and neither latches a health fault.
+      if (
+        source === 'user' &&
+        err instanceof SkatteverketAuthError &&
+        (err.code === 'SESSION_EXPIRED' || err.code === 'TOKEN_REVOKED')
+      ) {
         results.push({ userId, companyId, source, status: 'expired', error: err.code })
         continue
       }
@@ -311,7 +347,7 @@ export async function GET(request: Request) {
   const errors = results.filter(r => r.status === 'error').length
 
   console.log(
-    `[skattekonto-sync-cron] Processed ${results.length}: ${synced} synced, ${skipped} cooldown, ${expired} expired, ${grantRevoked} grant revoked, ${systemAuthFailures} system-auth failures, ${errors} errors`,
+    `[skattekonto-sync-cron] Processed ${results.length}: ${synced} synced, ${skipped} cooldown, ${expired} expired, ${deadSessions} dead sessions skipped, ${grantRevoked} grant revoked, ${systemAuthFailures} system-auth failures, ${errors} errors`,
   )
 
   return NextResponse.json({
@@ -319,6 +355,7 @@ export async function GET(request: Request) {
     synced,
     skipped,
     expired,
+    deadSessions,
     grantRevoked,
     systemAuthFailures,
     errors,
