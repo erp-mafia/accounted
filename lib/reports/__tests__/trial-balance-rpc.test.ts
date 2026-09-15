@@ -231,6 +231,47 @@ describe('generateTrialBalance via get_trial_balance_aggregates', () => {
     })
   })
 
+  // The year opening is the IB before the rollforward bucket is folded in, so
+  // Balansrapport's Ing balans and Ing saldo can differ on this path too. A
+  // P&L account has no IB, so its year opening stays zero however much
+  // rollforward it carries.
+  it('keeps the year opening at the IB while the window opening takes the rollforward', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      'rpc:compute_prior_opening_balances': [
+        { data: [{ account_number: '1930', debit: 1000, credit: 0 }], error: null },
+      ],
+      'rpc:get_trial_balance_aggregates': [
+        {
+          data: [
+            { bucket: 'rollforward', account_number: '1930', debit: 250, credit: 0 },
+            { bucket: 'rollforward', account_number: '3001', debit: 0, credit: 2000 },
+            { bucket: 'period', account_number: '3001', debit: 0, credit: 500 },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [CHART],
+    }
+
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
+      fromDate: '2024-07-01',
+    })
+
+    const bank = result.rows.find((r) => r.account_number === '1930')
+    const sales = result.rows.find((r) => r.account_number === '3001')
+    expect(bank).toMatchObject({ year_opening_debit: 1000, opening_debit: 1250 })
+    expect(sales).toMatchObject({
+      year_opening_credit: 0,
+      opening_credit: 2000,
+      period_credit: 500,
+      closing_credit: 2500,
+    })
+  })
+
   it('sends the dimension filter and drops company-wide IB for the filtered view', async () => {
     mockResults = {
       fiscal_periods: [

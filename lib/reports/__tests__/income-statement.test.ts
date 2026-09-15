@@ -7,12 +7,16 @@ vi.mock('../trial-balance', () => ({
 import { generateIncomeStatement } from '../income-statement'
 import { generateTrialBalance } from '../trial-balance'
 import { roundOre } from '@/lib/money'
+import { createFixedRowSupabase } from '@/tests/helpers'
 import type { TrialBalanceRow } from '@/types'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
 
+// generateIncomeStatement reads the fiscal period bounds for its header even
+// when the trial balance is mocked.
+const FISCAL_PERIOD = { period_start: '2025-01-01', period_end: '2025-12-31' }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const supabase = {} as any
+const supabase = createFixedRowSupabase(FISCAL_PERIOD) as any
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -25,6 +29,8 @@ function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
     account_class: 3,
     opening_debit: 0,
     opening_credit: 0,
+    year_opening_debit: 0,
+    year_opening_credit: 0,
     period_debit: 0,
     period_credit: 0,
     closing_debit: 0,
@@ -420,5 +426,234 @@ describe('generateIncomeStatement with a fromDate range', () => {
     // (absent) roll-forward, so closing-column sums are expected here.
     expect(report.total_revenue).toBe(15000)
     expect(report.total_expenses).toBe(7000)
+  })
+})
+
+describe('generateIncomeStatement opening and accumulated columns', () => {
+  // A July window of a calendar-year company: the activity booked Jan-Jun has
+  // been rolled into the opening columns, July's own activity is the period
+  // column, and the closing columns hold the year to date.
+  const WINDOW = { fromDate: '2025-07-01', toDate: '2025-07-31' }
+  const WINDOW_ROWS = [
+    makeRow({
+      account_number: '3001',
+      account_name: 'Försäljning 25%',
+      account_class: 3,
+      opening_credit: 10000,
+      period_credit: 5000,
+      closing_credit: 15000,
+    }),
+    makeRow({
+      account_number: '5010',
+      account_name: 'Lokalhyra',
+      account_class: 5,
+      opening_debit: 6000,
+      period_debit: 1000,
+      closing_debit: 7000,
+    }),
+    makeRow({
+      account_number: '8310',
+      account_name: 'Ränteintäkter',
+      account_class: 8,
+      opening_credit: 400,
+      period_credit: 100,
+      closing_credit: 500,
+    }),
+  ]
+
+  function mockWindowRows() {
+    mockTrialBalance.mockResolvedValue({
+      rows: WINDOW_ROWS,
+      totalDebit: 7000,
+      totalCredit: 15500,
+      isBalanced: false,
+    })
+  }
+
+  it('carries ytd_opening and ytd_closing next to the window amount, in the section sign', async () => {
+    mockWindowRows()
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1', WINDOW)
+
+    expect(report.revenue_sections[0].rows[0]).toMatchObject({
+      account_number: '3001',
+      ytd_opening: 10000,
+      amount: 5000,
+      ytd_closing: 15000,
+    })
+    // Expenses are debit-normal, so all three columns come out positive.
+    expect(report.expense_sections[0].rows[0]).toMatchObject({
+      account_number: '5010',
+      ytd_opening: 6000,
+      amount: 1000,
+      ytd_closing: 7000,
+    })
+    expect(report.financial_sections[0].rows[0]).toMatchObject({
+      account_number: '8310',
+      ytd_opening: 400,
+      amount: 100,
+      ytd_closing: 500,
+    })
+  })
+
+  it('sums each column into the section subtotals and the report totals', async () => {
+    mockWindowRows()
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1', WINDOW)
+
+    const revenue = report.revenue_sections[0]
+    expect(revenue.subtotal_ytd_opening).toBe(10000)
+    expect(revenue.subtotal).toBe(5000)
+    expect(revenue.subtotal_ytd_closing).toBe(15000)
+
+    expect(report.total_revenue_ytd_opening).toBe(10000)
+    expect(report.total_revenue).toBe(5000)
+    expect(report.total_revenue_ytd_closing).toBe(15000)
+    expect(report.total_expenses_ytd_opening).toBe(6000)
+    expect(report.total_expenses).toBe(1000)
+    expect(report.total_expenses_ytd_closing).toBe(7000)
+    expect(report.total_financial_ytd_opening).toBe(400)
+    expect(report.total_financial).toBe(100)
+    expect(report.total_financial_ytd_closing).toBe(500)
+    // 10 000 - 6 000 + 400, then 5 000 - 1 000 + 100, then 15 000 - 7 000 + 500
+    expect(report.net_result_ytd_opening).toBe(4400)
+    expect(report.net_result).toBe(4100)
+    expect(report.net_result_ytd_closing).toBe(8500)
+  })
+
+  it('holds ytd_opening + amount = ytd_closing on every row, subtotal and total', async () => {
+    mockWindowRows()
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1', WINDOW)
+
+    const sections = [
+      ...report.revenue_sections,
+      ...report.expense_sections,
+      ...report.financial_sections,
+    ]
+    expect(sections.length).toBeGreaterThan(0)
+    for (const section of sections) {
+      for (const row of section.rows) {
+        expect(roundOre(row.ytd_opening + row.amount)).toBe(row.ytd_closing)
+      }
+      expect(roundOre(section.subtotal_ytd_opening + section.subtotal)).toBe(
+        section.subtotal_ytd_closing,
+      )
+    }
+    expect(roundOre(report.total_revenue_ytd_opening + report.total_revenue)).toBe(
+      report.total_revenue_ytd_closing,
+    )
+    expect(roundOre(report.total_expenses_ytd_opening + report.total_expenses)).toBe(
+      report.total_expenses_ytd_closing,
+    )
+    expect(roundOre(report.total_financial_ytd_opening + report.total_financial)).toBe(
+      report.total_financial_ytd_closing,
+    )
+    expect(roundOre(report.net_result_ytd_opening + report.net_result)).toBe(
+      report.net_result_ytd_closing,
+    )
+  })
+
+  it('leaves ytd_opening at zero when the report covers the whole fiscal year', async () => {
+    // Nothing is rolled forward, so Ingående saldo is empty and Ackumulerat
+    // is the period column over again.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({
+          account_number: '3001',
+          account_name: 'Försäljning 25%',
+          account_class: 3,
+          period_credit: 12000,
+          closing_credit: 12000,
+        }),
+        makeRow({
+          account_number: '5010',
+          account_name: 'Lokalhyra',
+          account_class: 5,
+          period_debit: 3000,
+          closing_debit: 3000,
+        }),
+      ],
+      totalDebit: 3000,
+      totalCredit: 12000,
+      isBalanced: false,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    expect(report.revenue_sections[0].rows[0]).toMatchObject({
+      ytd_opening: 0,
+      amount: 12000,
+      ytd_closing: 12000,
+    })
+    expect(report.total_revenue_ytd_opening).toBe(0)
+    expect(report.total_expenses_ytd_opening).toBe(0)
+    expect(report.net_result_ytd_opening).toBe(0)
+    expect(report.net_result_ytd_closing).toBe(report.net_result)
+  })
+
+  it('keeps an account with no window activity but a non-zero Ackumulerat', async () => {
+    // 3001 was booked in June and never again. Dropping it would leave the
+    // Ackumulerat column 4 000 short of the subtotal printed under it.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({
+          account_number: '3001',
+          account_name: 'Försäljning 25%',
+          account_class: 3,
+          opening_credit: 4000,
+          closing_credit: 4000,
+        }),
+        makeRow({
+          account_number: '3002',
+          account_name: 'Försäljning 12%',
+          account_class: 3,
+          period_credit: 1000,
+          closing_credit: 1000,
+        }),
+      ],
+      totalDebit: 0,
+      totalCredit: 5000,
+      isBalanced: false,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1', WINDOW)
+
+    const section = report.revenue_sections.find((s) => s.title === 'Huvudintäkter')!
+    expect(section.rows.map((r) => r.account_number)).toEqual(['3001', '3002'])
+    expect(section.rows[0]).toMatchObject({
+      ytd_opening: 4000,
+      amount: 0,
+      ytd_closing: 4000,
+    })
+    expect(section.subtotal).toBe(1000)
+    expect(section.subtotal_ytd_opening).toBe(4000)
+    expect(section.subtotal_ytd_closing).toBe(5000)
+  })
+
+  it('reports the requested window as period and the fiscal period as fiscal_year', async () => {
+    mockWindowRows()
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1', WINDOW)
+
+    expect(report.period).toEqual({ start: '2025-07-01', end: '2025-07-31' })
+    expect(report.fiscal_year).toEqual({
+      start: FISCAL_PERIOD.period_start,
+      end: FISCAL_PERIOD.period_end,
+    })
+  })
+
+  it('falls back to the fiscal period bounds when no window is requested', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    expect(report.period).toEqual({ start: '2025-01-01', end: '2025-12-31' })
+    expect(report.fiscal_year).toEqual({ start: '2025-01-01', end: '2025-12-31' })
   })
 })

@@ -9,11 +9,15 @@ import {
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { BalanceSheetSection } from '@/types'
 
 interface FlatRow {
   section: string
   account_number: string
   account_name: string
+  year_ib: number
+  ib: number
+  period_change: number
   amount: number
   isSubtotal: boolean
 }
@@ -57,83 +61,93 @@ export const GET = withRouteContext('report.balance_sheet.xlsx', async (request,
     // Flatten nested sections into a single tabular view, mirroring how the
     // PDF lays them out: each section's rows followed by a subtotal line, with
     // grand totals at the end. The "Sektion" column keeps the grouping queryable.
-    const assetRows: FlatRow[] = []
-    for (const s of report.asset_sections) {
-      for (const r of s.rows) {
-        assetRows.push({
+    const flattenSections = (
+      sections: BalanceSheetSection[],
+      groupLabel: string,
+      groupTotalLabel: string,
+      groupTotals: { year_ib: number; ib: number; period_change: number; amount: number },
+    ): FlatRow[] => {
+      const rows: FlatRow[] = []
+      for (const s of sections) {
+        for (const r of s.rows) {
+          rows.push({
+            section: s.title,
+            account_number: r.account_number,
+            account_name: r.account_name,
+            year_ib: r.year_ib,
+            ib: r.ib,
+            period_change: r.period_change,
+            amount: r.amount,
+            isSubtotal: false,
+          })
+        }
+        rows.push({
           section: s.title,
-          account_number: r.account_number,
-          account_name: r.account_name,
-          amount: r.amount,
-          isSubtotal: false,
+          account_number: '',
+          account_name: `Summa ${s.title}`,
+          year_ib: s.subtotal_year_ib,
+          ib: s.subtotal_ib,
+          period_change: s.subtotal_period_change,
+          amount: s.subtotal,
+          isSubtotal: true,
         })
       }
-      assetRows.push({
-        section: s.title,
+      rows.push({
+        section: groupLabel,
         account_number: '',
-        account_name: `Summa ${s.title}`,
-        amount: s.subtotal,
+        account_name: groupTotalLabel,
+        ...groupTotals,
         isSubtotal: true,
       })
+      return rows
     }
-    assetRows.push({
-      section: 'Tillgångar',
-      account_number: '',
-      account_name: 'Summa tillgångar',
-      amount: report.total_assets,
-      isSubtotal: true,
-    })
 
-    const equityRows: FlatRow[] = []
-    for (const s of report.equity_liability_sections) {
-      for (const r of s.rows) {
-        equityRows.push({
-          section: s.title,
-          account_number: r.account_number,
-          account_name: r.account_name,
-          amount: r.amount,
-          isSubtotal: false,
-        })
-      }
-      equityRows.push({
-        section: s.title,
-        account_number: '',
-        account_name: `Summa ${s.title}`,
-        amount: s.subtotal,
-        isSubtotal: true,
-      })
-    }
-    equityRows.push({
-      section: 'Eget kapital och skulder',
-      account_number: '',
-      account_name: 'Summa eget kapital och skulder',
-      amount: report.total_equity_liabilities,
-      isSubtotal: true,
-    })
+    const assetRows = flattenSections(
+      report.asset_sections,
+      'Tillgångar',
+      'Summa tillgångar',
+      {
+        year_ib: report.total_assets_year_ib,
+        ib: report.total_assets_ib,
+        period_change: report.total_assets_period_change,
+        amount: report.total_assets,
+      },
+    )
+
+    const equityRows = flattenSections(
+      report.equity_liability_sections,
+      'Eget kapital och skulder',
+      'Summa eget kapital och skulder',
+      {
+        year_ib: report.total_equity_liabilities_year_ib,
+        ib: report.total_equity_liabilities_ib,
+        period_change: report.total_equity_liabilities_period_change,
+        amount: report.total_equity_liabilities,
+      },
+    )
+
+    const columns = [
+      textColumn('Sektion'),
+      textColumn('Konto'),
+      textColumn('Kontonamn'),
+      currencyColumn('Ingående balans'),
+      currencyColumn('Ingående saldo'),
+      currencyColumn('Period'),
+      currencyColumn('Utgående balans'),
+    ]
+    const mapRow = (r: FlatRow) => [
+      r.section,
+      r.account_number,
+      r.account_name,
+      r.year_ib,
+      r.ib,
+      r.period_change,
+      r.amount,
+    ]
 
     const buffer = reportToWorkbook<FlatRow>([
-      {
-        name: 'Tillgångar',
-        columns: [
-          textColumn('Sektion'),
-          textColumn('Konto'),
-          textColumn('Kontonamn'),
-          currencyColumn('Belopp'),
-        ],
-        rows: assetRows,
-        mapRow: (r) => [r.section, r.account_number, r.account_name, r.amount],
-      },
-      {
-        name: 'Eget kapital och skulder',
-        columns: [
-          textColumn('Sektion'),
-          textColumn('Konto'),
-          textColumn('Kontonamn'),
-          currencyColumn('Belopp'),
-        ],
-        rows: equityRows,
-        mapRow: (r) => [r.section, r.account_number, r.account_name, r.amount],
-      },
+      { name: 'Tillgångar', columns, rows: assetRows, mapRow },
+      { name: 'Eget kapital och skulder', columns, rows: equityRows, mapRow },
     ])
 
     const filename = xlsxFilename('balansrakning', companyRow?.company_name ?? '', effectiveEnd)

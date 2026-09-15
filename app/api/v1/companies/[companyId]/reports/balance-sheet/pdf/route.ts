@@ -142,13 +142,17 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
+    const balanceSheetModel = buildBalanceSheetPdfModel(report)
+
     let pdfBuffer: Buffer
     try {
       pdfBuffer = await renderToBuffer(
         FinancialStatementPDF({
           title: 'Balansräkning',
-          groups: buildBalanceSheetPdfModel(report).groups,
+          columns: balanceSheetModel.columns,
+          groups: balanceSheetModel.groups,
           period: report.period,
+          fiscalYear: report.fiscal_year,
           company: company as CompanySettings,
           generatedAt: new Date().toISOString(),
         }),
