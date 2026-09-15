@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { arkivRollout, isArkivEnabled } from '@/lib/arkiv/flag'
 import { classifyDocument, loadCompanyIdentity, type CompanyIdentity } from '@/lib/documents/classify/classify'
 import { extractDocument } from '@/lib/documents/extract/store'
+import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
+import { deriveDocument } from '@/lib/arkiv/agreements/store'
 import { readAndStoreDocument, type ReadableDocumentRow } from '@/lib/documents/read/store'
 import { createLogger } from '@/lib/logger'
 
@@ -10,11 +12,11 @@ const log = createLogger('documents/jobs')
 /**
  * Arkiv phase 3: the document pipeline as a queue. An upload queues a read
  * job and returns; the worker cron claims due jobs (SKIP LOCKED, so
- * overlapping ticks never run a job twice) and runs read, classify and
- * extract, each step queueing the next. A failed step retries with backoff
+ * overlapping ticks never run a job twice) and runs read, classify, extract
+ * and derive, each step queueing the next. A failed step retries with backoff
  * until max_attempts and keeps its last error.
  */
-export type JobKind = 'read' | 'classify' | 'extract'
+export type JobKind = 'read' | 'classify' | 'extract' | 'derive'
 
 export interface ClaimedJob {
   id: string
@@ -100,6 +102,8 @@ function runStep(supabase: SupabaseClient, job: ClaimedJob, identities: Map<stri
       return runClassify(supabase, job, identities)
     case 'extract':
       return runExtract(supabase, job, identities)
+    case 'derive':
+      return runDerive(supabase, job)
   }
 }
 
@@ -132,7 +136,16 @@ async function runExtract(supabase: SupabaseClient, job: ClaimedJob, identities:
   const out = await extractDocument(supabase, job.document_id, await identityFor(supabase, job.company_id, identities))
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return skipNote(out.reason)
+  if (agreementKindFor(out.schemaType)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'derive')
   return `extracted ${out.schemaType}${out.reviewFields.length ? `, review: ${out.reviewFields.join(', ')}` : ''}`
+}
+
+async function runDerive(supabase: SupabaseClient, job: ClaimedJob): Promise<string> {
+  if (!isArkivEnabled(job.company_id)) return 'skipped: not_in_rollout'
+  const out = await deriveDocument(supabase, job.document_id)
+  if (out.status === 'error') throw new Error(out.reason)
+  if (out.status === 'skipped') return `skipped: ${out.reason}`
+  return `derived ${out.obligations} obligations, ${out.deadlines} deadlines${out.waitingOn.length ? `, waiting on ${out.waitingOn.join(', ')}` : ''}`
 }
 
 /** Outcome note for a skip. A model that is not configured yet is worth waiting for, so that skip fails the job and retries. */

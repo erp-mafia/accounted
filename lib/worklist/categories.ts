@@ -287,6 +287,17 @@ export async function countDocumentFieldReviews(supabase: SupabaseClient, compan
   return count ?? 0
 }
 
+/** Arkiv: expected payments from agreements that never arrived. */
+export async function countMissedAgreementPayments(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('agreement_obligations')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('status', 'missed')
+  if (error) return logAndZero('agreement_payment_missed', companyId, error)
+  return count ?? 0
+}
+
 /** Overdue customer invoices (not credited). */
 export async function countOverdueInvoices(
   supabase: SupabaseClient,

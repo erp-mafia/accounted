@@ -7,11 +7,13 @@ vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn(() => ({ tag: 'service' })) }))
 vi.mock('@/lib/documents/extract/store', () => ({ recordHumanFields: vi.fn() }))
+vi.mock('@/lib/documents/jobs/queue', () => ({ enqueueDocumentJob: vi.fn() }))
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { recordHumanFields } from '@/lib/documents/extract/store'
+import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 
 const DOC = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const call = (body: unknown) =>
@@ -48,6 +50,14 @@ describe('POST /api/documents/[id]/extraction/fields', () => {
     expect(status).toBe(200)
     expect(body).toEqual({ data: { document_id: DOC, extraction_id: 'ext-2', review_fields: [] } })
     expect(recordHumanFields).toHaveBeenCalledWith({ tag: 'service' }, DOC, 'user-1', { interest_rate: '11,10', security: null })
+    expect(enqueueDocumentJob).toHaveBeenCalledWith({ tag: 'service' }, 'company-1', DOC, 'derive')
+  })
+
+  it('does not queue a derivation for a record that is not an agreement', async () => {
+    enqueue({ data: { id: DOC } })
+    settle({ status: 'extracted', extractionId: 'ext-3', schemaType: 'registration.bolagsverket', reviewFields: [] })
+    expect((await parseJsonResponse(await call({ fields: { auditor: null } }))).status).toBe(200)
+    expect(enqueueDocumentJob).not.toHaveBeenCalled()
   })
 
   it('answers 404 without a record, 400 for a field outside the schema, and 500 without internals', async () => {

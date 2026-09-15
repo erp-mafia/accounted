@@ -165,6 +165,10 @@
     {
       "path": "/api/documents/jobs/cron",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/arkiv/derive/cron",
+      "schedule": "40 4 * * *"
     }
   ]
 }

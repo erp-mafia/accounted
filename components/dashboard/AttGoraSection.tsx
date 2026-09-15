@@ -274,6 +274,7 @@ export default function AttGoraSection({
   const bevakaRows =
     counts.overdue_invoice > 0 ||
     counts.deadline_action > 0 ||
+    counts.agreement_payment_missed > 0 ||
     counts.reconciliation_due > 0 ||
     expiringBankConnections.length > 0
   const allClear = !bokforRows && !betalaRows && !granskaRows && !bevakaRows
@@ -580,6 +581,15 @@ export default function AttGoraSection({
                         icon={CalendarClock}
                         label={t('row_deadlines')}
                         count={counts.deadline_action}
+                      />
+                    )}
+                    {counts.agreement_payment_missed > 0 && (
+                      <WorklistRow
+                        href="/arkiv/avtal"
+                        icon={CalendarClock}
+                        label={t('row_agreement_payment_missed')}
+                        detail={t('row_agreement_payment_missed_detail')}
+                        count={counts.agreement_payment_missed}
                       />
                     )}
                     {counts.reconciliation_due > 0 && (

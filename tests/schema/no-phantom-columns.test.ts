@@ -205,7 +205,9 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // update, the extraction save carries the model's field payload, and the
 // provenance upsert builds its row and names its conflict target from the
 // row's own keys.
-const UNRESOLVED_CEILING = 416
+// Phase 4 links and agreements (+1): lib/arkiv/agreements/store.ts
+// syncObligations inserts one row per due date built by a map.
+const UNRESOLVED_CEILING = 417
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
