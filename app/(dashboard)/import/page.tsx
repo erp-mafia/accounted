@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import SIEJobProgress from '@/components/import/SIEJobProgress'
 import { uploadSIEFile } from '@/lib/import/sie-job-client'
-import { legacyNotices } from '@/lib/import/notices'
+import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
 import { fetchAccounts } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter } from 'next/navigation'
@@ -76,6 +76,11 @@ import {
   enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
 } from '@/lib/import/account-vat-treatment'
+import {
+  applySourceChartCsv,
+  emptySourceChartSummary,
+  type SourceChartSummary,
+} from '@/lib/import/source-chart/apply-source-chart'
 import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
 import type { TheaterModel } from '@/lib/import/theater-model'
 
@@ -906,6 +911,81 @@ function SIEImportWizard({
     setMappings((prev) => applyVatTreatmentReviewAll(prev))
   }, [])
 
+  // The source system's chart export, when the user has one. SIE4 carries no
+  // momskoder, so without it the mapping step can only guess from the account
+  // label. Enrichment, never a precondition: a file that cannot be read leaves
+  // the mappings untouched and reports why.
+  const [sourceChart, setSourceChart] =
+    useState<{ summary: SourceChartSummary; notices: ImportNotice[] } | null>(null)
+
+  // Read through a ref rather than the closed-over value: the file is read
+  // asynchronously, and a momskod the user changes while it loads would
+  // otherwise be computed against the pre-edit snapshot and silently reverted.
+  // The work stays outside the setMappings updater, which must remain pure
+  // because React runs it twice in StrictMode.
+  //
+  // Written in an effect, not in the render body: a render React starts and
+  // then abandons must not leave this pointing at state the app never had.
+  // Costs nothing here, since the ref is only read from an event handler and
+  // those run after commit.
+  const mappingsRef = useRef(mappings)
+  useEffect(() => {
+    mappingsRef.current = mappings
+  }, [mappings])
+
+  // The company's own chart, for the same reason and read the same way: a
+  // second file has to restore the rows the first one touched, and restoring
+  // one means re-deriving it against this list.
+  const basAccountsRef = useRef(basAccounts)
+  useEffect(() => {
+    basAccountsRef.current = basAccounts
+  }, [basAccounts])
+
+  // Which pick is the current one. file.text() is a promise, so choosing a
+  // second chart before the first has been read would otherwise let whichever
+  // resolves last win, and that is not necessarily the file on screen.
+  const sourceChartPick = useRef(0)
+
+  // One try around the whole body, so this can never reject: the caller is an
+  // onChange that discards the promise, and an unhandled rejection would leave
+  // the step looking exactly as if no file had been chosen. Reading the file is
+  // not the only step that can fail; a format's translate is called in here too.
+  const handleSourceChartSelected = useCallback(async (file: File) => {
+    const pick = ++sourceChartPick.current
+    try {
+      const csvText = await file.text()
+      if (pick !== sourceChartPick.current) return
+      const result = applySourceChartCsv(mappingsRef.current, csvText, basAccountsRef.current)
+      setMappings(result.mappings)
+      // A file that could not be read leaves the mappings as they were, so the
+      // line above the table has to keep describing the chart still in effect
+      // rather than reverting to the invitation. Only its complaint changes.
+      setSourceChart((prev) =>
+        result.applied || !prev
+          ? { summary: result.summary, notices: result.notices }
+          : { summary: prev.summary, notices: result.notices },
+      )
+    } catch (err) {
+      if (pick !== sourceChartPick.current) return
+      // Through getErrorMessage like every other catch in this file, so a real
+      // cause reaches the user instead of being flattened into one sentence.
+      // legacyNotices is the sanctioned bridge for a string that has no
+      // structured twin: the message is already mapped, and inventing a code
+      // per failure mode of file.text() would name nothing useful.
+      setSourceChart((prev) => ({
+        summary: prev?.summary ?? emptySourceChartSummary(),
+        notices: legacyNotices(
+          [
+            err instanceof Error
+              ? getErrorMessage(err)
+              : 'Kontoplanen kunde inte läsas in. Kontrollera att filen finns kvar och försök igen.',
+          ],
+          'action',
+        ),
+      }))
+    }
+  }, [])
+
   const confirmVatReview = useCallback(() => {
     if (mappings.some((mapping) =>
       mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
@@ -1077,6 +1157,7 @@ function SIEImportWizard({
         <AccountMappingStep mappings={mappings} basAccounts={basAccounts}
           onMappingChange={handleMappingChange} onVatTreatmentChange={handleVatTreatmentChange}
           onConfirmAllVatTreatments={handleConfirmAllVatTreatments}
+          onSourceChartSelected={handleSourceChartSelected} sourceChart={sourceChart}
           onContinue={confirmVatReview} onBack={goBack} />
       )}
       {duplicateImportId && <label className="flex items-center gap-3 text-sm">

@@ -164,6 +164,35 @@ describe('suggestMappings', () => {
     expect(result[0].matchType).toBe('manual')
   })
 
+  it('takes the source name from the file, not from the stored mapping', () => {
+    // A source system renames an account between fiscal years. The override
+    // remembers the target that was chosen; the name is a fact about the file
+    // being imported. Real case: Spiris swapped the names of 3541 and 3542
+    // between 2022 and 2023 to match BAS, so the stored name would have shown
+    // "export" beside this year's EU momskod.
+    const source = [makeSIEAccount('3541', 'Faktureringsavgifter, EU-land')]
+    const existingMappings: SIEAccountMappingRecord[] = [
+      {
+        id: 'map-1',
+        user_id: 'user-1',
+        source_account: '3541',
+        source_name: 'Faktureringsavgifter, export',
+        target_account: '3541',
+        confidence: 1.0,
+        match_type: 'exact',
+        created_at: '2024-01-01',
+        updated_at: '2024-01-01',
+      },
+    ]
+
+    const result = suggestMappings(source, basAccounts, existingMappings)
+
+    expect(result[0].sourceName).toBe('Faktureringsavgifter, EU-land')
+    // The target choice it was stored for still survives.
+    expect(result[0].targetAccount).toBe('3541')
+    expect(result[0].isOverride).toBe(true)
+  })
+
   it('sorts by confidence (lowest first)', () => {
     const source = [
       makeSIEAccount('1510', 'Kundfordringar'),

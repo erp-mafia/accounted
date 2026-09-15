@@ -65,6 +65,10 @@ export const ACCOUNT_TO_BOX: Record<string, MomsBox> = {
   '3402': '06',
   '3403': '06',
 
+  // Trepartshandel, the middleman's two sides → Box 37/38
+  '3107': '38',  // Mellanmans försäljning vid trepartshandel
+  '4512': '37',  // Mellanmans inköp vid trepartshandel
+
   // EU goods (reverse charge, VAT-free) → Box 35
   '3108': '35',  // Försäljning varor till annat EU-land
   '3521': '35',  // Fakturerade frakter EU (follows goods treatment)
