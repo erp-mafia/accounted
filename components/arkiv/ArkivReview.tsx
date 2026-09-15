@@ -238,10 +238,15 @@ function FindingRow({ finding, busy, onClose }: { finding: FindingView; busy: bo
           )
         ) : null}
       </span>
-      <div className="flex gap-2">
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => onClose('dismissed')}>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          disabled={busy}
+          className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50"
+          onClick={() => onClose('dismissed')}
+        >
           {t('finding_dismiss')}
-        </Button>
+        </button>
         {finding.kind === 'settings_mismatch' && (
           <Button size="sm" disabled={busy} onClick={() => onClose('applied')}>
             {t('finding_apply')}

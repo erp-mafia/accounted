@@ -190,7 +190,12 @@ export const SCHEMAS: Record<string, ExtractionSchemaDef> = {
     fields: [
       { name: 'employee_name', kind: 'text', description: 'Name of the employee. Never a personal identity number.', required: true },
       { name: 'role_title', kind: 'text', description: 'Position or title.' },
-      { name: 'employment_form', kind: 'enum', options: ['permanent', 'fixed_term', 'probation', 'hourly'], description: 'Form of employment (tillsvidare, visstid, provanställning, timanställning).' },
+      {
+        name: 'employment_form',
+        kind: 'enum',
+        options: ['permanent', 'fixed_term', 'probation', 'hourly'],
+        description: 'Form of employment (tillsvidare, visstid, provanställning, timanställning).',
+      },
       { name: 'starts_on', kind: 'date', description: 'First day of employment, YYYY-MM-DD.' },
       { name: 'ends_on', kind: 'date', description: 'Last day for a fixed term or probation, YYYY-MM-DD.' },
       { name: 'monthly_salary', kind: 'amount', description: 'Monthly salary before tax.' },
@@ -497,6 +502,11 @@ function valueSchema(f: FieldDef): Record<string, unknown> {
 export function readingsFromAnswer(def: ExtractionSchemaDef, answer: unknown): Record<string, { value: unknown; page: unknown; quote: unknown }> {
   const flat = answer && typeof answer === 'object' && !Array.isArray(answer) ? (answer as Record<string, unknown>) : {}
   return Object.fromEntries(def.fields.map((f) => [f.name, { value: flat[f.name], page: flat[`${f.name}_page`], quote: flat[`${f.name}_quote`] }]))
+}
+
+/** The fields a page shows before folding the rest: the required ones, money, dates, organisation numbers and names. */
+export function primaryFields(def: ExtractionSchemaDef): Set<string> {
+  return new Set(def.fields.filter((f) => f.required || f.kind === 'amount' || f.kind === 'date' || f.kind === 'orgnr' || f.name.endsWith('_name')).map((f) => f.name))
 }
 
 export function fieldKinds(def: ExtractionSchemaDef): Record<string, FieldKind> {

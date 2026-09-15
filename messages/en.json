@@ -10163,6 +10163,9 @@
 ,
   "arkiv": {
     "review_title": "Review documents",
+    "show_all_fields": "Show all {count} fields",
+    "show_fewer_fields": "Show fewer",
+    "decision_custom_value": "Own value…",
     "graph_open_hint": "Click to open",
     "graph_items": "{count, plural, one {1 item} other {# items}}",
     "record_line_items": "Lines",
@@ -10231,7 +10234,7 @@
     "review_all_clear": "Nothing waits for you. Everything that came in has a type, belongs to the company and has been read.",
     "held_row": "{meta}. Does this concern the company?",
     "unclassified_row": "{file}: what is this document? {meta}",
-    "fields_row": "{count, plural, one {Confirm 1 field} other {Confirm # fields}} in {file}: {fields}",
+    "fields_row": "{file}: {fields}",
     "findings_title": "Arkiv noticed something",
     "decision_pages": "{count, plural, one {1 page} other {# pages}}",
     "decision_uploaded": "uploaded {date}",

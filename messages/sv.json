@@ -10163,6 +10163,9 @@
 ,
   "arkiv": {
     "review_title": "Granska dokument",
+    "show_all_fields": "Visa alla {count} fält",
+    "show_fewer_fields": "Visa färre",
+    "decision_custom_value": "Eget värde…",
     "graph_open_hint": "Klicka för att öppna",
     "graph_items": "{count, plural, one {1 post} other {# poster}}",
     "record_line_items": "Rader",
@@ -10231,7 +10234,7 @@
     "review_all_clear": "Inget väntar på dig. Allt som kommit in har en typ, hör till bolaget och är läst.",
     "held_row": "{meta}. Rör det här bolaget?",
     "unclassified_row": "{file}: vad är det här dokumentet? {meta}",
-    "fields_row": "{count, plural, one {Bekräfta 1 fält} other {Bekräfta # fält}} i {file}: {fields}",
+    "fields_row": "{file}: {fields}",
     "findings_title": "Arkiv har sett något",
     "decision_pages": "{count, plural, one {1 sida} other {# sidor}}",
     "decision_uploaded": "laddades upp {date}",

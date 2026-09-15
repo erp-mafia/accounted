@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { DocumentRecordView } from '@/app/api/arkiv/documents/[id]/route'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
+import { primaryFields, schemaForType } from '@/lib/documents/extract/schemas'
 import { formatCurrency, formatDateLong } from '@/lib/utils'
 import { DefList, DefRow, Section, SourceLink, inlineHref } from './DefList'
 import { useFieldLabel } from './useFieldLabel'
@@ -27,6 +28,7 @@ export function DocumentRecord({ documentId }: { documentId: string }) {
   const fieldLabel = useFieldLabel()
   const [view, setView] = useState<DocumentRecordView | null>(null)
   const [failed, setFailed] = useState(false)
+  const [showAll, setShowAll] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -51,12 +53,15 @@ export function DocumentRecord({ documentId }: { documentId: string }) {
   const meta = [typeLabel, formatDateLong(view.created_at, locale), view.page_count ? t('decision_pages', { count: view.page_count }) : null].filter(Boolean).join(' · ')
   const signals = view.classification?.signals ?? []
   const multiPage = (view.page_count ?? 0) > 1
-  const fields = (view.record?.fields ?? []).filter((f) => f.value != null)
+  const allFields = (view.record?.fields ?? []).filter((f) => f.value != null)
+  const primary = primaryFields(schemaForType(view.record?.schema_type))
+  const fields = showAll ? allFields : allFields.filter((f) => primary.has(f.field) || f.under_review)
+  const folded = allFields.length - fields.length
   // A fact whose value is a field's value is that field, established: it shows on the row.
   const factOfField = new Map<string, DocumentRecordView['facts'][number]>()
   const loose: DocumentRecordView['facts'] = []
   for (const fact of view.facts) {
-    const field = fields.find((f) => String(f.value) === fact.value_text && !factOfField.has(f.field))
+    const field = allFields.find((f) => String(f.value) === fact.value_text && !factOfField.has(f.field))
     if (field) factOfField.set(field.field, fact)
     else loose.push(fact)
   }
@@ -121,6 +126,15 @@ export function DocumentRecord({ documentId }: { documentId: string }) {
               })}
             </DefList>
           )}
+          {view.record && (folded > 0 || showAll) ? (
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+              onClick={() => setShowAll((v) => !v)}
+            >
+              {showAll ? t('show_fewer_fields') : t('show_all_fields', { count: allFields.length })}
+            </button>
+          ) : null}
           {view.line_items.length > 0 && (
             <table className="mt-4 w-full border-collapse text-[13px]">
               <thead>

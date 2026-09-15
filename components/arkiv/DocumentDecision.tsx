@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SlideOver, SlideOverBody, SlideOverContent, SlideOverFooter, SlideOverHeader } from '@/components/ui/slide-over'
 import type { ExtractionView } from '@/app/api/documents/[id]/extraction/route'
 import { DOC_TYPES, type DocType } from '@/lib/documents/classify/taxonomy'
+import { primaryFields, schemaForType } from '@/lib/documents/extract/schemas'
 import { formatDateLong } from '@/lib/utils'
 import { DefList, DefRow, SourceLink, inlineHref } from './DefList'
 import { useFieldLabel } from './useFieldLabel'
@@ -80,19 +81,21 @@ export function DocumentDecision({
   const fieldLabel = useFieldLabel()
   const [extraction, setExtraction] = useState<ExtractionView | null | undefined>(undefined)
   const [chosen, setChosen] = useState<DocType | null>(null)
-  const [showAll, setShowAll] = useState(false)
   const [picks, setPicks] = useState<Record<string, string>>({})
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showAll, setShowAll] = useState(false)
+  const [custom, setCustom] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     if (!doc) return
     let cancelled = false
     setExtraction(undefined)
     setChosen((doc.doc_type as DocType | null) ?? null)
-    setShowAll(false)
     setPicks({})
     setReason('')
+    setShowAll(false)
+    setCustom({})
     fetch(`/api/documents/${doc.document_id}/extraction`)
       .then(async (res) => {
         if (res.status === 404) return null
@@ -111,7 +114,7 @@ export function DocumentDecision({
     return () => {
       cancelled = true
     }
-  }, [doc])
+  }, [doc, setShowAll, setCustom])
 
   const options = useMemo(() => {
     const current = (doc?.doc_type as DocType | null) ?? null
@@ -122,7 +125,9 @@ export function DocumentDecision({
 
   if (!doc) return null
 
-  const settled = extraction ? extraction.fields.filter((f) => extraction.payload[f.name]?.value != null && !extraction.review_fields.includes(f.name)).slice(0, 6) : []
+  const settledAll = extraction ? extraction.fields.filter((f) => extraction.payload[f.name]?.value != null && !extraction.review_fields.includes(f.name)) : []
+  const primary = extraction ? primaryFields(schemaForType(extraction.schema_type)) : new Set<string>()
+  const settled = showAll ? settledAll : settledAll.filter((f) => primary.has(f.name)).slice(0, 5)
   const reviewFields = extraction?.review_fields ?? []
   const highlight = extraction
     ? (reviewFields.map((n) => extraction.payload[n]?.readings?.find((r) => r.quote)?.quote).find(Boolean) ??
@@ -283,18 +288,37 @@ export function DocumentDecision({
                                 {r.page != null ? ` · ${t('source_page_short_only', { page: r.page })}` : ''}
                               </Button>
                             ))}
-                            <Input
-                              id={`field-${doc.document_id}-${name}`}
-                              value={picks[name] ?? ''}
-                              onChange={(e) => setPicks((p) => ({ ...p, [name]: e.target.value }))}
-                              placeholder={t('decision_own_value')}
-                              className="h-8 w-44 text-[13px]"
-                            />
+                            {custom[name] || readings.length === 0 ? (
+                              <Input
+                                id={`field-${doc.document_id}-${name}`}
+                                value={picks[name] ?? ''}
+                                onChange={(e) => setPicks((p) => ({ ...p, [name]: e.target.value }))}
+                                placeholder={t('decision_own_value')}
+                                className="h-8 w-44 text-[13px]"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                                onClick={() => setCustom((c) => ({ ...c, [name]: true }))}
+                              >
+                                {t('decision_custom_value')}
+                              </button>
+                            )}
                           </div>
                         </div>
                       )
                     })}
                   </DefList>
+                  {settledAll.length > settled.length || showAll ? (
+                    <button
+                      type="button"
+                      className="mt-1 text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                      onClick={() => setShowAll((v) => !v)}
+                    >
+                      {showAll ? t('show_fewer_fields') : t('show_all_fields', { count: settledAll.length })}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>
