@@ -570,17 +570,27 @@ export default function AccountMappingStep({
                             </SelectContent>
                           </Select>
                         </div>
-                        {/* Three things the code line can mean, and saying the
-                            wrong one costs trust either way.
+                        {/* Four things the code line can mean, and saying the
+                            wrong one costs trust every time.
 
                             Translated: print it. Untranslated on an account the
                             BAS map already routes (4545 import to ruta 50):
                             nothing is missing, so claiming the code could not
                             be used would send the user hunting for a problem
-                            that is not there. Untranslated with no BAS mapping:
-                            the row really does rest on the account name, and
-                            printing the code alone would read as confirmation
-                            of a box the source system never named. */}
+                            that is not there. Untranslated with no BAS mapping
+                            but a treatment on the row: it really does rest on
+                            the account name, and printing the code alone would
+                            read as confirmation of a box the source never
+                            named.
+
+                            And the one that used to borrow the third sentence
+                            and be wrong: nothing translated the code, no BAS
+                            number routes the account, and the label matched no
+                            rule either. Pointing at a suggestion that is not
+                            there is bad enough on its own; here it also hides
+                            that the amount reaches NO ruta until the user picks
+                            one. An import basis on a number outside 4545-4547
+                            lands exactly here. */}
                         {mapping.providerVatCode ? (
                           <p className="mt-1 text-xs text-muted-foreground">
                             {mapping.providerVatTreatment
@@ -590,7 +600,9 @@ export default function AccountMappingStep({
                                     code: mapping.providerVatCode,
                                     box: basBoxFor(mapping)!,
                                   })
-                                : t('vat_treatment_source_code_unreadable', { code: mapping.providerVatCode })}
+                                : mapping.defaultVatTreatment
+                                  ? t('vat_treatment_source_code_unreadable', { code: mapping.providerVatCode })
+                                  : t('vat_treatment_source_code_nowhere', { code: mapping.providerVatCode })}
                           </p>
                         ) : null}
                         </>

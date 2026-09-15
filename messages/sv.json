@@ -5891,6 +5891,7 @@
     "source_chart_untranslated_more": "{accounts} och {rest} till",
     "vat_treatment_source_code": "Momskod i källsystemet: {code}",
     "vat_treatment_source_code_unreadable": "Momskod i källsystemet: {code}. Den gick inte att tolka, så förslaget kommer från kontonamnet.",
+    "vat_treatment_source_code_nowhere": "Momskod i källsystemet: {code}. Den gick inte att tolka och kontonamnet ger ingen ledtråd: utan momskod kommer beloppet inte med i momsdeklarationen.",
     "vat_treatment_source_code_bas": "Momskod i källsystemet: {code}. Den gick inte att tolka, men kontonumret styr redan beloppet till ruta {box}.",
     "new_account_filter": "{count} nya konton skapas",
     "new_account_option": "skapas vid importen",

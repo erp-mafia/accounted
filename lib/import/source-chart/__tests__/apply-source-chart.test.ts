@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { applySourceChartCsv } from '../apply-source-chart'
 import { enrichAccountMappingsWithVat } from '@/lib/import/account-vat-treatment'
+import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
+import { suggestVatTreatment } from '@/lib/vat/account-vat-treatment'
 import type { AccountMapping } from '@/lib/import/types'
 
 function mapping(account: string, name: string, target = account): AccountMapping {
@@ -281,6 +283,39 @@ describe('applySourceChartCsv', () => {
       csv('True;3058;Försäljn varor EG momsfri;35-0%', 'True;3401;Egna uttag av varor;06-25%'),
     )
     expect(summary.accountsWithoutTreatment).toEqual(['3401'])
+  })
+
+  it('leaves an import basis on a non-standard number with nothing at all', () => {
+    // The state the mapping step's fourth source-code sentence is about, and
+    // the one that used to borrow the third and claim a suggestion that is not
+    // there. Ruta 50 reaches the declaration through ACCOUNT_RUTA, which knows
+    // 4545 to 4547 and no other number, so a chart that books the
+    // beskattningsunderlag anywhere else gets: no treatment from the code (this
+    // project has no member for ruta 50), no box from the number, and no
+    // suggestion from the label, since suggestVatTreatment declines
+    // /import/ + /var/ on purpose (a cost account named "import" holds the
+    // invoiced amount, while ruta 50 is tullvärde plus tullar plus
+    // bikostnader). The amount then reaches no ruta until the user picks one.
+    const { mappings } = applySourceChartCsv(
+      [mapping('4540', 'Beskattningsunderlag import 25%')],
+      csv('True;4540;Beskattningsunderlag import 25%;50-25%'),
+    )
+    const row = mappings[0]
+    expect(row.providerVatCode).toBe('50-25%')
+    expect(row.providerVatTreatment).toBeNull()
+    expect(row.defaultVatTreatment ?? null).toBeNull()
+    expect(ACCOUNT_TO_BOX['4540']).toBeUndefined()
+    expect(suggestVatTreatment('4540', 'Beskattningsunderlag import 25%')).toBeNull()
+  })
+
+  it('still reassures on the standard import numbers, which the BAS map routes', () => {
+    const { mappings } = applySourceChartCsv(
+      [mapping('4545', 'Import av varor, 25 % moms')],
+      csv('True;4545;Import av varor, 25 % moms;50-25%'),
+    )
+    expect(mappings[0].providerVatTreatment).toBeNull()
+    // Untranslated, but nothing is missing: the number carries it to ruta 50.
+    expect(ACCOUNT_TO_BOX['4545']).toBe('50')
   })
 
   it('does not touch a remapped row, only identity mappings', () => {
