@@ -3972,6 +3972,12 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
     message_en: 'The invoice is neither paid nor partially paid, so there is no link to remove.',
     retryable: false,
   },
+  UNLINK_SI_PAYMENT_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Du har läsbehörighet i det här företaget och kan inte ta bort kopplingen.',
+    message_en: 'Your role in this company is read-only, so you cannot remove the link.',
+    retryable: false,
+  },
   UNLINK_SI_PAYMENT_DB_ERROR: {
     httpStatus: 500,
     message_sv: 'Databasfel när kopplingen skulle tas bort. Försök igen.',

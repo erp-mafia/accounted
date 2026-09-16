@@ -796,6 +796,7 @@ export type SupplierVoucherUnlinkErrorCode =
   | 'UNLINK_SI_PAYMENT_NOT_A_LINK'
   | 'UNLINK_SI_PAYMENT_BOOKED_PAYMENT'
   | 'UNLINK_SI_PAYMENT_INVOICE_NOT_SETTLED'
+  | 'UNLINK_SI_PAYMENT_FORBIDDEN'
   | 'UNLINK_SI_PAYMENT_DB_ERROR'
 
 export interface UnlinkSupplierInvoiceFromVoucherResult {

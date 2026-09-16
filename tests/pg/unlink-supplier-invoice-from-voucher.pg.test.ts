@@ -13,7 +13,12 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from './setup'
-import { insertPostedJournalEntry, seedCompany } from './fixtures'
+import {
+  insertAuthUser,
+  insertCompanyMember,
+  insertPostedJournalEntry,
+  seedCompany,
+} from './fixtures'
 
 let arrivalSeq = 0
 
@@ -184,6 +189,36 @@ describe('unlink_supplier_invoice_from_voucher', () => {
 
     expect(result.ok).toBe(false)
     expect(result.code).toBe('UNLINK_SI_PAYMENT_NOT_FOUND')
+    const { rows } = await getPool().query(
+      `SELECT count(*)::int AS n FROM public.supplier_invoice_payments WHERE id = $1`,
+      [linked.payment_id],
+    )
+    expect(rows[0].n).toBe(1)
+  })
+
+  it('refuses a member whose role is read-only', async () => {
+    // EXECUTE is granted to `authenticated`, so a viewer can reach the RPC over
+    // PostgREST without passing the route's requireWrite. The gate has to live
+    // here too, or the only thing standing between a viewer and a deleted
+    // payment row is the application.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const invoiceId = await seedSupplierInvoice({ userId, companyId, total: 1000 })
+    const entryId = await seedApVoucher({ userId, companyId, fiscalPeriodId, amount: 400 })
+    const linked = await link(invoiceId, entryId, userId, companyId)
+
+    const viewerId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: viewerId, role: 'viewer' })
+
+    const result = await withUserContext(viewerId, async (client) => {
+      const { rows } = await client.query(
+        `SELECT public.unlink_supplier_invoice_from_voucher($1, $2, $3) AS result`,
+        [linked.payment_id, invoiceId, companyId],
+      )
+      return rows[0].result as Record<string, unknown>
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('UNLINK_SI_PAYMENT_FORBIDDEN')
     const { rows } = await getPool().query(
       `SELECT count(*)::int AS n FROM public.supplier_invoice_payments WHERE id = $1`,
       [linked.payment_id],

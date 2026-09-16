@@ -52,6 +52,7 @@ DECLARE
   v_new_status text;
   v_now timestamptz := now();
   v_jwt_role text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
+  v_caller_role text;
   -- The four source types whose reversal reverseEntry / the DELETE voucher
   -- route already own (lib/bookkeeping/payment-sync.ts PAYMENT_SOURCE_TYPES).
   -- Both customer values are listed too: the set is the shared definition, and
@@ -61,12 +62,35 @@ DECLARE
     'supplier_invoice_paid', 'supplier_invoice_cash_payment'
   ];
 BEGIN
-  -- Tenant guard, verbatim in shape from link_supplier_invoice_to_voucher
+  -- Tenant guard, in shape from link_supplier_invoice_to_voucher
   -- (20260615120000): anon/authenticated may only act on their own companies;
   -- service_role and direct access bypass it.
+  --
+  -- Plus a role gate the link RPC does not need. EXECUTE is granted to
+  -- `authenticated`, so any signed-in member can call this straight over
+  -- PostgREST, bypassing the route's requireWrite. Linking is additive and
+  -- re-doable; this one DELETES a payment row and rewrites the payable, so a
+  -- viewer reaching it directly would be a destructive privilege escalation
+  -- past a gate that only lives in the application. The rule is the
+  -- application's own (lib/auth/require-write.ts: everyone but 'viewer'), not
+  -- a stricter owner/admin one, so the RPC and the route agree on who may act.
+  --
+  -- Fails closed: a caller with no company_members row gets NULL and is
+  -- refused. A non-member is told NOT_FOUND rather than FORBIDDEN, so the
+  -- function never confirms that a payment id exists in a company the caller
+  -- cannot see.
   IF v_jwt_role IN ('anon', 'authenticated') THEN
     IF p_company_id NOT IN (SELECT public.user_company_ids()) THEN
       RETURN jsonb_build_object('ok', false, 'code', 'UNLINK_SI_PAYMENT_NOT_FOUND');
+    END IF;
+
+    SELECT cm.role INTO v_caller_role
+    FROM public.company_members cm
+    WHERE cm.company_id = p_company_id
+      AND cm.user_id = auth.uid();
+
+    IF v_caller_role IS NULL OR v_caller_role = 'viewer' THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'UNLINK_SI_PAYMENT_FORBIDDEN');
     END IF;
   END IF;
 
