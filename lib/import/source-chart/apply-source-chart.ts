@@ -113,8 +113,15 @@ function clearPreviousChart(
   mappings: AccountMapping[],
   existingAccounts: BASAccount[],
 ): AccountMapping[] {
+  // Reviewed AND required is the human signature, and both halves are needed
+  // here. Reviewed alone is also what a row carries when the company chart
+  // settled it and a chart file then agreed with it, and what an onboarding
+  // accept leaves behind: neither is a person's answer, so testing only that
+  // flag let such a row keep the previous file's code after a chart that does
+  // not mention the account at all.
   const fromPreviousChart = (mapping: AccountMapping) =>
-    Boolean(mapping.providerVatCode) && !mapping.vatTreatmentReviewed
+    Boolean(mapping.providerVatCode)
+    && !(mapping.vatTreatmentReviewed && mapping.requiresVatTreatmentReview)
 
   const stale = mappings.filter(fromPreviousChart)
   if (stale.length === 0) return mappings
