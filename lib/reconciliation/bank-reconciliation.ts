@@ -1955,6 +1955,45 @@ export async function fetchJunctionLinkedTxIds(
   return out
 }
 
+/**
+ * The verifikat each of the given transactions is anchored to through
+ * transaction_voucher_links, bank_line rows first: what a reader needs to
+ * report a linked verifikat for a row whose pointer column is NULL (a row
+ * split over several verifikat, #1553, or bulk-booked). Same chunking and
+ * empty-on-error contract as fetchJunctionLinkedTxIds.
+ */
+export async function fetchJunctionLinkMap(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionIds: string[],
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>()
+  const CHUNK = 150
+  for (let i = 0; i < transactionIds.length; i += CHUNK) {
+    const chunk = transactionIds.slice(i, i + CHUNK)
+    const { data, error } = await supabase
+      .from('transaction_voucher_links')
+      .select('transaction_id, journal_entry_id, role')
+      .eq('company_id', companyId)
+      .in('transaction_id', chunk)
+    if (error) return out
+    const rows = (data ?? []) as Array<{ transaction_id: string; journal_entry_id: string; role?: string | null }>
+    // bank_line anchors before supplementary ones so [0] is the booking of
+    // the bank line itself, never a residual.
+    const ordered = [...rows].sort((a, b) => {
+      const ar = (a.role ?? 'bank_line') === 'bank_line' ? 0 : 1
+      const br = (b.role ?? 'bank_line') === 'bank_line' ? 0 : 1
+      return ar - br
+    })
+    for (const row of ordered) {
+      const list = out.get(row.transaction_id) ?? []
+      if (!list.includes(row.journal_entry_id)) list.push(row.journal_entry_id)
+      out.set(row.transaction_id, list)
+    }
+  }
+  return out
+}
+
 /** A match candidate that carries how many transactions already point at it. */
 export interface GLLineForMatching extends UnlinkedGLLine {
   /** Transactions settling this entry ON THE REQUESTED ACCOUNT (plus legacy

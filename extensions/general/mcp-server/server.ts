@@ -255,7 +255,7 @@ import {
   type AgiSubmissionState,
 } from '@/lib/salary/agi-submission-state'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
-import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { fetchJunctionLinkedTxIds, getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
@@ -5707,35 +5707,56 @@ export const tools: McpTool[] = [
         throw new Error('cash_account_id must be a cash account UUID (cash_accounts.id), not a ledger account number')
       }
 
-      // Get total count. is_ignored = false on both queries: a transaction
-      // ignored via gnubok_ignore_transaction has no journal entry by CHECK
-      // constraint, so journal_entry_id IS NULL alone kept listing it as work
-      // to do (feedback seq 330091). Same predicate as the Att göra worklist.
-      let countQuery = supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .is('journal_entry_id', null)
-        .eq('is_ignored', false)
-      if (cashAccountId) countQuery = countQuery.eq('cash_account_id', cashAccountId)
-      const { count: totalCount, error: countError } = await countQuery
+      // is_ignored = false on every query: a transaction ignored via
+      // gnubok_ignore_transaction has no journal entry by CHECK constraint, so
+      // journal_entry_id IS NULL alone kept listing it as work to do
+      // (feedback seq 330091). Same predicate as the Att göra worklist.
+      //
+      // journal_entry_id IS NULL is only the first of the "booked" anchors
+      // (lib/transactions/is-booked.ts): a row split over several verifikat
+      // (#1553) or bulk-booked into a samlingsverifikat is anchored through
+      // transaction_voucher_links alone and was listed here as unbooked
+      // (crm#48). Ids first, junction rows subtracted, then the page: the
+      // offset and total_count stay exact instead of a page shrinking after a
+      // post-hoc filter.
+      const candidateIds = await fetchAllRows<{ id: string }>(({ from, to }) => {
+        let idQuery = supabase
+          .from('transactions')
+          .select('id')
+          .eq('company_id', companyId)
+          .is('journal_entry_id', null)
+          .eq('is_ignored', false)
+        if (cashAccountId) idQuery = idQuery.eq('cash_account_id', cashAccountId)
+        return idQuery.order('date', { ascending: false }).order('id', { ascending: true }).range(from, to)
+      })
+      const junctionLinked =
+        candidateIds.length > 0
+          ? await fetchJunctionLinkedTxIds(supabase, companyId, candidateIds.map((row) => row.id))
+          : new Set<string>()
+      const openIds = candidateIds.filter((row) => !junctionLinked.has(row.id)).map((row) => row.id)
+      const totalCount = openIds.length
+      const pageIds = openIds.slice(offset, offset + limit)
 
-      if (countError) throw dbError(countError)
-
-      let listQuery = supabase
-        .from('transactions')
-        .select(
-          'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id'
-        )
-        .eq('company_id', companyId)
-        .is('journal_entry_id', null)
-        .eq('is_ignored', false)
-      if (cashAccountId) listQuery = listQuery.eq('cash_account_id', cashAccountId)
-      const { data, error } = await listQuery
-        .order('date', { ascending: false })
-        .range(offset, offset + limit - 1)
-
-      if (error) throw dbError(error)
+      let data: unknown[] | null = []
+      if (pageIds.length > 0) {
+        // The unbooked predicate is repeated on the page read so a row booked
+        // between the two reads drops out instead of coming back as work.
+        let listQuery = supabase
+          .from('transactions')
+          .select(
+            'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id'
+          )
+          .eq('company_id', companyId)
+          .in('id', pageIds)
+          .is('journal_entry_id', null)
+          .eq('is_ignored', false)
+        if (cashAccountId) listQuery = listQuery.eq('cash_account_id', cashAccountId)
+        const { data: pageData, error } = await listQuery
+          .order('date', { ascending: false })
+          .order('id', { ascending: true })
+        if (error) throw dbError(error)
+        data = pageData
+      }
 
       // Resolve the bank account's BAS ledger for the rows on this page so a
       // per-account reconciliation can be driven from outside (customer
@@ -5762,7 +5783,7 @@ export const tools: McpTool[] = [
         cash_account_id: t.cash_account_id ?? null,
         cash_account_ledger: t.cash_account_id ? ledgerByCashAccount.get(t.cash_account_id) ?? null : null,
       }))
-      const total = totalCount ?? 0
+      const total = totalCount
 
       return { transactions: rows, ...pageTail(rows, total, offset) }
     },

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
-import { fetchJunctionLinkedTxIds, fetchUnlinkedGLLines, scopeTransactionsToAccount } from './bank-reconciliation'
+import { fetchJunctionLinkMap, fetchUnlinkedGLLines, scopeTransactionsToAccount } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import { proposeCoveringSets } from './covering-set-candidate'
 import {
@@ -183,11 +183,15 @@ export async function listAccountItems(
       const rows = (data ?? []) as BankTxRow[]
       // Rows anchored only through transaction_voucher_links (bulk-book,
       // residual bookings) are matched too; their pointer column is NULL.
-      const junctionLinked = await fetchJunctionLinkedTxIds(
+      // The map (not just the id set) so a junction-anchored row can report
+      // WHICH verifikat it is matched to: with only the pointer column read,
+      // linked_journal_entry_id came back null on a split row (crm#48).
+      const junctionLinks = await fetchJunctionLinkMap(
         supabase,
         companyId,
         rows.filter((tx) => !tx.journal_entry_id && !tx.is_ignored).map((tx) => tx.id),
       )
+      const junctionLinked = new Set(junctionLinks.keys())
       // Rows nothing explains 1:1 are searched for a set of unlinked verifikat
       // summing exactly to them (#2293) before they are offered as unmatched:
       // "Bokför" is the door only when the ledger has nothing for the row.
@@ -224,7 +228,7 @@ export async function listAccountItems(
             description: tx.merchant_name || tx.description || '',
             amount: roundOre(Number(tx.amount)),
             currency: tx.currency,
-            linked_journal_entry_id: tx.journal_entry_id,
+            linked_journal_entry_id: tx.journal_entry_id ?? junctionLinks.get(tx.id)?.[0] ?? null,
             proposal: tx.potential_journal_entry_id
               ? {
                   journal_entry_id: tx.potential_journal_entry_id,

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { embeddedVoucherLabel, getLinkedJournalEntryIds } from '@/lib/transactions/is-booked'
 import type { TransactionWithInvoice } from '@/components/transactions/transaction-types'
 import type { TransactionUnderlag } from '@/lib/transactions/underlag-read'
 
@@ -77,7 +78,13 @@ export function TransactionDrawer({
 }: TransactionDrawerProps) {
   const t = useTranslations('tx_inbox_card')
   const isIncome = transaction.amount > 0
-  const booked = !!transaction.journal_entry_id
+  // Pointer plus junction anchors: a row split over several verifikat has
+  // journal_entry_id NULL but is booked (crm#48).
+  const linkedEntryIds = getLinkedJournalEntryIds(transaction)
+  const booked = linkedEntryIds.length > 0
+  const voucherLinks = (transaction.transaction_voucher_links ?? []).filter(
+    (link) => (link.role ?? 'bank_line') === 'bank_line',
+  )
   const attach = actions.find((a) => a.key === 'attach')
   // The underlag from either door: pinned to the row, or matched in the
   // inbox. The receipt is what makes the booking decidable, so it sits
@@ -270,9 +277,19 @@ export function TransactionDrawer({
             {booked
               ? fact(
                   t('drawer_voucher'),
-                  <Link href={`/bookkeeping/${transaction.journal_entry_id}`} className={QUIET_LINK_CLASS}>
-                    {t('drawer_open_voucher')}
-                  </Link>,
+                  transaction.journal_entry_id ? (
+                    <Link href={`/bookkeeping/${transaction.journal_entry_id}`} className={QUIET_LINK_CLASS}>
+                      {t('drawer_open_voucher')}
+                    </Link>
+                  ) : (
+                    <span className="inline-flex flex-wrap gap-2">
+                      {voucherLinks.map((link, index) => (
+                        <Link key={link.journal_entry_id} href={`/bookkeeping/${link.journal_entry_id}`} className={QUIET_LINK_CLASS}>
+                          {embeddedVoucherLabel(link) ?? (index === 0 ? t('drawer_open_voucher') : `+${index}`)}
+                        </Link>
+                      ))}
+                    </span>
+                  ),
                 )
               : null}
             {skvCounterpartDate ? fact(t('skv_counterpart_label'), t('skv_counterpart_body', { date: skvCounterpartDate })) : null}

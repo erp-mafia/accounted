@@ -7,7 +7,7 @@ import {
   makeTransaction,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -141,6 +141,24 @@ describe('GET /api/transactions', () => {
     expect(status).toBe(200)
     expect(body.data.map((t) => t.id)).toEqual(['tx-open'])
     expect(body.has_more).toBe(false)
+  })
+
+  it('embeds transaction_voucher_links in every mode so a split row (journal_entry_id NULL, #1553) can be told from an unbooked one (crm#48)', async () => {
+    const split = makeTransaction({ id: 'tx-split', journal_entry_id: null }) as unknown as Record<string, unknown>
+    split.transaction_voucher_links = [
+      { journal_entry_id: 'je-200', role: 'bank_line' },
+      { journal_entry_id: 'je-201', role: 'bank_line' },
+    ]
+    enqueue({ data: [split], error: null })
+
+    const request = createMockRequest('/api/transactions')
+    const response = await GET(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string; transaction_voucher_links: Array<{ journal_entry_id: string }> }> }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data[0].transaction_voucher_links.map((l) => l.journal_entry_id)).toEqual(['je-200', 'je-201'])
+    const selectArgs = findCall('transactions', 'select')
+    expect(String(selectArgs?.[0])).toContain('transaction_voucher_links(journal_entry_id, role)')
   })
 
   it('filters by reconciled=true', async () => {
