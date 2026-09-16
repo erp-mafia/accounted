@@ -85,6 +85,12 @@ export const CONFIDENCE = {
    * happens to line up: it still names the invoice.
    */
   OCR_REFERENCE_IN_TEXT: 0.85,
+  /**
+   * Voucher matching: the invoice number sits in the verifikat text but the
+   * amount does not settle the invoice. A strong hint for a person, below
+   * the unattended auto-link bar (0.95) in bulk-reconcile-supplier-vouchers.
+   */
+  REFERENCE_AMOUNT_MISMATCH: 0.9,
   EXACT_AMOUNT_CUSTOMER: 0.95,
   EXACT_AMOUNT_ONLY: 0.80,
   FUZZY_AMOUNT_CUSTOMER: 0.70,
@@ -507,4 +513,37 @@ export async function getBestInvoiceMatch(
   }
 
   return null
+}
+
+/**
+ * True when `reference` occurs in `description` as a whole number, never as
+ * part of a longer digit run. Whitespace is stripped from both sides first so
+ * an OCR string typed in groups ("1234 5678") still matches; after that a hit
+ * may not touch a digit on either side. That is what keeps ankomstnummer 14
+ * out of "Levbet Tele2 (1814)" and invoice 26 out of "2026-05-11". The plain
+ * substring test this replaces linked a Tele2 payment to a Postronic invoice
+ * as a 99 % match (desk crm#64, 2026-09-16).
+ */
+export function descriptionMentionsReference(
+  description: string | null | undefined,
+  reference: string | number | null | undefined,
+): boolean {
+  if (!description || reference === null || reference === undefined) return false
+  const haystack = description.replace(/\s+/g, '').toLowerCase()
+  const needle = String(reference).replace(/\s+/g, '').toLowerCase()
+  if (needle.length < 2) return false
+  let from = 0
+  while (from + needle.length <= haystack.length) {
+    const at = haystack.indexOf(needle, from)
+    if (at === -1) return false
+    const before = at > 0 ? haystack[at - 1] : ''
+    const after = haystack[at + needle.length] ?? ''
+    if (!isDigit(before) && !isDigit(after)) return true
+    from = at + 1
+  }
+  return false
+}
+
+function isDigit(ch: string): boolean {
+  return ch >= '0' && ch <= '9'
 }

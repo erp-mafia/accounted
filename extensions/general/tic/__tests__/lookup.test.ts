@@ -47,9 +47,11 @@ const lookupHandler = ticExtension.apiRoutes![0].handler
 const mockDoc: TICCompanyDocument = {
   companyId: 42,
   registrationNumber: '5560360793',
+  // Real Lens v2 shape: newest-decided first, so a särskilt företagsnamn
+  // registered after the firma precedes the legal name.
   names: [
-    { nameOrIdentifier: 'Registered Name', companyNamingType: 'registeredName' },
-    { nameOrIdentifier: 'Test AB', companyNamingType: 'name' },
+    { nameOrIdentifier: 'Brand Name', companyNamingType: 'particularName' },
+    { nameOrIdentifier: 'Test AB', companyNamingType: 'legalName' },
   ],
   legalEntityType: 'AB',
   // 2026-02-02 in Unix seconds (TIC's native unit; the route converts to ms)
@@ -199,8 +201,15 @@ describe('TIC lookup route', () => {
     expect(data.phone).toBe('+4681234567')
   })
 
-  it('prefers name type over other naming types', async () => {
-    mockSearch.mockResolvedValue(mockDoc)
+  it('returns the legal name, not a newer särskilt företagsnamn listed first', async () => {
+    mockSearch.mockResolvedValue({
+      ...mockDoc,
+      names: [
+        { nameOrIdentifier: 'Newest Brand', companyNamingType: 'particularName' },
+        { nameOrIdentifier: 'Older Brand', companyNamingType: 'particularName' },
+        { nameOrIdentifier: 'Test AB', companyNamingType: 'legalName' },
+      ],
+    })
 
     const res = await lookupHandler(makeRequest('556036-0793'))
     const { data } = await res.json()

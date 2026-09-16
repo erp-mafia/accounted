@@ -127,6 +127,20 @@ describe('reconcileSupplierInvoiceVouchers', () => {
     expect(mLink).not.toHaveBeenCalled()
   })
 
+  it('does not auto-link a reference hit whose amount differs from the invoice (0.90)', async () => {
+    // Desk crm#64: "Ankomstnummer 14 omnämnt" on a 859 kr voucher against a
+    // 3 156 kr invoice used to go through at 0.99 as a partial payment.
+    queue([inv({ id: 'i1', total: 3156, remaining: 3156 })])
+    mFind.mockResolvedValueOnce([cand({ je: 'v1', confidence: 0.9, amount: 859 })] as never)
+
+    const res = await run()
+
+    expect(res.autoLinked).toBe(0)
+    expect(res.ambiguous).toBe(1)
+    expect(res.review[0]).toMatchObject({ supplier_invoice_id: 'i1', reason: 'low_confidence' })
+    expect(mLink).not.toHaveBeenCalled()
+  })
+
   it('does not auto-link when the top two candidates are within the margin', async () => {
     queue([inv({ id: 'i1' })])
     mFind.mockResolvedValueOnce([

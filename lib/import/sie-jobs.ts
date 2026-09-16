@@ -39,7 +39,11 @@ export interface SIEJobInput {
  * paused import, where the truth was that SIE_IMPORT_JOBS was unset.
  */
 export class SIEJobValidationError extends Error {
-  constructor(message: string, readonly code: string = 'VALIDATION_ERROR') {
+  constructor(
+    message: string,
+    readonly code: string = 'VALIDATION_ERROR',
+    readonly details?: Record<string, unknown>,
+  ) {
     super(message)
     userFacing(this, code)
   }
@@ -53,6 +57,7 @@ export function assertSIEReportingAccounts(accounts: Iterable<string>): void {
       `Målkonton ${unsupported.slice(0, 5).join(', ')} stöds inte i balans- och resultatrapporterna. ` +
       'Mappa konton med belopp till konton 1000-8999 innan importen startas. Oanvända kontodefinitioner kan behållas.',
       'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS',
+      { account_numbers: unsupported },
     )
   }
 }
