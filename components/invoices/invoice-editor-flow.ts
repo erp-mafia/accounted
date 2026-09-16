@@ -1,4 +1,4 @@
-import { differenceInCalendarDays, isValid, parseISO } from 'date-fns'
+import { addDays, differenceInCalendarDays, format, isValid, parseISO } from 'date-fns'
 import { foldText } from '@/lib/bookkeeping/account-search'
 
 /**
@@ -9,6 +9,10 @@ import { foldText } from '@/lib/bookkeeping/account-search'
  *   - deriveForvalChips: the Förval chip line summarizing collapsed settings,
  *     surfacing every value that deviates from its default so edit/copy mode
  *     never round-trips values the user cannot see.
+ *   - planDueDateSync: keeps förfallodatum on the same payment term when the
+ *     user moves fakturadatum, instead of leaving them to count days by hand.
+ *   - planCustomerTermsFill: the same term, filled from the picked customer's
+ *     default and counted from the invoice date on the form.
  *   - filterArticleSuggestions: the unified row entry's autocomplete filter
  *     (diacritics-folded, matches name and article number, same folding as
  *     ArticleCombobox).
@@ -204,6 +208,100 @@ function dueDays(invoiceDate: string, dueDate: string): number | null {
   const to = parseISO(dueDate)
   if (!isValid(from) || !isValid(to)) return null
   return differenceInCalendarDays(to, from)
+}
+
+export interface DueDateSyncInput {
+  /** Fakturadatum as the form holds it now (yyyy-MM-dd, may be empty). */
+  invoiceDate: string
+  /** Förfallodatum as the form holds it now (yyyy-MM-dd, may be empty). */
+  dueDate: string
+  /** The invoice date the previous sync settled on; null before the first. */
+  previousInvoiceDate: string | null
+  /** Payment term in days carried over from the previous sync. */
+  terms: number
+}
+
+export interface DueDateSyncResult {
+  /** The due date to write, or null to leave the field alone. */
+  dueDate: string | null
+  /** Term to carry into the next sync. */
+  terms: number
+  /** Invoice date to carry into the next sync. */
+  previousInvoiceDate: string | null
+}
+
+/**
+ * Betalningsvillkoret, not the due DATE, is what the user actually decided:
+ * moving fakturadatum to the end of the month must carry "30 dagar netto"
+ * with it rather than leave förfallodatum stranded four days out (issue: the
+ * user had to count 30 days by hand).
+ *
+ * The term is never stored on the draft, so it is read back off the current
+ * date pair: whatever the customer default, the loaded draft or the user's own
+ * hand-picked due date put there. That makes a manual due date a NEW term
+ * instead of something the next invoice-date edit would clobber.
+ *
+ * Only a change of fakturadatum moves förfallodatum; a due date the user edits
+ * on its own is authoritative. A half-typed or cleared invoice date holds the
+ * previous baseline: `<input type="date">` reports empty mid-edit, and treating
+ * that as a change would rewrite the due date off a garbage anchor.
+ */
+export function planDueDateSync(input: DueDateSyncInput): DueDateSyncResult {
+  const { invoiceDate, dueDate, previousInvoiceDate, terms } = input
+  const anchor = parseISO(invoiceDate)
+  if (!invoiceDate || !isValid(anchor)) {
+    return { dueDate: null, terms, previousInvoiceDate }
+  }
+  if (previousInvoiceDate === null || previousInvoiceDate === invoiceDate) {
+    // Same anchor: the pair on screen defines the term. A due date BEFORE the
+    // invoice date is not a term at all (the chip line treats it as a fixed
+    // date too), so it is ignored rather than carried forward as negative.
+    const observed = dueDays(invoiceDate, dueDate)
+    return {
+      dueDate: null,
+      terms: observed !== null && observed >= 0 ? observed : terms,
+      previousInvoiceDate: invoiceDate,
+    }
+  }
+  return {
+    dueDate: format(addDays(anchor, terms), 'yyyy-MM-dd'),
+    terms,
+    previousInvoiceDate: invoiceDate,
+  }
+}
+
+export interface CustomerTermsFillInput {
+  /** Fakturadatum as the form holds it now (yyyy-MM-dd, may be empty). */
+  invoiceDate: string
+  /** The picked customer's default_payment_terms, in days. */
+  terms: number
+  /** Today as yyyy-MM-dd: the anchor of last resort. */
+  today: string
+}
+
+export interface CustomerTermsFillResult {
+  /** The due date to write. */
+  dueDate: string
+  /** The term planDueDateSync must carry from here on. */
+  terms: number
+}
+
+/**
+ * Picking a customer fills förfallodatum from that customer's payment term,
+ * counted from the invoice date the form is actually on: choosing a customer
+ * after setting fakturadatum to the 31st must give the 31st + terms, not
+ * today + terms. Today is the anchor only while fakturadatum is empty or
+ * half-typed, which is also why the term comes back out of here: the sync
+ * baseline reads a term off the date pair on screen, and with no valid invoice
+ * date there is no pair to read, so this fill is the only thing that knows it.
+ * Without that, a 14 day customer picked on a cleared fakturadatum would be
+ * overwritten by the previous 30 day term on the next date the user types.
+ */
+export function planCustomerTermsFill(input: CustomerTermsFillInput): CustomerTermsFillResult {
+  const { invoiceDate, terms, today } = input
+  const anchor = parseISO(invoiceDate)
+  const base = invoiceDate && isValid(anchor) ? anchor : parseISO(today)
+  return { dueDate: format(addDays(base, terms), 'yyyy-MM-dd'), terms }
 }
 
 export interface ArticleSuggestion {
