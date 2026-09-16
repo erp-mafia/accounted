@@ -203,6 +203,13 @@ export function applySourceChartCsv(
     if (!vatRateComesFromLabel(treatment, Number(mapping.sourceAccount.charAt(0)))) return mapping
     const stated = format.rateFromCode(mapping.providerVatCode)
     if (stated === null || stated === mapping.defaultVatRate) return mapping
+    // A code stating 0 % states no acquisition rate: the buyer self-assesses at
+    // 25, 12 or 6, and zero is none of them. Read literally it is worse than a
+    // bare code, because the row then buckets nowhere: fetchDynamicVatAccounts
+    // builds rc-basis accounts for those three rates only, so the basis would
+    // drop out of the FK004 reconciliation with nothing said. The label keeps
+    // the rate it already derived.
+    if (stated === 0 && treatment.startsWith('reverse_charge')) return mapping
     // Same ownership rule as the treatment above: a rate change on a row the
     // company chart had settled is news the user has to see, not something to
     // apply in silence. defaultVatRate is what buckets a reverse-charge row in

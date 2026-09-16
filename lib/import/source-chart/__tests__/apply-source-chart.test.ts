@@ -81,6 +81,19 @@ describe('applySourceChartCsv', () => {
     expect(mappings[0].defaultVatRate).toBeNull()
   })
 
+  it('refuses a stated 0 % on a reverse charge, where it buckets nowhere', () => {
+    // 0 is not an acquisition rate: the buyer self-assesses at 25, 12 or 6.
+    // Taken literally it is worse than a code stating nothing, because
+    // fetchDynamicVatAccounts builds rc-basis accounts for those three rates
+    // only, so the basis would leave the FK004 reconciliation in silence.
+    const { mappings } = applySourceChartCsv(
+      [mapping('4515', 'Inköp varor EU 12%')],
+      csv('True;4515;Inköp varor EU 12%;20-0%'),
+    )
+    expect(mappings[0].providerVatTreatment).toBe('reverse_charge_eu_goods')
+    expect(mappings[0].defaultVatRate).toBe(0.12)
+  })
+
   it('leaves the rate alone when the code states none', () => {
     // The bare form names a box but no sats, so there is nothing to prefer and
     // the treatment's own default stands.

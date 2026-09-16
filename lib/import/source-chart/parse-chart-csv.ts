@@ -57,14 +57,19 @@ export interface ParsedSourceChart {
  * split on that format's delimiter. Column sets are fingerprints, so the first
  * match is the only match in practice.
  */
-function detectFormat(text: string): { format: SourceChartFormat; header: string[]; rows: string[][] } | null {
+function detectFormat(text: string): {
+  format: SourceChartFormat
+  header: string[]
+  rows: string[][]
+  unterminated: boolean
+} | null {
   for (const format of SOURCE_CHART_FORMATS) {
-    const records = splitCsvRecords(text, format.delimiter)
+    const { records, unterminated } = splitCsvRecords(text, format.delimiter)
     if (records.length === 0) continue
     const header = records[0].map((h) => h.trim())
     const { accountNumber, accountName } = format.columns
     if (header.includes(accountNumber) && header.includes(accountName)) {
-      return { format, header, rows: records.slice(1) }
+      return { format, header, rows: records.slice(1), unterminated }
     }
   }
   return null
@@ -85,7 +90,10 @@ function detectFormat(text: string): { format: SourceChartFormat; header: string
  * harder to diagnose than one that handles neither. CR, LF and CRLF all end a
  * record outside quotes and are all kept verbatim inside them.
  */
-function splitCsvRecords(text: string, delimiter: string): string[][] {
+function splitCsvRecords(
+  text: string,
+  delimiter: string,
+): { records: string[][]; unterminated: boolean } {
   const records: string[][] = []
   let fields: string[] = []
   let field = ''
@@ -129,7 +137,11 @@ function splitCsvRecords(text: string, delimiter: string): string[][] {
     field += char
   }
   if (field !== '' || fields.length > 0) endRecord()
-  return records
+  // Still inside a quote at EOF means the file stops mid-field: a download that
+  // was cut, not a chart. The rows before the cut parse perfectly well, which is
+  // the danger, so the fact has to leave this function rather than being
+  // rounded off into a last record that looks like every other one.
+  return { records, unterminated: inQuotes }
 }
 
 /** True for the spellings Spiris writes into a boolean column. */
@@ -166,6 +178,19 @@ export function parseSourceChartCsv(content: string): ParsedSourceChart {
   }
 
   const { format, header, rows } = detected
+
+  // No accounts, so applySourceChartCsv takes its not-applicable path and the
+  // chart already in force keeps standing. Returning the rows before the cut
+  // would be worse than returning none: they apply cleanly, so the import would
+  // carry half a chart with nothing saying which half.
+  if (detected.unterminated) {
+    return {
+      accounts: [],
+      format,
+      notices: [makeNotice('source_chart_truncated', 'action')],
+    }
+  }
+
   const columnOf = (name: string | undefined) => (name === undefined ? -1 : header.indexOf(name))
 
   const numberAt = columnOf(format.columns.accountNumber)
