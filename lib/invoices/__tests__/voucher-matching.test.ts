@@ -458,10 +458,13 @@ describe('findMatchingVouchersForInvoice', () => {
 
   // ── a reference found in the description (issue #2673) ────────────
   //
-  // The SQL candidate band is wider than the amount rules, so a voucher can
-  // reach the scorer while matching neither the remaining nor the total. Before,
-  // a description that merely contained the invoice number returned 0.99 from
-  // the scorer and returned early, skipping the currency guard.
+  // The prefilter band spans min(remaining, total) - pad .. max(remaining,
+  // total) + pad, which is wider than what scoreCandidate accepts: a voucher
+  // inside it can still match neither the remaining amount nor the total nor
+  // the fuzzy window. 5 000 against a 3 500 remainder on a 10 000 invoice is
+  // that shape, so these candidates are ones production actually delivers to
+  // the scorer, not mock-only constructions. Before this PR the description
+  // alone returned 0.99 there and returned early, skipping the currency guard.
 
   /** One accrual candidate with a chosen description, amount and line currency. */
   function enqueueDescribedCandidate(
@@ -511,7 +514,7 @@ describe('findMatchingVouchersForInvoice', () => {
 
   it('scores a description-only reference as in-text when the amount matches neither remaining nor total', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueueDescribedCandidate(enqueue, 'Inbetalning avser faktura F-2026001', 859, 'SEK')
+    enqueueDescribedCandidate(enqueue, 'Inbetalning avser faktura F-2026001', 5000, 'SEK')
 
     const result = await findMatchingVouchersForInvoice(
       supabase as never,
@@ -526,7 +529,7 @@ describe('findMatchingVouchersForInvoice', () => {
 
   it('rejects a candidate in another currency even when the description names the invoice', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueueDescribedCandidate(enqueue, 'Inbetalning avser faktura F-2026001', 859, 'EUR')
+    enqueueDescribedCandidate(enqueue, 'Inbetalning avser faktura F-2026001', 5000, 'EUR')
 
     const result = await findMatchingVouchersForInvoice(
       supabase as never,
