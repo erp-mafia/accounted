@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from './setup'
+import { PAYMENT_SOURCE_TYPES } from '@/lib/bookkeeping/payment-source-types'
 import {
   insertAuthUser,
   insertCompanyMember,
@@ -194,6 +195,74 @@ describe('unlink_supplier_invoice_from_voucher', () => {
       [linked.payment_id],
     )
     expect(rows[0].n).toBe(1)
+  })
+
+  it('restores the stored remainder instead of deriving it from the total', async () => {
+    // remaining_amount is not always total - paid_amount: a settlement may
+    // absorb öre (ORE_ROUNDING_SETTLEMENT_MAX) and a credit reduces it while
+    // total and paid_amount stay put. Deriving from the total would hand the
+    // absorbed amount back and leave a payable nobody owes.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const invoiceId = await seedSupplierInvoice({ userId, companyId, total: 3500 })
+    const entryId = await seedApVoucher({ userId, companyId, fiscalPeriodId, amount: 859 })
+    const linked = await link(invoiceId, entryId, userId, companyId)
+
+    // Stand in for an earlier settlement that absorbed 0.40 kr: the stored
+    // remainder is 40 öre lower than total - paid_amount.
+    await getPool().query(
+      `UPDATE public.supplier_invoices SET remaining_amount = remaining_amount - 0.40 WHERE id = $1`,
+      [invoiceId],
+    )
+
+    const result = await unlink(linked.payment_id!, invoiceId, companyId)
+    expect(result.ok).toBe(true)
+
+    const after = await invoiceRow(invoiceId)
+    expect(Number(after.paid_amount)).toBe(0)
+    expect(Number(after.remaining_amount)).toBe(3499.6)
+  })
+
+  it('refuses a payment whose link booked an exchange-rate difference', async () => {
+    // link_supplier_invoice_to_voucher books its own residual verifikat when it
+    // settles across currencies (20260830140000), and stamps the effective rate
+    // on the payment row. Unlink cannot reverse a posted verifikat, so it must
+    // not half-undo the settlement. The rate is set directly here rather than
+    // reconstructing the whole FX path, since the guard is what is under test.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const invoiceId = await seedSupplierInvoice({ userId, companyId, total: 1000 })
+    const entryId = await seedApVoucher({ userId, companyId, fiscalPeriodId, amount: 1000 })
+    const linked = await link(invoiceId, entryId, userId, companyId)
+
+    await getPool().query(
+      `UPDATE public.supplier_invoice_payments SET payment_exchange_rate = 11.42 WHERE id = $1`,
+      [linked.payment_id],
+    )
+
+    const result = await unlink(linked.payment_id!, invoiceId, companyId)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('UNLINK_SI_PAYMENT_FX_SETTLED')
+
+    const { rows } = await getPool().query(
+      `SELECT count(*)::int AS n FROM public.supplier_invoice_payments WHERE id = $1`,
+      [linked.payment_id],
+    )
+    expect(rows[0].n).toBe(1)
+    expect((await invoiceRow(invoiceId)).status).toBe('paid')
+  })
+
+  it('lists exactly the booked-payment source types the application does', async () => {
+    // The storno/unlink boundary is one rule in two languages. If the SQL copy
+    // drifts from PAYMENT_SOURCE_TYPES, one side deletes a payment row the
+    // other side also owns, which is the desync this design exists to prevent.
+    const { rows } = await getPool().query(
+      `SELECT prosrc FROM pg_proc WHERE proname = 'unlink_supplier_invoice_from_voucher'`,
+    )
+    const declared = (rows[0].prosrc as string).match(
+      /v_booked_payment_types text\[\] := ARRAY\[([^\]]+)\]/,
+    )
+    expect(declared).not.toBeNull()
+    const inSql = [...declared![1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort()
+    expect(inSql).toEqual([...PAYMENT_SOURCE_TYPES].sort())
   })
 
   it('refuses a member whose role is read-only', async () => {

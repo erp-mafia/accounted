@@ -796,6 +796,7 @@ export type SupplierVoucherUnlinkErrorCode =
   | 'UNLINK_SI_PAYMENT_NOT_A_LINK'
   | 'UNLINK_SI_PAYMENT_BOOKED_PAYMENT'
   | 'UNLINK_SI_PAYMENT_INVOICE_NOT_SETTLED'
+  | 'UNLINK_SI_PAYMENT_FX_SETTLED'
   | 'UNLINK_SI_PAYMENT_FORBIDDEN'
   | 'UNLINK_SI_PAYMENT_DB_ERROR'
 
@@ -893,7 +894,7 @@ export async function unlinkSupplierInvoiceFromVoucher(
 
   // The payment row is gone, so the row itself can no longer carry the record
   // of who removed it. audit_log is where behandlingshistorik reads from.
-  await supabase.from('audit_log').insert({
+  const { error: auditError } = await supabase.from('audit_log').insert({
     user_id: userId,
     company_id: companyId,
     action: 'DELETE',
@@ -913,6 +914,18 @@ export async function unlinkSupplierInvoiceFromVoucher(
       remaining_amount: result.remaining_amount,
     },
   })
+  if (auditError) {
+    // The payment row is hard-deleted, so this entry is the only record that
+    // the link existed and who removed it. Losing it silently would leave an
+    // unexplained change to the leverantörsreskontra, so it has to be
+    // observable even though the RPC has already committed.
+    log.error('failed to write the audit entry for an unlinked payment', auditError, {
+      companyId,
+      userId,
+      paymentId,
+      supplierInvoiceId: result.supplier_invoice_id,
+    })
+  }
 
   return {
     ok: true,

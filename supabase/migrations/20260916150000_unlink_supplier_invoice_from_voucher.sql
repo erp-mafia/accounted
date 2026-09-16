@@ -144,6 +144,31 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'code', 'UNLINK_SI_PAYMENT_NOT_FOUND');
   END IF;
 
+  -- The one case where linking DID write bookkeeping. 20260830140000 taught
+  -- link_supplier_invoice_to_voucher to settle a SEK payment voucher against a
+  -- foreign-currency invoice by committing its OWN two-line residual verifikat
+  -- (Dr 7960 / Cr 3960 plus the AP counter-leg). Deleting the payment row would
+  -- leave that verifikat posted with nothing to explain it, and the payable
+  -- restored to full: the ledger and the subledger would then disagree by the
+  -- residual. The row does not record the residual's id (only the effective
+  -- rate), so it cannot be found and reversed from here, and reversing a posted
+  -- verifikat is storno's job in any case. Refuse instead of half-undoing.
+  --
+  -- Both signals are checked: payment_exchange_rate is written only when the
+  -- cross-currency fallback engaged, and a non-SEK invoice is where it can
+  -- engage at all, so a row predating that column is still caught.
+  IF v_payment.payment_exchange_rate IS NOT NULL
+     OR COALESCE(v_invoice.currency, 'SEK') <> 'SEK' THEN
+    RETURN jsonb_build_object(
+      'ok', false,
+      'code', 'UNLINK_SI_PAYMENT_FX_SETTLED',
+      'details', jsonb_build_object(
+        'invoice_currency', v_invoice.currency,
+        'payment_exchange_rate', v_payment.payment_exchange_rate
+      )
+    );
+  END IF;
+
   -- 'credited' and 'reversed' mean another lifecycle step has already decided
   -- this invoice's fate; restoring a payable status would contradict it.
   IF v_invoice.status NOT IN ('paid', 'partially_paid') THEN
@@ -155,7 +180,20 @@ BEGIN
   END IF;
 
   v_new_paid := GREATEST(0, ROUND((COALESCE(v_invoice.paid_amount, 0) - v_payment.amount) * 100) / 100);
-  v_new_remaining := GREATEST(0, ROUND((v_invoice.total - v_new_paid) * 100) / 100);
+
+  -- Give the payment back to the REMAINDER rather than deriving the remainder
+  -- from the total. remaining_amount is not always total - paid_amount: a
+  -- settlement may absorb öre (lib/invoices/apply-supplier-payment.ts,
+  -- ORE_ROUNDING_SETTLEMENT_MAX) and a credit reduces the remainder while total
+  -- and paid_amount stay put. Re-deriving from total resurrects both, leaving
+  -- an outstanding balance nobody owes and an invoice that can never reach
+  -- 'paid' again. The link RPC reads the same stored column
+  -- (COALESCE(remaining_amount, total - paid_amount)), so the two now agree on
+  -- what the column means.
+  v_new_remaining := GREATEST(0, ROUND((
+    COALESCE(v_invoice.remaining_amount, v_invoice.total - COALESCE(v_invoice.paid_amount, 0))
+    + v_payment.amount
+  ) * 100) / 100);
 
   -- Restore the payable status the invoice would have had. payment-sync falls
   -- back to 'approved' unconditionally; reading approved_at instead keeps an

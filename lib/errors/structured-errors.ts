@@ -3972,6 +3972,14 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
     message_en: 'The invoice is neither paid nor partially paid, so there is no link to remove.',
     retryable: false,
   },
+  UNLINK_SI_PAYMENT_FX_SETTLED: {
+    httpStatus: 409,
+    message_sv:
+      'Betalningen avser en faktura i utländsk valuta, och kopplingen bokförde en valutakursdifferens. Ångra den med en stornoverifikation, så att differensen backas tillsammans med kopplingen.',
+    message_en:
+      'The payment settled a foreign-currency invoice and the link booked an exchange-rate difference. Reverse it with a storno so the difference is undone together with the link.',
+    retryable: false,
+  },
   UNLINK_SI_PAYMENT_FORBIDDEN: {
     httpStatus: 403,
     message_sv: 'Du har läsbehörighet i det här företaget och kan inte ta bort kopplingen.',

@@ -9,7 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
-import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { isPaymentSourceType } from '@/lib/bookkeeping/payment-source-types'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -180,21 +181,19 @@ type PaymentRow = SupplierInvoicePayment & {
 }
 
 /**
- * The four source types a payment Accounted booked itself carries
- * (lib/bookkeeping/payment-sync.ts PAYMENT_SOURCE_TYPES). Reversing those is
- * storno's job, which restores the ledger and the invoice together.
+ * True when the payment only LINKS an existing verifikat, so the unlink route
+ * can undo it. A payment whose entry Accounted booked itself belongs to storno.
+ *
+ * Fails CLOSED, like the RPC: without the embedded entry we cannot tell the two
+ * apart, and offering a control that the RPC will refuse is worse than not
+ * offering it. That happens with a payload from before the embed existed, or an
+ * entry the caller cannot read.
  */
-const BOOKED_PAYMENT_SOURCE_TYPES = new Set([
-  'invoice_paid',
-  'invoice_cash_payment',
-  'supplier_invoice_paid',
-  'supplier_invoice_cash_payment',
-])
-
 function isUnlinkablePayment(payment: PaymentRow): boolean {
   if (!payment.journal_entry_id) return false
   const sourceType = payment.journal_entry?.source_type
-  return !sourceType || !BOOKED_PAYMENT_SOURCE_TYPES.has(sourceType)
+  if (!sourceType) return false
+  return !isPaymentSourceType(sourceType)
 }
 
 export default function SupplierInvoiceDetailPage() {
@@ -1181,16 +1180,7 @@ export default function SupplierInvoiceDetailPage() {
                   <span className="tabular-nums text-muted-foreground">{formatDate(p.payment_date)}</span>
                   <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
                   {p.notes && <span className="min-w-0 truncate text-muted-foreground">{p.notes}</span>}
-                  <div className="ml-auto flex items-center gap-3">
-                    {isUnlinkablePayment(p) && (
-                      <button
-                        type="button"
-                        onClick={() => setUnlinkTarget(p)}
-                        className={`${HOVER_REVEAL_CLASS} text-xs text-muted-foreground hover:text-foreground hover:underline`}
-                      >
-                        {t('unlink_payment_action')}
-                      </button>
-                    )}
+                  <div className="ml-auto flex items-center gap-2">
                     {p.journal_entry_id && (
                       <Link
                         href={`/bookkeeping/${p.journal_entry_id}`}
@@ -1198,6 +1188,33 @@ export default function SupplierInvoiceDetailPage() {
                       >
                         {t('view_voucher')}
                       </Link>
+                    )}
+                    {/* Removing the link is destructive and sits next to a link
+                        people click to LOOK at something, so it goes behind the
+                        same kebab the page's other destructive actions use
+                        rather than one slip away from "Visa verifikation". */}
+                    {isUnlinkablePayment(p) && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            aria-label={tCommon('more_options')}
+                          >
+                            <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[240px]">
+                          <DropdownMenuItem
+                            onSelect={() => setUnlinkTarget(p)}
+                            disabled={!canWrite}
+                          >
+                            {t('unlink_payment_action')}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     )}
                   </div>
                 </li>
