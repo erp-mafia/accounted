@@ -9704,6 +9704,7 @@
     "fact_vouchers": "{count} vouchers",
     "fact_accounts_known": "{count} accounts, all known",
     "fact_accounts_new": "{count} accounts, {created} new ones created",
+    "fact_obs_to_2999": "Observation account {accounts} is posted to 2999 OBS-konto",
     "fact_years_span": "{count, plural, one {one fiscal year} other {# fiscal years}}, {from} to {to}",
     "fact_accounts": "{count} accounts",
     "fact_vouchers_years": "{count} vouchers in the chosen years",

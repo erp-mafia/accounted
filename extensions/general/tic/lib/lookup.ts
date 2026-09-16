@@ -42,10 +42,29 @@ export function registrationDateToMs(unixSeconds: number | null | undefined): nu
   return unixSeconds * 1000
 }
 
+/**
+ * The registered legal name (firma) of a company, from the search doc's
+ * `names` array.
+ *
+ * Lens v2 types each entry as `legalName` or `particularName` (a särskilt
+ * företagsnamn, registered alongside the firma for a branch or brand) and
+ * lists them newest-decided first. A company that registered a särskilt
+ * företagsnamn after its firma therefore has that name at index 0, so
+ * "first entry" is wrong exactly when it matters. The v1 index typed the
+ * firma as `name`; kept as a fallback so an old cached shape still resolves.
+ * (Support case PH#80: an AB was created under its särskilt företagsnamn.)
+ */
+export function pickCompanyName(names: TICCompanyDocument['names']): string {
+  const entry =
+    names.find((n) => n.companyNamingType === 'legalName')
+    ?? names.find((n) => n.companyNamingType === 'name')
+    ?? names.find((n) => n.companyNamingType !== 'particularName')
+    ?? names[0]
+  return entry?.nameOrIdentifier ?? ''
+}
+
 export function mapDocumentToLookupResult(doc: TICCompanyDocument): CompanyLookupResult {
-  const nameEntry =
-    doc.names.find((n) => n.companyNamingType === 'name') ?? doc.names[0]
-  const companyName = nameEntry?.nameOrIdentifier ?? ''
+  const companyName = pickCompanyName(doc.names)
 
   const isCeased = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
 

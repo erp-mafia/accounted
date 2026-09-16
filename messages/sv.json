@@ -9704,6 +9704,7 @@
     "fact_vouchers": "{count} verifikat",
     "fact_accounts_known": "{count} konton, alla kända",
     "fact_accounts_new": "{count} konton, {created} nya skapas",
+    "fact_obs_to_2999": "Observationskonto {accounts} bokförs på 2999 OBS-konto",
     "fact_years_span": "{count, plural, one {ett räkenskapsår} other {# räkenskapsår}}, {from} till {to}",
     "fact_accounts": "{count} konton",
     "fact_vouchers_years": "{count} verifikat i de valda åren",

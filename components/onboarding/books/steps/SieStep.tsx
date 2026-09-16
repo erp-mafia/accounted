@@ -282,6 +282,15 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     }
     return out
   }, [ready])
+  // Class 9 accounts with amounts are routed to 2999 OBS-konto by the parse
+  // route (sie-preview-mappings.ts); this flow has no mapping page, so say so.
+  const obsAccounts = useMemo(() => {
+    const seen = new Set<string>()
+    for (const f of ready) for (const m of f.parsed!.mappings) {
+      if (m.targetAccount === '2999' && m.matchType === 'class' && /^9\d{3}$/.test(m.sourceAccount)) seen.add(m.sourceAccount)
+    }
+    return Array.from(seen).sort()
+  }, [ready])
   const hasIb = ready.some((f) => (f.parsed?.preview.openingBalanceTotal ?? 0) > 0)
   const ib = ibOn ?? hasIb
   const ibAmount = ready.reduce((s, f) => s + (f.parsed?.preview.openingBalanceTotal ?? 0), 0)
@@ -293,8 +302,9 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     list.push({ text: t('fact_years', { count: nYears }) })
     list.push({ text: t('fact_vouchers', { count: totalVouchers }) })
     list.push(unmapped.length === 0 ? { text: t('fact_accounts_known', { count: totalAccounts }) } : { text: t('fact_accounts_new', { count: totalAccounts, created: unmapped.length }) })
+    if (obsAccounts.length > 0) list.push({ text: t('fact_obs_to_2999', { accounts: obsAccounts.join(', ') }) })
     return list
-  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, t])
+  }, [ready.length, company, nYears, totalVouchers, totalAccounts, unmapped.length, obsAccounts, t])
 
   /* ── import ──────────────────────────────────────────────────────── */
   const lines: TheaterLine[] = [
