@@ -460,6 +460,16 @@ describe('tools/list payload size guard', () => {
     //     fraction" on a property named default_vat_rate, so it now opens
     //     "Fraction" like its twin on create_account. Ceiling unchanged, no
     //     read demoted.
+    //   * 2026-09-16, source chart merging main (#2641 on top of #2660): the
+    //     batch-allocation preview tool and the ruta 06/50 enum growth each
+    //     paid for themselves, and together they measured 60 513. Paid for
+    //     inside the same two account tools again: the livsmedel note lost
+    //     its parenthetical and now states the last 6 % day rather than
+    //     "reverts 2027-12-31", which read as the reversion happening a day
+    //     early; update_account's account_number said "of the account to
+    //     update" on the update tool, and its description said "Stages for
+    //     approval" after opening with "Stage an edit". Ceiling unchanged, no
+    //     read demoted.
     expect(approxTokens).toBeLessThan(60_500)
   })
 
