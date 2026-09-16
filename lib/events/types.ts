@@ -45,6 +45,8 @@ export type CoreEvent =
   | { type: 'document.uploaded'; payload: { document: DocumentAttachment; userId: string; companyId: string; extractionOwner?: DocumentExtractionOwner } }
   | { type: 'document.accessed'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
   | { type: 'document.deleted'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
+  /** Arkiv said what a document is (a model or a person). The invoice inbox routes it into or out of the Underlag queue on this. */
+  | { type: 'document.classified'; payload: { document: { id: string; file_name: string }; companyId: string; userId: string; docType: string; admission: 'admitted' | 'held'; decidedBy: 'model' | 'human' } }
   // Invoicing
   | { type: 'invoice.created'; payload: { invoice: Invoice; userId: string; companyId: string } }
   // Hard delete of an un-finalized, unnumbered draft (no F-series number was

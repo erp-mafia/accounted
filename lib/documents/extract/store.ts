@@ -10,6 +10,7 @@ import type { PageText } from './locate'
 import { runChecks, type CheckFailure } from './merge'
 import { fieldKinds, jsonSchemaFor, schemaForType, type ExtractionSchemaDef } from './schemas'
 import { auditOneIn } from '@/lib/arkiv/lint/autonomy'
+import { actingFields } from './acting'
 
 /**
  * Arkiv phase 3: the stored record of a document. A model run writes a
@@ -17,20 +18,10 @@ import { auditOneIn } from '@/lib/arkiv/lint/autonomy'
  * Both go through save_document_extraction, which supersedes the current row
  * in one transaction and refuses when it changed since it was read.
  */
-export type SkipReason =
-  | 'ai_unconfigured'
-  | 'not_found'
-  | 'not_admitted'
-  | 'no_type'
-  | 'no_text'
-  | 'up_to_date'
-  | 'no_extraction'
-  | 'unknown_fields'
+export type SkipReason = 'ai_unconfigured' | 'not_found' | 'not_admitted' | 'no_type' | 'no_text' | 'up_to_date' | 'no_extraction' | 'unknown_fields'
 
 export type ExtractOutcome =
-  | { status: 'extracted'; extractionId: string; schemaType: string; reviewFields: string[] }
-  | { status: 'skipped'; reason: SkipReason }
-  | { status: 'error'; reason: string }
+  { status: 'extracted'; extractionId: string; schemaType: string; reviewFields: string[] } | { status: 'skipped'; reason: SkipReason } | { status: 'error'; reason: string }
 
 interface DocumentRow {
   id: string
@@ -77,6 +68,9 @@ export async function extractDocument(supabase: SupabaseClient, documentId: stri
 
     const startedAt = new Date().toISOString()
     const run = await readFields({ def, company, fileName: doc.file_name, pages })
+    // Only what something acts on goes to a person; the rest keeps both readings in the record.
+    const acting = actingFields(def.schemaType)
+    run.reviewFields = run.reviewFields.filter((name) => acting.has(name))
     const audit = auditSample(documentId, def, run.reviewFields, auditOneIn(await autonomyLevel(supabase, doc.company_id, def.schemaType)))
     if (audit) {
       run.reviewFields.push(audit)
@@ -116,12 +110,7 @@ export async function extractDocument(supabase: SupabaseClient, documentId: stri
  * person's value with full confidence and leave the review list, even when a
  * check still objects (the failure stays in validation for anyone to see).
  */
-export async function recordHumanFields(
-  supabase: SupabaseClient,
-  documentId: string,
-  userId: string,
-  values: Record<string, string | number | null>,
-): Promise<ExtractOutcome> {
+export async function recordHumanFields(supabase: SupabaseClient, documentId: string, userId: string, values: Record<string, string | number | null>): Promise<ExtractOutcome> {
   try {
     const doc = await loadDocument(supabase, documentId)
     if (!doc) return skip('not_found')
@@ -147,10 +136,13 @@ export async function recordHumanFields(
       }
     }
     const checks = runChecks(def, payload)
-    const reviewFields = [...new Set([...current.review_fields, ...checks.map((c) => c.field)])].filter((name) => !settled.includes(name))
+    const acting = actingFields(current.schema_type)
+    const reviewFields = [...new Set([...current.review_fields, ...checks.map((c) => c.field)])].filter((name) => !settled.includes(name) && acting.has(name))
     // An audited field the person confirmed as read, or changed, is what the autonomy ladder counts.
     const audited = (current.validation ?? []).find((c) => c.check === 'audit' && settled.includes(c.field))
-    const audit = audited ? { field: audited.field, changed: normalizeValue(kinds[audited.field], values[audited.field]) !== (current.payload[audited.field]?.normalized ?? null) } : null
+    const audit = audited
+      ? { field: audited.field, changed: normalizeValue(kinds[audited.field], values[audited.field]) !== (current.payload[audited.field]?.normalized ?? null) }
+      : null
     const activityId = await recordActivity(supabase, {
       companyId: doc.company_id,
       documentId,
@@ -177,11 +169,7 @@ export async function recordHumanFields(
 }
 
 async function loadDocument(supabase: SupabaseClient, documentId: string): Promise<DocumentRow | null> {
-  const { data, error } = await supabase
-    .from('document_attachments')
-    .select('id, company_id, file_name, doc_type, admission_state')
-    .eq('id', documentId)
-    .maybeSingle()
+  const { data, error } = await supabase.from('document_attachments').select('id, company_id, file_name, doc_type, admission_state').eq('id', documentId).maybeSingle()
   if (error) throw new Error(`document fetch failed: ${error.message}`)
   return data as DocumentRow | null
 }
@@ -198,11 +186,7 @@ async function loadCurrentExtraction(supabase: SupabaseClient, documentId: strin
 }
 
 async function loadPages(supabase: SupabaseClient, documentId: string): Promise<PageText[]> {
-  const { data, error } = await supabase
-    .from('document_pages')
-    .select('page_no, text, words')
-    .eq('document_id', documentId)
-    .order('page_no', { ascending: true })
+  const { data, error } = await supabase.from('document_pages').select('page_no, text, words').eq('document_id', documentId).order('page_no', { ascending: true })
   if (error) throw new Error(`pages fetch failed: ${error.message}`)
   return ((data ?? []) as Array<{ page_no: number; text: string; words: WordBox[] | null }>).map((p) => ({ pageNo: p.page_no, text: p.text, words: p.words }))
 }
@@ -238,9 +222,11 @@ export const AUDIT_ONE_IN = 20
 
 export function auditSample(documentId: string, def: ExtractionSchemaDef, reviewFields: string[], oneIn: number = AUDIT_ONE_IN): string | null {
   if (reviewFields.length > 0) return null
+  const acting = actingFields(def.schemaType)
+  if (acting.size === 0) return null
   const bucket = parseInt(createHash('sha256').update(documentId).digest('hex').slice(0, 8), 16) % Math.max(1, oneIn)
   if (bucket !== 0) return null
-  return (def.fields.find((f) => f.required) ?? def.fields[0])?.name ?? null
+  return (def.fields.find((f) => f.required && acting.has(f.name)) ?? def.fields.find((f) => acting.has(f.name)))?.name ?? null
 }
 
 /** The company's earned level for a document type (phase 6); 0 until the nightly lint has counted enough audits. */

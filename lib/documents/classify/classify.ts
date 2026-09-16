@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { getAiService, getAiStatus } from '@/lib/ai'
+import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { DOC_TYPES, DOC_TYPE_DESCRIPTIONS, type DocType } from './taxonomy'
 
@@ -79,6 +80,7 @@ export type ClassifyOutcome =
 interface DocumentRow {
   id: string
   company_id: string
+  user_id: string | null
   file_name: string
   page_count: number | null
   admission_state: 'held' | 'admitted'
@@ -88,7 +90,7 @@ export async function classifyDocument(supabase: SupabaseClient, documentId: str
   if (!getAiStatus().configured) return { status: 'skipped', reason: 'ai_unconfigured' }
   const { data: doc, error: docError } = await supabase
     .from('document_attachments')
-    .select('id, company_id, file_name, page_count, admission_state')
+    .select('id, company_id, user_id, file_name, page_count, admission_state')
     .eq('id', documentId)
     .maybeSingle()
   if (docError) return { status: 'error', reason: `document fetch failed: ${docError.message}` }
@@ -191,7 +193,7 @@ export async function recordHumanClassification(
 ): Promise<ClassifyOutcome> {
   const { data: doc, error } = await supabase
     .from('document_attachments')
-    .select('id, company_id, file_name, page_count, admission_state')
+    .select('id, company_id, user_id, file_name, page_count, admission_state')
     .eq('id', documentId)
     .maybeSingle()
   if (error) return { status: 'error', reason: `document fetch failed: ${error.message}` }
@@ -253,6 +255,11 @@ async function persistClassification(
   if (meta.decidedBy === 'human' && meta.admission === 'admitted') update.admission_reason = c.relevance_reason || null
   const { error: docError } = await supabase.from('document_attachments').update(update).eq('id', doc.id)
   if (docError) return { status: 'error', reason: `document update failed: ${docError.message}` }
+  // What it is decides where it goes: the inbox extension queues or releases it on this.
+  await eventBus.emit({
+    type: 'document.classified',
+    payload: { document: { id: doc.id, file_name: doc.file_name }, companyId: doc.company_id, userId: meta.userId ?? doc.user_id ?? '', docType: c.doc_type, admission, decidedBy: meta.decidedBy },
+  })
   return { status: 'classified', classification: c, admission }
 }
 

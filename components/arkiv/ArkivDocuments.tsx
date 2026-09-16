@@ -34,7 +34,7 @@ const PICKER_CLASS = 'h-8 w-auto gap-1.5 rounded-full px-3.5 text-[13px]'
  * date, document, type, counterparty, amount, and what it is tied to.
  * `fixedType` pins the list to one group (the Myndighet page).
  */
-export function ArkivDocuments({ fixedType }: { fixedType?: string }) {
+export function ArkivDocuments({ fixedType, refreshKey = 0 }: { fixedType?: string; refreshKey?: number }) {
   const t = useTranslations('arkiv')
   const router = useRouter()
   const [type, setType] = useState(fixedType ?? 'all')
@@ -70,7 +70,7 @@ export function ArkivDocuments({ fixedType }: { fixedType?: string }) {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [type, query, year])
+  }, [type, query, year, refreshKey])
 
   const years = useMemo(() => {
     const now = new Date().getFullYear()

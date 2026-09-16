@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
+import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { enqueueMissingExtractions, runDocumentJobs } from '@/lib/documents/jobs/queue'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+
+// Classification emits document.classified; the inbox extension's handler must be wired to route it.
+ensureInitialized()
 
 /**
  * GET /api/documents/jobs/cron

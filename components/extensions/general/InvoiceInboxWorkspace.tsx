@@ -11,6 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
+import { isDocType } from '@/lib/documents/classify/taxonomy'
 import AiFilledIndicator from '@/components/ui/ai-filled-indicator'
 import {
   Dialog,
@@ -175,6 +176,9 @@ interface InboxItem {
   // it survives re-extraction; wins over extracted_data.documentKind for the
   // row badge and the type filter. Absent on client-side placeholders.
   kind_hint?: 'supplier_invoice' | 'receipt' | null
+  // Arkiv classified the document as something not booked from here; it left the queue for its own page.
+  routed_to_arkiv_at?: string | null
+  routed_doc_type?: string | null
   matched_supplier_id: string | null
   matched_transaction_id: string | null
   created_supplier_invoice_id: string | null
@@ -421,6 +425,7 @@ const WorkspaceSkeleton = InvoiceInboxSkeleton
 export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
   const t = useTranslations('inbox_workspace')
+  const tArkiv = useTranslations('arkiv')
   const tStart = useTranslations('start_cards')
   const dismissKeyCompanyId = useCompanyOptional()?.company?.id ?? null
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -436,6 +441,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // The list read failed (non-2xx, unparseable body, or network). Kept apart
   // from "the list is empty": with no list at all we know nothing about the
   // inbox and must not render an authoritative "Inkorgen är tom".
+  const [routedToArkiv, setRoutedToArkiv] = useState<InboxItem[]>([])
   const [itemsLoadFailed, setItemsLoadFailed] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // List filter + search (client-side over the already-fetched items list).
@@ -519,7 +525,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         setItemsLoadFailed(true)
         return
       }
-      const serverItems: InboxItem[] = json.data?.items ?? []
+      const allItems: InboxItem[] = json.data?.items ?? []
+      setRoutedToArkiv(allItems.filter((it) => it.routed_to_arkiv_at))
+      const serverItems = allItems.filter((it) => !it.routed_to_arkiv_at)
       // Preserve optimistic upload placeholders that haven't resolved to a
       // server row yet. A refetch can now fire mid-upload (a realtime event
       // from an unrelated booking), and a wholesale replace would briefly
@@ -1475,6 +1483,18 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         </div>
       </header>
 
+      {routedToArkiv.length > 0 && (
+        <div className="mx-4 mt-3">
+          <AttnLine action={{ label: tArkiv('underlag_routed_open'), href: '/arkiv' }}>
+            {tArkiv('underlag_routed_line', {
+              count: routedToArkiv.length,
+              types: [...new Set(routedToArkiv.map((it) => it.routed_doc_type).filter((x): x is string => !!x))]
+                .map((type) => (isDocType(type) ? tArkiv(`types.${type}` as never) : type).toLowerCase())
+                .join(', '),
+            })}
+          </AttnLine>
+        </div>
+      )}
       {/* The flow bar is the status picker, with errors beside it only while
           there are any. No document-type menu: the bar is the one axis, and a
           second one next to it read as a second picker (founder review

@@ -82,7 +82,7 @@ describe('runInboxSweep', () => {
 
     const summary = await runInboxSweep(supabase)
 
-    expect(summary).toEqual({ flipped: 2 })
+    expect(summary).toEqual({ flipped: 2, routed: 0 })
     // The stale scan targets processing rows older than the threshold.
     expect(captured.selectFilters).toEqual([
       { method: 'eq', args: ['status', 'processing'] },
@@ -109,7 +109,7 @@ describe('runInboxSweep', () => {
 
     const summary = await runInboxSweep(supabase)
 
-    expect(summary).toEqual({ flipped: 1 })
+    expect(summary).toEqual({ flipped: 1, routed: 0 })
   })
 
   it('does nothing when no processing row is stale', async () => {
@@ -117,19 +117,19 @@ describe('runInboxSweep', () => {
 
     const summary = await runInboxSweep(supabase)
 
-    expect(summary).toEqual({ flipped: 0 })
+    expect(summary).toEqual({ flipped: 0, routed: 0 })
     expect(captured.updatePayload).toBeUndefined()
   })
 
   it('never throws: a failed select reports zero flips', async () => {
     const { supabase } = makeSupabase({ staleIds: [], selectError: { message: 'boom' } })
 
-    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0 })
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0 })
   })
 
   it('never throws: a failed update reports zero flips', async () => {
     const { supabase } = makeSupabase({ staleIds: ['i1'], updateError: { message: 'boom' } })
 
-    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0 })
+    await expect(runInboxSweep(supabase)).resolves.toEqual({ flipped: 0, routed: 0 })
   })
 })

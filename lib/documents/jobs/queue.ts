@@ -55,10 +55,7 @@ export async function enqueueMissingExtractions(supabase: SupabaseClient, limit:
   return (data as number | null) ?? 0
 }
 
-export async function runDocumentJobs(
-  supabase: SupabaseClient,
-  opts: { limit: number; worker: string; budgetMs: number; now?: () => number },
-): Promise<RunSummary> {
+export async function runDocumentJobs(supabase: SupabaseClient, opts: { limit: number; worker: string; budgetMs: number; now?: () => number }): Promise<RunSummary> {
   const now = opts.now ?? Date.now
   const deadline = now() + opts.budgetMs
   const { data, error } = await supabase.rpc('claim_document_jobs', { p_batch_size: opts.limit, p_worker: opts.worker })
@@ -73,25 +70,57 @@ export async function runDocumentJobs(
       summary.returned++
       continue
     }
-    try {
-      const result = await runStep(supabase, job, identities)
-      await settleJob(supabase, job, { status: 'done', result, last_error: null })
-      summary.done++
-    } catch (err) {
-      const reason = (err instanceof Error ? err.message : String(err)).slice(0, 500)
-      await settleJob(supabase, job, { status: 'failed', last_error: reason, run_after: new Date(now() + backoffMs(job.attempts)).toISOString() })
-      summary.failed++
-      log.warn('document job failed', { job: job.id, kind: job.kind, doc: job.document_id, attempt: job.attempts, reason })
-    }
+    const outcome = await runClaimed(supabase, job, identities, now)
+    if ('error' in outcome) summary.failed++
+    else summary.done++
   }
   return summary
+}
+
+/** One claimed job: run its step, settle it done or failed with backoff. */
+async function runClaimed(
+  supabase: SupabaseClient,
+  job: ClaimedJob,
+  identities: Map<string, CompanyIdentity>,
+  now: () => number,
+): Promise<{ kind: string; result: string } | { kind: string; error: string }> {
+  try {
+    const result = await runStep(supabase, job, identities)
+    await settleJob(supabase, job, { status: 'done', result, last_error: null })
+    return { kind: job.kind, result }
+  } catch (err) {
+    const reason = (err instanceof Error ? err.message : String(err)).slice(0, 500)
+    await settleJob(supabase, job, { status: 'failed', last_error: reason, run_after: new Date(now() + backoffMs(job.attempts)).toISOString() })
+    log.warn('document job failed', { job: job.id, kind: job.kind, doc: job.document_id, attempt: job.attempts, reason })
+    return { kind: job.kind, error: reason }
+  }
+}
+
+/**
+ * Runs the one due step of a single document now: the upload surface polls
+ * this while a person watches, so a document lands in seconds instead of on
+ * the next cron ticks. Null when the document has nothing due.
+ */
+export async function runDocumentJobFor(
+  supabase: SupabaseClient,
+  documentId: string,
+  worker: string,
+): Promise<{ kind: string; result: string } | { kind: string; error: string } | null> {
+  const { data, error } = await supabase.rpc('claim_document_job_for', { p_document_id: documentId, p_worker: worker })
+  if (error) throw new Error(`claim failed: ${error.message}`)
+  const job = ((data ?? []) as ClaimedJob[])[0]
+  if (!job) return null
+  return runClaimed(supabase, job, new Map(), Date.now)
 }
 
 /** 2, 4, 8, 16, 32 minutes, capped at an hour. */
 const backoffMs = (attempts: number) => Math.min(60, 2 ** attempts) * 60_000
 
 async function settleJob(supabase: SupabaseClient, job: ClaimedJob, patch: Record<string, unknown>): Promise<void> {
-  const { error } = await supabase.from('document_jobs').update({ ...patch, locked_at: null, locked_by: null }).eq('id', job.id)
+  const { error } = await supabase
+    .from('document_jobs')
+    .update({ ...patch, locked_at: null, locked_by: null })
+    .eq('id', job.id)
   if (error) log.error('document job update failed', { job: job.id, reason: error.message })
 }
 
@@ -110,11 +139,7 @@ function runStep(supabase: SupabaseClient, job: ClaimedJob, identities: Map<stri
 }
 
 async function runRead(supabase: SupabaseClient, job: ClaimedJob): Promise<string> {
-  const { data, error } = await supabase
-    .from('document_attachments')
-    .select('id, company_id, storage_path, mime_type')
-    .eq('id', job.document_id)
-    .maybeSingle()
+  const { data, error } = await supabase.from('document_attachments').select('id, company_id, storage_path, mime_type').eq('id', job.document_id).maybeSingle()
   if (error) throw new Error(`document fetch failed: ${error.message}`)
   if (!data) return 'skipped: not_found'
   const out = await readAndStoreDocument(supabase, data as ReadableDocumentRow)

@@ -15,6 +15,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { routeStaleQueueItems } from './route-from-arkiv'
 import { createLogger } from '@/lib/logger'
 import { emptyResult } from './extract-invoice-fields'
 
@@ -36,18 +37,27 @@ const BATCH = 50
 export interface InboxSweepSummary {
   /** Stale 'processing' rows flipped to 'received' with the empty skeleton. */
   flipped: number
+  /** Queue rows whose document Arkiv classified as something not booked from here, sent to Arkiv (phase 7 catch-up). */
+  routed?: number
 }
 
 /** Run one sweep pass. Never throws. */
 export async function runInboxSweep(supabase: SupabaseClient): Promise<InboxSweepSummary> {
+  const summary = await flipStaleProcessing(supabase)
+  try {
+    const routed = await routeStaleQueueItems(supabase)
+    if (routed > 0) log.info('routed stale queue rows to arkiv', { routed })
+    return { ...summary, routed }
+  } catch (err) {
+    log.error('stale queue routing failed', { error: err instanceof Error ? err.message : String(err) })
+    return { ...summary, routed: 0 }
+  }
+}
+
+async function flipStaleProcessing(supabase: SupabaseClient): Promise<InboxSweepSummary> {
   const cutoff = new Date(Date.now() - PROCESSING_STUCK_MS).toISOString()
 
-  const { data: stale, error: selectError } = await supabase
-    .from('invoice_inbox_items')
-    .select('id')
-    .eq('status', 'processing')
-    .lt('created_at', cutoff)
-    .limit(BATCH)
+  const { data: stale, error: selectError } = await supabase.from('invoice_inbox_items').select('id').eq('status', 'processing').lt('created_at', cutoff).limit(BATCH)
   if (selectError) {
     log.error('stale-processing select failed', { error: selectError.message })
     return { flipped: 0 }

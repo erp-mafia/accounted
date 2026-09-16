@@ -106,15 +106,44 @@ interface DocumentRow {
 
 async function documentRecord(supabase: SupabaseClient, companyId: string, documentId: string) {
   const [doc, extraction, links, agreement] = await Promise.all([
-    supabase.from('document_attachments').select('id, file_name, created_at, doc_type, admission_state, page_count, journal_entry_id, extracted_data').eq('id', documentId).eq('company_id', companyId).maybeSingle(),
-    supabase.from('document_extractions').select('id, schema_type, schema_version, pass, payload, review_fields, created_at').eq('document_id', documentId).eq('is_current', true).maybeSingle(),
+    supabase
+      .from('document_attachments')
+      .select('id, file_name, created_at, doc_type, admission_state, page_count, journal_entry_id, extracted_data')
+      .eq('id', documentId)
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    supabase
+      .from('document_extractions')
+      .select('id, schema_type, schema_version, pass, payload, review_fields, created_at')
+      .eq('document_id', documentId)
+      .eq('is_current', true)
+      .maybeSingle(),
     supabase.from('document_links').select('id, target_kind, target_id, basis, method, confidence').eq('document_id', documentId).is('retired_at', null),
     supabase.from('agreements').select('id, kind, title').eq('source_document_id', documentId).maybeSingle(),
   ])
   for (const r of [doc, extraction, links, agreement]) if (r.error) throw dbError(r.error)
   if (!doc.data) return null
   const d = doc.data as DocumentRow
-  const ext = extraction.data as { id: string; schema_type: string; schema_version: number; pass: string; payload: Record<string, { value: unknown; normalized: unknown; page: number | null; quote: string | null; confidence: number; method: string }>; review_fields: string[]; created_at: string } | null
+  const ext = extraction.data as {
+    id: string
+    schema_type: string
+    schema_version: number
+    pass: string
+    payload: Record<
+      string,
+      {
+        value: unknown
+        normalized: unknown
+        page: number | null
+        quote: string | null
+        confidence: number
+        method: string
+        readings?: Array<{ value: unknown; page: number | null; quote: string | null }>
+      }
+    >
+    review_fields: string[]
+    created_at: string
+  } | null
   return {
     document_id: d.id,
     file_name: d.file_name,
@@ -129,11 +158,25 @@ async function documentRecord(supabase: SupabaseClient, companyId: string, docum
           schema_type: ext.schema_type,
           schema_version: ext.schema_version,
           settled_by: ext.pass,
-          fields: Object.entries(ext.payload).map(([name, f]) => ({ field: name, value: f.normalized ?? f.value ?? null, page: f.page, quote: f.quote, confidence: f.confidence, under_review: ext.review_fields.includes(name) })),
+          fields: Object.entries(ext.payload).map(([name, f]) => ({
+            field: name,
+            value: f.normalized ?? f.value ?? null,
+            page: f.page,
+            quote: f.quote,
+            confidence: f.confidence,
+            under_review: ext.review_fields.includes(name),
+            readings: f.confidence < 1 && f.readings?.length ? f.readings.map((r) => ({ value: r.value, page: r.page, quote: r.quote })) : undefined,
+          })),
           review_fields: ext.review_fields,
         }
       : null,
-    links: ((links.data ?? []) as Array<{ id: string; target_kind: RecordKind; target_id: string; basis: string; method: string; confidence: number }>).map((l) => ({ link_id: l.id, record_ref: recordRef(l.target_kind, l.target_id), basis: l.basis, method: l.method, confidence: Number(l.confidence) })),
+    links: ((links.data ?? []) as Array<{ id: string; target_kind: RecordKind; target_id: string; basis: string; method: string; confidence: number }>).map((l) => ({
+      link_id: l.id,
+      record_ref: recordRef(l.target_kind, l.target_id),
+      basis: l.basis,
+      method: l.method,
+      confidence: Number(l.confidence),
+    })),
     agreement_ref: agreement.data ? recordRef('agreement', (agreement.data as { id: string }).id) : null,
     // The Underlag reader's structured read of a receipt or invoice (line items, VAT breakdown, totals), when it ran.
     underlag_extraction: d.extracted_data ?? null,
@@ -143,7 +186,9 @@ async function documentRecord(supabase: SupabaseClient, companyId: string, docum
 async function agreementRecord(supabase: SupabaseClient, companyId: string, agreementId: string, asOf: string | null) {
   const { data, error } = await supabase
     .from('agreements')
-    .select('id, kind, title, status, counterparty_party_id, counterparty_name, starts_on, ends_on, notice_months, renewal_terms, amount, currency, period, principal, interest_rate, source_document_id, sources')
+    .select(
+      'id, kind, title, status, counterparty_party_id, counterparty_name, starts_on, ends_on, notice_months, renewal_terms, amount, currency, period, principal, interest_rate, source_document_id, sources',
+    )
     .eq('id', agreementId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -151,8 +196,19 @@ async function agreementRecord(supabase: SupabaseClient, companyId: string, agre
   if (!data) return null
   const a = data as Record<string, unknown> & { id: string; counterparty_party_id: string | null; source_document_id: string }
   const [obligations, deadlines, facts] = await Promise.all([
-    supabase.from('agreement_obligations').select('id, kind, due_on, amount, currency, amount_is_estimate, status, transaction_id').eq('agreement_id', agreementId).order('due_on', { ascending: true }).limit(60),
-    supabase.from('deadlines').select('id, title, due_date, status, source_key').eq('company_id', companyId).like('source_key', `agreement:${agreementId}:%`).eq('is_completed', false).is('dismissed_at', null),
+    supabase
+      .from('agreement_obligations')
+      .select('id, kind, due_on, amount, currency, amount_is_estimate, status, transaction_id')
+      .eq('agreement_id', agreementId)
+      .order('due_on', { ascending: true })
+      .limit(60),
+    supabase
+      .from('deadlines')
+      .select('id, title, due_date, status, source_key')
+      .eq('company_id', companyId)
+      .like('source_key', `agreement:${agreementId}:%`)
+      .eq('is_completed', false)
+      .is('dismissed_at', null),
     listLiveFacts(supabase, companyId, { kind: 'agreement', id: agreementId }, asOf),
   ])
   if (obligations.error) throw dbError(obligations.error)
@@ -174,14 +230,28 @@ async function agreementRecord(supabase: SupabaseClient, companyId: string, agre
     interest_rate: a.interest_rate == null ? null : Number(a.interest_rate),
     source_document_ref: recordRef('document', a.source_document_id),
     sources: a.sources,
-    obligations: ((obligations.data ?? []) as Array<Record<string, unknown>>).map((o) => ({ obligation_id: o.id, kind: o.kind, due_on: o.due_on, amount: Number(o.amount), currency: o.currency, estimate: o.amount_is_estimate, status: o.status, transaction_id: o.transaction_id })),
+    obligations: ((obligations.data ?? []) as Array<Record<string, unknown>>).map((o) => ({
+      obligation_id: o.id,
+      kind: o.kind,
+      due_on: o.due_on,
+      amount: Number(o.amount),
+      currency: o.currency,
+      estimate: o.amount_is_estimate,
+      status: o.status,
+      transaction_id: o.transaction_id,
+    })),
     deadlines: ((deadlines.data ?? []) as Array<Record<string, unknown>>).map((d) => ({ deadline_id: d.id, title: d.title, due_date: d.due_date, status: d.status })),
     facts: facts.map(factView),
   }
 }
 
 async function partyRecord(supabase: SupabaseClient, companyId: string, partyId: string) {
-  const { data, error } = await supabase.from('parties').select('id, display_name, legal_name, org_number, vat_number, kind, status').eq('id', partyId).eq('company_id', companyId).maybeSingle()
+  const { data, error } = await supabase
+    .from('parties')
+    .select('id, display_name, legal_name, org_number, vat_number, kind, status')
+    .eq('id', partyId)
+    .eq('company_id', companyId)
+    .maybeSingle()
   if (error) throw dbError(error)
   if (!data) return null
   const p = data as Record<string, unknown> & { id: string }
@@ -197,13 +267,27 @@ async function partyRecord(supabase: SupabaseClient, companyId: string, partyId:
     vat_number: p.vat_number,
     kind: p.kind,
     status: p.status,
-    documents: ((links ?? []) as Array<{ document_id: string; basis: string; method: string }>).map((l) => ({ record_ref: recordRef('document', l.document_id), basis: l.basis, method: l.method })),
-    agreements: ((agreements ?? []) as Array<{ id: string; title: string; kind: string; status: string }>).map((a) => ({ record_ref: recordRef('agreement', a.id), title: a.title, kind: a.kind, status: a.status })),
+    documents: ((links ?? []) as Array<{ document_id: string; basis: string; method: string }>).map((l) => ({
+      record_ref: recordRef('document', l.document_id),
+      basis: l.basis,
+      method: l.method,
+    })),
+    agreements: ((agreements ?? []) as Array<{ id: string; title: string; kind: string; status: string }>).map((a) => ({
+      record_ref: recordRef('agreement', a.id),
+      title: a.title,
+      kind: a.kind,
+      status: a.status,
+    })),
   }
 }
 
 async function journalEntryRecord(supabase: SupabaseClient, companyId: string, journalEntryId: string) {
-  const { data: entry, error } = await supabase.from('journal_entries').select('id, voucher_series, voucher_number, entry_date, description').eq('id', journalEntryId).eq('company_id', companyId).maybeSingle()
+  const { data: entry, error } = await supabase
+    .from('journal_entries')
+    .select('id, voucher_series, voucher_number, entry_date, description')
+    .eq('id', journalEntryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
   if (error) throw dbError(error)
   if (!entry) return null
   const { data: docs, error: docError } = await supabase.from('document_attachments').select('id').eq('journal_entry_id', journalEntryId).eq('company_id', companyId).limit(50)
@@ -223,7 +307,8 @@ export function createArkivTools(deps: Deps): McpTool[] {
       name: 'gnubok_search_records',
       keywords: ['arkiv', 'dokument', 'avtal', 'fakta', 'sök dokument', 'hyresavtal', 'lån', 'registreringsbevis'],
       title: 'Search Records',
-      description: 'Search the company archive: document text, agreements and facts. Returns record_refs to pass to gnubok_get_record. Use for any question about a contract, registration, decision or what a document says.',
+      description:
+        'Search the company archive: document text, agreements and facts. Returns record_refs to pass to gnubok_get_record. Use for any question about a contract, registration, decision or what a document says.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -265,29 +350,80 @@ export function createArkivTools(deps: Deps): McpTool[] {
         if (query.length < 2) throw new Error('query must be at least two characters')
         const kinds = new Set<string>(Array.isArray(args.kinds) && args.kinds.length ? (args.kinds as string[]) : ['document', 'agreement', 'fact'])
         const limit = Math.min(50, Math.max(1, Number(args.limit ?? 10)))
-        const items: Array<{ record_ref: string; kind: 'document' | 'agreement' | 'fact'; title: string; snippet: string | null; document_id: string | null; page: number | null }> = []
+        const items: Array<{
+          record_ref: string
+          kind: 'document' | 'agreement' | 'fact'
+          title: string
+          snippet: string | null
+          document_id: string | null
+          page: number | null
+        }> = []
         const like = `%${query.replace(/[%_]/g, ' ')}%`
         if (kinds.has('document')) {
           const hits = await searchDocumentPages(supabase, companyId, query, limit)
           for (const hit of hits) {
-            items.push({ record_ref: recordRef('document', hit.document_id), kind: 'document', title: hit.file_name, snippet: hit.headline, document_id: hit.document_id, page: hit.page_no })
+            items.push({
+              record_ref: recordRef('document', hit.document_id),
+              kind: 'document',
+              title: hit.file_name,
+              snippet: hit.headline,
+              document_id: hit.document_id,
+              page: hit.page_no,
+            })
           }
         }
         if (kinds.has('agreement')) {
-          const { data, error } = await supabase.from('agreements').select('id, title, counterparty_name, kind, ends_on').eq('company_id', companyId).or(`title.ilike.${like},counterparty_name.ilike.${like}`).limit(limit)
+          const { data, error } = await supabase
+            .from('agreements')
+            .select('id, title, counterparty_name, kind, ends_on')
+            .eq('company_id', companyId)
+            .or(`title.ilike.${like},counterparty_name.ilike.${like}`)
+            .limit(limit)
           if (error) throw dbError(error)
           for (const a of (data ?? []) as Array<{ id: string; title: string; counterparty_name: string | null; kind: string; ends_on: string | null }>) {
-            items.push({ record_ref: recordRef('agreement', a.id), kind: 'agreement', title: a.title, snippet: [a.kind, a.counterparty_name, a.ends_on ? `till ${a.ends_on}` : null].filter(Boolean).join(' · '), document_id: null, page: null })
+            items.push({
+              record_ref: recordRef('agreement', a.id),
+              kind: 'agreement',
+              title: a.title,
+              snippet: [a.kind, a.counterparty_name, a.ends_on ? `till ${a.ends_on}` : null].filter(Boolean).join(' · '),
+              document_id: null,
+              page: null,
+            })
           }
         }
         if (kinds.has('fact')) {
           // "momsperiod" is the Swedish label of vat_period: a query that names a predicate the way people do finds its facts.
-          const labelled = Object.values(PREDICATES).filter((p) => p.label.toLowerCase().includes(query.toLowerCase())).map((p) => p.predicate)
-          const factFilter = labelled.length ? `value_text.ilike.${like},predicate.ilike.${like},predicate.in.(${labelled.join(',')})` : `value_text.ilike.${like},predicate.ilike.${like}`
-          const { data, error } = await supabase.from('company_facts').select('id, predicate, value_text, subject_kind, subject_id, source_document_id').eq('company_id', companyId).is('sys_to', null).neq('rank', 'deprecated').or(factFilter).limit(limit)
+          const labelled = Object.values(PREDICATES)
+            .filter((p) => p.label.toLowerCase().includes(query.toLowerCase()))
+            .map((p) => p.predicate)
+          const factFilter = labelled.length
+            ? `value_text.ilike.${like},predicate.ilike.${like},predicate.in.(${labelled.join(',')})`
+            : `value_text.ilike.${like},predicate.ilike.${like}`
+          const { data, error } = await supabase
+            .from('company_facts')
+            .select('id, predicate, value_text, subject_kind, subject_id, source_document_id')
+            .eq('company_id', companyId)
+            .is('sys_to', null)
+            .neq('rank', 'deprecated')
+            .or(factFilter)
+            .limit(limit)
           if (error) throw dbError(error)
-          for (const f of (data ?? []) as Array<{ id: string; predicate: string; value_text: string; subject_kind: FactSubjectKind; subject_id: string; source_document_id: string | null }>) {
-            items.push({ record_ref: recordRef('fact', f.id), kind: 'fact', title: `${predicateDef(f.predicate)?.label ?? f.predicate}: ${f.value_text}`, snippet: `${f.subject_kind}:${f.subject_id}`, document_id: f.source_document_id, page: null })
+          for (const f of (data ?? []) as Array<{
+            id: string
+            predicate: string
+            value_text: string
+            subject_kind: FactSubjectKind
+            subject_id: string
+            source_document_id: string | null
+          }>) {
+            items.push({
+              record_ref: recordRef('fact', f.id),
+              kind: 'fact',
+              title: `${predicateDef(f.predicate)?.label ?? f.predicate}: ${f.value_text}`,
+              snippet: `${f.subject_kind}:${f.subject_id}`,
+              document_id: f.source_document_id,
+              page: null,
+            })
           }
         }
         return { items, count: items.length }
@@ -297,7 +433,8 @@ export function createArkivTools(deps: Deps): McpTool[] {
       name: 'gnubok_get_record',
       keywords: ['arkiv', 'dokument', 'avtal', 'verifikat underlag', 'läs avtal'],
       title: 'Get Record',
-      description: 'The structured record behind a record_ref: a document with its extracted fields (each with page and quote), an agreement with its payments, dates and facts, a party, or a journal_entry with every attached document as a record. as_of picks the facts valid on a date.',
+      description:
+        'The structured record behind a record_ref: a document with its extracted fields (each with page and quote), an agreement with its payments, dates and facts, a party, or a journal_entry with every attached document as a record. as_of picks the facts valid on a date.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -361,7 +498,8 @@ export function createArkivTools(deps: Deps): McpTool[] {
       name: 'gnubok_get_record_links',
       keywords: ['arkiv', 'kopplingar', 'motpart', 'avtal'],
       title: 'Get Record Links',
-      description: 'What a record is tied to: parties, agreements, assets and documents, each link with its basis (proven or guessed). depth 2 follows one step further. Use gnubok_get_record on the refs you get back.',
+      description:
+        'What a record is tied to: parties, agreements, assets and documents, each link with its basis (proven or guessed). depth 2 follows one step further. Use gnubok_get_record on the refs you get back.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -417,7 +555,8 @@ export function createArkivTools(deps: Deps): McpTool[] {
       name: 'gnubok_get_fact_history',
       keywords: ['arkiv', 'fakta', 'historik', 'ändrades när'],
       title: 'Get Fact History',
-      description: 'Every reading a subject ever had for a predicate, with validity and belief windows, what superseded what, and the page each value came from. Use when a value changed or two sources disagree.',
+      description:
+        'Every reading a subject ever had for a predicate, with validity and belief windows, what superseded what, and the page each value came from. Use when a value changed or two sources disagree.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -448,7 +587,8 @@ export function createArkivTools(deps: Deps): McpTool[] {
       name: 'gnubok_get_source',
       keywords: ['arkiv', 'sida', 'källa', 'citat', 'läs sidan'],
       title: 'Get Source',
-      description: 'The text of one page of a document as Arkiv read it, plus a 5-minute signed URL to the file. Use to verify a quote or read around a cited value before answering.',
+      description:
+        'The text of one page of a document as Arkiv read it, plus a 5-minute signed URL to the file. Use to verify a quote or read around a cited value before answering.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -479,7 +619,12 @@ export function createArkivTools(deps: Deps): McpTool[] {
         const documentId = String(args.document_id ?? '')
         if (!UUID.test(documentId)) throw new Error('document_id must be a UUID')
         const pageNo = Math.max(1, Number(args.page ?? 1))
-        const { data: doc, error } = await supabase.from('document_attachments').select('id, file_name, storage_path, page_count').eq('id', documentId).eq('company_id', companyId).maybeSingle()
+        const { data: doc, error } = await supabase
+          .from('document_attachments')
+          .select('id, file_name, storage_path, page_count')
+          .eq('id', documentId)
+          .eq('company_id', companyId)
+          .maybeSingle()
         if (error) throw dbError(error)
         if (!doc) throw new Error('Document not found')
         const d = doc as { id: string; file_name: string; storage_path: string; page_count: number | null }
@@ -503,7 +648,8 @@ export function createArkivTools(deps: Deps): McpTool[] {
       name: 'gnubok_propose_fact',
       keywords: ['arkiv', 'fakta', 'föreslå', 'rätta faktum'],
       title: 'Propose Fact',
-      description: 'Stage a company fact for a person to approve: subject, predicate from the controlled vocabulary, value, validity and the page it rests on. Stages for approval; the approved fact supersedes the old value and is reverted in one call.',
+      description:
+        'Stage a company fact for a person to approve: subject, predicate from the controlled vocabulary, value, validity and the page it rests on. Stages for approval; the approved fact supersedes the old value and is reverted in one call.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -552,7 +698,15 @@ export function createArkivTools(deps: Deps): McpTool[] {
           'arkiv_propose_fact',
           `Faktum: ${def.label} = ${String(params.value)}`,
           params,
-          { predicate: def.label, value: params.value, prior_value: prior?.value ?? null, valid_from: params.valid_from ?? null, valid_to: params.valid_to ?? null, rationale: params.rationale, evidence: params.evidence ?? null },
+          {
+            predicate: def.label,
+            value: params.value,
+            prior_value: prior?.value ?? null,
+            valid_from: params.valid_from ?? null,
+            valid_to: params.valid_to ?? null,
+            rationale: params.rationale,
+            evidence: params.evidence ?? null,
+          },
           actor,
         )
       },
@@ -584,10 +738,22 @@ async function linksOf(supabase: SupabaseClient, companyId: string, ref: { kind:
   const from = recordRef(ref.kind, ref.id)
   const out: LinkView[] = []
   if (ref.kind === 'document') {
-    const { data, error } = await supabase.from('document_links').select('target_kind, target_id, basis, method').eq('document_id', ref.id).eq('company_id', companyId).is('retired_at', null)
+    const { data, error } = await supabase
+      .from('document_links')
+      .select('target_kind, target_id, basis, method')
+      .eq('document_id', ref.id)
+      .eq('company_id', companyId)
+      .is('retired_at', null)
     if (error) throw dbError(error)
     for (const l of (data ?? []) as Array<{ target_kind: RecordKind; target_id: string; basis: 'proven' | 'guessed'; method: string }>) {
-      out.push({ from_ref: from, record_ref: recordRef(l.target_kind, l.target_id), relation: l.target_kind === 'party' ? 'counterparty' : l.target_kind === 'agreement' ? 'establishes' : 'concerns', basis: l.basis, method: l.method, title: null })
+      out.push({
+        from_ref: from,
+        record_ref: recordRef(l.target_kind, l.target_id),
+        relation: l.target_kind === 'party' ? 'counterparty' : l.target_kind === 'agreement' ? 'establishes' : 'concerns',
+        basis: l.basis,
+        method: l.method,
+        title: null,
+      })
     }
     const { data: doc, error: docError } = await supabase.from('document_attachments').select('journal_entry_id').eq('id', ref.id).eq('company_id', companyId).maybeSingle()
     if (docError) throw dbError(docError)
@@ -610,12 +776,14 @@ async function linksOf(supabase: SupabaseClient, companyId: string, ref: { kind:
     } else {
       const { data: agreements, error: agrError } = await supabase.from('agreements').select('id, title').eq('counterparty_party_id', ref.id).eq('company_id', companyId).limit(50)
       if (agrError) throw dbError(agrError)
-      for (const a of (agreements ?? []) as Array<{ id: string; title: string }>) out.push({ from_ref: from, record_ref: recordRef('agreement', a.id), relation: 'party_to', basis: 'proven', method: 'derived', title: a.title })
+      for (const a of (agreements ?? []) as Array<{ id: string; title: string }>)
+        out.push({ from_ref: from, record_ref: recordRef('agreement', a.id), relation: 'party_to', basis: 'proven', method: 'derived', title: a.title })
     }
   } else if (ref.kind === 'journal_entry') {
     const { data, error } = await supabase.from('document_attachments').select('id, file_name').eq('journal_entry_id', ref.id).eq('company_id', companyId).limit(50)
     if (error) throw dbError(error)
-    for (const d of (data ?? []) as Array<{ id: string; file_name: string }>) out.push({ from_ref: from, record_ref: recordRef('document', d.id), relation: 'supported_by', basis: 'proven', method: 'attachment', title: d.file_name })
+    for (const d of (data ?? []) as Array<{ id: string; file_name: string }>)
+      out.push({ from_ref: from, record_ref: recordRef('document', d.id), relation: 'supported_by', basis: 'proven', method: 'attachment', title: d.file_name })
   }
   return out
 }

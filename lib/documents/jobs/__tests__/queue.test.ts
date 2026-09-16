@@ -176,3 +176,15 @@ describe('runDocumentJobs', () => {
     await expect(run()).rejects.toThrow('claim failed: boom')
   })
 })
+
+describe('runDocumentJobFor', () => {
+  it('runs the one due step of a document now and settles it', async () => {
+    const { runDocumentJobFor } = await import('../queue')
+    const { createQueuedMockSupabase } = await import('@/tests/helpers')
+    const local = createQueuedMockSupabase()
+    const supabase = local.supabase as unknown as import('@supabase/supabase-js').SupabaseClient
+    local.enqueue({ data: [] })
+    expect(await runDocumentJobFor(supabase, 'doc-1', 'pipeline:user-1')).toBeNull()
+    expect(local.supabase.rpc).toHaveBeenLastCalledWith('claim_document_job_for', { p_document_id: 'doc-1', p_worker: 'pipeline:user-1' })
+  })
+})
