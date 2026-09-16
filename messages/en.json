@@ -5256,7 +5256,7 @@
     "payment_history_title": "Payment history",
     "unlink_payment_action": "Remove the link",
     "unlink_payment_title": "Remove the link to the voucher?",
-    "unlink_payment_description": "The {amount} payment is removed from the invoice, which returns to unpaid or partly paid. The voucher is untouched: the link created no bookkeeping, and none changes when it is removed. The action is recorded in the processing history.",
+    "unlink_payment_description": "The {amount} payment is removed from the invoice, which returns to unpaid or partly paid. No bookkeeping changes: the voucher stays posted exactly as it is. It may afterwards show as missing its underlag, because the underlag belonged to this invoice. The action is recorded in the processing history.",
     "unlink_payment_confirm": "Remove the link",
     "unlink_payment_done_title": "Link removed",
     "unlink_payment_failed_title": "The link could not be removed",

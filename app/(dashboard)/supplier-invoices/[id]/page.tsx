@@ -24,7 +24,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Loader2, Pencil, Plus, CalendarClock, MoreHorizontal } from 'lucide-react'
+import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Loader2, Pencil, Plus, CalendarClock, MoreHorizontal, Unlink } from 'lucide-react'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
@@ -1217,10 +1217,15 @@ export default function SupplierInvoiceDetailPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="min-w-[240px]">
+                          {/* Reads as what it is, in the page's own vocabulary:
+                              the delete item above carries the same destructive
+                              class and every item in both menus has an icon. */}
                           <DropdownMenuItem
                             onSelect={() => setUnlinkTarget(p)}
                             disabled={!canWrite}
+                            className="text-destructive focus:text-destructive"
                           >
+                            <Unlink className="h-4 w-4" />
                             {t('unlink_payment_action')}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
