@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -17,6 +18,7 @@ import {
   TD_CLASS,
   QUIET_LINK_CLASS,
   HOVER_REVEAL_CLASS,
+  CHECKBOX_REVEAL_CLASS,
 } from '@/components/ui/dry-table'
 import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -43,6 +45,7 @@ import {
   formatDateTime,
 } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { rowsNeedingInterestDate } from '@/lib/skatteverket/interest-period'
 import {
   skvAuthErrorNeedsReconnect,
@@ -128,6 +131,13 @@ export default function SkattekontoPage() {
   const [showIgnored, setShowIgnored] = useState(false)
   const { dialogProps: ignoreConfirmProps, confirm: confirmIgnore } =
     useDestructiveConfirm()
+  // Bulk ignore (hover-checkbox pattern from /transactions and /orders): a
+  // sole trader's skattekonto carries private tax rows that are not the
+  // firm's affärshändelser, often dozens at a time. Selection holds raw ids;
+  // the rendered set is re-derived against what is still ignorable after a
+  // reload, so a row that got booked or ignored meanwhile drops out on its
+  // own instead of being carried into the next bulk call.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   // The /status probe is fire-and-forget, so a slow response from an earlier
   // reload can land after a later one and overwrite the fresher banner state.
@@ -483,6 +493,99 @@ export default function SkattekontoPage() {
     await reload()
   }
 
+  /**
+   * PATCH the ignore flag on many rows through the same per-row route the
+   * single action uses (one select + one conditional update each, so N calls
+   * stay cheap and every row keeps the same booked-row 409 guard). Bounded
+   * concurrency: a sole trader can select a whole year in one go.
+   */
+  async function patchIgnoreMany(
+    ids: string[],
+    isIgnored: boolean,
+  ): Promise<{ done: string[]; failed: string[] }> {
+    const done: string[] = []
+    const failed: string[] = []
+    const queue = [...ids]
+    const worker = async () => {
+      for (;;) {
+        const id = queue.shift()
+        if (!id) return
+        try {
+          const res = await fetch(
+            `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${id}/ignore`,
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ is_ignored: isIgnored }),
+            },
+          )
+          if (res.ok) done.push(id)
+          else failed.push(id)
+        } catch {
+          failed.push(id)
+        }
+      }
+    }
+    await Promise.allSettled(Array.from({ length: Math.min(6, ids.length) }, worker))
+    return { done, failed }
+  }
+
+  async function unignoreMany(ids: string[]) {
+    const { failed } = await patchIgnoreMany(ids, false)
+    if (failed.length > 0) {
+      toast({
+        title: t('unignore_failed'),
+        description: t('bulk_unignore_partial', { failed: failed.length }),
+        variant: 'destructive',
+      })
+    }
+    await reload()
+  }
+
+  async function ignoreSelected(ids: string[]) {
+    if (ids.length === 0) return
+    // Same shape as the single-row flow: confirm once up front, Ångra in the
+    // toast, and the standing "Ignorerade" band as the lasting way back.
+    let outcome: { done: string[]; failed: string[] } = { done: [], failed: [] }
+    const ok = await confirmIgnore(
+      {
+        title: t('bulk_ignore_confirm_title', { count: ids.length }),
+        description: t('bulk_ignore_confirm_body', { count: ids.length }),
+        confirmLabel: t('bulk_ignore_cta', { count: ids.length }),
+        cancelLabel: t('ignore_confirm_cancel'),
+        variant: 'warning',
+      },
+      async () => {
+        outcome = await patchIgnoreMany(ids, true)
+      },
+    )
+    if (!ok) return
+    setSelectedIds(new Set())
+    const undo =
+      outcome.done.length > 0 ? (
+        <ToastAction
+          altText={t('ignored_undo')}
+          onClick={() => void unignoreMany(outcome.done)}
+        >
+          {t('ignored_undo')}
+        </ToastAction>
+      ) : undefined
+    if (outcome.failed.length === 0) {
+      toast({ title: t('bulk_ignored_toast_title', { count: outcome.done.length }), action: undo })
+    } else {
+      // Partial result stays honest: the count that landed, the count that
+      // did not (a row booked meanwhile answers 409), and Ångra for the
+      // ones that did.
+      toast({
+        title: t('bulk_ignore_partial_title', { done: outcome.done.length, total: ids.length }),
+        description: t('bulk_ignore_partial_body', { failed: outcome.failed.length }),
+        variant: 'destructive',
+        action: undo,
+      })
+    }
+    await reload()
+  }
+
   // Next charge (concept attn line): the earliest upcoming due date and the
   // sum of everything Skatteverket draws that day. Ignored rows stay out of
   // the work-list buckets, but SKV draws an upcoming charge regardless of our
@@ -502,6 +605,27 @@ export default function SkattekontoPage() {
     const amount = rows.reduce((sum, r) => sum + Number(r.belopp_skatteverket), 0)
     return { due, count: rows.length, amount: Math.round(Math.abs(amount) * 100) / 100 }
   }, [tx])
+
+  // Ignorable rows in rendered order (upcoming, overdue, then the unbooked
+  // rows of Genomförda): the order shift-range selection follows. Booked
+  // rows can never be ignored (the route answers 409, the DB CHECK agrees)
+  // and the Ignorerade band is already ignored, so neither gets a checkbox.
+  const selectableIds = useMemo(
+    () =>
+      [...(tx?.upcoming ?? []), ...(tx?.overdue ?? []), ...(tx?.booked ?? [])]
+        .filter((r) => !r.journal_entry_id)
+        .map((r) => r.id),
+    [tx],
+  )
+  const activeSelectedIds = useMemo(() => {
+    const selectable = new Set(selectableIds)
+    return new Set([...selectedIds].filter((id) => selectable.has(id)))
+  }, [selectableIds, selectedIds])
+  const range = useRangeSelect({ visibleIds: selectableIds, selectedIds, setSelectedIds })
+  const toggleSelect = useCallback(
+    (id: string, extend?: boolean) => range.toggle(id, extend),
+    [range],
+  )
 
   const saldoNow = saldo?.data ? saldo.data.saldoSkatteverket : null
   const shortfall =
@@ -739,10 +863,47 @@ export default function SkattekontoPage() {
       </section>
       )}
 
+      {/* Bulkbar (transactions-page pattern): hidden until at least one
+          ignorable row is selected via the hover checkboxes. */}
+      {activeSelectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+          <span className="whitespace-nowrap">
+            {t('bulk_selected', { count: activeSelectedIds.size })}
+          </span>
+          <Button size="sm" onClick={() => void ignoreSelected([...activeSelectedIds])}>
+            {t('bulk_ignore_cta', { count: activeSelectedIds.size })}
+          </Button>
+          {activeSelectedIds.size < selectableIds.length && (
+            <button
+              type="button"
+              className={QUIET_LINK_CLASS}
+              onClick={() => {
+                setSelectedIds(new Set(selectableIds))
+                range.resetAnchor()
+              }}
+            >
+              {t('bulk_select_all', { count: selectableIds.length })}
+            </button>
+          )}
+          <button
+            type="button"
+            className={QUIET_LINK_CLASS}
+            onClick={() => {
+              setSelectedIds(new Set())
+              range.resetAnchor()
+            }}
+          >
+            {t('bulk_clear')}
+          </button>
+        </div>
+      )}
+
       {/* One dry table with band rows (concept): Kommande, Förfallna, Genomförda */}
       <SkattekontoTable
         tx={tx}
         showIgnored={showIgnored}
+        selectedIds={activeSelectedIds}
+        onToggleSelect={toggleSelect}
         onBokfor={bokfor}
         onMatch={openMatch}
         onIgnore={ignoreRow}
@@ -869,6 +1030,8 @@ function rowDisplayDate(
 function SkattekontoTable({
   tx,
   showIgnored,
+  selectedIds,
+  onToggleSelect,
   onBokfor,
   onMatch,
   onIgnore,
@@ -876,6 +1039,8 @@ function SkattekontoTable({
 }: {
   tx: TransaktionerEnvelope['data'] | null
   showIgnored: boolean
+  selectedIds: Set<string>
+  onToggleSelect: (id: string, extend?: boolean) => void
   onBokfor: (id: string) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
   onIgnore: (row: StoredSkattekontoTransaction) => void
@@ -918,10 +1083,18 @@ function SkattekontoTable({
   }
 
   return (
-    <div className="overflow-x-auto" role="region" aria-label="Skattekontohändelser">
+    // Negative margin + matching padding: lets the hover-revealed selection
+    // checkbox hang into the page margins without being clipped by the
+    // overflow container (transactions-page pattern).
+    <div
+      className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8"
+      role="region"
+      aria-label="Skattekontohändelser"
+    >
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
+            <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
             <th className={cn(TH_CLASS, 'w-[110px]')}>Datum</th>
             <th className={TH_CLASS}>Händelse</th>
             <th className={cn(TH_CLASS, 'text-right')}>Belopp</th>
@@ -933,7 +1106,7 @@ function SkattekontoTable({
             <Fragment key={section.key}>
               <tr className="bg-muted/30">
                 <td
-                  colSpan={4}
+                  colSpan={5}
                   className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
                 >
                   {section.label}
@@ -949,6 +1122,8 @@ function SkattekontoTable({
                   key={row.id}
                   row={row}
                   section={section.key}
+                  isSelected={selectedIds.has(row.id)}
+                  onToggleSelect={onToggleSelect}
                   onBokfor={onBokfor}
                   onMatch={onMatch}
                   onIgnore={onIgnore}
@@ -967,6 +1142,8 @@ function SkattekontoTable({
 function SkattekontoRow({
   row,
   section,
+  isSelected,
+  onToggleSelect,
   onBokfor,
   onMatch,
   onIgnore,
@@ -975,6 +1152,8 @@ function SkattekontoRow({
 }: {
   row: SkattekontoTransactionWithSuggestion
   section: TableSection['key']
+  isSelected: boolean
+  onToggleSelect: (id: string, extend?: boolean) => void
   onBokfor: (id: string) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
   onIgnore: (row: StoredSkattekontoTransaction) => void
@@ -982,9 +1161,12 @@ function SkattekontoRow({
   showInterestDate: boolean
 }) {
   const t = useTranslations('skattekonto')
+  // Whether shift was held on the checkbox click, for range selection.
+  const shiftHeld = useRef(false)
   const amount = Number(row.belopp_skatteverket)
   const isBooked = !!row.journal_entry_id
   const isIgnoredSection = section === 'ignored'
+  const selectable = !isBooked && !isIgnoredSection
   const displayDate = rowDisplayDate(row, section)
 
   return (
@@ -992,8 +1174,28 @@ function SkattekontoRow({
       className={cn(
         'group transition-colors duration-150 hover:bg-secondary/35',
         isIgnoredSection && 'opacity-60',
+        isSelected && 'bg-secondary/40',
       )}
     >
+      {/* Hover-revealed selection checkbox (transactions-page pattern):
+          zero-width cell, the checkbox hangs in the left page margin so the
+          date column stays where it was. Selected rows keep it visible. */}
+      <td className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}>
+        {selectable && (
+          <Checkbox
+            checked={isSelected}
+            onClick={(e) => {
+              shiftHeld.current = e.shiftKey
+            }}
+            onCheckedChange={() => onToggleSelect(row.id, shiftHeld.current)}
+            aria-label={t('select_row_aria', { text: row.transaktionstext })}
+            className={cn(
+              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
+              isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
+            )}
+          />
+        )}
+      </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(displayDate)}
       </td>

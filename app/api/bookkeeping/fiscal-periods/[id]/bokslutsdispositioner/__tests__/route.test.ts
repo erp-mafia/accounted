@@ -176,6 +176,7 @@ beforeEach(() => {
     items: [],
     nonDeductibleExpenses: 5_244,
     nonTaxableIncome: 0,
+    deficitCarryforward: 0,
   })
   vi.mocked(generateIncomeStatement).mockResolvedValue({
     net_result: 592_722.21,
@@ -251,7 +252,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =>
 
 describe('PUT /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () => {
   const validBody = {
-    manualAdjustments: { nonDeductibleExpenses: 0, nonTaxableIncome: 0 },
+    manualAdjustments: { nonDeductibleExpenses: 0, nonTaxableIncome: 0, deficitCarryforward: 0 },
     detectedAccounts: { '6992': true, '8423': true },
   }
 
@@ -270,6 +271,46 @@ describe('PUT /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =>
       manualAdjustments: { nonDeductibleExpenses: -1, nonTaxableIncome: 0 },
     })
     expect(res.status).toBe(400)
+  })
+
+  it('returns 400 for a negative or non-numeric prior-year deficit', async () => {
+    const negative = await put({
+      ...validBody,
+      manualAdjustments: { nonDeductibleExpenses: 0, nonTaxableIncome: 0, deficitCarryforward: -5 },
+    })
+    expect(negative.status).toBe(400)
+    const text = await put({
+      ...validBody,
+      manualAdjustments: { nonDeductibleExpenses: 0, nonTaxableIncome: 0, deficitCarryforward: '12000' },
+    })
+    expect(text.status).toBe(400)
+    expect(saveTaxAdjustments).not.toHaveBeenCalled()
+  })
+
+  it('treats an omitted prior-year deficit as zero so older clients keep working', async () => {
+    const supabase = periodClient({
+      id: 'period-1',
+      is_closed: false,
+      locked_at: null,
+      closing_entry_id: null,
+    })
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+
+    const res = await put({
+      manualAdjustments: { nonDeductibleExpenses: 10, nonTaxableIncome: 0 },
+      detectedAccounts: { '6992': true, '8423': true },
+    })
+
+    expect(res.status).toBe(200)
+    expect(saveTaxAdjustments).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'period-1',
+      'user-1',
+      expect.objectContaining({
+        manualAdjustments: { nonDeductibleExpenses: 10, nonTaxableIncome: 0, deficitCarryforward: 0 },
+      }),
+    )
   })
 
   it('returns 404 when the fiscal period is missing', async () => {

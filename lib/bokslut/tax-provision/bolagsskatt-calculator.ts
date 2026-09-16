@@ -28,6 +28,9 @@ export interface BolagsskattInput {
     nonDeductibleExpenses?: number
     /** e.g. skattefria intäkter: näringsbetingad utdelning. */
     nonTaxableIncome?: number
+    /** Outnyttjat underskott från föregående beskattningsår (INK2S 4.14 a):
+     *  deducted when the year's överskott is computed, IL 40 kap. 2 §. */
+    deficitCarryforward?: number
     /** Schablonintäkt on periodiseringsfond opening balance (statslåneräntan
      *  × ingående saldo). Computed by periodiseringsfond-service so callers
      *  can pass it through. */
@@ -43,6 +46,7 @@ export interface BolagsskattComputation {
   resultBeforeTax: number
   nonDeductibleExpenses: number
   nonTaxableIncome: number
+  deficitCarryforward: number
   schablonintaktPeriodiseringsfond: number
   otherAdjustments: number
   taxableResult: number
@@ -261,6 +265,7 @@ export async function calculateBolagsskatt(
   const adjustments = input.manualAdjustments ?? {}
   const nonDeductibleExpenses = adjustments.nonDeductibleExpenses ?? 0
   const nonTaxableIncome = adjustments.nonTaxableIncome ?? 0
+  const deficitCarryforward = adjustments.deficitCarryforward ?? 0
   const schablonintaktPeriodiseringsfond = adjustments.schablonintaktPeriodiseringsfond ?? 0
   const otherAdjustments = adjustments.other ?? 0
 
@@ -272,7 +277,8 @@ export async function calculateBolagsskatt(
   const taxableResult = roundOre(
     resultBeforeTax +
     nonDeductibleExpenses -
-    nonTaxableIncome +
+    nonTaxableIncome -
+    deficitCarryforward +
     schablonintaktPeriodiseringsfond +
     otherAdjustments,
   )
@@ -286,6 +292,7 @@ export async function calculateBolagsskatt(
     resultBeforeTax,
     nonDeductibleExpenses,
     nonTaxableIncome,
+    deficitCarryforward,
     schablonintaktPeriodiseringsfond,
     otherAdjustments,
     taxableResult,

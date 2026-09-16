@@ -72,6 +72,37 @@ describe('calculateBolagsskatt', () => {
     expect(result!.amount).toBe(12_360)
   })
 
+  it('deducts the prior-year deficit (INK2S 4.14 a) before applying the rate', async () => {
+    vi.mocked(generateIncomeStatement).mockResolvedValue({
+      net_result: 500_000,
+    } as Awaited<ReturnType<typeof generateIncomeStatement>>)
+
+    const result = await calculateBolagsskatt(NOOP_CLIENT, 'co', 'fp', {
+      manualAdjustments: { deficitCarryforward: 120_000 },
+    })
+
+    // 500 000 - 120 000 = 380 000 taxable, 20.6 % = 78 280
+    expect(result!.amount).toBe(Math.round(380_000 * BOLAGSSKATT_RATE))
+    expect(result!.computation).toMatchObject({
+      deficitCarryforward: 120_000,
+      taxableResult: 380_000,
+    })
+  })
+
+  it('books no tax when the prior-year deficit exceeds the result, and leaves the rest to INK2', async () => {
+    vi.mocked(generateIncomeStatement).mockResolvedValue({
+      net_result: 100_000,
+    } as Awaited<ReturnType<typeof generateIncomeStatement>>)
+
+    const result = await calculateBolagsskatt(NOOP_CLIENT, 'co', 'fp', {
+      manualAdjustments: { deficitCarryforward: 150_000 },
+    })
+
+    expect(result!.amount).toBe(0)
+    expect(result!.lines).toEqual([])
+    expect(result!.computation).toMatchObject({ taxableResult: -50_000, taxableResultClamped: 0 })
+  })
+
   it('adds schablonintäkt on periodiseringsfond to taxable result', async () => {
     vi.mocked(generateIncomeStatement).mockResolvedValue({
       net_result: 200_000,

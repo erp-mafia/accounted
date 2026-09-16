@@ -28,6 +28,7 @@ import {
   ChevronRight,
   ExternalLink,
   Loader2,
+  Paperclip,
   RefreshCw,
   RotateCcw,
   XCircle,
@@ -39,11 +40,12 @@ import {
   ArcimDocumentImportRequestError,
   arcimDocumentImportReducer,
   documentOAuthProblemFromReason,
-  parseArcimDocumentOAuthResume,
+  parseArcimDocumentResumeMarker,
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   requestArcimDocumentImport,
   runArcimDocumentImportToCompletion,
   resolveArcimDocumentFollowUpProvider,
+  serializeArcimDocumentResumeMarker,
   watchArcimOAuthPopup,
   type ArcimDocumentImportProblem,
   type ArcimDocumentImportState,
@@ -117,11 +119,12 @@ function documentImportProblem(error: unknown): ArcimDocumentImportProblem {
 
 function storeDocumentOAuthResume(
   action: 'discover' | 'import',
+  standalone: boolean,
 ): void {
   try {
     window.sessionStorage.setItem(
       ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
-      action,
+      serializeArcimDocumentResumeMarker({ action, standalone }),
     )
   } catch {
     // Full-page recovery is best-effort when browser storage is unavailable.
@@ -130,7 +133,7 @@ function storeDocumentOAuthResume(
 
 function readDocumentOAuthResume() {
   try {
-    return parseArcimDocumentOAuthResume(
+    return parseArcimDocumentResumeMarker(
       window.sessionStorage.getItem(ARCIM_DOCUMENT_OAUTH_RESUME_KEY),
     )
   } catch {
@@ -525,16 +528,20 @@ const PROVIDER_LOGOS: Record<ArcimProvider, string> = {
 function ProviderStep({
   onSelect,
   onResync,
+  onFetchDocuments,
   onDisconnect,
   connectionStatus,
   isLoadingStatus,
 }: {
   onSelect: (provider: ArcimProvider) => void
   onResync: (provider: ArcimProvider, consentId: string) => void
+  /** Run the underlag import on its own against an active Fortnox consent. */
+  onFetchDocuments: (consentId: string) => void
   onDisconnect: (consentId: string) => void
   connectionStatus: ConnectionStatus | null
   isLoadingStatus: boolean
 }) {
+  const t = useTranslations('extensions')
   const activeConsents = connectionStatus?.consents.filter(c => c.status === 1) ?? []
   const hasSieImport = connectionStatus?.hasCompletedSieImport
     ?? ((connectionStatus?.sieImports.filter(i => i.status === 'completed').length ?? 0) > 0)
@@ -608,6 +615,20 @@ function ProviderStep({
                       <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
                       Synka igen
                     </Button>
+                    {/* The underlag offer used to live only in the result step
+                        of the run that just finished; closing or reloading
+                        lost it. From here it runs on its own, with the same
+                        consent, without repeating the migration. */}
+                    {consent.provider === 'fortnox' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onFetchDocuments(consent.id)}
+                      >
+                        <Paperclip className="mr-1.5 h-3.5 w-3.5" />
+                        {t('ext_arcim_documents_fetch_action')}
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1723,12 +1744,15 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
 
 function DocumentImportFollowUp({
   state,
+  standalone = false,
   onDiscover,
   onImport,
   onDismiss,
   onReconnect,
 }: {
   state: ArcimDocumentImportState
+  /** Started from an active connection rather than as the tail of a migration: the copy must not claim a migration just ran. */
+  standalone?: boolean
   onDiscover: () => void
   onImport: () => void
   onDismiss: () => void
@@ -1738,7 +1762,11 @@ function DocumentImportFollowUp({
 
   if (state.phase === 'hidden' || state.phase === 'dismissed') return null
 
-  const title = <SectionKicker>{t('ext_arcim_documents_title')}</SectionKicker>
+  const title = (
+    <SectionKicker>
+      {standalone ? t('ext_arcim_documents_title_standalone') : t('ext_arcim_documents_title')}
+    </SectionKicker>
+  )
 
   if (
     state.phase === 'discovering' ||
@@ -1781,7 +1809,9 @@ function DocumentImportFollowUp({
       <section className="space-y-3" aria-live="polite">
         {title}
         <p className="text-sm text-muted-foreground">
-          {t('ext_arcim_documents_prompt', { count: state.found })}
+          {standalone
+            ? t('ext_arcim_documents_prompt_standalone', { count: state.found })
+            : t('ext_arcim_documents_prompt', { count: state.found })}
         </p>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button className="min-h-11" onClick={onImport}>
@@ -1893,8 +1923,12 @@ function DocumentImportFollowUp({
           : reconnectRequired
           ? t('ext_arcim_documents_scope_error')
           : discoveryFailed
-            ? t('ext_arcim_documents_discovery_error')
-            : t('ext_arcim_documents_import_error')}
+            ? standalone
+              ? t('ext_arcim_documents_discovery_error_standalone')
+              : t('ext_arcim_documents_discovery_error')
+            : standalone
+              ? t('ext_arcim_documents_import_error_standalone')
+              : t('ext_arcim_documents_import_error')}
       </p>
       {state.problem?.providerMessage && (
         <p className="text-xs text-muted-foreground">
@@ -1943,6 +1977,7 @@ function ResultStep({
   omittedYears,
   error,
   documentImportState,
+  documentsOnly,
   theaterModel,
   onDone,
   onRetry,
@@ -1957,6 +1992,8 @@ function ResultStep({
   omittedYears: SourceFiscalYear[]
   error: string | null
   documentImportState: ArcimDocumentImportState
+  /** Only the underlag import ran, from an active connection: no migration verdict to show. */
+  documentsOnly: boolean
   theaterModel: TheaterModel | null
   onDone: () => void
   onRetry: () => void
@@ -2001,6 +2038,46 @@ function ResultStep({
           <Button className="min-h-11" onClick={onRetry}>
             <RotateCcw className="mr-2 h-4 w-4" />
             Försök igen
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  if (documentsOnly) {
+    // Nothing was migrated in this run, so no verdict, stats or next steps:
+    // the underlag flow is the whole page.
+    return (
+      <div className="stagger-enter space-y-8">
+        <div>
+          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            {t('ext_arcim_documents_standalone_kicker')}
+          </p>
+          <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
+            {t('ext_arcim_documents_title_standalone')}
+          </h2>
+          <p className="mt-3 text-[13px] text-muted-foreground">
+            {t('ext_arcim_documents_standalone_lede')}
+          </p>
+        </div>
+        <DocumentImportFollowUp
+          state={documentImportState}
+          standalone
+          onDiscover={onDiscoverDocuments}
+          onImport={onImportDocuments}
+          onDismiss={onDismissDocuments}
+          onReconnect={onReconnectDocuments}
+        />
+        <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
+          <Button variant="outline" className="min-h-11" onClick={onDone}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            {t('ext_arcim_documents_standalone_back')}
+          </Button>
+          <Button className="min-h-11" asChild>
+            <Link href="/bookkeeping">
+              Visa bokföring
+              <ExternalLink className="ml-2 h-4 w-4" />
+            </Link>
           </Button>
         </div>
       </div>
@@ -2501,6 +2578,9 @@ export default function ArcimMigrationWorkspace({
     arcimDocumentImportReducer,
     INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
   )
+  // True while the result step shows an underlag run started on its own from
+  // an active Fortnox connection (no migration ran in this pass).
+  const [documentsOnly, setDocumentsOnly] = useState(false)
   const documentReconnectActionRef = useRef<'discover' | 'import' | null>(null)
   const documentReconnectFailureCleanupRef = useRef<number | null>(null)
   const stopOAuthPopupWatchRef = useRef<(() => void) | null>(null)
@@ -2596,6 +2676,7 @@ export default function ArcimMigrationWorkspace({
 
   const handleSelectProvider = useCallback(async (provider: ArcimProvider) => {
     setSelectedProvider(provider)
+    setDocumentsOnly(false)
     setStep('connect')
     setIsLoading(true)
     setError(null)
@@ -2644,6 +2725,7 @@ export default function ArcimMigrationWorkspace({
   // Re-sync with existing consent: go straight to preview
   const handleResync = useCallback(async (provider: ArcimProvider, existingConsentId: string) => {
     setSelectedProvider(provider)
+    setDocumentsOnly(false)
     setConsentId(existingConsentId)
     setMigrationOptions(DEFAULT_OPTIONS)
     setMigrationResults(null)
@@ -2809,6 +2891,24 @@ export default function ArcimMigrationWorkspace({
     }
   }, [])
 
+  // Run the underlag import on its own against an active Fortnox consent.
+  // Same discovery, import and scope-reconnect path as the tail of a
+  // migration; only the surrounding page differs (no migration verdict).
+  const handleFetchDocuments = useCallback(async (existingConsentId: string) => {
+    setSelectedProvider('fortnox')
+    setConsentId(existingConsentId)
+    setError(null)
+    setMigrationResults(null)
+    setSieImportResults([])
+    setSieData(null)
+    setTheaterModel(null)
+    clearDocumentReconnectFailureCleanup()
+    documentReconnectActionRef.current = null
+    setDocumentsOnly(true)
+    setStep('result')
+    await runDocumentDiscovery(existingConsentId, 'fortnox', true)
+  }, [clearDocumentReconnectFailureCleanup, runDocumentDiscovery])
+
   const handleDocumentReconnect = useCallback(() => {
     if (!consentId) return
     clearDocumentReconnectFailureCleanup()
@@ -2821,7 +2921,7 @@ export default function ArcimMigrationWorkspace({
     }
 
     documentReconnectActionRef.current = reconnectAction
-    storeDocumentOAuthResume(reconnectAction)
+    storeDocumentOAuthResume(reconnectAction, documentsOnly)
     dispatchDocumentImport({ type: 'reconnect-started' })
     void handleReconnect('fortnox', consentId, {
       // The whole point of this reconnect is the attachment permissions, so
@@ -2848,6 +2948,7 @@ export default function ArcimMigrationWorkspace({
     consentId,
     documentImportState.phase,
     documentImportState.problem,
+    documentsOnly,
     handleReconnect,
   ])
 
@@ -2923,6 +3024,7 @@ export default function ArcimMigrationWorkspace({
         documentReconnectActionRef.current = null
         setConsentId(callbackConsentId)
         setSelectedProvider('fortnox')
+        setDocumentsOnly(documentResume.standalone)
         setStep('result')
         if (documentResume.action === 'discover') {
           await runDocumentDiscovery(callbackConsentId, 'fortnox', true)
@@ -3170,6 +3272,7 @@ export default function ArcimMigrationWorkspace({
     setIsStartingMigration(true)
 
     setStep('migrating')
+    setDocumentsOnly(false)
     setMigrationStep('Startar migrering...')
     setMigrationProgress(5)
     setError(null)
@@ -3393,6 +3496,7 @@ export default function ArcimMigrationWorkspace({
     setMigrationResults(null)
     setSieImportResults([])
     dispatchDocumentImport({ type: 'reset' })
+    setDocumentsOnly(false)
     clearDocumentReconnectFailureCleanup()
     documentReconnectActionRef.current = null
     setTheaterModel(null)
@@ -3415,6 +3519,7 @@ export default function ArcimMigrationWorkspace({
         <ProviderStep
           onSelect={handleSelectProvider}
           onResync={handleResync}
+          onFetchDocuments={handleFetchDocuments}
           onDisconnect={handleDisconnect}
           connectionStatus={connectionStatus}
           isLoadingStatus={isLoadingStatus}
@@ -3502,6 +3607,7 @@ export default function ArcimMigrationWorkspace({
           omittedYears={sieData?.omittedYears ?? []}
           error={error}
           documentImportState={documentImportState}
+          documentsOnly={documentsOnly}
           theaterModel={theaterModel}
           onDone={handleDone}
           onRetry={() => {
@@ -3514,7 +3620,15 @@ export default function ArcimMigrationWorkspace({
           onImportDocuments={() => {
             if (consentId) void runDocumentImport(consentId)
           }}
-          onDismissDocuments={() => dispatchDocumentImport({ type: 'dismissed' })}
+          onDismissDocuments={() => {
+            // A dismissed standalone run has nothing left to show: back to
+            // the connections list instead of an empty result page.
+            if (documentsOnly) {
+              handleDone()
+              return
+            }
+            dispatchDocumentImport({ type: 'dismissed' })
+          }}
           onReconnectDocuments={handleDocumentReconnect}
         />
       )}

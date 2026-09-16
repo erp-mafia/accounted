@@ -317,6 +317,10 @@ import {
   type AlreadyExplainedOutcome,
   type DuplicateCandidateOutcome,
 } from '@/lib/invoices/already-explained-guard'
+import {
+  buildBatchAllocationPreview,
+  type BatchAllocationPreviewInvoice,
+} from '@/lib/invoices/batch-allocation-preview'
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
@@ -11161,7 +11165,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_match_batch_allocate',
     keywords: ['klumpbetalning', 'fördela betalning', 'matcha betalningar'],
     title: 'Batch-Allocate Payment',
-    description: 'Allocate 1 bank tx across N customer OR N supplier invoices: one receipt covering many invoices, one transfer paying many bills (samlingsbetalning, BFL 5 kap 6§). Stages.',
+    description: 'Allocate 1 bank tx across N customer OR N supplier invoices: one receipt covering many invoices, one transfer paying many bills (samlingsbetalning, BFL 5 kap 6§). Stages; preview.expected_lines = the verifikat rows approval posts.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -11292,6 +11296,10 @@ export const tools: McpTool[] = [
       // The RPC also re-checks this, but failing fast at the MCP
       // layer gives the agent a clear error instead of an opaque
       // BATCH_INVOICE_NOT_FOUND code at commit time.
+      // The tenant pre-check below also carries the columns the RPC reads
+      // (currency, rate, remaining), so the preview can mirror the verifikat
+      // without a second round-trip.
+      const previewInvoices = new Map<string, BatchAllocationPreviewInvoice>()
       const invoiceIds = allocations
         .filter((a) => a.kind === 'customer_invoice')
         .map((a) => a.invoice_id!)
@@ -11307,10 +11315,11 @@ export const tools: McpTool[] = [
         const uniqueIds = Array.from(new Set(invoiceIds))
         const { data: found } = await supabase
           .from('invoices')
-          .select('id, document_type')
+          .select('id, document_type, currency, exchange_rate, remaining_amount, total')
           .in('id', uniqueIds)
           .eq('company_id', companyId)
         const foundRows = found ?? []
+        for (const row of foundRows) previewInvoices.set(row.id, row)
         const foundSet = new Set(foundRows.map((r) => r.id))
         const missing = uniqueIds.filter((id) => !foundSet.has(id))
         if (missing.length > 0 || foundRows.length !== uniqueIds.length) {
@@ -11327,10 +11336,11 @@ export const tools: McpTool[] = [
         const uniqueIds = Array.from(new Set(supplierInvoiceIds))
         const { data: found } = await supabase
           .from('supplier_invoices')
-          .select('id')
+          .select('id, currency, exchange_rate, remaining_amount, total')
           .in('id', uniqueIds)
           .eq('company_id', companyId)
         const foundRows = found ?? []
+        for (const row of foundRows) previewInvoices.set(row.id, row)
         const foundSet = new Set(foundRows.map((r) => r.id))
         const missing = uniqueIds.filter((id) => !foundSet.has(id))
         if (missing.length > 0 || foundRows.length !== uniqueIds.length) {
@@ -11388,6 +11398,17 @@ export const tools: McpTool[] = [
       const noun = hasCustomer ? 'kundfaktura' : 'leverantörsfaktura'
       const summary = `${allocations.length} ${allocations.length === 1 ? noun : `${noun.slice(0, -1)}or`}`
 
+      // The verifikat approval will post, computed from the same rows the RPC
+      // reads (lib/invoices/batch-allocation-preview.ts mirrors the migration).
+      // An API review flow approves konto, debet, kredit and date, not a
+      // count; the /pending card renders the same rows (GenericPreview picks
+      // up any kontering-shaped array in preview_data).
+      const expected = buildBatchAllocationPreview({
+        transaction: { amount: transaction.amount, currency: transaction.currency, date: transaction.date },
+        allocations,
+        invoices: previewInvoices,
+      })
+
       return stagePendingOperation(supabase, companyId, userId, 'match_batch_allocate',
         `Fördela: ${txDesc} → ${summary}`,
         {
@@ -11412,10 +11433,17 @@ export const tools: McpTool[] = [
           allocations_count: allocations.length,
           allocations_kind: hasCustomer ? 'customer_invoice' : 'supplier_invoice',
           total_allocated: totalAllocated,
+          // Neutral per-line descriptions ("Kundfaktura 1 av 3"): no invoice
+          // numbers or counterparty names, same posture as the keys above.
+          expected_entry_date: expected.entry_date,
+          expected_description: expected.description,
+          expected_lines: expected.lines,
+          expected_lines_balanced: expected.balanced,
+          expected_fx: expected.fx,
         },
         actor,
         {
-          description: 'After approval the combined verifikat is created and each invoice is advanced. Verify with gnubok_get_ar_ledger (customer) or gnubok_get_supplier_ledger.',
+          description: 'After approval the combined verifikat is created exactly as preview.expected_lines and each invoice is advanced. Verify with gnubok_get_ar_ledger (customer) or gnubok_get_supplier_ledger.',
           tool: hasCustomer ? 'gnubok_get_ar_ledger' : 'gnubok_get_supplier_ledger',
         },
         {

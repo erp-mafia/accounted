@@ -267,6 +267,62 @@ describe('generateINK2Declaration: closed fiscal year', () => {
   })
 })
 
+describe('generateINK2Declaration: prior-year deficit (INK2S 4.14 a)', () => {
+  it('deducts the saved deficit from the taxable result and files it on 7763', async () => {
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      nonDeductibleExpenses: 4_000,
+      nonTaxableIncome: 0,
+      deficitCarryforward: 100_000.75,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any)
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    // Whole kronor, ören dropped: 100 000. 506 000 - 100 000.
+    expect(result.ink2s['7763']).toBe(100_000)
+    expect(result.ink2s['8020']).toBe(406_000)
+    expect(result.ink2s['8021']).toBe(0)
+    expect(result.ink2['7104']).toBe(406_000)
+    expect(result.ink2['7114']).toBe(0)
+  })
+
+  it('turns a deficit larger than the result into this year\'s underskott on 4.16', async () => {
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      nonDeductibleExpenses: 4_000,
+      nonTaxableIncome: 0,
+      deficitCarryforward: 600_000,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any)
+
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    // 506 000 - 600 000 = -94 000: nothing on 4.15, the remainder rolls forward.
+    expect(result.ink2s['7763']).toBe(600_000)
+    expect(result.ink2s['8020']).toBe(0)
+    expect(result.ink2s['8021']).toBe(94_000)
+    expect(result.ink2['7104']).toBe(0)
+    expect(result.ink2['7114']).toBe(94_000)
+  })
+
+  it('files 7763 in the INK2S block and leaves it out when there is no deficit', async () => {
+    const withoutDeficit = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    expect(withoutDeficit.ink2s['7763']).toBe(0)
+    expect(generateSRUSubmission(withoutDeficit).blanketterSru).not.toContain('#UPPGIFT 7763')
+
+    vi.mocked(loadTaxAdjustmentSnapshot).mockResolvedValue({
+      nonDeductibleExpenses: 4_000,
+      nonTaxableIncome: 0,
+      deficitCarryforward: 100_000,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any)
+    const withDeficit = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+    const sru = generateSRUSubmission(withDeficit).blanketterSru
+    expect(sru).toContain('#UPPGIFT 7763 100000')
+    expect(sru).toContain('#UPPGIFT 8020 406000')
+    expect(validateBlanketterSru(sru).isValid).toBe(true)
+  })
+})
+
 describe('generateINK2Declaration: sign-based reclassification', () => {
   it('presents a skattekonto credit as a skatteskuld, not a negative fordran', async () => {
     const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)

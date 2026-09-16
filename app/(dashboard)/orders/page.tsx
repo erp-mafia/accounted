@@ -499,6 +499,9 @@ function OrderRow({
   // button (the two-button layout used to overflow the panel width).
   const markable = canWrite && !booked && !invoiced && !manuallyMarked
   const unmarkable = canWrite && manuallyMarked
+  // Paid + invoiceable: Bokför holds the button, Skapa faktura is offered in
+  // the menu. Unpaid orders already show Skapa faktura as the button.
+  const invoiceViaMenu = bookable && invoiceable
 
   return (
     <tr
@@ -573,7 +576,10 @@ function OrderRow({
       {/* One action per row: Bokför when the money event is bookable, else
           Skapa faktura for unpaid invoice-flow orders. Two buttons side by
           side pushed the table past the panel width and the overflow clip
-          swallowed single-button cells. */}
+          swallowed single-button cells. A paid order can still go the
+          invoice route (a kontantfaktura for the customer, a kundfaktura
+          settled by the same money), so when Bokför takes the button slot,
+          Skapa faktura moves into the overflow menu instead of vanishing. */}
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
         <div className="flex items-center justify-end gap-1">
           {bookable ? (
@@ -585,7 +591,7 @@ function OrderRow({
               {t('action_create_invoice')}
             </Button>
           ) : null}
-          {(markable || unmarkable) && (
+          {(invoiceViaMenu || markable || unmarkable) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -599,6 +605,11 @@ function OrderRow({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                {invoiceViaMenu && (
+                  <DropdownMenuItem onSelect={onInvoice}>
+                    {t('action_create_invoice')}
+                  </DropdownMenuItem>
+                )}
                 {markable && (
                   <DropdownMenuItem onSelect={onMarkBooked}>
                     {t('action_mark_booked')}
