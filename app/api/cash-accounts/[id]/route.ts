@@ -3,7 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateCashAccountSchema } from '@/lib/api/schemas'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { setVoucherSeries } from '@/lib/cash-accounts/service'
+import { setVoucherSeries, setEnabled, hasOpenTransactions } from '@/lib/cash-accounts/service'
 import { isBankCashAccount, updateCashAccountPayee, type PayeeUpdate } from '@/lib/cash-accounts/invoice-payee'
 import { getCompanyRole } from '@/lib/auth/require-write'
 import { UUID_RE } from '@/lib/invariants/uuid'
@@ -40,11 +40,14 @@ const PAYEE_KEYS = [
 /**
  * PATCH /api/cash-accounts/[id]
  *
- * Two independent concerns on one of the company's bank accounts:
+ * Three independent concerns on one of the company's bank accounts:
  *   - voucher_series: the verifikationsserie override (any writer role).
  *   - payee fields + invoice_payee + name: what customer invoices print
  *     (owner/admin only, same gate as the payment instructions on
  *     /api/settings; members never control where customers pay).
+ *   - enabled: opt a manual/SIE-sourced account out of the Konton overview
+ *     and the booking flows once the company stops using it (never the
+ *     account currently primary, never one with unbooked transactions).
  * Ledger account and primary flag have their own guarded flows.
  */
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -94,6 +97,30 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
     }
 
+    if (body.enabled === false) {
+      const { data: existing, error: existingError } = await supabase
+        .from('cash_accounts')
+        .select('id, is_primary')
+        .eq('company_id', companyId)
+        .eq('id', id)
+        .maybeSingle()
+      if (existingError) return errorResponse(existingError, log, { requestId })
+      if (!existing) return notFound()
+      if ((existing as { is_primary: boolean }).is_primary) {
+        return errorResponseFromCode('CASH_ACCOUNT_DISABLE_PRIMARY', log, {
+          requestId,
+          details: { cash_account_id: id },
+        })
+      }
+      const openWork = await hasOpenTransactions(supabase, companyId, id)
+      if (openWork) {
+        return errorResponseFromCode('CASH_ACCOUNT_DISABLE_UNRESOLVED', log, {
+          requestId,
+          details: { cash_account_id: id },
+        })
+      }
+    }
+
     let updated = null
     try {
       if (body.voucher_series !== undefined) {
@@ -102,6 +129,10 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
       if (touchesPayee) {
         updated = await updateCashAccountPayee(supabase, companyId, id, payeeUpdate)
+      }
+      if (body.enabled !== undefined) {
+        updated = await setEnabled(supabase, companyId, id, body.enabled)
+        if (!updated) return notFound()
       }
     } catch (err) {
       log.error('cash_accounts update failed', err as Error)

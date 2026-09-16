@@ -1605,21 +1605,65 @@ export async function ensureManualCashAccount(
 }
 
 /**
- * Toggle a cash account's enabled flag. Used by the AccountPicker when a user
- * opts in or out of syncing a particular PSD2 account.
+ * Toggle a cash account's enabled flag: PATCH /api/cash-accounts/[id] for a
+ * manual or SIE-sourced account the company has stopped using (the route
+ * guards is_primary and open reconciliation work before calling this), and
+ * the AccountPicker for a PSD2 account the user opts in or out of syncing.
  */
 export async function setEnabled(
   supabase: SupabaseClient,
   companyId: string,
   cashAccountId: string,
   enabled: boolean,
-): Promise<void> {
-  const { error } = await supabase
+): Promise<CashAccount | null> {
+  const { data, error } = await supabase
     .from('cash_accounts')
     .update({ enabled })
     .eq('company_id', companyId)
     .eq('id', cashAccountId)
+    .select('*')
+    .maybeSingle()
   if (error) throw new Error(`cash_accounts setEnabled failed: ${error.message}`)
+  return (data as CashAccount | null) ?? null
+}
+
+/**
+ * Whether a cash account still has work pending: an unbooked, non-ignored
+ * transaction. Disabling an account with open work would hide it from
+ * Konton and the booking flows while its rows still need a decision.
+ *
+ * A NULL journal_entry_id alone overcounts: a row split over several
+ * verifikat (transaction_voucher_links, #1553) or booked through a multi
+ * allocation carries the same NULL but is not open work, so junction-anchored
+ * rows are subtracted the same way lib/transactions/is-booked.ts does.
+ */
+export async function hasOpenTransactions(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('cash_account_id', cashAccountId)
+    .is('journal_entry_id', null)
+    .eq('is_ignored', false)
+    .limit(50)
+  if (error) throw new Error(`cash_accounts hasOpenTransactions failed: ${error.message}`)
+  const candidateIds = (data ?? []).map((row) => (row as { id: string }).id)
+  if (candidateIds.length === 0) return false
+  // lib/reconciliation/bank-reconciliation.ts already imports this module, so
+  // its fetchJunctionLinkedTxIds() can't be imported back here without a
+  // cycle; the same two-column lookup, inlined.
+  const { data: linkRows, error: linkError } = await supabase
+    .from('transaction_voucher_links')
+    .select('transaction_id')
+    .eq('company_id', companyId)
+    .in('transaction_id', candidateIds)
+  if (linkError) throw new Error(`cash_accounts hasOpenTransactions junction lookup failed: ${linkError.message}`)
+  const junctionLinked = new Set((linkRows ?? []).map((row) => (row as { transaction_id: string }).transaction_id))
+  return candidateIds.some((id) => !junctionLinked.has(id))
 }
 
 /**
