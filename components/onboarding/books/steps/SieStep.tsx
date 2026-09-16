@@ -592,21 +592,29 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                       >
                         {f.chart ? shortChartName(f.chart.name) : t('sie_chart_pick')}
                       </button>
-                      {f.chart ? (
-                        <span className="bks-f" style={{ marginLeft: 6, color: 'hsl(var(--muted-foreground))' }}>
-                          {t('sie_chart_count', { count: f.chart.treatments })}
-                        </span>
-                      ) : null}
-                      {/* A rejected pick sits beside the chart, never over it:
-                          the row keeps naming the file whose codes the import
-                          will actually use. */}
-                      {f.chartRejected ? (
-                        <span className="bks-f is-warn" style={{ marginLeft: 6 }}>
-                          {f.chartRejected.why && tn.has(f.chartRejected.why)
-                            ? tn(f.chartRejected.why, { formats: chartFormat.label, format: chartFormat.label, count: 0 })
-                            : t('sie_chart_unread')}
-                        </span>
-                      ) : null}
+                      {/* Both outcomes land after file.text() resolves, with
+                          nothing moving and no focus change, so without a live
+                          region a screen reader never learns the pick worked.
+                          The button stays outside it: a live region is for
+                          text that appears, not for a control that was already
+                          there. */}
+                      <span role="status" aria-live="polite">
+                        {f.chart ? (
+                          <span className="bks-f" style={{ marginLeft: 6, color: 'hsl(var(--muted-foreground))' }}>
+                            {t('sie_chart_count', { count: f.chart.treatments })}
+                          </span>
+                        ) : null}
+                        {/* A rejected pick sits beside the chart, never over
+                            it: the row keeps naming the file whose codes the
+                            import will actually use. */}
+                        {f.chartRejected ? (
+                          <span className="bks-f is-warn" style={{ marginLeft: 6 }}>
+                            {f.chartRejected.why && tn.has(f.chartRejected.why)
+                              ? tn(f.chartRejected.why, { formats: chartFormat.label, format: chartFormat.label, count: 0 })
+                              : t('sie_chart_unread')}
+                          </span>
+                        ) : null}
+                      </span>
                     </span>
                   ) : null}
                 </p>
