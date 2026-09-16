@@ -455,6 +455,88 @@ describe('findMatchingVouchersForInvoice', () => {
     expect(result[0].journal_entry_id).toBe('je-1')
     expect(result[0].ar_credit_amount).toBe(1000)
   })
+
+  // ── a reference found in the description (issue #2673) ────────────
+  //
+  // The SQL candidate band is wider than the amount rules, so a voucher can
+  // reach the scorer while matching neither the remaining nor the total. Before,
+  // a description that merely contained the invoice number returned 0.99 from
+  // the scorer and returned early, skipping the currency guard.
+
+  /** One accrual candidate with a chosen description, amount and line currency. */
+  function enqueueDescribedCandidate(
+    enqueue: (result: { data?: unknown; error?: unknown }) => void,
+    description: string,
+    creditAmount: number,
+    lineCurrency: string,
+  ) {
+    enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
+    enqueue({
+      data: [
+        {
+          id: 'je-1',
+          voucher_series: 'A',
+          voucher_number: 7,
+          entry_date: '2026-05-01',
+          description,
+          status: 'posted',
+          source_type: 'manual',
+          fiscal_period_id: 'fp-1',
+          company_id: 'company-1',
+          journal_entry_lines: [
+            {
+              id: 'l1',
+              account_number: '1510',
+              debit_amount: 0,
+              credit_amount: creditAmount,
+              currency: lineCurrency,
+            },
+          ],
+        },
+      ],
+    })
+    enqueue({ data: [] }) // invoice_payments already-linked lookup
+    enqueue({ data: [] }) // fiscal_periods lock lookup
+  }
+
+  const partlyPaid = () =>
+    makeInvoice({
+      total: 10000,
+      paid_amount: 6500,
+      remaining_amount: 3500,
+      currency: 'SEK',
+      due_date: '2026-05-01',
+      invoice_number: 'F-2026001',
+    })
+
+  it('scores a description-only reference as in-text when the amount matches neither remaining nor total', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueDescribedCandidate(enqueue, 'Inbetalning avser faktura F-2026001', 859, 'SEK')
+
+    const result = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      partlyPaid() as never,
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe(0.85)
+    expect(result[0].match_reason).toContain('F-2026001')
+  })
+
+  it('rejects a candidate in another currency even when the description names the invoice', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueDescribedCandidate(enqueue, 'Inbetalning avser faktura F-2026001', 859, 'EUR')
+
+    const result = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      partlyPaid() as never,
+    )
+
+    // The counterparty discriminator now runs for a reference hit too.
+    expect(result).toEqual([])
+  })
 })
 
 // ============================================================
