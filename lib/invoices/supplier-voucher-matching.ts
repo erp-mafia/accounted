@@ -26,6 +26,7 @@ import {
 } from './invoice-matching'
 import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
+import { textMentionsReference } from './ocr-keys'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import type { SupplierInvoice, Supplier } from '@/types'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
@@ -264,21 +265,32 @@ function scoreCandidate(
   lineCurrency: string | null,
   ctx: CandidateContext,
 ): { confidence: number; match_reason: string } | null {
-  // OCR-style: invoice number or arrival number appears in the entry description.
+  // A reference found in the verifikat's FREE TEXT. Scored, never decisive: the
+  // description is prose, so a hit can coincide, which is what
+  // CONFIDENCE.OCR_REFERENCE_IN_TEXT exists to say. It therefore does not
+  // short-circuit; the amount branches below still run and the stronger reason
+  // wins, exactly as the transaction-side matcher already does
+  // (lib/invoices/invoice-matching.ts).
+  //
+  // This used to return OCR_REFERENCE_MATCH (0.99, the value for an exact hit
+  // in a dedicated reference field) and return immediately, which both cleared
+  // the unattended auto-link threshold in bulk-reconcile-supplier-vouchers.ts
+  // on a coincidence and skipped the currency guard below. An ankomstnummer 14
+  // matched the digits inside another supplier's invoice number 1814 quoted in
+  // an unrelated payment voucher, and settled 859 kr against a 3 500 kr
+  // payable (issue #2673).
   const invoiceNumberHit =
-    ctx.invoice.supplier_invoice_number &&
-    descriptionMentionsToken(entry.description, ctx.invoice.supplier_invoice_number)
+    !!ctx.invoice.supplier_invoice_number &&
+    textMentionsReference(entry.description, ctx.invoice.supplier_invoice_number)
   const arrivalHit =
+    !invoiceNumberHit &&
     ctx.invoice.arrival_number != null &&
-    descriptionMentionsToken(entry.description, String(ctx.invoice.arrival_number))
-  if (invoiceNumberHit || arrivalHit) {
-    return {
-      confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
-      match_reason: invoiceNumberHit
-        ? `Fakturanummer ${ctx.invoice.supplier_invoice_number} omnämnt i verifikatets beskrivning`
-        : `Ankomstnummer ${ctx.invoice.arrival_number} omnämnt i verifikatets beskrivning`,
-    }
-  }
+    textMentionsReference(entry.description, String(ctx.invoice.arrival_number))
+  const referenceReason = invoiceNumberHit
+    ? `Fakturanummer ${ctx.invoice.supplier_invoice_number} omnämnt i verifikatets beskrivning`
+    : arrivalHit
+      ? `Ankomstnummer ${ctx.invoice.arrival_number} omnämnt i verifikatets beskrivning`
+      : null
 
   // Label guard, unchanged in shape. It is no longer what makes the amounts
   // comparable (that used to be the bug: `lineCurrency ?? invoice.currency`
@@ -330,12 +342,18 @@ function scoreCandidate(
   } else if (fuzzyRemaining) {
     confidence = CONFIDENCE.FUZZY_AMOUNT_ONLY
     reason = `Belopp nära (±1%)`
-  } else {
+  } else if (!referenceReason) {
     return null
   }
 
-  if (isDateWithinDays(entry.entry_date, ctx.invoice.due_date, 7)) {
+  // Only an amount score earns the date bump: with no amount match there is
+  // nothing for proximity to corroborate.
+  if (confidence > 0 && isDateWithinDays(entry.entry_date, ctx.invoice.due_date, 7)) {
     confidence = Math.min(CONFIDENCE.OCR_REFERENCE_MATCH - 0.001, confidence + DATE_PROXIMITY_BUMP)
+  }
+
+  if (referenceReason && CONFIDENCE.OCR_REFERENCE_IN_TEXT > confidence) {
+    return { confidence: CONFIDENCE.OCR_REFERENCE_IN_TEXT, match_reason: referenceReason }
   }
 
   return { confidence, match_reason: reason }
@@ -763,12 +781,4 @@ function computeRemaining(invoice: SupplierInvoice): number {
   }
   const paid = invoice.paid_amount ?? 0
   return Math.max(0, round2(invoice.total - paid))
-}
-
-function descriptionMentionsToken(description: string | null, token: string): boolean {
-  if (!description || !token) return false
-  const normalizedDesc = description.replace(/\s+/g, '').toLowerCase()
-  const normalizedTok = token.replace(/\s+/g, '').toLowerCase()
-  if (normalizedTok.length < 2) return false
-  return normalizedDesc.includes(normalizedTok)
 }

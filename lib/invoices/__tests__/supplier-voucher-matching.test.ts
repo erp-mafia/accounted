@@ -742,4 +742,112 @@ describe('findMatchingVouchersForSupplierInvoice', () => {
     const tables = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
     expect(tables).not.toContain('journal_entry_lines')
   })
+
+  // ── the free-text reference branch (issue #2673) ──────────────────
+
+  function enqueueOneApLine(
+    enqueue: (result: { data?: unknown; error?: unknown }) => void,
+    description: string,
+    debitAmount: number,
+  ) {
+    enqueueApLines(enqueue, [
+      {
+        id: 'line-1',
+        account_number: '2440',
+        debit_amount: debitAmount,
+        currency: 'SEK',
+        entry: entryFixture({ description }),
+      },
+    ])
+    enqueue({ data: [], error: null }) // supplier_invoice_payments links
+    enqueue({ data: [{ id: 'period-1', is_closed: false, locked_at: null }], error: null })
+  }
+
+  it('does not match an ankomstnummer against digits inside a longer number', async () => {
+    // The reported case: ankomstnummer 14 found inside another supplier's
+    // invoice number 1814, quoted in an unrelated payment voucher, settled
+    // 859 kr against a 3 500 kr payable at 99% confidence.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueOneApLine(enqueue, 'Levbet Tele2 Sverige AB (1814)', 859)
+
+    const result = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      makeSupplierInvoice({
+        id: 'si-2673',
+        total: 3500,
+        paid_amount: 0,
+        remaining_amount: 3500,
+        currency: 'SEK',
+        arrival_number: 14,
+        supplier_invoice_number: 'PO-5567',
+      }) as never,
+    )
+
+    // No reference, and 859 is neither the remaining nor the total: nothing to
+    // offer, let alone auto-link.
+    expect(result).toEqual([])
+  })
+
+  it('scores a genuine reference in the description as in-text, not as an exact reference hit', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueOneApLine(enqueue, 'Levbet avser faktura F-9001', 250)
+
+    const result = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      invoice() as never,
+    )
+
+    // A description is prose: the hit ranks below a reference-field match and,
+    // at 0.85, below bulk-reconcile's unattended auto-link threshold (0.95).
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe(0.85)
+    expect(result[0].match_reason).toContain('F-9001')
+  })
+
+  it('lets the stronger amount reason win over a reference in the description', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueOneApLine(enqueue, 'Levbet Leverantor AB faktura F-9001', 1000)
+
+    const result = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      {
+        ...invoice(),
+        supplier: { id: 'supplier-1', name: 'Leverantor AB' },
+      } as never,
+    )
+
+    // Exact remaining amount plus the supplier name: the reference no longer
+    // short-circuits, so the corroborated path keeps the confidence it had and
+    // still clears the unattended auto-link threshold.
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBeGreaterThanOrEqual(0.95)
+    expect(result[0].match_reason).toContain('Exakt belopp')
+  })
+
+  it('applies the currency guard to a candidate that mentions the invoice', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueApLines(enqueue, [
+      {
+        id: 'line-1',
+        account_number: '2440',
+        debit_amount: 1000,
+        currency: 'EUR',
+        entry: entryFixture({ description: 'Levbet avser faktura F-9001' }),
+      },
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ id: 'period-1', is_closed: false, locked_at: null }], error: null })
+
+    const result = await findMatchingVouchersForSupplierInvoice(
+      supabase as never,
+      'company-1',
+      invoice() as never,
+    )
+
+    // The reference branch used to return before this guard ran.
+    expect(result).toEqual([])
+  })
 })

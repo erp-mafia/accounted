@@ -91,3 +91,34 @@ export function distinctiveReferenceKeys(
     .filter((k) => k.form !== 'ocr' || validateOcrReference(k.key))
     .map((k) => k.key)
 }
+
+/**
+ * True when `token` occurs in free text (a verifikat description, a bank memo)
+ * as a reference rather than as a run of characters inside a longer number.
+ *
+ * Two rules, both of which the substring tests this replaced were missing:
+ *
+ *  - the same `MIN_REFERENCE_KEY_DIGITS` floor the OCR keys use. An ankomstnummer
+ *    is a sequential counter, so a company has hundreds of one- to three-character
+ *    tokens in circulation and every one of them turns up somewhere in some
+ *    description;
+ *  - digit adjacency. `14` inside `(1814)` is not a mention of 14. The guard is
+ *    digit adjacency and not a word boundary because whitespace is stripped from
+ *    both sides first (a source system may print a reference in groups), which
+ *    leaves `faktura 1814` as `faktura1814`: there `\b` would reject the very
+ *    case the match exists for.
+ *
+ * Exact equality against a dedicated reference field needs neither rule, which
+ * is why `matchesNormalizedReference` has neither.
+ */
+export function textMentionsReference(
+  text: string | null | undefined,
+  token: string | null | undefined,
+): boolean {
+  if (!text || !token) return false
+  const haystack = text.replace(/\s+/g, '').toLowerCase()
+  const needle = token.replace(/\s+/g, '').toLowerCase()
+  if (needle.length < MIN_REFERENCE_KEY_DIGITS) return false
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?<!\\d)${escaped}(?!\\d)`).test(haystack)
+}

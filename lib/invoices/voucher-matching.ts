@@ -30,6 +30,7 @@ import {
 } from './invoice-matching'
 import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
+import { textMentionsReference } from './ocr-keys'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import type { Invoice, Customer } from '@/types'
 import {
@@ -381,16 +382,17 @@ function scoreCandidate(
   lineCurrency: string | null,
   ctx: CandidateContext
 ): { confidence: number; match_reason: string } | null {
-  // OCR-style: invoice number appears in entry description.
-  if (
+  // A reference found in the verifikat's FREE TEXT. Scored, never decisive, and
+  // it does not short-circuit: see the twin in supplier-voucher-matching.ts and
+  // the in-text branch this borrows from in invoice-matching.ts. Returning
+  // OCR_REFERENCE_MATCH here priced a prose coincidence as an exact hit in a
+  // dedicated reference field, and skipped the currency guard below
+  // (issue #2673).
+  const referenceReason =
     ctx.invoice.invoice_number &&
-    descriptionMentionsInvoice(entry.description, ctx.invoice.invoice_number)
-  ) {
-    return {
-      confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
-      match_reason: `Fakturanummer ${ctx.invoice.invoice_number} omnämnt i verifikatets beskrivning`,
-    }
-  }
+    textMentionsReference(entry.description, ctx.invoice.invoice_number)
+      ? `Fakturanummer ${ctx.invoice.invoice_number} omnämnt i verifikatets beskrivning`
+      : null
 
   // Label guard, unchanged in shape. It is no longer what makes the amounts
   // comparable (that used to be the bug: it passed on exactly the FX rows it
@@ -436,13 +438,18 @@ function scoreCandidate(
   } else if (fuzzyRemaining) {
     confidence = CONFIDENCE.FUZZY_AMOUNT_ONLY
     reason = `Belopp nära (±1%)`
-  } else {
+  } else if (!referenceReason) {
     return null
   }
 
-  // Bump for date proximity to due_date.
-  if (isDateWithinDays(entry.entry_date, ctx.invoice.due_date, 7)) {
+  // Bump for date proximity to due_date. Only an amount score earns it: with no
+  // amount match there is nothing for proximity to corroborate.
+  if (confidence > 0 && isDateWithinDays(entry.entry_date, ctx.invoice.due_date, 7)) {
     confidence = Math.min(CONFIDENCE.OCR_REFERENCE_MATCH - 0.001, confidence + DATE_PROXIMITY_BUMP)
+  }
+
+  if (referenceReason && CONFIDENCE.OCR_REFERENCE_IN_TEXT > confidence) {
+    return { confidence: CONFIDENCE.OCR_REFERENCE_IN_TEXT, match_reason: referenceReason }
   }
 
   return { confidence, match_reason: reason }
@@ -857,11 +864,4 @@ function computeRemaining(invoice: Invoice): number {
   }
   const paid = invoice.paid_amount ?? 0
   return Math.max(0, round2(invoice.total - paid))
-}
-
-function descriptionMentionsInvoice(description: string | null, invoiceNumber: string): boolean {
-  if (!description || !invoiceNumber) return false
-  const normalizedDesc = description.replace(/\s+/g, '').toLowerCase()
-  const normalizedNum = invoiceNumber.replace(/\s+/g, '').toLowerCase()
-  return normalizedDesc.includes(normalizedNum)
 }
