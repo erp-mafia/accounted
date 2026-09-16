@@ -87,5 +87,39 @@ describe('loadTaxAdjustmentSnapshot', () => {
 
     expect(snapshot.nonDeductibleExpenses).toBe(3_094)
     expect(snapshot.items.find((item) => item.accountNumber === '8423')?.included).toBe(false)
+    expect(snapshot.deficitCarryforward).toBe(0)
+  })
+
+  it('keeps the prior-year deficit (INK2S 4.14 a) in its own total, apart from non-taxable income', async () => {
+    const snapshot = await loadTaxAdjustmentSnapshot(
+      makeClient([
+        {
+          source_key: 'manual:non_taxable_income',
+          adjustment_type: 'non_taxable_income',
+          source: 'manual',
+          description: 'Ej skattepliktiga intäkter',
+          account_number: null,
+          amount: 1_000,
+          included: true,
+        },
+        {
+          source_key: 'manual:deficit_carryforward',
+          adjustment_type: 'deficit_carryforward',
+          source: 'manual',
+          description: 'Outnyttjat underskott från föregående beskattningsår',
+          account_number: null,
+          amount: 250_000.5,
+          included: true,
+        },
+      ]),
+      'company-1',
+      'period-1',
+    )
+
+    expect(snapshot.nonTaxableIncome).toBe(1_000)
+    expect(snapshot.deficitCarryforward).toBe(250_000.5)
+    const deficit = snapshot.items.find((item) => item.sourceKey === 'manual:deficit_carryforward')
+    expect(deficit?.adjustmentType).toBe('deficit_carryforward')
+    expect(deficit?.included).toBe(true)
   })
 })

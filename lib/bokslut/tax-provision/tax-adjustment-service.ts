@@ -33,6 +33,14 @@ const MANUAL_ADJUSTMENTS = [
     adjustmentType: 'non_taxable_income' as const,
     description: 'Ej skattepliktiga intäkter',
   },
+  // INK2S 4.14 a (SRU 7763). Stored like the other manual bridges so a
+  // company that imported only its recent years can still carry the deficit
+  // into the tax provision and the declaration.
+  {
+    sourceKey: 'manual:deficit_carryforward',
+    adjustmentType: 'deficit_carryforward' as const,
+    description: 'Outnyttjat underskott från föregående beskattningsår',
+  },
 ] as const
 
 interface PersistedAdjustmentRow {
@@ -49,6 +57,8 @@ export interface SaveTaxAdjustmentsInput {
   manualAdjustments: {
     nonDeductibleExpenses: number
     nonTaxableIncome: number
+    /** INK2S 4.14 a: prior years' unused deficit to deduct this year. */
+    deficitCarryforward: number
   }
   detectedAccounts: Record<(typeof DETECTED_TAX_ADJUSTMENT_ACCOUNTS)[number]['accountNumber'], boolean>
 }
@@ -163,6 +173,18 @@ export async function saveTaxAdjustments(
       amount: roundOre(input.manualAdjustments.nonTaxableIncome),
       included: input.manualAdjustments.nonTaxableIncome > 0,
     },
+    {
+      company_id: companyId,
+      user_id: userId,
+      fiscal_period_id: fiscalPeriodId,
+      adjustment_type: 'deficit_carryforward',
+      source: 'manual',
+      source_key: 'manual:deficit_carryforward',
+      description: 'Outnyttjat underskott från föregående beskattningsår',
+      account_number: null,
+      amount: roundOre(input.manualAdjustments.deficitCarryforward),
+      included: input.manualAdjustments.deficitCarryforward > 0,
+    },
   ]
 
   const { error } = await supabase
@@ -177,13 +199,20 @@ export async function saveTaxAdjustments(
 function summarizeTaxAdjustments(items: TaxAdjustmentItem[]): TaxAdjustmentSnapshot {
   let nonDeductibleExpenses = 0
   let nonTaxableIncome = 0
+  let deficitCarryforward = 0
 
   for (const item of items) {
     if (!item.included) continue
-    if (item.adjustmentType === 'non_deductible_expense') {
-      nonDeductibleExpenses += item.amount
-    } else {
-      nonTaxableIncome += item.amount
+    switch (item.adjustmentType) {
+      case 'non_deductible_expense':
+        nonDeductibleExpenses += item.amount
+        break
+      case 'non_taxable_income':
+        nonTaxableIncome += item.amount
+        break
+      case 'deficit_carryforward':
+        deficitCarryforward += item.amount
+        break
     }
   }
 
@@ -191,5 +220,6 @@ function summarizeTaxAdjustments(items: TaxAdjustmentItem[]): TaxAdjustmentSnaps
     items,
     nonDeductibleExpenses: roundOre(nonDeductibleExpenses),
     nonTaxableIncome: roundOre(nonTaxableIncome),
+    deficitCarryforward: roundOre(deficitCarryforward),
   }
 }

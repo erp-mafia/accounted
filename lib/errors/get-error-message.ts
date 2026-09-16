@@ -762,6 +762,20 @@ const BANK_CONNECTION_ERROR_MAP: Record<string, string> = {
 const BANK_CONNECTION_CANCELLED_MESSAGE =
   'Anslutningen avbröts hos banken innan den slutfördes. Ingen bankkoppling skapades. Försök igen och slutför alla steg hos banken.'
 
+// The bank refused the login itself. For a company account this is almost
+// always a missing or unlinked open banking permission (fullmakt) for the
+// person logging in: Handelsbanken reports an unlinked "API Företag" fullmakt
+// as access_denied "Invalid credentials" (seen from 2026-09-14), which used
+// to read as "you cancelled" and sent people back to retry the same thing.
+const BANK_CONNECTION_INVALID_CREDENTIALS_MESSAGE =
+  'Banken godkände inte inloggningen. Gäller det företagskonton behöver personen som loggar in ha bankens fullmakt för öppna API:er (open banking) kopplad till sig innan anslutningen kan godkännas. Kontrollera fullmakten hos banken och försök igen.'
+
+// The login worked but the bank has not opened account information to it:
+// SEB answers "You cannot retrieve account information, please ask PSU to
+// contact bank". Retrying cannot help; the bank has to enable access.
+const BANK_CONNECTION_ACCOUNT_ACCESS_MESSAGE =
+  'Banken har inte gett den här inloggningen tillgång till kontoinformation. Be banken aktivera åtkomst via öppna API:er (open banking) för kontot och försök sedan igen.'
+
 const BANK_CONNECTION_SESSION_EXPIRED_MESSAGE =
   'Bankens inloggningssession hann gå ut innan anslutningen slutfördes. Starta bankkopplingen på nytt och slutför alla steg hos banken direkt.'
 
@@ -771,6 +785,50 @@ const BANK_CONNECTION_FALLBACK_MESSAGE =
 // Same shape the callback route keys its expired-vs-error decision on.
 const BANK_SESSION_EXPIRY_PATTERN =
   /session.?expired|expired.?session|closed.?session|session.?closed|invalid.?session|session.?not.?found/i
+
+/**
+ * What an `access_denied` (or cancel-worded) callback actually meant, read
+ * from the provider description. `null` for every other code.
+ *
+ *  - `cancelled`: the person stopped at the bank (cancel/abort/denied consent,
+ *    or a bare access_denied with no description). Expected outcome.
+ *  - `invalid_credentials`: the bank refused the login. On a company account
+ *    that is the missing or unlinked open banking fullmakt.
+ *  - `account_access`: login accepted, account information not opened to it.
+ *  - `other`: access_denied with a description we do not recognise.
+ *
+ * Shared by the message mapper, the callback's log level and the settings
+ * page hints so the three cannot drift apart (the previous split is exactly
+ * how a real fullmakt failure got labelled "you cancelled" for a week).
+ */
+export type BankConnectionDenialReason =
+  | 'cancelled'
+  | 'invalid_credentials'
+  | 'account_access'
+  | 'other'
+
+const BANK_DENIAL_CANCEL_PATTERN = /cancel|abort|denied|declin/i
+const BANK_DENIAL_CREDENTIALS_PATTERN = /invalid.?credential|wrong.?credential|bad.?credential|authentication.?failed|login.?failed|incorrect.?(password|pin|credential)/i
+const BANK_DENIAL_ACCOUNT_ACCESS_PATTERN =
+  /cannot.?retrieve.?account|account.?information|contact.?(the.?)?bank|ask.?psu|psu.?(has|must|should|needs)|not.?(been.?)?(authori[sz]ed|entitled|permitted)|no.?(access|permission).?to.?account/i
+
+export function classifyBankConnectionDenial(
+  errorCode: string,
+  errorDescription?: string | null
+): BankConnectionDenialReason | null {
+  const code = errorCode.trim()
+  const description = errorDescription?.trim() || null
+
+  // A cancel can arrive under any code ("server_error: Cancelled by user").
+  // Matched on the description alone: the code access_denied itself contains
+  // "denied" and must not turn every denial into a cancel.
+  if (description && BANK_DENIAL_CANCEL_PATTERN.test(description)) return 'cancelled'
+  if (code !== 'access_denied') return null
+  if (!description) return 'cancelled'
+  if (BANK_DENIAL_CREDENTIALS_PATTERN.test(description)) return 'invalid_credentials'
+  if (BANK_DENIAL_ACCOUNT_ACCESS_PATTERN.test(description)) return 'account_access'
+  return 'other'
+}
 
 /**
  * Map a PSD2 authorization callback outcome (OAuth error code plus optional
@@ -786,10 +844,20 @@ export function getBankConnectionErrorMessage(
   const description = errorDescription?.trim() || null
   const combined = `${code} ${description ?? ''}`
 
+  const denial = classifyBankConnectionDenial(code, description)
   // User cancelled at the bank: an expected outcome, keep it clean without
   // echoing the provider text back.
-  if (code === 'access_denied' || /cancel/i.test(combined)) {
+  if (denial === 'cancelled') {
     return BANK_CONNECTION_CANCELLED_MESSAGE
+  }
+  // The two denial shapes a retry cannot fix get their own explanation. The
+  // bank's own sentence still rides along in parentheses (support reads it
+  // off the screenshot).
+  if (denial === 'invalid_credentials') {
+    return `${BANK_CONNECTION_INVALID_CREDENTIALS_MESSAGE} (${description})`
+  }
+  if (denial === 'account_access') {
+    return `${BANK_CONNECTION_ACCOUNT_ACCESS_MESSAGE} (${description})`
   }
 
   let base: string

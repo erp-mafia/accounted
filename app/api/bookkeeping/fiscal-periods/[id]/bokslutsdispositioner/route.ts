@@ -83,6 +83,9 @@ const PutBodySchema = z.object({
   manualAdjustments: z.object({
     nonDeductibleExpenses: z.number().nonnegative().max(1_000_000_000_000),
     nonTaxableIncome: z.number().nonnegative().max(1_000_000_000_000),
+    // INK2S 4.14 a. Defaulted so a client that predates the field keeps
+    // saving the other two without clearing anything.
+    deficitCarryforward: z.number().nonnegative().max(1_000_000_000_000).default(0),
   }),
   detectedAccounts: z.object({
     '6992': z.boolean(),
@@ -349,6 +352,7 @@ async function computeProposal(
         manualAdjustments: {
           nonDeductibleExpenses: taxAdjustments.nonDeductibleExpenses,
           nonTaxableIncome: taxAdjustments.nonTaxableIncome,
+          deficitCarryforward: taxAdjustments.deficitCarryforward ?? 0,
           schablonintaktPeriodiseringsfond: Math.round(schablonintakt),
         },
       })
@@ -428,6 +432,7 @@ async function computeProposal(
         incomeStatement.net_result + postedEffect.total + alreadyProvisioned
         + Math.round(schablonintakt)
         + taxAdjustments.nonDeductibleExpenses - taxAdjustments.nonTaxableIncome
+        - (taxAdjustments.deficitCarryforward ?? 0)
       return proposeAvsattning({
         skattemassigtResultatBeforeAvsattning: base,
         desiredAmount: item.desiredAmount,

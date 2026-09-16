@@ -2020,6 +2020,70 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(location).toContain('psu_type=business')
   })
 
+  it('forwards bank_error_reason so the settings page can tell a refused login from a cancel', async () => {
+    mockFrom.mockImplementation(() =>
+      mockChain({
+        data: { id: 'conn-1', user_id: 'user-1', bank_name: 'Handelsbanken', psu_type: 'business', status: 'pending' },
+        error: null,
+      })
+    )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const response = await GET(makeRequest({
+      error: 'access_denied',
+      error_description: 'Invalid credentials',
+      state: 'pending-state',
+    }))
+
+    expect(response.status).toBe(307)
+    const location = new URL(response.headers.get('location') || '', 'https://app.example')
+    expect(location.searchParams.get('bank_error_code')).toBe('access_denied')
+    expect(location.searchParams.get('bank_error_reason')).toBe('invalid_credentials')
+    expect(location.searchParams.get('psu_type')).toBe('business')
+    // Since 2026-09-14 Handelsbanken reports an unlinked fullmakt this way:
+    // the user message must not call it a cancel.
+    expect(location.searchParams.get('bank_error')).toContain('godkände inte inloggningen')
+    expect(location.searchParams.get('bank_error')).not.toContain('Anslutningen avbröts')
+    // A refused login is a real failure: it stays at error level, unlike a
+    // cancel (which logs at warn so it does not page anyone).
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[enable-banking] Bank authorization denied',
+      expect.objectContaining({ error: 'access_denied', error_description: 'Invalid credentials' })
+    )
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      '[enable-banking] Bank authorization denied',
+      expect.anything()
+    )
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+
+  it('marks a plain cancel as bank_error_reason=cancelled and logs it at warn level', async () => {
+    mockFrom.mockImplementation(() =>
+      mockChain({
+        data: { id: 'conn-1', user_id: 'user-1', bank_name: 'SEB', psu_type: 'business', status: 'pending' },
+        error: null,
+      })
+    )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const response = await GET(makeRequest({
+      error: 'access_denied',
+      error_description: 'User cancelled',
+      state: 'pending-state',
+    }))
+
+    const location = new URL(response.headers.get('location') || '', 'https://app.example')
+    expect(location.searchParams.get('bank_error_reason')).toBe('cancelled')
+    expect(location.searchParams.get('bank_error')).toContain('Anslutningen avbröts hos banken')
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[enable-banking] Bank authorization denied',
+      expect.objectContaining({ error: 'access_denied' })
+    )
+    warnSpy.mockRestore()
+  })
+
   it('returns a bank denial to the recorded brand origin so the banner is seen where the session is', async () => {
     mockFrom.mockImplementation(() =>
       mockChain({

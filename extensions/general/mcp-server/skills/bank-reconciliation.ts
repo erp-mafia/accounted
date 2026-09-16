@@ -121,7 +121,7 @@ ledger after reconciliation:
 - \`gnubok_list_uncategorized_transactions\`
 - \`gnubok_suggest_categories\`
 - \`gnubok_categorize_transaction\`
-- \`gnubok_match_transaction_to_invoice\`, \`gnubok_match_batch_allocate\` (one receipt → many invoices)
+- \`gnubok_match_transaction_to_invoice\`, \`gnubok_match_batch_allocate\` (one receipt → many invoices; its staged preview carries \`expected_lines\`, the verifikat rows approval posts: show them before approving)
 - \`gnubok_auto_match_period\` (bulk matcher with confidence thresholds: use for big backlogs)
 - \`gnubok_link_transaction_to_journal_entry\`, \`gnubok_link_invoice_to_voucher\`, \`gnubok_link_supplier_invoice_to_voucher\` (attach to an existing verifikat: no new bokföring)
 - \`gnubok_find_voucher_candidates_for_invoice\`, \`gnubok_find_voucher_candidates_for_supplier_invoice\` (read-only: run before the link_\* tools)
