@@ -1351,6 +1351,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       description: 'Välj ett av företagets bankkonton som är markerat "Visas på fakturor" och har betaluppgifter för fakturans valuta.',
     },
   },
+  CASH_ACCOUNT_DISABLE_PRIMARY: {
+    httpStatus: 400,
+    message_sv: 'Det här är företagets primära bankkonto och kan inte stängas av. Gör ett annat konto primärt först.',
+    message_en: 'This is the company’s primary bank account and cannot be disabled. Make another account primary first.',
+  },
+  CASH_ACCOUNT_DISABLE_UNRESOLVED: {
+    httpStatus: 400,
+    message_sv: 'Kontot har obokförda eller oavstämda transaktioner och kan inte stängas av förrän de är hanterade.',
+    message_en: 'The account has unbooked or unreconciled transactions and cannot be disabled until they are handled.',
+  },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
     // Currency-neutral by necessity (the registry has no details). Surfaces

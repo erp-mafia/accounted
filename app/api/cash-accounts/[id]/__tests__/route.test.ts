@@ -183,4 +183,68 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
     expect(status).toBeGreaterThanOrEqual(400)
     expect(body.error).toBeDefined()
   })
+
+  describe('enabled toggle (crm#59: let a company disable an unused manual bank account)', () => {
+    it('returns 404 for an id that is not one of the company\'s bank accounts', async () => {
+      enqueue({ data: null }) // existing-row guard lookup
+      const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(404)
+      expect(body.error.code).toBe('CASH_ACCOUNT_NOT_FOUND')
+    })
+
+    it('blocks disabling the primary cash account', async () => {
+      enqueue({ data: { id: CA_1, is_primary: true } })
+      const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('CASH_ACCOUNT_DISABLE_PRIMARY')
+      expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+    })
+
+    it('blocks disabling an account with an open (unbooked, non-ignored) transaction', async () => {
+      enqueue({ data: { id: CA_1, is_primary: false } }) // existing-row guard lookup
+      enqueue({ data: [{ id: 'tx-1' }] }) // unbooked candidates
+      enqueue({ data: [] }) // transaction_voucher_links: tx-1 is not junction-anchored
+
+      const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('CASH_ACCOUNT_DISABLE_UNRESOLVED')
+      expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+    })
+
+    // Split-row case (#1553): journal_entry_id is NULL but the row is booked
+    // through transaction_voucher_links (PR crm-48), so it must not count as
+    // open work and block the disable.
+    it('does not treat a junction-anchored (split) transaction as open work', async () => {
+      enqueue({ data: { id: CA_1, is_primary: false } })
+      enqueue({ data: [{ id: 'tx-1' }] })
+      enqueue({ data: [{ transaction_id: 'tx-1' }] })
+      enqueue({ data: { id: CA_1, enabled: false, source: 'manual' } }) // setEnabled update
+
+      const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
+      expect(response.status).toBe(200)
+    })
+
+    it('disables a manual, non-primary account with no open transactions', async () => {
+      enqueue({ data: { id: CA_1, is_primary: false } })
+      enqueue({ data: [] }) // no unbooked candidates
+      enqueue({ data: { id: CA_1, enabled: false, source: 'manual' } })
+
+      const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
+      const { status, body } = await parseJsonResponse<{ data: { enabled: boolean } }>(response)
+      expect(status).toBe(200)
+      expect(body.data.enabled).toBe(false)
+      expect(findCalls('cash_accounts', 'update')).toContainEqual([{ enabled: false }])
+    })
+
+    it('re-enabling an account skips the primary/open-work guard entirely', async () => {
+      enqueue({ data: { id: CA_1, enabled: true, source: 'manual' } }) // setEnabled update only
+      const response = await PATCH(patchReq({ enabled: true }), createMockRouteParams({ id: CA_1 }))
+      const { status, body } = await parseJsonResponse<{ data: { enabled: boolean } }>(response)
+      expect(status).toBe(200)
+      expect(body.data.enabled).toBe(true)
+    })
+  })
 })

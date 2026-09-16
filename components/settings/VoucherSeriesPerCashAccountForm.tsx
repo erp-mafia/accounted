@@ -3,8 +3,9 @@
 import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Loader2 } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
-import { SettingsGroup, SettingsRow, SettingsSelect } from '@/components/settings/SettingsRows'
+import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsSelect } from '@/components/settings/SettingsRows'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { buildVoucherSeriesOptions } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -44,6 +45,13 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
   const t = useTranslations('settings_voucher_series')
   const { toast } = useToast()
   const { cashAccounts, isLoading, refresh } = useCashAccounts({ enabledOnly: true })
+  // Same cache, unfiltered: only source to disabled manual/SIE accounts,
+  // which enabledOnly above hides, so a company can turn one back on.
+  const { cashAccounts: allCashAccounts } = useCashAccounts()
+  const disabledAccounts = useMemo(
+    () => allCashAccounts.filter((a) => !a.enabled && a.source !== 'enable_banking'),
+    [allCashAccounts],
+  )
   const [savingId, setSavingId] = useState<string | null>(null)
 
   // Presets first, then any configured or already-assigned letter the presets
@@ -102,40 +110,134 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
     }
   }
 
+  /**
+   * PATCH enabled on/off. Only offered for manual/SIE accounts (never a
+   * PSD2-synced one, which the AccountPicker owns): the seed migration plants
+   * a manual 1930 row on every new company so reconciliation works before any
+   * bank is connected, and a company that never connects one, or books its
+   * real account on a different ledger slot, needs a way to turn it off.
+   */
+  const handleToggleEnabled = async (account: CashAccount, next: boolean) => {
+    setSavingId(account.id)
+    try {
+      const res = await fetch(`/api/cash-accounts/${account.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast({
+          title: t('per_account_save_failed'),
+          description: getErrorMessage(json, { context: 'settings', statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
+      }
+      await refresh()
+      toast({
+        title: next ? t('per_account_enabled_title') : t('per_account_disabled_title'),
+        description: next
+          ? t('per_account_enabled_body', { account: accountLabel(account) })
+          : t('per_account_disabled_body', { account: accountLabel(account) }),
+      })
+    } catch (err) {
+      toast({
+        title: t('per_account_save_failed'),
+        description: getErrorMessage(err, { context: 'settings' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setSavingId(null)
+    }
+  }
+
   return (
-    <SettingsGroup label={t('per_account_heading')} help={t('per_account_help')}>
-      {isLoading ? (
-        <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-          {t('per_account_loading')}
-        </div>
-      ) : cashAccounts.length === 0 ? (
-        <p className="px-1 py-3 text-sm text-muted-foreground">{t('per_account_empty')}</p>
-      ) : (
-        cashAccounts.map((account, i) => (
-          <SettingsRow
-            key={account.id}
-            label={accountLabel(account)}
-            htmlFor={`series-cash-account-${account.id}`}
-            borderless={i === cashAccounts.length - 1}
-          >
-            <SettingsSelect
-              id={`series-cash-account-${account.id}`}
-              value={account.voucher_series ?? FOLLOW_DEFAULT}
-              onChange={(e) => void handleChange(account, e.target.value)}
-              disabled={savingId === account.id}
-              className="font-mono"
+    <>
+      <SettingsGroup label={t('per_account_heading')} help={t('per_account_help')}>
+        {isLoading ? (
+          <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            {t('per_account_loading')}
+          </div>
+        ) : cashAccounts.length === 0 ? (
+          <p className="px-1 py-3 text-sm text-muted-foreground">{t('per_account_empty')}</p>
+        ) : (
+          cashAccounts.map((account, i) => {
+            // A PSD2-synced account's enabled state belongs to the
+            // AccountPicker; the primary account can't be turned off without
+            // first making another one primary (its own guarded flow).
+            const canDisable = account.source !== 'enable_banking' && !account.is_primary
+            return (
+              <SettingsRow
+                key={account.id}
+                label={accountLabel(account)}
+                htmlFor={`series-cash-account-${account.id}`}
+                borderless={i === cashAccounts.length - 1}
+              >
+                <SettingsSelect
+                  id={`series-cash-account-${account.id}`}
+                  value={account.voucher_series ?? FOLLOW_DEFAULT}
+                  onChange={(e) => void handleChange(account, e.target.value)}
+                  disabled={savingId === account.id}
+                  className="font-mono"
+                >
+                  <option value={FOLLOW_DEFAULT}>{t('per_account_follow_default')}</option>
+                  {seriesOptions.map((option) => (
+                    <option key={option.letter} value={option.letter}>
+                      {option.label ? `${option.letter}  ${option.label}` : option.letter}
+                    </option>
+                  ))}
+                </SettingsSelect>
+                {canDisable && (
+                  <SettingsRowEnd>
+                    <Switch
+                      id={`enabled-cash-account-${account.id}`}
+                      checked={account.enabled}
+                      onCheckedChange={(next) => void handleToggleEnabled(account, next)}
+                      disabled={savingId === account.id}
+                      aria-label={t('per_account_disable_aria', { account: accountLabel(account) })}
+                    />
+                    <label
+                      htmlFor={`enabled-cash-account-${account.id}`}
+                      className="cursor-pointer text-xs text-muted-foreground"
+                    >
+                      {t('per_account_enabled_label')}
+                    </label>
+                  </SettingsRowEnd>
+                )}
+              </SettingsRow>
+            )
+          })
+        )}
+      </SettingsGroup>
+      {disabledAccounts.length > 0 && (
+        <SettingsGroup label={t('per_account_disabled_heading')} help={t('per_account_disabled_help')}>
+          {disabledAccounts.map((account, i) => (
+            <SettingsRow
+              key={account.id}
+              label={accountLabel(account)}
+              borderless={i === disabledAccounts.length - 1}
             >
-              <option value={FOLLOW_DEFAULT}>{t('per_account_follow_default')}</option>
-              {seriesOptions.map((option) => (
-                <option key={option.letter} value={option.letter}>
-                  {option.label ? `${option.letter}  ${option.label}` : option.letter}
-                </option>
-              ))}
-            </SettingsSelect>
-          </SettingsRow>
-        ))
+              <SettingsRowEnd className="ml-0">
+                <Switch
+                  id={`enabled-disabled-cash-account-${account.id}`}
+                  checked={false}
+                  onCheckedChange={(next) => void handleToggleEnabled(account, next)}
+                  disabled={savingId === account.id}
+                  aria-label={t('per_account_enable_aria', { account: accountLabel(account) })}
+                />
+                <label
+                  htmlFor={`enabled-disabled-cash-account-${account.id}`}
+                  className="cursor-pointer text-xs text-muted-foreground"
+                >
+                  {t('per_account_enable_label')}
+                </label>
+              </SettingsRowEnd>
+            </SettingsRow>
+          ))}
+        </SettingsGroup>
       )}
-    </SettingsGroup>
+    </>
   )
 }

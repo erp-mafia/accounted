@@ -2536,6 +2536,9 @@ export const UpdateCashAccountSchema = InvoicePaymentAccountSchema.extend({
   voucher_series: UpdateCashAccountVoucherSeriesSchema.shape.voucher_series.optional(),
   name: z.string().trim().min(1).max(100).nullable().optional(),
   invoice_payee: z.boolean().optional(),
+  // Manual/SIE-sourced accounts only: a PSD2 account's enabled state is owned
+  // by the AccountPickerDialog (enabled_uids), not this route.
+  enabled: z.boolean().optional(),
 }).strict().refine((body) => Object.keys(body).length > 0, {
   message: 'Inget att uppdatera',
 })
