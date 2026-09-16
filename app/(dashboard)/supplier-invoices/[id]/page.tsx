@@ -182,15 +182,23 @@ type PaymentRow = SupplierInvoicePayment & {
 
 /**
  * True when the payment only LINKS an existing verifikat, so the unlink route
- * can undo it. A payment whose entry Accounted booked itself belongs to storno.
+ * can undo it. A payment whose settlement Accounted booked itself belongs to
+ * storno, and the RPC refuses it.
+ *
+ * Both of the RPC's signals, so the control appears exactly where it works:
+ * the entry's source_type, and whether the invoice names that entry as its own
+ * payment_journal_entry_id. The second is what keeps an utlägg off this path,
+ * whose entry is source_type 'expense_claim' (outside PAYMENT_SOURCE_TYPES)
+ * but whose payable is genuinely settled.
  *
  * Fails CLOSED, like the RPC: without the embedded entry we cannot tell the two
  * apart, and offering a control that the RPC will refuse is worse than not
  * offering it. That happens with a payload from before the embed existed, or an
  * entry the caller cannot read.
  */
-function isUnlinkablePayment(payment: PaymentRow): boolean {
+function isUnlinkablePayment(payment: PaymentRow, paymentJournalEntryId: string | null): boolean {
   if (!payment.journal_entry_id) return false
+  if (payment.journal_entry_id === paymentJournalEntryId) return false
   const sourceType = payment.journal_entry?.source_type
   if (!sourceType) return false
   return !isPaymentSourceType(sourceType)
@@ -1193,7 +1201,7 @@ export default function SupplierInvoiceDetailPage() {
                         people click to LOOK at something, so it goes behind the
                         same kebab the page's other destructive actions use
                         rather than one slip away from "Visa verifikation". */}
-                    {isUnlinkablePayment(p) && (
+                    {isUnlinkablePayment(p, invoice.payment_journal_entry_id ?? null) && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button
@@ -1528,7 +1536,7 @@ export default function SupplierInvoiceDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Duplicate-payment warning dialog */}
+      {/* Undo a link to an existing verifikat */}
       <Dialog
         open={unlinkTarget !== null}
         onOpenChange={(open) => {
@@ -1563,6 +1571,7 @@ export default function SupplierInvoiceDetailPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Duplicate-payment warning dialog */}
       <Dialog
         open={duplicateCandidates !== null}
         onOpenChange={(open) => {

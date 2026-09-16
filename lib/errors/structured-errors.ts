@@ -3961,9 +3961,9 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
   UNLINK_SI_PAYMENT_BOOKED_PAYMENT: {
     httpStatus: 409,
     message_sv:
-      'Betalningen har en egen bokförd betalningsverifikation. Ångra den med en stornoverifikation istället, så att bokföringen och reskontran ändras tillsammans.',
+      'Betalningen är bokförd med en egen verifikation som reglerar fakturan. Ångra den med en stornoverifikation istället, så att bokföringen och reskontran ändras tillsammans.',
     message_en:
-      'The payment has its own posted payment voucher. Reverse that entry (storno) instead, so the ledger and the subledger change together.',
+      'The payment is booked with its own posted voucher that settles the invoice. Reverse that entry (storno) instead, so the ledger and the subledger change together.',
     retryable: false,
   },
   UNLINK_SI_PAYMENT_INVOICE_NOT_SETTLED: {

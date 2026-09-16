@@ -850,6 +850,9 @@ export async function unlinkSupplierInvoiceFromVoucher(
     p_payment_id: paymentId,
     p_supplier_invoice_id: supplierInvoiceId,
     p_company_id: companyId,
+    // Attribution for the audit row the RPC writes. Only load-bearing for
+    // service-role callers: for a user session the RPC prefers the JWT sub.
+    p_user_id: userId,
   })
 
   if (error) {
@@ -892,40 +895,10 @@ export async function unlinkSupplierInvoiceFromVoucher(
     })
   }
 
-  // The payment row is gone, so the row itself can no longer carry the record
-  // of who removed it. audit_log is where behandlingshistorik reads from.
-  const { error: auditError } = await supabase.from('audit_log').insert({
-    user_id: userId,
-    company_id: companyId,
-    action: 'DELETE',
-    table_name: 'supplier_invoice_payments',
-    record_id: paymentId,
-    description:
-      `Kopplingen mellan leverantörsfakturan och verifikatet togs bort ` +
-      `(${result.payment_amount} kr). Ingen bokföring ändrades.`,
-    old_state: {
-      supplier_invoice_id: result.supplier_invoice_id,
-      journal_entry_id: result.journal_entry_id,
-      amount: result.payment_amount,
-    },
-    new_state: {
-      invoice_status: result.invoice_status,
-      paid_amount: result.paid_amount,
-      remaining_amount: result.remaining_amount,
-    },
-  })
-  if (auditError) {
-    // The payment row is hard-deleted, so this entry is the only record that
-    // the link existed and who removed it. Losing it silently would leave an
-    // unexplained change to the leverantörsreskontra, so it has to be
-    // observable even though the RPC has already committed.
-    log.error('failed to write the audit entry for an unlinked payment', auditError, {
-      companyId,
-      userId,
-      paymentId,
-      supplierInvoiceId: result.supplier_invoice_id,
-    })
-  }
+  // The audit row is NOT written here. audit_log has RLS with a SELECT policy
+  // and no INSERT policy, so this client (the request's user-scoped one) is
+  // refused with 42501 every time; the RPC is SECURITY DEFINER and writes it
+  // inside the same transaction as the delete, which is also where it belongs.
 
   return {
     ok: true,

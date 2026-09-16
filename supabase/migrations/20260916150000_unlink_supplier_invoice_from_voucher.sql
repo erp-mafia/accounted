@@ -12,20 +12,32 @@
 -- type. Stornoing the linked voucher would also be wrong: it is a real
 -- payment to someone, merely pointed at the wrong payable.
 --
--- The complement is exact, and is what makes this safe to expose:
+-- The complement is what makes this safe to expose. A payment row is this
+-- function's to remove only when BOTH signals say the settlement was linked,
+-- not booked:
 --
---   * a payment row whose journal entry IS a payment Accounted booked
---     (source_type in supplier_invoice_paid / supplier_invoice_cash_payment,
---     and the customer-side pair) is owned by the storno path, which reverses
---     the entry and the row together. This function refuses those.
---   * a payment row whose journal entry is anything else (an SIE-imported
---     voucher, a manual one) is a pure subledger pointer. Deleting it changes
---     no bookkeeping at all, because the link never wrote any.
+--   * journal_entries.source_type is not one of PAYMENT_SOURCE_TYPES
+--     (supplier_invoice_paid / supplier_invoice_cash_payment and the
+--     customer-side pair). Those are the storno path's: reverseEntry reverses
+--     the entry and clears the row together.
+--   * supplier_invoices.payment_journal_entry_id does not name the same entry.
+--     Every path that BOOKS a settlement stamps that pointer (mark-paid,
+--     match_batch_allocate, and the utlägg/expense-claim mirror row written by
+--     POST /api/supplier-invoices); the link RPC deliberately never does
+--     (lib/invoices/bulk-reconcile-supplier-vouchers.ts). source_type alone is
+--     not enough: an expense claim books Dr kostnad / Cr 2890 under
+--     source_type 'expense_claim', which is outside PAYMENT_SOURCE_TYPES and
+--     must stay outside it (payment-sync would read its source_id as an
+--     invoice id), yet the payable it mirrors is genuinely settled. Removing
+--     that row would resurrect a paid utlägg as an open payable with nothing
+--     on 2440 behind it.
 --
--- Every payment row is therefore reversible by exactly one path, and the two
--- cannot overlap. No journal entry, line or document is touched here, so no
--- enforcement trigger is involved and no period lock applies: the ledger the
--- locks protect is not what changes.
+-- What is left after both guards is a pure subledger pointer: deleting it
+-- changes no bookkeeping, because the link never wrote any. Every payment row
+-- is therefore reversible by exactly one path, and the two cannot overlap. No
+-- journal entry, line or document is touched here, so no enforcement trigger
+-- is involved and no period lock applies: the ledger the locks protect is not
+-- what changes.
 --
 -- Scoped to the supplier side on purpose. The customer twin
 -- (link_invoice_to_voucher) has the same gap, but invoices.remaining_amount is
@@ -33,10 +45,33 @@
 -- lib/invoices/customer-share.ts; re-deriving it in PL/pgSQL would duplicate a
 -- definition rather than reuse one. See the PR body.
 
+-- ── audit_log gains a SUBLEDGER_LINK_REMOVED action ─────────────────────────
+--
+-- Selected by ACTION rather than by table in behandlingshistorik, for the same
+-- reason GUARD_BYPASSED is (20260914150102): supplier_invoice_payments is a
+-- register and otherwise out of scope per BFN's commentary, but this one row
+-- type in it is the sole surviving record of a change to the
+-- leverantörsreskontra, because the payment row is hard-deleted.
+--
+-- NOT VALID skips the full-table validation scan: every existing row satisfies
+-- the previous, strictly narrower constraint, and NOT VALID still enforces all
+-- new rows. Same pattern as 20260914150102.
+
+ALTER TABLE public.audit_log DROP CONSTRAINT IF EXISTS audit_log_action_check;
+ALTER TABLE public.audit_log ADD CONSTRAINT audit_log_action_check
+  CHECK (action = ANY (ARRAY[
+    'INSERT','UPDATE','DELETE','COMMIT','REVERSE','CORRECT',
+    'LOCK_PERIOD','CLOSE_PERIOD','DOCUMENT_DELETE_BLOCKED',
+    'RETENTION_BLOCK','SECURITY_EVENT','INTEGRITY_FAILURE',
+    'COMMITTED_AT_OVERRIDE','RESET_SNAPSHOT','GUARD_BYPASSED',
+    'SUBLEDGER_LINK_REMOVED'
+  ])) NOT VALID;
+
 CREATE OR REPLACE FUNCTION public.unlink_supplier_invoice_from_voucher(
   p_payment_id uuid,
   p_supplier_invoice_id uuid,
-  p_company_id uuid
+  p_company_id uuid,
+  p_user_id uuid DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -52,7 +87,7 @@ DECLARE
   v_new_status text;
   v_now timestamptz := now();
   v_jwt_role text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
-  v_caller_role text;
+  v_acting_user uuid;
   -- The four source types whose reversal reverseEntry / the DELETE voucher
   -- route already own (lib/bookkeeping/payment-sync.ts PAYMENT_SOURCE_TYPES).
   -- Both customer values are listed too: the set is the shared definition, and
@@ -75,23 +110,33 @@ BEGIN
   -- application's own (lib/auth/require-write.ts: everyone but 'viewer'), not
   -- a stricter owner/admin one, so the RPC and the route agree on who may act.
   --
-  -- Fails closed: a caller with no company_members row gets NULL and is
-  -- refused. A non-member is told NOT_FOUND rather than FORBIDDEN, so the
-  -- function never confirms that a payment id exists in a company the caller
-  -- cannot see.
+  -- Both halves go through the NULL-safe house helpers rather than an inline
+  -- membership subquery. The raw NOT-IN-over-user_company_ids() shape skips its
+  -- own deny branch on UNKNOWN, which is why 20260703180000 rewrote every
+  -- function carrying it; tests/pg/null-safe-tenant-guards.pg.test.ts scans
+  -- prosrc for that literal, so it must not appear here even in a comment.
+  --
+  -- Fails closed: a caller with no company_members row is refused by both. A
+  -- non-member is told NOT_FOUND rather than FORBIDDEN, so the function never
+  -- confirms that a payment id exists in a company the caller cannot see.
   IF v_jwt_role IN ('anon', 'authenticated') THEN
-    IF p_company_id NOT IN (SELECT public.user_company_ids()) THEN
+    IF NOT public.caller_is_company_member(p_company_id) THEN
       RETURN jsonb_build_object('ok', false, 'code', 'UNLINK_SI_PAYMENT_NOT_FOUND');
     END IF;
 
-    SELECT cm.role INTO v_caller_role
-    FROM public.company_members cm
-    WHERE cm.company_id = p_company_id
-      AND cm.user_id = auth.uid();
-
-    IF v_caller_role IS NULL OR v_caller_role = 'viewer' THEN
+    IF NOT public.caller_can_write_company(p_company_id) THEN
       RETURN jsonb_build_object('ok', false, 'code', 'UNLINK_SI_PAYMENT_FORBIDDEN');
     END IF;
+
+    -- Attribution: the JWT sub is authoritative for user-session callers, in
+    -- shape from link_supplier_invoice_to_voucher, so p_user_id cannot point
+    -- the audit row at someone else.
+    v_acting_user := coalesce(
+      (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid,
+      p_user_id
+    );
+  ELSE
+    v_acting_user := p_user_id;
   END IF;
 
   -- Scoped by the invoice as well as the payment: the caller addresses this
@@ -124,17 +169,6 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'code', 'UNLINK_SI_PAYMENT_NOT_A_LINK');
   END IF;
 
-  IF v_voucher.source_type = ANY (v_booked_payment_types) THEN
-    RETURN jsonb_build_object(
-      'ok', false,
-      'code', 'UNLINK_SI_PAYMENT_BOOKED_PAYMENT',
-      'details', jsonb_build_object(
-        'source_type', v_voucher.source_type,
-        'journal_entry_id', v_voucher.id
-      )
-    );
-  END IF;
-
   SELECT * INTO v_invoice
   FROM public.supplier_invoices
   WHERE id = v_payment.supplier_invoice_id AND company_id = p_company_id
@@ -142,6 +176,26 @@ BEGIN
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object('ok', false, 'code', 'UNLINK_SI_PAYMENT_NOT_FOUND');
+  END IF;
+
+  -- Storno's, not ours. Two signals, because neither is sufficient alone: see
+  -- the header. The pointer half is what keeps an utlägg (source_type
+  -- 'expense_claim', liability booked on 2890, payable created already 'paid')
+  -- out of this path.
+  IF v_voucher.source_type = ANY (v_booked_payment_types)
+     OR v_invoice.payment_journal_entry_id = v_payment.journal_entry_id THEN
+    RETURN jsonb_build_object(
+      'ok', false,
+      'code', 'UNLINK_SI_PAYMENT_BOOKED_PAYMENT',
+      'details', jsonb_build_object(
+        'source_type', v_voucher.source_type,
+        'journal_entry_id', v_voucher.id,
+        'reason', CASE
+          WHEN v_voucher.source_type = ANY (v_booked_payment_types) THEN 'booked_payment_source_type'
+          ELSE 'invoice_payment_entry_pointer'
+        END
+      )
+    );
   END IF;
 
   -- The one case where linking DID write bookkeeping. 20260830140000 taught
@@ -154,11 +208,17 @@ BEGIN
   -- rate), so it cannot be found and reversed from here, and reversing a posted
   -- verifikat is storno's job in any case. Refuse instead of half-undoing.
   --
-  -- Both signals are checked: payment_exchange_rate is written only when the
-  -- cross-currency fallback engaged, and a non-SEK invoice is where it can
-  -- engage at all, so a row predating that column is still caught.
-  IF v_payment.payment_exchange_rate IS NOT NULL
-     OR COALESCE(v_invoice.currency, 'SEK') <> 'SEK' THEN
+  -- payment_exchange_rate is the signal, and the only one: the fallback stamps
+  -- it on exactly the rows whose link committed a residual. Refusing every
+  -- non-SEK invoice instead (an earlier revision did) would refuse the ordinary
+  -- foreign case too, where the voucher's matched lines carry
+  -- amount_in_currency, no residual is booked and the row is as undoable as any
+  -- SEK one. That refusal told the user a difference had been booked when none
+  -- had, and sent them to storno a real payment to another supplier: the exact
+  -- move this function's header calls wrong. The column predates the fallback
+  -- (20260601122000 vs 20260830140000), so no residual-bearing row can be
+  -- missing it.
+  IF v_payment.payment_exchange_rate IS NOT NULL THEN
     RETURN jsonb_build_object(
       'ok', false,
       'code', 'UNLINK_SI_PAYMENT_FX_SETTLED',
@@ -209,19 +269,70 @@ BEGIN
   SET status = v_new_status,
       paid_amount = v_new_paid,
       remaining_amount = v_new_remaining,
-      paid_at = CASE WHEN v_new_paid > 0.005 THEN paid_at ELSE NULL END,
-      payment_journal_entry_id = CASE
-        WHEN payment_journal_entry_id = v_payment.journal_entry_id THEN NULL
-        ELSE payment_journal_entry_id
-      END,
+      -- paid_at means "fully settled" everywhere else (the link RPC sets it
+      -- only when v_is_fully_paid; payment-sync clears it on every revert), so
+      -- it follows the REMAINDER, not the paid amount. Keyed on v_new_paid it
+      -- survived on an invoice that had just fallen back to partially_paid:
+      -- remove one of two links from a fully paid invoice and it kept a
+      -- settlement date it had not reached.
+      paid_at = CASE WHEN v_new_remaining <= 0.005 THEN paid_at ELSE NULL END,
+      -- payment_journal_entry_id is deliberately NOT cleared: the guard above
+      -- refuses any row the invoice names there, so it can only point at some
+      -- other settlement, which this undo has no business erasing.
       updated_at = v_now
   WHERE id = v_invoice.id;
 
   -- Hard delete, as the storno path does: a soft-deleted row would still trip
   -- the uniqueness the link checks (invoice + entry) and double-count a
-  -- re-match. The audit trail is written by the caller into audit_log, which
-  -- behandlingshistorik reads.
+  -- re-match. The audit row below is what carries the history instead.
   DELETE FROM public.supplier_invoice_payments WHERE id = v_payment.id;
+
+  -- The audit row is written HERE, not by the caller. audit_log has RLS with
+  -- no INSERT policy (20240101000014, and see 20260810121000's header for the
+  -- same conclusion), so the route's user-scoped client cannot write it: an
+  -- insert from there is refused with 42501 every time. A SECURITY DEFINER
+  -- function can, and this one already is.
+  --
+  -- It has to exist: the payment row is hard-deleted, and the write_audit_log
+  -- trigger on supplier_invoices attributes its own row to the invoice's
+  -- user_id, not to whoever acted. Without this insert nothing anywhere records
+  -- who removed the link (BFNAR 2013:2 p. 9.16, behandlingshistorik).
+  INSERT INTO public.audit_log (
+    user_id, company_id, action, table_name, record_id, actor_id,
+    old_state, new_state, description, actor_type, actor_label
+  )
+  VALUES (
+    COALESCE(v_acting_user, v_invoice.user_id),
+    p_company_id,
+    'SUBLEDGER_LINK_REMOVED',
+    'supplier_invoice_payments',
+    v_payment.id,
+    v_acting_user,
+    jsonb_build_object(
+      'supplier_invoice_id', v_invoice.id,
+      'journal_entry_id', v_payment.journal_entry_id,
+      'transaction_id', v_payment.transaction_id,
+      'payment_date', v_payment.payment_date,
+      'amount', v_payment.amount,
+      'currency', v_payment.currency,
+      'status', v_invoice.status,
+      'paid_amount', v_invoice.paid_amount,
+      'remaining_amount', v_invoice.remaining_amount
+    ),
+    jsonb_build_object(
+      'invoice_status', v_new_status,
+      'paid_amount', v_new_paid,
+      'remaining_amount', v_new_remaining
+    ),
+    format(
+      'Kopplingen mellan leverantörsfakturan %s och verifikatet togs bort (%s %s). Ingen bokföring ändrades.',
+      COALESCE(v_invoice.supplier_invoice_number, v_invoice.arrival_number::text),
+      v_payment.amount,
+      COALESCE(v_payment.currency, 'SEK')
+    ),
+    COALESCE(NULLIF(current_setting('gnubok.actor_type', true), ''), 'user'),
+    NULLIF(current_setting('gnubok.actor_label', true), '')
+  );
 
   RETURN jsonb_build_object(
     'ok', true,
@@ -236,10 +347,10 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.unlink_supplier_invoice_from_voucher(uuid, uuid, uuid) IS
-  'Removes a supplier_invoice_payments row that only links an existing verifikat, and restores the invoice status/paid/remaining. Refuses rows whose entry is a payment Accounted booked (storno owns those) and rows with no entry. Touches no journal entry.';
+COMMENT ON FUNCTION public.unlink_supplier_invoice_from_voucher(uuid, uuid, uuid, uuid) IS
+  'Removes a supplier_invoice_payments row that only links an existing verifikat, and restores the invoice status/paid/remaining. Refuses rows whose settlement was booked rather than linked (a PAYMENT_SOURCE_TYPES entry, or one the invoice names as its payment_journal_entry_id: storno owns those), rows with no entry, and rows whose link committed an FX residual. Touches no journal entry; writes its own audit_log row.';
 
-REVOKE ALL ON FUNCTION public.unlink_supplier_invoice_from_voucher(uuid, uuid, uuid) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.unlink_supplier_invoice_from_voucher(uuid, uuid, uuid) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.unlink_supplier_invoice_from_voucher(uuid, uuid, uuid, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.unlink_supplier_invoice_from_voucher(uuid, uuid, uuid, uuid) TO authenticated, service_role;
 
 NOTIFY pgrst, 'reload schema';

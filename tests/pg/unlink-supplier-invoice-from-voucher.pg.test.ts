@@ -81,10 +81,10 @@ async function link(invoiceId: string, entryId: string, userId: string, companyI
   return rows[0].result as { ok: boolean; payment_id?: string; code?: string }
 }
 
-async function unlink(paymentId: string, invoiceId: string, companyId: string) {
+async function unlink(paymentId: string, invoiceId: string, companyId: string, userId?: string) {
   const { rows } = await getPool().query(
-    `SELECT public.unlink_supplier_invoice_from_voucher($1, $2, $3) AS result`,
-    [paymentId, invoiceId, companyId],
+    `SELECT public.unlink_supplier_invoice_from_voucher($1, $2, $3, $4) AS result`,
+    [paymentId, invoiceId, companyId, userId ?? null],
   )
   return rows[0].result as Record<string, unknown>
 }
@@ -151,6 +151,159 @@ describe('unlink_supplier_invoice_from_voucher', () => {
     expect(Number(after.remaining_amount)).toBe(3000)
   })
 
+  it('refuses a payment the invoice names as its own payment verifikat', async () => {
+    // The utlägg shape: POST /api/supplier-invoices books an expense claim
+    // (source_type 'expense_claim', Cr 2890), stamps payment_journal_entry_id
+    // and mirrors the settlement as a payment row on an invoice created 'paid'.
+    // source_type alone does not catch it, and it must not be added to
+    // PAYMENT_SOURCE_TYPES (payment-sync would read its source_id as an invoice
+    // id). Removing the row would resurrect a settled payable with nothing on
+    // 2440 behind it.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const invoiceId = await seedSupplierInvoice({ userId, companyId, total: 1000 })
+    const entryId = await seedApVoucher({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      amount: 1000,
+      sourceType: 'expense_claim',
+    })
+
+    const linked = await link(invoiceId, entryId, userId, companyId)
+    expect(linked.ok).toBe(true)
+    await getPool().query(
+      `UPDATE public.supplier_invoices SET payment_journal_entry_id = $2 WHERE id = $1`,
+      [invoiceId, entryId],
+    )
+
+    const result = await unlink(linked.payment_id!, invoiceId, companyId, userId)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('UNLINK_SI_PAYMENT_BOOKED_PAYMENT')
+    expect((result.details as Record<string, unknown>).reason).toBe('invoice_payment_entry_pointer')
+
+    const { rows } = await getPool().query(
+      `SELECT count(*)::int AS n FROM public.supplier_invoice_payments WHERE id = $1`,
+      [linked.payment_id],
+    )
+    expect(rows[0].n).toBe(1)
+    expect((await invoiceRow(invoiceId)).status).toBe('paid')
+  })
+
+  it('allows a foreign-currency link that booked no exchange-rate difference', async () => {
+    // Only payment_exchange_rate marks a link whose settlement committed a
+    // residual verifikat. Refusing every non-SEK invoice also refused the
+    // ordinary foreign case, and told the user a difference had been booked
+    // when none had.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const invoiceId = await seedSupplierInvoice({ userId, companyId, total: 1000 })
+    const entryId = await seedApVoucher({ userId, companyId, fiscalPeriodId, amount: 400 })
+    const linked = await link(invoiceId, entryId, userId, companyId)
+
+    await getPool().query(
+      `UPDATE public.supplier_invoices SET currency = 'EUR' WHERE id = $1`,
+      [invoiceId],
+    )
+    await getPool().query(
+      `UPDATE public.supplier_invoice_payments SET currency = 'EUR' WHERE id = $1`,
+      [linked.payment_id],
+    )
+
+    const result = await unlink(linked.payment_id!, invoiceId, companyId, userId)
+    expect(result.ok).toBe(true)
+    const { rows } = await getPool().query(
+      `SELECT count(*)::int AS n FROM public.supplier_invoice_payments WHERE id = $1`,
+      [linked.payment_id],
+    )
+    expect(rows[0].n).toBe(0)
+  })
+
+  it('clears paid_at when the invoice falls back to partially paid', async () => {
+    // paid_at means "fully settled". Keyed on the remaining paid_amount it
+    // survived on an invoice that had just stopped being paid.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const invoiceId = await seedSupplierInvoice({ userId, companyId, total: 1000 })
+    const first = await seedApVoucher({ userId, companyId, fiscalPeriodId, amount: 600 })
+    const second = await seedApVoucher({ userId, companyId, fiscalPeriodId, amount: 400 })
+
+    await link(invoiceId, first, userId, companyId)
+    const wrong = await link(invoiceId, second, userId, companyId)
+    const settled = await invoiceRow(invoiceId)
+    expect(settled.status).toBe('paid')
+    expect(settled.paid_at).not.toBeNull()
+
+    const result = await unlink(wrong.payment_id!, invoiceId, companyId, userId)
+    expect(result.ok).toBe(true)
+
+    const after = await invoiceRow(invoiceId)
+    expect(after.status).toBe('partially_paid')
+    expect(Number(after.remaining_amount)).toBe(400)
+    expect(after.paid_at).toBeNull()
+  })
+
+  it('writes the audit row itself, naming who acted', async () => {
+    // audit_log has RLS with no INSERT policy, so the route's user-scoped
+    // client cannot write this; the SECURITY DEFINER function can, inside the
+    // same transaction as the delete. It is the only surviving record: the
+    // payment row is hard-deleted and the supplier_invoices audit trigger
+    // attributes its row to the invoice's user_id, not to whoever acted.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const invoiceId = await seedSupplierInvoice({ userId, companyId, total: 3500 })
+    const entryId = await seedApVoucher({ userId, companyId, fiscalPeriodId, amount: 859 })
+    const linked = await link(invoiceId, entryId, userId, companyId)
+
+    const actorId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: actorId, role: 'member' })
+
+    const result = await unlink(linked.payment_id!, invoiceId, companyId, actorId)
+    expect(result.ok).toBe(true)
+
+    const { rows } = await getPool().query(
+      `SELECT user_id, actor_id, company_id, old_state, new_state
+         FROM public.audit_log
+        WHERE action = 'SUBLEDGER_LINK_REMOVED' AND record_id = $1`,
+      [linked.payment_id],
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0].user_id).toBe(actorId)
+    expect(rows[0].actor_id).toBe(actorId)
+    expect(rows[0].company_id).toBe(companyId)
+    expect(rows[0].old_state.journal_entry_id).toBe(entryId)
+    expect(Number(rows[0].old_state.amount)).toBe(859)
+    expect(rows[0].new_state.invoice_status).toBe('approved')
+  })
+
+  it('attributes the audit row to the JWT sub, not to a passed-in user id', async () => {
+    // Same rule as link_supplier_invoice_to_voucher: for a user session the
+    // claim is authoritative, so p_user_id cannot point the record at someone
+    // else. Asserted inside the transaction, because withUserContext rolls back.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const invoiceId = await seedSupplierInvoice({ userId, companyId, total: 3500 })
+    const entryId = await seedApVoucher({ userId, companyId, fiscalPeriodId, amount: 859 })
+    const linked = await link(invoiceId, entryId, userId, companyId)
+
+    const actorId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: actorId, role: 'member' })
+    const impostorId = await insertAuthUser()
+
+    const auditUserId = await withUserContext(actorId, async (client) => {
+      const { rows: out } = await client.query(
+        `SELECT public.unlink_supplier_invoice_from_voucher($1, $2, $3, $4) AS result`,
+        [linked.payment_id, invoiceId, companyId, impostorId],
+      )
+      expect((out[0].result as Record<string, unknown>).ok).toBe(true)
+
+      const { rows } = await client.query(
+        `SELECT user_id FROM public.audit_log
+          WHERE action = 'SUBLEDGER_LINK_REMOVED' AND record_id = $1`,
+        [linked.payment_id],
+      )
+      expect(rows).toHaveLength(1)
+      return rows[0].user_id as string
+    })
+
+    expect(auditUserId).toBe(actorId)
+  })
+
   it('refuses a payment whose verifikat is a payment Accounted booked', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const invoiceId = await seedSupplierInvoice({ userId, companyId, total: 1000 })
@@ -165,9 +318,10 @@ describe('unlink_supplier_invoice_from_voucher', () => {
     const linked = await link(invoiceId, entryId, userId, companyId)
     expect(linked.ok).toBe(true)
 
-    const result = await unlink(linked.payment_id!, invoiceId, companyId)
+    const result = await unlink(linked.payment_id!, invoiceId, companyId, userId)
     expect(result.ok).toBe(false)
     expect(result.code).toBe('UNLINK_SI_PAYMENT_BOOKED_PAYMENT')
+    expect((result.details as Record<string, unknown>).reason).toBe('booked_payment_source_type')
 
     // Refused means nothing moved: storno owns this row and would restore both
     // halves together.
