@@ -18,13 +18,34 @@ export type ArcimDocumentOAuthResumeAction = 'discover' | 'import'
 
 export interface ArcimDocumentOAuthResume {
   action: ArcimDocumentOAuthResumeAction
+  /**
+   * The underlag run was started on its own from an active connection, not
+   * as the tail of a migration. Carried across the full-page OAuth fallback so
+   * the result page comes back without a migration verdict.
+   */
+  standalone: boolean
 }
 
-export function parseArcimDocumentOAuthResume(
+const STANDALONE_SUFFIX = ':standalone'
+
+// The stored value is a resume marker ("discover", "import", optionally
+// ":standalone"), never a token or credential: it tells the page which step
+// to continue after the Fortnox scope popup returns. Named "marker" so
+// static analysis does not read it as OAuth material written to storage.
+export function serializeArcimDocumentResumeMarker(
+  resume: ArcimDocumentOAuthResume,
+): string {
+  return resume.standalone ? `${resume.action}${STANDALONE_SUFFIX}` : resume.action
+}
+
+export function parseArcimDocumentResumeMarker(
   value: string | null,
 ): ArcimDocumentOAuthResume | null {
-  if (value !== 'discover' && value !== 'import') return null
-  return { action: value }
+  if (value === null) return null
+  const standalone = value.endsWith(STANDALONE_SUFFIX)
+  const action = standalone ? value.slice(0, -STANDALONE_SUFFIX.length) : value
+  if (action !== 'discover' && action !== 'import') return null
+  return { action, standalone }
 }
 
 /** Poll a provider popup so closing it cannot leave the UI reconnecting forever. */

@@ -166,6 +166,7 @@ export async function buildDispositionsProposal(
     + overavskrivningarResultEffect
     + ateforing.schablonintaktAmount - (slp?.amount ?? 0)
     + taxAdjustments.nonDeductibleExpenses - taxAdjustments.nonTaxableIncome
+    - (taxAdjustments.deficitCarryforward ?? 0)
   const avsattning = alreadyProvisioned > 0
     ? null
     : proposeAvsattning({
@@ -204,6 +205,7 @@ export async function buildDispositionsProposal(
     manualAdjustments: {
       nonDeductibleExpenses: taxAdjustments.nonDeductibleExpenses,
       nonTaxableIncome: taxAdjustments.nonTaxableIncome,
+      deficitCarryforward: taxAdjustments.deficitCarryforward ?? 0,
       schablonintaktPeriodiseringsfond: ateforing.schablonintaktAmount,
     },
   })

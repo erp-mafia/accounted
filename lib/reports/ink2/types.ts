@@ -118,6 +118,7 @@ export interface INK2SRutor {
   '7651': number  // 4.3a Skatt på årets resultat (ej avdragsgill)
   '7653': number  // 4.3c Andra ej avdragsgilla kostnader
   '7754': number  // 4.5c Andra ej skattepliktiga intäkter
+  '7763': number  // 4.14a Outnyttjat underskott från föregående beskattningsår
   '8020': number  // 4.15 Överskott → punkt 1.1
   '8021': number  // 4.16 Underskott → punkt 1.2
 }

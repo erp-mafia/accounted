@@ -348,6 +348,11 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
                 label="Andra ej skattepliktiga intäkter"
                 amount={data.ink2s['7754']}
               />
+              <DeclarationRutaRow
+                code="4.14a"
+                label="Outnyttjat underskott från föregående beskattningsår"
+                amount={data.ink2s['7763']}
+              />
             </TableBody>
             <tfoot>
               <tr className="border-t font-medium">

@@ -36,7 +36,11 @@ export interface ProposedDisposition {
   required?: boolean
 }
 
-export type TaxAdjustmentType = 'non_deductible_expense' | 'non_taxable_income'
+export type TaxAdjustmentType =
+  | 'non_deductible_expense'
+  | 'non_taxable_income'
+  /** INK2S 4.14 a: outnyttjat underskott från föregående beskattningsår (IL 40 kap. 2 §). */
+  | 'deficit_carryforward'
 export type TaxAdjustmentSource = 'detected' | 'manual'
 
 export interface TaxAdjustmentItem {
@@ -53,6 +57,8 @@ export interface TaxAdjustmentSnapshot {
   items: TaxAdjustmentItem[]
   nonDeductibleExpenses: number
   nonTaxableIncome: number
+  /** Prior years' unused deficit deducted this year (INK2S 4.14 a, SRU 7763). */
+  deficitCarryforward: number
 }
 
 export interface CompletedDisposition {
