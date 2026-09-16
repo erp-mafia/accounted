@@ -1,4 +1,8 @@
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
+import { routeClassifiedDocument } from './lib/route-from-arkiv'
+import type { EventPayload } from '@/lib/events/types'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+const extensionLog = createLogger('invoice-inbox')
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
@@ -309,6 +313,28 @@ export const invoiceInboxExtension: Extension = {
   name: 'Dokumentinkorg',
   version: '3.0.0',
 
+  eventHandlers: [
+    {
+      // Arkiv said what a document is: queue a receipt or invoice that came in another way, release what is not booked from here.
+      eventType: 'document.classified',
+      handler: async (payload: EventPayload<'document.classified'>) => {
+        try {
+          const outcome = await routeClassifiedDocument(createServiceClientNoCookies(), {
+            documentId: payload.document.id,
+            companyId: payload.companyId,
+            userId: payload.userId,
+            docType: payload.docType,
+            admission: payload.admission,
+          })
+          if (outcome === 'queued' || outcome === 'requeued' || outcome === 'routed_to_arkiv') {
+            extensionLog.info('routed classified document', { doc: payload.document.id, docType: payload.docType, outcome })
+          }
+        } catch (err) {
+          extensionLog.warn('routing classified document failed', { doc: payload.document.id, reason: err instanceof Error ? err.message : String(err) })
+        }
+      },
+    },
+  ],
   apiRoutes: [
     // ── Manual upload ───────────────────────────────────────
     {
@@ -620,7 +646,8 @@ export const invoiceInboxExtension: Extension = {
             email_received_at, email_body_text, error_message,
             created_supplier_invoice_id,
             matched_transaction_id, created_journal_entry_id,
-            resend_email_id, extraction_skipped, channel_context, kind_hint
+            resend_email_id, extraction_skipped, channel_context, kind_hint,
+            routed_to_arkiv_at, routed_doc_type
           `)
           .eq('company_id', ctx.companyId)
           .order('created_at', { ascending: false })

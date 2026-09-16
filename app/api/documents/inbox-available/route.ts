@@ -53,6 +53,7 @@ export const GET = withRouteContext('document.inbox_available', async (_request,
     .is('created_supplier_invoice_id', null)
     .is('created_journal_entry_id', null)
     .is('matched_transaction_id', null)
+    .is('routed_to_arkiv_at', null)
     .order('created_at', { ascending: false })
     .limit(100)
 
