@@ -34,6 +34,28 @@ describe('parseSourceChartCsv', () => {
     ])
   })
 
+  it('refuses a file that stops inside a quoted field', () => {
+    // A download cut mid-field. The rows before the cut parse perfectly, which
+    // is exactly why this cannot be allowed through: applySourceChartCsv would
+    // clear the chart in force and replace it with half of another one.
+    const csv = '\ufeffIsActive;AccountNumber;AccountName;VatCodeAndPercent\r\n'
+      + 'True;3051;Försäljn varor 25% sv;05-25%\r\n'
+      + 'True;3056;"Försäljn varor till EG'
+    const { accounts, notices } = parseSourceChartCsv(csv)
+    expect(accounts).toEqual([])
+    expect(notices.map((n) => n.code)).toEqual(['source_chart_truncated'])
+  })
+
+  it('keeps a quoted line break inside one record, and is not fooled into truncation', () => {
+    const csv = '\ufeffIsActive;AccountNumber;AccountName;VatCodeAndPercent\r\n'
+      + 'True;3051;"Varor\r\ntjänster";05-25%\r\n'
+    const { accounts, notices } = parseSourceChartCsv(csv)
+    expect(notices).toEqual([])
+    expect(accounts).toEqual([
+      { accountNumber: '3051', accountName: 'Varor\r\ntjänster', vatCode: '05-25%', isActive: true },
+    ])
+  })
+
   it('keeps a semicolon that is inside a quoted account name', () => {
     const { accounts } = parseSourceChartCsv(spirisCsv('True;3051;"Varor; tjänster";05-25%'))
     expect(accounts[0].accountName).toBe('Varor; tjänster')
