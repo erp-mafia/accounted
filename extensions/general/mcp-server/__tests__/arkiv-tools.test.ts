@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+vi.mock('@/lib/arkiv/ask', () => ({ askDocument: vi.fn() }))
 import { tools } from '../server'
 import { parseRecordRef } from '../arkiv-tools'
 
@@ -119,5 +120,70 @@ describe('Arkiv tools', () => {
     const out = await propose.execute({ subject_ref: `company:${CO}`, predicate: 'vat_period', value: 'kvartal', rationale: 'Beslutet från Skatteverket säger kvartal.', evidence: { document_id: DOC, page: 1, quote: 'redovisningsperiod kvartal' } }, CO, 'user-1', supabase, { type: 'user' })
     expect(out).toMatchObject({ staged: true })
     expect(stage).toHaveBeenCalledWith(supabase, CO, 'user-1', 'arkiv_propose_fact', 'Faktum: Momsperiod = kvartal', expect.objectContaining({ subject_kind: 'company', subject_id: CO, predicate: 'vat_period', value: 'kvartal' }), expect.objectContaining({ predicate: 'Momsperiod', value: 'kvartal', prior_value: 'helt beskattningsår' }), { type: 'user' })
+  })
+})
+
+describe('gnubok_ask_document', () => {
+  it('asks the reader one question about one document and returns the cited answer', async () => {
+    const { askDocument } = await import('@/lib/arkiv/ask')
+    ;(askDocument as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'answered',
+      answer: 'Tre månader',
+      page: 2,
+      quote: 'tre (3) månaders uppsägningstid',
+      quote_verified: true,
+      confidence: 0.9,
+      pages_read: [1, 2],
+      page_count: 2,
+      not_found: false,
+    })
+    enqueue({ data: { name: 'Arcim Technology AB' } })
+    const out = await tool('gnubok_ask_document').execute({ record_ref: `document:${DOC}`, question: 'Vad är uppsägningstiden?' }, CO, 'user-1', supabase)
+    expect(out).toEqual({
+      record_ref: `document:${DOC}`,
+      question: 'Vad är uppsägningstiden?',
+      answer: 'Tre månader',
+      not_found: false,
+      page: 2,
+      quote: 'tre (3) månaders uppsägningstid',
+      quote_verified: true,
+      confidence: 0.9,
+      pages_read: [1, 2],
+      page_count: 2,
+    })
+    expect(askDocument).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({
+        companyId: CO,
+        documentId: DOC,
+        question: 'Vad är uppsägningstiden?',
+        company: { name: 'Arcim Technology AB' },
+        askedBy: { agentName: 'mcp.ask', agentVersion: '1' },
+      }),
+    )
+    expect((askDocument as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1]).not.toHaveProperty('pages')
+    enqueue({ data: { name: 'Arcim Technology AB' } })
+    await tool('gnubok_ask_document').execute(
+      {
+        record_ref: `document:${DOC}`,
+        question: 'Vad är uppsägningstiden?',
+        pages: [23, 24, 24, 0],
+      },
+      CO,
+      'user-1',
+      supabase,
+    )
+    expect(askDocument).toHaveBeenLastCalledWith(supabase, expect.objectContaining({ pages: [23, 24] }))
+  })
+
+  it('refuses anything but a document ref and turns a missing document into a plain error', async () => {
+    const { askDocument } = await import('@/lib/arkiv/ask')
+    await expect(tool('gnubok_ask_document').execute({ record_ref: `agreement:${DOC}`, question: 'x?' }, CO, 'user-1', supabase)).rejects.toThrow(/document:<uuid>/)
+    ;(askDocument as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'skipped',
+      reason: 'not_found',
+    })
+    enqueue({ data: { name: 'Arcim' } })
+    await expect(tool('gnubok_ask_document').execute({ record_ref: `document:${DOC}`, question: 'Vad?' }, CO, 'user-1', supabase)).rejects.toThrow(/No such document/)
   })
 })

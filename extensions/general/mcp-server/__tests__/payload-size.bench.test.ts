@@ -457,7 +457,10 @@ describe('tools/list payload size guard', () => {
     //     gnubok_search_records and gnubok_get_record (the record behind a
     //     document, agreement, party or verifikat). The four other Arkiv tools
     //     are catalogVisibility: 'search'. Measured 61 331 on landing.
-    expect(approxTokens).toBeLessThan(61_400)
+    //  2026-09-16 (phase 8, schema on read): gnubok_ask_document joins the
+    //     default catalog, the one write-free way for an agent to read a clause
+    //     the record does not carry. Measured 61 684 on landing.
+    expect(approxTokens).toBeLessThan(61_800)
   })
 
   /**

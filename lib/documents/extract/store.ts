@@ -11,6 +11,7 @@ import { runChecks, type CheckFailure } from './merge'
 import { fieldKinds, jsonSchemaFor, schemaForType, type ExtractionSchemaDef } from './schemas'
 import { auditOneIn } from '@/lib/arkiv/lint/autonomy'
 import { actingFields } from './acting'
+import { eagerSchema } from './eager'
 
 /**
  * Arkiv phase 3: the stored record of a document. A model run writes a
@@ -60,6 +61,8 @@ export async function extractDocument(supabase: SupabaseClient, documentId: stri
     if (doc.admission_state !== 'admitted') return skip('not_admitted')
     if (!doc.doc_type) return skip('no_type')
     const def = schemaForType(doc.doc_type)
+    // On arrival only the eager fields are read; the rest of the vocabulary waits for a question (gnubok_ask_document).
+    const eager = eagerSchema(def)
     const current = await loadCurrentExtraction(supabase, documentId)
     // For the same schema a person's record stands, and a model's record stands until the schema version moves.
     if (current?.schema_type === def.schemaType && (current.pass === 'human' || current.schema_version === def.version)) return skip('up_to_date')
@@ -67,16 +70,16 @@ export async function extractDocument(supabase: SupabaseClient, documentId: stri
     if (!pages.some((p) => p.text.trim())) return skip('no_text')
 
     const startedAt = new Date().toISOString()
-    const run = await readFields({ def, company, fileName: doc.file_name, pages })
+    const run = await readFields({ def: eager, company, fileName: doc.file_name, pages })
     // Only what something acts on goes to a person; the rest keeps both readings in the record.
     const acting = actingFields(def.schemaType)
     run.reviewFields = run.reviewFields.filter((name) => acting.has(name))
-    const audit = auditSample(documentId, def, run.reviewFields, auditOneIn(await autonomyLevel(supabase, doc.company_id, def.schemaType)))
+    const audit = auditSample(documentId, eager, run.reviewFields, auditOneIn(await autonomyLevel(supabase, doc.company_id, def.schemaType)))
     if (audit) {
       run.reviewFields.push(audit)
       run.checks.push({ check: 'audit', field: audit })
     }
-    await registerSchema(supabase, def)
+    await registerSchema(supabase, eager)
     const activityId = await recordActivity(supabase, {
       companyId: doc.company_id,
       documentId,
