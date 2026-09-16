@@ -19,7 +19,11 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   const { data: invoice, error } = await supabase
     .from('supplier_invoices')
-    .select('*, supplier:suppliers(*), items:supplier_invoice_items(*), payments:supplier_invoice_payments(*)')
+    // The payment's verifikat carries its source_type so the detail view can
+    // tell a payment Accounted booked (storno undoes those) from one that only
+    // links an existing voucher (DELETE .../payments/[paymentId] undoes those),
+    // and offer the right action instead of one the RPC would refuse.
+    .select('*, supplier:suppliers(*), items:supplier_invoice_items(*), payments:supplier_invoice_payments(*, journal_entry:journal_entries(id, source_type))')
     .eq('id', id)
     .eq('company_id', companyId)
     .single()

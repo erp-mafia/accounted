@@ -772,3 +772,140 @@ function descriptionMentionsToken(description: string | null, token: string): bo
   if (normalizedTok.length < 2) return false
   return normalizedDesc.includes(normalizedTok)
 }
+
+// ── Unlink ──────────────────────────────────────────────────
+
+export type SupplierVoucherUnlinkErrorCode =
+  | 'UNLINK_SI_PAYMENT_NOT_FOUND'
+  | 'UNLINK_SI_PAYMENT_NOT_A_LINK'
+  | 'UNLINK_SI_PAYMENT_BOOKED_PAYMENT'
+  | 'UNLINK_SI_PAYMENT_INVOICE_NOT_SETTLED'
+  | 'UNLINK_SI_PAYMENT_DB_ERROR'
+
+export interface UnlinkSupplierInvoiceFromVoucherResult {
+  supplierInvoiceId: string
+  journalEntryId: string
+  paymentAmount: number
+  invoiceStatus: string
+  paidAmount: number
+  remainingAmount: number
+}
+
+interface RpcUnlinkOk {
+  ok: true
+  supplier_invoice_id: string
+  journal_entry_id: string
+  transaction_id: string | null
+  payment_amount: number
+  invoice_status: string
+  paid_amount: number
+  remaining_amount: number
+}
+
+interface RpcUnlinkErr {
+  ok: false
+  code: SupplierVoucherUnlinkErrorCode
+  details?: Record<string, unknown>
+}
+
+/**
+ * Undo a link made by linkSupplierInvoiceToVoucher: remove the
+ * supplier_invoice_payments row and restore the invoice's payable state.
+ *
+ * The RPC owns every check and both writes in one transaction, and refuses any
+ * row whose verifikat is a payment Accounted booked itself: those belong to the
+ * storno path (lib/bookkeeping/payment-sync.ts), which reverses the entry and
+ * the row together. Nothing here touches a journal entry, because the link
+ * never created one.
+ */
+export async function unlinkSupplierInvoiceFromVoucher(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: { supplierInvoiceId: string; paymentId: string },
+): Promise<
+  | { ok: true; result: UnlinkSupplierInvoiceFromVoucherResult }
+  | { ok: false; code: SupplierVoucherUnlinkErrorCode; details?: Record<string, unknown> }
+> {
+  const { supplierInvoiceId, paymentId } = params
+  const { data, error } = await supabase.rpc('unlink_supplier_invoice_from_voucher', {
+    p_payment_id: paymentId,
+    p_supplier_invoice_id: supplierInvoiceId,
+    p_company_id: companyId,
+  })
+
+  if (error) {
+    log.error('unlink_supplier_invoice_from_voucher RPC error', {
+      companyId,
+      userId,
+      paymentId,
+      message: error.message,
+    })
+    return { ok: false, code: 'UNLINK_SI_PAYMENT_DB_ERROR', details: { reason: error.message } }
+  }
+
+  const result = data as RpcUnlinkOk | RpcUnlinkErr | null
+  if (!result) {
+    return {
+      ok: false,
+      code: 'UNLINK_SI_PAYMENT_DB_ERROR',
+      details: { reason: 'empty RPC response' },
+    }
+  }
+  if (!result.ok) return { ok: false, code: result.code, details: result.details }
+
+  // Clear the invoice pointer the link's auto-reconcile stamped on the bank
+  // row, and ONLY that pointer. releaseLinkedTransactions (payment-sync) is
+  // deliberately not reused: it also clears journal_entry_id, which is right
+  // after a storno (the entry is reversed) and wrong here (the entry stays
+  // posted, and the bank line genuinely paid it; only the claim that it settled
+  // THIS payable was false). Best-effort: the RPC has already committed.
+  const { error: releaseError } = await supabase
+    .from('transactions')
+    .update({ supplier_invoice_id: null })
+    .eq('company_id', companyId)
+    .eq('supplier_invoice_id', result.supplier_invoice_id)
+    .eq('journal_entry_id', result.journal_entry_id)
+  if (releaseError) {
+    log.error('failed to clear the supplier-invoice pointer after unlink', releaseError, {
+      companyId,
+      paymentId,
+      supplierInvoiceId: result.supplier_invoice_id,
+    })
+  }
+
+  // The payment row is gone, so the row itself can no longer carry the record
+  // of who removed it. audit_log is where behandlingshistorik reads from.
+  await supabase.from('audit_log').insert({
+    user_id: userId,
+    company_id: companyId,
+    action: 'DELETE',
+    table_name: 'supplier_invoice_payments',
+    record_id: paymentId,
+    description:
+      `Kopplingen mellan leverantörsfakturan och verifikatet togs bort ` +
+      `(${result.payment_amount} kr). Ingen bokföring ändrades.`,
+    old_state: {
+      supplier_invoice_id: result.supplier_invoice_id,
+      journal_entry_id: result.journal_entry_id,
+      amount: result.payment_amount,
+    },
+    new_state: {
+      invoice_status: result.invoice_status,
+      paid_amount: result.paid_amount,
+      remaining_amount: result.remaining_amount,
+    },
+  })
+
+  return {
+    ok: true,
+    result: {
+      supplierInvoiceId: result.supplier_invoice_id,
+      journalEntryId: result.journal_entry_id,
+      paymentAmount: result.payment_amount,
+      invoiceStatus: result.invoice_status,
+      paidAmount: result.paid_amount,
+      remainingAmount: result.remaining_amount,
+    },
+  }
+}

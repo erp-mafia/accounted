@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -174,6 +174,29 @@ function InlineAccountCell({
   )
 }
 
+/** A payment row with the linked verifikat's source_type embedded by the GET route. */
+type PaymentRow = SupplierInvoicePayment & {
+  journal_entry?: { id: string; source_type: string | null } | null
+}
+
+/**
+ * The four source types a payment Accounted booked itself carries
+ * (lib/bookkeeping/payment-sync.ts PAYMENT_SOURCE_TYPES). Reversing those is
+ * storno's job, which restores the ledger and the invoice together.
+ */
+const BOOKED_PAYMENT_SOURCE_TYPES = new Set([
+  'invoice_paid',
+  'invoice_cash_payment',
+  'supplier_invoice_paid',
+  'supplier_invoice_cash_payment',
+])
+
+function isUnlinkablePayment(payment: PaymentRow): boolean {
+  if (!payment.journal_entry_id) return false
+  const sourceType = payment.journal_entry?.source_type
+  return !sourceType || !BOOKED_PAYMENT_SOURCE_TYPES.has(sourceType)
+}
+
 export default function SupplierInvoiceDetailPage() {
   const { canWrite } = useCanWrite()
   const { settings: companySettings } = useCompanySettings()
@@ -198,6 +221,12 @@ export default function SupplierInvoiceDetailPage() {
   // The list page's "Betald {date}" label, so the header reads like the row.
   const tList = useTranslations('supplier_invoices')
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
+  // A payment that only LINKS an existing verifikat can be undone here; one
+  // with its own booked payment voucher is the storno path's, and the RPC
+  // refuses it. The detail payload carries the entry's source_type so the
+  // control is offered only where it works.
+  const [unlinkTarget, setUnlinkTarget] = useState<PaymentRow | null>(null)
+  const [isUnlinking, setIsUnlinking] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
   const [payTab, setPayTab] = useState<'new' | 'existing'>('new')
@@ -251,6 +280,40 @@ export default function SupplierInvoiceDetailPage() {
     credited: t('status_credited'),
     reversed: t('status_reversed'),
   }), [t])
+
+  async function confirmUnlink() {
+    if (!unlinkTarget) return
+    setIsUnlinking(true)
+    try {
+      const res = await fetch(
+        `/api/supplier-invoices/${params.id}/payments/${unlinkTarget.id}`,
+        { method: 'DELETE' },
+      )
+      const body = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast({
+          title: t('unlink_payment_failed_title'),
+          description: getErrorMessage(body, {
+            statusCode: res.status,
+            context: 'supplier_invoice',
+          }),
+          variant: 'destructive',
+        })
+        return
+      }
+      setUnlinkTarget(null)
+      toast({ title: t('unlink_payment_done_title') })
+      await fetchInvoice()
+    } catch (err) {
+      toast({
+        title: t('unlink_payment_failed_title'),
+        description: getErrorMessage(err, { context: 'supplier_invoice' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsUnlinking(false)
+    }
+  }
 
   async function fetchInvoice() {
     const seq = ++fetchSeqRef.current
@@ -673,7 +736,7 @@ export default function SupplierInvoiceDetailPage() {
     }
   }
   const items = (invoice.items || []) as SupplierInvoiceItem[]
-  const payments = (invoice.payments || []) as SupplierInvoicePayment[]
+  const payments = (invoice.payments || []) as PaymentRow[]
   const creditedOriginal =
     (invoice as SupplierInvoice & {
       credited_original?: { id: string; supplier_invoice_number: string; arrival_number: number } | null
@@ -1114,18 +1177,29 @@ export default function SupplierInvoiceDetailPage() {
           <DefRow label={t('payment_history_title')} className="items-baseline">
             <ul className="divide-y divide-border">
               {payments.map((p) => (
-                <li key={p.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 first:pt-0 last:pb-0">
+                <li key={p.id} className="group flex flex-wrap items-center gap-x-4 gap-y-1 py-2 first:pt-0 last:pb-0">
                   <span className="tabular-nums text-muted-foreground">{formatDate(p.payment_date)}</span>
                   <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
                   {p.notes && <span className="min-w-0 truncate text-muted-foreground">{p.notes}</span>}
-                  {p.journal_entry_id && (
-                    <Link
-                      href={`/bookkeeping/${p.journal_entry_id}`}
-                      className="ml-auto text-xs text-muted-foreground hover:text-foreground hover:underline"
-                    >
-                      {t('view_voucher')}
-                    </Link>
-                  )}
+                  <div className="ml-auto flex items-center gap-3">
+                    {isUnlinkablePayment(p) && (
+                      <button
+                        type="button"
+                        onClick={() => setUnlinkTarget(p)}
+                        className={`${HOVER_REVEAL_CLASS} text-xs text-muted-foreground hover:text-foreground hover:underline`}
+                      >
+                        {t('unlink_payment_action')}
+                      </button>
+                    )}
+                    {p.journal_entry_id && (
+                      <Link
+                        href={`/bookkeeping/${p.journal_entry_id}`}
+                        className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                      >
+                        {t('view_voucher')}
+                      </Link>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -1438,6 +1512,40 @@ export default function SupplierInvoiceDetailPage() {
       </Dialog>
 
       {/* Duplicate-payment warning dialog */}
+      <Dialog
+        open={unlinkTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !isUnlinking) setUnlinkTarget(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('unlink_payment_title')}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              {t('unlink_payment_description', {
+                amount: unlinkTarget
+                  ? formatCurrency(unlinkTarget.amount, unlinkTarget.currency)
+                  : '',
+              })}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => setUnlinkTarget(null)}
+                disabled={isUnlinking}
+              >
+                {t('cancel')}
+              </Button>
+              <Button onClick={confirmUnlink} disabled={isUnlinking}>
+                {t('unlink_payment_confirm')}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={duplicateCandidates !== null}
         onOpenChange={(open) => {
