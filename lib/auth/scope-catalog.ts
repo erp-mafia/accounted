@@ -319,6 +319,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_record_links:                'documents:read',
   gnubok_get_fact_history:                'documents:read',
   gnubok_get_source:                      'documents:read',
+  gnubok_ask_document:                    'documents:read',
   gnubok_propose_fact:                    'agent:write',
   gnubok_attach_document_to_transaction:  'transactions:write',
   gnubok_link_document_to_voucher:        'bookkeeping:write',
