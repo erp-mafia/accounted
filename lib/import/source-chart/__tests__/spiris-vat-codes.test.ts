@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseSpirisVatCode, spirisVatTreatment } from '../spiris-vat-codes'
+import { resolveVatTreatmentRuta } from '@/lib/vat/account-vat-treatment'
 
 describe('parseSpirisVatCode', () => {
   it('splits the ruta from the rate', () => {
@@ -98,5 +99,77 @@ describe('spirisVatTreatment', () => {
   it('answers null for blank and malformed codes', () => {
     expect(spirisVatTreatment('', '3051')).toBeNull()
     expect(spirisVatTreatment('IVEU', '3051')).toBeNull()
+  })
+})
+
+describe('spirisVatTreatment: the code must file where the source said', () => {
+  // Omvänd skattskyldighet inom Sverige is the one treatment whose ruta comes
+  // from the account NUMBER rather than from itself: 4415-4417 varor file ruta
+  // 23, 4425-4427 tjänster file ruta 24, and everything else falls to the
+  // goods branch. A Spiris "24" on any other class 4 account therefore filed a
+  // service purchase as goods, and did it silently, because the code HAD
+  // translated and so the row never reached the review list.
+
+  it('translates 23 and 24 on the six accounts whose number carries the split', () => {
+    for (const account of ['4415', '4416', '4417']) {
+      expect(spirisVatTreatment('23-25%', account)).toBe('reverse_charge_domestic')
+    }
+    for (const account of ['4425', '4426', '4427']) {
+      expect(spirisVatTreatment('24-25%', account)).toBe('reverse_charge_domestic')
+    }
+  })
+
+  it('refuses 24 on a class 4 account the resolver would read as varor', () => {
+    // Left untranslated, so applySourceVatCodes keeps the code on the mapping,
+    // shows it, and leaves the row in the review list: a person decides,
+    // instead of ruta 23 being filed on a tjänsteinköp behind their back.
+    for (const account of ['4400', '4429', '4530', '4010']) {
+      expect(spirisVatTreatment('24-25%', account)).toBeNull()
+    }
+  })
+
+  it('refuses 23 on an account the resolver would read as tjänster', () => {
+    expect(spirisVatTreatment('23-25%', '4425')).toBeNull()
+    // Classes 5 and 6 never take the varor branch, so a goods code there is
+    // exactly as unreadable.
+    expect(spirisVatTreatment('23-25%', '5010')).toBeNull()
+    expect(spirisVatTreatment('23-25%', '6010')).toBeNull()
+  })
+
+  it('still translates 24 on classes 5 and 6, which the resolver reads as tjänster', () => {
+    expect(spirisVatTreatment('24-25%', '5010')).toBe('reverse_charge_domestic')
+    expect(spirisVatTreatment('24-25%', '6010')).toBe('reverse_charge_domestic')
+  })
+
+  it('ratchet: every code this file translates files the ruta it names', () => {
+    // The property, not a list: whatever spirisVatTreatment returns, the
+    // declaration must put it in the box the source system wrote. Stated over
+    // the whole two-digit space so a ruta added to either table later is
+    // covered without anyone remembering to extend a fixture.
+    const accounts = [
+      '3051', '3110', '3231', '3910', '3058', '3107', '3105', '3308', '3305', '3401', '3004',
+      '4415', '4416', '4417', '4425', '4426', '4427', '4400', '4429', '4512', '4515', '4535',
+      '4531', '4545', '5010', '6010',
+    ]
+    const rates = ['-25%', '-12%', '-6%', '-0%', '']
+    let translated = 0
+    for (let n = 0; n < 100; n++) {
+      const ruta = String(n).padStart(2, '0')
+      for (const rate of rates) {
+        for (const account of accounts) {
+          const treatment = spirisVatTreatment(`${ruta}${rate}`, account)
+          if (!treatment) continue
+          translated += 1
+          const accountClass = Number(account.charAt(0))
+          expect(
+            resolveVatTreatmentRuta(treatment, accountClass, account)?.box,
+            `${ruta}${rate} on ${account} translated to ${treatment}, which files elsewhere`,
+          ).toBe(`ruta${ruta}`)
+        }
+      }
+    }
+    // Guard the guard: a change that made spirisVatTreatment always return null
+    // would satisfy every assertion above vacuously.
+    expect(translated).toBeGreaterThan(50)
   })
 })
