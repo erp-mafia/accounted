@@ -191,17 +191,19 @@ type PaymentRow = SupplierInvoicePayment & {
  * whose entry is source_type 'expense_claim' (outside PAYMENT_SOURCE_TYPES)
  * but whose payable is genuinely settled.
  *
- * Fails CLOSED, like the RPC: without the embedded entry we cannot tell the two
- * apart, and offering a control that the RPC will refuse is worse than not
- * offering it. That happens with a payload from before the embed existed, or an
- * entry the caller cannot read.
+ * The embed being ABSENT (payload from before the embed existed, or an entry
+ * the caller cannot read) still fails CLOSED. But the embed being present with
+ * a NULL source_type is a legitimate legacy value: older SIE imports wrote
+ * journal_entries without stamping one. The RPC accepts those rows because
+ * NULL = ANY(booked_payment_types) is not TRUE, so the UI must not be stricter
+ * than the RPC or the exact #2673 dead end returns for imported vouchers.
  */
 function isUnlinkablePayment(payment: PaymentRow, paymentJournalEntryId: string | null): boolean {
   if (!payment.journal_entry_id) return false
   if (payment.journal_entry_id === paymentJournalEntryId) return false
-  const sourceType = payment.journal_entry?.source_type
-  if (!sourceType) return false
-  return !isPaymentSourceType(sourceType)
+  if (!payment.journal_entry) return false
+  const sourceType = payment.journal_entry.source_type
+  return !sourceType || !isPaymentSourceType(sourceType)
 }
 
 export default function SupplierInvoiceDetailPage() {
