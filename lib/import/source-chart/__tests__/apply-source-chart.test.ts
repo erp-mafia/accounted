@@ -517,6 +517,30 @@ describe('applySourceChartCsv', () => {
     expect(accepted[1].vatTreatmentReviewed ?? false).toBe(false)
   })
 
+  it('drops an accepted code when the next chart does not mention the account', () => {
+    // The accept marks rows reviewed without a person having read them, which
+    // is exactly why clearPreviousChart cannot treat that flag alone as
+    // ownership. An account the company stopped using is simply absent from
+    // the next year's chart, and its old code has to go with the file it came
+    // from rather than riding along into the import.
+    const accepted = acceptSourceChartWithoutReview(
+      applySourceChartCsv(
+        [mapping('3058', 'Försäljn varor EG momsfri')],
+        csv('True;3058;Försäljn varor EG momsfri;35-0%'),
+      ).mappings,
+    )
+    expect(accepted[0].providerVatCode).toBe('35-0%')
+
+    const { mappings } = applySourceChartCsv(accepted, csv('True;3051;Försäljn varor 25% sv;05-25%'))
+    expect(mappings[0].providerVatCode).toBeNull()
+    // Not null afterwards: the row falls back to what its label suggests. The
+    // difference that matters is the provenance, because buildSIEVatDefaults
+    // writes only reviewed rows, so this one is asked about instead of riding
+    // into the ledger as a fact the accepted chart no longer supports.
+    expect(mappings[0].vatTreatmentReviewed).toBe(false)
+    expect(mappings[0].vatTreatmentSuggested).toBe(true)
+  })
+
   it('lets a corrected chart still correct an accepted row', () => {
     // Reviewed AND required is what applySourceVatCodes reads as "a human
     // answered this", which it never overwrites. An accept that left the flag
