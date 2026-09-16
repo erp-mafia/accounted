@@ -15,6 +15,7 @@
  * REST envelope so a single registry covers every entry point.
  */
 import { NextResponse } from 'next/server'
+import { userFacingCode } from './user-facing'
 import { ZodError } from 'zod'
 import { getErrorMessage } from './get-error-message'
 import {
@@ -416,6 +417,25 @@ export function errorResponse(
       requestId: ctx.requestId,
       pgCode: err.code,
     })
+  }
+
+  // 3b. Errors written for the reader. Before the registry lookup, because the
+  //     point is to keep the sentence the author wrote instead of the canned
+  //     one the code maps to: a paused import and a klarmarkerat räkenskapsår
+  //     both name the setting to change, and both arrived as generic text.
+  //     Swedish in both locales, like the engine's other domain errors.
+  const spoken = userFacingCode(err)
+  if (spoken && getErrorEntry(spoken)) {
+    const entry = entryFor(spoken)
+    const status = ctx.status ?? entry.httpStatus
+    const message = (err as Error).message
+    logAtLevel(log, status, spoken, err as Error, { requestId: ctx.requestId })
+    return buildResponse(
+      spoken,
+      { ...entry, httpStatus: status, message_sv: message, message_en: message },
+      ctx.requestId,
+      ctx.details,
+    )
   }
 
   // 4. Errors with a known structured code on them
