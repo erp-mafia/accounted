@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { DocumentRecordView } from '@/app/api/arkiv/documents/[id]/route'
+import type { DocumentTextView } from '@/app/api/documents/[id]/text/route'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import { primaryFields, schemaForType } from '@/lib/documents/extract/schemas'
 import { formatCurrency, formatDateLong } from '@/lib/utils'
@@ -29,6 +30,8 @@ export function DocumentRecord({ documentId }: { documentId: string }) {
   const [view, setView] = useState<DocumentRecordView | null>(null)
   const [failed, setFailed] = useState(false)
   const [showAll, setShowAll] = useState(false)
+  const [text, setText] = useState<DocumentTextView | null>(null)
+  const [textOpen, setTextOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -180,6 +183,49 @@ export function DocumentRecord({ documentId }: { documentId: string }) {
               </DefList>
             </Section>
           )}
+          <Section title={t('record_text')} help={t('record_text_help')}>
+            {!text ? (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                onClick={() => {
+                  fetch(`/api/documents/${documentId}/text`)
+                    .then(async (res) => (res.ok ? ((await res.json()) as { data: DocumentTextView }).data : null))
+                    .then((data) => {
+                      if (data) {
+                        setText(data)
+                        setTextOpen(true)
+                      }
+                    })
+                    .catch(() => undefined)
+                }}
+              >
+                {t('record_text_show')}
+              </button>
+            ) : (
+              <div className="space-y-4">
+                {(textOpen ? text.pages : text.pages.slice(0, 1)).map((p) => (
+                  <div key={p.page_no}>
+                    {text.pages.length > 1 ? (
+                      <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{t('source_page_short_only', { page: p.page_no })}</div>
+                    ) : null}
+                    <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-sm bg-secondary px-4 py-3 font-sans text-[12.5px] leading-relaxed">
+                      {textOpen ? p.text : p.text.slice(0, 1500)}
+                    </pre>
+                  </div>
+                ))}
+                {(!textOpen && (text.pages.length > 1 || (text.pages[0]?.text.length ?? 0) > 1500)) || text.truncated ? (
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                    onClick={() => setTextOpen((v) => !v)}
+                  >
+                    {textOpen ? t('show_fewer_fields') : t('record_text_all', { count: text.page_count ?? text.pages.length })}
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </Section>
           <Section title={t('record_links')}>
             <DefList className="text-[13px]">
               {view.journal_entry && (

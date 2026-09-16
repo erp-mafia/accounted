@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server'
+import { documentTitle } from '@/lib/arkiv/documents/title'
+import type { Payload } from '@/lib/documents/extract/fields'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -27,6 +29,7 @@ export interface ReviewDocument {
 export interface FieldReviewDocument {
   document_id: string
   file_name: string
+  title: string
   created_at: string
   page_count: number | null
   doc_type: string | null
@@ -72,32 +75,34 @@ export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
       .in('id', unsureIds)
       .order('created_at', { ascending: false })
     if (docsError) return NextResponse.json({ error: getErrorMessage(docsError) }, { status: 500 })
-    unclassifiedRows = ((docs ?? []) as Array<Record<string, unknown>>)
-      .map((d) => toReview(d, byDoc.get(d.id as string)))
-      .filter((r) => r.relevance === 'relevant')
+    unclassifiedRows = ((docs ?? []) as Array<Record<string, unknown>>).map((d) => toReview(d, byDoc.get(d.id as string))).filter((r) => r.relevance === 'relevant')
   }
   const { data: pending, error: pendingError } = await ctx.supabase
     .from('document_extractions')
-    .select('document_id, schema_type, review_fields')
+    .select('document_id, schema_type, review_fields, payload')
     .eq('company_id', ctx.companyId)
     .eq('is_current', true)
     .not('review_fields', 'eq', '{}')
     .limit(200)
   if (pendingError) return NextResponse.json({ error: getErrorMessage(pendingError) }, { status: 500 })
   let fieldRows: FieldReviewDocument[] = []
-  const pendingList = (pending ?? []) as Array<{ document_id: string; schema_type: string; review_fields: string[] }>
+  const pendingList = (pending ?? []) as Array<{ document_id: string; schema_type: string; review_fields: string[]; payload: Payload }>
   if (pendingList.length) {
     const { data: docs, error: docsError } = await ctx.supabase
       .from('document_attachments')
       .select('id, file_name, created_at, page_count, doc_type')
       .eq('company_id', ctx.companyId)
-      .in('id', pendingList.map((p) => p.document_id))
+      .in(
+        'id',
+        pendingList.map((p) => p.document_id),
+      )
       .order('created_at', { ascending: false })
     if (docsError) return NextResponse.json({ error: getErrorMessage(docsError) }, { status: 500 })
     const byId = new Map(pendingList.map((p) => [p.document_id, p]))
     fieldRows = ((docs ?? []) as Array<{ id: string; file_name: string; created_at: string; page_count: number | null; doc_type: string | null }>).map((d) => ({
       document_id: d.id,
       file_name: d.file_name,
+      title: documentTitle({ docType: d.doc_type, fileName: d.file_name, payload: byId.get(d.id)?.payload ?? null }),
       created_at: d.created_at,
       page_count: d.page_count,
       doc_type: d.doc_type,

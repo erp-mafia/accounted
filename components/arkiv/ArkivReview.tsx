@@ -93,7 +93,7 @@ export function ArkivReview() {
       )}
 
       {data && (
-        <div className="max-w-[760px]">
+        <div>
           <div className="flex items-baseline justify-between border-b border-border px-1 pb-2.5">
             <h2 className="text-sm font-medium">{t('review_title')}</h2>
             <span className="text-xs text-muted-foreground">{t('review_count', { count: total })}</span>

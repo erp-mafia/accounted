@@ -10163,6 +10163,10 @@
 ,
   "arkiv": {
     "review_title": "Granska dokument",
+    "record_text": "Texten",
+    "record_text_help": "Dokumentet som Arkiv läste det, sida för sida. Samma text som agenter får.",
+    "record_text_show": "Visa texten",
+    "record_text_all": "Visa alla {count} sidor",
     "upload_title": "Släpp filer här",
     "upload_hint": "Kvitton och fakturor går till Underlag och bokförs där. Avtal, registreringar och beslut får en egen sida i Arkiv. Allt sparas i Arkiv samma sekund.",
     "upload_pick": "Välj filer",

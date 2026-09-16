@@ -10163,6 +10163,10 @@
 ,
   "arkiv": {
     "review_title": "Review documents",
+    "record_text": "The text",
+    "record_text_help": "The document as Arkiv read it, page by page. The same text agents get.",
+    "record_text_show": "Show the text",
+    "record_text_all": "Show all {count} pages",
     "upload_title": "Drop files here",
     "upload_hint": "Receipts and invoices go to Underlag and are booked there. Agreements, registrations and decisions get their own page in Arkiv. Everything is kept in Arkiv the same second.",
     "upload_pick": "Choose files",
