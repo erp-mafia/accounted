@@ -170,6 +170,22 @@ describe('applySourceChartCsv', () => {
     expect(notices.map((n) => n.code)).toContain('source_chart_no_codes')
   })
 
+  it('takes no code from an account the company no longer uses', () => {
+    // The export is the vendor catalogue plus a flag: IsActive marks the rows
+    // the company actually uses, so an inactive row's code is the vendor's
+    // default for that BAS number, not a choice this company made. Measured on
+    // six real yearly exports, about fifty accounts a year are inactive and
+    // coded, and none of them is posted to in the matching SIE file.
+    const { mappings, summary } = applySourceChartCsv(
+      [mapping('3058', 'Försäljn varor EG momsfri')],
+      csv('False;3058;Försäljn varor EG momsfri;35-0%'),
+    )
+    expect(mappings[0].defaultVatTreatment).toBeUndefined()
+    expect(summary.treatmentsApplied).toBe(0)
+    expect(summary.accountsInChart).toBe(1)
+    expect(summary.activeInChart).toBe(0)
+  })
+
   it('ignores chart rows this import does not map', () => {
     // The export is the vendor's whole chart, over a thousand rows. Only the
     // accounts the SIE file actually uses are touched.
@@ -238,6 +254,28 @@ describe('applySourceChartCsv', () => {
     expect(mappings[0].vatTreatmentReviewed).toBe(true)
     expect(mappings[0].providerVatCode).toBeUndefined()
     expect(summary.codesApplied).toBe(0)
+  })
+
+  it('will not overwrite the answer a user gave on a row the company chart had settled', () => {
+    // The test above hands applySourceChartCsv a row built with
+    // requiresVatTreatmentReview already true, so it passes without ever
+    // asking where that flag comes from. A row the company chart settles
+    // arrives with it FALSE, and the user's answer used to inherit that: the
+    // reviewed flag went up, the required one stayed down, and the pair
+    // applySourceVatCodes reads as "a human answered this" was never formed.
+    // The next year's chart then walked over the answer in silence.
+    const chart = [{ account_number: '3056', default_vat_treatment: 'export_goods', default_vat_rate: 0 }] as never
+    const settled = enrichAccountMappingsWithVat([mapping('3056', 'Försäljn varor till EG')], chart)
+    expect(settled[0].vatTreatmentReviewed).toBe(true)
+    expect(settled[0].requiresVatTreatmentReview).toBe(false)
+
+    const answered = applyVatTreatmentReview(settled, '3056', 'oss', null)
+    const { mappings } = applySourceChartCsv(
+      answered,
+      csv('True;3056;Försäljn varor till EG;35-0%'),
+      chart,
+    )
+    expect(mappings[0].defaultVatTreatment).toBe('oss')
   })
 
   it('leaves a settled account alone while the file agrees with it', () => {

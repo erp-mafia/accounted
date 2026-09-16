@@ -147,9 +147,17 @@ export function applySourceChartCsv(
 ): SourceChartResult {
   const { accounts, format, notices } = parseSourceChartCsv(content)
 
+  // Active only. Spiris ships the whole vendor catalogue and marks the rows the
+  // company does not use inactive, so an inactive row's code is the vendor's
+  // default for that BAS number and never something this company chose. Across
+  // six real yearly exports about fifty accounts per year are inactive AND
+  // coded, and not one of them is posted to anywhere in the matching SIE file:
+  // keeping them buys no code the ledger needs and lets a catalogue default
+  // land on a row, or come back on a later chart after the company had moved
+  // the account on.
   const codesByAccount = new Map<string, string>()
   for (const account of accounts) {
-    if (account.vatCode) codesByAccount.set(account.accountNumber, account.vatCode)
+    if (account.isActive && account.vatCode) codesByAccount.set(account.accountNumber, account.vatCode)
   }
 
   const summaryBase = {

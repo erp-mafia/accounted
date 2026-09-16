@@ -966,11 +966,15 @@ function SIEImportWizard({
       // A file that could not be read leaves the mappings as they were, so the
       // line above the table has to keep describing the chart still in effect
       // rather than reverting to the invitation. Only its complaint changes.
-      setSourceChart((prev) =>
-        result.applied || !prev
-          ? { summary: result.summary, notices: result.notices }
-          : { summary: prev.summary, notices: result.notices },
-      )
+      //
+      // And when there is no chart in effect, the description is empty, not the
+      // rejected file's: its summary still carries the format the header was
+      // recognised as, so storing it made an unusable pick render as the active
+      // chart with nothing applied. Same fallback the catch below already uses.
+      setSourceChart((prev) => ({
+        summary: result.applied ? result.summary : prev?.summary ?? emptySourceChartSummary(),
+        notices: result.notices,
+      }))
     } catch (err) {
       if (pick !== sourceChartPick.current) return
       // Through getErrorMessage like every other catch in this file, so a real
