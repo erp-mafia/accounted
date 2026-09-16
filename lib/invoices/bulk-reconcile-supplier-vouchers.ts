@@ -39,10 +39,12 @@ import type { SupplierInvoice, Supplier } from '@/types'
 const log = createLogger('bulk-reconcile-supplier-vouchers')
 
 /**
- * Minimum confidence for an UNATTENDED auto-link. 0.95 = OCR/invoice-number hit
- * (0.99) or exact-remaining-amount AND supplier-name corroboration (0.95).
- * Amount-only matches (0.80, even with the +0.05 date bump → 0.85) are
- * deliberately excluded: too many invoices share round amounts.
+ * Minimum confidence for an UNATTENDED auto-link. 0.95 = a reference hit whose
+ * amount settles the invoice (0.99) or exact-remaining-amount AND supplier-name
+ * corroboration (0.95). A reference with another amount (0.90) and amount-only
+ * matches (0.80, even with the +0.05 date bump → 0.85) are deliberately
+ * excluded: the first is at best a partial payment a person should confirm,
+ * the second collides on round amounts.
  */
 const AUTO_LINK_MIN_CONFIDENCE = 0.95
 /**
@@ -234,8 +236,9 @@ export async function reconcileSupplierInvoiceVouchers(
 
     const confidentEnough = top.confidence >= AUTO_LINK_MIN_CONFIDENCE
     const clearMargin = !runnerUp || top.confidence - runnerUp.confidence >= AUTO_LINK_MIN_MARGIN
-    // The RPC rejects a voucher whose AP debit exceeds the remaining amount; an
-    // OCR match (which ignores amount) could trip this, so screen it out here.
+    // The RPC rejects a voucher whose AP debit exceeds the remaining amount; a
+    // total-amount match on a partly paid invoice could trip this, so screen
+    // it out here.
     // Both sides are in the invoice's currency (see remainingOf).
     const amountFits = top.ap_debit_amount <= remaining + AMOUNT_TOLERANCE
 

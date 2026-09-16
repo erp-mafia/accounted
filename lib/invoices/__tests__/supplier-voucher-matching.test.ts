@@ -742,4 +742,107 @@ describe('findMatchingVouchersForSupplierInvoice', () => {
     const tables = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
     expect(tables).not.toContain('journal_entry_lines')
   })
+
+  // ============================================================
+  // Reference matching: whole numbers, and the amount has to agree
+  //
+  // Desk crm#64 (2026-09-16): the substring test read ankomstnummer 14
+  // inside "(1814)" and auto-linked a Tele2 payment of 859 kr as a partial
+  // payment on a Postronic invoice of 3 156 kr at "99 % säkerhet". All 31
+  // arrival-number auto-links in prod were of that kind.
+  // ============================================================
+
+  describe('reference matching', () => {
+    type ApRow = Parameters<typeof enqueueApLines>[1][number]
+    async function search(rows: ApRow[], inv: ReturnType<typeof makeSupplierInvoice>) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueueApLines(enqueue, rows)
+      enqueue({ data: [], error: null }) // supplier_invoice_payments links
+      enqueue({ data: [{ id: 'period-1', is_closed: false, locked_at: null }], error: null })
+      return findMatchingVouchersForSupplierInvoice(supabase as never, 'company-1', inv as never)
+    }
+    const apRow = (debit: number, description: string): ApRow => ({
+      id: 'line-1',
+      account_number: '2440',
+      debit_amount: debit,
+      currency: 'SEK',
+      entry: entryFixture({ description }),
+    })
+
+    it('does not read ankomstnummer 14 inside "(1814)": the Tele2 payment stays off the Postronic invoice', async () => {
+      const postronic = makeSupplierInvoice({
+        id: 'si-postronic',
+        total: 3156,
+        paid_amount: 0,
+        remaining_amount: 3156,
+        currency: 'SEK',
+        due_date: '2026-05-20',
+        supplier_invoice_number: '1813',
+        arrival_number: 14,
+      })
+      const result = await search([apRow(859, 'Levbet Tele2 Sverige AB (1814)')], postronic)
+      expect(result).toEqual([])
+    })
+
+    it('counts an ankomstnummer only when the amount settles the invoice', async () => {
+      const inv14 = makeSupplierInvoice({
+        id: 'si-14',
+        total: 1000,
+        paid_amount: 0,
+        remaining_amount: 1000,
+        currency: 'SEK',
+        due_date: '2026-03-12',
+        supplier_invoice_number: '',
+        arrival_number: 14,
+      })
+      const partial = await search([apRow(400, 'Levbet faktura 14')], inv14)
+      expect(partial).toEqual([])
+
+      const full = await search([apRow(1000, 'Levbet faktura 14')], inv14)
+      expect(full).toHaveLength(1)
+      expect(full[0].confidence).toBe(0.99)
+      expect(full[0].match_reason).toContain('Ankomstnummer 14')
+      expect(full[0].match_reason).toContain('beloppet stämmer')
+    })
+
+    it('keeps an invoice number with another amount as a 0.90 hint, below the auto-link bar', async () => {
+      const result = await search([apRow(400, 'Betalning faktura F-9001')], invoice())
+      expect(result).toHaveLength(1)
+      expect(result[0].confidence).toBe(0.9)
+      expect(result[0].match_reason).toContain('Fakturanummer F-9001')
+      expect(result[0].match_reason).toContain('avviker')
+    })
+
+    it('does not read invoice number F-900 inside F-9001', async () => {
+      const inv = makeSupplierInvoice({
+        id: 'si-900',
+        total: 1000,
+        paid_amount: 0,
+        remaining_amount: 1000,
+        currency: 'SEK',
+        due_date: '2026-03-12',
+        supplier_invoice_number: 'F-900',
+      })
+      const result = await search([apRow(1000, 'Betalning faktura F-9001')], inv)
+      // The amount alone still matches (0.80): the reference must not lift it.
+      expect(result).toHaveLength(1)
+      expect(result[0].confidence).toBeLessThan(0.9)
+      expect(result[0].match_reason).not.toContain('Fakturanummer')
+    })
+
+    it('still matches an OCR typed in groups against the same digits run together', async () => {
+      const inv = makeSupplierInvoice({
+        id: 'si-ocr',
+        total: 1000,
+        paid_amount: 0,
+        remaining_amount: 1000,
+        currency: 'SEK',
+        due_date: '2026-03-12',
+        supplier_invoice_number: '1234 5678',
+      })
+      const result = await search([apRow(1000, 'OCR 12345678')], inv)
+      expect(result).toHaveLength(1)
+      expect(result[0].confidence).toBe(0.99)
+    })
+  })
 })

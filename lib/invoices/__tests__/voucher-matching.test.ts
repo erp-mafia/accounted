@@ -455,6 +455,61 @@ describe('findMatchingVouchersForInvoice', () => {
     expect(result[0].journal_entry_id).toBe('je-1')
     expect(result[0].ar_credit_amount).toBe(1000)
   })
+
+  // Reference matching follows the supplier side (desk crm#64): the invoice
+  // number must stand alone as a number in the text, and only an amount that
+  // settles the invoice makes it a 0.99 match.
+  function cashVoucher(description: string, debit: number) {
+    return {
+      id: 'je-1',
+      voucher_series: 'A',
+      voucher_number: 7,
+      entry_date: '2026-05-01',
+      description,
+      status: 'posted',
+      source_type: 'manual',
+      fiscal_period_id: 'fp-1',
+      company_id: 'company-1',
+      journal_entry_lines: [
+        { id: 'l1', account_number: '1930', debit_amount: debit, credit_amount: 0, currency: 'SEK' },
+      ],
+    }
+  }
+  async function searchCash(description: string, debit: number) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const invoice = makeInvoice({
+      remaining_amount: 1000,
+      total: 1000,
+      currency: 'SEK',
+      due_date: '2026-05-01',
+      invoice_number: 'F-1',
+    })
+    enqueue({ data: { accounting_method: 'cash' } })
+    enqueue({ data: [cashVoucher(description, debit)] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    return findMatchingVouchersForInvoice(supabase as never, 'company-1', invoice as never)
+  }
+
+  it('does not read invoice number F-1 inside F-12', async () => {
+    const result = await searchCash('Betalning faktura F-12', 1000)
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBeLessThan(0.9)
+    expect(result[0].match_reason).not.toContain('Fakturanummer')
+  })
+
+  it('keeps an invoice number with a partial amount as a 0.90 hint', async () => {
+    const result = await searchCash('Betalning faktura F-1', 400)
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe(0.9)
+    expect(result[0].match_reason).toContain('avviker')
+  })
+
+  it('gives 0.99 when the invoice number and the settling amount agree', async () => {
+    const result = await searchCash('Betalning faktura F-1', 1000)
+    expect(result[0].confidence).toBe(0.99)
+    expect(result[0].match_reason).toContain('beloppet stämmer')
+  })
 })
 
 // ============================================================

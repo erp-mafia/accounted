@@ -23,6 +23,7 @@ import {
   amountsMatchExact,
   amountsMatchFuzzy,
   customerNameMatches,
+  descriptionMentionsReference,
 } from './invoice-matching'
 import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
@@ -264,19 +265,42 @@ function scoreCandidate(
   lineCurrency: string | null,
   ctx: CandidateContext,
 ): { confidence: number; match_reason: string } | null {
-  // OCR-style: invoice number or arrival number appears in the entry description.
-  const invoiceNumberHit =
-    ctx.invoice.supplier_invoice_number &&
-    descriptionMentionsToken(entry.description, ctx.invoice.supplier_invoice_number)
-  const arrivalHit =
-    ctx.invoice.arrival_number != null &&
-    descriptionMentionsToken(entry.description, String(ctx.invoice.arrival_number))
-  if (invoiceNumberHit || arrivalHit) {
+  // Reference in the voucher text: the supplier's invoice number, or our own
+  // ankomstnummer, as a whole number (descriptionMentionsReference). A
+  // reference alone does not prove THIS payment: a bank text naming the
+  // invoice can still be a partial payment, and short numbers recur in dates
+  // and inside other invoices' numbers. Only together with an amount that
+  // settles the invoice (the remainder, or the total) does it earn 0.99. An
+  // invoice number with another amount stays a strong hint for a person
+  // (0.90), below the unattended auto-link bar. The ankomstnummer is
+  // Accounted's own sequence (1, 2, 3, ...): no bank or source system writes
+  // it on a payment, so it counts only when the amount corroborates it. All
+  // 31 arrival-number auto-links in prod on 2026-09-16 were of the kind "14"
+  // inside "(1814)" with an unrelated amount (desk crm#64).
+  const invoiceNumberHit = descriptionMentionsReference(
+    entry.description,
+    ctx.invoice.supplier_invoice_number,
+  )
+  const arrivalHit = descriptionMentionsReference(entry.description, ctx.invoice.arrival_number)
+  const settlesInvoice =
+    amountsMatchExact(apDebitTotal, ctx.remainingAmount) ||
+    amountsMatchExact(apDebitTotal, ctx.invoice.total)
+  if (invoiceNumberHit && settlesInvoice) {
     return {
       confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
-      match_reason: invoiceNumberHit
-        ? `Fakturanummer ${ctx.invoice.supplier_invoice_number} omnämnt i verifikatets beskrivning`
-        : `Ankomstnummer ${ctx.invoice.arrival_number} omnämnt i verifikatets beskrivning`,
+      match_reason: `Fakturanummer ${ctx.invoice.supplier_invoice_number} omnämnt i verifikatets beskrivning och beloppet stämmer`,
+    }
+  }
+  if (arrivalHit && settlesInvoice) {
+    return {
+      confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
+      match_reason: `Ankomstnummer ${ctx.invoice.arrival_number} omnämnt i verifikatets beskrivning och beloppet stämmer`,
+    }
+  }
+  if (invoiceNumberHit) {
+    return {
+      confidence: CONFIDENCE.REFERENCE_AMOUNT_MISMATCH,
+      match_reason: `Fakturanummer ${ctx.invoice.supplier_invoice_number} omnämnt i verifikatets beskrivning, men beloppet (${formatNumber(apDebitTotal)} ${ctx.invoice.currency}) avviker från fakturans`,
     }
   }
 
@@ -763,14 +787,6 @@ function computeRemaining(invoice: SupplierInvoice): number {
   }
   const paid = invoice.paid_amount ?? 0
   return Math.max(0, round2(invoice.total - paid))
-}
-
-function descriptionMentionsToken(description: string | null, token: string): boolean {
-  if (!description || !token) return false
-  const normalizedDesc = description.replace(/\s+/g, '').toLowerCase()
-  const normalizedTok = token.replace(/\s+/g, '').toLowerCase()
-  if (normalizedTok.length < 2) return false
-  return normalizedDesc.includes(normalizedTok)
 }
 
 // ── Unlink ──────────────────────────────────────────────────
