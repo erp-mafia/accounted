@@ -382,26 +382,23 @@ function BankHistoryRow({
               <span className="text-muted-foreground">
                 {isPrivate ? t('private_badge') : t('posted')}
               </span>
-              {transaction.journal_entry_id ? (
-                <Link
-                  href={`/bookkeeping/${transaction.journal_entry_id}`}
-                  className={QUIET_LINK_CLASS}
-                >
-                  {t('view_voucher_short')}
-                </Link>
-              ) : (
-                // A split row: one link per verifikat, labelled V200, V201 when
-                // the fetch embedded the voucher, else the generic label.
-                voucherLinks.map((link, index) => (
+              {/* One link per verifikat the row is anchored to (pointer first,
+                  then each bank_line junction row, deduplicated): a split row
+                  reads V200, V201 when the fetch embedded the voucher, else
+                  the generic label. */}
+              {linkedEntryIds.map((entryId, index) => {
+                const link = voucherLinks.find((l) => l.journal_entry_id === entryId)
+                return (
                   <Link
-                    key={link.journal_entry_id}
-                    href={`/bookkeeping/${link.journal_entry_id}`}
+                    key={entryId}
+                    href={`/bookkeeping/${entryId}`}
                     className={QUIET_LINK_CLASS}
                   >
-                    {embeddedVoucherLabel(link) ?? (index === 0 ? t('view_voucher_short') : `+${index}`)}
+                    {(link ? embeddedVoucherLabel(link) : null) ??
+                      (index === 0 ? t('view_voucher_short') : `+${index}`)}
                   </Link>
-                ))
-              )}
+                )
+              })}
             </>
           ) : isPrivate ? (
             <span className="text-muted-foreground">{t('private_badge')}</span>

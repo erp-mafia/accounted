@@ -277,19 +277,17 @@ export function TransactionDrawer({
             {booked
               ? fact(
                   t('drawer_voucher'),
-                  transaction.journal_entry_id ? (
-                    <Link href={`/bookkeeping/${transaction.journal_entry_id}`} className={QUIET_LINK_CLASS}>
-                      {t('drawer_open_voucher')}
-                    </Link>
-                  ) : (
-                    <span className="inline-flex flex-wrap gap-2">
-                      {voucherLinks.map((link, index) => (
-                        <Link key={link.journal_entry_id} href={`/bookkeeping/${link.journal_entry_id}`} className={QUIET_LINK_CLASS}>
-                          {embeddedVoucherLabel(link) ?? (index === 0 ? t('drawer_open_voucher') : `+${index}`)}
+                  <span className="inline-flex flex-wrap gap-2">
+                    {linkedEntryIds.map((entryId, index) => {
+                      const link = voucherLinks.find((l) => l.journal_entry_id === entryId)
+                      return (
+                        <Link key={entryId} href={`/bookkeeping/${entryId}`} className={QUIET_LINK_CLASS}>
+                          {(link ? embeddedVoucherLabel(link) : null) ??
+                            (index === 0 ? t('drawer_open_voucher') : `+${index}`)}
                         </Link>
-                      ))}
-                    </span>
-                  ),
+                      )
+                    })}
+                  </span>,
                 )
               : null}
             {skvCounterpartDate ? fact(t('skv_counterpart_label'), t('skv_counterpart_body', { date: skvCounterpartDate })) : null}
