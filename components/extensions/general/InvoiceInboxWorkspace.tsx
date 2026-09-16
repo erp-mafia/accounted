@@ -2482,7 +2482,13 @@ function InboxRow({
                 </Badge>
               ) : (
                 <>
-                  {item.extraction_skipped && (
+                  {/* extraction_skipped records that the AI run did not
+                      happen at upload, which is not the same as the item
+                      having no fields: an agent can fill them in afterwards
+                      over MCP (set_inbox_extracted_data). Gate on the fields
+                      so the chip stops claiming "inte tolkad" once they are
+                      there. */}
+                  {item.extraction_skipped && !hasAnyExtractedField(item.extracted_data) && (
                     <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
                   )}
                 </>
@@ -3284,8 +3290,11 @@ function FieldsRail({
       {/* Skipped-extraction hint: explains the empty fields and points the
           user to the manual paths (transaction link or supplier invoice).
           Deliberately reason-agnostic: skip covers sandbox, BYO-extraction
-          and unsliceable PDFs, not just page count anymore. */}
-      {item.extraction_skipped && !isResolved && (
+          and unsliceable PDFs, not just page count anymore. Drops out once
+          fields exist: on the BYO path the agent writes them after the
+          skipped run, and the hint would then talk about empty fields the
+          user can see are filled. */}
+      {item.extraction_skipped && !isResolved && !hasAnyExtractedField(data) && (
         <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
           {t('skipped_hint')}
         </div>
