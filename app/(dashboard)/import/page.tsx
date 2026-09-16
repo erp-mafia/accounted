@@ -833,6 +833,12 @@ function SIEImportWizard({
       })
       setBasAccounts(accounts)
       setMappings(enrichAccountMappingsWithVat(data.mappings, accounts))
+      // These are another file's mappings, so the chart the last one carried
+      // no longer describes them and the line above the table would announce
+      // momskoder that are not in there. The bump invalidates a read still in
+      // flight as well: it resolves against mappingsRef, which now holds these.
+      sourceChartPick.current++
+      setSourceChart(null)
 
       setStep('preview')
 
@@ -1115,6 +1121,7 @@ function SIEImportWizard({
     setPreview(null); setIssues([]); setImportResult(null); setError(null); setErrorType(undefined)
     setValidationErrors([]); setValidationWarnings([]); setDuplicateImportId(null)
     setSieAccounts([]); setIsCreatingAccounts(false); setTheaterModel(null)
+    sourceChartPick.current++; setSourceChart(null)
   }
 
   const handleJobCompleted = useCallback((result:ImportResult) => {
