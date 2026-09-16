@@ -203,10 +203,11 @@ export function enrichAccountMappingsWithVat(
  * Sets requiresVatTreatmentReview as well as clearing the suggestion, so the
  * pair applySourceVatCodes reads as "a human answered this" is established
  * here rather than inherited from whatever the row happened to carry. It used
- * to be inherited, which held only because every row reaching a review had the
- * flag up already; a row settled by a source chart does not, and its answer
- * was then overwritable by the next chart. The counter and the filter both ask
- * for required AND NOT reviewed, so a row answered here still leaves the list.
+ * to be inherited, which held only while every row reaching a review had the
+ * flag up already; a row the company chart settled does not, and its answer
+ * was then overwritable by the next chart file. The counter and the filter
+ * both ask for required AND NOT reviewed, so a row answered here still leaves
+ * the review list.
  */
 export function applyVatTreatmentReview(
   mappings: AccountMapping[],
