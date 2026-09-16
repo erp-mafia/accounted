@@ -224,6 +224,40 @@ describe('applySourceChartCsv', () => {
     expect(second.summary).toMatchObject({ accountsInChart: 1, codesApplied: 1, treatmentsApplied: 1 })
   })
 
+  it('drops a code the next chart no longer mentions, even where the file had agreed', () => {
+    // Reviewed alone is not the human signature. A row the company chart
+    // settled, which the first file then agreed with, carries reviewed true
+    // and required false, and clearPreviousChart used to read that as "leave
+    // it alone". So a later chart that does not mention the account at all
+    // left the previous file's code sitting on the row, which is the one
+    // thing a replacement is supposed to remove.
+    const chart = [{ account_number: '3542', default_vat_treatment: 'reverse_charge_eu_goods', default_vat_rate: 0 }] as never
+    const settled = enrichAccountMappingsWithVat([mapping('3542', 'Faktureringsavgifter, EU-land')], chart)
+    const first = applySourceChartCsv(settled, csv('True;3542;Faktureringsavgifter, EU-land;35-0%'), chart)
+    expect(first.mappings[0].providerVatCode).toBe('35-0%')
+    expect(first.mappings[0].requiresVatTreatmentReview).toBe(false)
+
+    const second = applySourceChartCsv(first.mappings, csv('True;3051;Försäljn varor 25% sv;05-25%'), chart)
+    expect(second.mappings[0].providerVatCode).toBeNull()
+    // The company chart still owns the treatment; only the file's claim goes.
+    expect(second.mappings[0].defaultVatTreatment).toBe('reverse_charge_eu_goods')
+  })
+
+  it('still leaves a row the user answered untouched when the next chart omits it', () => {
+    const answered = applyVatTreatmentReview(
+      applySourceChartCsv(
+        [mapping('3058', 'Försäljn varor EG momsfri')],
+        csv('True;3058;Försäljn varor EG momsfri;35-0%'),
+      ).mappings,
+      '3058',
+      'oss',
+      null,
+    )
+    const { mappings } = applySourceChartCsv(answered, csv('True;3051;Försäljn varor 25% sv;05-25%'))
+    expect(mappings[0].defaultVatTreatment).toBe('oss')
+    expect(mappings[0].providerVatCode).toBe('35-0%')
+  })
+
   it('leaves the previous chart standing when the new file cannot be read', () => {
     const first = applySourceChartCsv(
       [mapping('3058', 'Försäljn varor EG momsfri')],
