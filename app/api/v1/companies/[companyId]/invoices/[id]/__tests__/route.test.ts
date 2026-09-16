@@ -536,6 +536,9 @@ describe('DELETE /api/v1/companies/:companyId/invoices/:id', () => {
     expect(update).toBeDefined()
     expect(update!.payload).toMatchObject({ status: 'cancelled' })
     expect(captures.filter((c) => c.op === 'delete')).toEqual([])
+    // A producing webshop order is released by the DB inside the cancel
+    // statement (crm#56), never by a second write from here.
+    expect(captures.filter((c) => c.table === 'webshop_orders')).toEqual([])
   })
 
   it('returns 409 INVOICE_CANCEL_RACE when the draft is finalized concurrently', async () => {

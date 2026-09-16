@@ -168,5 +168,11 @@ export async function deleteDraftInvoice(
     return { ok: false, code: 'INVOICE_CANCEL_RACE' }
   }
 
+  // A webshop order that produced this draft is released by the database in
+  // the same transaction: ON DELETE SET NULL on the hard-delete path above,
+  // release_webshop_order_on_invoice_cancel on this one (migrations
+  // 20260916190000 and 20260916200000). No application unlink: a second
+  // statement could fail after the cancel and leave the order pinned.
+
   return { ok: true, outcome: 'cancelled', invoiceNumber: invoice.invoice_number }
 }
